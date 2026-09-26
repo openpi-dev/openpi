@@ -42,6 +42,7 @@ import {
   WEB_PROMPT_IMAGE_MAX_BYTES,
   WEB_PROMPT_IMAGE_MAX_COUNT,
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
+  WEB_PROMPT_MAX_TEXT_LENGTH,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
   type WebEmbeddedBrowserAction,
@@ -1315,9 +1316,10 @@ export class WebHost {
           error: parsedImages.error,
         });
       }
-      if ((!content && parsedImages.images.length === 0) || content.length > 12_000) {
+      if ((!content && parsedImages.images.length === 0) || content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
         return this.json(response, 400, {
-          error: "prompt must contain text or images and at most 12000 characters",
+          code: "INVALID_PROMPT",
+          error: `prompt must contain text or images and at most ${WEB_PROMPT_MAX_TEXT_LENGTH} characters`,
         });
       }
       const imageSignature = promptImageSignature(parsedImages.images);

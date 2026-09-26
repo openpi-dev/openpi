@@ -1,12 +1,30 @@
+import { Dialog } from "@astryxdesign/core/Dialog";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
-import { RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw, RotateCcw } from "lucide-react";
+import {
+  type KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type { WebInteractiveTerminalEvent } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
 
-type TerminalStatus = "connecting" | "ready" | "exited" | "error";
+type TerminalStatus =
+  | "connecting"
+  | "reconnecting"
+  | "restarting"
+  | "ready"
+  | "exited"
+  | "error";
+
+type TerminalConnection = {
+  reconnect: () => void;
+  suspend: () => void;
+};
 
 function terminalTheme() {
   return {
@@ -43,27 +61,40 @@ export function InteractiveTerminal({
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const container = useRef<HTMLDivElement>(null);
+  const restartFocusIntent = useRef<{
+    sessionId: string;
+    cwd: string;
+    generation: number;
+  } | null>(null);
   const terminalId = useRef<string | null>(null);
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [generation, setGeneration] = useState(0);
+  const connection = useRef<TerminalConnection | null>(null);
+  const restartInFlight = useRef<TerminalConnection | null>(null);
+  const [restartOpen, setRestartOpen] = useState(false);
+  const [restartPending, setRestartPending] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: cwd changes and generation increments intentionally recreate the PTY connection.
   useEffect(() => {
     const host = container.current;
     if (!host) return;
     let disposed = false;
     let exited = false;
     let connected = false;
+    let opening = false;
     let offset: number | undefined;
     let inputStopped = false;
     let pendingInput = Promise.resolve<unknown>(undefined);
     let bufferedInput: { data: string } | null = null;
-    const streamAbort = new AbortController();
+    let streamAbort = new AbortController();
     setStatus("connecting");
     setError(null);
     setExitCode(null);
+    setRestartOpen(false);
+    setRestartPending(false);
+    setRestartError(null);
 
     const terminal = new XTerm({
       cursorBlink: true,
@@ -79,12 +110,20 @@ export function InteractiveTerminal({
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
+    const focusIntent = restartFocusIntent.current;
+    restartFocusIntent.current = null;
     // Opening the tool is the focus intent. A delayed connection must not
     // steal focus back after the user has moved to another input or panel.
     if (
       !host.closest("[hidden], [inert]") &&
       (generation === 0 ||
-        host.closest(".interactive-terminal")?.contains(document.activeElement))
+        host
+          .closest(".interactive-terminal")
+          ?.contains(document.activeElement) ||
+        (focusIntent?.sessionId === sessionId &&
+          focusIntent.cwd === cwd &&
+          focusIntent.generation === generation &&
+          document.activeElement === document.body))
     )
       terminal.focus();
     terminal.attachCustomKeyEventHandler((event) => {
@@ -101,21 +140,32 @@ export function InteractiveTerminal({
       return true;
     });
 
+    const isCurrent = (controller: AbortController) =>
+      !disposed && streamAbort === controller && !controller.signal.aborted;
+    const suspend = () => {
+      connected = false;
+      inputStopped = true;
+      bufferedInput = null;
+      terminal.options.disableStdin = true;
+      streamAbort.abort();
+    };
     const failInput = (reason: unknown) => {
       if (disposed) return;
-      inputStopped = true;
-      terminal.options.disableStdin = true;
+      suspend();
       setError(reason instanceof Error ? reason.message : t("terminalError"));
       setStatus("error");
     };
     const enqueueInput = (request: () => Promise<unknown>) => {
       if (inputStopped || disposed) return;
+      const controller = streamAbort;
       pendingInput = pendingInput
         .then(() => {
-          if (!disposed && !inputStopped && connected && !exited)
+          if (isCurrent(controller) && !inputStopped && connected && !exited)
             return request();
         })
-        .catch(failInput);
+        .catch((reason) => {
+          if (isCurrent(controller)) failInput(reason);
+        });
     };
     const writeInput = (data: string) => {
       const id = terminalId.current;
@@ -175,56 +225,75 @@ export function InteractiveTerminal({
     observer?.observe(host);
 
     const start = async () => {
+      if (disposed || opening || connected) return;
+      opening = true;
+      suspend();
+      const controller = new AbortController();
+      streamAbort = controller;
+      // An interrupted input is never retried with the new connection.
+      pendingInput = Promise.resolve();
+      const id = terminalId.current;
+      setStatus(id ? "reconnecting" : "connecting");
+      setError(null);
       fitTerminal();
-      const info = await client.createInteractiveTerminal(
-        sessionId,
-        terminal.cols,
-        terminal.rows,
-        streamAbort.signal,
-      );
-      if (disposed) return;
-      terminalId.current = info.id;
-      connected = !info.exited;
-      terminal.options.disableStdin = info.exited;
-      setStatus(info.exited ? "exited" : "ready");
-      setExitCode(info.exitCode);
-      fitTerminal();
-      if (!info.exited) {
-        resize(terminal.cols, terminal.rows);
-      }
-      await client.streamInteractiveTerminal(
-        sessionId,
-        info.id,
-        offset,
-        streamAbort.signal,
-        applyEvent,
-      );
-      if (!disposed && !exited) {
-        connected = false;
-        terminal.options.disableStdin = true;
-        setError(t("terminalDisconnected"));
-        setStatus("error");
+      try {
+        const info = id
+          ? await client.interactiveTerminal(sessionId, id, controller.signal)
+          : await client.createInteractiveTerminal(
+              sessionId,
+              terminal.cols,
+              terminal.rows,
+              controller.signal,
+            );
+        if (!isCurrent(controller)) return;
+        if (
+          !info.id ||
+          info.sessionId !== sessionId ||
+          info.cwd !== cwd ||
+          (id && info.id !== id)
+        )
+          throw new Error(t("inspectionChanged"));
+        opening = false;
+        terminalId.current = info.id;
+        exited = info.exited;
+        connected = !info.exited;
+        inputStopped = info.exited;
+        terminal.options.disableStdin = info.exited;
+        setStatus(info.exited ? "exited" : "ready");
+        setExitCode(info.exitCode);
+        fitTerminal();
+        if (!info.exited) resize(terminal.cols, terminal.rows);
+        await client.streamInteractiveTerminal(
+          sessionId,
+          info.id,
+          offset,
+          controller.signal,
+          (event) => {
+            if (isCurrent(controller)) applyEvent(event);
+          },
+        );
+        if (isCurrent(controller) && !exited)
+          failInput(new Error(t("terminalDisconnected")));
+      } catch (reason) {
+        if (isCurrent(controller)) failInput(reason);
+      } finally {
+        if (streamAbort === controller) opening = false;
       }
     };
-    void start().catch((reason) => {
-      if (
-        disposed ||
-        streamAbort.signal.aborted ||
-        (reason instanceof DOMException && reason.name === "AbortError")
-      )
-        return;
-      connected = false;
-      terminal.options.disableStdin = true;
-      setError(reason instanceof Error ? reason.message : t("terminalError"));
-      setStatus("error");
-    });
+    const scope = {
+      reconnect: () => {
+        void start();
+      },
+      suspend,
+    };
+    connection.current = scope;
+    void start();
 
     return () => {
       disposed = true;
-      connected = false;
-      inputStopped = true;
-      bufferedInput = null;
-      streamAbort.abort();
+      suspend();
+      if (connection.current === scope) connection.current = null;
+      if (restartInFlight.current === scope) restartInFlight.current = null;
       observer?.disconnect();
       onData.dispose();
       onResize.dispose();
@@ -234,14 +303,39 @@ export function InteractiveTerminal({
     };
   }, [client, cwd, generation, sessionId, t]);
 
-  const restart = async () => {
+  const restart = async (returnFocus: boolean) => {
+    const scope = connection.current;
+    if (!scope || restartInFlight.current) return;
+    restartInFlight.current = scope;
+    setRestartPending(true);
+    setRestartError(null);
+    setStatus("restarting");
+    setError(null);
+    scope.suspend();
     const id = terminalId.current;
-    terminalId.current = null;
-    if (id)
-      await client
-        .closeInteractiveTerminal(sessionId, id)
-        .catch(() => undefined);
-    setGeneration((value) => value + 1);
+    try {
+      if (id) await client.closeInteractiveTerminal(sessionId, id);
+      if (connection.current !== scope) return;
+      terminalId.current = null;
+      if (returnFocus)
+        restartFocusIntent.current = {
+          sessionId,
+          cwd,
+          generation: generation + 1,
+        };
+      setRestartOpen(false);
+      setGeneration((value) => value + 1);
+    } catch (reason) {
+      if (connection.current === scope) {
+        const message =
+          reason instanceof Error ? reason.message : t("terminalError");
+        setError(message);
+        setRestartError(message);
+        setStatus("error");
+        restartInFlight.current = null;
+        setRestartPending(false);
+      }
+    }
   };
 
   return (
@@ -251,14 +345,35 @@ export function InteractiveTerminal({
           <span className={`terminal-status-dot ${status}`} />
           <span title={cwd}>{cwd}</span>
         </div>
-        <button
-          type="button"
-          aria-label={t("restartTerminal")}
-          title={t("restartTerminal")}
-          onClick={() => void restart()}
-        >
-          <RefreshCw aria-hidden="true" />
-        </button>
+        <div className="interactive-terminal-actions">
+          {status === "error" && (
+            <button
+              type="button"
+              aria-label={t("reconnectTerminal")}
+              title={t("reconnectTerminal")}
+              disabled={restartPending}
+              onClick={() => connection.current?.reconnect()}
+            >
+              <RefreshCw aria-hidden="true" />
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label={t("restartTerminal")}
+            title={t("restartTerminal")}
+            disabled={
+              restartPending ||
+              status === "connecting" ||
+              status === "reconnecting"
+            }
+            onClick={() => {
+              setRestartError(null);
+              setRestartOpen(true);
+            }}
+          >
+            <RotateCcw aria-hidden="true" />
+          </button>
+        </div>
       </header>
       <div className="interactive-terminal-notice" aria-live="polite">
         {error ? (
@@ -271,11 +386,60 @@ export function InteractiveTerminal({
           </span>
         ) : status === "connecting" ? (
           <span>{t("terminalConnecting")}</span>
+        ) : status === "reconnecting" ? (
+          <span>{t("terminalReconnecting")}</span>
+        ) : status === "restarting" ? (
+          <span>{t("terminalRestarting")}</span>
         ) : null}
       </div>
       <div className="interactive-terminal-viewport">
         <div ref={container} className="interactive-terminal-host" />
       </div>
+      <Dialog
+        key={`${sessionId}:${cwd}`}
+        isOpen={restartOpen}
+        purpose="form"
+        width={430}
+        aria-label={t("restartTerminalTitle")}
+        onKeyDown={(event: KeyboardEvent<HTMLDialogElement>) => {
+          // Keep native dialog dismissal ahead of the workbar's outer close.
+          if (event.key === "Escape") event.stopPropagation();
+        }}
+        onOpenChange={(open: boolean) => {
+          if (!open && !restartInFlight.current) setRestartOpen(false);
+        }}
+      >
+        <form
+          className="openpi-dialog"
+          aria-busy={restartPending}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void restart(event.currentTarget.contains(document.activeElement));
+          }}
+        >
+          <strong>{t("restartTerminalTitle")}</strong>
+          <p>{t("restartTerminalDetail")}</p>
+          {restartError && (
+            <p className="terminal-restart-error" role="alert">
+              {restartError}
+            </p>
+          )}
+          <div className="dialog-actions">
+            <button
+              type="button"
+              disabled={restartPending}
+              onClick={() => {
+                if (!restartInFlight.current) setRestartOpen(false);
+              }}
+            >
+              {t("cancel")}
+            </button>
+            <button type="submit" className="danger" disabled={restartPending}>
+              {t(restartPending ? "terminalRestarting" : "restartTerminal")}
+            </button>
+          </div>
+        </form>
+      </Dialog>
     </section>
   );
 }

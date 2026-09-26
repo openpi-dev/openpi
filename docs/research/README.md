@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_EXECUTION_RECOVERY_2026-09-26.md`](WEB_EXECUTION_RECOVERY_2026-09-26.md) - exact-request prompt recovery, terminal reconnect/restart and native-modal ownership, retained child inspection, full checks/tests, ablation and bounded browser observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
 - [`WEB_OPERATOR_ACTION_CONTINUITY_2026-09-26.md`](WEB_OPERATOR_ACTION_CONTINUITY_2026-09-26.md) - native question working position, mutation feedback, model search continuity, and context completion ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
 
 - [`WEB_SESSION_WORKING_POSITION_2026-09-26.md`](WEB_SESSION_WORKING_POSITION_2026-09-26.md) - exact Session draft ownership, paired reading-window/bookmark recovery, reader/controller selection, and native archive pagination; full checks/tests, ablation, and bounded manual browser observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).

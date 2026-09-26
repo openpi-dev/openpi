@@ -1,14 +1,15 @@
 import { createStore } from "zustand/vanilla";
 import { reduceLiveTools } from "../../../protocol/live-tools.ts";
-import type {
-  WebCommandSummary,
-  WebEvent,
-  WebHistoryAnchor,
-  WebLiveMessage,
-  WebModelSummary,
-  WebPromptImage,
-  WebSnapshot,
-  WebThinkingState,
+import {
+  WEB_PROMPT_MAX_TEXT_LENGTH,
+  type WebCommandSummary,
+  type WebEvent,
+  type WebHistoryAnchor,
+  type WebLiveMessage,
+  type WebModelSummary,
+  type WebPromptImage,
+  type WebSnapshot,
+  type WebThinkingState,
 } from "../../../protocol/types.ts";
 import { i18n } from "../i18n.ts";
 import { isControlledSession } from "../lib/session-control.ts";
@@ -138,6 +139,7 @@ export interface PromptAdmissionRecovery {
   afterEntryId?: string | null;
   timestamp?: string;
   images?: readonly WebPromptImage[];
+  retryable?: boolean;
   phase: "checking" | "verification-failed" | "ready" | "submitting";
 }
 
@@ -251,6 +253,7 @@ export interface WebStoreActions {
     images?: readonly WebPromptImage[],
   ) => Promise<boolean>;
   checkPromptAdmissionRecovery: () => Promise<void>;
+  retryPromptAdmission: () => Promise<boolean>;
   sendPromptAsNew: (
     content: string,
     images?: readonly WebPromptImage[],
@@ -692,21 +695,20 @@ export function createWebStore(
           "turn_settled",
         ].includes(event.type)
       ) {
-        const handled = event.type !== "prompt_failed";
+        const restoreInputPreview = event.type !== "prompt_failed";
         set({
           promptAdmissionRecovery: null,
-          promptAdmissionResolution:
-            handled && recovery
-              ? {
-                  sessionId: recovery.sessionId,
-                  sessionPath: recovery.sessionPath,
-                  commandId: recovery.commandId,
-                  content: recovery.content,
-                  images: recovery.images,
-                }
-              : current.promptAdmissionResolution,
+          promptAdmissionResolution: recovery
+            ? {
+                sessionId: recovery.sessionId,
+                sessionPath: recovery.sessionPath,
+                commandId: recovery.commandId,
+                content: recovery.content,
+                images: recovery.images,
+              }
+            : current.promptAdmissionResolution,
           liveMessages:
-            handled &&
+            restoreInputPreview &&
             recovery &&
             !current.liveMessages.some(
               (entry) => entry.key === recovery.optimisticKey,
@@ -970,15 +972,22 @@ export function createWebStore(
 
       if (event.type === "prompt_failed") {
         rememberBounded(terminalPromptIds, detail.commandId);
+        const failedActiveTurn =
+          typeof detail.commandId === "string" &&
+          current.activeTurn?.commandId === detail.commandId;
         set({
           liveMessages: get().liveMessages.filter(
             (entry) =>
               !entry.optimistic ||
               entry.optimistic.commandId !== detail.commandId,
           ),
-          liveRunning: false,
-          livePhase: "idle",
-          liveRetry: null,
+          ...(failedActiveTurn || current.livePhase !== "running"
+            ? {
+                liveRunning: false,
+                livePhase: "idle" as const,
+                liveRetry: null,
+              }
+            : {}),
           notice:
             typeof detail.error === "string" ? detail.error : "Prompt failed",
         });
@@ -1810,6 +1819,15 @@ export function createWebStore(
       async sendPrompt(rawContent, promptImages = []) {
         if (get().planSelectionPending) return false;
         const content = rawContent.trim();
+        if (content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
+          set({
+            notice: i18n.t("promptTooLong", {
+              count: content.length,
+              limit: WEB_PROMPT_MAX_TEXT_LENGTH,
+            }),
+          });
+          return false;
+        }
         const images = promptImages.map((image) => ({ ...image }));
         const imageSignature = JSON.stringify(
           images.map(({ data, mimeType, name }) => [
@@ -1993,7 +2011,20 @@ export function createWebStore(
               : null,
             ...(replacement &&
             get().promptAdmissionRecovery?.commandId === replacement.commandId
-              ? { promptAdmissionRecovery: null }
+              ? {
+                  promptAdmissionRecovery: null,
+                  ...(retrying
+                    ? {
+                        promptAdmissionResolution: {
+                          sessionId: replacement.sessionId,
+                          sessionPath: replacement.sessionPath,
+                          commandId: replacement.commandId,
+                          content: replacement.content,
+                          images: replacement.images,
+                        },
+                      }
+                    : {}),
+                }
               : {}),
           });
           scheduleSnapshotRefresh(120);
@@ -2006,20 +2037,65 @@ export function createWebStore(
             promptAdmissionToken !== admission
           )
             return false;
-          if (
+          const knownRejection =
             error instanceof WebApiError &&
-            error.code === "COMMAND_ADMISSION_UNKNOWN" &&
-            promptAdmission?.commandId === commandId
-          ) {
+            [
+              "WORKSPACE_REQUIRED",
+              "SESSION_CONFLICT",
+              "PROMPT_REJECTED",
+              "COMMAND_CONFLICT",
+              "PROMPT_ADMISSION_CAPACITY",
+              "INVALID_PROMPT",
+              "INVALID_PROMPT_IMAGES",
+            ].includes(error.code ?? "");
+          const confirmedAdmission =
+            terminalPromptIds.has(commandId) ||
+            get().liveMessages.some(
+              (entry) =>
+                entry.optimistic?.sessionId === sessionId &&
+                entry.optimistic.sessionPath === sessionPath &&
+                entry.optimistic.commandId === commandId &&
+                entry.optimistic.admitted,
+            ) ||
+            (get().activeTurn?.sessionId === sessionId &&
+              get().activeTurn?.commandId === commandId);
+          if (!knownRejection && confirmedAdmission) {
+            if (promptAdmission?.commandId === commandId)
+              promptAdmission = null;
+            if (
+              replacement &&
+              get().promptAdmissionRecovery?.commandId === replacement.commandId
+            ) {
+              set({
+                promptAdmissionRecovery: null,
+                ...(retrying
+                  ? {
+                      promptAdmissionResolution: {
+                        sessionId: replacement.sessionId,
+                        sessionPath: replacement.sessionPath,
+                        commandId: replacement.commandId,
+                        content: replacement.content,
+                        images: replacement.images,
+                      },
+                    }
+                  : {}),
+              });
+            }
+            return true;
+          }
+          if (!knownRejection && promptAdmission?.commandId === commandId) {
             const recovery = promptAdmission;
             promptAdmission = null;
             set({
-              liveRunning: false,
-              livePhase: "idle",
-              liveRetry: null,
               notice: null,
               promptAdmissionPending: false,
-              promptAdmissionRecovery: { ...recovery, phase: "checking" },
+              promptAdmissionRecovery: {
+                ...recovery,
+                retryable:
+                  !(error instanceof WebApiError) ||
+                  error.code !== "COMMAND_ADMISSION_UNKNOWN",
+                phase: "checking",
+              },
             });
             const refreshed = await actions.refreshSnapshot({
               resetCursor: true,
@@ -2027,6 +2103,25 @@ export function createWebStore(
             });
             const currentRecovery = get().promptAdmissionRecovery;
             if (currentRecovery?.commandId === commandId) {
+              if (
+                get().activeTurn?.sessionId === sessionId &&
+                get().activeTurn?.commandId === commandId &&
+                get().selectedPath === sessionPath &&
+                get().snapshot?.selectedSession?.path === sessionPath &&
+                isControlledSession(get().snapshot)
+              ) {
+                set({
+                  promptAdmissionRecovery: null,
+                  promptAdmissionResolution: {
+                    sessionId: currentRecovery.sessionId,
+                    sessionPath: currentRecovery.sessionPath,
+                    commandId: currentRecovery.commandId,
+                    content: currentRecovery.content,
+                    images: currentRecovery.images,
+                  },
+                });
+                return true;
+              }
               set({
                 promptAdmissionRecovery: {
                   ...currentRecovery,
@@ -2036,22 +2131,7 @@ export function createWebStore(
             }
             return false;
           }
-          const knownRejection =
-            error instanceof WebApiError &&
-            [
-              "WORKSPACE_REQUIRED",
-              "SESSION_CONFLICT",
-              "PROMPT_REJECTED",
-              "COMMAND_CONFLICT",
-              "PROMPT_ADMISSION_CAPACITY",
-            ].includes(error.code ?? "");
           if (!knownRejection) {
-            set({
-              liveRunning: true,
-              livePhase:
-                get().livePhase === "running" ? "running" : "preparing",
-              liveRetry: null,
-            });
             showError(error);
             return false;
           }
@@ -2060,9 +2140,12 @@ export function createWebStore(
             liveMessages: get().liveMessages.filter(
               (entry) => entry.key !== optimisticKey,
             ),
-            livePhase: "idle",
-            liveRetry: null,
-            liveRunning: false,
+            ...(retrying &&
+            replacement &&
+            error instanceof WebApiError &&
+            error.code === "PROMPT_REJECTED"
+              ? { promptAdmissionRecovery: null }
+              : {}),
           });
           showError(error);
           return false;
@@ -2098,6 +2181,48 @@ export function createWebStore(
           });
         }
       },
+      async retryPromptAdmission() {
+        const recovery = get().promptAdmissionRecovery;
+        if (
+          !recovery?.retryable ||
+          recovery.phase !== "ready" ||
+          recovery.sessionPath !== get().selectedPath ||
+          recovery.sessionPath !== get().snapshot?.selectedSession?.path ||
+          recovery.sessionId !== get().snapshot?.selectedSession?.id
+        )
+          return false;
+        const images = recovery.images ?? [];
+        promptAdmission = {
+          ...recovery,
+          images,
+          imageSignature: JSON.stringify(
+            images.map(({ data, mimeType, name }) => [
+              mimeType,
+              name ?? "",
+              data,
+            ]),
+          ),
+          afterEntryId: recovery.afterEntryId ?? null,
+          timestamp: recovery.timestamp ?? new Date().toISOString(),
+        };
+        set({
+          promptAdmissionRecovery: { ...recovery, phase: "submitting" },
+          notice: null,
+        });
+        try {
+          return await actions.sendPrompt(recovery.content, images);
+        } finally {
+          const currentRecovery = get().promptAdmissionRecovery;
+          if (
+            currentRecovery?.commandId === recovery.commandId &&
+            currentRecovery.phase === "submitting"
+          ) {
+            set({
+              promptAdmissionRecovery: { ...currentRecovery, phase: "ready" },
+            });
+          }
+        }
+      },
       async sendPromptAsNew(rawContent, promptImages) {
         const recovery = get().promptAdmissionRecovery;
         if (
@@ -2112,6 +2237,7 @@ export function createWebStore(
         const content = rawContent.trim();
         const images = promptImages ?? recovery.images ?? [];
         if (!content && images.length === 0) return false;
+        promptAdmission = null;
         set({
           promptAdmissionRecovery: { ...recovery, phase: "submitting" },
           notice: null,
@@ -2137,6 +2263,8 @@ export function createWebStore(
       abandonPromptAdmission() {
         const recovery = get().promptAdmissionRecovery;
         if (!recovery || recovery.phase === "submitting") return;
+        if (promptAdmission?.commandId === recovery.commandId)
+          promptAdmission = null;
         set({
           liveMessages: get().liveMessages.filter(
             (entry) => entry.key !== recovery.optimisticKey,

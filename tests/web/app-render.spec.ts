@@ -12,7 +12,12 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { projectEntry, type WebSnapshot } from "../../web/protocol/types.ts";
+import { useStore } from "zustand";
+import {
+  projectEntry,
+  WEB_PROMPT_MAX_TEXT_LENGTH,
+  type WebSnapshot,
+} from "../../web/protocol/types.ts";
 import { App } from "../../web/ui/src/app/App.tsx";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
@@ -21,11 +26,11 @@ import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx"
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
 import { SubagentDetailView } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
-import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import {
-  sessionReadingScope,
   type SessionReadingCache,
+  sessionReadingScope,
 } from "../../web/ui/src/features/transcript/session-reading-state.ts";
+import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
@@ -3719,6 +3724,433 @@ it("renders explicit choices for an unknown prompt admission", () => {
       .disabled,
   ).toBe(true);
 });
+
+it("retains an over-limit draft, explains the exact trimmed limit, and sends nothing", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  const store = createWebStore();
+  const send = vi.fn(async () => false);
+  const view = renderWithI18n(
+    createElement(Composer, {
+      ...thinkingProps(snapshot),
+      actions: { ...store.getState().actions, sendPrompt: send },
+    }),
+  );
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  const content = "\ud83d\ude42".repeat(WEB_PROMPT_MAX_TEXT_LENGTH / 2 + 1);
+  fireEvent.change(input, { target: { value: `  ${content}  ` } });
+  expect(input.value).toBe(`  ${content}  `);
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("promptTooLong", {
+      count: content.length,
+      limit: WEB_PROMPT_MAX_TEXT_LENGTH,
+    }),
+  );
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(true);
+  fireEvent.submit(view.container.querySelector("form")!);
+  expect(send).not.toHaveBeenCalled();
+
+  const atLimit = `  ${"x".repeat(WEB_PROMPT_MAX_TEXT_LENGTH)}  `;
+  fireEvent.change(input, { target: { value: atLimit } });
+  expect(input.value).toBe(atLimit);
+  expect(input.getAttribute("aria-invalid")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(false);
+  await act(async () =>
+    fireEvent.submit(view.container.querySelector("form")!),
+  );
+  expect(send).toHaveBeenCalledWith(atLimit);
+});
+
+it("retries only the original uncertain request and retains the current revised composer draft", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.sessions = [
+    {
+      ...snapshot.selectedSession!,
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
+      created: snapshot.generatedAt,
+      modified: snapshot.generatedAt,
+      messageCount: 0,
+      firstMessage: "",
+    },
+  ];
+  const client = new WebClient();
+  vi.spyOn(client, "snapshot").mockResolvedValue(snapshot);
+  const receipt = deferred<{ id: string; accepted: boolean }>();
+  const prompt = vi
+    .spyOn(client, "prompt")
+    .mockRejectedValueOnce(new TypeError("lost receipt"))
+    .mockReturnValueOnce(receipt.promise);
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  function ConnectedComposer() {
+    const state = useStore(store);
+    return createElement(Composer, {
+      ...thinkingProps(state.snapshot!, state.actions),
+      selectedWorkspace: state.selectedWorkspace,
+      promptAdmissionPending: state.promptAdmissionPending,
+      promptAdmissionRecovery: state.promptAdmissionRecovery,
+      promptAdmissionResolution: state.promptAdmissionResolution,
+      liveRunning: state.liveRunning,
+      activeTurn: state.activeTurn,
+    });
+  }
+  try {
+    const view = renderWithI18n(createElement(ConnectedComposer));
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: i18n.t("describeTask"),
+    });
+    fireEvent.change(input, { target: { value: "original" } });
+    await act(async () =>
+      fireEvent.submit(view.container.querySelector("form")!),
+    );
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(input.value).toBe("original");
+    expect(store.getState().promptAdmissionRecovery?.retryable).toBe(true);
+    fireEvent.change(input, { target: { value: "edited current draft" } });
+    fireEvent.submit(view.container.querySelector("form")!);
+    expect(prompt).toHaveBeenCalledOnce();
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("retryOriginalAdmission") }),
+    );
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    expect(prompt.mock.calls[1]).toEqual([
+      "session",
+      "original",
+      prompt.mock.calls[0]![2],
+      "/tmp/session",
+      true,
+      [],
+    ]);
+    fireEvent.change(input, { target: { value: "edited again during retry" } });
+    await act(async () =>
+      receipt.resolve({ id: prompt.mock.calls[0]![2], accepted: true }),
+    );
+    expect(input.value).toBe("edited again during retry");
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().promptAdmissionResolution).toBeNull();
+    expect(store.getState().liveMessages).toHaveLength(1);
+    expect(store.getState().liveMessages[0]!.message.content).toBe("original");
+  } finally {
+    store.getState().actions.stop();
+  }
+});
+
+it.each([
+  ["unchanged", "prompt_accepted"],
+  ["retyped", "prompt_accepted"],
+  ["edited", "prompt_accepted"],
+  ["unchanged", "prompt_failed"],
+  ["retyped", "prompt_failed"],
+  ["edited", "prompt_failed"],
+])(
+  "settles a %s submission when recovery and late %s are batched into one render",
+  async (revision, type) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.sessions = [
+      {
+        ...snapshot.selectedSession!,
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+        created: snapshot.generatedAt,
+        modified: snapshot.generatedAt,
+        messageCount: 0,
+        firstMessage: "",
+      },
+    ];
+    let stream!: EventStreamOptions;
+    let loseReceipt!: (error: unknown) => void;
+    const receipt = new Promise<{ id: string; accepted: boolean }>(
+      (_resolve, reject) => {
+        loseReceipt = reject;
+      },
+    );
+    const client = new WebClient();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(receipt);
+    vi.spyOn(client, "snapshot")
+      .mockResolvedValueOnce(snapshot)
+      .mockImplementationOnce(async () => {
+        stream.onEvent({
+          protocolVersion: 1,
+          sequence: 2,
+          timestamp: snapshot.generatedAt,
+          type,
+          detail: {
+            sessionId: "session",
+            sessionPath: "/tmp/session",
+            commandId: prompt.mock.calls[0]![2],
+            error: "Native execution failed",
+          },
+        });
+        return snapshot;
+      })
+      .mockResolvedValue(snapshot);
+    const store = createWebStore(client, {
+      consumeEvents: (options) => {
+        stream = options;
+        options.onConnected();
+        return new Promise<void>((resolve) =>
+          options.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          }),
+        );
+      },
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    function ConnectedComposer() {
+      const state = useStore(store);
+      return createElement(Composer, {
+        ...thinkingProps(state.snapshot!, state.actions),
+        selectedWorkspace: state.selectedWorkspace,
+        promptAdmissionPending: state.promptAdmissionPending,
+        promptAdmissionRecovery: state.promptAdmissionRecovery,
+        promptAdmissionResolution: state.promptAdmissionResolution,
+      });
+    }
+    try {
+      const view = renderWithI18n(createElement(ConnectedComposer));
+      const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: i18n.t("describeTask"),
+      });
+      fireEvent.change(input, { target: { value: "original" } });
+      fireEvent.submit(view.container.querySelector("form")!);
+      expect(prompt).toHaveBeenCalledOnce();
+      if (revision !== "unchanged") {
+        fireEvent.change(input, { target: { value: "edited" } });
+        if (revision === "retyped")
+          fireEvent.change(input, { target: { value: "original" } });
+      }
+      await act(async () => loseReceipt(new TypeError("lost receipt")));
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionResolution).toBeNull();
+      if (type === "prompt_failed")
+        expect(store.getState().notice).toBe("Native execution failed");
+      expect(input.value).toBe(
+        revision === "unchanged"
+          ? ""
+          : revision === "retyped"
+            ? "original"
+            : "edited",
+      );
+      expect(prompt).toHaveBeenCalledOnce();
+    } finally {
+      store.getState().actions.stop();
+    }
+  },
+);
+
+it("does not lend a rejected composer submission's revision to an external admission", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  const actions = {
+    ...createWebStore().getState().actions,
+    sendPrompt: vi.fn(async () => false),
+  };
+  const props = thinkingProps(snapshot, actions);
+  const view = renderWithI18n(createElement(Composer, props));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  fireEvent.change(input, { target: { value: "unrelated rejected draft" } });
+  await act(async () =>
+    fireEvent.submit(view.container.querySelector("form")!),
+  );
+  const recovery = {
+    sessionId: "session",
+    sessionPath: "/tmp/session",
+    commandId: "external-setup-card",
+    optimisticKey: "optimistic-external-setup-card",
+    content: "/openpi-setup repair",
+    phase: "ready" as const,
+    retryable: true,
+  };
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, { ...props, promptAdmissionRecovery: recovery }),
+    ),
+  );
+  expect(input.value).toBe("unrelated rejected draft");
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        promptAdmissionResolution: {
+          sessionId: recovery.sessionId,
+          sessionPath: recovery.sessionPath,
+          commandId: recovery.commandId,
+          content: recovery.content,
+        },
+      }),
+    ),
+  );
+  expect(input.value).toBe("unrelated rejected draft");
+});
+
+it.each([
+  ["abandon", "unchanged"],
+  ["abandon", "edited"],
+  ["abandon", "retyped"],
+  ["cached-rejection", "unchanged"],
+  ["cached-rejection", "edited"],
+  ["cached-rejection", "retyped"],
+  ["navigation", "unchanged"],
+  ["navigation", "edited"],
+  ["navigation", "retyped"],
+])(
+  "settles the next %s submission with a %s revision despite a previous recovery capture",
+  async (previous, revision) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    const send = vi.fn(async () => false);
+    const abandon = vi.fn();
+    const retry = vi.fn(async () => false);
+    const acknowledge = vi.fn();
+    const props = thinkingProps(snapshot, {
+      ...createWebStore().getState().actions,
+      sendPrompt: send,
+      abandonPromptAdmission: abandon,
+      retryPromptAdmission: retry,
+      acknowledgePromptAdmissionResolution: acknowledge,
+    });
+    const view = renderWithI18n(createElement(Composer, props));
+    let input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: i18n.t("describeTask"),
+    });
+    fireEvent.change(input, { target: { value: "first X" } });
+    await act(async () =>
+      fireEvent.submit(view.container.querySelector("form")!),
+    );
+    const recovery = {
+      sessionId: "session",
+      sessionPath: "/tmp/session",
+      commandId: "X",
+      optimisticKey: "optimistic-X",
+      content: "first X",
+      retryable: true,
+      phase: "ready" as const,
+    };
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...props,
+          promptAdmissionRecovery: recovery,
+        }),
+      ),
+    );
+    if (previous === "cached-rejection") {
+      await act(async () =>
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: i18n.t("retryOriginalAdmission"),
+          }),
+        ),
+      );
+      expect(retry).toHaveBeenCalledExactlyOnceWith();
+    } else {
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("abandonAdmission") }),
+      );
+      expect(abandon).toHaveBeenCalledOnce();
+    }
+    view.rerender(
+      createElement(I18nextProvider, { i18n }, createElement(Composer, props)),
+    );
+    expect(input.value).toBe("first X");
+
+    fireEvent.change(input, { target: { value: "second Y" } });
+    await act(async () =>
+      fireEvent.submit(view.container.querySelector("form")!),
+    );
+    expect(send).toHaveBeenCalledTimes(2);
+    if (previous === "navigation") {
+      const other = {
+        ...snapshot,
+        currentSessionId: "other",
+        currentSessionPath: "/tmp/other",
+        selectedSession: {
+          ...snapshot.selectedSession!,
+          id: "other",
+          path: "/tmp/other",
+        },
+      };
+      view.rerender(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(Composer, { ...props, snapshot: other }),
+        ),
+      );
+      expect(
+        screen.getByRole<HTMLTextAreaElement>("textbox", {
+          name: i18n.t("describeTask"),
+        }).value,
+      ).toBe("");
+      view.rerender(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(Composer, props),
+        ),
+      );
+      input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: i18n.t("describeTask"),
+      });
+      expect(input.value).toBe("second Y");
+    }
+    if (revision !== "unchanged") {
+      fireEvent.change(input, { target: { value: "third revision" } });
+      if (revision === "retyped")
+        fireEvent.change(input, { target: { value: "second Y" } });
+    }
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...props,
+          promptAdmissionResolution: {
+            sessionId: "session",
+            sessionPath: "/tmp/session",
+            commandId: "Y",
+            content: "second Y",
+            images: [],
+          },
+        }),
+      ),
+    );
+    expect(input.value).toBe(
+      revision === "unchanged"
+        ? ""
+        : revision === "retyped"
+          ? "second Y"
+          : "third revision",
+    );
+    expect(acknowledge).toHaveBeenCalledExactlyOnceWith("Y");
+  },
+);
 
 it("requires another canonical check after admission verification fails", () => {
   const snapshot = activeSnapshot();

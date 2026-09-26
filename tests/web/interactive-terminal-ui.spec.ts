@@ -7,17 +7,69 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
-import { afterEach, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { InteractiveTerminal } from "../../web/ui/src/features/workbar/InteractiveTerminal.tsx";
 import { WorkbarPanel } from "../../web/ui/src/features/workbar/WorkbarPanel.tsx";
-import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import { WebClient } from "../../web/ui/src/protocol/client.ts";
 
 const input = vi.hoisted(() => ({ send: (_data: string) => {} }));
+const elementFocus = HTMLElement.prototype.focus;
+const dialogMethods = new Map(
+  ["showModal", "close"].map((name) => [
+    name,
+    Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, name),
+  ]),
+);
+beforeAll(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.open = true;
+      this.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus();
+    },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.open = false;
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && this.contains(focused))
+        focused.blur();
+    },
+  });
+});
+afterAll(() => {
+  for (const [name, descriptor] of dialogMethods) {
+    if (descriptor)
+      Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
+    else Reflect.deleteProperty(HTMLDialogElement.prototype, name);
+  }
+});
+beforeEach(() => {
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (
+    this: HTMLElement,
+    options,
+  ) {
+    const modal = document.querySelector("dialog[open]");
+    if (modal && !modal.contains(this)) return;
+    elementFocus.call(this, options);
+  });
+});
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     cols = 80;
@@ -41,6 +93,8 @@ vi.mock("@xterm/xterm", () => ({
       });
     }
     focus() {
+      const modal = document.querySelector("dialog[open]");
+      if (modal && !modal.contains(this.textarea ?? null)) return;
       this.textarea?.focus();
     }
     dispose() {
@@ -68,13 +122,15 @@ afterEach(() => {
 });
 
 it("keeps Escape in the terminal input while respecting child-consumed and header Escape", async () => {
-  vi.spyOn(WebClient.prototype, "createInteractiveTerminal").mockResolvedValue({
-    id: "terminal-a",
-    sessionId: "a",
-    cwd: "/workspace",
-    exited: false,
-    exitCode: null,
-  });
+  const create = vi
+    .spyOn(WebClient.prototype, "createInteractiveTerminal")
+    .mockResolvedValue({
+      id: "terminal-a",
+      sessionId: "a",
+      cwd: "/workspace",
+      exited: false,
+      exitCode: null,
+    });
   vi.spyOn(WebClient.prototype, "resizeInteractiveTerminal").mockResolvedValue({
     resized: true,
   });
@@ -124,6 +180,24 @@ it("keeps Escape in the terminal input while respecting child-consumed and heade
     expect(write).toHaveBeenCalledWith("a", "terminal-a", "\x1b"),
   );
   expect(close).not.toHaveBeenCalled();
+  const opener = screen.getByRole("button", {
+    name: i18n.t("restartTerminal"),
+  });
+  opener.focus();
+  fireEvent.click(opener);
+  const dialog = await screen.findByRole("dialog", {
+    name: i18n.t("restartTerminalTitle"),
+  });
+  const cancel = within(dialog).getByRole("button", { name: i18n.t("cancel") });
+  cancel.focus();
+  fireEvent.keyDown(cancel, { key: "Escape" });
+  expect(close).not.toHaveBeenCalled();
+  fireEvent(dialog, new Event("cancel", { cancelable: true }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(document.activeElement).toBe(opener);
+  expect(create).toHaveBeenCalledOnce();
+  expect(stop).not.toHaveBeenCalled();
+
   const tab = screen.getByRole("button", {
     name: i18n.t("terminal"),
   });
@@ -145,15 +219,28 @@ it("keeps Escape in the terminal input while respecting child-consumed and heade
 it.each([false, true])(
   "a delayed restart respects the current focus owner (moved: %s)",
   async (moved) => {
+    let ready!: (value: {
+      id: string;
+      sessionId: string;
+      cwd: string;
+      exited: boolean;
+      exitCode: number | null;
+    }) => void;
     const create = vi
       .spyOn(WebClient.prototype, "createInteractiveTerminal")
-      .mockResolvedValue({
+      .mockResolvedValueOnce({
         id: "terminal-a",
         sessionId: "a",
         cwd: "/workspace",
         exited: false,
         exitCode: null,
-      });
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            ready = resolve;
+          }),
+      );
     vi.spyOn(
       WebClient.prototype,
       "resizeInteractiveTerminal",
@@ -194,10 +281,30 @@ it.each([false, true])(
     });
     restart.focus();
     fireEvent.click(restart);
+    const dialog = await screen.findByRole("dialog", {
+      name: i18n.t("restartTerminalTitle"),
+    });
+    const confirm = within(dialog).getByRole("button", {
+      name: i18n.t("restartTerminal"),
+    });
+    confirm.focus();
+    fireEvent.click(confirm);
     const main = screen.getByRole("textbox", { name: "Main prompt" });
-    if (moved) main.focus();
+    main.focus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
     await act(async () => closed({ closed: true }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    if (moved) main.focus();
+    await act(async () =>
+      ready({
+        id: "terminal-b",
+        sessionId: "a",
+        cwd: "/workspace",
+        exited: false,
+        exitCode: null,
+      }),
+    );
     expect(document.activeElement).toBe(
       moved ? main : screen.getByRole("textbox", { name: "Terminal input" }),
     );

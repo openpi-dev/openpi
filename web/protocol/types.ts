@@ -10,6 +10,7 @@ export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
 export const WEB_MAX_EVENT_BYTES = 64 * 1024;
 export const WEB_MAX_TEXT = 12_000;
+export const WEB_PROMPT_MAX_TEXT_LENGTH = 12_000;
 export const WEB_MAX_SESSION_PREVIEW = 500;
 const WEB_MAX_METADATA_TEXT = 500;
 export const WEB_MAX_ENTRIES = 250;

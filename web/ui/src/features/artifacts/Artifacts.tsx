@@ -324,7 +324,7 @@ export const ArtifactProvider = forwardRef<
       blobUrls.current.clear();
     };
   }, [client, request, requestInScope, sessionId]);
-  const context = useMemo(() => ({ open }), [open]);
+  const context = useMemo(() => ({ open, disabled }), [open, disabled]);
   const path = preview?.artifact.path ?? request?.reference ?? "";
   const name = preview?.artifact.name ?? path.split(/[\\/]/u).at(-1) ?? path;
   const download = async () => {
@@ -504,7 +504,7 @@ export const ArtifactProvider = forwardRef<
                   <p>{t("artifactUnsupported")}</p>
                 ) : /\.(?:md|markdown)$/iu.test(preview.artifact.name) ? (
                   <ArtifactContext.Provider
-                    value={{ open, parent: preview.artifact.handle }}
+                    value={{ open, disabled, parent: preview.artifact.handle }}
                   >
                     <Markdown>{preview.text}</Markdown>
                   </ArtifactContext.Provider>

@@ -18,6 +18,7 @@ import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
 import type { WebHostOptions } from "../../web/host/web-host.ts";
 import {
   WEB_BROWSER_TEXT_MAX_LENGTH,
+  WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebInteractiveTerminalEvent,
 } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
@@ -3012,6 +3013,51 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
       error: "Pi rejected this prompt",
     });
     assert.equal(sendCalls, 1);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("rejects invalid prompt text with a typed admission error before runtime dispatch", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-limit-"));
+  const contents: string[] = [];
+  const runtime = testRuntime(cwd, async (content) => {
+    contents.push(content);
+    return { pendingFollowUps: 0 };
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const prompt = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: mutationSessionPath(runtime.sessionManager),
+  };
+  try {
+    for (const content of [
+      "  ",
+      "\ud83d\ude42".repeat(WEB_PROMPT_MAX_TEXT_LENGTH / 2 + 1),
+    ]) {
+      const response = await fetch(`${launched.origin}/api/prompt`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...prompt, content }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        code: "INVALID_PROMPT",
+        error: `prompt must contain text or images and at most ${WEB_PROMPT_MAX_TEXT_LENGTH} characters`,
+      });
+    }
+    assert.deepEqual(contents, []);
+    const accepted = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...prompt,
+        content: `  ${"x".repeat(WEB_PROMPT_MAX_TEXT_LENGTH)}  `,
+      }),
+    });
+    assert.equal(accepted.status, 202);
+    assert.deepEqual(contents, ["x".repeat(WEB_PROMPT_MAX_TEXT_LENGTH)]);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

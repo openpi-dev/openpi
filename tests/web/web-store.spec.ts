@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  WebCommandDiscoveryResult,
-  WebEvent,
-  WebModelSearchResult,
-  WebModelSummary,
-  WebSnapshot,
-  WebThinkingState,
+import {
+  WEB_PROMPT_MAX_TEXT_LENGTH,
+  type WebCommandDiscoveryResult,
+  type WebEvent,
+  type WebModelSearchResult,
+  type WebModelSummary,
+  type WebSnapshot,
+  type WebThinkingState,
 } from "../../web/protocol/types.ts";
 import {
   type CommandReceipt,
@@ -1708,6 +1709,11 @@ describe("OpenPI Web store", () => {
 
     current = activeSnapshot("session-1", "/tmp/ws/copy.jsonl");
     expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(false);
+    expect(store.getState().promptAdmissionRecovery?.sessionPath).toBe(
+      "/tmp/ws/session.jsonl",
+    );
+    store.getState().actions.abandonPromptAdmission();
     expect(await store.getState().actions.sendPrompt("once")).toBe(true);
 
     const [first, second] = fetcher.mock.calls.map(([, options]) =>
@@ -2830,7 +2836,12 @@ describe("OpenPI Web store", () => {
 
   it("retries an uncertain admission with the same identity without idling the running turn", async () => {
     const client = new FakeClient();
-    client.snapshots.push(Promise.resolve(snapshot()));
+    const running = snapshot();
+    running.runtime.status = "running";
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(running),
+    );
     const prompt = vi
       .spyOn(client, "prompt")
       .mockRejectedValueOnce(new TypeError("lost receipt"))
@@ -2841,7 +2852,7 @@ describe("OpenPI Web store", () => {
     expect(await store.getState().actions.sendPrompt("once")).toBe(false);
     expect(store.getState().liveRunning).toBe(true);
     expect(store.getState().liveMessages).toHaveLength(1);
-    expect(await store.getState().actions.sendPrompt("once")).toBe(true);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(true);
     expect(prompt.mock.calls[0]?.[2]).toEqual(expect.any(String));
     expect(prompt.mock.calls[1]?.[2]).toBe(prompt.mock.calls[0]?.[2]);
     expect(prompt.mock.calls[1]?.[3]).toBe("/tmp/ws/session.jsonl");
@@ -2849,9 +2860,322 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  it("rejects over-limit trimmed UTF-16 input before creation or a prompt POST", async () => {
+    const client = new FakeClient();
+    const prompt = vi.spyOn(client, "prompt");
+    const create = vi.spyOn(client, "createSession");
+    const store = createWebStore(client);
+    store.getState().actions.setWorkspace("/tmp/ws");
+    const tooLong = "\ud83d\ude42".repeat(WEB_PROMPT_MAX_TEXT_LENGTH / 2 + 1);
+    expect(await store.getState().actions.sendPrompt(`  ${tooLong}  `)).toBe(
+      false,
+    );
+    expect(prompt).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(store.getState().liveMessages).toEqual([]);
+    expect(store.getState().promptAdmissionPending).toBe(false);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().livePhase).toBe("idle");
+    store.getState().actions.stop();
+  });
+
+  it.each(["INVALID_PROMPT", "INVALID_PROMPT_IMAGES", "PROMPT_REJECTED"])(
+    "keeps the existing native turn running when admission rejects with %s",
+    async (code) => {
+      const client = new FakeClient();
+      client.snapshots.push(Promise.resolve(snapshot()));
+      vi.spyOn(client, "prompt").mockRejectedValue(
+        new WebApiError("rejected", 400, code),
+      );
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+      const activeTurn = {
+        sessionId: "session-1",
+        commandId: "original",
+        epoch: 1,
+      };
+      const liveRetry = { attempt: 1, maxAttempts: 2 };
+      store.setState({
+        activeTurn,
+        liveRunning: true,
+        livePhase: "running",
+        liveRetry,
+      });
+      expect(await store.getState().actions.sendPrompt("follow-up")).toBe(
+        false,
+      );
+      expect(store.getState().liveRunning).toBe(true);
+      expect(store.getState().livePhase).toBe("running");
+      expect(store.getState().activeTurn).toBe(activeTurn);
+      expect(store.getState().liveRetry).toBe(liveRetry);
+      expect(store.getState().liveMessages).toEqual([]);
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionPending).toBe(false);
+      store.getState().actions.stop();
+    },
+  );
+
+  it("does not idle another native turn when a follow-up emits prompt_failed", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    const activeTurn = {
+      sessionId: "session-1",
+      commandId: "original",
+      epoch: 1,
+    };
+    store.setState({ activeTurn, liveRunning: true, livePhase: "running" });
+    store.getState().actions.start();
+    stream.emit(
+      runtimeEvent(5, "prompt_failed", {
+        sessionId: "session-1",
+        commandId: "rejected-follow-up",
+        error: "rejected",
+      }),
+    );
+    expect(store.getState().activeTurn).toBe(activeTurn);
+    expect(store.getState().liveRunning).toBe(true);
+    expect(store.getState().livePhase).toBe("running");
+    store.getState().actions.stop();
+  });
+
+  it("keeps an uncertain original and its images until explicit retry or replacement", async () => {
+    const client = new FakeClient();
+    vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockImplementationOnce(async (_sessionId, _content, commandId) => ({
+        id: commandId,
+        accepted: true,
+      }));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const images = [
+      {
+        data: "aW1hZ2U=",
+        mimeType: "image/png" as const,
+        name: "original.png",
+      },
+    ];
+    expect(await store.getState().actions.sendPrompt("original", images)).toBe(
+      false,
+    );
+    expect(store.getState().promptAdmissionRecovery).toMatchObject({
+      content: "original",
+      images,
+      phase: "ready",
+      retryable: true,
+    });
+    expect(store.getState().livePhase).toBe("idle");
+    expect(store.getState().liveRunning).toBe(false);
+    expect(store.getState().promptAdmissionPending).toBe(false);
+    expect(await store.getState().actions.sendPrompt("edited", [])).toBe(false);
+    expect(await store.getState().actions.sendPrompt("original", images)).toBe(
+      false,
+    );
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(true);
+    expect(prompt.mock.calls[1]).toEqual([
+      "session-1",
+      "original",
+      prompt.mock.calls[0]![2],
+      "/tmp/ws/session.jsonl",
+      true,
+      images,
+    ]);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().promptAdmissionResolution).toMatchObject({
+      commandId: prompt.mock.calls[0]![2],
+      content: "original",
+      images,
+    });
+    expect(store.getState().liveMessages).toHaveLength(1);
+    store.getState().actions.stop();
+  });
+
+  it("uses a new identity only for an explicitly replaced uncertain request, even with the same payload", async () => {
+    const client = new FakeClient();
+    vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockImplementationOnce(async (_sessionId, _content, commandId) => ({
+        id: commandId,
+        accepted: true,
+      }));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    expect(await store.getState().actions.sendPrompt("original")).toBe(false);
+    expect(await store.getState().actions.sendPromptAsNew("original")).toBe(
+      true,
+    );
+    expect(prompt.mock.calls[1]![2]).not.toBe(prompt.mock.calls[0]![2]);
+    expect(prompt.mock.calls[1]![4]).toBe(false);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().promptAdmissionResolution).toBeNull();
+    store.getState().actions.stop();
+  });
+
+  it("leaves recovery after an original-ID retry receives its cached rejection without clearing the draft", async () => {
+    const client = new FakeClient();
+    vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockRejectedValueOnce(
+        new WebApiError("Pi rejected this prompt", 422, "PROMPT_REJECTED"),
+      );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    expect(await store.getState().actions.sendPrompt("original")).toBe(false);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(false);
+    expect(prompt.mock.calls[1]![2]).toBe(prompt.mock.calls[0]![2]);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().promptAdmissionResolution).toBeNull();
+    expect(store.getState().liveMessages).toEqual([]);
+    expect(store.getState().notice).toBe("Pi rejected this prompt");
+    expect(store.getState().promptAdmissionPending).toBe(false);
+    store.getState().actions.stop();
+  });
+
+  it.each(["prompt_accepted", "turn_started"])(
+    "uses exact native %s evidence when the original HTTP receipt is subsequently lost",
+    async (type) => {
+      const client = new FakeClient();
+      vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+      const receipt = deferred<CommandReceipt>();
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockReturnValue(receipt.promise);
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      store.getState().actions.start();
+      const sending = store.getState().actions.sendPrompt("original");
+      const commandId = prompt.mock.calls[0]![2];
+      stream.emit(
+        runtimeEvent(5, type, { sessionId: "session-1", commandId, epoch: 1 }),
+      );
+      receipt.reject(new TypeError("lost receipt"));
+      expect(await sending).toBe(true);
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionPending).toBe(false);
+      expect(store.getState().liveMessages).toHaveLength(1);
+      expect(prompt).toHaveBeenCalledOnce();
+      store.getState().actions.stop();
+    },
+  );
+
+  it.each(["prompt_failed", "prompt_settled", "turn_settled"])(
+    "uses native %s as handled evidence before a lost HTTP receipt without changing execution success",
+    async (type) => {
+      const client = new FakeClient();
+      vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+      const receipt = deferred<CommandReceipt>();
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockReturnValue(receipt.promise);
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      const activeTurn = {
+        sessionId: "session-1",
+        commandId: "another-running-turn",
+        epoch: 3,
+      };
+      store.setState({ activeTurn, liveRunning: true, livePhase: "running" });
+      store.getState().actions.start();
+      const sending = store.getState().actions.sendPrompt("original");
+      const commandId = prompt.mock.calls[0]![2];
+      stream.emit(
+        runtimeEvent(5, type, {
+          sessionId: "session-1",
+          commandId,
+          epoch: 1,
+          outcome: "failed",
+          error: "Native execution failed",
+        }),
+      );
+      receipt.reject(new TypeError("lost receipt"));
+      expect(await sending).toBe(true);
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionPending).toBe(false);
+      expect(store.getState().activeTurn).toBe(activeTurn);
+      expect(store.getState().liveRunning).toBe(true);
+      expect(store.getState().livePhase).toBe("running");
+      expect(store.getState().turnTerminalStatus).toBeNull();
+      if (type === "prompt_failed")
+        expect(store.getState().notice).toBe("Native execution failed");
+      expect(prompt).toHaveBeenCalledOnce();
+      store.getState().actions.stop();
+    },
+  );
+
+  it.each(["recovery", "later-refresh"])(
+    "settles an original lost receipt using canonical active-turn evidence from %s",
+    async (when) => {
+      const client = new FakeClient();
+      let nativeKnown = when === "recovery";
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockRejectedValue(new TypeError("lost receipt"));
+      vi.spyOn(client, "snapshot").mockImplementation(async () => {
+        const next = snapshot();
+        const commandId = prompt.mock.calls[0]?.[2];
+        if (commandId && nativeKnown)
+          next.runtime = {
+            status: "running",
+            capabilities: {},
+            activeTurn: {
+              sessionId: "session-1",
+              sessionPath: "/tmp/ws/session.jsonl",
+              commandId,
+              epoch: 1,
+            },
+          };
+        return next;
+      });
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+      expect(await store.getState().actions.sendPrompt("original")).toBe(
+        when === "recovery",
+      );
+      if (when === "later-refresh") {
+        expect(store.getState().promptAdmissionRecovery?.phase).toBe("ready");
+        nativeKnown = true;
+        await store.getState().actions.refreshSnapshot();
+        expect(await store.getState().actions.retryPromptAdmission()).toBe(
+          true,
+        );
+      }
+      expect(store.getState().activeTurn?.commandId).toBe(
+        prompt.mock.calls[0]![2],
+      );
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionResolution).toMatchObject({
+        commandId: prompt.mock.calls[0]![2],
+        content: "original",
+      });
+      expect(store.getState().livePhase).toBe("running");
+      expect(store.getState().liveRunning).toBe(true);
+      expect(prompt).toHaveBeenCalledTimes(when === "recovery" ? 1 : 2);
+      store.getState().actions.stop();
+    },
+  );
+
   it("reconciles an unknown admission and requires an explicit new request", async () => {
     const client = new FakeClient();
     client.snapshots.push(
+      Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
     );
@@ -2866,14 +3190,16 @@ describe("OpenPI Web store", () => {
     await store.getState().actions.refreshSnapshot();
 
     expect(await store.getState().actions.sendPrompt("once")).toBe(false);
-    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(false);
     expect(store.getState().promptAdmissionRecovery).toMatchObject({
       content: "once",
       phase: "ready",
+      retryable: false,
     });
     expect(store.getState().livePhase).toBe("idle");
     expect(store.getState().liveRunning).toBe(false);
     expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(false);
     expect(prompt).toHaveBeenCalledTimes(2);
 
     expect(await store.getState().actions.sendPromptAsNew("edited")).toBe(true);
@@ -2913,6 +3239,7 @@ describe("OpenPI Web store", () => {
     const client = new FakeClient();
     client.snapshots.push(
       Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
       Promise.reject(new Error("snapshot unavailable")),
     );
     const prompt = vi
@@ -2926,7 +3253,7 @@ describe("OpenPI Web store", () => {
     await store.getState().actions.refreshSnapshot();
 
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
 
     expect(store.getState().promptAdmissionRecovery?.phase).toBe(
       "verification-failed",
@@ -2946,6 +3273,7 @@ describe("OpenPI Web store", () => {
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
     );
     const prompt = vi
       .spyOn(client, "prompt")
@@ -2956,7 +3284,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
 
     expect(await store.getState().actions.sendPromptAsNew("   ")).toBe(false);
     expect(store.getState().promptAdmissionRecovery?.phase).toBe("ready");
@@ -2975,6 +3303,7 @@ describe("OpenPI Web store", () => {
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
     );
     const replacement = deferred<CommandReceipt>();
     const prompt = vi
@@ -2987,7 +3316,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
 
     const first = store.getState().actions.sendPromptAsNew("edited");
     await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(3));
@@ -3002,66 +3331,78 @@ describe("OpenPI Web store", () => {
     expect(store.getState().promptAdmissionRecovery).toBeNull();
   });
 
-  it("turns matching late canonical evidence into a draft resolution", async () => {
-    const client = new FakeClient();
-    client.snapshots.push(
-      Promise.resolve(snapshot()),
-      Promise.resolve(snapshot()),
-    );
-    const prompt = vi
-      .spyOn(client, "prompt")
-      .mockRejectedValueOnce(new TypeError("lost receipt"))
-      .mockRejectedValueOnce(
-        new WebApiError("unknown", 409, "COMMAND_ADMISSION_UNKNOWN"),
+  it.each(["prompt_accepted", "prompt_failed"])(
+    "turns matching late canonical %s into a draft resolution",
+    async (type) => {
+      const client = new FakeClient();
+      client.snapshots.push(
+        Promise.resolve(snapshot()),
+        Promise.resolve(snapshot()),
+        Promise.resolve(snapshot()),
       );
-    const stream = eventStreamHarness();
-    const store = createWebStore(client, {
-      consumeEvents: stream.consumeEvents,
-    });
-    await store.getState().actions.refreshSnapshot();
-    store.getState().actions.start();
-    await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
-    const commandId = String(prompt.mock.calls[0]?.[2]);
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockRejectedValueOnce(new TypeError("lost receipt"))
+        .mockRejectedValueOnce(
+          new WebApiError("unknown", 409, "COMMAND_ADMISSION_UNKNOWN"),
+        );
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      store.getState().actions.start();
+      await store.getState().actions.sendPrompt("once");
+      await store.getState().actions.retryPromptAdmission();
+      const commandId = String(prompt.mock.calls[0]?.[2]);
 
-    stream.emit(
-      runtimeEvent(5, "prompt_accepted", {
-        sessionId: "session-1",
-        commandId,
-      }),
-    );
-
-    expect(store.getState().promptAdmissionRecovery).toBeNull();
-    expect(store.getState().promptAdmissionResolution).toEqual({
-      sessionId: "session-1",
-      sessionPath: "/tmp/ws/session.jsonl",
-      commandId,
-      content: "once",
-      images: [],
-    });
-    expect(store.getState().liveMessages).toEqual([
-      {
-        key: `optimistic-${commandId}`,
-        timestamp: expect.any(String),
-        optimistic: {
+      stream.emit(
+        runtimeEvent(5, type, {
           sessionId: "session-1",
-          sessionPath: "/tmp/ws/session.jsonl",
           commandId,
-          afterEntryId: null,
-          admitted: true,
-        },
-        message: { role: "user", content: "once" },
-      },
-    ]);
-    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
-    store.getState().actions.acknowledgePromptAdmissionResolution(commandId);
-    expect(store.getState().promptAdmissionResolution).toBeNull();
-    store.getState().actions.stop();
-  });
+          error: "Native execution failed",
+        }),
+      );
+
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionResolution).toEqual({
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+        commandId,
+        content: "once",
+        images: [],
+      });
+      expect(store.getState().liveMessages).toEqual(
+        type === "prompt_failed"
+          ? []
+          : [
+              {
+                key: `optimistic-${commandId}`,
+                timestamp: expect.any(String),
+                optimistic: {
+                  sessionId: "session-1",
+                  sessionPath: "/tmp/ws/session.jsonl",
+                  commandId,
+                  afterEntryId: null,
+                  admitted: true,
+                },
+                message: { role: "user", content: "once" },
+              },
+            ],
+      );
+      if (type === "prompt_failed")
+        expect(store.getState().notice).toBe("Native execution failed");
+      expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+      store.getState().actions.acknowledgePromptAdmissionResolution(commandId);
+      expect(store.getState().promptAdmissionResolution).toBeNull();
+      store.getState().actions.stop();
+    },
+  );
 
   it("clears recovery when changing workspace without treating navigation as admission evidence", async () => {
     const client = new FakeClient();
     client.snapshots.push(
+      Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
     );
@@ -3073,7 +3414,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
     store.getState().actions.setWorkspace("/tmp/repo-b");
 
     expect(store.getState().promptAdmissionRecovery).toBeNull();
@@ -3085,6 +3426,7 @@ describe("OpenPI Web store", () => {
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
     );
     vi.spyOn(client, "prompt")
       .mockRejectedValueOnce(new TypeError("lost receipt"))
@@ -3094,7 +3436,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("keep me");
-    await store.getState().actions.sendPrompt("keep me");
+    await store.getState().actions.retryPromptAdmission();
 
     expect(store.getState().promptAdmissionRecovery?.content).toBe("keep me");
     store.getState().actions.abandonPromptAdmission();
@@ -3117,6 +3459,7 @@ describe("OpenPI Web store", () => {
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(running),
+      Promise.resolve(running),
     );
     vi.spyOn(client, "prompt")
       .mockRejectedValueOnce(new TypeError("lost receipt"))
@@ -3126,7 +3469,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
 
     expect(store.getState().promptAdmissionRecovery).not.toBeNull();
     expect(store.getState().livePhase).toBe("running");
@@ -3220,7 +3563,10 @@ describe("OpenPI Web store", () => {
 
   it("preserves retry identity when successful headers have a truncated receipt body", async () => {
     const client = new FakeClient();
-    client.snapshots.push(Promise.resolve(snapshot()));
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
+    );
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(new Response("{", { status: 202 }))
@@ -3237,7 +3583,7 @@ describe("OpenPI Web store", () => {
     await store.getState().actions.refreshSnapshot();
     expect(await store.getState().actions.sendPrompt("once")).toBe(false);
     expect(store.getState().liveMessages).toHaveLength(1);
-    expect(await store.getState().actions.sendPrompt("once")).toBe(true);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(true);
     const first = JSON.parse(String(fetcher.mock.calls[0]?.[1].body));
     const second = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
     expect(second.commandId).toBe(first.commandId);

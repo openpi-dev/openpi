@@ -29,6 +29,7 @@ import { useTranslation } from "react-i18next";
 import {
   WEB_PROMPT_IMAGE_MAX_COUNT,
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
+  WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebCommandSummary,
   type WebPromptImage,
   type WebSnapshot,
@@ -140,11 +141,19 @@ export function Composer(props: ComposerProps) {
   const currentDraft = useRef(draft);
   currentDraft.current = draft;
   const { prompt, images, caret: cursor } = draft;
+  const promptLength = prompt.trim().length;
+  const promptTooLong = promptLength > WEB_PROMPT_MAX_TEXT_LENGTH;
   const renderedOwnerKey = nextOwner.key;
   const submissions = useRef(
     new Map<
       string,
-      { owner: DraftOwner; revision: number; pending: boolean }
+      {
+        owner: DraftOwner;
+        revision: number;
+        pending: boolean;
+        content: string;
+        images: readonly WebPromptImage[];
+      }
     >(),
   );
   const recoveryRevision = useRef<{
@@ -476,7 +485,17 @@ export function Composer(props: ComposerProps) {
       recovery.sessionPath,
     ]);
     const submission = submissions.current.get(key);
-    if (submission) {
+    const images = recovery.images ?? [];
+    if (
+      submission?.content.trim() === recovery.content &&
+      submission.images.length === images.length &&
+      submission.images.every(
+        (image, index) =>
+          image.data === images[index]?.data &&
+          image.mimeType === images[index]?.mimeType &&
+          image.name === images[index]?.name,
+      )
+    ) {
       recoveryRevision.current = {
         commandId: recovery.commandId,
         key,
@@ -527,8 +546,25 @@ export function Composer(props: ComposerProps) {
       resolution.sessionId,
       resolution.sessionPath,
     ]);
-    if (captured?.key === key && captured.commandId === resolution.commandId) {
-      const cleared = draftMemory.clear(key, captured.revision);
+    const submission = submissions.current.get(key);
+    const images = resolution.images ?? [];
+    const matchingSubmission =
+      submission?.content.trim() === resolution.content &&
+      submission.images.length === images.length &&
+      submission.images.every(
+        (image, index) =>
+          image.data === images[index]?.data &&
+          image.mimeType === images[index]?.mimeType &&
+          image.name === images[index]?.name,
+      );
+    const revision =
+      captured?.key === key && captured.commandId === resolution.commandId
+        ? captured.revision
+        : matchingSubmission
+          ? submission.revision
+          : undefined;
+    if (revision !== undefined) {
+      const cleared = draftMemory.clear(key, revision);
       if (cleared && draftOwner.current.key === key) {
         currentDraft.current = cleared;
         setDraft(cleared);
@@ -562,6 +598,8 @@ export function Composer(props: ComposerProps) {
       revision: captured.revision,
       owner: draftOwner.current,
       pending: true,
+      content: captured.prompt,
+      images: captured.images,
     };
     submissions.current.set(submission.owner.key, submission);
     let accepted = false;
@@ -604,6 +642,7 @@ export function Composer(props: ComposerProps) {
       props.promptAdmissionPending ||
       props.promptAdmissionRecovery ||
       props.promptAdmissionResolution ||
+      promptTooLong ||
       (!prompt.trim() && images.length === 0)
     )
       return;
@@ -640,7 +679,8 @@ export function Composer(props: ComposerProps) {
       !active ||
       props.sessionSwitching ||
       props.modelSelectionPending ||
-      props.thinkingPendingLevel !== null
+      props.thinkingPendingLevel !== null ||
+      promptTooLong
     )
       return;
     return sendDraft(props.actions.sendPromptAsNew, true);
@@ -972,6 +1012,21 @@ export function Composer(props: ComposerProps) {
                 {t("retryAdmissionCheck")}
               </button>
             )}
+            {props.promptAdmissionRecovery.retryable && (
+              <button
+                type="button"
+                disabled={
+                  !active ||
+                  props.sessionSwitching ||
+                  props.modelSelectionPending ||
+                  props.thinkingPendingLevel !== null ||
+                  props.promptAdmissionRecovery.phase !== "ready"
+                }
+                onClick={() => void props.actions.retryPromptAdmission()}
+              >
+                {t("retryOriginalAdmission")}
+              </button>
+            )}
             <button
               type="button"
               className="primary"
@@ -981,6 +1036,7 @@ export function Composer(props: ComposerProps) {
                 props.sessionSwitching ||
                 props.modelSelectionPending ||
                 props.thinkingPendingLevel !== null ||
+                promptTooLong ||
                 props.promptAdmissionRecovery.phase !== "ready" ||
                 (!prompt.trim() && images.length === 0)
               }
@@ -1137,6 +1193,18 @@ export function Composer(props: ComposerProps) {
             {commandError}
           </p>
         )}
+        {promptTooLong && (
+          <p
+            id="composer-prompt-length-error"
+            className="composer-attachment-error"
+            role="alert"
+          >
+            {t("promptTooLong", {
+              count: promptLength,
+              limit: WEB_PROMPT_MAX_TEXT_LENGTH,
+            })}
+          </p>
+        )}
         {dragActive && (
           <div className="composer-drop-overlay" aria-hidden="true">
             <ImagePlus />
@@ -1150,6 +1218,10 @@ export function Composer(props: ComposerProps) {
           disabled={disabled}
           readOnly={!props.selectedWorkspace}
           aria-label={t("describeTask")}
+          aria-invalid={promptTooLong || undefined}
+          aria-describedby={
+            promptTooLong ? "composer-prompt-length-error" : undefined
+          }
           aria-autocomplete="list"
           aria-controls={commandListVisible ? slashCommandListId : undefined}
           aria-activedescendant={
@@ -1435,6 +1507,7 @@ export function Composer(props: ComposerProps) {
                     !canCompose ||
                     !props.selectedWorkspace ||
                     props.promptAdmissionPending ||
+                    promptTooLong ||
                     props.planSelectionPending ||
                     Boolean(props.promptAdmissionRecovery) ||
                     Boolean(props.promptAdmissionResolution) ||

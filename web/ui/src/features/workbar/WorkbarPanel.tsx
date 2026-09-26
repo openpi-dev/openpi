@@ -131,6 +131,7 @@ function SideConversationPanel({
   const draft = drafts[selectedId ?? ""] ?? "";
   const navigation = useRef(0);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [detailRevision, setDetailRevision] = useState(0);
   const [lastStatus, setLastStatus] = useState<
@@ -151,7 +152,8 @@ function SideConversationPanel({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || busy) return;
+    if (!text || busyRef.current) return;
+    busyRef.current = true;
     abort.current?.abort();
     const controller = new AbortController();
     const generation = navigation.current;
@@ -191,12 +193,16 @@ function SideConversationPanel({
           caught instanceof Error ? caught.message : t("inspectionUnavailable"),
         );
     } finally {
-      if (!controller.signal.aborted) setBusy(false);
+      if (!controller.signal.aborted) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
   const stop = async () => {
-    if (!selectedId || busy) return;
+    if (!selectedId || busyRef.current) return;
+    busyRef.current = true;
     abort.current?.abort();
     const controller = new AbortController();
     const generation = navigation.current;
@@ -221,7 +227,10 @@ function SideConversationPanel({
           caught instanceof Error ? caught.message : t("inspectionUnavailable"),
         );
     } finally {
-      if (!controller.signal.aborted) setBusy(false);
+      if (!controller.signal.aborted) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -237,13 +246,14 @@ function SideConversationPanel({
             <ArrowLeft aria-hidden="true" /> {t("backToSideConversations")}
           </button>
           <SubagentDetailView
-            key={`${sessionId}:${selectedId}:${detailRevision}`}
+            key={`${sessionId}:${selectedId}`}
             sessionId={sessionId}
             id={selectedId}
             activity={selected}
             client={client}
             liveAvailable
             active={active}
+            refreshRevision={detailRevision}
             fullView={false}
             readOnlyNote={false}
           />
@@ -301,7 +311,12 @@ function SideConversationPanel({
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
-              !event.nativeEvent.isComposing
+              !event.altKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.defaultPrevented &&
+              !event.nativeEvent.isComposing &&
+              event.nativeEvent.keyCode !== 229
             ) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();

@@ -434,6 +434,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .subagent-task-end { display:flex; align-items:center; gap:12px; font-size:11px; color:var(--subtle); }
 .subagent-task-end svg { width:14px; height:14px; }
 .subagent-detail { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; gap:12px; padding:24px; }
+.subagent-detail[hidden] { display:none; }
 .subagent-detail-heading { display:flex; justify-content:space-between; gap:12px; }
 .subagent-detail-heading h3 { margin:0 0 5px; font-size:14px; font-weight:500; overflow-wrap:anywhere; }
 .subagent-duration { margin-left:10px; font-size:11px; color:var(--muted); }
