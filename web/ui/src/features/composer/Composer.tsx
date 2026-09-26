@@ -5,6 +5,7 @@ import {
   Check,
   ChevronRight,
   Command,
+  CornerDownRight,
   FileText,
   Folder,
   ImagePlus,
@@ -111,6 +112,9 @@ export function Composer(props: ComposerProps) {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [expandedQueuedMessage, setExpandedQueuedMessage] = useState<
+    string | null
+  >(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const imagePicker = useRef<HTMLInputElement>(null);
   const attachmentImport = useRef<{
@@ -749,29 +753,6 @@ export function Composer(props: ComposerProps) {
         />
       )}
       {props.accessory}
-      {showingQueue && (
-        <section
-          className="composer-queue"
-          aria-label={t("pendingFollowUpsHint", { count: observedQueue })}
-        >
-          <strong>{t("pendingFollowUpsHint", { count: observedQueue })}</strong>
-          <ol>
-            {queuedRows.map(({ message, key }, index) => (
-              <li key={key}>
-                <span aria-hidden="true">{index + 1}</span>
-                <span>{message || t("queuedImage")}</span>
-              </li>
-            ))}
-          </ol>
-          {observedQueue > queuedMessages.length && (
-            <small>
-              {t("queuedMore", {
-                count: observedQueue - queuedMessages.length,
-              })}
-            </small>
-          )}
-        </section>
-      )}
       {props.landing && (
         <div className="workspace-picker-row">
           <DropdownMenu
@@ -888,6 +869,47 @@ export function Composer(props: ComposerProps) {
             <ChevronRight aria-hidden="true" />
             <strong>{targetSummary}</strong>
           </div>
+        )}
+        {showingQueue && (
+          <section
+            className="composer-queue"
+            aria-label={t("pendingFollowUpsHint", { count: observedQueue })}
+          >
+            <ul>
+              {queuedRows.map(({ message, key }) => {
+                const rowKey = `${selected?.id}\0${selected?.path}\0${key}`;
+                const expanded = expandedQueuedMessage === rowKey;
+                const text = message || t("queuedImage");
+                const action = t(
+                  expanded ? "queuedMessageCollapse" : "queuedMessageExpand",
+                );
+                return (
+                  <li key={key}>
+                    <button
+                      type="button"
+                      className={`composer-queue-row ${expanded ? "expanded" : ""}`}
+                      aria-expanded={expanded}
+                      aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
+                      title={action}
+                      onClick={() =>
+                        setExpandedQueuedMessage(expanded ? null : rowKey)
+                      }
+                    >
+                      <CornerDownRight aria-hidden="true" />
+                      <span>{text}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {observedQueue > queuedMessages.length && (
+              <small>
+                {t("queuedMore", {
+                  count: observedQueue - queuedMessages.length,
+                })}
+              </small>
+            )}
+          </section>
         )}
         <input
           ref={imagePicker}

@@ -632,6 +632,8 @@ const resources = {
       pendingFollowUpsHint: "{{count}} messages queued",
       queuedMore: "{{count}} more queued",
       queuedImage: "Image attachment",
+      queuedMessageExpand: "Expand queued message",
+      queuedMessageCollapse: "Collapse queued message",
       backgroundSessionRunning: "This session is running in the background…",
       observedSessionTools: "{{count}} active tools",
       toolsRequireCurrentSession:
@@ -1353,6 +1355,8 @@ const resources = {
       pendingFollowUpsHint: "{{count}} 条消息正在排队",
       queuedMore: "还有 {{count}} 条排队消息",
       queuedImage: "图片附件",
+      queuedMessageExpand: "展开排队消息",
+      queuedMessageCollapse: "收起排队消息",
       backgroundSessionRunning: "此会话正在后台运行…",
       observedSessionTools: "{{count}} 个正在执行的工具",
       toolsRequireCurrentSession: "切换到此会话后可使用交互工具。",

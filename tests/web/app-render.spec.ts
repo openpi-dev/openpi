@@ -1759,16 +1759,17 @@ it("shows cancellation and queued follow-up receipts on the active session", () 
   ).toBe(true);
 });
 
-it("shows Pi's queued messages beside the composer after reload and in a background session", () => {
+it("shows Pi's queued messages inside the composer after reload and in a background session", () => {
   const snapshot = activeSnapshot();
   const selected = snapshot.selectedSession!;
+  const firstMessage = `First follow-up ${"x".repeat(90)} complete queued text`;
   snapshot.currentSessionId = "another-session";
   snapshot.selectedExecution = {
     sessionId: selected.id,
     sessionPath: selected.path,
     status: "running",
     pendingFollowUps: 2,
-    queuedMessages: ["First follow-up", "Second follow-up"],
+    queuedMessages: [firstMessage, ""],
     liveTools: [],
     liveToolsOmitted: 0,
   };
@@ -1791,8 +1792,27 @@ it("shows Pi's queued messages beside the composer after reload and in a backgro
   const queued = screen.getByRole("region", {
     name: i18n.t("pendingFollowUpsHint", { count: 2 }),
   });
+  expect(queued.closest("form.composer")).toBeTruthy();
+  expect(queued.querySelector("ol")).toBeNull();
   expect(queued.textContent).toContain("First follow-up");
-  expect(queued.textContent).toContain("Second follow-up");
+  expect(queued.textContent).toContain(i18n.t("queuedImage"));
+  expect(
+    screen.getByRole("button", {
+      name: `${i18n.t("queuedMessageExpand")}: ${i18n.t("queuedImage")}`,
+    }),
+  ).toBeTruthy();
+  const first = screen.getByRole("button", {
+    name: /First follow-up/,
+  });
+  expect(first.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(first);
+  expect(
+    screen
+      .getByRole("button", {
+        name: `${i18n.t("queuedMessageCollapse")}: ${firstMessage}`,
+      })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
   expect(
     screen.queryByText(i18n.t("pendingFollowUpsHint", { count: 2 }), {
       selector: ".composer-hint",

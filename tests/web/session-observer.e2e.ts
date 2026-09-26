@@ -296,7 +296,9 @@ test("a readonly observer keeps its pending messages and native progress, then r
     expect(
       queueBounds &&
         composerBounds &&
-        queueBounds.y + queueBounds.height <= composerBounds.y,
+        queueBounds.y >= composerBounds.y &&
+        queueBounds.y + queueBounds.height <=
+          composerBounds.y + composerBounds.height,
     ).toBe(true);
     expect(
       await page.evaluate(

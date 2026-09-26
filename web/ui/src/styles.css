@@ -542,14 +542,14 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 }
 
 .composer-dock { @apply flex flex-col items-center gap-2; padding: 12px 24px 22px; }
-.composer-queue { width: 100%; max-width: 840px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--text); font-size: 12px; }
-.composer-queue > strong { display: block; padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 600; }
-.composer-queue ol { max-height: min(160px, 25dvh); overflow-y: auto; }
-.composer-queue li { display: flex; align-items: baseline; gap: 12px; padding: 8px 12px; line-height: 1.5; }
-.composer-queue li + li { border-top: 1px solid var(--border); }
-.composer-queue li > span:first-child { flex: 0 0 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.composer-queue li > span:last-child { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.composer-queue small { display: block; padding: 5px 12px; border-top: 1px solid var(--border); color: var(--muted); }
+.composer-queue { max-height: min(220px, 30dvh); margin: 0 -13px 10px; padding: 3px 12px 7px; overflow-x: hidden; overflow-y: auto; border-bottom: 1px solid var(--border); color: var(--text); font-size: 12px; }
+.composer-queue-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 28px; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; }
+.composer-queue-row:hover { background: var(--sidebar-hover); color: var(--text); }
+.composer-queue-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.composer-queue-row > svg { flex: 0 0 14px; width: 14px; height: 14px; margin-top: 2px; color: var(--subtle); }
+.composer-queue-row > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 20px; }
+.composer-queue-row.expanded > span { white-space: pre-wrap; overflow-wrap: anywhere; }
+.composer-queue small { display: block; padding: 4px 4px 0 26px; color: var(--muted); }
 .prompt-recovery { @apply mx-auto flex w-full items-center justify-between gap-4; max-width: 840px; padding: 10px 12px; border: 1px solid oklch(74% .11 78); border-radius: 8px; background: oklch(98% .025 88); color: var(--text); font-size: 12px; }
 .prompt-recovery > div:first-child { @apply flex min-w-0 flex-col gap-0.5; }
 .prompt-recovery strong { font-size: 13px; }

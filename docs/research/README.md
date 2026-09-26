@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_QUEUED_COMPOSER_2026-09-26.md`](WEB_QUEUED_COMPOSER_2026-09-26.md) — Codex Desktop 输入区排队消息与 Pi 队列能力边界、紧凑逐条预览及可访问展开（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
 - [`WEB_BACKGROUND_SESSION_OBSERVATION_2026-09-26.md`](WEB_BACKGROUND_SESSION_OBSERVATION_2026-09-26.md) — 后台会话的精确身份、侧栏运行/排队状态，以及 Files/Trajectory/Review 跨会话隔离（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 - [`WEB_TURN_EVIDENCE_AND_ITEM_RECOVERY_2026-09-23.md`](WEB_TURN_EVIDENCE_AND_ITEM_RECOVERY_2026-09-23.md) — Codex-style paged Pi history/item recovery and per-user-turn Git evidence; local gates passed, CI pending ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
