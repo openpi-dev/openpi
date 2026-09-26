@@ -226,6 +226,22 @@ test("a readonly observer keeps its pending messages and native progress, then r
   const headers = { Authorization: `Bearer ${token}` };
   try {
     await page.goto(fixture.host.origin);
+    const sidebarA = page
+      .locator(".session-sidebar .session")
+      .filter({ hasText: "Observer A" });
+    const sidebarB = page
+      .locator(".session-sidebar .session")
+      .filter({ hasText: "Observer B" });
+    await expect(sidebarA).toHaveAttribute(
+      "aria-label",
+      `Observer A · ${aPath}`,
+    );
+    await expect(sidebarA.locator(".session-running")).toHaveCount(0);
+    await expect(sidebarB).toHaveAttribute(
+      "aria-label",
+      `Observer B · ${bPath} · 运行中`,
+    );
+    await expect(sidebarB.locator(".session-running")).toBeVisible();
     const input = page.getByRole("textbox", { name: "描述任务" });
     await input.fill("Run observer A");
     await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -256,6 +272,12 @@ test("a readonly observer keeps its pending messages and native progress, then r
       .getByRole("listitem")
       .filter({ hasText: pendingText });
     await expect(ownPending).toHaveCount(2);
+    await expect(sidebarA).toHaveAttribute(
+      "aria-label",
+      `Observer A · ${aPath} · 运行中 · 2 条消息正在排队`,
+    );
+    await expect(sidebarA.locator(".session-queue")).toHaveText("2");
+    await expect(sidebarB.locator(".session-queue")).toHaveCount(0);
     await expect(
       conversation.getByText(pendingText, { exact: true }),
     ).toHaveCount(0);
@@ -284,6 +306,32 @@ test("a readonly observer keeps its pending messages and native progress, then r
     await page.screenshot({
       path: testInfo.outputPath("queued-messages-mobile.png"),
     });
+    await page.getByRole("button", { name: "打开侧边栏", exact: true }).click();
+    await expect
+      .poll(
+        async () => (await page.locator(".session-sidebar").boundingBox())?.x,
+      )
+      .toBe(0);
+    await expect(sidebarA.locator(".session-running")).toBeVisible();
+    await expect(sidebarA.locator(".session-queue")).toBeVisible();
+    const titleBounds = await sidebarA.locator(".session-title").boundingBox();
+    const statusBounds = await sidebarA
+      .locator(".session-status")
+      .boundingBox();
+    expect(
+      titleBounds &&
+        statusBounds &&
+        titleBounds.x + titleBounds.width <= statusBounds.x,
+    ).toBe(true);
+    expect(
+      await sidebarA.evaluate(
+        (button) => button.scrollWidth <= button.clientWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath("session-status-mobile-sidebar.png"),
+    });
+    await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
     await page.setViewportSize({ width: 1440, height: 1000 });
     const timer = conversation.getByRole("timer");
     await expect(timer).toBeVisible();
@@ -300,6 +348,14 @@ test("a readonly observer keeps its pending messages and native progress, then r
     });
     await expect(activate).toBeVisible();
     await expect(input).toBeDisabled();
+    await expect(sidebarA).toHaveAttribute(
+      "aria-label",
+      `Observer A · ${aPath} · 运行中 · 2 条消息正在排队`,
+    );
+    await expect(sidebarB).toHaveAttribute(
+      "aria-label",
+      `Observer B · ${bPath} · 运行中`,
+    );
     await expect(toolbar).toBeHidden();
     await expect(hint).toHaveAttribute("data-visible", "false");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(
@@ -379,6 +435,12 @@ test("a readonly observer keeps its pending messages and native progress, then r
     ).toHaveCount(0);
     await expect(timer).toHaveCount(0);
     await expect(queue).toHaveCount(0);
+    await expect(sidebarA.locator(".session-status")).toHaveCount(0);
+    await expect(sidebarA).toHaveAttribute(
+      "aria-label",
+      `Observer A · ${aPath}`,
+    );
+    await expect(sidebarB.locator(".session-running")).toBeVisible();
     await expect(
       conversation
         .locator(".message-row.user .message-body")

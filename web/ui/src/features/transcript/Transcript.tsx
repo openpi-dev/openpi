@@ -1943,6 +1943,10 @@ export function Transcript(props: TranscriptProps) {
       : props.livePhase === "preparing"
         ? t("modelPreparing")
         : t("modelRunning");
+  const observedRunningTools = !active
+    ? (selectedExecution?.liveTools.filter((tool) => tool.state === "running")
+        .length ?? 0)
+    : 0;
   const activeTurn = selectedExecution
     ? selectedExecution.activeTurn
     : active
@@ -2031,6 +2035,11 @@ export function Transcript(props: TranscriptProps) {
           >
             <span className="conversation-running-dot" />
             <span>{runningLabel}</span>
+            {observedRunningTools > 0 && (
+              <span>
+                {t("observedSessionTools", { count: observedRunningTools })}
+              </span>
+            )}
             {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
               <span>
                 {t("pendingFollowUpsHint", {

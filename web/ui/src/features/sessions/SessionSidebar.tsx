@@ -5,6 +5,8 @@ import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Archive,
   ArchiveRestore,
+  CircleDot,
+  ListOrdered,
   MoreHorizontal,
   PanelLeftClose,
   Plus,
@@ -468,77 +470,113 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 {!collapsed && (
                   <div className="workspace-sessions">
                     {group.sessions.length ? (
-                      group.sessions.map((session) => (
-                        <div className="session-row" key={session.path}>
-                          <button
-                            className={`session ${session.path === confirmedPath ? "active" : ""}`}
-                            type="button"
-                            aria-current={
-                              session.path === confirmedPath
-                                ? "page"
-                                : undefined
-                            }
-                            aria-label={`${sessionTitle(session, t("untitledSession"))} · ${session.path}`}
-                            onClick={() =>
-                              void props.actions.selectSession(session.path)
-                            }
-                          >
-                            <span
-                              className="session-title"
-                              title={sessionTitle(
-                                session,
-                                t("untitledSession"),
-                              )}
+                      group.sessions.map((session) => {
+                        const running = session.execution?.status === "running";
+                        const queued = session.execution?.pendingFollowUps ?? 0;
+                        const statusLabel = [
+                          ...(running ? [t("execution_running")] : []),
+                          ...(queued > 0
+                            ? [t("pendingFollowUpsHint", { count: queued })]
+                            : []),
+                        ].join(" · ");
+                        return (
+                          <div className="session-row" key={session.path}>
+                            <button
+                              className={`session ${session.path === confirmedPath ? "active" : ""}`}
+                              type="button"
+                              aria-current={
+                                session.path === confirmedPath
+                                  ? "page"
+                                  : undefined
+                              }
+                              aria-label={[
+                                sessionTitle(session, t("untitledSession")),
+                                session.path,
+                                statusLabel,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")}
+                              onClick={() =>
+                                void props.actions.selectSession(session.path)
+                              }
                             >
-                              {sessionTitle(session, t("untitledSession"))}
-                            </span>
-                            <span className="session-time">
-                              {relativeTime(session.modified)}
-                            </span>
-                          </button>
-                          <ActionMenu
-                            label={t("conversationOptions")}
-                            items={[
-                              {
-                                id: "rename",
-                                label: t("renameConversation"),
-                                icon: <SquarePen />,
-                                onClick: () =>
-                                  openEdit({
-                                    kind: "session",
-                                    path: session.path,
-                                    name: sessionTitle(
-                                      session,
-                                      t("untitledSession"),
-                                    ),
-                                  }),
-                              },
-                              {
-                                id: archived ? "restore" : "archive",
-                                label: restoring.has(session.path)
-                                  ? t("restoringConversation")
-                                  : t(
-                                      archived
-                                        ? "restoreConversation"
-                                        : "archiveConversation",
-                                    ),
-                                icon: archived ? (
-                                  <ArchiveRestore />
-                                ) : (
-                                  <Archive />
-                                ),
-                                isDisabled: restoring.has(session.path),
-                                onClick: () =>
-                                  archived
-                                    ? void restore(session.path)
-                                    : void props.actions.archiveSession(
-                                        session.path,
+                              <span
+                                className="session-title"
+                                title={sessionTitle(
+                                  session,
+                                  t("untitledSession"),
+                                )}
+                              >
+                                {sessionTitle(session, t("untitledSession"))}
+                              </span>
+                              {statusLabel && (
+                                <Tooltip content={statusLabel}>
+                                  <span
+                                    className="session-status"
+                                    aria-hidden="true"
+                                  >
+                                    {running && (
+                                      <CircleDot className="session-running" />
+                                    )}
+                                    {queued > 0 && (
+                                      <span className="session-queue">
+                                        <ListOrdered />
+                                        <span>
+                                          {queued > 99 ? "99+" : queued}
+                                        </span>
+                                      </span>
+                                    )}
+                                  </span>
+                                </Tooltip>
+                              )}
+                              <span className="session-time">
+                                {relativeTime(session.modified)}
+                              </span>
+                            </button>
+                            <ActionMenu
+                              label={t("conversationOptions")}
+                              items={[
+                                {
+                                  id: "rename",
+                                  label: t("renameConversation"),
+                                  icon: <SquarePen />,
+                                  onClick: () =>
+                                    openEdit({
+                                      kind: "session",
+                                      path: session.path,
+                                      name: sessionTitle(
+                                        session,
+                                        t("untitledSession"),
                                       ),
-                              },
-                            ]}
-                          />
-                        </div>
-                      ))
+                                    }),
+                                },
+                                {
+                                  id: archived ? "restore" : "archive",
+                                  label: restoring.has(session.path)
+                                    ? t("restoringConversation")
+                                    : t(
+                                        archived
+                                          ? "restoreConversation"
+                                          : "archiveConversation",
+                                      ),
+                                  icon: archived ? (
+                                    <ArchiveRestore />
+                                  ) : (
+                                    <Archive />
+                                  ),
+                                  isDisabled: restoring.has(session.path),
+                                  onClick: () =>
+                                    archived
+                                      ? void restore(session.path)
+                                      : void props.actions.archiveSession(
+                                          session.path,
+                                        ),
+                                },
+                              ]}
+                            />
+                          </div>
+                        );
+                      })
                     ) : (
                       <div className="empty">{t("noConversations")}</div>
                     )}

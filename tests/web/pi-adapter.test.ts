@@ -124,6 +124,75 @@ test("session projection uses the selected file when IDs are duplicated", async 
   }
 });
 
+test("session summaries include only known execution facts for an exact Session identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-session-status-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const current = SessionManager.create(root, sessionDirectory);
+    persistSession(current, "current conversation", 1);
+    const currentPath = current.getSessionFile()!;
+    const copiedPath = join(sessionDirectory, "copied-session.jsonl");
+    await writeFile(copiedPath, await readFile(currentPath));
+    const unknown = SessionManager.create(root, sessionDirectory);
+    persistSession(unknown, "unloaded conversation", 2);
+    const runtime = runtimeFor(root, sessionDirectory, current);
+    runtime.getSessionExecution = (sessionId, sessionPath) => {
+      if (sessionId === current.getSessionId()) {
+        return {
+          sessionId,
+          sessionPath: currentPath,
+          status: "running",
+          pendingFollowUps: 2,
+          queuedMessages: ["private queued content"],
+          liveTools: [],
+          liveToolsOmitted: 0,
+        };
+      }
+      return {
+        sessionId,
+        sessionPath,
+        status: "unknown",
+        liveTools: [],
+        liveToolsOmitted: 0,
+      };
+    };
+    const adapter = new PiWebAdapter(runtime);
+    const sessions = await adapter.listSessions();
+    assert.deepEqual(
+      sessions.find((session) => session.path === currentPath)?.execution,
+      {
+        status: "running",
+        pendingFollowUps: 2,
+      },
+    );
+    assert.equal(
+      sessions.find((session) => session.path === copiedPath)?.execution,
+      undefined,
+    );
+    assert.equal(
+      sessions.find((session) => session.path === unknown.getSessionFile())
+        ?.execution,
+      undefined,
+    );
+    assert.doesNotMatch(JSON.stringify(sessions), /private queued content/);
+
+    runtime.getSessionExecution = (sessionId, sessionPath) => ({
+      sessionId: "mismatched-id",
+      sessionPath,
+      status: "running",
+      pendingFollowUps: 3,
+      liveTools: [],
+      liveToolsOmitted: 0,
+    });
+    assert.equal(
+      (await adapter.listSessions()).some((session) => session.execution),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("renaming a copied session does not rename the active session with the same ID", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-session-rename-"));
   const sessionDirectory = join(root, "sessions");

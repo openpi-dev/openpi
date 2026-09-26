@@ -633,6 +633,7 @@ const resources = {
       queuedMore: "{{count}} more queued",
       queuedImage: "Image attachment",
       backgroundSessionRunning: "This session is running in the background…",
+      observedSessionTools: "{{count}} active tools",
       toolsRequireCurrentSession:
         "Switch to this session to use interactive tools.",
       activateViewedSession: "Switch to this session",
@@ -1353,6 +1354,7 @@ const resources = {
       queuedMore: "还有 {{count}} 条排队消息",
       queuedImage: "图片附件",
       backgroundSessionRunning: "此会话正在后台运行…",
+      observedSessionTools: "{{count}} 个正在执行的工具",
       toolsRequireCurrentSession: "切换到此会话后可使用交互工具。",
       activateViewedSession: "切换到此会话",
       activateViewedSessionHint: "切换到此会话后可继续对话。",

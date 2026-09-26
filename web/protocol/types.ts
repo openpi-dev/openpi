@@ -64,6 +64,11 @@ export interface WebSessionSummary {
   firstMessage: string;
   archived?: boolean;
   ungrouped?: boolean;
+  /** Present only while this exact Session is known to the current runtime. */
+  execution?: {
+    status: "running" | "idle";
+    pendingFollowUps?: number;
+  };
 }
 
 export interface WebWorkspaceSummary {

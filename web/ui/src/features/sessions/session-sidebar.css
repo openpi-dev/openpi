@@ -54,6 +54,36 @@
   align-items: center;
 }
 
+.session-sidebar .session-status,
+.session-sidebar .session-queue {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.session-sidebar .session-status {
+  gap: 6px;
+  color: var(--text);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-sidebar .session-status svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.session-sidebar .session-running {
+  color: var(--accent);
+}
+
+.session-sidebar .session-time {
+  min-width: 27px;
+  text-align: right;
+}
+
 .session-sidebar .session-title {
   min-width: 0;
   overflow: hidden;

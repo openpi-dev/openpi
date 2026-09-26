@@ -862,7 +862,22 @@ export class PiWebAdapter {
       }
     }
     return {
-      sessions: projected,
+      sessions: projected.map((session) => {
+        const execution = this.runtime.getSessionExecution?.(session.id, session.path);
+        if (
+          !execution ||
+          execution.sessionId !== session.id ||
+          execution.sessionPath !== session.path ||
+          execution.status === "unknown"
+        ) return session;
+        return {
+          ...session,
+          execution: {
+            status: execution.status,
+            pendingFollowUps: execution.pendingFollowUps,
+          },
+        };
+      }),
       omitted: Math.max(
         0,
         allSessions.length +
@@ -984,7 +999,7 @@ export class PiWebAdapter {
   async getSnapshot(selectedPath?: string, historyAnchor?: { sessionId: string; entryId: string }) {
     await this.ensureWorkspaceStateLoaded();
     const sessionProjection = await this.listSessionProjection(selectedPath);
-    const sessions = sessionProjection.sessions;
+    const sessions: WebSessionSummary[] = sessionProjection.sessions;
     const currentCwd = resolve(this.runtime.cwd);
     const workspacePaths = await this.workspacePaths(sessions);
     const retainedWorkspacePaths: string[] = [];

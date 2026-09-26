@@ -126,6 +126,80 @@ function mount(
   };
 }
 
+it("shows per-Session running and queue facts without borrowing global runtime state", () => {
+  const running = session(
+    "/repos/long-example/one.jsonl",
+    "/repos/long-example",
+    "Working",
+  );
+  running.execution = { status: "running", pendingFollowUps: 2 };
+  const unknown = session(
+    "/repos/long-example/copy.jsonl",
+    "/repos/long-example",
+    "Unloaded",
+  );
+  unknown.id = running.id;
+  const queued = session(
+    "/other/shared/three.jsonl",
+    "/other/shared",
+    "Waiting",
+  );
+  queued.execution = { status: "idle", pendingFollowUps: 120 };
+  const data = snapshot([running, unknown, queued]);
+  data.runtime.status = "running";
+  mount(data);
+
+  const workingButton = screen.getByRole("button", {
+    name: `Working · ${running.path} · Running · 2 messages queued`,
+  });
+  expect(workingButton.querySelector(".session-running")).toBeTruthy();
+  expect(workingButton.querySelector(".session-queue")?.textContent).toBe("2");
+  expect(
+    screen
+      .getByRole("button", { name: `Unloaded · ${unknown.path}` })
+      .querySelector(".session-status"),
+  ).toBeNull();
+  const waitingButton = screen.getByRole("button", {
+    name: `Waiting · ${queued.path} · 120 messages queued`,
+  });
+  expect(waitingButton.querySelector(".session-queue")?.textContent).toBe(
+    "99+",
+  );
+  expect(waitingButton.querySelector(".session-running")).toBeNull();
+});
+
+it("clears sidebar execution markers when the runtime releases the Session", () => {
+  const working = session(
+    "/repos/long-example/one.jsonl",
+    "/repos/long-example",
+    "Working",
+  );
+  working.execution = { status: "running", pendingFollowUps: 1 };
+  const { rerender } = mount(snapshot([working]));
+  expect(
+    screen
+      .getByRole("button", { name: /Working.*Running.*1 messages queued/ })
+      .querySelector(".session-status"),
+  ).toBeTruthy();
+
+  rerender({
+    snapshot: snapshot([
+      { ...working, execution: { status: "idle", pendingFollowUps: 0 } },
+    ]),
+  });
+  expect(
+    screen
+      .getByRole("button", { name: `Working · ${working.path}` })
+      .querySelector(".session-status"),
+  ).toBeNull();
+  rerender({ snapshot: snapshot([{ ...working, execution: undefined }]) });
+  expect(
+    screen
+      .getByRole("button", { name: `Working · ${working.path}` })
+      .querySelector(".session-status"),
+  ).toBeNull();
+});
+
 it("searches only the selected view and loaded list, revealing matched workspaces without changing collapse", () => {
   const data = snapshot([
     session("/repos/long-example/one.jsonl", "/repos/long-example", "First"),

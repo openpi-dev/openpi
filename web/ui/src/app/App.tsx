@@ -286,9 +286,22 @@ export function App() {
   const selected = state.workspaceDraft
     ? undefined
     : state.snapshot?.selectedSession;
+  const controlled = isControlledSession(state.snapshot, selected);
+  const execution = state.snapshot?.selectedExecution;
+  const selectedExecution =
+    execution?.sessionId === selected?.id &&
+    execution?.sessionPath === selected?.path
+      ? execution
+      : undefined;
+  const selectedRunning =
+    (controlled &&
+      (state.liveRunning ||
+        Boolean(state.activeTurn) ||
+        state.snapshot?.runtime.status === "running")) ||
+    selectedExecution?.status === "running";
   const gitReview = useGitReview(selected, state.snapshot?.cursor, {
     active: workbarOpen && workbarActiveTool === "review",
-    running: state.liveRunning || Boolean(state.activeTurn),
+    running: selectedRunning,
   });
   const workbarMessages = useMemo(() => {
     if (!workbarOpen || workbarActiveTool !== "files") return [];
@@ -296,9 +309,24 @@ export function App() {
       ...(selected?.entries.flatMap((entry) =>
         entry.message ? [entry.message] : [],
       ) ?? []),
-      ...state.liveMessages.map((entry) => entry.message),
+      ...state.liveMessages
+        .filter((entry) =>
+          entry.optimistic
+            ? entry.optimistic.sessionId === selected?.id &&
+              entry.optimistic.sessionPath === selected?.path
+            : controlled,
+        )
+        .map((entry) => entry.message),
     ];
-  }, [workbarOpen, workbarActiveTool, selected?.entries, state.liveMessages]);
+  }, [
+    workbarOpen,
+    workbarActiveTool,
+    selected?.entries,
+    selected?.id,
+    selected?.path,
+    controlled,
+    state.liveMessages,
+  ]);
   const workbarBound = Boolean(
     workbarTarget &&
       selected &&
@@ -583,7 +611,7 @@ export function App() {
               <Trajectory
                 key={selected.path}
                 snapshot={state.snapshot}
-                running={state.liveRunning}
+                running={selectedRunning}
               />
             ) : landing ? (
               <section

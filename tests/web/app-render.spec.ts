@@ -1045,6 +1045,224 @@ function activeSnapshot(): WebSnapshot {
   };
 }
 
+it("keeps background Session files, trajectory and activity scoped to the selected identity", async () => {
+  const original = webStore.getState();
+  const start = vi
+    .spyOn(original.actions, "start")
+    .mockImplementation(() => {});
+  const stop = vi.spyOn(original.actions, "stop").mockImplementation(() => {});
+  const review = vi.spyOn(WebClient.prototype, "gitReview").mockResolvedValue({
+    ok: false,
+    reason: "not_git_repository",
+  });
+  const snapshot = activeSnapshot();
+  snapshot.currentSessionId = "active-a";
+  snapshot.currentSessionPath = "/tmp/a";
+  snapshot.runtime.activeTurn = {
+    sessionId: "active-a",
+    sessionPath: "/tmp/a",
+    commandId: "turn-a",
+    epoch: 1,
+  };
+  snapshot.runtime.capabilities = {
+    "background-terminals": {
+      items: [
+        { id: "terminal-a", title: "A build", status: "running", createdAt: 1 },
+      ],
+      omitted: 0,
+      truncated: false,
+    },
+  };
+  snapshot.workspaces = [{ path: "/tmp", name: "Workspace", current: true }];
+  snapshot.selectedSession = {
+    ...snapshot.selectedSession!,
+    id: "background-b",
+    path: "/tmp/b",
+    entries: [
+      {
+        id: "b-call",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "write-b",
+              name: "write",
+              arguments: '{"path":"b.txt"}',
+            },
+          ],
+        },
+      },
+      {
+        id: "b-result",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "toolResult",
+          toolCallId: "write-b",
+          content: "saved",
+          isError: false,
+        },
+      },
+    ],
+  };
+  snapshot.selectedExecution = {
+    sessionId: "background-b",
+    sessionPath: "/tmp/b",
+    status: "running",
+    liveTools: [
+      {
+        call: { type: "toolCall", name: "bash", arguments: "{}" },
+        state: "running",
+      },
+    ],
+    liveToolsOmitted: 0,
+  };
+  webStore.setState({
+    snapshot,
+    selectedPath: "/tmp/b",
+    selectedWorkspace: "/tmp",
+    workspaceDraft: false,
+    sessionSwitching: false,
+    liveRunning: true,
+    activeTurn: snapshot.runtime.activeTurn,
+    liveMessages: [
+      {
+        key: "a-call",
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "write-a",
+              name: "write",
+              arguments: '{"path":"a.txt"}',
+            },
+          ],
+        },
+      },
+      {
+        key: "a-result",
+        message: {
+          role: "toolResult",
+          toolCallId: "write-a",
+          content: "saved",
+          isError: false,
+        },
+      },
+    ],
+  });
+  const view = renderWithI18n(createElement(App));
+  try {
+    expect(screen.getByText(i18n.t("backgroundSessionRunning"))).toBeTruthy();
+    expect(
+      screen.getByText(i18n.t("observedSessionTools", { count: 1 })),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("stopTurn") }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("trajectory") }));
+    expect(screen.getByText(i18n.t("trajectoryRunning"))).toBeTruthy();
+    act(() =>
+      webStore.setState({
+        snapshot: {
+          ...snapshot,
+          selectedExecution: { ...snapshot.selectedExecution!, status: "idle" },
+        },
+      }),
+    );
+    expect(screen.queryByText(i18n.t("trajectoryRunning"))).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("chatView") }));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: new RegExp(i18n.t("generatedFiles"), "u"),
+      }),
+    );
+    const files = view.container.querySelector<HTMLElement>(
+      ".generated-files-list",
+    )!;
+    expect(files.textContent).toContain("b.txt");
+    expect(files.textContent).not.toContain("a.txt");
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    review.mockRestore();
+    webStore.setState(original, true);
+  }
+});
+
+it("refreshes background Session Git review while a different Session runs", async () => {
+  vi.useFakeTimers();
+  const original = webStore.getState();
+  const start = vi
+    .spyOn(original.actions, "start")
+    .mockImplementation(() => {});
+  const stop = vi.spyOn(original.actions, "stop").mockImplementation(() => {});
+  const review = vi.spyOn(WebClient.prototype, "gitReview").mockResolvedValue({
+    ok: false,
+    reason: "not_git_repository",
+  });
+  const snapshot = activeSnapshot();
+  snapshot.currentSessionId = "running-a";
+  snapshot.currentSessionPath = "/tmp/a";
+  snapshot.selectedSession = {
+    ...snapshot.selectedSession!,
+    id: "idle-b",
+    path: "/tmp/b",
+  };
+  snapshot.selectedExecution = {
+    sessionId: "idle-b",
+    sessionPath: "/tmp/b",
+    status: "idle",
+    liveTools: [],
+    liveToolsOmitted: 0,
+  };
+  webStore.setState({
+    snapshot,
+    selectedPath: "/tmp/b",
+    selectedWorkspace: "/tmp",
+    workspaceDraft: false,
+    sessionSwitching: false,
+    liveRunning: true,
+    liveMessages: [],
+    activeTurn: {
+      sessionId: "running-a",
+      sessionPath: "/tmp/a",
+      commandId: "a",
+      epoch: 1,
+    },
+  });
+  const view = renderWithI18n(createElement(App));
+  try {
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(review).toHaveBeenCalledWith(
+      "idle-b",
+      "/tmp/b",
+      expect.any(AbortSignal),
+      expect.any(Object),
+    );
+    act(() => webStore.setState({ snapshot: { ...snapshot, cursor: 2 } }));
+    await act(async () => vi.advanceTimersByTimeAsync(2_100));
+    expect(review).toHaveBeenCalledTimes(2);
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    review.mockRestore();
+    webStore.setState(original, true);
+  }
+});
+
 it("keeps the reader mounted across an external controller change and revokes input until refreshed", async () => {
   const original = webStore.getState();
   const snapshot = activeSnapshot();

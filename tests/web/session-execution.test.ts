@@ -266,6 +266,24 @@ test("a real Pi Session continues tool progress and queued follow-ups after anot
     b.session.sessionManager.getSessionId(),
   );
   assert.equal(snapshot.runtime.status, "idle");
+  assert.deepEqual(
+    snapshot.sessions.find(
+      (session) => session.id === sid && session.path === path,
+    )?.execution,
+    {
+      status: "running",
+      pendingFollowUps: 2,
+    },
+  );
+  assert.deepEqual(
+    snapshot.sessions.find(
+      (session) => session.path === b.session.sessionManager.getSessionFile(),
+    )?.execution,
+    {
+      status: "idle",
+      pendingFollowUps: 0,
+    },
+  );
   assert.equal(snapshot.selectedExecution?.sessionId, sid);
   assert.equal(snapshot.selectedExecution?.sessionPath, path);
   assert.equal(snapshot.selectedExecution?.status, "running");
@@ -383,6 +401,13 @@ test("background settlement records timing in the owning Pi Session, never the c
       a.session.sessionManager.getSessionId(),
       a.session.sessionManager.getSessionFile()!,
     ),
+    undefined,
+  );
+  const snapshot = await new PiWebAdapter(web).getSnapshot();
+  assert.equal(
+    snapshot.sessions.find(
+      (session) => session.path === a.session.sessionManager.getSessionFile(),
+    )?.execution,
     undefined,
   );
 });
