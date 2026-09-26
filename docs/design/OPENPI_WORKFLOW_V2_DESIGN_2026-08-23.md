@@ -678,3 +678,17 @@ Coordinator 在单一输入边界完成 legacy 映射，内部仍只产生 `inli
 - `bun run check`；
 - `bun run test`；
 - GitHub CI：Node 22.19.0、Node 24 与 Windows background-terminal suite。
+
+## 16. 后续合同变更（2026-09-13）
+
+Issue #132 / PR #305 删除调用参数 `background`。第 15 节仍是 PR #139 的历史合同：当时在兼容窗口内接受 deprecated inverse alias，并要求真正删除只在另行公告的 breaking release 进行。本次实现就是那次删除，不再把 `package.json` 改成 1.0.0 来假装窗口已结束，也不复用 #139 的验证证明相反的新行为。
+
+迁移映射保持不变：`background: true` → `wait: false`；`background: false` → `wait: true`。未知调用字段由 `additionalProperties: false` fail closed。`WorkflowDetails.background` 与 persisted artifact 中的同名字段继续记录实际 detached 状态，不改写历史 artifact。
+
+该后续变更的验证以 PR #305 的新 head 为准，至少包括：
+
+- `wait`、未知 `background` 输入拒绝、host delivery 能力和 wait interruption 的专项测试；
+- `bun run check`；
+- `bun run test`；
+- GitHub CI：Node 22、Node 24 与 Windows background-terminal suite。
+
