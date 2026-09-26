@@ -2,7 +2,7 @@
 
 > 日期：2026-08-23
 >
-> 范围：仅使用 Anthropic 官方 Claude Code 文档、官方 Agent SDK Cookbook 和官方示例；不推断未公开的 Runtime 内部算法。本文补充已有的 [Claude Code Workflow 生命周期研究](./CLAUDE_CODE_WORKFLOW_DESIGN_2026-08-23.md)，只回答“Claude 一次启动多少 Agent、为什么、谁决定、有哪些边界”。
+> 范围：仅使用 Anthropic 官方 Claude Code 文档、官方 Agent SDK Cookbook 和官方示例；不推断未公开的 Runtime 内部算法。本文补充已有的 Claude Code Workflow 生命周期研究，只回答“Claude 一次启动多少 Agent、为什么、谁决定、有哪些边界”。
 
 ## 结论先行
 
