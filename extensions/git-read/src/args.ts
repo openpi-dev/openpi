@@ -31,7 +31,8 @@ export function isSafeRevision(revision: string): boolean {
 const REPO_PATH_PATTERN = /^[^:/\\?#*[\]'"\s][^:/\\?#*[\]'"\s]*$/;
 
 export function isSafeRepoPath(value: string): boolean {
-  if (value.length === 0 || value.length > 512) return false;
+  if (value.length === 0 || value.length > 512 || value.includes("\0"))
+    return false;
   const segments = value.split("/");
   for (const segment of segments) {
     if (segment === "" || segment === "." || segment === "..") return false;
