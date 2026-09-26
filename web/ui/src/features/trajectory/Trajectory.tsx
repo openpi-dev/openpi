@@ -1,7 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
-import { buildTrajectory } from "./trajectory.ts";
+import { buildTrajectory, defaultTrajectoryNode } from "./trajectory.ts";
 
 const EMPTY: NonNullable<WebSnapshot["selectedSession"]>["entries"] = [];
 export const Trajectory = memo(function Trajectory({
@@ -23,7 +23,8 @@ export const Trajectory = memo(function Trajectory({
   );
   const visible = nodes.slice(start);
   const selected =
-    visible.find((node) => node.key === selectedKey) ?? visible.at(-1);
+    visible.find((node) => node.key === selectedKey) ??
+    defaultTrajectoryNode(visible);
   const truncation = snapshot.selectedSession?.truncation;
   const output = selected?.result;
   const message = selected?.message;

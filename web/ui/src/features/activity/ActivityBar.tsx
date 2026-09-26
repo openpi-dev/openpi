@@ -1,11 +1,14 @@
-import { Check, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, CircleStop, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { formatElapsedMs } from "../../lib/format.ts";
+import { recordedSubagents } from "../subagents/recorded-subagents.ts";
 
-type Status = "running" | "done" | "error" | "warn" | "unknown";
+type Status = "running" | "done" | "error" | "interrupted" | "warn" | "unknown";
 
 function canonicalStatus(value: string): Status {
+  if (value === "interrupted") return "interrupted";
   if (value === "running") return "running";
   if (value === "done" || value === "completed") return "done";
   if (["error", "failed", "aborted", "killed", "timed_out"].includes(value))
@@ -38,6 +41,8 @@ function Chip({
         <Check />
       ) : status === "error" ? (
         <X />
+      ) : status === "interrupted" ? (
+        <CircleStop />
       ) : (
         <span className="activity-chip-glyph">?</span>
       )}
@@ -49,14 +54,38 @@ function Chip({
 export function ActivityBar({
   snapshot,
   onInspectTerminal,
+  onInspectSubagent,
 }: {
   snapshot: WebSnapshot | null;
   onInspectTerminal?: (id: string) => void;
+  onInspectSubagent?: (id?: string) => void;
 }) {
+  const { t } = useTranslation();
   const [, tick] = useState(0);
   const capabilities = snapshot?.runtime.capabilities;
+  const saved = useMemo(
+    () =>
+      recordedSubagents(
+        (snapshot?.selectedSession?.entries ?? []).flatMap((entry) =>
+          entry.message ? [entry.message] : [],
+        ),
+      ),
+    [snapshot?.selectedSession?.entries],
+  );
+  const liveSubagents = capabilities?.subagents;
+  const knownSubagentCount = new Set([
+    ...(liveSubagents?.items ?? []).map((item) => item.id),
+    ...saved.map((item) => item.id),
+  ]).size;
+  const subagentCount = Math.max(
+    knownSubagentCount,
+    (liveSubagents?.items.length ?? 0) + (liveSubagents?.omitted ?? 0),
+  );
+  const activeSubagentCount = (liveSubagents?.items ?? []).filter(
+    (item) => item.status === "running",
+  ).length;
+  const admission = liveSubagents?.childExecutionAdmission;
   const running = [
-    ...(capabilities?.subagents?.items ?? []),
     ...(capabilities?.workflows?.items ?? []),
     ...(capabilities?.["background-terminals"]?.items ?? []),
   ].some((item) => item.status === "running");
@@ -93,15 +122,6 @@ export function ActivityBar({
       status: canonicalStatus(workflow.status),
     });
   }
-  for (const subagent of capabilities?.subagents?.items ?? []) {
-    const elapsed = formatElapsedMs(subagent.createdAt, subagent.settledAt);
-    chips.push({
-      key: `subagent-${subagent.id}`,
-      kind: "subagent",
-      label: `${subagent.title || subagent.id}${elapsed ? ` · ${elapsed}` : ""}`,
-      status: canonicalStatus(subagent.status),
-    });
-  }
   for (const terminal of capabilities?.["background-terminals"]?.items ?? []) {
     const elapsed = formatElapsedMs(terminal.createdAt, terminal.settledAt);
     chips.push({
@@ -122,12 +142,34 @@ export function ActivityBar({
   const omitted =
     chips.length -
     visible.length +
-    (capabilities?.subagents?.omitted ?? 0) +
     (capabilities?.workflows?.omitted ?? 0) +
     (capabilities?.["background-terminals"]?.omitted ?? 0);
-  if (!visible.length && !omitted) return null;
+  if (
+    !visible.length &&
+    !omitted &&
+    !(onInspectSubagent && subagentCount) &&
+    !admission?.enabled
+  )
+    return null;
   return (
     <div className="activity-bar" role="status" aria-label="Runtime activity">
+      {onInspectSubagent && subagentCount > 0 && (
+        <button
+          className="activity-chip subagent-list-trigger"
+          type="button"
+          onClick={() => onInspectSubagent()}
+        >
+          {t("subagentList", {
+            count: subagentCount,
+            running: activeSubagentCount,
+          })}
+        </button>
+      )}
+      {admission?.enabled && admission.limit !== undefined && (
+        <span className="activity-chip subagent-list-trigger">
+          {`${admission.held}/${admission.limit} child slots · ${admission.queued} queued · wf ${admission.heldByOrigin.workflow} / direct ${admission.heldByOrigin.direct} / btw ${admission.heldByOrigin.btw}`}
+        </span>
+      )}
       {visible.map(({ key, ...chip }) => (
         <Chip key={key} {...chip} />
       ))}

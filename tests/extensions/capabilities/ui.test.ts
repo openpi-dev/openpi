@@ -103,6 +103,14 @@ test("shimmer phase changes only the keyword colors", () => {
 });
 
 test("highlights capability names only when shared intent authorizes them", () => {
+  for (const name of ["subagent", "Subagents", "workflow", "Workflows"]) {
+    const selected = editor(name);
+    assert.deepEqual(selected.highlighted.render(120), [
+      `<accent>${name}</accent>`,
+    ]);
+    assert.equal(selected.highlighted.getText(), name);
+  }
+
   const reserved = editor("subagent, workflow");
   assert.deepEqual(reserved.highlighted.render(120), ["subagent, workflow"]);
 

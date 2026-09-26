@@ -4,7 +4,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { SETUP_CONFIG_CHANGED_CHANNEL } from "../../../extensions/shared/setup-config.ts";
+import { SETUP_APPLY_CHANNEL } from "../../../extensions/shared/setup-apply.ts";
 import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
@@ -132,7 +132,7 @@ function harness(options: { discovery?: "explicit" | "adaptive" } = {}) {
     },
     setDiscovery(mode: "explicit" | "adaptive") {
       discovery = mode;
-      pi.events.emit(SETUP_CONFIG_CHANGED_CHANNEL, {});
+      pi.events.emit(SETUP_APPLY_CHANNEL, { tasks: [] });
     },
     tool: () => tools.get("openpi_load_tools")!,
   };
@@ -244,7 +244,24 @@ test("an explicit subagent request loads delegation directly", () => {
   assert.match(JSON.stringify(results), SUBAGENT_SKILL_PATH_PATTERN);
 });
 
-test("capability names without request verbs leave their groups unloaded", () => {
+test("standalone capability selections expose only the selected group", () => {
+  for (const [prompt, selectedTool, otherTool] of [
+    ["subagent", "subagent_spawn", "workflow"],
+    [" Subagents ", "subagent_spawn", "workflow"],
+    ["workflow", "workflow", "subagent_spawn"],
+    [" WORKFLOWS ", "workflow", "subagent_spawn"],
+  ]) {
+    const h = harness();
+    h.start();
+    h.before(prompt);
+    assert.equal(h.active().includes(selectedTool), true, prompt);
+    assert.equal(h.active().includes(otherTool), false, prompt);
+    assert.equal(h.active().includes("bg_start"), false, prompt);
+    assert.equal(h.active().includes("openpi_load_tools"), false, prompt);
+  }
+});
+
+test("a list of capability references leaves their groups unloaded", () => {
   const h = harness();
   h.start();
 

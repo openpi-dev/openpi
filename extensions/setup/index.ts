@@ -1,49 +1,57 @@
+import { StringEnum } from "@earendil-works/pi-ai";
+import { applySetupConfiguration } from "../shared/setup-apply.ts";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import {
+  applyFooterConfig,
+  CAPABILITY_DISCOVERY_MODES,
+  type CapabilityDiscoveryMode,
+  DEFAULT_WEB_CHAT_FONT_SIZE,
+  DEFAULT_WEB_CHAT_WIDTH,
+  DETAIL_DISPLAYS,
+  FOOTER_ITEMS,
+  FOOTER_LAYOUT_ITEMS,
+  FOOTER_PRESETS,
+  FOOTER_STYLES,
+  type FooterLayoutItem,
+  type FooterPreset,
+  type FooterStyle,
+  formatSetupConfig,
+  formatSetupDiagnostics,
+  inspectSetupConfig,
+  MAX_WEB_CHAT_FONT_SIZE,
+  MAX_WEB_CHAT_WIDTH,
+  MAX_SESSION_CHILD_EXECUTION_LIMIT,
+  MAX_WORKFLOW_AGENT_CALLS,
+  MAX_WORKFLOW_CONCURRENCY,
+  MIN_WEB_CHAT_FONT_SIZE,
+  MIN_WEB_CHAT_WIDTH,
+  type MyPiSetupConfig,
+  POST_EDIT_COMMAND_MAX_CHARS,
+  REASONING_LEVELS,
+  SETUP_CONFIG_CHANGED_CHANNEL,
+  updateSetupConfig,
+  WEB_THEMES,
+  type WebTheme,
+} from "../shared/setup-config.ts";
+import {
+  OPENPI_SETUP_EPISODE_CHANNEL,
+  type OpenPiSetupEpisodeState,
+} from "../shared/setup-episode-state.ts";
 import {
   SUBAGENT_ROLE_NAMES,
   type SubagentRoleModel,
   type SubagentRoleModels,
 } from "../shared/subagent-roles.ts";
 import {
-  OPENPI_SETUP_EPISODE_CHANNEL,
-  type OpenPiSetupEpisodeState,
-} from "../shared/setup-episode-state.ts";
-import {
   isOwnedToolActive,
   isOwnedToolAvailable,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
-import {
-  applyFooterConfig,
-  CAPABILITY_DISCOVERY_MODES,
-  DETAIL_DISPLAYS,
-  FOOTER_ITEMS,
-  FOOTER_LAYOUT_ITEMS,
-  FOOTER_PRESETS,
-  FOOTER_STYLES,
-  formatSetupConfig,
-  hasSavedSetupConfig,
-  loadSetupConfig,
-  updateSetupConfig,
-  MAX_WORKFLOW_AGENT_CALLS,
-  MAX_WORKFLOW_CONCURRENCY,
-  POST_EDIT_COMMAND_MAX_CHARS,
-  REASONING_LEVELS,
-  SETUP_CONFIG_CHANGED_CHANNEL,
-  WEB_THEMES,
-  type FooterLayoutItem,
-  type CapabilityDiscoveryMode,
-  type FooterPreset,
-  type FooterStyle,
-  type MyPiSetupConfig,
-  type WebTheme,
-} from "../shared/setup-config.ts";
 
 const subagentRoleModelValueSchema = Type.Union([
   Type.Object(
@@ -101,6 +109,16 @@ export function applySubagentRoleModelUpdates(
   return roleModels;
 }
 
+const FOOTER_PRESET_GUIDANCE = `compact is a preset, not a style: it resolves to plain style and the default single row (model context flex git pr cwd). It is identical to the default footer, so applying compact to that configuration does not make it more compact. Preset names are not persisted; report actual style/layout changes, not a plain-to-compact transition. If the user explicitly requests footerStyle="compact" or ui_footer_style="compact", report the invalid style and list the allowed values (${FOOTER_STYLES.join(", ")}). Explain that the compact preset also resets the layout, but do not apply that preset or plain style unless the user chooses that alternative.`;
+
+const EXPLICIT_VALUE_GUIDANCE =
+  "If the user explicitly names a configuration field and supplies an invalid value, explain the error in the user's language and list the allowed values or range. Do not call the writer until the user supplies a valid choice. Do not silently substitute a default, another field, or a preset for that explicit assignment. A general request such as 'use the compact footer preset' may use the matching preset. On a tool validation error, report it and the legal choices instead of retrying with an unrequested substitute.";
+
+const SETUP_REQUEST_VALIDATION = [
+  "Validate the requested field and value before writing. For an invalid requested value, explain the problem and the legal values or range in the user's language. Do not clamp, substitute, or reinterpret it as a different field or preset. Preserve the setting unless the user explicitly chooses a legal alternative; keeping the current setting requires no write. A prior assistant explanation is not user consent, and an answer to an unrelated question is not approval for a configuration change.",
+  'In particular, ui.footerStyle accepts only plain, powerline, powerline-mono. A request for ui.footerStyle="compact" is invalid; applying the compact preset is a different request that also resets the layout. workflows.concurrency accepts integers 1-64; 0 does not mean 1 or "disabled". workflows.maxAgentCalls accepts integers 1-1024. Ask only for the missing configuration decision when clarification is needed.',
+].join("\n");
+
 export function buildInteractiveSetupPrompt(options: {
   currentConfiguration: string;
   currentModel: string;
@@ -109,7 +127,7 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Capability discovery, Next-action suggestions, Workflow limits, UI theme/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Capability discovery, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
@@ -125,6 +143,8 @@ export function buildInteractiveSetupPrompt(options: {
     `Current Pi model: ${options.currentModel}`,
     `Current Pi thinking level: ${options.currentThinking}`,
     `Saved configuration exists: ${options.savedConfigExists ? "yes" : "no"}`,
+    EXPLICIT_VALUE_GUIDANCE,
+    FOOTER_PRESET_GUIDANCE,
     "",
     ...configurationState,
     "",
@@ -132,7 +152,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Capability discovery: explicit is the safe default and keeps OpenPI model tools absent until the user asks for a capability. adaptive is opt-in and keeps only the small openpi_load_tools gateway visible, allowing the model to load Subagents, Workflows, background terminals, structured search, or Session tracking when it judges them useful. Loaded groups remain session-stable, and normal permission, concurrency, and workflow limits still apply.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
-    "- UI: the Web theme is system (default), light, or dark and is projected from this canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web theme changes apply on its next canonical snapshot.",
+    `- UI: OpenPI Web themes are system (default), light, dark, mist, rose, and pine. Chat content width defaults to ${DEFAULT_WEB_CHAT_WIDTH}px (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}px), chat font size defaults to ${DEFAULT_WEB_CHAT_FONT_SIZE}px (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}px), and thinking blocks are collapsed by default. These values are projected from canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web appearance changes apply on its next canonical snapshot.`,
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact; all three default to compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Recommend compact for users who scan activity first and inspect evidence on demand.",
@@ -142,6 +162,8 @@ export function buildInteractiveSetupPrompt(options: {
     '- "let the model discover OpenPI capabilities when useful" → capability_discovery=adaptive',
     '- "only use OpenPI capabilities when I ask" → capability_discovery=explicit',
     '- "use dark theme in OpenPI Web" → ui_web_theme=dark',
+    '- "set OpenPI Web chat width to 960px" → ui_web_chat_width=960',
+    '- "use 16px chat text and expand thinking by default" → ui_web_chat_font_size=16, ui_web_expand_thinking=true',
     '- "switch footer to powerline" → ui_footer_preset=powerline',
     '- "use mono powerline" → ui_footer_preset=powerline-mono',
     '- "compact footer" → ui_footer_preset=compact',
@@ -152,15 +174,19 @@ export function buildInteractiveSetupPrompt(options: {
     '- "make explorer inherit again" → subagent_role_models={explorer:null}',
     "",
     "configure_my_pi_setup is available only for this setup run. If the run settles without a successful apply, the writer is hidden and a later change requires /openpi-setup <request>. Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
+    SETUP_REQUEST_VALIDATION,
   ];
 }
 
 export function buildSetupSuccessText(
   currentConfiguration: string,
+  changed: readonly string[],
   normalizationNote = "",
 ) {
   return [
-    `Updated OpenPI setup. ${currentConfiguration}${normalizationNote}`,
+    `Saved OpenPI setup. ${changed.length ? `Changed effective fields: ${changed.join(", ")}.` : "Effective configuration unchanged; saving may create or migrate the document without changing behavior."}`,
+    `${currentConfiguration}${normalizationNote}`,
+    "Describe changes only from this receipt's changed effective fields and final configuration. A successful save does not imply a visual or behavioral change. Do not infer a before/after transition from the requested preset name.",
     "This setup episode is complete; configure_my_pi_setup is now hidden. Do not call it again. Do not edit configuration files directly. If the user requests another configuration change, tell them to run /openpi-setup <request> to start a new setup episode.",
   ].join(" ");
 }
@@ -215,8 +241,17 @@ export default function openPiSetup(pi: ExtensionAPI) {
     publishEpisode();
   };
 
-  pi.on("session_start", () => {
+  pi.on("session_start", (_event, ctx) => {
     resetEpisode();
+    if (!ctx.hasUI) return;
+    const inspected = inspectSetupConfig();
+    if (inspected.diagnostics.length === 0) return;
+    ctx.ui.notify(
+      inspected.writable
+        ? "OpenPI configuration loaded with warnings (legacy format or unknown fields). The file is unchanged. Run /openpi-setup for details."
+        : "OpenPI could not load the saved configuration; safe defaults are in use and configuration writes are blocked. The file is unchanged. Run /openpi-setup for diagnostics and recovery guidance.",
+      inspected.writable ? "warning" : "error",
+    );
   });
 
   const dispatchNextRequest = (ctx: ExtensionContext) => {
@@ -312,7 +347,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure OpenPI",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, the canonical OpenPI Web theme, UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes theme changes through canonical snapshots.",
+      "Apply a user-requested configuration change for this Pi setup. Configures capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (theme, chat width, font size, thinking expansion), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
     parameters: Type.Object({
       capability_discovery: Type.Optional(
         StringEnum(CAPABILITY_DISCOVERY_MODES, {
@@ -353,6 +388,21 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "Maximum total agent() calls in each workflow (default 128, hard maximum 1024). Omit to preserve the current value.",
         }),
       ),
+      child_execution_limit: Type.Optional(
+        Type.Union(
+          [
+            Type.Integer({
+              minimum: 1,
+              maximum: MAX_SESSION_CHILD_EXECUTION_LIMIT,
+            }),
+            Type.Null(),
+          ],
+          {
+            description:
+              "Optional maximum active child executions shared by Workflow, Direct Subagent, and BTW in this top-level Pi Session (1-64). This is off by default and does not change workflow's own concurrency. Set null to disable the shared admission limit. Omit to preserve the current value.",
+          },
+        ),
+      ),
       ui_show_header: Type.Optional(
         Type.Boolean({
           description:
@@ -362,7 +412,27 @@ export default function openPiSetup(pi: ExtensionAPI) {
       ui_web_theme: Type.Optional(
         StringEnum(WEB_THEMES, {
           description:
-            "Canonical OpenPI Web theme: system follows the browser/OS color scheme, light and dark force that appearance. Stored in package setup rather than browser storage. Omit to preserve the current value.",
+            "Canonical OpenPI Web theme: system follows the browser/OS color scheme; light, dark, mist, rose, and pine force that appearance. Stored in package setup rather than browser storage. Omit to preserve the current value.",
+        }),
+      ),
+      ui_web_chat_width: Type.Optional(
+        Type.Integer({
+          minimum: MIN_WEB_CHAT_WIDTH,
+          maximum: MAX_WEB_CHAT_WIDTH,
+          description: `OpenPI Web chat content width in pixels (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}, default ${DEFAULT_WEB_CHAT_WIDTH}). Omit to preserve the current value.`,
+        }),
+      ),
+      ui_web_chat_font_size: Type.Optional(
+        Type.Integer({
+          minimum: MIN_WEB_CHAT_FONT_SIZE,
+          maximum: MAX_WEB_CHAT_FONT_SIZE,
+          description: `OpenPI Web chat font size in pixels (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}, default ${DEFAULT_WEB_CHAT_FONT_SIZE}). Omit to preserve the current value.`,
+        }),
+      ),
+      ui_web_expand_thinking: Type.Optional(
+        Type.Boolean({
+          description:
+            "Whether OpenPI Web thinking blocks are expanded by default. Existing blocks remain individually collapsible. Omit to preserve the current value.",
         }),
       ),
       ui_custom_footer: Type.Optional(
@@ -373,8 +443,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
       ),
       ui_footer_preset: Type.Optional(
         StringEnum(FOOTER_PRESETS, {
-          description:
-            "Convenient footer preset applied first: powerline (one-line ANSI256 blocks), powerline-mono (one-line gray powerline), compact (one-line plain text). Style/lines overrides still win after the preset. Omit to preserve the current layout unless other footer fields are set.",
+          description: `Convenient footer preset applied first: powerline (one-line ANSI256 blocks), powerline-mono (one-line gray powerline), compact (one-line plain text). ${FOOTER_PRESET_GUIDANCE} Style/lines overrides still win after the preset. Omit to preserve the current layout unless other footer fields are set.`,
         }),
       ),
       ui_footer_style: Type.Optional(
@@ -511,10 +580,21 @@ export default function openPiSetup(pi: ExtensionAPI) {
               params.workflow_max_agent_calls ??
               current.workflows.maxAgentCalls,
           },
+          childExecutions:
+            params.child_execution_limit === undefined
+              ? current.childExecutions
+              : params.child_execution_limit === null
+                ? {}
+                : { maxActive: params.child_execution_limit },
           ui: {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??
               current.ui.webTheme,
+            webChatWidth: params.ui_web_chat_width ?? current.ui.webChatWidth,
+            webChatFontSize:
+              params.ui_web_chat_font_size ?? current.ui.webChatFontSize,
+            webExpandThinking:
+              params.ui_web_expand_thinking ?? current.ui.webExpandThinking,
             showHeader: params.ui_show_header ?? current.ui.showHeader,
             customFooter: params.ui_custom_footer ?? current.ui.customFooter,
             ...footer,
@@ -545,16 +625,30 @@ export default function openPiSetup(pi: ExtensionAPI) {
 
       // Patch the document as it is on disk now, not as it was when this call
       // started, and report any stored value that was normalized or migrated.
-      const { config, replaced } = await updateSetupConfig(buildConfig);
+      _signal?.throwIfAborted();
+      const { config, changed, replaced, diagnostics } =
+        await updateSetupConfig(
+          buildConfig,
+          () => applySetupConfiguration(pi),
+          _signal,
+        );
       pi.events.emit(SETUP_CONFIG_CHANGED_CHANNEL, config);
       const text = formatSetupConfig(config);
       const note =
-        replaced.length > 0
+        diagnostics
+          .map((item) => ` ${JSON.stringify(item.path)}: ${item.message}.`)
+          .join("") +
+        (replaced.length > 0
           ? ` Normalized or migrated stored values: ${replaced.join(", ")}.`
-          : "";
-      if (ctx.hasUI) ctx.ui.notify(`${text}${note}`, "info");
+          : "");
+      const receipt = buildSetupSuccessText(text, changed, note);
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          `${changed.length ? `Changed effective fields: ${changed.join(", ")}.` : "Effective configuration unchanged."} Saved OpenPI setup.\n${text}${note}`,
+          "info",
+        );
       return {
-        content: [{ type: "text", text: buildSetupSuccessText(text, note) }],
+        content: [{ type: "text", text: receipt }],
         details: config,
       };
     },
@@ -562,8 +656,13 @@ export default function openPiSetup(pi: ExtensionAPI) {
 
   const setupHandler = async (args: string, ctx: ExtensionCommandContext) => {
     const request = args.trim();
-    const currentConfiguration = formatSetupConfig(loadSetupConfig());
-    const savedConfigExists = hasSavedSetupConfig();
+    const inspected = inspectSetupConfig();
+    const diagnostics = formatSetupDiagnostics(inspected);
+    if (ctx.hasUI)
+      ctx.ui.notify(diagnostics, inspected.writable ? "info" : "error");
+    if (!inspected.writable) throw new Error(diagnostics);
+    const currentConfiguration = `${formatSetupConfig(inspected.config)}\n\n${diagnostics}`;
+    const savedConfigExists = inspected.source === "disk";
     const currentModel = ctx.model
       ? `${ctx.model.provider}/${ctx.model.id}`
       : "unavailable";
@@ -576,10 +675,13 @@ export default function openPiSetup(pi: ExtensionAPI) {
           "",
           "Current configuration:",
           currentConfiguration,
+          EXPLICIT_VALUE_GUIDANCE,
+          FOOTER_PRESET_GUIDANCE,
           "",
           "Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
           "",
           "configure_my_pi_setup is available only for this setup run. If the run settles without a successful apply, the writer is hidden and a later change requires /openpi-setup <request>. Use configure_my_pi_setup to apply only the requested OpenPI-owned changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
+          SETUP_REQUEST_VALIDATION,
         ]
       : buildInteractiveSetupPrompt({
           currentConfiguration,

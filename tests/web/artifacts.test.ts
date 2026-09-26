@@ -12,11 +12,62 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { ArtifactError, ArtifactReader } from "../../web/host/artifacts.ts";
-import { ARTIFACT_MAX_BYTES } from "../../web/protocol/artifacts.ts";
+import {
+  ARTIFACT_MAX_BYTES,
+  ARTIFACT_PREVIEW_BYTES,
+  ARTIFACT_PREVIEW_LINES,
+} from "../../web/protocol/artifacts.ts";
 
 function code(value: string) {
   return (error: unknown) =>
     error instanceof ArtifactError && error.code === value;
+}
+
+for (const [name, source, expected, truncated] of [
+  ["literal replacement character", "report: \ufffd", "report: \ufffd", false],
+  ["UTF-8 BOM", "\ufeffreport", "\ufeffreport", false],
+  [
+    "exact line limit",
+    Array(ARTIFACT_PREVIEW_LINES).fill("row").join("\n"),
+    Array(ARTIFACT_PREVIEW_LINES).fill("row").join("\n"),
+    false,
+  ],
+  [
+    "over line limit",
+    Array(ARTIFACT_PREVIEW_LINES + 1)
+      .fill("row")
+      .join("\n"),
+    Array(ARTIFACT_PREVIEW_LINES).fill("row").join("\n"),
+    true,
+  ],
+  [
+    "complete replacement character at byte limit",
+    "x".repeat(ARTIFACT_PREVIEW_BYTES - 3) + "\ufffdmore",
+    "x".repeat(ARTIFACT_PREVIEW_BYTES - 3) + "\ufffd",
+    true,
+  ],
+  [
+    "split UTF-8 character at byte limit",
+    "x".repeat(ARTIFACT_PREVIEW_BYTES - 1) + "\u4e2dmore",
+    "x".repeat(ARTIFACT_PREVIEW_BYTES - 1),
+    true,
+  ],
+] as const) {
+  test(`artifact preview preserves text and reports truncation: ${name}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "openpi-preview-text-"));
+    const reader = new ArtifactReader(() => ({ sessionId: "s", cwd: root }));
+    try {
+      await writeFile(join(root, "report.txt"), source);
+      const handle = await reader.resolveFile("s", "report.txt");
+      const result = await reader.read(handle, "s");
+      assert.equal(result.preview.text, expected);
+      assert.equal(result.preview.truncated, truncated);
+      assert.equal(result.bytes.toString("utf8"), source);
+    } finally {
+      reader.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 }
 
 test("artifact reads bind Session, canonical file, content revision and explicit release", async () => {

@@ -127,3 +127,67 @@ test("handoff capture failure is explicit and leaves cleanup to the caller", asy
     assert.ok(fs.existsSync(worktree.worktree.path));
   });
 });
+
+for (const location of ["patch", "inventory"] as const) {
+  test(`handoff preserves a literal replacement character in ${location}`, async () => {
+    await fixture(async ({ repo, runDir, worktree }) => {
+      if (location === "patch") {
+        fs.writeFileSync(
+          path.join(worktree.worktree.path, "a.txt"),
+          "literal � marker\n",
+        );
+      } else {
+        fs.writeFileSync(
+          path.join(worktree.worktree.path, "literal-�.txt"),
+          "keep\n",
+        );
+        fs.mkdirSync(path.join(worktree.worktree.path, "ignored"));
+        fs.writeFileSync(
+          path.join(worktree.worktree.path, "ignored", "�.txt"),
+          "keep\n",
+        );
+      }
+      const prepared = prepareWorktreeHandoff({
+        runDir,
+        runId: "wf_unicode",
+        agentIndex: 1,
+        agentLabel: "impl",
+        repoCwd: repo,
+        worktree: worktree.worktree,
+      });
+      assert.ok(prepared.ok, prepared.ok ? "" : prepared.reason);
+      if (!prepared.ok) return;
+      const disk = JSON.parse(fs.readFileSync(prepared.absolutePath, "utf8"));
+      if (location === "patch") {
+        assert.match(disk.patch.content, /\+literal � marker/);
+      } else {
+        assert.deepEqual(disk.untracked, ["literal-�.txt"]);
+        assert.deepEqual(disk.ignored, ["ignored/�.txt"]);
+      }
+    });
+  });
+}
+
+test("handoff still rejects invalid UTF-8 patch bytes before writing an artifact", async () => {
+  await fixture(async ({ repo, runDir, worktree }) => {
+    fs.writeFileSync(
+      path.join(worktree.worktree.path, "a.txt"),
+      Buffer.from([0xff, 0x0a]),
+    );
+    const prepared = prepareWorktreeHandoff({
+      runDir,
+      runId: "wf_invalid",
+      agentIndex: 1,
+      agentLabel: "impl",
+      repoCwd: repo,
+      worktree: worktree.worktree,
+    });
+    assert.equal(prepared.ok, false);
+    if (!prepared.ok) assert.match(prepared.reason, /UTF-8/);
+    assert.equal(
+      fs.existsSync(path.join(runDir, "worktrees", "agent-1.json")),
+      false,
+    );
+    assert.ok(fs.existsSync(worktree.worktree.path));
+  });
+});

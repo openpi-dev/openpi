@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { registerWebQuestionBridge } from "../../../extensions/ask-user/web-bridge.ts";
 import { stripVTControlCharacters } from "node:util";
 import type {
   ExtensionAPI,
@@ -481,6 +482,72 @@ test("compact paste content survives Escape and reopening the draft", async () =
   assert.deepEqual(result.details.answers, [{ id: "db", custom: draft }]);
 });
 
+test("a full-size draft can still be submitted", async () => {
+  const draft = "a".repeat(MAX_ANSWER_DRAFT_UTF8_BYTES);
+  let reviewShown = false;
+  let extraTextRejected = false;
+  const result = await runQuestionnaire(
+    { questions: [reviewQuestions.questions[0]!] },
+    (component) => {
+      component.handleInput("3");
+      component.handleInput(`\u001b[200~${draft}\u001b[201~`);
+      component.handleInput("b");
+      extraTextRejected = component
+        .render(100)
+        .join("\n")
+        .includes("Answer drafts are limited");
+      component.handleInput(input.enter);
+      reviewShown = component.render(100).join("\n").includes("Review answers");
+      if (reviewShown) component.handleInput(input.enter);
+      else {
+        component.handleInput(input.escape);
+        component.handleInput(input.escape);
+      }
+    },
+  );
+  assert.equal(extraTextRejected, true);
+  assert.equal(
+    reviewShown,
+    true,
+    "Enter must open review for a valid 8000-byte draft",
+  );
+  assert.deepEqual(result.details.answers, [{ id: "db", custom: draft }]);
+});
+
+test("a full-size draft permits backspace before new text", async () => {
+  const draft = "a".repeat(MAX_ANSWER_DRAFT_UTF8_BYTES - 1);
+  let reviewShown = false;
+  let backspaceRejected = false;
+  const result = await runQuestionnaire(
+    { questions: [reviewQuestions.questions[0]!] },
+    (component) => {
+      component.handleInput("3");
+      component.handleInput(draft);
+      component.handleInput("z");
+      component.handleInput("\u007f");
+      backspaceRejected = component
+        .render(100)
+        .join("\n")
+        .includes("Answer drafts are limited");
+      component.handleInput("b");
+      component.handleInput(input.enter);
+      reviewShown = component.render(100).join("\n").includes("Review answers");
+      if (reviewShown) component.handleInput(input.enter);
+      else {
+        component.handleInput(input.escape);
+        component.handleInput(input.escape);
+      }
+    },
+  );
+  assert.equal(
+    backspaceRejected,
+    false,
+    "Backspace must not consume draft bytes",
+  );
+  assert.equal(reviewShown, true);
+  assert.deepEqual(result.details.answers, [{ id: "db", custom: `${draft}b` }]);
+});
+
 test("a blank free-form draft explicitly requests a rephrased question", async () => {
   const result = await runQuestionnaire(
     { questions: [reviewQuestions.questions[0]!] },
@@ -745,6 +812,59 @@ function toolsExecute<T>(name: string) {
   assert.ok(execute, `${name} must be registered`);
   return execute as T;
 }
+
+test("Web handoff accepts only a reviewed status and maps expiry to cancellation", async () => {
+  const execute = toolsExecute<HumanHandoffExecute>("human_handoff");
+  const scope = {};
+  const ctx = {
+    hasUI: false,
+    sessionManager: scope,
+  } as unknown as ExtensionContext;
+  const params = {
+    title: "Sign in",
+    instructions: "Open the login page",
+    completionSignal: "Account visible",
+  };
+  const signal = new AbortController().signal;
+  const unregister = registerWebQuestionBridge(
+    scope,
+    async (_id, questions, _signal, handoff) => {
+      assert.deepEqual(handoff, params);
+      return {
+        kind: "answered",
+        answers: [
+          {
+            id: "handoff",
+            selected: questions[0]!.options[1]!.label,
+            note: "No access",
+          },
+        ],
+      };
+    },
+  );
+  try {
+    const result = await execute("handoff-web", params, signal, undefined, ctx);
+    assert.deepEqual(result.details, { status: "unable", note: "No access" });
+    assert.match(result.content[0]!.text, /Do not claim it succeeded/);
+  } finally {
+    unregister();
+  }
+  const expire = registerWebQuestionBridge(scope, async () => ({
+    kind: "expired",
+  }));
+  try {
+    assert.equal(
+      (await execute("expired", params, signal, undefined, ctx)).details.status,
+      "cancelled",
+    );
+  } finally {
+    expire();
+  }
+  assert.equal(
+    (await execute("missing", params, signal, undefined, ctx)).details.status,
+    "unavailable",
+  );
+});
 
 test("human handoff reviews status and tells the agent to verify completion", async () => {
   const execute = toolsExecute<HumanHandoffExecute>("human_handoff");

@@ -1,18 +1,386 @@
-import { AxeBuilder } from "@axe-core/playwright";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { expect, type Page, test } from "@playwright/test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { AxeBuilder } from "@axe-core/playwright";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { expect, type Page, test } from "@playwright/test";
+import type { WebSnapshot } from "../../web/protocol/types.ts";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
+  MOCK_SESSION_PATH,
 } from "./thinking-e2e-support.ts";
 
 const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
 
 const authenticatedPath = "/";
+
+function alignControlledSessionFixture(snapshot: WebSnapshot) {
+  const session = snapshot.selectedSession;
+  if (!session || session.id !== snapshot.currentSessionId) {
+    throw new Error("A controlled fixture must select its current Session");
+  }
+  snapshot.sessions = [
+    {
+      id: session.id,
+      path: session.path,
+      cwd: session.cwd,
+      name: "Browser fixture",
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
+      created: "2026-09-07T00:00:00Z",
+      modified: "2026-09-07T00:00:00Z",
+      messageCount: session.entries.length,
+      firstMessage: "",
+    },
+  ];
+  snapshot.workspaces = [
+    { path: session.cwd, name: "Fixture workspace", current: true },
+  ];
+}
+
+for (const width of [1280, 390]) {
+  test(`message editing and composer resizing preserve readable layout at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.selectedSession.entries = [
+        {
+          id: "layout-user",
+          type: "message",
+          timestamp: "2026-09-18T00:00:00Z",
+          message: { role: "user", content: "Original message ".repeat(30) },
+        },
+        {
+          id: "layout-assistant",
+          type: "message",
+          timestamp: "2026-09-18T00:00:01Z",
+          message: {
+            role: "assistant",
+            content: Array.from(
+              { length: 50 },
+              (_, index) => `Paragraph ${index + 1}`,
+            ).join("\n\n"),
+          },
+        },
+      ];
+      await route.fulfill({ response, json: snapshot });
+    });
+    await openWorkbench(page);
+    const conversation = page.getByRole("log", { name: "Conversation" });
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    const bottomGap = () =>
+      conversation.evaluate(
+        (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
+      );
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await input.fill(
+      Array.from({ length: 14 }, (_, index) => `Draft line ${index}`).join(
+        "\n",
+      ),
+    );
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await input.fill("");
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await conversation.evaluate((el) => {
+      // Establish a reading position, rather than starting the stylesheet's
+      // smooth-scroll animation while a resize notification is still pending.
+      el.scrollTo({ top: 120, behavior: "instant" });
+    });
+    await expect
+      .poll(() => conversation.evaluate((el) => el.scrollTop))
+      .toBe(120);
+    await input.fill("Reading history\n".repeat(12));
+    await expect
+      .poll(() => conversation.evaluate((el) => el.scrollTop))
+      .toBe(120);
+    await input.fill("");
+    await page.getByRole("button", { name: "编辑消息", exact: true }).click();
+    const editor = page.getByRole("textbox", { name: "编辑消息", exact: true });
+    await expect(editor).toBeVisible();
+    await expect(page.locator(".message-row.user .message-body")).toBeHidden();
+    const dimensions = await page.locator(".message-editor").evaluate((el) => ({
+      width: el.getBoundingClientRect().width,
+      rowWidth: el.parentElement!.getBoundingClientRect().width,
+      right: el.getBoundingClientRect().right,
+      viewport: document.documentElement.clientWidth,
+    }));
+    expect(dimensions.width).toBeGreaterThan(
+      Math.min(600, dimensions.rowWidth - 2),
+    );
+    expect(dimensions.right).toBeLessThanOrEqual(dimensions.viewport);
+    await editor.fill("Cancelled edit");
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    await page.getByRole("button", { name: "编辑消息", exact: true }).click();
+    await expect(editor).toHaveValue("Original message ".repeat(30));
+  });
+}
+
+for (const width of [1280, 390]) {
+  test(`long code blocks copy cleanly without widening the page at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    const source = [
+      'const messages = ["开始处理", "处理中", "处理完成"];',
+      'const greeting = "你好，OpenPI";',
+      'const longLine = "' + "long-code-value-".repeat(20) + '\";',
+      "console.log(messages, greeting, longLine);",
+    ].join("\n");
+    await page.setViewportSize({ width, height: 800 });
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText(text: string) {
+            (
+              window as Window & {
+                __openPiCopiedCode?: string;
+              }
+            ).__openPiCopiedCode = text;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.selectedSession.entries = [
+        {
+          id: "code-assistant",
+          type: "message",
+          timestamp: "2026-09-19T00:00:00Z",
+          message: {
+            role: "assistant",
+            content: `Use \`inlineCode\` here.\n\n\`\`\`ts\n${source}\n\`\`\``,
+          },
+        },
+      ];
+      await route.fulfill({ response, json: snapshot });
+    });
+    await openWorkbench(page);
+
+    const block = page.locator(".markdown-code-block");
+    const copy = page.getByRole("button", { name: "复制代码", exact: true });
+    await expect(block).toHaveCount(1);
+    await expect(copy).toBeVisible();
+    await expect
+      .poll(() =>
+        block.evaluate((element) => {
+          const scroll = element.querySelector(".markdown-code-scroll");
+          return scroll ? scroll.scrollWidth - scroll.clientWidth : 0;
+        }),
+      )
+      .toBeGreaterThan(0);
+    const dimensions = await block.evaluate((element) => {
+      const scroll = element.querySelector(".markdown-code-scroll");
+      const button = element.querySelector("button");
+      const bounds = element.getBoundingClientRect();
+      const buttonBounds = button?.getBoundingClientRect();
+      return {
+        pageWidth: document.documentElement.scrollWidth,
+        viewportWidth: document.documentElement.clientWidth,
+        blockRight: bounds.right,
+        buttonRight: buttonBounds?.right ?? Number.POSITIVE_INFINITY,
+        preClientWidth: scroll?.clientWidth ?? 0,
+        preScrollWidth: scroll?.scrollWidth ?? 0,
+      };
+    });
+    expect(dimensions.pageWidth).toBeLessThanOrEqual(width);
+    expect(dimensions.blockRight).toBeLessThanOrEqual(width);
+    expect(dimensions.buttonRight).toBeLessThanOrEqual(width);
+    expect(dimensions.preScrollWidth).toBeGreaterThan(
+      dimensions.preClientWidth,
+    );
+
+    const scroll = page.locator(".markdown-code-scroll");
+    await scroll.focus();
+    await expect(scroll).toHaveCSS("outline-style", "solid");
+    await expect(scroll).toHaveCSS("outline-width", "2px");
+    for (let index = 0; index < 8; index++) await scroll.press("ArrowRight");
+    await expect
+      .poll(() => scroll.evaluate((element) => element.scrollLeft))
+      .toBeGreaterThan(0);
+
+    await copy.click();
+    await expect(
+      page.getByRole("button", { name: "代码已复制", exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __openPiCopiedCode?: string;
+            }
+          ).__openPiCopiedCode,
+      ),
+    ).toBe(`${source}\n`);
+    expect(
+      (await new AxeBuilder({ page }).include(".markdown-code-block").analyze())
+        .violations,
+    ).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`code-block-${width}.png`),
+    });
+  });
+}
+
+for (const viewport of [
+  { width: 768, height: 1024, label: "tablet" },
+  { width: 640, height: 500, label: "effective 200% of 1280x1000" },
+] as const) {
+  test(`composer remains reachable at ${viewport.width}px (${viewport.label})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({
+      width: viewport.width,
+      height: viewport.height,
+    });
+    let admissions = 0;
+    await page.route("**/api/prompt", (route) => {
+      admissions++;
+      return route.abort();
+    });
+    await openWorkbench(page);
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("组合输入");
+    await input.evaluate((element) => {
+      element.dispatchEvent(
+        new CompositionEvent("compositionstart", { bubbles: true }),
+      );
+      element.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          isComposing: true,
+          bubbles: true,
+        }),
+      );
+    });
+    expect(admissions).toBe(0);
+    await expect(input).toHaveValue("组合输入");
+    await input.evaluate((element) =>
+      element.dispatchEvent(
+        new CompositionEvent("compositionend", { bubbles: true }),
+      ),
+    );
+    await input.press("Shift+Enter");
+    await expect(input).toHaveValue("组合输入\n");
+    await input.fill("多行草稿\n".repeat(12));
+    const send = page.getByRole("button", { name: "发送", exact: true });
+    await expect(send).toBeVisible();
+    const bounds = await send.boundingBox();
+    expect(bounds?.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`composer-${viewport.width}.png`),
+    });
+    expect(admissions).toBe(0);
+  });
+}
+
+test("provider failures remain visible after refresh without discarding partial text", async ({
+  page,
+}, testInfo) => {
+  let content = "";
+  let stopReason: "error" | "aborted" = "error";
+  const retried: string[] = [];
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: ": heartbeat\n\n",
+    }),
+  );
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.selectedSession.entries = [
+      {
+        id: "failed-user",
+        type: "message",
+        timestamp: "2026-09-18T00:00:00Z",
+        message: { role: "user", content: "Question" },
+      },
+      {
+        id: "failed-assistant",
+        type: "message",
+        timestamp: "2026-09-18T00:00:01Z",
+        message: {
+          role: "assistant",
+          content,
+          stopReason,
+          ...(stopReason === "error"
+            ? { errorMessage: "gateway_concurrency_limit (429)" }
+            : {}),
+        },
+      },
+    ];
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/api/prompt", async (route) => {
+    const body = route.request().postDataJSON() as { content: string };
+    retried.push(body.content);
+    await route.fulfill({ json: { id: "provider-retry", accepted: true } });
+  });
+  await openWorkbench(page);
+  await expect(page.getByRole("alert")).toContainText(
+    "gateway_concurrency_limit (429)",
+  );
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(page.getByRole("button", { name: "重试消息" })).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`provider-retry-${width}.png`),
+      fullPage: true,
+    });
+  }
+  await page.getByRole("button", { name: "重试消息" }).click();
+  await expect.poll(() => retried).toEqual(["Question"]);
+  await page.reload();
+  await expect(page.getByRole("alert")).toContainText(
+    "gateway_concurrency_limit (429)",
+  );
+  content = "Partial answer";
+  await page.reload();
+  await expect(page.getByText("Partial answer")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(
+    "gateway_concurrency_limit (429)",
+  );
+  stopReason = "aborted";
+  await page.reload();
+  await expect(page.getByText("Partial answer")).toBeVisible();
+  await expect(page.getByText("模型请求已停止")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
 
 async function openWorkbench(page: Page) {
   const externalRequests: string[] = [];
@@ -30,13 +398,372 @@ async function openWorkbench(page: Page) {
   return externalRequests;
 }
 
+async function dragPane(page: Page, side: "left" | "right", deltaX: number) {
+  const handle = page.locator(`[data-pane-resizer="${side}"]`);
+  const bounds = await handle.boundingBox();
+  expect(bounds).not.toBeNull();
+  const startX = bounds!.x + bounds!.width / 2;
+  const y = bounds!.y + Math.min(120, bounds!.height / 2);
+  await page.mouse.move(startX, y);
+  await page.mouse.down();
+  await page.mouse.move(startX + deltaX, y, { steps: 8 });
+  await page.mouse.up();
+}
+
+async function openWorkbarTool(page: Page, name: string) {
+  await page.locator(".task-tools-trigger").click();
+  const workbar = page.locator(".workbar-panel");
+  await expect(workbar).toBeVisible();
+  const existingTab = workbar
+    .locator(".workbar-tab > button:first-child")
+    .filter({ hasText: name });
+  if (await existingTab.isVisible().catch(() => false)) {
+    await existingTab.click();
+  } else {
+    await workbar
+      .getByRole("button", { name: new RegExp(`^${name}`, "u") })
+      .click();
+  }
+  return workbar;
+}
+
+test("desktop panes resize by pointer and collapse beyond their thresholds", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  const sidebar = page.locator(".session-sidebar");
+  const conversation = page.locator(".conversation-shell");
+  const initialSidebar = await sidebar.boundingBox();
+  const initialConversation = await conversation.boundingBox();
+  expect(initialSidebar).not.toBeNull();
+  expect(initialConversation).not.toBeNull();
+
+  await dragPane(page, "left", 80);
+  await expect
+    .poll(async () => (await sidebar.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(initialSidebar!.width + 60);
+  await expect
+    .poll(async () => (await conversation.boundingBox())?.width ?? 0)
+    .toBeLessThan(initialConversation!.width - 60);
+
+  await dragPane(page, "left", -240);
+  await expect(sidebar).toHaveCSS("width", "56px");
+  await expect(page.locator('[data-pane-resizer="left"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+
+  const workbar = await openWorkbarTool(page, "生成文件");
+  const centerBeforeRightDrag = await conversation.boundingBox();
+  await dragPane(page, "right", -70);
+  await expect
+    .poll(async () => (await conversation.boundingBox())?.width ?? 0)
+    .toBeLessThan(centerBeforeRightDrag!.width - 50);
+
+  await dragPane(page, "right", -360);
+  await expect(conversation).toBeHidden();
+  await expect(workbar).toBeVisible();
+  await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(0);
+  await workbar.getByRole("button", { name: "恢复会话", exact: true }).click();
+  await expect(conversation).toBeVisible();
+  await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(1);
+
+  await dragPane(page, "right", 420);
+  await expect(workbar).toBeHidden();
+  await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(0);
+});
+
+test("workbar exposes five tools and completes a side conversation lifecycle", async ({
+  page,
+}) => {
+  type SideAction = {
+    sessionId: string;
+    kind: "subagents";
+    action: "spawn-btw" | "send-btw" | "cancel-btw";
+    prompt?: string;
+    id?: string;
+    text?: string;
+  };
+  const actions: SideAction[] = [];
+  const turns: Array<{ question: string; answer: string }> = [];
+  let status: "running" | "done" = "running";
+  const detail = () => ({
+    kind: "subagents" as const,
+    id: "btw-e2e",
+    title: "Focused side question",
+    origin: "btw" as const,
+    status,
+    ...(status === "done"
+      ? { outcome: "interrupted" as const, settledAt: 2 }
+      : {}),
+    createdAt: 1,
+    cwd: "/workspace",
+    model: "fixture/model",
+    prompt: turns[0]?.question ?? "",
+    transcript: turns.flatMap((turn) => [
+      { kind: "user" as const, text: turn.question },
+      {
+        kind: "assistant" as const,
+        parts: [{ type: "text" as const, text: turn.answer }],
+      },
+    ]),
+    liveTools: [],
+    finalText: turns.at(-1)?.answer ?? "",
+    truncated: false,
+    omittedEntries: 0,
+  });
+  await page.route("**/api/capabilities/action", async (route) => {
+    const action = route.request().postDataJSON() as SideAction;
+    actions.push(action);
+    if (action.action === "spawn-btw") {
+      turns.push({
+        question: action.prompt ?? "",
+        answer: "Side response",
+      });
+    } else if (action.action === "send-btw") {
+      turns.push({
+        question: action.text ?? "",
+        answer: "Follow-up response",
+      });
+    } else {
+      status = "done";
+    }
+    await route.fulfill({
+      json: { sessionId: action.sessionId, detail: detail() },
+    });
+  });
+  await page.route("**/api/capabilities/detail?**", async (route) => {
+    const sessionId = new URL(route.request().url()).searchParams.get(
+      "sessionId",
+    );
+    await route.fulfill({ json: { sessionId, detail: detail() } });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "打开工具", exact: true }).click();
+  const launcher = page.locator(".workbar-panel");
+  const launcherButtons = launcher.locator(".workbar-launcher-list > button");
+  await expect(launcherButtons).toHaveCount(5);
+  expect(await launcherButtons.locator("strong").allTextContents()).toEqual([
+    "侧边对话",
+    "变更",
+    "终端",
+    "浏览器",
+    "生成文件",
+  ]);
+  await launcher.getByRole("button", { name: /^变更/u }).click();
+  const review = launcher.locator(".review-panel");
+  await expect(review).toBeVisible();
+  await launcher
+    .getByRole("button", { name: "关闭 变更", exact: true })
+    .click();
+  await expect(launcher.locator(".workbar-launcher-list")).toBeVisible();
+
+  const workbar = await openWorkbarTool(page, "侧边对话");
+  const question = workbar.getByPlaceholder("提出一个侧边问题…");
+  await question.fill("Inspect this in isolation");
+  await question.press("Enter");
+  await expect(workbar.getByText("Side response")).toBeVisible();
+  await expect
+    .poll(() => actions.map((action) => action.action))
+    .toEqual(["spawn-btw"]);
+
+  const followUp = workbar.getByPlaceholder("继续追问…");
+  await followUp.fill("Check one more detail");
+  await followUp.press("Enter");
+  await expect(workbar.getByText("Follow-up response")).toBeVisible();
+  await expect
+    .poll(() => actions.map((action) => action.action))
+    .toEqual(["spawn-btw", "send-btw"]);
+  await workbar.getByRole("button", { name: "停止", exact: true }).click();
+  await expect
+    .poll(() => actions.map((action) => action.action))
+    .toEqual(["spawn-btw", "send-btw", "cancel-btw"]);
+  await expect(workbar.getByRole("button", { name: "停止" })).toHaveCount(0);
+  expect(
+    (await new AxeBuilder({ page }).include(".workbar-panel").analyze())
+      .violations,
+  ).toEqual([]);
+});
+
+test("terminal tool runs a real workspace shell", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  await openWorkbarTool(page, "终端");
+  const terminal = page.locator(".interactive-terminal");
+  await expect(terminal.locator(".terminal-status-dot.ready")).toBeVisible();
+  const input = terminal.locator(".xterm-helper-textarea");
+  await input.focus();
+  await page.keyboard.type("printf 'OPENPI_WEB_TERMINAL_OK\\n'");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => terminal.locator(".xterm-rows").textContent())
+    .toContain("OPENPI_WEB_TERMINAL_OK");
+});
+
+test("browser tool keeps an interactive page inside the workbar", async ({
+  page,
+}) => {
+  type BrowserState = {
+    sessionId: string;
+    url: string;
+    title: string;
+    width: number;
+    height: number;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+  };
+  let launch:
+    | { sessionId: string; url: string; width: number; height: number }
+    | undefined;
+  let browserState: BrowserState | undefined;
+  const actions: Array<{ action: string }> = [];
+  await page.route("**/api/browser/open", async (route) => {
+    launch = route.request().postDataJSON();
+    browserState = {
+      sessionId: launch!.sessionId,
+      url: launch!.url,
+      title: "Example Domain",
+      width: launch!.width,
+      height: launch!.height,
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+    };
+    await route.fulfill({ json: browserState });
+  });
+  await page.route("**/api/browser/state?**", async (route) => {
+    if (!browserState) {
+      await route.fulfill({
+        status: 404,
+        json: { error: "Browser is not open" },
+      });
+      return;
+    }
+    await route.fulfill({ json: browserState });
+  });
+  await page.route("**/api/browser/action", async (route) => {
+    const action = route.request().postDataJSON() as {
+      action: string;
+      width?: number;
+      height?: number;
+    };
+    actions.push(action);
+    if (browserState && action.action === "resize") {
+      browserState = {
+        ...browserState,
+        width: action.width ?? browserState.width,
+        height: action.height ?? browserState.height,
+      };
+    }
+    await route.fulfill({ json: browserState });
+  });
+  await page.route("**/api/browser/frame?**", (route) =>
+    route.fulfill({
+      contentType: "image/jpeg",
+      body: Buffer.from(
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/Aaf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/Aaf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z",
+        "base64",
+      ),
+    }),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  const workbar = await openWorkbarTool(page, "浏览器");
+  await workbar
+    .getByRole("textbox", { name: "浏览器地址" })
+    .fill("example.com");
+  await workbar.getByRole("button", { name: "打开地址" }).click();
+  await expect(
+    workbar.locator(".browser-viewport img[alt='Example Domain']"),
+  ).toBeVisible();
+  await expect(workbar.locator("iframe")).toHaveCount(0);
+  expect(launch?.url).toBe("https://example.com/");
+  expect(launch?.sessionId).toBeTruthy();
+  expect(launch?.width).toBeGreaterThanOrEqual(320);
+  expect(launch?.height).toBeGreaterThanOrEqual(240);
+  await dragPane(page, "right", -70);
+  await expect
+    .poll(() => actions.some((action) => action.action === "resize"))
+    .toBe(true);
+
+  await workbar.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(workbar).toBeHidden();
+  await page.locator(".task-tools-trigger").click();
+  await expect(workbar).toBeVisible();
+  await expect(
+    workbar.locator(".browser-viewport img[alt='Example Domain']"),
+  ).toBeVisible();
+});
+
+test("composer sends staged image data with the prompt", async ({ page }) => {
+  let admission:
+    | {
+        content: string;
+        images?: Array<{ data: string; mimeType: string }>;
+      }
+    | undefined;
+  await page.route("**/api/prompt", async (route) => {
+    admission = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      json: { id: "image-prompt", accepted: true },
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  await page.locator(".composer input[type=file]").setInputFiles({
+    name: "sample.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGQAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await expect(page.locator(".composer-attachment")).toContainText(
+    "sample.png",
+  );
+  await page.getByRole("textbox", { name: "描述任务" }).fill("Inspect this");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect.poll(() => admission).toBeTruthy();
+  expect(admission?.content).toBe("Inspect this");
+  expect(admission?.images).toHaveLength(1);
+  expect(admission?.images?.[0]?.mimeType).toBe("image/png");
+  expect(admission?.images?.[0]?.data).toMatch(/^iVBOR/u);
+});
+
+test("sidebar settings stays open after an OpenPI configuration request", async ({
+  page,
+}) => {
+  let request = "";
+  await page.route("**/api/prompt", async (route) => {
+    request = (route.request().postDataJSON() as { content: string }).content;
+    await route.fulfill({
+      status: 202,
+      json: { id: "settings-request", accepted: true },
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "设置" });
+  await expect(settings).toBeVisible();
+  await settings
+    .getByRole("button", { name: "配置 OpenPI", exact: true })
+    .click();
+  await expect(settings).toBeVisible();
+  await expect(settings.getByText("配置请求已接收。")).toBeVisible();
+  expect(request).toBe("/openpi-setup 和我一起检查全部 OpenPI 配置项");
+});
+
 test("production workbench is local, keyboard-operable, and accessible", async ({
   page,
 }) => {
   const externalRequests = await openWorkbench(page);
 
   await expect(
-    page.getByRole("heading", { level: 1, name: "OpenPI" }),
+    page.getByRole("heading", { level: 1, name: "新会话" }),
   ).toBeAttached();
   await expect(page.locator('script[src*="@vite/client"]')).toHaveCount(0);
   await expect.poll(() => externalRequests).toEqual([]);
@@ -99,29 +826,118 @@ test("production workbench is local, keyboard-operable, and accessible", async (
     const conversation = document.querySelector<HTMLElement>(".conversation");
     if (!shell || !conversation)
       throw new Error("conversation shell is missing");
-    const message = document.createElement("article");
-    message.className = "message-row assistant";
-    message.textContent = "Layout probe";
+    const turn = document.createElement("section");
+    turn.className = "conversation-turn";
     const rail = document.createElement("nav");
     rail.className = "turn-rail";
-    conversation.append(message);
+    conversation.append(turn);
     shell.append(rail);
-    const messageRect = message.getBoundingClientRect();
+    const turnRect = turn.getBoundingClientRect();
     const railRect = rail.getBoundingClientRect();
     const shellRect = shell.getBoundingClientRect();
-    message.remove();
+    turn.remove();
     rail.remove();
     return {
       gutter: shellRect.right - railRect.right,
-      messageRight: messageRect.right,
+      turnRight: turnRect.right,
       railLeft: railRect.left,
     };
   });
   expect(turnRailLayout.gutter).toBeCloseTo(24, 0);
   expect(turnRailLayout.railLeft).toBeGreaterThanOrEqual(
-    turnRailLayout.messageRight,
+    turnRailLayout.turnRight,
   );
 });
+
+for (const theme of ["light", "dark"]) {
+  test(`compact navigation preserves controls and drawer layout in ${theme} theme`, async ({
+    page,
+  }, testInfo) => {
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.preferences = { ...snapshot.preferences, theme };
+      await route.fulfill({ json: snapshot });
+    });
+    await openWorkbench(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const sidebar = page.locator(".session-sidebar");
+    const current = sidebar.getByRole("button", { name: "当前", exact: true });
+    const archived = sidebar.getByRole("button", {
+      name: "已归档",
+      exact: true,
+    });
+    const create = sidebar.getByRole("button", {
+      name: "新建会话",
+      exact: true,
+    });
+    await archived.click();
+    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeVisible();
+    await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
+    const expand = page.getByRole("button", { name: "展开侧边栏" });
+    await expect(expand).toBeVisible();
+    await expect(create).toBeVisible();
+    await expect(create).toHaveAttribute("title", "新建会话");
+    await expect(current).toBeHidden();
+    await expect(archived).toBeHidden();
+    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeHidden();
+    await expect(sidebar.locator(".workspace-tree")).toBeHidden();
+    await expect(sidebar).toHaveCSS("width", "56px");
+    const createBox = await create.boundingBox();
+    const expandBox = await expand.boundingBox();
+    if (!createBox || !expandBox) throw new Error("rail actions are missing");
+    expect(createBox.width).toBe(40);
+    expect(createBox.height).toBe(40);
+    expect(createBox.y - expandBox.y - expandBox.height).toBe(8);
+    expect(Math.abs(createBox.x - expandBox.x)).toBeLessThanOrEqual(1);
+    await create.focus();
+    await expect(create).toBeFocused();
+    const accessibility = await new AxeBuilder({ page }).analyze();
+    expect(accessibility.violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`rail-${theme}.png`),
+      animations: "disabled",
+    });
+
+    await expand.click();
+    await expect(archived).toHaveAttribute("aria-pressed", "true");
+    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeVisible();
+    await current.click();
+    await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
+    await expect(sidebar.locator(".session-view-switch")).toBeHidden();
+
+    // Carry the desktop collapsed state across the responsive boundary.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "打开侧边栏" }).click();
+    await expect(current).toBeVisible();
+    await expect(sidebar.locator(".sidebar-brand")).toBeVisible();
+    await expect.poll(async () => (await sidebar.boundingBox())?.x).toBe(0);
+    const brand = await sidebar.locator(".brand-lockup").boundingBox();
+    const drawer = await sidebar.boundingBox();
+    if (!brand || !drawer) throw new Error("drawer brand is missing");
+    expect(brand.x).toBeGreaterThanOrEqual(drawer.x);
+    expect(brand.x + brand.width).toBeLessThanOrEqual(drawer.x + drawer.width);
+    await page.screenshot({ path: testInfo.outputPath(`drawer-${theme}.png`) });
+    await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByRole("button", { name: "执行轨迹", exact: true }).click();
+    const switcher = page.locator(".conversation-view-switch");
+    const switchBox = await switcher.boundingBox();
+    const buttons = await switcher.locator("button").all();
+    const buttonBoxes = await Promise.all(
+      buttons.map((button) => button.boundingBox()),
+    );
+    const contentWidth = buttonBoxes.reduce(
+      (sum, box) => sum + (box?.width ?? 0),
+      0,
+    );
+    expect(switchBox?.width).toBeLessThanOrEqual(contentWidth + 16);
+    await page.screenshot({
+      path: testInfo.outputPath(`navigation-${theme}.png`),
+    });
+  });
+}
 
 test("discovers and completes Pi commands without submitting unsupported commands", async ({
   page,
@@ -214,7 +1030,6 @@ test("discovers and completes Pi commands without submitting unsupported command
     /\/deploy/u,
     /\/inspect/u,
     /\/optimize/u,
-    /\/extension:setup/u,
   ]);
   const menu = page.locator(".slash-command-menu");
   const menuBox = await menu.boundingBox();
@@ -253,9 +1068,10 @@ test("discovers and completes Pi commands without submitting unsupported command
   expect(flippedMenuBox!.y + flippedMenuBox!.height).toBeLessThanOrEqual(
     shiftedComposerBox!.y - 7,
   );
+  await input.fill("/extension");
   const extension = page.getByRole("option", { name: /\/extension:setup/u });
   await expect(extension).toBeDisabled();
-  await expect(extension).toContainText("当前 Web 不支持");
+  await expect(extension).toContainText("尚未适配 · 手动命令仍交给 Pi");
 
   await input.fill("/rev");
   await expect(page.getByRole("option", { name: /\/review/u })).toBeVisible();
@@ -298,8 +1114,14 @@ test.describe("touch viewport", () => {
       .first();
     await expect(sessionMenu).toBeVisible();
     await sessionMenu.click();
-    await expect(page.getByRole("menu", { name: "会话选项" })).toBeVisible();
+    const menu = page.getByRole("menu", { name: "会话选项" });
+    await expect(menu).toBeVisible();
+    // Keyboard dismissal belongs to the menu after its focus handoff, not to
+    // the drawer trigger while the menu is still opening.
+    await expect(menu).toBeFocused();
     await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(sidebar).toBeVisible();
 
     await page.getByRole("button", { name: "Workspace options" }).click();
     await page.getByRole("menuitem", { name: "重命名工作区" }).click();
@@ -339,7 +1161,10 @@ for (const width of [320, 390]) {
     await expect(close).toBeFocused();
     await expect.poll(async () => (await sidebar.boundingBox())?.x).toBe(0);
 
-    const last = sidebar.getByRole("button", { name: "会话选项" }).last();
+    const last = sidebar.getByRole("button", { name: "设置", exact: true });
+    const sessionOptions = sidebar
+      .getByRole("button", { name: "会话选项" })
+      .last();
     for (const source of ["brand", "search"] as const) {
       for (const key of ["Tab", "Shift+Tab", "Escape"]) {
         if (source === "brand") {
@@ -370,11 +1195,13 @@ for (const width of [320, 390]) {
     await expect(last).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(close).toBeFocused();
-    await last.focus();
+    await sessionOptions.focus();
     await page.keyboard.press("Enter");
     await expect(
       page.getByRole("menuitem", { name: "重命名会话" }),
     ).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(last).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(close).toBeFocused();
     for (let step = 0; step < 15; step++) {
@@ -594,6 +1421,7 @@ test("restores a running turn and canonical dark theme without losing cancellati
       activeTurn: turn,
       capabilities: {},
     };
+    alignControlledSessionFixture(snapshot);
     await route.fulfill({ response, json: snapshot });
   });
   await page.route("**/events?**", (route) =>
@@ -624,6 +1452,9 @@ test("restores a running turn and canonical dark theme without losing cancellati
   await expect.poll(() => cancelRequests).toEqual([turn]);
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+  // Cancel triggers a snapshot reconcile. Finish its route handler before
+  // Playwright disposes the response's request context during teardown.
+  await page.unrouteAll({ behavior: "wait" });
 });
 
 test("recovers an unknown prompt admission only after an explicit user decision", async ({
@@ -787,6 +1618,16 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
         },
       },
     };
+    snapshot.models = [
+      {
+        provider: "example",
+        id: "example-model",
+        name: "Inspection Model",
+        label: "Inspection Model",
+        current: true,
+      },
+    ];
+    alignControlledSessionFixture(snapshot);
     await route.fulfill({ response, json: snapshot });
   });
   await page.route("**/events?**", (route) =>
@@ -850,8 +1691,9 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole("button", { name: "运行状态", exact: true }).click();
     const dialog = page.getByRole("dialog");
+    await expect(dialog).toHaveCSS("opacity", "1");
     await expect(dialog).toContainText("medium");
-    await expect(dialog).toContainText("Example");
+    await expect(dialog).not.toContainText("Example");
     await expect
       .poll(() => reads.filter((x) => x === "thinking").length)
       .toBe(width === 1280 ? 1 : 2);
@@ -862,10 +1704,61 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     });
     await page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();
+    await page.getByRole("button", { name: "服务商凭据", exact: true }).click();
+    const providerSettings = page.getByRole("dialog", { name: "设置" });
+    const settingsNavigation = providerSettings.getByRole("tablist", {
+      name: "设置导航",
+    });
+    await expect(
+      providerSettings.getByRole("heading", { name: "常规" }),
+    ).toBeVisible();
+    await expect(
+      providerSettings.getByRole("button", { name: "打开运行详情" }),
+    ).toBeVisible();
+    await settingsNavigation
+      .getByRole("tab", { name: "模型", exact: true })
+      .click();
+    await expect(
+      providerSettings.getByRole("heading", { name: "Inspection Model" }),
+    ).toBeVisible();
+    await expect(providerSettings).toContainText("Example");
+    await expect
+      .poll(() => reads.filter((x) => x === "providers/auth-status").length)
+      .toBe(width === 1280 ? 1 : 2);
+    await settingsNavigation
+      .getByRole("tab", { name: "常规", exact: true })
+      .click();
+    await expect(
+      providerSettings.getByRole("heading", { name: "常规" }),
+    ).toBeVisible();
+    await expect(
+      providerSettings.getByRole("button", { name: "打开运行详情" }),
+    ).toBeVisible();
+    await settingsNavigation
+      .getByRole("tab", { name: "模型", exact: true })
+      .click();
+    await expect(
+      providerSettings.getByRole("heading", { name: "Inspection Model" }),
+    ).toBeVisible();
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`providers-${width}.png`),
+      fullPage: true,
+    });
+    await page.keyboard.press("Escape");
+    await expect(providerSettings).not.toBeVisible();
     await page.getByRole("button", { name: /Build logs/ }).click();
     await expect(dialog.locator("pre").first()).toContainText(
       '<script>alert("literal output")</script>',
     );
+    const terminalOutput = dialog.getByRole("region", { name: "标准输出" });
+    await terminalOutput.click();
+    await expect(terminalOutput).toBeFocused();
+    expect(
+      await terminalOutput.evaluate(
+        (element) => element.scrollWidth > element.clientWidth,
+      ),
+    ).toBe(true);
     await expect(dialog.locator("script")).toHaveCount(0);
     await expect(dialog).toContainText("已完成");
     expect(
@@ -879,6 +1772,106 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     });
     await page.getByRole("button", { name: "关闭", exact: true }).click();
   }
+});
+
+test("adds validated file references without hiding the prompt contract", async ({
+  page,
+}, testInfo) => {
+  const sessionId = "file-reference-browser-session";
+  const references: string[] = [];
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    const selected = snapshot.selectedSession;
+    expect(selected).toBeTruthy();
+    snapshot.currentSessionId = sessionId;
+    snapshot.selectedSession = {
+      ...selected,
+      id: sessionId,
+      entries: [],
+      bytes: 0,
+      truncation: {
+        truncated: false,
+        maxBytes: 2097152,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+      },
+    };
+    snapshot.sessions = snapshot.sessions.map(
+      (session: { path: string; id: string }) =>
+        session.path === selected.path
+          ? { ...session, id: sessionId }
+          : session,
+    );
+    snapshot.runtime = { status: "idle", capabilities: {} };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: ": heartbeat\n\n",
+    }),
+  );
+  await page.route("**/api/artifacts/resolve", async (route) => {
+    const body = route.request().postDataJSON() as { reference: string };
+    references.push(body.reference);
+    if (body.reference.startsWith("..")) {
+      await route.fulfill({
+        status: 403,
+        json: { error: "Host English", code: "ARTIFACT_DENIED" },
+      });
+      return;
+    }
+    await route.fulfill({ json: { handle: "file-reference-handle" } });
+  });
+  await page.route("**/api/artifacts/content?**", async (route) => {
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({ json: { released: true } });
+      return;
+    }
+    await route.fulfill({ json: { identity: "stable" } });
+  });
+
+  await openWorkbench(page);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const draft = page.getByRole("textbox", { name: "描述任务" });
+    await page.getByRole("button", { name: "添加上下文" }).click();
+    await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
+    const dialog = page.getByRole("dialog", { name: "引用工作区文件" });
+    await dialog
+      .getByRole("textbox", { name: "工作区文件路径" })
+      .fill("README.md");
+    await dialog.getByRole("button", { name: "插入引用" }).click();
+    await expect(draft).toHaveValue("`README.md`");
+    await expect(draft).toBeFocused();
+
+    await page.getByRole("button", { name: "添加上下文" }).click();
+    await expect(
+      page.getByRole("menuitem", { name: /斜杠命令/u }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
+    await dialog
+      .getByRole("textbox", { name: "工作区文件路径" })
+      .fill("../outside.txt");
+    await dialog.getByRole("button", { name: "插入引用" }).click();
+    await expect(dialog).toContainText("请选择当前会话工作区内的文件。");
+    await expect(draft).toHaveValue("`README.md`");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`file-reference-${width}.png`),
+      fullPage: true,
+    });
+    await dialog.getByRole("button", { name: "取消" }).click();
+    await draft.fill("");
+  }
+  expect(references).toEqual([
+    "README.md",
+    "../outside.txt",
+    "README.md",
+    "../outside.txt",
+  ]);
 });
 
 test("restores archived history without switching the active Session", async ({
@@ -900,6 +1893,7 @@ test("restores archived history without switching the active Session", async ({
     const response = await route.fetch();
     const snapshot = await response.json();
     snapshot.sessions = [
+      ...snapshot.sessions,
       {
         id: "archived-browser",
         path,
@@ -940,6 +1934,18 @@ test("restores archived history without switching the active Session", async ({
   });
   await openWorkbench(page);
   await page.getByRole("button", { name: "已归档", exact: true }).click();
+  await expect(
+    page.getByText("Saved browser work", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "搜索会话" }).click();
+  await page
+    .getByRole("searchbox", { name: "搜索会话" })
+    .fill("not-in-loaded-history");
+  await expect(
+    page.getByText("已加载历史中没有匹配的会话", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(/搜索仅覆盖已加载列表/u)).toBeVisible();
+  await page.getByRole("button", { name: "关闭搜索" }).click();
   await expect(
     page.getByText("Saved browser work", { exact: true }),
   ).toBeVisible();
@@ -1025,8 +2031,14 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
             isError: false,
           },
         },
+        {
+          id: "custom-tail",
+          type: "custom",
+          timestamp: "2026-09-07T00:00:03Z",
+        },
       ],
     };
+    alignControlledSessionFixture(snapshot);
     await route.fulfill({ response, json: snapshot });
   });
   await page.route("**/events?**", (route) =>
@@ -1039,9 +2051,15 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
   await page.getByRole("button", { name: "执行轨迹", exact: true }).click();
   const view = page.getByRole("region", { name: "执行轨迹", exact: true });
   await expect(view.locator(".trajectory-record")).toHaveCount(50);
+  await expect(view.locator(".trajectory-inspector")).toContainText(
+    "printf hello",
+  );
+  await expect(view.locator(".trajectory-inspector")).toContainText(
+    "工具已返回结果。",
+  );
   await expect(view.getByText(/省略 4 条记录/)).toBeVisible();
   await view.getByRole("button", { name: /显示更早记录/ }).click();
-  await expect(view.locator(".trajectory-record")).toHaveCount(56);
+  await expect(view.locator(".trajectory-record")).toHaveCount(57);
   await view.locator(".trajectory-record").filter({ hasText: "bash" }).click();
   await expect(view.locator(".trajectory-inspector")).toContainText(
     "printf hello",
@@ -1163,8 +2181,10 @@ test("model picker distinguishes same-named models before choosing a directory",
       const label = element.querySelector(".model-picker-label");
       return (
         label instanceof HTMLElement &&
-        getComputedStyle(label).whiteSpace === "normal" &&
-        label.scrollWidth <= label.clientWidth
+        getComputedStyle(label).whiteSpace === "nowrap" &&
+        getComputedStyle(label).textOverflow === "ellipsis" &&
+        label.getBoundingClientRect().right <=
+          document.documentElement.clientWidth
       );
     }),
   ).toBe(true);
@@ -1208,6 +2228,7 @@ test("same-named model selection sends the exact identity for an active Session"
   page,
 }) => {
   let selectedIdentity = "provider-alpha/one";
+  let selectedSessionPath = "";
   const writes: Array<{
     provider: string;
     modelId: string;
@@ -1216,6 +2237,7 @@ test("same-named model selection sends the exact identity for an active Session"
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const snapshot = await response.json();
+    selectedSessionPath = snapshot.selectedSession.path;
     snapshot.runtime.status = "idle";
     snapshot.models = [
       {
@@ -1267,6 +2289,7 @@ test("same-named model selection sends the exact identity for an active Session"
       provider: "provider-beta",
       modelId: "two",
       sessionId: expect.any(String),
+      sessionPath: selectedSessionPath,
     },
   ]);
 });
@@ -1293,14 +2316,17 @@ test("finds and selects a model omitted from the bounded snapshot", async ({
     provider: string;
     modelId: string;
     sessionId: string;
+    sessionPath: string;
   }> = [];
   let activeSessionId: string | undefined;
+  let activeSessionPath: string | undefined;
   let selectedIdentity = "fixture/visible-0";
 
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const snapshot = await response.json();
     activeSessionId = snapshot.currentSessionId;
+    activeSessionPath = snapshot.selectedSession.path;
     snapshot.runtime.status = "idle";
     snapshot.models =
       selectedIdentity === "provider-hidden/needle-251"
@@ -1375,6 +2401,7 @@ test("finds and selects a model omitted from the bounded snapshot", async ({
       provider: "provider-hidden",
       modelId: "needle-251",
       sessionId: activeSessionId,
+      sessionPath: activeSessionPath,
     },
   ]);
   await expect(
@@ -1483,7 +2510,7 @@ test("a delayed creation receipt never retargets the first prompt to another tab
     expect(importedB.status()).toBe(201);
     const { path: canonicalA } = await importedA.json();
     const { path: canonicalB } = await importedB.json();
-    const workspaceNameA = canonicalA.split("/").at(-1);
+    const workspaceNameA = canonicalA.split(/[\\/]/u).at(-1);
 
     await page.route("**/events?**", (route) =>
       route.fulfill({
@@ -1604,7 +2631,11 @@ test.describe("thinking picker", () => {
       "false",
     );
     expect(fixture.posts).toEqual([
-      { sessionId: MOCK_SESSION_ID, level: "high" },
+      {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        level: "high",
+      },
     ]);
   });
 
@@ -1627,7 +2658,11 @@ test.describe("thinking picker", () => {
       "low",
     );
     expect(fixture.posts).toEqual([
-      { sessionId: MOCK_SESSION_ID, level: "low" },
+      {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        level: "low",
+      },
     ]);
 
     await picker.focus();
@@ -1665,8 +2700,16 @@ test.describe("thinking picker", () => {
       "false",
     );
     expect(fixture.posts).toEqual([
-      { sessionId: MOCK_SESSION_ID, level: "low" },
-      { sessionId: MOCK_SESSION_ID, level: "high" },
+      {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        level: "low",
+      },
+      {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        level: "high",
+      },
     ]);
   });
 

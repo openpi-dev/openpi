@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 
-import { cleanup, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { type ComponentProps, createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
+import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
+import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 
@@ -22,6 +30,64 @@ vi.mock("react-markdown", async (importOriginal) => {
 afterEach(() => {
   cleanup();
   parsing.inputs.length = 0;
+});
+
+it("scrolls overflowing code blocks with deterministic arrow-key controls", () => {
+  const { container } = render(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(
+        Markdown,
+        null,
+        `\`\`\`ts\nconst value = "${"wide-".repeat(40)}";\n\`\`\``,
+      ),
+    ),
+  );
+  const scroll = container.querySelector<HTMLElement>(".markdown-code-scroll");
+  expect(scroll).toBeTruthy();
+  Object.defineProperties(scroll!, {
+    clientWidth: { configurable: true, value: 100 },
+    scrollWidth: { configurable: true, value: 300 },
+    scrollLeft: { configurable: true, value: 0, writable: true },
+  });
+
+  fireEvent.keyDown(scroll!, { key: "ArrowRight" });
+  expect(scroll!.scrollLeft).toBe(40);
+  fireEvent.keyDown(scroll!, { key: "ArrowLeft" });
+  expect(scroll!.scrollLeft).toBe(0);
+});
+
+it("keeps code-copy feedback across artifact context refreshes", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  const renderMarkdown = (parent: string) =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(
+        ArtifactContext.Provider,
+        { value: { open: vi.fn(), parent } },
+        createElement(Markdown, null, "```ts\nconst value = 42;\n```"),
+      ),
+    );
+  const view = render(renderMarkdown("first.ts"));
+
+  await act(async () =>
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("copyCode") })),
+  );
+  expect(writeText).toHaveBeenCalledWith("const value = 42;\n");
+  expect(
+    screen.getByRole("button", { name: i18n.t("copiedCode") }),
+  ).toBeTruthy();
+
+  view.rerender(renderMarkdown("second.ts"));
+  expect(
+    screen.getByRole("button", { name: i18n.t("copiedCode") }),
+  ).toBeTruthy();
 });
 
 it("parses changed text without reparsing mounted history during streaming or snapshot refresh", () => {

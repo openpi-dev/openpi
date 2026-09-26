@@ -312,7 +312,15 @@ export default function fileSearchTools(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, { expanded, isPartial }, theme) {
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      if (context.isError) {
+        return new Text(
+          theme.fg("error", "fd search failed") +
+            expandedPreview(result, undefined, theme),
+          0,
+          0,
+        );
+      }
       if (isPartial) return new Text(theme.fg("warning", "Searching..."), 0, 0);
       const details = result.details;
       if (!details || details.matchCount === 0) {
@@ -405,7 +413,15 @@ export default function fileSearchTools(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, { expanded, isPartial }, theme) {
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      if (context.isError) {
+        return new Text(
+          theme.fg("error", "rg search failed") +
+            expandedPreview(result, undefined, theme),
+          0,
+          0,
+        );
+      }
       if (isPartial) return new Text(theme.fg("warning", "Searching..."), 0, 0);
       const details = result.details;
       if (!details || details.outputLines === 0) {
