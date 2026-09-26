@@ -25,6 +25,7 @@ import {
   inspectSetupConfig,
   MAX_WEB_CHAT_FONT_SIZE,
   MAX_WEB_CHAT_WIDTH,
+  MAX_SESSION_CHILD_EXECUTION_LIMIT,
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
   MIN_WEB_CHAT_FONT_SIZE,
@@ -387,6 +388,21 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "Maximum total agent() calls in each workflow (default 128, hard maximum 1024). Omit to preserve the current value.",
         }),
       ),
+      child_execution_limit: Type.Optional(
+        Type.Union(
+          [
+            Type.Integer({
+              minimum: 1,
+              maximum: MAX_SESSION_CHILD_EXECUTION_LIMIT,
+            }),
+            Type.Null(),
+          ],
+          {
+            description:
+              "Optional maximum active child executions shared by Workflow, Direct Subagent, and BTW in this top-level Pi Session (1-64). This is off by default and does not change workflow's own concurrency. Set null to disable the shared admission limit. Omit to preserve the current value.",
+          },
+        ),
+      ),
       ui_show_header: Type.Optional(
         Type.Boolean({
           description:
@@ -564,6 +580,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
               params.workflow_max_agent_calls ??
               current.workflows.maxAgentCalls,
           },
+          childExecutions:
+            params.child_execution_limit === undefined
+              ? current.childExecutions
+              : params.child_execution_limit === null
+                ? {}
+                : { maxActive: params.child_execution_limit },
           ui: {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??
