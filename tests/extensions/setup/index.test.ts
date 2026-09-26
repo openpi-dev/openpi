@@ -256,6 +256,7 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   assert.equal("ui_web_chat_width" in parameters.properties, true);
   assert.equal("ui_web_chat_font_size" in parameters.properties, true);
   assert.equal("ui_web_expand_thinking" in parameters.properties, true);
+  assert.equal("child_execution_limit" in parameters.properties, true);
   const postEdit = parameters.properties.post_edit_command as {
     description?: string;
   };
@@ -303,6 +304,15 @@ test("post-edit stays off or preserved unless the setup request changes it", asy
 
   await apply({ workflow_concurrency: 4 });
   assert.equal(loadSetupConfig().postEdit.command, "npm run format");
+
+  await apply({ child_execution_limit: 3 });
+  assert.equal(loadSetupConfig().childExecutions.maxActive, 3);
+
+  await apply({ workflow_max_agent_calls: 64 });
+  assert.equal(loadSetupConfig().childExecutions.maxActive, 3);
+
+  await apply({ child_execution_limit: null });
+  assert.equal(loadSetupConfig().childExecutions.maxActive, undefined);
 
   await apply({ post_edit_command: "" });
   assert.equal(loadSetupConfig().postEdit.command, "");

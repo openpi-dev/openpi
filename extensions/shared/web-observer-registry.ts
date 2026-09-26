@@ -4,6 +4,7 @@ import type {
   TranscriptItem,
   TranscriptPart,
 } from "../subagents/src/domain.ts";
+import type { ChildExecutionAdmissionSnapshot } from "./child-execution-admission.ts";
 
 export type WebCapabilityKind =
   | "subagents"
@@ -145,6 +146,8 @@ export interface WebCapabilityProjection<
   readonly omitted: number;
   /** Records were omitted or a user-visible string was shortened. */
   readonly truncated: boolean;
+  /** Session-local child admission state, never a task prompt or transcript. */
+  readonly childExecutionAdmission?: ChildExecutionAdmissionSnapshot;
 }
 
 export interface WebCapabilitySnapshot {
@@ -289,8 +292,9 @@ export function projectSubagentCapability(
     readonly createdAt: number;
     readonly settledAt?: number;
   }[],
+  childExecutionAdmission?: ChildExecutionAdmissionSnapshot,
 ): WebCapabilityProjection<WebSubagentActivity> {
-  return boundedActivityProjection(source, (value) => {
+  const projection = boundedActivityProjection(source, (value) => {
     const id = boundedActivityText(value.id);
     const title = boundedActivityText(value.title);
     return {
@@ -308,6 +312,10 @@ export function projectSubagentCapability(
       truncated: id.truncated || title.truncated,
     };
   });
+  return {
+    ...projection,
+    ...(childExecutionAdmission ? { childExecutionAdmission } : {}),
+  };
 }
 
 /** Project only manager-owned display data; never load child session files. */

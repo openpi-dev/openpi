@@ -469,6 +469,27 @@ test("projects bounded canonical activity without private payloads", () => {
   assert.equal("prompt" in subagents.items[0]!, false);
   assert.equal("finalText" in subagents.items[0]!, false);
 
+  const withAdmission = projectSubagentCapability([], {
+    enabled: true,
+    limit: 2,
+    held: 2,
+    queued: 1,
+    heldByOrigin: { workflow: 1, direct: 1, btw: 0 },
+    queuedByOrigin: { workflow: 0, direct: 0, btw: 1 },
+    blockedReason:
+      "Waiting for a shared child execution slot (2 active / 2 limit).",
+  });
+  assert.deepEqual(withAdmission.childExecutionAdmission, {
+    enabled: true,
+    limit: 2,
+    held: 2,
+    queued: 1,
+    heldByOrigin: { workflow: 1, direct: 1, btw: 0 },
+    queuedByOrigin: { workflow: 0, direct: 0, btw: 1 },
+    blockedReason:
+      "Waiting for a shared child execution slot (2 active / 2 limit).",
+  });
+
   const workflowSources = [
     {
       runId: "wf-1",

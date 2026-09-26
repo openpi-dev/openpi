@@ -226,7 +226,7 @@ subagent_spawn({
 
 - 默认继承父会话的 Provider 与模型；用户可明确指定 Thinking Level，否则模型根据角色建议、任务难度与目标模型实际支持的档位选择；
 - 继承父会话当前启用且允许委派的工具、Skills 和项目说明；目标目录的项目扩展按其自身 Trust 决策加载；
-- 最多 4 个模型发起的 Subagent 并发运行，结束后自动回传；
+- 最多 4 个模型发起的 Direct Subagent 并发运行，结束后自动回传；BTW 仍有独立的 2 个本地槽位。可选的 Session child execution limit 会让 Workflow、Direct 与 BTW 在各自本地限制之外共享一个活动执行上限；它不计 dormant child、父 Session、Terminal、Provider 请求或费用；
 - 可 `check`、`wait`、`cancel`，也可用 `subagent_send` 继续同一子会话；
 - 输入框下方显示实时摘要，空输入时按 `↓` 聚焦，`Enter` 或 `→` 打开管理界面。
 
@@ -304,7 +304,7 @@ return agent("Synthesize the verified findings", {
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
 
-Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。普通子代理和 Workflow 都使用 Pi 原生传输超时与重试，不再用额外的 45 秒无可见输出计时器打断思考、排队或重试。显式取消和 Session 清理仍有界，原生 Provider 错误保留在 Child outcome 中。并发上限不代表账号的服务端速率额度；429 仍按 Pi 原生重试策略处理。
+Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。可选的 Session child execution limit 是另一层跨入口的活动 child 槽位：未配置时完全保持原有独立并发行为，配置后 Workflow / Direct / BTW 都先满足各自本地限制，再按 FIFO 竞争同一个顶层 Pi Session 的上限。它不会把 Workflow 默认 8 变成 Session 默认值，也不治理 Terminal、429、费用、token 或内存。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。普通子代理和 Workflow 都使用 Pi 原生传输超时与重试，不再用额外的 45 秒无可见输出计时器打断思考、排队或重试。显式取消和 Session 清理仍有界，原生 Provider 错误保留在 Child outcome 中。并发上限不代表账号的服务端速率额度；429 仍按 Pi 原生重试策略处理。
 
 ---
 
@@ -444,12 +444,13 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
 /openpi-setup workflow 同时跑 16 个 agent，总调用最多 256
+/openpi-setup 当前 Pi Session 的 Workflow、Direct 和 BTW 最多同时运行 6 个 child
 /openpi-setup Web 主题跟随系统
 /openpi-setup Web 使用深色主题
 /openpi-setup Web 使用雾青主题，聊天宽度设为 960px
@@ -476,6 +477,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Capability discovery         | `explicit`；`adaptive` 必须显式开启            |
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
+| Session child execution slots | 关闭；显式设为 1-64 后由 Workflow / Direct / BTW 共享 |
 | Web 主题                    | `system`；另有 `light` / `dark` / `mist` / `rose` / `pine` |
 | Web 聊天宽度 / 聊天字号     | 820px / 14px；范围 820-2000px / 12-24px        |
 | Web 思考块                  | 默认折叠                                       |
