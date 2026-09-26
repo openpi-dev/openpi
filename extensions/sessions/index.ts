@@ -773,11 +773,28 @@ async function showSessionPicker(
         }
       };
 
+      const renderFilter = (width: number) => {
+        const border = (text: string) =>
+          theme.fg(focus === "list" ? "accent" : "borderMuted", text);
+        const prefix = "⌕ [ ";
+        const suffix = " ]";
+        const value = truncateToWidth(
+          filter || "type to filter",
+          Math.max(0, width - visibleWidth(prefix + suffix)),
+        );
+        return [
+          truncateToWidth(
+            border(prefix) +
+              theme.fg(filter ? "text" : "muted", value) +
+              border(suffix),
+            width,
+          ),
+          theme.fg("borderMuted", "─".repeat(Math.max(0, width))),
+        ];
+      };
+
       const renderSinglePane = (width: number): string[] => {
         const container = new Container();
-        const filterLine = filter.length
-          ? `${theme.fg("muted", "Filter: ")}${theme.fg("text", filter)}`
-          : `${theme.fg("muted", "Filter: ")}${theme.fg("dim", "type to filter")}`;
 
         container.addChild(
           new DynamicBorder((text: string) => theme.fg("accent", text)),
@@ -785,7 +802,9 @@ async function showSessionPicker(
         container.addChild(
           new Text(theme.fg("accent", theme.bold("Sessions")), 1, 0),
         );
-        container.addChild(new Text(filterLine, 1, 0));
+        container.addChild(
+          new Text(renderFilter(Math.max(0, width - 2)).join("\n"), 1, 0),
+        );
         if (isLoading) {
           container.addChild(new Spacer(1));
           container.addChild(
@@ -806,7 +825,11 @@ async function showSessionPicker(
               theme.fg(focus === "list" ? "accent" : "muted", text),
             description: (text) => theme.fg("muted", text),
             scrollInfo: (text) => theme.fg("dim", text),
-            noMatch: () => theme.fg("warning", "  No matching sessions"),
+            noMatch: () =>
+              theme.fg(
+                "warning",
+                truncateToWidth("  No matching sessions", width),
+              ),
           });
           const selectedIndex = filteredEntries.findIndex(
             (entry) => entry.session.path === selectedPath,
@@ -866,20 +889,18 @@ async function showSessionPicker(
         const termRows = Math.max(12, tui.terminal?.rows ?? 24);
         // Frame (2) + hint line (1).
         const contentHeight = Math.max(8, termRows - 3);
-        const filterLine = filter.length
-          ? `${theme.fg("muted", "Filter: ")}${theme.fg("text", filter)}`
-          : `${theme.fg("muted", "Filter: ")}${theme.fg("dim", "type to filter")}`;
-        const listHeight = Math.max(1, contentHeight - 1);
+        const filterRows = renderFilter(layout.listWidth);
+        const listHeight = Math.max(1, contentHeight - filterRows.length);
 
         let leftLines: string[] = [];
         if (isLoading) {
-          leftLines.push(filterLine);
+          leftLines.push(...filterRows);
           leftLines.push("");
           leftLines.push(theme.fg("muted", "  Loading sessions..."));
         } else {
-          const effectiveVisible = Math.max(
+          const effectiveVisible = Math.min(
             listHeight,
-            Math.min(maxVisible, Math.max(filteredEntries.length, 1)),
+            Math.max(filteredEntries.length, 1),
           );
           ensureStatsWindowLoad(effectiveVisible);
           const items = buildItems(filteredEntries, layout.listWidth);
@@ -902,7 +923,7 @@ async function showSessionPicker(
           selectList.onSelectionChange = (item) => setSelectedPath(item.value);
 
           leftLines = [
-            filterLine,
+            ...filterRows,
             ...selectList.render(layout.listWidth),
           ].slice(0, contentHeight);
         }
