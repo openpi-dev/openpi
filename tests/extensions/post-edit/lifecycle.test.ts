@@ -30,8 +30,13 @@ function deferred<T>() {
 }
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-const nodeCommand = (source: string) =>
-  `exec ${quote(process.execPath.replaceAll("\\", "/"))} -e ${quote(source)}`;
+const nodeCommand = (source: string) => {
+  if (process.platform === "win32") {
+    const encoded = Buffer.from(source, "utf8").toString("base64");
+    return `node -e "eval(Buffer.from('${encoded}','base64').toString())"`;
+  }
+  return `exec ${quote(process.execPath.replaceAll("\\", "/"))} -e ${quote(source)}`;
+};
 
 async function formatterGate() {
   const connected = deferred<Socket>();
