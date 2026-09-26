@@ -149,3 +149,14 @@ test("buildLogArgs clamps the limit and validates inputs", () => {
   assert.throws(() => buildLogArgs({ revision: "-n5" }), InvalidRevisionError);
   assert.throws(() => buildLogArgs({ file: "a/../b" }), InvalidPathError);
 });
+
+test("git argv builders reject NUL bytes in repository paths", () => {
+  const path = "src\0secret.ts";
+
+  assert.throws(
+    () => buildShowArgs({ revision: "HEAD", path }),
+    InvalidPathError,
+  );
+  assert.throws(() => buildDiffArgs({ path }), InvalidPathError);
+  assert.throws(() => buildLogArgs({ file: path }), InvalidPathError);
+});
