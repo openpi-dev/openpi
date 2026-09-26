@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { createElement } from "react";
@@ -25,6 +26,9 @@ import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
+import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
+
+installCheckVisibilityFixture();
 
 afterEach(() => {
   cleanup();
@@ -1246,6 +1250,279 @@ function activeSnapshot(): WebSnapshot {
     },
   };
 }
+
+it.each([
+  [false, false],
+  [true, false],
+  [true, true],
+])(
+  "returns from a Files preview to the same list and outer opener (nested: %s, Tools navigation: %s)",
+  async (nested, viaTools) => {
+    const original = webStore.getState();
+    const start = vi
+      .spyOn(original.actions, "start")
+      .mockImplementation(() => {});
+    const stop = vi
+      .spyOn(original.actions, "stop")
+      .mockImplementation(() => {});
+    const resolve = vi
+      .spyOn(WebClient.prototype, "resolveArtifact")
+      .mockImplementation(async (_session, reference) => ({
+        handle: reference,
+      }));
+    const release = vi
+      .spyOn(WebClient.prototype, "releaseArtifact")
+      .mockResolvedValue({});
+    const read = vi
+      .spyOn(WebClient.prototype, "artifactPreview")
+      .mockImplementation(async (sessionId, handle) => ({
+        artifact: {
+          sessionId,
+          handle,
+          path: handle,
+          name: handle.split("/").at(-1)!,
+          revision: "a",
+          bytes: 32,
+          preview: "text",
+        },
+        text: handle.endsWith("report.md")
+          ? "[Next file](./next.md)"
+          : "Nested file text",
+        truncated: false,
+      }));
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.selectedSession!.entries = [
+      {
+        id: "write-call",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "write-report",
+              name: "write",
+              arguments: '{"path":"report.md"}',
+            },
+          ],
+        },
+      },
+      {
+        id: "write-result",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "toolResult",
+          toolCallId: "write-report",
+          content: "saved",
+          isError: false,
+        },
+      },
+    ];
+    webStore.setState({
+      snapshot,
+      selectedPath: "/tmp/session",
+      selectedWorkspace: "/tmp",
+      workspaceDraft: false,
+      sessionSwitching: false,
+      liveRunning: false,
+      liveMessages: [],
+      activeTurn: null,
+    });
+    const view = renderWithI18n(createElement(App));
+    try {
+      const tools = screen.getByRole("button", {
+        name: i18n.t("openTools"),
+      });
+      tools.focus();
+      fireEvent.click(tools);
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: new RegExp(i18n.t("generatedFiles"), "u"),
+        }),
+      );
+      const files = view.container.querySelector<HTMLElement>(
+        ".generated-files-list",
+      )!;
+      files.scrollTop = 77;
+      const opener = within(files).getByRole("button", { name: /report.md/u });
+      fireEvent.click(opener);
+      await screen.findByRole("button", { name: /Next file/u });
+      expect(opener.isConnected).toBe(true);
+      expect(
+        view.container.querySelector<HTMLElement>(".workbar-panel")!.hidden,
+      ).toBe(true);
+      if (nested) {
+        fireEvent.click(screen.getByRole("button", { name: /Next file/u }));
+        await screen.findByText("Nested file text");
+      }
+      if (viaTools) {
+        tools.focus();
+        fireEvent.click(tools);
+      } else {
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("closePreview") }),
+        );
+      }
+      await waitFor(() =>
+        expect(document.activeElement).toBe(viaTools ? tools : opener),
+      );
+      expect(
+        screen.queryByRole("button", { name: i18n.t("closePreview") }),
+      ).toBeNull();
+      expect(
+        view.container.querySelector<HTMLElement>(".workbar-panel")!.hidden,
+      ).toBe(false);
+      expect(view.container.querySelector(".generated-files-list")).toBe(files);
+      expect(files.scrollTop).toBe(77);
+      fireEvent.keyDown(opener, { key: "Escape" });
+      await waitFor(() => expect(document.activeElement).toBe(tools));
+    } finally {
+      view.unmount();
+      start.mockRestore();
+      stop.mockRestore();
+      resolve.mockRestore();
+      release.mockRestore();
+      read.mockRestore();
+      webStore.setState(original, true);
+    }
+  },
+);
+
+it.each(["switching", "path"])(
+  "invalidates a Files preview without reopening its source across %s",
+  async (boundary) => {
+    const original = webStore.getState();
+    const start = vi
+      .spyOn(original.actions, "start")
+      .mockImplementation(() => {});
+    const stop = vi
+      .spyOn(original.actions, "stop")
+      .mockImplementation(() => {});
+    const resolve = vi
+      .spyOn(WebClient.prototype, "resolveArtifact")
+      .mockResolvedValue({ handle: "report" });
+    const release = vi
+      .spyOn(WebClient.prototype, "releaseArtifact")
+      .mockResolvedValue({});
+    const read = vi
+      .spyOn(WebClient.prototype, "artifactPreview")
+      .mockResolvedValue({
+        artifact: {
+          sessionId: "session",
+          handle: "report",
+          path: "/tmp/report.md",
+          name: "report.md",
+          revision: "a",
+          bytes: 4,
+          preview: "text",
+        },
+        text: "File preview",
+        truncated: false,
+      });
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.selectedSession!.entries = [
+      {
+        id: "call",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "write-report",
+              name: "write",
+              arguments: '{"path":"report.md"}',
+            },
+          ],
+        },
+      },
+      {
+        id: "result",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "toolResult",
+          toolCallId: "write-report",
+          content: "saved",
+          isError: false,
+        },
+      },
+    ];
+    webStore.setState({
+      snapshot,
+      selectedPath: "/tmp/session",
+      selectedWorkspace: "/tmp",
+      workspaceDraft: false,
+      sessionSwitching: false,
+      liveRunning: false,
+      liveMessages: [],
+      activeTurn: null,
+    });
+    const view = renderWithI18n(createElement(App));
+    try {
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("openTools") }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: new RegExp(i18n.t("generatedFiles"), "u"),
+        }),
+      );
+      const files = view.container.querySelector<HTMLElement>(
+        ".generated-files-list",
+      )!;
+      fireEvent.click(
+        within(files).getByRole("button", { name: /report.md/u }),
+      );
+      await screen.findByText("File preview");
+      const sidebar = screen.getByRole("button", {
+        name: i18n.t("collapseSidebar"),
+      });
+      sidebar.focus();
+      act(() =>
+        webStore.setState(
+          boundary === "switching"
+            ? { sessionSwitching: true }
+            : {
+                selectedPath: "/tmp/copied-session",
+                snapshot: {
+                  ...snapshot,
+                  selectedSession: {
+                    ...snapshot.selectedSession!,
+                    path: "/tmp/copied-session",
+                  },
+                },
+              },
+        ),
+      );
+      expect(screen.queryByText("File preview")).toBeNull();
+      expect(document.activeElement).toBe(sidebar);
+      expect(
+        view.container.querySelector<HTMLElement>(".workbar-panel")?.hidden ??
+          true,
+      ).toBe(true);
+      await waitFor(() => expect(release).toHaveBeenCalled());
+      expect(
+        screen.queryByRole("button", { name: i18n.t("closePreview") }),
+      ).toBeNull();
+    } finally {
+      view.unmount();
+      start.mockRestore();
+      stop.mockRestore();
+      resolve.mockRestore();
+      release.mockRestore();
+      read.mockRestore();
+      webStore.setState(original, true);
+    }
+  },
+);
 
 it("keeps background Session files, trajectory and activity scoped to the selected identity", async () => {
   const original = webStore.getState();

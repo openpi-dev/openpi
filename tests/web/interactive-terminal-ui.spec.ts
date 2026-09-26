@@ -11,7 +11,9 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
+import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { InteractiveTerminal } from "../../web/ui/src/features/workbar/InteractiveTerminal.tsx";
+import { WorkbarPanel } from "../../web/ui/src/features/workbar/WorkbarPanel.tsx";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
 
@@ -28,7 +30,16 @@ vi.mock("@xterm/xterm", () => ({
       this.textarea.setAttribute("aria-label", "Terminal input");
       host.append(this.textarea);
     }
-    attachCustomKeyEventHandler() {}
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
+      this.textarea?.addEventListener("keydown", (event) => {
+        if (
+          handler(event) &&
+          !this.options.disableStdin &&
+          event.key === "Escape"
+        )
+          input.send("\x1b");
+      });
+    }
     focus() {
       this.textarea?.focus();
     }
@@ -54,6 +65,81 @@ vi.mock("@xterm/addon-fit", () => ({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+it("keeps Escape in the terminal input while respecting child-consumed and header Escape", async () => {
+  vi.spyOn(WebClient.prototype, "createInteractiveTerminal").mockResolvedValue({
+    id: "terminal-a",
+    sessionId: "a",
+    cwd: "/workspace",
+    exited: false,
+    exitCode: null,
+  });
+  vi.spyOn(WebClient.prototype, "resizeInteractiveTerminal").mockResolvedValue({
+    resized: true,
+  });
+  vi.spyOn(WebClient.prototype, "streamInteractiveTerminal").mockImplementation(
+    (_session, _id, _offset, signal) =>
+      new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      }),
+  );
+  const write = vi
+    .spyOn(WebClient.prototype, "writeInteractiveTerminal")
+    .mockResolvedValue({ written: true });
+  const stop = vi.spyOn(WebClient.prototype, "closeInteractiveTerminal");
+  const close = vi.fn();
+  const view = render(
+    createElement(
+      Providers,
+      null,
+      createElement(WorkbarPanel, {
+        visible: true,
+        requestedTool: "terminal",
+        requestRevision: 0,
+        sessionId: "a",
+        cwd: "/workspace",
+        capabilities: {},
+        messages: [],
+        review: {
+          result: null,
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        conversationCollapsed: false,
+        onRestoreConversation: () => {},
+        onBeforeArtifactOpen: () => {},
+        onClose: close,
+      }),
+    ),
+  );
+  await waitFor(() =>
+    expect(screen.queryByText(i18n.t("terminalConnecting"))).toBeNull(),
+  );
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Terminal input" }), {
+    key: "Escape",
+  });
+  await waitFor(() =>
+    expect(write).toHaveBeenCalledWith("a", "terminal-a", "\x1b"),
+  );
+  expect(close).not.toHaveBeenCalled();
+  const tab = screen.getByRole("button", {
+    name: i18n.t("terminal"),
+  });
+  const consumed = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  consumed.preventDefault();
+  fireEvent(tab, consumed);
+  fireEvent.keyDown(tab, { key: "Escape", isComposing: true });
+  expect(close).not.toHaveBeenCalled();
+  fireEvent.keyDown(tab, { key: "Escape" });
+  expect(close).toHaveBeenCalledOnce();
+  view.unmount();
+  expect(stop).not.toHaveBeenCalled();
 });
 
 it.each([false, true])(

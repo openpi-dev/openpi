@@ -90,6 +90,7 @@ export function InteractiveTerminal({
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
       const key = event.key.toLowerCase();
+      if (key === "escape") event.stopPropagation();
       if ((event.ctrlKey || event.metaKey) && key === "v") return false;
       if (
         (event.ctrlKey || event.metaKey) &&

@@ -374,20 +374,15 @@ function TerminalPanel({
 }
 
 function GeneratedFilesPanel({
-  active,
   messages,
   onBeforeOpen,
 }: {
-  active: boolean;
   messages: readonly WebLiveMessage[];
   onBeforeOpen: () => void;
 }) {
   const { t } = useTranslation();
   const artifacts = useContext(ArtifactContext);
-  const files = useMemo(
-    () => (active ? generatedFiles(messages) : []),
-    [active, messages],
-  );
+  const files = useMemo(() => generatedFiles(messages), [messages]);
   return (
     <div className="workbar-resource-list generated-files-list">
       {files.length === 0 ? (
@@ -404,10 +399,14 @@ function GeneratedFilesPanel({
                 type="button"
                 disabled={!artifacts}
                 title={file.reference}
-                onClick={() => {
+                onClick={(event) => {
                   if (!artifacts) return;
                   onBeforeOpen();
-                  artifacts.open(encodeURI(file.reference));
+                  artifacts.open(
+                    encodeURI(file.reference),
+                    undefined,
+                    event.currentTarget,
+                  );
                 }}
               >
                 <FileCode2 aria-hidden="true" />
@@ -511,7 +510,13 @@ export function WorkbarPanel({
       hidden={!visible}
       aria-label={t(activeLabel ?? "openTools")}
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+        if (
+          event.key !== "Escape" ||
+          event.defaultPrevented ||
+          event.nativeEvent.isComposing
+        )
+          return;
+        event.stopPropagation();
         if (tabs.launcherOpen && tabs.active) {
           event.preventDefault();
           setTabs(dismissWorkbarLauncher);
@@ -665,9 +670,6 @@ export function WorkbarPanel({
               />
             ) : (
               <GeneratedFilesPanel
-                active={
-                  visible && !tabs.launcherOpen && tabs.active === "files"
-                }
                 messages={messages}
                 onBeforeOpen={onBeforeArtifactOpen}
               />

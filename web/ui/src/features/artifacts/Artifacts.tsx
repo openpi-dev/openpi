@@ -21,7 +21,7 @@ import { sniffPromptImageMime } from "../composer/image-attachments.ts";
 import { ArtifactContext } from "./context.ts";
 
 export interface ArtifactProviderHandle {
-  close: () => void;
+  close: (options?: { restoreFocus?: boolean }) => void;
 }
 
 function ArtifactImagePreview({
@@ -98,19 +98,21 @@ export const ArtifactProvider = forwardRef<
   ArtifactProviderHandle,
   {
     sessionId?: string;
+    sessionPath?: string;
     children?: ReactNode;
     disabled?: boolean;
-    onOpen?: () => void;
+    onOpen?: (nested: boolean) => void;
     onClose?: (reason: "user" | "context") => void;
   }
 >(function ArtifactProvider(
-  { sessionId, children, disabled = false, onOpen, onClose },
+  { sessionId, sessionPath, children, disabled = false, onOpen, onClose },
   ref,
 ) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const [request, setRequest] = useState<{
     sessionId?: string;
+    sessionPath?: string;
     reference: string;
     parent?: string;
     external?: boolean;
@@ -128,44 +130,99 @@ export const ArtifactProvider = forwardRef<
   const downloadAbort = useRef<AbortController | null>(null);
   const blobUrls = useRef(new Set<string>());
   const nextParent = useRef<string | undefined>(undefined);
+  const focusClose = useRef(false);
+  const focusReturnFrame = useRef<number | null>(null);
+  const scope = JSON.stringify([sessionId, sessionPath, disabled]);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const requestInScope = Boolean(
+    request &&
+      !disabled &&
+      request.sessionId === sessionId &&
+      request.sessionPath === sessionPath,
+  );
+  useEffect(() => {
+    void scope;
+    return () => {
+      if (focusReturnFrame.current !== null) {
+        window.cancelAnimationFrame(focusReturnFrame.current);
+        focusReturnFrame.current = null;
+      }
+    };
+  }, [scope]);
   const open = useCallback(
-    (reference: string, parent?: string) => {
+    (reference: string, parent?: string, source?: HTMLElement) => {
       if (disabled) return;
-      onOpen?.();
       const active = document.activeElement;
-      if (!(active instanceof HTMLElement && active.closest(".artifact-panel")))
-        opener.current = active instanceof HTMLElement ? active : null;
+      const trigger = source ?? (active instanceof HTMLElement ? active : null);
+      const nested = Boolean(parent || trigger?.closest(".artifact-panel"));
+      if (!nested) opener.current = trigger;
+      onOpen?.(nested);
+      if (focusReturnFrame.current !== null) {
+        window.cancelAnimationFrame(focusReturnFrame.current);
+        focusReturnFrame.current = null;
+      }
+      focusClose.current = true;
       copyGeneration.current++;
       setPreview(null);
       setError(null);
       setAccessDenied(false);
       setCopyStatus(null);
       nextParent.current = parent;
-      setRequest({ reference, parent, sessionId });
+      setRequest({ reference, parent, sessionId, sessionPath });
     },
-    [disabled, onOpen, sessionId],
+    [disabled, onOpen, sessionId, sessionPath],
   );
-  const close = useCallback(() => {
-    copyGeneration.current++;
-    setRequest(null);
-    setPreview(null);
-    setCopyStatus(null);
-    onClose?.("user");
-    opener.current?.focus();
-  }, [onClose]);
+  const close = useCallback(
+    ({ restoreFocus = true }: { restoreFocus?: boolean } = {}) => {
+      if (!request) return;
+      const generation = ++copyGeneration.current;
+      const trigger = opener.current;
+      const focusedAtClose = document.activeElement;
+      const reason = requestInScope ? "user" : "context";
+      opener.current = null;
+      focusClose.current = false;
+      nextParent.current = undefined;
+      setRequest(null);
+      setPreview(null);
+      setCopyStatus(null);
+      onClose?.(reason);
+      if (focusReturnFrame.current !== null)
+        window.cancelAnimationFrame(focusReturnFrame.current);
+      if (reason === "context" || !restoreFocus) {
+        focusReturnFrame.current = null;
+        return;
+      }
+      focusReturnFrame.current = window.requestAnimationFrame(() => {
+        focusReturnFrame.current = null;
+        if (
+          generation === copyGeneration.current &&
+          currentScope.current === scope &&
+          (document.activeElement === document.body ||
+            document.activeElement === focusedAtClose ||
+            document.activeElement === trigger) &&
+          trigger?.isConnected &&
+          trigger.checkVisibility({ visibilityProperty: true })
+        )
+          trigger.focus();
+      });
+    },
+    [onClose, request, requestInScope, scope],
+  );
   useImperativeHandle(ref, () => ({ close }), [close]);
   useEffect(() => {
-    if (!request || (!disabled && request.sessionId === sessionId)) return;
+    if (!request || requestInScope) return;
     copyGeneration.current++;
     setRequest(null);
     setPreview(null);
     setCopyStatus(null);
+    focusClose.current = false;
     opener.current = null;
     nextParent.current = undefined;
     onClose?.("context");
-  }, [disabled, sessionId, request, onClose]);
+  }, [request, requestInScope, onClose]);
   useEffect(() => {
-    if (!request || !sessionId || request.sessionId !== sessionId) return;
+    if (!request || !sessionId || !requestInScope) return;
     const controller = new AbortController();
     let handle: string | undefined;
     let parent = request.parent;
@@ -173,7 +230,10 @@ export const ArtifactProvider = forwardRef<
     let stopped = false;
     let identity: string | undefined;
     let delay = 2_000;
-    closeButton.current?.focus();
+    if (focusClose.current) {
+      focusClose.current = false;
+      closeButton.current?.focus();
+    }
     const update = async () => {
       if (document.visibilityState === "hidden") {
         timer = setTimeout(update, 2_000);
@@ -263,7 +323,7 @@ export const ArtifactProvider = forwardRef<
       for (const url of blobUrls.current) URL.revokeObjectURL(url);
       blobUrls.current.clear();
     };
-  }, [client, request, sessionId]);
+  }, [client, request, requestInScope, sessionId]);
   const context = useMemo(() => ({ open }), [open]);
   const path = preview?.artifact.path ?? request?.reference ?? "";
   const name = preview?.artifact.name ?? path.split(/[\\/]/u).at(-1) ?? path;
@@ -298,12 +358,17 @@ export const ArtifactProvider = forwardRef<
   return (
     <ArtifactContext.Provider value={context}>
       {children}
-      {request && (
+      {request && requestInScope && (
         <aside
           className="artifact-panel"
           aria-label={t("filePreview")}
           onKeyDown={(event) => {
-            if (event.key === "Escape") {
+            if (
+              event.key === "Escape" &&
+              !event.nativeEvent.isComposing &&
+              !event.defaultPrevented
+            ) {
+              event.preventDefault();
               event.stopPropagation();
               close();
             }
@@ -321,7 +386,7 @@ export const ArtifactProvider = forwardRef<
               type="button"
               aria-label={t("closePreview")}
               title={t("closePreview")}
-              onClick={close}
+              onClick={() => close()}
             >
               <X aria-hidden="true" />
             </button>
@@ -359,11 +424,14 @@ export const ArtifactProvider = forwardRef<
                 onClick={() => {
                   copyGeneration.current++;
                   setCopyStatus(null);
+                  setError(null);
+                  setAccessDenied(false);
                   nextParent.current = undefined;
                   setRequest((value) =>
                     value
                       ? {
                           sessionId,
+                          sessionPath,
                           reference: preview
                             ? encodeURI(preview.artifact.path)
                             : value.reference,
@@ -399,6 +467,7 @@ export const ArtifactProvider = forwardRef<
                   <button
                     type="button"
                     onClick={() => {
+                      focusClose.current = true;
                       setError(null);
                       setAccessDenied(false);
                       setRequest({

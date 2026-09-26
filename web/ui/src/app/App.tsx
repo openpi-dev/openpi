@@ -308,7 +308,10 @@ export function App() {
     running: selectedRunning,
   });
   const workbarMessages = useMemo(() => {
-    if (!workbarOpen || workbarActiveTool !== "files") return [];
+    const previewingFiles =
+      artifactPanelOpen && artifactReturn.current === "files";
+    if (!(workbarOpen && workbarActiveTool === "files") && !previewingFiles)
+      return [];
     return [
       ...(selected?.entries.flatMap((entry) =>
         entry.message ? [entry.message] : [],
@@ -325,6 +328,7 @@ export function App() {
   }, [
     workbarOpen,
     workbarActiveTool,
+    artifactPanelOpen,
     selected?.entries,
     selected?.id,
     selected?.path,
@@ -347,6 +351,10 @@ export function App() {
   }, [workbarBound, workbarTarget]);
   const openWorkbar = (tool: WorkbarTool = "launcher") => {
     if (!selected || state.sessionSwitching) return;
+    if (artifactPanelOpen) {
+      artifactReturn.current = null;
+      artifactProvider.current?.close({ restoreFocus: false });
+    }
     if (!workbarVisible)
       workbarReturnFocus.current =
         document.activeElement instanceof HTMLElement
@@ -470,12 +478,19 @@ export function App() {
         <ArtifactProvider
           ref={artifactProvider}
           sessionId={selected?.id}
-          disabled={Boolean(subagentVisible || providerSettingsVisible)}
-          onOpen={() => {
+          sessionPath={selected?.path}
+          disabled={Boolean(
+            state.workspaceDraft ||
+              state.sessionSwitching ||
+              subagentVisible ||
+              providerSettingsVisible,
+          )}
+          onOpen={(nested) => {
             setArtifactPanelOpen(true);
-            artifactReturn.current = artifactOpenFromFiles.current
-              ? "files"
-              : null;
+            if (!nested)
+              artifactReturn.current = artifactOpenFromFiles.current
+                ? "files"
+                : null;
             artifactOpenFromFiles.current = false;
             setSubagentTarget(null);
             setWorkbarOpen(false);
@@ -485,7 +500,16 @@ export function App() {
             setArtifactPanelOpen(false);
             const target = artifactReturn.current;
             artifactReturn.current = null;
-            if (reason === "user" && target) openWorkbar(target);
+            if (
+              reason === "user" &&
+              target &&
+              workbarBound &&
+              !state.workspaceDraft &&
+              !state.sessionSwitching
+            ) {
+              setWorkbarActiveTool("files");
+              setWorkbarOpen(true);
+            }
           }}
         >
           <SessionSidebar
@@ -549,6 +573,8 @@ export function App() {
                 title={t("openTools")}
                 disabled={!selected || state.sessionSwitching}
                 onClick={(event) => {
+                  if (artifactPanelOpen)
+                    artifactProvider.current?.close({ restoreFocus: false });
                   workbarReturnFocus.current = event.currentTarget;
                   if (workbarBound && !workbarVisible) setWorkbarOpen(true);
                   else openWorkbar("launcher");

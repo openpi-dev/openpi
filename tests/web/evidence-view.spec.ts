@@ -16,6 +16,9 @@ import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts"
 import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import "../../web/ui/src/i18n.ts";
+import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
+
+installCheckVisibilityFixture();
 
 afterEach(() => {
   cleanup();
@@ -229,7 +232,7 @@ it("restores the original opener after nested preview navigation and ignores sta
     await act(async () => finishCopy?.());
     expect(screen.queryByText("File path copied")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   } finally {
     if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
     else Reflect.deleteProperty(navigator, "clipboard");
@@ -327,8 +330,10 @@ it("polls metadata with backoff, rereads changes and refreshes, and stops on clo
         createElement(Markdown, null, "[Report](./report.md)"),
       ),
     );
+    const opener = screen.getByRole("button", { name: "Report" });
+    opener.focus();
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Report" }));
+      fireEvent.click(opener);
     });
     expect(preview).toHaveBeenCalledTimes(1);
     await act(async () => {
@@ -353,6 +358,8 @@ it("polls metadata with backoff, rereads changes and refreshes, and stops on clo
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
     });
+    act(() => vi.advanceTimersToNextFrame());
+    expect(document.activeElement).toBe(opener);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });

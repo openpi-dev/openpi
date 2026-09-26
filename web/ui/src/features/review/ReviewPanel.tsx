@@ -10,6 +10,7 @@ import {
   FileDiff,
   GitBranch,
   Plus,
+  RefreshCw,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -75,13 +76,22 @@ export function ReviewPanel({
   const listCloseButton = useRef<HTMLButtonElement>(null);
   const listBody = useRef<HTMLDivElement>(null);
   const preview = useRef<HTMLElement>(null);
+  const focusRequested = useRef(true);
+  const wasActive = useRef(false);
+  const listScrollTop = useRef<number | null>(null);
   const [visibleFiles, setVisibleFiles] = useState(FILE_PAGE_SIZE);
   const [selectedPath, setSelectedPath] = useState(initialFilePath ?? null);
   const [loadedFile, setLoadedFile] = useState<{
+    source: WebGitReviewSource;
     revision: string;
     file: WebGitReviewFile;
   } | null>(null);
-  const [fileError, setFileError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<{
+    source: WebGitReviewSource;
+    path: string;
+    revision: string;
+    message: string;
+  } | null>(null);
   const [fileRetry, setFileRetry] = useState(0);
   const [narrow, setNarrow] = useState(
     () => window.matchMedia?.("(max-width: 1100px)").matches ?? false,
@@ -95,10 +105,13 @@ export function ReviewPanel({
     return () => media.removeEventListener("change", update);
   }, []);
   useEffect(() => {
+    focusRequested.current = true;
+    listScrollTop.current = null;
     setSelectedPath(initialFilePath ?? null);
   }, [initialFilePath]);
   const Surface = embedded ? "section" : narrow ? "main" : "aside";
   const snapshot = review.result?.ok ? review.result.snapshot : null;
+  const source = review.source ?? snapshot?.comparison ?? "unstaged";
   const failure = failureLabel(
     review.result && !review.result.ok ? review.result : null,
     t,
@@ -107,11 +120,19 @@ export function ReviewPanel({
     (file) => file.path === selectedPath,
   );
   const selectedFile =
+    loadedFile?.source === source &&
     loadedFile?.revision === snapshot?.revision &&
     loadedFile?.file.path === selectedPath
       ? loadedFile.file
       : fileSummary;
   const revision = snapshot?.revision;
+  const detailError =
+    fileError?.source === source &&
+    fileError?.path === selectedPath &&
+    fileError?.revision === revision &&
+    fileSummary?.diffLoaded === false
+      ? fileError.message
+      : null;
   useEffect(() => {
     void fileRetry;
     const path = fileSummary?.path;
@@ -128,15 +149,25 @@ export function ReviewPanel({
     void review.readFile(path, controller.signal).then(
       (file) => {
         if (!controller.signal.aborted) {
-          if (file) setLoadedFile({ revision, file });
-          else setFileError(t("gitReviewFileMissing"));
+          if (file) setLoadedFile({ source, revision, file });
+          else
+            setFileError({
+              source,
+              path,
+              revision,
+              message: t("gitReviewFileMissing"),
+            });
         }
       },
       (error) => {
         if (!controller.signal.aborted)
-          setFileError(
-            error instanceof Error ? error.message : t("gitReviewFailed"),
-          );
+          setFileError({
+            source,
+            path,
+            revision,
+            message:
+              error instanceof Error ? error.message : t("gitReviewFailed"),
+          });
       },
     );
     return () => controller.abort();
@@ -145,6 +176,7 @@ export function ReviewPanel({
     active,
     fileSummary?.diffLoaded,
     revision,
+    source,
     review.readFile,
     fileRetry,
     t,
@@ -168,19 +200,39 @@ export function ReviewPanel({
 
   const selectedFilePath = selectedFile?.path;
   useEffect(() => {
+    // Snapshot refreshes can remove a preview without a navigation intent.
+    const activated = active && !wasActive.current;
+    wasActive.current = active;
     if (!active) return;
+    if (!activated && !focusRequested.current) return;
+    focusRequested.current = false;
     if (selectedFilePath) preview.current?.focus();
     else if (embedded) listBody.current?.focus();
     else listCloseButton.current?.focus();
   }, [active, embedded, selectedFilePath]);
 
   const openFile = (path: string) => {
+    listScrollTop.current = listBody.current?.scrollTop ?? null;
+    focusRequested.current = true;
     setSelectedPath(path);
   };
   const showFileList = () => {
+    const path = selectedFile?.path;
+    const index = snapshot?.files.findIndex((file) => file.path === path) ?? -1;
+    if (index >= visibleFiles)
+      setVisibleFiles(Math.ceil((index + 1) / FILE_PAGE_SIZE) * FILE_PAGE_SIZE);
+    focusRequested.current = false;
     setSelectedPath(null);
     requestAnimationFrame(() => {
-      if (embedded) listBody.current?.focus();
+      const body = listBody.current;
+      if (!body?.isConnected || body.closest("[hidden], [inert]")) return;
+      const row = [
+        ...body.querySelectorAll<HTMLButtonElement>("[data-review-file]"),
+      ].find((button) => button.dataset.reviewFile === path);
+      if (listScrollTop.current !== null)
+        body.scrollTop = listScrollTop.current;
+      if (row) row.focus({ preventScroll: listScrollTop.current !== null });
+      else if (embedded) body.focus();
       else listCloseButton.current?.focus();
     });
   };
@@ -191,14 +243,21 @@ export function ReviewPanel({
       aria-label={t("changeEvidence")}
       aria-busy={review.loading || undefined}
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+        if (
+          event.key !== "Escape" ||
+          event.nativeEvent.isComposing ||
+          event.defaultPrevented
+        )
+          return;
+        if (!selectedFile && embedded) return;
         event.preventDefault();
+        event.stopPropagation();
         if (selectedFile) showFileList();
         else if (!embedded) onClose();
       }}
     >
-      {review.setSource && (
-        <div className="review-source-picker">
+      <div className="review-source-picker">
+        {review.setSource && (
           <label>
             {t("gitReviewSource")}{" "}
             <select
@@ -215,12 +274,48 @@ export function ReviewPanel({
               <option value="session">{t("gitReviewSessionSnapshot")}</option>
             </select>
           </label>
+        )}
+        <div className="review-source-actions">
           {onOpenFiles && (
             <button type="button" onClick={onOpenFiles}>
               {t("sessionFileRecords")}
             </button>
           )}
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("gitReviewRefresh")}
+            title={t("gitReviewRefresh")}
+            disabled={review.loading}
+            aria-busy={review.loading || undefined}
+            onClick={() => {
+              if (!review.loading) void review.refresh();
+            }}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
         </div>
+      </div>
+      {(review.error || failure) && (
+        <Banner
+          status="error"
+          container="section"
+          title={review.error || failure}
+          description={snapshot ? t("gitReviewOlderResult") : undefined}
+          className="review-banner"
+          endContent={
+            <Button
+              variant="ghost"
+              size="sm"
+              label={t("gitReviewRetry")}
+              isDisabled={review.loading}
+              isLoading={review.loading}
+              onClick={() => {
+                if (!review.loading) void review.refresh();
+              }}
+            />
+          }
+        />
       )}
       {selectedFile ? (
         <div className="review-file-screen">
@@ -299,9 +394,9 @@ export function ReviewPanel({
             })}
             tabIndex={-1}
           >
-            {fileError ? (
+            {detailError ? (
               <div role="alert">
-                <p>{fileError}</p>
+                <p>{detailError}</p>
                 <button
                   type="button"
                   onClick={() => setFileRetry((value) => value + 1)}
@@ -432,22 +527,6 @@ export function ReviewPanel({
                 </VStack>
               </div>
             )}
-            {(review.error || failure) && (
-              <Banner
-                status="error"
-                title={review.error || failure}
-                className="review-banner"
-                endContent={
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    label={t("gitReviewRetry")}
-                    isLoading={review.loading}
-                    onClick={() => void review.refresh()}
-                  />
-                }
-              />
-            )}
             {snapshot?.truncated && (
               <Banner
                 status="info"
@@ -475,6 +554,7 @@ export function ReviewPanel({
                       <button
                         className="session-review-file"
                         type="button"
+                        data-review-file={file.path}
                         title={file.path}
                         onClick={() => openFile(file.path)}
                       >
