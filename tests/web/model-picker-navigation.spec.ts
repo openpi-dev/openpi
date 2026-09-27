@@ -15,6 +15,7 @@ import type {
   WebModelSearchResult,
   WebSnapshot,
 } from "../../web/protocol/types.ts";
+import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { ModelPicker } from "../../web/ui/src/features/composer/ModelPicker.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
@@ -172,6 +173,171 @@ function setup(overrides: Partial<Props> = {}) {
     },
   };
 }
+
+it("keeps an empty catalog actionable without a meaningless search", async () => {
+  const catalog = snapshot();
+  catalog.models = [];
+  const openSettings = vi.fn();
+  setup({
+    snapshot: catalog,
+    currentModel: undefined,
+    onOpenProviders: openSettings,
+  });
+  const trigger = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("configureModels"),
+  });
+  expect(trigger.disabled).toBe(false);
+  fireEvent.click(trigger);
+  expect(screen.getByRole("status").textContent).toBe(i18n.t("noModels"));
+  expect(
+    screen.queryByRole("textbox", { name: i18n.t("searchModels") }),
+  ).toBeNull();
+  expect(screen.queryByRole("listbox")).toBeNull();
+  const configure = screen.getByRole("button", {
+    name: i18n.t("openModelSettings"),
+  });
+  await waitFor(() => expect(document.activeElement).toBe(configure));
+  fireEvent.click(configure);
+  expect(openSettings).toHaveBeenCalledOnce();
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("does not treat an unreceived catalog as an empty one", () => {
+  const openSettings = vi.fn();
+  setup({
+    snapshot: null,
+    currentModel: undefined,
+    onOpenProviders: openSettings,
+  });
+  const trigger = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("loadingModels"),
+  });
+  expect(trigger.disabled).toBe(true);
+  fireEvent.click(trigger);
+  expect(openSettings).not.toHaveBeenCalled();
+  expect(screen.queryByText(i18n.t("noModels"))).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("openModelSettings") }),
+  ).toBeNull();
+});
+
+it("distinguishes an emptied catalog from old search misses without discarding the query", async () => {
+  const catalog = snapshot();
+  const ui = setup({ onOpenProviders: vi.fn() });
+  const input = await ui.open();
+  fireEvent.change(input, { target: { value: "missing model" } });
+  expect(screen.getByText(i18n.t("noMatchingModels"))).toBeTruthy();
+  ui.update({ snapshot: { ...catalog, models: [] }, currentModel: undefined });
+  expect(screen.getByText(i18n.t("noModels"))).toBeTruthy();
+  expect(screen.queryByText(i18n.t("noMatchingModels"))).toBeNull();
+  expect(
+    screen.queryByRole("textbox", { name: i18n.t("searchModels") }),
+  ).toBeNull();
+  expect(
+    screen.getByRole("button", { name: i18n.t("openModelSettings") }),
+  ).toBeTruthy();
+  ui.update({ snapshot: catalog, currentModel: catalog.models[0] });
+  expect(
+    screen.getByRole<HTMLInputElement>("textbox", {
+      name: i18n.t("searchModels"),
+    }).value,
+  ).toBe("missing model");
+});
+
+it("does not present the first catalog item as an unselected composer's current model", () => {
+  const catalog = snapshot();
+  catalog.models = catalog.models.map((model) => ({
+    ...model,
+    current: false,
+  }));
+  const store = createWebStore();
+  render(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        snapshot: catalog,
+        selectedWorkspace: "/workspace",
+        selectedPath: "/workspace/a.jsonl",
+        sessionSwitching: false,
+        promptAdmissionPending: false,
+        liveRunning: false,
+        landing: false,
+        activeTurn: null,
+        turnCancellationPending: false,
+        turnTerminalStatus: null,
+        pendingFollowUpsReceipt: null,
+        thinkingPendingLevel: null,
+        actions: store.getState().actions,
+      }),
+    ),
+  );
+  const trigger = screen.getByRole("button", { name: i18n.t("selectModel") });
+  expect(trigger.textContent).toContain(i18n.t("selectModel"));
+  expect(trigger.textContent).not.toContain("Zen");
+  fireEvent.click(trigger);
+  expect(
+    screen
+      .getByRole("option", { name: "Zen (alpha/zen)" })
+      .getAttribute("aria-selected"),
+  ).toBe("false");
+});
+
+it("closes model search before opening settings and leaves the new focus alone after no matches", async () => {
+  render(createElement("button", { type: "button" }, "Settings destination"));
+  const destination = screen.getByRole<HTMLButtonElement>("button", {
+    name: "Settings destination",
+  });
+  let capturedOpener: Element | null = null;
+  const openSettings = vi.fn(() => {
+    capturedOpener = document.activeElement;
+    destination.focus();
+  });
+  const ui = setup({ onOpenProviders: openSettings });
+  const input = await ui.open();
+  fireEvent.change(input, { target: { value: "no matching model" } });
+  expect(screen.getByText(i18n.t("noMatchingModels"))).toBeTruthy();
+  const trigger = screen.getByRole("button", { name: "Zen (alpha/zen)" });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("openModelSettings") }),
+  );
+  expect(openSettings).toHaveBeenCalledOnce();
+  expect(capturedOpener).toBe(trigger);
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  await waitFor(() => expect(document.activeElement).toBe(destination));
+  expect(ui.clearModelSearch).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { sessionSwitching: true },
+  { modelSelectionPending: true },
+  { promptAdmissionPending: true },
+  { liveRunning: true },
+  {
+    snapshot: { ...snapshot(), currentSessionPath: "/workspace/copied.jsonl" },
+  },
+])(
+  "does not let an empty catalog override existing selection authority %j",
+  (blocked) => {
+    const catalog = { ...(blocked.snapshot ?? snapshot()), models: [] };
+    const openSettings = vi.fn();
+    setup({
+      ...blocked,
+      snapshot: catalog,
+      currentModel: undefined,
+      onOpenProviders: openSettings,
+    });
+    const trigger = screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("configureModels"),
+    });
+    expect(trigger.disabled).toBe(true);
+    fireEvent.click(trigger);
+    expect(openSettings).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("openModelSettings") }),
+    ).toBeNull();
+  },
+);
 
 it("filters complete catalogs locally by provider, name and slash-bearing id", async () => {
   const ui = setup();

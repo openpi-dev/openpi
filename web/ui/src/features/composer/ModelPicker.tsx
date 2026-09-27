@@ -2,18 +2,18 @@ import {
   ComplexSelector,
   type ComplexSelectorHandle,
 } from "@astryxdesign/core/ComplexSelector";
-import { Check, RotateCcw, Search } from "lucide-react";
+import { Check, RotateCcw, Search, Settings2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebModelSummary,
   WebSnapshot,
 } from "../../../../protocol/types.ts";
+import { isControlledSession } from "../../lib/session-control.ts";
 import type {
   ModelSearchState,
   WebStoreActions,
 } from "../../store/web-store.ts";
-import { isControlledSession } from "../../lib/session-control.ts";
 import { modelIdentity } from "./model-identity.ts";
 
 interface ModelPickerProps {
@@ -26,6 +26,7 @@ interface ModelPickerProps {
   sessionSwitching: boolean;
   liveRunning: boolean;
   workspaceDraft: boolean;
+  onOpenProviders?: () => void;
   actions: WebStoreActions;
 }
 
@@ -41,6 +42,7 @@ export function ModelPicker(props: ModelPickerProps) {
   const selected = props.draftModel ?? props.currentModel;
   const snapshotModels = props.snapshot?.models ?? [];
   const canSearch = (props.snapshot?.truncation.modelsOmitted ?? 0) > 0;
+  const hasCatalog = snapshotModels.length > 0 || canSearch;
   const normalizedQuery = query.trim();
   const searchMatchesQuery = props.modelSearch.query === normalizedQuery;
   const searchPending =
@@ -87,17 +89,24 @@ export function ModelPicker(props: ModelPickerProps) {
     close();
   };
 
-  const triggerLabel = selected ? modelIdentity(selected) : t("noModels");
-  const accessibleLabel = selected ? triggerLabel : t("selectModel");
+  const triggerLabel = selected
+    ? modelIdentity(selected)
+    : t(
+        !props.snapshot
+          ? "loadingModels"
+          : hasCatalog
+            ? "selectModel"
+            : "configureModels",
+      );
   const disabled =
+    !props.snapshot ||
     props.sessionSwitching ||
     props.modelSelectionPending ||
     props.promptAdmissionPending ||
     (!props.workspaceDraft &&
       Boolean(props.snapshot?.selectedSession) &&
       !isControlledSession(props.snapshot)) ||
-    props.liveRunning ||
-    (!snapshotModels.length && !canSearch);
+    props.liveRunning;
 
   useEffect(() => {
     if (disabled) selector.current?.close();
@@ -106,11 +115,10 @@ export function ModelPicker(props: ModelPickerProps) {
   return (
     <ComplexSelector
       className="model-selector model-picker"
-      label={accessibleLabel}
+      label={triggerLabel}
       isLabelHidden
       value={selected ? `${selected.provider}/${selected.id}` : ""}
       triggerLabel={<span className="model-picker-label">{triggerLabel}</span>}
-      placeholder={t("noModels")}
       variant="ghost"
       size="sm"
       placement="above"
@@ -136,34 +144,41 @@ export function ModelPicker(props: ModelPickerProps) {
               })}
             </p>
           )}
-          <label className="model-search-input">
-            <Search aria-hidden="true" />
-            <span className="sr-only">{t("searchModels")}</span>
-            <input
-              ref={input}
-              aria-controls={optionsId}
-              value={query}
-              placeholder={t("searchModelsPlaceholder")}
-              onChange={(event) => {
-                const next = event.currentTarget.value;
-                setQuery(next);
-                if (!next.trim()) props.actions.clearModelSearch();
-              }}
-              onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing || event.keyCode === 229)
-                  return;
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  close();
-                } else if (event.key === "ArrowDown" && models.length) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  optionRefs.current[0]?.focus();
-                }
-              }}
-            />
-          </label>
+          {props.snapshot && !hasCatalog && (
+            <p className="model-search-status" role="status">
+              {t("noModels")}
+            </p>
+          )}
+          {hasCatalog && (
+            <label className="model-search-input">
+              <Search aria-hidden="true" />
+              <span className="sr-only">{t("searchModels")}</span>
+              <input
+                ref={input}
+                aria-controls={optionsId}
+                value={query}
+                placeholder={t("searchModelsPlaceholder")}
+                onChange={(event) => {
+                  const next = event.currentTarget.value;
+                  setQuery(next);
+                  if (!next.trim()) props.actions.clearModelSearch();
+                }}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing || event.keyCode === 229)
+                    return;
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    close();
+                  } else if (event.key === "ArrowDown" && models.length) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    optionRefs.current[0]?.focus();
+                  }
+                }}
+              />
+            </label>
+          )}
           {searchPending && (
             <p className="model-search-status" role="status">
               {t("searchingModels")}
@@ -189,7 +204,8 @@ export function ModelPicker(props: ModelPickerProps) {
                 </button>
               </p>
             )}
-          {normalizedQuery &&
+          {hasCatalog &&
+            normalizedQuery &&
             (!canSearch ||
               (searchMatchesQuery && props.modelSearch.status === "ready")) &&
             models.length === 0 && (
@@ -208,67 +224,85 @@ export function ModelPicker(props: ModelPickerProps) {
                 })}
               </p>
             )}
-          <div
-            className="model-search-options"
-            id={optionsId}
-            role="listbox"
-            aria-label={t("selectModel")}
-            aria-busy={searchPending}
-          >
-            {models.map((model, index) => {
-              const isSelected =
-                selected?.provider === model.provider &&
-                selected.id === model.id;
-              return (
-                <button
-                  className="model-search-option"
-                  key={`${model.provider}/${model.id}`}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  ref={(element) => {
-                    optionRefs.current[index] = element;
-                  }}
-                  onClick={() => select(model, close)}
-                  onKeyDownCapture={(event) => {
-                    if (event.nativeEvent.isComposing || event.keyCode === 229)
-                      return;
-                    if (event.key === "Escape") {
+          {hasCatalog && (
+            <div
+              className="model-search-options"
+              id={optionsId}
+              role="listbox"
+              aria-label={t("selectModel")}
+              aria-busy={searchPending}
+            >
+              {models.map((model, index) => {
+                const isSelected =
+                  selected?.provider === model.provider &&
+                  selected.id === model.id;
+                return (
+                  <button
+                    className="model-search-option"
+                    key={`${model.provider}/${model.id}`}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    ref={(element) => {
+                      optionRefs.current[index] = element;
+                    }}
+                    onClick={() => select(model, close)}
+                    onKeyDownCapture={(event) => {
+                      if (
+                        event.nativeEvent.isComposing ||
+                        event.keyCode === 229
+                      )
+                        return;
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        close();
+                        return;
+                      }
+                      if (event.key === "ArrowUp" && index === 0) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        input.current?.focus();
+                        return;
+                      }
+                      const moveTo =
+                        event.key === "ArrowDown"
+                          ? Math.min(index + 1, models.length - 1)
+                          : event.key === "ArrowUp"
+                            ? Math.max(index - 1, 0)
+                            : event.key === "Home"
+                              ? 0
+                              : event.key === "End"
+                                ? models.length - 1
+                                : null;
+                      if (moveTo === null || moveTo === index) return;
                       event.preventDefault();
                       event.stopPropagation();
-                      close();
-                      return;
-                    }
-                    if (event.key === "ArrowUp" && index === 0) {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      input.current?.focus();
-                      return;
-                    }
-                    const moveTo =
-                      event.key === "ArrowDown"
-                        ? Math.min(index + 1, models.length - 1)
-                        : event.key === "ArrowUp"
-                          ? Math.max(index - 1, 0)
-                          : event.key === "Home"
-                            ? 0
-                            : event.key === "End"
-                              ? models.length - 1
-                              : null;
-                    if (moveTo === null || moveTo === index) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    optionRefs.current[moveTo]?.focus();
-                  }}
-                >
-                  <span className="model-menu-item-label">
-                    {modelIdentity(model)}
-                  </span>
-                  {isSelected && <Check aria-hidden="true" />}
-                </button>
-              );
-            })}
-          </div>
+                      optionRefs.current[moveTo]?.focus();
+                    }}
+                  >
+                    <span className="model-menu-item-label">
+                      {modelIdentity(model)}
+                    </span>
+                    {isSelected && <Check aria-hidden="true" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {props.onOpenProviders && (
+            <button
+              className="model-settings-command"
+              type="button"
+              onClick={() => {
+                close();
+                props.onOpenProviders?.();
+              }}
+            >
+              <Settings2 aria-hidden="true" />
+              <span>{t("openModelSettings")}</span>
+            </button>
+          )}
         </div>
       )}
     </ComplexSelector>

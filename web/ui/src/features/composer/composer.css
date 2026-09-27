@@ -242,3 +242,45 @@
   .composer-m02 .composer-toolbar-controls { gap: 3px; }
   .composer-m02 .model-picker-wrap { flex: 1 1 90px; min-width: 0; max-width: 100%; }
 }
+.model-search-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.model-search-options {
+  overflow-y: auto;
+}
+
+.model-search-input,
+.model-search-truncation,
+.model-search-status,
+.model-settings-command {
+  flex-shrink: 0;
+}
+
+.model-settings-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.model-settings-command:hover,
+.model-settings-command:focus-visible {
+  background: var(--sidebar-hover);
+}
+
+.model-settings-command svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}

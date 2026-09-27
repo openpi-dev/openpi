@@ -3,6 +3,7 @@ import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { Agent } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type {
   AgentSessionServices,
@@ -940,6 +941,121 @@ test("model selection and Session activation are serialized", async () => {
       detail: { provider: "fixture", modelId: "model-a" },
     },
   ]);
+});
+
+test("model projection omits Pi's unselected Agent placeholder", () => {
+  const agent = new Agent({
+    streamFn: () => assert.fail("model projection must not call a model"),
+  });
+  const available = [
+    {
+      ...agent.state.model,
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid",
+      input: ["text"],
+    },
+  ];
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model: typeof agent.state.model };
+      services: {
+        modelRuntime: { getAvailableSnapshot: () => typeof available };
+      };
+    };
+    listModels: PiWebRuntime["listModels"];
+  };
+  harness.runtime = {
+    session: { model: agent.state.model },
+    services: { modelRuntime: { getAvailableSnapshot: () => [] } },
+  };
+  assert.deepEqual(harness.listModels(), []);
+  harness.runtime.services.modelRuntime.getAvailableSnapshot = () => available;
+  assert.deepEqual(harness.listModels(), [
+    {
+      provider: "unknown",
+      id: "unknown",
+      name: "unknown",
+      label: "unknown",
+      current: false,
+    },
+  ]);
+  assert.equal(agent.state.model.api, "unknown");
+});
+
+test("model projection preserves a real selected model named unknown outside the available catalog", () => {
+  const agent = new Agent({
+    streamFn: () => assert.fail("model projection must not call a model"),
+  });
+  const selected = {
+    ...agent.state.model,
+    api: "openai-completions" as const,
+    baseUrl: "https://fixture.invalid",
+    input: ["text" as const],
+    contextWindow: 8192,
+    maxTokens: 1024,
+  };
+  const selectedAgent = new Agent({
+    initialState: { model: selected },
+    streamFn: () => assert.fail("model projection must not call a model"),
+  });
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model: typeof selectedAgent.state.model };
+      services: {
+        modelRuntime: { getAvailableSnapshot: () => (typeof selected)[] };
+      };
+    };
+    listModels: PiWebRuntime["listModels"];
+  };
+  harness.runtime = {
+    session: { model: selectedAgent.state.model },
+    services: { modelRuntime: { getAvailableSnapshot: () => [] } },
+  };
+  assert.deepEqual(harness.listModels(), [
+    {
+      provider: "unknown",
+      id: "unknown",
+      name: "unknown",
+      label: "unknown",
+      current: true,
+    },
+  ]);
+});
+
+test("model projection does not classify other Pi model shapes by unknown identity or API alone", () => {
+  const placeholder = new Agent({
+    streamFn: () => assert.fail("model projection must not call a model"),
+  }).state.model;
+  const models = [
+    { ...placeholder, provider: "fixture-native" },
+    { ...placeholder, id: "custom" },
+    { ...placeholder, name: "Custom" },
+    { ...placeholder, api: "openai-completions" as const },
+    { ...placeholder, baseUrl: "https://fixture.invalid" },
+    { ...placeholder, reasoning: true },
+    { ...placeholder, input: ["text" as const] },
+    { ...placeholder, contextWindow: 8192 },
+    { ...placeholder, maxTokens: 1024 },
+    { ...placeholder, cost: { ...placeholder.cost, input: 1 } },
+    { ...placeholder, cost: { ...placeholder.cost, output: 1 } },
+    { ...placeholder, cost: { ...placeholder.cost, cacheRead: 1 } },
+    { ...placeholder, cost: { ...placeholder.cost, cacheWrite: 1 } },
+  ];
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model: typeof placeholder };
+      services: { modelRuntime: { getAvailableSnapshot: () => typeof models } };
+    };
+    listModels: PiWebRuntime["listModels"];
+  };
+  harness.runtime = {
+    session: { model: placeholder },
+    services: { modelRuntime: { getAvailableSnapshot: () => [] } },
+  };
+  for (const model of models) {
+    harness.runtime.session.model = model;
+    assert.equal(harness.listModels()[0]?.current, true, JSON.stringify(model));
+  }
 });
 
 test("model search matches provider and identity fields within a bounded result", () => {

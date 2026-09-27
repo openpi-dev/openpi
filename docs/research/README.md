@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_MODEL_ENTRY_2026-09-27.md`](WEB_MODEL_ENTRY_2026-09-27.md) - native unselected-model projection, actionable model configuration, search/return focus, and bounded responsive picker observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
 - [`WEB_RESULT_READING_2026-09-27.md`](WEB_RESULT_READING_2026-09-27.md) - exact native plan reading, truthful execution summaries, draft image inspection, per-turn return focus, and browser operation feedback; full gates, ablation, and bounded desktop observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
 
 - [`WEB_EXECUTION_RECOVERY_2026-09-26.md`](WEB_EXECUTION_RECOVERY_2026-09-26.md) - exact-request prompt recovery, terminal reconnect/restart and native-modal ownership, retained child inspection, full checks/tests, ablation and bounded browser observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).

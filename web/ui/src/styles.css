@@ -604,7 +604,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .model-selector > div { min-width: 150px; max-width: 100%; }
 .model-selector > div > button { min-width: 0; max-width: 100%; padding: 0 9px 0 10px; color: var(--muted); font: inherit; }
 .model-selector > div > button:hover, .model-selector > div > button[aria-expanded="true"] { color: var(--text); }
-.model-search-panel { width: min(360px, calc(100vw - 32px)); max-height: min(420px, 60dvh); overflow: auto; padding: 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--page); color: var(--text); box-shadow: 0 12px 30px oklch(25% .03 249 / 18%); }
+.model-search-panel { width: min(360px, calc(100vw - 32px)); max-height: min(420px, 60dvh); overflow: auto; padding: 8px; color: var(--text); }
 .model-search-panel.searchable { min-height: 156px; }
 .model-search-truncation, .model-search-status { margin: 3px 4px 8px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .model-search-error { color: var(--error); }

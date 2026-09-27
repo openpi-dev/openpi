@@ -772,9 +772,7 @@ export function Composer(props: ComposerProps) {
     },
   ];
   const currentModel =
-    props.draftModel ??
-    props.snapshot?.models.find((model) => model.current) ??
-    props.snapshot?.models[0];
+    props.draftModel ?? props.snapshot?.models.find((model) => model.current);
   const workspaceLabel =
     props.snapshot?.workspaces.find(
       (workspace) => workspace.path === props.selectedWorkspace,
@@ -1410,6 +1408,7 @@ export function Composer(props: ComposerProps) {
                 sessionSwitching={props.sessionSwitching}
                 liveRunning={running}
                 workspaceDraft={Boolean(props.workspaceDraft)}
+                onOpenProviders={props.onOpenProviders}
                 actions={props.actions}
               />
             </div>

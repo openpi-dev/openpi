@@ -461,7 +461,24 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   listModels() {
-    const current = this.runtime.session.model;
+    const nativeCurrent = this.runtime.session.model;
+    // Recognize Pi Agent's unselected sentinel, not a custom model's validity.
+    const current =
+      nativeCurrent?.provider === "unknown" &&
+      nativeCurrent.id === "unknown" &&
+      nativeCurrent.name === "unknown" &&
+      nativeCurrent.api === "unknown" &&
+      nativeCurrent.baseUrl === "" &&
+      nativeCurrent.reasoning === false &&
+      nativeCurrent.input.length === 0 &&
+      nativeCurrent.contextWindow === 0 &&
+      nativeCurrent.maxTokens === 0 &&
+      nativeCurrent.cost.input === 0 &&
+      nativeCurrent.cost.output === 0 &&
+      nativeCurrent.cost.cacheRead === 0 &&
+      nativeCurrent.cost.cacheWrite === 0
+        ? undefined
+        : nativeCurrent;
     const available = [...this.runtime.services.modelRuntime.getAvailableSnapshot()];
     if (
       current &&
