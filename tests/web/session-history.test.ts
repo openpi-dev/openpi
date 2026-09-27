@@ -533,6 +533,215 @@ test("item hydration includes visible native command input without exposing tool
   );
 });
 
+test("plan item hydration reads only the exact successful bounded native receipt in explicit pages", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  const prompt = manager.appendMessage({
+    role: "user",
+    content: "Prepare a plan",
+    timestamp: 1,
+  });
+  const plan = `# Full native plan\n${"Step. ".repeat(6_000)}\nEND OF PLAN`;
+  const entryId = manager.appendMessage({
+    role: "toolResult",
+    toolName: "plan_ready",
+    toolCallId: "plan-call",
+    isError: false,
+    content: [
+      { type: "text", text: "Do not recover this duplicate receipt prose" },
+    ],
+    details: { status: "ready", plan },
+    timestamp: 2,
+  });
+  manager.appendMessage({
+    role: "toolResult",
+    toolName: "plan_ready",
+    toolCallId: "later-plan",
+    isError: false,
+    content: [{ type: "text", text: "Later plan" }],
+    details: { status: "ready", plan: "# Do not substitute the latest plan" },
+    timestamp: 3,
+  });
+  const session = (await adapter.getSnapshot()).selectedSession!;
+  assert.equal(
+    session.entries.find((entry) => entry.id === entryId)?.message?.truncation
+      ?.details,
+    true,
+  );
+  assert.equal(
+    (await adapter.getSessionItem(session.id, session.path, entryId, 0)).status,
+    "changed",
+  );
+  let cursor = 0;
+  let restored = "";
+  while (true) {
+    const result = await adapter.getSessionItem(
+      session.id,
+      session.path,
+      entryId,
+      cursor,
+      "plan",
+    );
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") break;
+    assert.equal(result.page.planStatus, "ready");
+    assert.ok(result.page.text.length <= 32_000);
+    restored += result.page.text;
+    if (result.page.nextCursor === null) break;
+    assert.ok(result.page.nextCursor > cursor);
+    cursor = result.page.nextCursor;
+  }
+  assert.equal(restored, plan);
+  assert.equal(
+    (await adapter.getSessionItem(session.id, session.path, prompt, 0, "plan"))
+      .status,
+    "changed",
+  );
+  assert.equal(
+    (
+      await adapter.getSessionItem(
+        "wrong-session",
+        session.path,
+        entryId,
+        0,
+        "plan",
+      )
+    ).status,
+    "changed",
+  );
+  manager.branch(prompt);
+  assistant(manager, "Another branch");
+  assert.equal(
+    (await adapter.getSessionItem(session.id, session.path, entryId, 0, "plan"))
+      .status,
+    "changed",
+  );
+});
+
+test("plan hydration refuses failed, cancelled, malformed, oversized and ordinary tool results", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  const cases = [
+    {
+      toolName: "bash",
+      isError: false,
+      details: { status: "ready", plan: "secret" },
+    },
+    {
+      toolName: "plan_ready",
+      isError: true,
+      details: { status: "ready", plan: "not accepted" },
+    },
+    {
+      toolName: "plan_ready",
+      isError: false,
+      details: { status: "cancelled", plan: "not accepted" },
+    },
+    {
+      toolName: "plan_ready",
+      isError: false,
+      details: { status: "ready", plan: " " },
+    },
+    {
+      toolName: "plan_ready",
+      isError: false,
+      details: { status: "ready", plan: "x".repeat(48_001) },
+    },
+    {
+      toolName: "plan_ready",
+      isError: false,
+      details: { status: "ready", plan: "文".repeat(16_001) },
+    },
+    {
+      toolName: "plan_ready",
+      isError: false,
+      details: { status: "ready", plan: "bad\u0000plan" },
+    },
+    { toolName: "plan_ready", isError: false, details: undefined },
+  ];
+  const entries = cases.map((value, index) =>
+    manager.appendMessage({
+      role: "toolResult",
+      ...value,
+      toolCallId: `call-${index}`,
+      content: [{ type: "text", text: "Plan ready for explicit user action." }],
+      timestamp: index,
+    }),
+  );
+  const session = (await adapter.getSnapshot()).selectedSession!;
+  for (const entryId of entries) {
+    assert.equal(
+      (
+        await adapter.getSessionItem(
+          session.id,
+          session.path,
+          entryId,
+          0,
+          "plan",
+        )
+      ).status,
+      "changed",
+    );
+    assert.equal(
+      (await adapter.getSessionItem(session.id, session.path, entryId, 0))
+        .status,
+      "changed",
+    );
+  }
+});
+
+test("authenticated plan-item queries preserve strict native identity and purpose boundaries", async (t) => {
+  const { manager, runtime } = await fixture(t);
+  const entryId = manager.appendMessage({
+    role: "toolResult",
+    toolName: "plan_ready",
+    toolCallId: "plan-call",
+    isError: false,
+    content: [{ type: "text", text: "duplicate receipt" }],
+    details: { status: "ready", plan: "# Exact native plan" },
+    timestamp: 1,
+  });
+  const host = new WebHost({ runtime, token: "ab".repeat(32) });
+  await host.start();
+  t.after(() => host.stop());
+  const headers = { Authorization: `Bearer ${"ab".repeat(32)}` };
+  const query = new URLSearchParams({
+    sessionId: manager.getSessionId(),
+    sessionPath: `current:${manager.getSessionId()}`,
+    entryId,
+    cursor: "0",
+    purpose: "plan",
+  });
+  const address = `${host.origin}/api/session/item?${query}`;
+  assert.equal((await fetch(address)).status, 401);
+  for (const suffix of ["&purpose=plan", "&entryId=other", "&unknown=plan"]) {
+    assert.equal((await fetch(address + suffix, { headers })).status, 400);
+  }
+  for (const purpose of ["", "tool", "PLAN", "plan_ready"]) {
+    const invalid = new URLSearchParams(query);
+    invalid.set("purpose", purpose);
+    assert.equal(
+      (await fetch(`${host.origin}/api/session/item?${invalid}`, { headers }))
+        .status,
+      400,
+    );
+  }
+  const response = await fetch(address, { headers });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    entryId,
+    text: "# Exact native plan",
+    nextCursor: null,
+    totalChars: 19,
+    planStatus: "ready",
+  });
+  const ordinary = new URLSearchParams(query);
+  ordinary.delete("purpose");
+  assert.equal(
+    (await fetch(`${host.origin}/api/session/item?${ordinary}`, { headers }))
+      .status,
+    409,
+  );
+});
+
 test("snapshot fitting retains a real latest-entry cursor before dropping bounded catalog rows", async (t) => {
   const { manager, runtime, adapter, directory } = await fixture(t, true);
   manager.appendMessage({

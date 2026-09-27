@@ -2094,19 +2094,22 @@ export class WebHost {
     }
     if (url.pathname === "/api/session/item") {
       if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
-      const keys = ["sessionId", "sessionPath", "entryId", "cursor"] as const;
+      const keys = ["sessionId", "sessionPath", "entryId", "cursor", "purpose"] as const;
+      const required = keys.slice(0, 4);
       if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
-        keys.some((key) => {
+        required.some((key) => {
           const value = url.searchParams.get(key);
           return url.searchParams.getAll(key).length !== 1 || !value ||
             value.length > (key === "sessionPath" ? 4096 : 128) || /[\u0000-\u001f]/u.test(value);
-        }) || !/^(0|[1-9]\d{0,9})$/u.test(url.searchParams.get("cursor") ?? ""))
+        }) || !/^(0|[1-9]\d{0,9})$/u.test(url.searchParams.get("cursor") ?? "") ||
+        (url.searchParams.has("purpose") && (url.searchParams.getAll("purpose").length !== 1 || url.searchParams.get("purpose") !== "plan")))
         return this.json(response, 400, { code: "INVALID_SESSION_ITEM_REQUEST", error: "an exact Session item and bounded cursor are required" });
       const result = await this.adapter.getSessionItem(
         url.searchParams.get("sessionId")!,
         url.searchParams.get("sessionPath")!,
         url.searchParams.get("entryId")!,
         Number(url.searchParams.get("cursor")),
+        url.searchParams.get("purpose") === "plan" ? "plan" : undefined,
       );
       if (result.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is not in the selected workspace" });
       if (result.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "Session item is no longer on this branch" });

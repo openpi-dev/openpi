@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { loadSessionPreviewData } from "../../extensions/sessions/preview-loader.ts";
 import { WEB_COMMAND_INPUT } from "../../extensions/shared/web-command-feedback.ts";
+import { isBoundedReadyPlan } from "../../extensions/plan-mode/persisted-state.ts";
 import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import {
   boundedText,
@@ -1357,7 +1358,7 @@ export class PiWebAdapter {
     return { ok: true, changes: detail };
   }
 
-  async getSessionItem(sessionId: string, path: string, entryId: string, cursor: number) {
+  async getSessionItem(sessionId: string, path: string, entryId: string, cursor: number, purpose?: "plan") {
     const summary = (await this.listSessions(path)).find((session) => session.path === path);
     if (!summary) return { status: "not_found" as const };
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
@@ -1367,14 +1368,26 @@ export class PiWebAdapter {
     const entry = manager.getBranch().find((item) => item.id === entryId);
     if (!entry) return { status: "changed" as const };
     let content: unknown;
-    if (entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"))
+    let planStatus: "ready" | undefined;
+    if (purpose === "plan") {
+      if (entry.type !== "message" || entry.message.role !== "toolResult" ||
+        entry.message.toolName !== "plan_ready" || entry.message.isError !== false)
+        return { status: "changed" as const };
+      const details = entry.message.details;
+      if (!details || typeof details !== "object" || Array.isArray(details) ||
+        !("status" in details) || details.status !== "ready" ||
+        !("plan" in details) || !isBoundedReadyPlan(details.plan))
+        return { status: "changed" as const };
+      content = details.plan.trim();
+      planStatus = "ready";
+    } else if (entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"))
       content = entry.message.content;
     else if (entry.type === "custom" && entry.customType === WEB_COMMAND_INPUT &&
       entry.data && typeof entry.data === "object" && "text" in entry.data)
       content = entry.data.text;
     else return { status: "changed" as const };
     const page = visibleTextPage(content, cursor);
-    return page ? { status: "ok" as const, page: { entryId, ...page } }
+    return page ? { status: "ok" as const, page: { entryId, ...page, ...(planStatus ? { planStatus } : {}) } }
       : { status: "invalid_cursor" as const };
   }
 }

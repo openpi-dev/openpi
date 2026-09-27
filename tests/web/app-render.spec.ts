@@ -734,6 +734,17 @@ it("marks only live execution evidence for shimmer styling", () => {
       },
     },
   ];
+  snapshot.runtime.liveTools = [
+    {
+      call: {
+        type: "toolCall",
+        id: "read-live",
+        name: "read",
+        arguments: '{"path":"src/index.ts"}',
+      },
+      state: "running",
+    },
+  ];
 
   const view = renderWithI18n(
     createElement(Transcript, {

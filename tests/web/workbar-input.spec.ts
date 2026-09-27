@@ -10,6 +10,10 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  WEB_BROWSER_TEXT_MAX_LENGTH,
+  type WebBrowserFrame,
+} from "../../web/protocol/types.ts";
 import { PaneResizeHandle } from "../../web/ui/src/components/PaneResizeHandle.tsx";
 import { EmbeddedBrowserPanel } from "../../web/ui/src/features/workbar/EmbeddedBrowserPanel.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
@@ -67,9 +71,298 @@ async function browserPanel(restore?: Promise<void>) {
     state,
     viewport,
     action,
+    read: vi.mocked(WebClient.prototype.browserState),
+    stream: vi.mocked(WebClient.prototype.streamBrowserFrames),
+    rerender: (active: boolean) =>
+      view.rerender(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(EmbeddedBrowserPanel, {
+            sessionId: "session-1",
+            active,
+          }),
+        ),
+      ),
     unmount: view.unmount,
   };
 }
+
+function enableFrames() {
+  const OriginalURL = URL;
+  vi.stubGlobal(
+    "URL",
+    class extends OriginalURL {
+      static createObjectURL = vi.fn(() => "blob:browser-frame");
+      static revokeObjectURL = vi.fn();
+    },
+  );
+  vi.stubGlobal(
+    "Image",
+    class {
+      src = "";
+      async decode() {}
+    },
+  );
+  return {
+    data: "AA==",
+    mimeType: "image/png",
+    width: 800,
+    height: 600,
+  } satisfies WebBrowserFrame;
+}
+
+it.each(["address", "paste"] as const)(
+  "does not let a healthy frame hide a rejected %s operation",
+  async (kind) => {
+    const frame = enableFrames();
+    const { viewport, stream, action } = await browserPanel();
+    const message =
+      kind === "address"
+        ? i18n.t("invalidBrowserAddress")
+        : i18n.t("browserPasteTooLarge", {
+            count: WEB_BROWSER_TEXT_MAX_LENGTH,
+          });
+    if (kind === "address") {
+      fireEvent.change(
+        screen.getByRole("textbox", { name: i18n.t("browserAddress") }),
+        { target: { value: "https://" } },
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("browserGo") }),
+      );
+    } else {
+      fireEvent.paste(viewport, {
+        clipboardData: {
+          getData: () => "a".repeat(WEB_BROWSER_TEXT_MAX_LENGTH + 1),
+        },
+      });
+      expect(action).not.toHaveBeenCalled();
+    }
+    expect(screen.getByText(message)).toBeTruthy();
+    await act(async () => stream.mock.calls[0]![2](frame));
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe(message);
+  },
+);
+
+it.each(["before", "during"] as const)(
+  "ignores a state poll started %s navigation when its old result arrives after the receipt",
+  async (timing) => {
+    const polls: (() => void)[] = [];
+    const browserWindow: Window = window;
+    const schedule = browserWindow.setTimeout.bind(browserWindow);
+    vi.spyOn(browserWindow, "setTimeout").mockImplementation(
+      (handler, delay, ...args) => {
+        if (delay === 1_000 && typeof handler === "function") {
+          polls.push(() => handler(...args));
+          return schedule(() => {}, 0);
+        }
+        return schedule(handler, delay, ...args);
+      },
+    );
+    const { state, read } = await browserPanel();
+    let finishPoll!: (value: typeof state) => void;
+    read.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishPoll = resolve;
+      }),
+    );
+    let finishOpen!: (value: typeof state) => void;
+    vi.spyOn(WebClient.prototype, "openBrowser").mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishOpen = resolve;
+      }),
+    );
+    const poll = polls.shift();
+    expect(poll).toBeDefined();
+    if (timing === "before") await act(async () => poll?.());
+    const address = screen.getByRole<HTMLInputElement>("textbox", {
+      name: i18n.t("browserAddress"),
+    });
+    fireEvent.change(address, { target: { value: "localhost:43210/new" } });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("browserGo") }));
+    if (timing === "during") await act(async () => poll?.());
+    expect(finishPoll).toBeDefined();
+    await act(async () =>
+      finishOpen({
+        ...state,
+        url: "http://localhost:43210/new",
+        canGoBack: false,
+      }),
+    );
+    expect(address.value).toBe("http://localhost:43210/new");
+    expect(read.mock.calls.at(-1)?.[1]?.aborted).toBe(false);
+    await act(async () => finishPoll(state));
+    expect(address.value).toBe("http://localhost:43210/new");
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: i18n.t("browserBack"),
+      }).disabled,
+    ).toBe(true);
+  },
+);
+
+it("keeps separate address and paste feedback through unrelated pointer receipts", async () => {
+  const { viewport, action, state } = await browserPanel();
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    top: 0,
+    width: 800,
+    height: 600,
+  } as DOMRect);
+  let finish!: (value: typeof state) => void;
+  action.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  fireEvent.pointerMove(viewport, { clientX: 10, clientY: 10 });
+  const address = screen.getByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("browserAddress"),
+  });
+  fireEvent.change(address, { target: { value: "https://" } });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("browserGo") }));
+  fireEvent.paste(viewport, {
+    clipboardData: {
+      getData: () => "a".repeat(WEB_BROWSER_TEXT_MAX_LENGTH + 1),
+    },
+  });
+  await act(async () => finish(state));
+  expect(screen.getAllByRole("alert")).toHaveLength(2);
+  fireEvent.change(address, { target: { value: "https://example.com/new" } });
+  expect(screen.queryByText(i18n.t("invalidBrowserAddress"))).toBeNull();
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("browserPasteTooLarge", { count: WEB_BROWSER_TEXT_MAX_LENGTH }),
+  );
+  await act(async () =>
+    fireEvent.paste(viewport, {
+      clipboardData: { getData: () => "corrected" },
+    }),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("does not replace a newer opened page with an older navigation receipt", async () => {
+  const { state, action } = await browserPanel();
+  let finishBack!: (value: typeof state) => void;
+  action.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finishBack = resolve;
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("browserBack") }));
+  vi.spyOn(WebClient.prototype, "openBrowser").mockResolvedValue({
+    ...state,
+    url: "http://localhost:43210/new",
+    title: "New page",
+    canGoBack: false,
+  });
+  const address = screen.getByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("browserAddress"),
+  });
+  fireEvent.change(address, { target: { value: "localhost:43210/new" } });
+  await act(async () =>
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("browserGo") })),
+  );
+  await act(async () => finishBack(state));
+  expect(address.value).toBe("http://localhost:43210/new");
+  expect(screen.getByRole("application", { name: "New page" })).toBeTruthy();
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("browserBack"),
+    }).disabled,
+  ).toBe(true);
+});
+
+it.each(["navigation", "resize", "close"] as const)(
+  "ignores a delayed resize receipt after newer %s intent",
+  async (intent) => {
+    let notify!: () => void;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          notify = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const timers: (() => void)[] = [];
+    const browserWindow: Window = window;
+    const schedule = browserWindow.setTimeout.bind(browserWindow);
+    vi.spyOn(browserWindow, "setTimeout").mockImplementation(
+      (handler, delay, ...args) => {
+        if (delay === 160 && typeof handler === "function") {
+          timers.push(() => handler(...args));
+          return schedule(() => {}, 0);
+        }
+        return schedule(handler, delay, ...args);
+      },
+    );
+    const { state, action, viewport, rerender } = await browserPanel();
+    let width = 600;
+    vi.spyOn(viewport, "getBoundingClientRect").mockImplementation(
+      () =>
+        ({
+          left: 0,
+          top: 0,
+          width,
+          height: 600,
+        }) as DOMRect,
+    );
+    let finishResize!: (value: typeof state) => void;
+    action.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishResize = resolve;
+      }),
+    );
+    notify();
+    await act(async () => timers.shift()?.());
+    expect(action).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ type: "resize", width: 600 }),
+      expect.any(AbortSignal),
+    );
+    let title = state.title;
+    if (intent === "navigation") {
+      title = "New native page";
+      vi.spyOn(WebClient.prototype, "openBrowser").mockResolvedValue({
+        ...state,
+        url: "http://localhost:43210/new",
+        title,
+      });
+      fireEvent.change(
+        screen.getByRole("textbox", { name: i18n.t("browserAddress") }),
+        {
+          target: { value: "localhost:43210/new" },
+        },
+      );
+      await act(async () =>
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("browserGo") }),
+        ),
+      );
+    } else if (intent === "resize") {
+      title = "Latest resize";
+      width = 640;
+      action.mockResolvedValueOnce({ ...state, width, title });
+      notify();
+      await act(async () => timers.shift()?.());
+    } else {
+      rerender(false);
+      expect(action.mock.calls[0]![2]?.aborted).toBe(true);
+      notify();
+      expect(timers).toHaveLength(0);
+    }
+    await act(async () =>
+      finishResize({ ...state, width: 600, title: "Old resize" }),
+    );
+    expect(screen.getByRole("application", { name: title })).toBeTruthy();
+  },
+);
 
 it("forwards pasted Unicode text into the embedded page", async () => {
   const { viewport, action } = await browserPanel();
@@ -141,6 +434,42 @@ it("does not restore an older address after the user already opened a new page",
   await loading;
   expect(address.value).toBe("http://localhost:43210/new");
   await act(async () => restore());
+  expect(address.value).toBe("http://localhost:43210/new");
+});
+
+it("ignores an older restore failure after opening and painting a new page", async () => {
+  const frame = enableFrames();
+  let failRestore!: (error: Error) => void;
+  const loading = browserPanel(
+    new Promise<void>((_resolve, reject) => {
+      failRestore = reject;
+    }),
+  );
+  vi.spyOn(WebClient.prototype, "openBrowser").mockImplementation(
+    async (sessionId, url, viewport) => {
+      const opened = {
+        sessionId,
+        url,
+        ...viewport,
+        title: "Input fixture",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+      };
+      vi.mocked(WebClient.prototype.browserState).mockResolvedValue(opened);
+      return opened;
+    },
+  );
+  const address = screen.getByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("browserAddress"),
+  });
+  fireEvent.change(address, { target: { value: "localhost:43210/new" } });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("browserGo") }));
+  const { stream } = await loading;
+  await act(async () => stream.mock.calls[0]![2](frame));
+  expect(screen.queryByRole("status")).toBeNull();
+  await act(async () => failRestore(new Error("Old restore failed")));
+  expect(screen.queryByRole("status")).toBeNull();
   expect(address.value).toBe("http://localhost:43210/new");
 });
 

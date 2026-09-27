@@ -29,7 +29,11 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSubagentActivity } from "../../../../../extensions/shared/web-observer-registry.ts";
-import { evidenceText, isEvidenceTool } from "../../../../protocol/evidence.ts";
+import {
+  type EvidenceState,
+  evidenceText,
+  isEvidenceTool,
+} from "../../../../protocol/evidence.ts";
 import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
 import type {
@@ -53,8 +57,8 @@ import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
 import {
   rememberSessionReading,
-  sessionReadingScope,
   type SessionReadingCache,
+  sessionReadingScope,
 } from "./session-reading-state.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
 import { TurnChangesCard } from "./TurnChangesCard.tsx";
@@ -173,8 +177,13 @@ function canonicalStatus(value: unknown): Status {
   return "unknown";
 }
 
-function resultStatus(message?: WebLiveMessage): Status {
-  if (!message) return "running";
+function resultStatus(
+  message?: WebLiveMessage,
+  liveState?: EvidenceState,
+): Status {
+  if (liveState === "running") return "running";
+  if (liveState === "unknown") return "unknown";
+  if (!message) return "unknown";
   if (message.isError) return "error";
   const status = canonicalStatus(record(message.details).status);
   if (status !== "unknown") return status;
@@ -368,11 +377,12 @@ function familyCard(
   result?: WebLiveMessage,
   subagents: readonly WebSubagentActivity[] = [],
   onInspectSubagent?: (id: string) => void,
+  liveState?: EvidenceState,
 ) {
   const name = part.name || "";
   const args = parseArguments(part.arguments);
   const details = record(result?.details);
-  const status = resultStatus(result);
+  const status = resultStatus(result, liveState);
   if (name === "subagent_spawn") {
     const meta = [args.agent_type, details.model || args.model]
       .filter(Boolean)
@@ -1033,8 +1043,16 @@ function ProcessSequence({
     activities ? t("processActivityCount", { count: activities }) : "",
   ].filter(Boolean);
   const preview = rows.find((row) => row.processPreview)?.processPreview;
-  const failed = rows.some((row) => row.error);
-  const status: Status = active ? "running" : failed ? "error" : "done";
+  const failed = rows.some((row) => row.error || row.processStatus === "error");
+  const status: Status = active
+    ? "running"
+    : failed
+      ? "error"
+      : rows.some((row) => row.processStatus === "warn")
+        ? "warn"
+        : rows.every((row) => row.processStatus === "done")
+          ? "done"
+          : "unknown";
   return (
     <details
       className={`process-sequence ${status}`}
@@ -1354,16 +1372,17 @@ export function Transcript(props: TranscriptProps) {
   }, []);
 
   const { rows, turns } = useMemo(() => {
-    const results = new Map<string, WebLiveMessage>();
+    const results = new Map<string, DisplayEntry>();
     const familyIds = new Set<string>();
     const specializedIds = new Set<string>();
     const liveTools = historyPaused
       ? []
       : (selectedExecution?.liveTools ??
         (active ? (props.snapshot.runtime.liveTools ?? []) : []));
-    entries.forEach(({ message }) => {
+    entries.forEach((entry) => {
+      const { message } = entry;
       if (message.role === "toolResult" && message.toolCallId)
-        results.set(message.toolCallId, message);
+        results.set(message.toolCallId, entry);
       message.parts?.forEach((part) => {
         if (part.type === "toolCall" && part.id && isEvidenceTool(part.name))
           specializedIds.add(part.id);
@@ -1382,7 +1401,7 @@ export function Transcript(props: TranscriptProps) {
           part.name === "plan_ready" &&
           part.id &&
           planPresentation(
-            results.get(part.id) ??
+            results.get(part.id)?.message ??
               liveTools.find((item) => item.call.id === part.id)?.result,
           )
             ? [part.id]
@@ -1706,7 +1725,10 @@ export function Transcript(props: TranscriptProps) {
             const live = part.id
               ? liveTools.find((item) => item.call.id === part.id)
               : undefined;
-            const persistedResult = part.id ? results.get(part.id) : undefined;
+            const persistedResultEntry = part.id
+              ? results.get(part.id)
+              : undefined;
+            const persistedResult = persistedResultEntry?.message;
             const result = persistedResult ?? live?.result;
             const card =
               part.name === "plan_ready" &&
@@ -1715,6 +1737,9 @@ export function Transcript(props: TranscriptProps) {
                 <PlanCard
                   key={`${entry.key}-${part.id || partIndex}-plan`}
                   result={result}
+                  sessionId={selectedId}
+                  sessionPath={selectedPath}
+                  entryId={persistedResultEntry?.entryId}
                 />
               ) : isEvidenceTool(part.name) ? (
                 <ToolEvidence
@@ -1732,11 +1757,15 @@ export function Transcript(props: TranscriptProps) {
                     ? props.snapshot.runtime.capabilities.subagents?.items
                     : undefined,
                   props.onInspectSubagent,
+                  persistedResult ? undefined : live?.state,
                 )
               );
             const args = parseArguments(part.arguments);
             const toolIcon = iconForTool(part.name);
-            const status = resultStatus(result);
+            const status = resultStatus(
+              result,
+              persistedResult ? undefined : live?.state,
+            );
             detailRows.push({
               key: `${entry.key}-tool-${part.id || partIndex}`,
               turn,
@@ -1813,7 +1842,12 @@ export function Transcript(props: TranscriptProps) {
               content: (
                 <article className="message-row assistant detail-only">
                   <div className="message-content">
-                    <PlanCard result={message} />
+                    <PlanCard
+                      result={message}
+                      sessionId={selectedId}
+                      sessionPath={selectedPath}
+                      entryId={entry.entryId}
+                    />
                   </div>
                 </article>
               ),

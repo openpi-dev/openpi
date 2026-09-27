@@ -204,14 +204,16 @@ export class WebClient {
     entryId: string,
     cursor: number,
     signal: AbortSignal,
+    purpose?: "plan",
   ) {
     return this.request<{
       entryId: string;
       text: string;
       nextCursor: number | null;
       totalChars: number;
+      planStatus?: "ready";
     }>(
-      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor) })}`,
+      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor), ...(purpose ? { purpose } : {}) })}`,
       { signal, timeoutMessage: "Message request timed out. Please retry." },
     );
   }

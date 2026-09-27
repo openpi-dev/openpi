@@ -46,6 +46,7 @@ import {
   type ComposerDraft,
   createComposerDraftMemory,
 } from "./composer-drafts.ts";
+import { DraftImagePreview } from "./DraftImagePreview.tsx";
 import { FileReferenceDialog } from "./FileReferenceDialog.tsx";
 import {
   type StagedPromptImage,
@@ -1152,36 +1153,20 @@ export function Composer(props: ComposerProps) {
               void stageFiles(event.currentTarget.files);
           }}
         />
-        {images.length > 0 && (
-          <section
-            className="composer-attachments"
-            aria-label={t("imageAttachments")}
-          >
-            {images.map((image) => (
-              <div className="composer-attachment" key={image.id}>
-                <img src={image.previewUrl} alt="" />
-                <span title={image.name}>{image.name}</span>
-                <button
-                  type="button"
-                  aria-label={`${t("removeAttachment")} ${image.name}`}
-                  title={t("removeAttachment")}
-                  onClick={() => {
-                    if (
-                      updateDraft({
-                        images: currentDraft.current.images.filter(
-                          (item) => item.id !== image.id,
-                        ),
-                      })
-                    )
-                      setAttachmentError(null);
-                  }}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            ))}
-          </section>
-        )}
+        <DraftImagePreview
+          ownerKey={renderedOwnerKey}
+          images={images}
+          onRemove={(id) => {
+            if (
+              updateDraft({
+                images: currentDraft.current.images.filter(
+                  (item) => item.id !== id,
+                ),
+              })
+            )
+              setAttachmentError(null);
+          }}
+        />
         {attachmentError && (
           <p className="composer-attachment-error" role="alert">
             {attachmentError}

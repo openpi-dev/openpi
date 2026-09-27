@@ -97,6 +97,8 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const addressEditing = useRef(false);
   const addressDirty = useRef(false);
   const addressRevision = useRef(0);
+  const inputRevision = useRef(0);
+  const navigationRevision = useRef(0);
   const pointerMovePoint = useRef<{
     x: number;
     y: number;
@@ -124,7 +126,9 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<WebEmbeddedBrowserState | null>(null);
   const [frameReady, setFrameReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [addressError, setAddressError] = useState<string | null>(null);
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [frameError, setFrameError] = useState<string | null>(null);
   const browserStarted = state !== null;
 
   useEffect(
@@ -165,10 +169,11 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
       .catch((caught) => {
         if (
           controller.signal.aborted ||
+          stateRef.current ||
           (caught instanceof WebApiError && caught.status === 404)
         )
           return;
-        setError(
+        setFrameError(
           caught instanceof Error ? caught.message : t("browserOpenFailed"),
         );
       });
@@ -207,12 +212,12 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
           frameUrl.current = url;
           decodingUrl = undefined;
           setFrameReady(true);
-          setError(null);
+          setFrameError(null);
           if (previous) URL.revokeObjectURL(previous);
         }
       } catch (caught) {
         if (!controller.signal.aborted)
-          setError(
+          setFrameError(
             caught instanceof Error ? caught.message : t("browserOpenFailed"),
           );
       } finally {
@@ -234,7 +239,7 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         );
       } catch (caught) {
         if (!controller.signal.aborted)
-          setError(
+          setFrameError(
             caught instanceof Error ? caught.message : t("browserOpenFailed"),
           );
       } finally {
@@ -243,9 +248,14 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
       }
     };
     const refreshState = async () => {
+      const submittedRevision = navigationRevision.current;
       try {
         const next = await client.browserState(sessionId, controller.signal);
-        if (!controller.signal.aborted) applyState(next);
+        if (
+          !controller.signal.aborted &&
+          submittedRevision === navigationRevision.current
+        )
+          applyState(next);
       } catch {
       } finally {
         if (!controller.signal.aborted)
@@ -272,8 +282,11 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
       typeof ResizeObserver === "undefined"
     )
       return;
+    const controller = new AbortController();
+    let revision = 0;
     let timer = 0;
     const observer = new ResizeObserver(() => {
+      if (controller.signal.aborted) return;
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         const bounds = element.getBoundingClientRect();
@@ -285,22 +298,36 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         const current = stateRef.current;
         if (!current || (width === current.width && height === current.height))
           return;
+        const submittedNavigation = navigationRevision.current;
+        const submittedRevision = ++revision;
         void client
-          .browserAction(sessionId, {
-            type: "resize",
-            width,
-            height,
-            deviceScaleFactor: Math.max(
-              1,
-              Math.min(2, window.devicePixelRatio || 1),
-            ),
+          .browserAction(
+            sessionId,
+            {
+              type: "resize",
+              width,
+              height,
+              deviceScaleFactor: Math.max(
+                1,
+                Math.min(2, window.devicePixelRatio || 1),
+              ),
+            },
+            controller.signal,
+          )
+          .then((next) => {
+            if (
+              !controller.signal.aborted &&
+              submittedNavigation === navigationRevision.current &&
+              submittedRevision === revision
+            )
+              applyState(next);
           })
-          .then((next) => applyState(next))
           .catch(() => undefined);
       }, 160);
     });
     observer.observe(element);
     return () => {
+      controller.abort();
       observer.disconnect();
       window.clearTimeout(timer);
     };
@@ -318,16 +345,19 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const launchBrowser = async () => {
     const next = normalizedBrowserUrl(draft);
     if (!next) {
-      setError(t("invalidBrowserAddress"));
+      setAddressError(t("invalidBrowserAddress"));
       return;
     }
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
     const submittedRevision = addressRevision.current;
+    const navigation = ++navigationRevision.current;
     setBusy(true);
     setDraft(next);
-    setError(null);
+    setAddressError(null);
+    inputRevision.current++;
+    setInputError(null);
     try {
       sessionStorage.setItem(storageKey, next);
     } catch {}
@@ -338,14 +368,22 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         dimensions(),
         controller.signal,
       );
-      if (!controller.signal.aborted) {
+      if (
+        !controller.signal.aborted &&
+        navigation === navigationRevision.current
+      ) {
+        navigationRevision.current++;
         const syncAddress = submittedRevision === addressRevision.current;
         if (syncAddress) addressDirty.current = false;
         applyState(opened, syncAddress);
       }
     } catch (caught) {
-      if (!controller.signal.aborted) {
-        setError(
+      if (
+        !controller.signal.aborted &&
+        navigation === navigationRevision.current &&
+        submittedRevision === addressRevision.current
+      ) {
+        setAddressError(
           caught instanceof Error ? caught.message : t("browserOpenFailed"),
         );
       }
@@ -364,22 +402,49 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
       browserAction: Parameters<WebClient["browserAction"]>[1],
       syncAddress = false,
     ) => {
-      const submittedRevision = addressRevision.current;
+      const input = ["mouse", "key", "text"].includes(browserAction.type);
+      const passive =
+        (browserAction.type === "mouse" &&
+          ["move", "up"].includes(browserAction.event)) ||
+        (browserAction.type === "key" && browserAction.event === "up");
+      const submittedAddress = addressRevision.current;
+      const submittedRevision = input
+        ? passive
+          ? inputRevision.current
+          : ++inputRevision.current
+        : ++navigationRevision.current;
+      if (!input) {
+        inputRevision.current++;
+        setInputError(null);
+      }
       try {
         const next = await client.browserAction(sessionId, browserAction);
-        if (["mouse", "key", "text"].includes(browserAction.type)) {
-          setError(null);
+        if (input) {
+          if (!passive && submittedRevision === inputRevision.current)
+            setInputError(null);
           return;
         }
+        if (submittedRevision !== navigationRevision.current) return;
+        navigationRevision.current++;
         const syncDraft =
-          syncAddress && submittedRevision === addressRevision.current;
+          syncAddress && submittedAddress === addressRevision.current;
         if (syncDraft) addressDirty.current = false;
         applyState(next, syncDraft);
-        setError(null);
+        if (submittedAddress === addressRevision.current) setAddressError(null);
       } catch (caught) {
-        setError(
-          caught instanceof Error ? caught.message : t("browserOpenFailed"),
-        );
+        if (
+          submittedRevision ===
+          (input ? inputRevision.current : navigationRevision.current)
+        ) {
+          const message =
+            caught instanceof Error ? caught.message : t("browserOpenFailed");
+          if (input)
+            setInputError((previous) =>
+              passive ? (previous ?? message) : message,
+            );
+          else if (submittedAddress === addressRevision.current)
+            setAddressError(message);
+        }
       }
     },
     [applyState, client, sessionId, t],
@@ -551,6 +616,7 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
           onChange={(event) => {
             addressRevision.current++;
             addressDirty.current = true;
+            setAddressError(null);
             setDraft(event.currentTarget.value);
           }}
           onFocus={() => {
@@ -581,7 +647,23 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
           <ExternalLink aria-hidden="true" />
         </button>
       </form>
-      {error && <p className="workbar-error">{error}</p>}
+      <div className="browser-feedback">
+        {addressError && (
+          <p className="workbar-error" role="alert">
+            {addressError}
+          </p>
+        )}
+        {inputError && (
+          <p className="workbar-error" role="alert">
+            {inputError}
+          </p>
+        )}
+        {frameError && (
+          <p className="workbar-error" role="status">
+            {frameError}
+          </p>
+        )}
+      </div>
       <div
         ref={viewport}
         className="browser-viewport"
@@ -596,7 +678,8 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
           event.preventDefault();
           event.stopPropagation();
           if (text.length > WEB_BROWSER_TEXT_MAX_LENGTH) {
-            setError(
+            inputRevision.current++;
+            setInputError(
               t("browserPasteTooLarge", { count: WEB_BROWSER_TEXT_MAX_LENGTH }),
             );
             return;

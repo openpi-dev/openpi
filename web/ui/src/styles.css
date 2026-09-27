@@ -482,7 +482,8 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .plan-card-copy { display: grid; place-items: center; width: 36px; flex-shrink: 0; }
 .plan-card-body { padding: 4px 16px 16px; }
 .plan-card-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.plan-card-body > .markdown { overflow-x: auto; }
+.plan-card-body > .markdown,
+.plan-card-body > .message-full-text > .markdown { overflow-x: auto; }
 .plan-card .markdown ol { list-style-type: decimal; }
 .plan-card .markdown ul { list-style-type: disc; }
 .plan-card .markdown ul.contains-task-list { list-style-type: none; }

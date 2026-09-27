@@ -11,6 +11,8 @@ export function FullMessageText({
   markdown,
   fullText,
   onComplete,
+  onProgress,
+  purpose,
 }: {
   preview: string;
   sessionId: string;
@@ -19,10 +21,14 @@ export function FullMessageText({
   markdown: boolean;
   fullText?: string;
   onComplete?: (text: string) => void;
+  onProgress?: (text: string) => void;
+  purpose?: "plan";
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const request = useRef<AbortController | null>(null);
+  const loadButton = useRef<HTMLButtonElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const [chunks, setChunks] = useState<string[] | null>(null);
   const [nextCursor, setNextCursor] = useState<number | null>(0);
   const [loading, setLoading] = useState(false);
@@ -43,10 +49,12 @@ export function FullMessageText({
         entryId,
         nextCursor,
         controller.signal,
+        ...(purpose ? ([purpose] as const) : []),
       );
       if (controller.signal.aborted) return;
       if (
         page.entryId !== entryId ||
+        (purpose === "plan" && page.planStatus !== "ready") ||
         (page.nextCursor !== null && page.nextCursor <= nextCursor)
       )
         throw new Error("Message identity changed");
@@ -54,7 +62,14 @@ export function FullMessageText({
         nextCursor === 0 ? [page.text] : [...(chunks ?? []), page.text];
       setChunks(nextChunks);
       setNextCursor(page.nextCursor);
-      if (page.nextCursor === null) onComplete?.(nextChunks.join(""));
+      if (page.nextCursor === null) {
+        onComplete?.(nextChunks.join(""));
+        if (
+          document.activeElement === loadButton.current &&
+          !body.current?.closest("[hidden]")
+        )
+          body.current?.focus();
+      } else onProgress?.(nextChunks.join(""));
     } catch {
       if (!controller.signal.aborted) setError(true);
     } finally {
@@ -68,26 +83,35 @@ export function FullMessageText({
   const text = fullText ?? chunks?.join("") ?? preview;
   return (
     <>
-      {markdown ? (
-        <Markdown>{text}</Markdown>
-      ) : (
-        <div className="message-body">{text}</div>
-      )}
+      <div ref={body} className="message-full-text" tabIndex={-1}>
+        {markdown ? (
+          <Markdown>{text}</Markdown>
+        ) : (
+          <div className="message-body">{text}</div>
+        )}
+      </div>
       {fullText === undefined && nextCursor !== null && (
         <button
+          ref={loadButton}
           type="button"
           className="message-load-full"
-          disabled={loading}
+          aria-disabled={loading}
           onClick={() => void load()}
         >
           {t(
             loading
-              ? "messageLoadingFull"
+              ? purpose === "plan"
+                ? "planCardLoadingFull"
+                : "messageLoadingFull"
               : error
-                ? "messageLoadFailed"
+                ? purpose === "plan"
+                  ? "planCardLoadFailed"
+                  : "messageLoadFailed"
                 : chunks
                   ? "messageLoadMore"
-                  : "messageLoadFull",
+                  : purpose === "plan"
+                    ? "planCardLoadFull"
+                    : "messageLoadFull",
           )}
         </button>
       )}

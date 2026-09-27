@@ -328,8 +328,8 @@ it("a canonical successor retires an in-flight submission without awaiting its r
   fireEvent.click(screen.getByRole("button", { name: "提交答案" }));
   expect(screen.getByRole("button", { name: "正在提交…" })).toBeTruthy();
   pending.mockResolvedValue({ pending: request("A", "successor") });
-  view.rerender(panel(cache, { revision: 2 }));
-  await screen.findByRole("radio", { name: /完整交互/ });
+  await act(async () => view.rerender(panel(cache, { revision: 2 })));
+  expect(screen.getByRole("radio", { name: /完整交互/ })).toBeTruthy();
   expect(answer.mock.calls[0]![2]?.aborted).toBe(true);
   expect(cache.size).toBe(0);
   await act(async () => resolve?.({ state: "dismissed" }));

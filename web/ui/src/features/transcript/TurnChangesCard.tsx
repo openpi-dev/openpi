@@ -1,5 +1,5 @@
 import { ArrowLeft, ChevronDown, FilePenLine } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebTurnChanges,
@@ -61,6 +61,28 @@ export function TurnChangesCard({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [requestedPath, setRequestedPath] = useState<string | null>(null);
   const [error, setError] = useState(false);
+  const card = useRef<HTMLElement>(null);
+  const review = useRef<HTMLElement>(null);
+  const reviewButton = useRef<HTMLButtonElement>(null);
+  const focusIntent = useRef<"review" | "summary" | null>(null);
+
+  useLayoutEffect(() => {
+    if (focusIntent.current === "review" && reviewing) review.current?.focus();
+    else if (focusIntent.current === "summary" && !reviewing) {
+      const opener = Array.from(
+        card.current?.querySelectorAll<HTMLButtonElement>(
+          ".turn-changes-list .turn-changes-file",
+        ) ?? [],
+      ).find((button) => button.title === requestedPath);
+      (opener ?? reviewButton.current)?.focus();
+    }
+    focusIntent.current = null;
+  }, [reviewing, requestedPath]);
+
+  const returnToSummary = () => {
+    focusIntent.current = "summary";
+    setReviewing(false);
+  };
 
   useEffect(() => {
     if (!reviewing) return;
@@ -127,7 +149,28 @@ export function TurnChangesCard({
     : changes.files.slice(0, PREVIEW_FILES);
   const remaining = changes.files.length - files.length;
   return (
-    <section className="turn-changes" aria-label={t("turnChangesReview")}>
+    <section
+      ref={card}
+      className="turn-changes"
+      aria-label={t("turnChangesReview")}
+      onKeyDown={(event) => {
+        if (
+          !reviewing ||
+          event.key !== "Escape" ||
+          event.defaultPrevented ||
+          event.nativeEvent.isComposing ||
+          event.nativeEvent.keyCode === 229 ||
+          event.shiftKey ||
+          event.ctrlKey ||
+          event.altKey ||
+          event.metaKey
+        )
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        returnToSummary();
+      }}
+    >
       <header className="turn-changes-header">
         <span className="turn-changes-icon" aria-hidden="true">
           <FilePenLine />
@@ -146,12 +189,18 @@ export function TurnChangesCard({
           )}
         </span>
         <button
+          ref={reviewButton}
           type="button"
           className="turn-changes-review-button"
           aria-label={reviewing ? t("turnChangesBack") : t("turnChangesReview")}
           onClick={() => {
+            if (reviewing) {
+              returnToSummary();
+              return;
+            }
+            focusIntent.current = "review";
             setRequestedPath(null);
-            setReviewing((value) => !value);
+            setReviewing(true);
           }}
         >
           {reviewing ? (
@@ -163,13 +212,10 @@ export function TurnChangesCard({
       </header>
       {reviewing ? (
         <section
+          ref={review}
           className="turn-changes-review"
           aria-label={t("turnChangesReview")}
           tabIndex={-1}
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && !event.nativeEvent.isComposing)
-              setReviewing(false);
-          }}
         >
           {error && (
             <p role="alert">
@@ -227,6 +273,7 @@ export function TurnChangesCard({
               key={file.path}
               file={file}
               onClick={() => {
+                focusIntent.current = "review";
                 setRequestedPath(file.path);
                 setReviewing(true);
               }}
