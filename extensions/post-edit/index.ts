@@ -35,7 +35,7 @@ function commandInvocation(command: string) {
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `${command}; $openpiSucceeded = $?; $openpiExitCode = $LASTEXITCODE; if (-not $openpiSucceeded) { if ($openpiExitCode -ne 0) { exit $openpiExitCode }; exit 1 }; exit 0`,
+        `${command}; $openpiSucceeded = $?; $openpiExitCode = $LASTEXITCODE; if (-not $openpiSucceeded) { if ($null -ne $openpiExitCode -and $openpiExitCode -ne 0) { exit $openpiExitCode }; exit 1 }; exit 0`,
       ],
     };
   }
