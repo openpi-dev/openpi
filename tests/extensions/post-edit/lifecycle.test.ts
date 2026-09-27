@@ -286,6 +286,28 @@ test("real Pi waits for a foreground formatter before the next prompt reaches it
   }
 });
 
+test("real Windows post-edit preserves cmdlet and native command failures", {
+  skip: process.platform !== "win32",
+  timeout: 15_000,
+}, async () => {
+  const cases = [
+    {
+      command: `${nodeCommand("process.exit(0)")}; Get-Item C:\\definitely-missing-openpi-file`,
+      expectedExit: 1,
+    },
+    { command: nodeCommand("process.exit(7)"), expectedExit: 7 },
+  ];
+
+  for (const { command, expectedExit } of cases) {
+    await withSession(command, async (h) => {
+      h.enqueue(write("initial\\n"));
+      await h.session.prompt("write fixture");
+      await h.session.prompt("wait for post-edit failure");
+      assert.match(h.notices[0] ?? "", new RegExp(`exit ${expectedExit}`));
+    });
+  }
+});
+
 for (const name of ["write", "edit", "bash", "read"] as const) {
   test(`real Pi native ${name} backstop joins formatter with agent_start fence omitted`, {
     timeout: 15_000,
