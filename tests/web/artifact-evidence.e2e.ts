@@ -249,9 +249,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
       .click();
     const workbar = page.locator(".workbar-panel");
-    await workbar
-      .getByRole("button", { name: /^(生成文件|Generated files)/u })
-      .click();
+    await workbar.getByRole("button", { name: /^(文件|Files)/u }).click();
     const generatedReport = workbar.getByRole("button", {
       name: /report space\.md/u,
     });
@@ -416,10 +414,18 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       path,
       content: "# Latest report\nExternal revision",
     });
+    await expect(artifactPanel).toContainText(/文件已更新|The file changed/u, {
+      timeout: 8_000,
+    });
+    await expect(
+      page.getByRole("heading", { name: "Updated report" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: /刷新文件|Refresh file/u }).click();
     await expect(
       page.getByRole("heading", { name: "Latest report" }),
     ).toBeVisible({ timeout: 8_000 });
     await rm(path);
+    await page.getByRole("button", { name: /刷新文件|Refresh file/u }).click();
     await expect(artifactPanel).toContainText(
       /当前显示旧版预览|Showing an older preview/u,
       { timeout: 8_000 },

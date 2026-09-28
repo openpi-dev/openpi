@@ -55,6 +55,7 @@ function panel(running = false) {
         requestedTool: "side-conversation",
         requestRevision: 0,
         sessionId: "parent",
+        sessionPath: "/workspace/session.jsonl",
         cwd: "/workspace",
         capabilities: {
           subagents: {
@@ -63,7 +64,6 @@ function panel(running = false) {
             omitted: 0,
           },
         },
-        messages: [],
         review: {
           result: null,
           loading: false,
@@ -72,7 +72,6 @@ function panel(running = false) {
         },
         conversationCollapsed: false,
         onRestoreConversation: () => {},
-        onBeforeArtifactOpen: () => {},
         onClose: () => {},
       }),
     ),

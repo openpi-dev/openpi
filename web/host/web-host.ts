@@ -308,7 +308,7 @@ export class WebHost {
           !this.adapter.isCurrentSession({ id: admission.sessionId, path: admission.sessionPath })) return undefined;
       return { ...turn, workspace: this.runtime.cwd, controllerId: admission.controllerId };
     }, () => this.publish("questions_changed"));
-    this.artifacts = new ArtifactReader(() => this.runtime.workspaceSelected && !this.stopping ? { sessionId: this.runtime.sessionManager.getSessionId(), cwd: this.runtime.cwd } : undefined);
+    this.artifacts = new ArtifactReader(() => this.runtime.workspaceSelected && !this.stopping ? { sessionId: this.runtime.sessionManager.getSessionId(), sessionPath: this.runtime.sessionManager.getSessionFile() ?? `current:${this.runtime.sessionManager.getSessionId()}`, cwd: this.runtime.cwd } : undefined);
     this.requestedPort = options.port ?? 0;
     this.token = options.token
       ? Buffer.from(options.token, "hex")
@@ -625,7 +625,7 @@ export class WebHost {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "Content-Security-Policy":
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src http: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+          "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src http: https: 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
         "Referrer-Policy": "no-referrer",
         "Cross-Origin-Resource-Policy": "same-origin",
         "Cross-Origin-Opener-Policy": "same-origin",
@@ -638,7 +638,9 @@ export class WebHost {
     if (
       url.pathname === "/styles.css" ||
       url.pathname === "/app.js" ||
-      url.pathname === "/favicon.svg"
+      url.pathname === "/favicon.svg" ||
+      /^\/app-[a-zA-Z0-9_.-]+\.js$/u.test(url.pathname) ||
+      url.pathname === "/pdf.worker.min.mjs"
     ) {
       if (request.method !== "GET")
         return this.json(response, 405, {
@@ -799,6 +801,19 @@ export class WebHost {
       const handle = await this.artifacts.resolveFile(body.sessionId, body.reference, body.parent);
       return this.json(response, 200, { handle });
     }
+    if (url.pathname === "/api/artifacts/files") {
+      if (request.method === "DELETE") {
+        const cursor = url.searchParams.get("cursor");
+        if (!cursor || cursor.length > 100) return this.json(response, 400, { error: "A file-list cursor is required" });
+        this.artifacts.releaseListing(cursor);
+        return this.json(response, 200, { released: true });
+      }
+      if (request.method !== "GET") return this.json(response, 405, { error: "Directory listing requires GET" });
+      const sessionId = url.searchParams.get("sessionId");
+      const sessionPath = url.searchParams.get("sessionPath");
+      if (!sessionId || !sessionPath || sessionId.length > 128 || sessionPath.length > 4096) return this.json(response, 400, { error: "An exact Session is required" });
+      return this.json(response, 200, await this.artifacts.listFiles(sessionId, url.searchParams.get("path") ?? ".", url.searchParams.get("query") ?? "", sessionPath, url.searchParams.get("cursor") ?? undefined));
+    }
     if (url.pathname === "/api/artifacts/authorize-file") {
       if (request.method !== "POST") return this.json(response, 405, { error: "File authorization requires POST" });
       const body = await this.readJson(request);
@@ -821,7 +836,9 @@ export class WebHost {
         return this.json(response, 200, await this.artifacts.metadata(handle, sessionId));
       const revision = url.searchParams.get("revision") ?? undefined;
       if (download && !/^[a-f0-9]{64}$/u.test(revision ?? "")) return this.json(response, 400, { error: "Download requires the preview content revision" });
-      const result = await this.artifacts.read(handle, sessionId, revision);
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > 20 * 1024 * 1024) return this.json(response, 400, { error: "A bounded text offset is required" });
+      const result = await this.artifacts.read(handle, sessionId, revision, offset);
       if (!download) return this.json(response, 200, result.preview);
       response.writeHead(200, {
         "Content-Type": "application/octet-stream", "Content-Length": result.bytes.length,

@@ -12,6 +12,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 - [`WEB_BROWSER_DSH_COMPARISON_2026-09-28.md`](WEB_BROWSER_DSH_COMPARISON_2026-09-28.md) - Web-only DSH iframe comparison, actual OpenPI input/paint observations, embedding limits and an isolated Chromium WebRTC transport experiment ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
 
+- [`WEB_WORKSPACE_FILES_2026-09-28.md`](WEB_WORKSPACE_FILES_2026-09-28.md) — 工作区文件树、原位预览、显式继续加载、DSH 源码参考及验证边界（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
 - [`WEB_BROWSER_TEXT_INPUT_2026-09-27.md`](WEB_BROWSER_TEXT_INPUT_2026-09-27.md) - committed browser text, native editable-focus receipts, bounded admission, password exclusion, event-order regressions and local desktop observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
 
 - [`WEB_MODEL_ENTRY_2026-09-27.md`](WEB_MODEL_ENTRY_2026-09-27.md) - native unselected-model projection, actionable model configuration, search/return focus, and bounded responsive picker observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).

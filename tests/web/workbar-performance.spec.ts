@@ -56,11 +56,11 @@ it("pauses side-conversation polling across hidden panels and inactive tabs, the
         requestedTool,
         requestRevision,
         sessionId: "session-a",
+        sessionPath: "/workspace/session.jsonl",
         cwd: "/workspace",
         capabilities: {
           subagents: { items: [detail], truncated: false, omitted: 0 },
         },
-        messages: [],
         review: {
           result: null,
           loading: false,
@@ -69,7 +69,6 @@ it("pauses side-conversation polling across hidden panels and inactive tabs, the
         },
         conversationCollapsed: false,
         onRestoreConversation: () => {},
-        onBeforeArtifactOpen: () => {},
         onClose: () => {},
         onActiveToolChange: changes,
       }),

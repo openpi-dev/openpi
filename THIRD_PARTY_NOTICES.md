@@ -2,6 +2,18 @@
 
 ## Project origins and acknowledgments
 
+The workspace Files explorer and preview interactions were informed by
+[DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar), revision
+`9b5834f74ad197534c821c35b8357edac1ad3919`. OpenPI uses its own Session-bound
+file service and inline workbar layout; no DSH source is embedded.
+
+File preview bundles additionally include Mermaid, PDF.js, Mammoth, ExcelJS,
+fflate, fast-xml-parser, highlight.js, DOMPurify and rehype-raw. Their licenses
+and bundled dependency notices are reproduced in
+[`web/THIRD_PARTY_LICENSES.txt`](web/THIRD_PARTY_LICENSES.txt), included in the
+package alongside the Web assets. JSZip is used under its MIT option;
+DOMPurify is used under its Apache-2.0 option.
+
 OpenPI originated from [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) and is maintained as an independent distribution. Thanks to the original author for the starting point.
 
 Web workbench contributions include:

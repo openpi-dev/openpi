@@ -15,6 +15,20 @@ export interface ArtifactPreview {
   artifact: ArtifactMetadata;
   text?: string;
   truncated: boolean;
+  nextOffset?: number;
+}
+
+export interface WorkspaceFileEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file" | "symlink" | "other";
+}
+
+export interface WorkspaceFileListing {
+  path: string;
+  entries: WorkspaceFileEntry[];
+  truncated: boolean;
+  nextCursor?: string;
 }
 
 /** Keep the original reference; URL resolution belongs to the Host. */

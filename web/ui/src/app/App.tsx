@@ -30,8 +30,8 @@ import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.
 import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
 import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
-import { Transcript } from "../features/transcript/Transcript.tsx";
 import type { SessionReadingCache } from "../features/transcript/session-reading-state.ts";
+import { Transcript } from "../features/transcript/Transcript.tsx";
 import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
 import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
@@ -65,8 +65,6 @@ export function App() {
   const providerSettingsTrigger = useRef<HTMLElement | null>(null);
   const workbarReturnFocus = useRef<HTMLElement | null>(null);
   const artifactProvider = useRef<ArtifactProviderHandle>(null);
-  const artifactOpenFromFiles = useRef(false);
-  const artifactReturn = useRef<"files" | null>(null);
   const readingCache = useMemo<SessionReadingCache>(() => new Map(), []);
   const questionWorkingCache = useMemo<QuestionWorkingCache>(
     () => new Map(),
@@ -316,34 +314,6 @@ export function App() {
     active: workbarOpen && workbarActiveTool === "review",
     running: selectedRunning,
   });
-  const workbarMessages = useMemo(() => {
-    const previewingFiles =
-      artifactPanelOpen && artifactReturn.current === "files";
-    if (!(workbarOpen && workbarActiveTool === "files") && !previewingFiles)
-      return [];
-    return [
-      ...(selected?.entries.flatMap((entry) =>
-        entry.message ? [entry.message] : [],
-      ) ?? []),
-      ...state.liveMessages
-        .filter((entry) =>
-          entry.optimistic
-            ? entry.optimistic.sessionId === selected?.id &&
-              entry.optimistic.sessionPath === selected?.path
-            : controlled,
-        )
-        .map((entry) => entry.message),
-    ];
-  }, [
-    workbarOpen,
-    workbarActiveTool,
-    artifactPanelOpen,
-    selected?.entries,
-    selected?.id,
-    selected?.path,
-    controlled,
-    state.liveMessages,
-  ]);
   const workbarBound = Boolean(
     workbarTarget &&
       selected &&
@@ -361,7 +331,6 @@ export function App() {
   const openWorkbar = (tool: WorkbarTool = "launcher") => {
     if (!selected || state.sessionSwitching) return;
     if (artifactPanelOpen) {
-      artifactReturn.current = null;
       artifactProvider.current?.close({ restoreFocus: false });
     }
     if (!workbarVisible)
@@ -494,31 +463,14 @@ export function App() {
               subagentVisible ||
               providerSettingsVisible,
           )}
-          onOpen={(nested) => {
+          onOpen={() => {
             setArtifactPanelOpen(true);
-            if (!nested)
-              artifactReturn.current = artifactOpenFromFiles.current
-                ? "files"
-                : null;
-            artifactOpenFromFiles.current = false;
             setSubagentTarget(null);
             setWorkbarOpen(false);
             setInspection(null);
           }}
-          onClose={(reason) => {
+          onClose={() => {
             setArtifactPanelOpen(false);
-            const target = artifactReturn.current;
-            artifactReturn.current = null;
-            if (
-              reason === "user" &&
-              target &&
-              workbarBound &&
-              !state.workspaceDraft &&
-              !state.sessionSwitching
-            ) {
-              setWorkbarActiveTool("files");
-              setWorkbarOpen(true);
-            }
           }}
         >
           <SessionSidebar
@@ -791,11 +743,12 @@ export function App() {
           )}
           {workbarBound && selected && workbarTarget && (
             <WorkbarPanel
-              key={selected.id}
+              key={`${selected.id}:${selected.path}`}
               visible={workbarVisible}
               requestedTool={workbarTarget.tool}
               requestRevision={workbarTarget.requestRevision}
               sessionId={selected.id}
+              sessionPath={selected.path}
               canControl={
                 !state.sessionSwitching &&
                 isControlledSession(state.snapshot, selected)
@@ -809,12 +762,8 @@ export function App() {
                   ? (state.snapshot?.runtime.capabilities ?? {})
                   : {}
               }
-              messages={workbarMessages}
               onActiveToolChange={setWorkbarActiveTool}
               review={gitReview}
-              onBeforeArtifactOpen={() => {
-                artifactOpenFromFiles.current = true;
-              }}
               conversationCollapsed={centerCollapsed}
               onRestoreConversation={() => setCenterCollapsed(false)}
               onClose={closeWorkbar}

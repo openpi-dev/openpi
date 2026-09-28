@@ -3,9 +3,8 @@ import {
   ArrowLeft,
   Check,
   ChevronRight,
-  FileCode2,
   FileDiff,
-  FolderOutput,
+  FolderOpen,
   Globe2,
   MessagesSquare,
   PanelLeftOpen,
@@ -15,14 +14,7 @@ import {
   StopCircle,
   X,
 } from "lucide-react";
-import {
-  type FormEvent,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebBackgroundTerminalActivity,
@@ -30,16 +22,14 @@ import type {
   WebCapabilitySnapshot,
   WebSubagentActivity,
 } from "../../../../../extensions/shared/web-observer-registry.ts";
-import type { WebLiveMessage } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
-import { ArtifactContext } from "../artifacts/context.ts";
+import { FilesPanel } from "../files/FilesPanel.tsx";
 import {
   type GitReviewViewState,
   ReviewPanel,
 } from "../review/ReviewPanel.tsx";
 import { SubagentDetailView } from "../subagents/SubagentPanel.tsx";
 import { BrowserPanel } from "./BrowserPanel.tsx";
-import { generatedFiles } from "./generated-files.ts";
 import { InteractiveTerminal } from "./InteractiveTerminal.tsx";
 import type { WorkbarTool } from "./types.ts";
 import {
@@ -78,8 +68,8 @@ const launcherTools = [
   },
   {
     kind: "files" as const,
-    icon: FolderOutput,
-    title: "generatedFiles",
+    icon: FolderOpen,
+    title: "files",
     description: "workbarFilesDescription",
   },
 ] as const;
@@ -388,80 +378,18 @@ function TerminalPanel({
   );
 }
 
-function GeneratedFilesPanel({
-  messages,
-  onBeforeOpen,
-}: {
-  messages: readonly WebLiveMessage[];
-  onBeforeOpen: () => void;
-}) {
-  const { t } = useTranslation();
-  const artifacts = useContext(ArtifactContext);
-  const files = useMemo(() => generatedFiles(messages), [messages]);
-  return (
-    <div className="workbar-resource-list generated-files-list">
-      {files.length === 0 ? (
-        <div className="workbar-empty">
-          <FolderOutput aria-hidden="true" />
-          <h3>{t("noGeneratedFiles")}</h3>
-          <p>{t("workbarFilesDescription")}</p>
-        </div>
-      ) : (
-        <ul>
-          {files.map((file) => (
-            <li key={file.reference}>
-              <button
-                type="button"
-                disabled={!artifacts}
-                title={file.reference}
-                onClick={(event) => {
-                  if (!artifacts) return;
-                  onBeforeOpen();
-                  artifacts.open(
-                    encodeURI(file.reference),
-                    undefined,
-                    event.currentTarget,
-                  );
-                }}
-              >
-                <FileCode2 aria-hidden="true" />
-                <span>
-                  <strong>
-                    {file.path.split(/[\\/]/u).at(-1) ?? file.path}
-                  </strong>
-                  <small>{file.path}</small>
-                </span>
-                <em>{t(`fileChange_${file.change ?? file.tool}`)}</em>
-                <ChevronRight aria-hidden="true" />
-              </button>
-              {file.diff && (
-                <details className="generated-file-edit">
-                  <summary>{t("recordedFileEdit")}</summary>
-                  {file.diffTruncated && <p>{t("artifactPreviewTruncated")}</p>}
-                  <pre>{file.diff}</pre>
-                </details>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 export function WorkbarPanel({
   visible,
   requestedTool,
   requestRevision,
   sessionId,
+  sessionPath,
   cwd,
   capabilities,
-  messages,
   review,
   reviewInitialFilePath,
   conversationCollapsed,
   onRestoreConversation,
-  onBeforeArtifactOpen,
   onClose,
   onActiveToolChange,
   canControl = true,
@@ -471,14 +399,13 @@ export function WorkbarPanel({
   requestedTool: WorkbarTool;
   requestRevision: number;
   sessionId: string;
+  sessionPath: string;
   cwd: string;
   capabilities: WebCapabilitySnapshot;
-  messages: readonly WebLiveMessage[];
   review: GitReviewViewState;
   reviewInitialFilePath?: string;
   conversationCollapsed: boolean;
   onRestoreConversation: () => void;
-  onBeforeArtifactOpen: () => void;
   onClose: () => void;
   onActiveToolChange?: (tool: WorkbarTool | null) => void;
   canControl?: boolean;
@@ -679,9 +606,14 @@ export function WorkbarPanel({
             ) : tool === "browser" ? (
               <BrowserPanel key={sessionId} />
             ) : (
-              <GeneratedFilesPanel
-                messages={messages}
-                onBeforeOpen={onBeforeArtifactOpen}
+              <FilesPanel
+                key={`${sessionId}:${sessionPath}`}
+                sessionId={sessionId}
+                sessionPath={sessionPath}
+                cwd={cwd}
+                active={
+                  visible && !tabs.launcherOpen && tabs.active === "files"
+                }
               />
             )}
           </div>

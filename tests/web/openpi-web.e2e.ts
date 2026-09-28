@@ -640,7 +640,7 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   await expect(page.locator('[data-pane-resizer="left"]')).toHaveCount(0);
   await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
 
-  const workbar = await openWorkbarTool(page, "生成文件");
+  const workbar = await openWorkbarTool(page, "文件");
   const workbarHandle = page.getByRole("separator", { name: "调整工具栏宽度" });
   await workbarHandle.focus();
   await page.keyboard.press("ArrowLeft");
@@ -841,7 +841,7 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
     "变更",
     "终端",
     "浏览器",
-    "生成文件",
+    "文件",
   ]);
   await launcher.getByRole("button", { name: /^变更/u }).click();
   const review = launcher.locator(".review-panel");

@@ -14,11 +14,12 @@ import type {
   ArtifactMetadata,
   ArtifactPreview,
 } from "../../../../protocol/artifacts.ts";
-import { Markdown } from "../../components/Markdown.tsx";
 import { copyText } from "../../lib/clipboard.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
 import { sniffPromptImageMime } from "../composer/image-attachments.ts";
+import { FileContent } from "../files/FileContent.tsx";
 import { ArtifactContext } from "./context.ts";
+import "../files/files.css";
 
 export interface ArtifactProviderHandle {
   close: (options?: { restoreFocus?: boolean }) => void;
@@ -36,6 +37,7 @@ function ArtifactImagePreview({
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [original, setOriginal] = useState(false);
   const { sessionId, handle, revision } = artifact;
   useEffect(() => {
     const controller = new AbortController();
@@ -75,21 +77,39 @@ function ArtifactImagePreview({
       </div>
     );
   return (
-    <div className="artifact-image-preview">
+    <div className="artifact-image-preview" data-original={original}>
+      <div className="file-preview-toolbar">
+        <button
+          type="button"
+          aria-pressed={!original}
+          onClick={() => setOriginal(false)}
+        >
+          {t("filesFitImage")}
+        </button>
+        <button
+          type="button"
+          aria-pressed={original}
+          onClick={() => setOriginal(true)}
+        >
+          {t("filesOriginalImage")}
+        </button>
+      </div>
       {!image?.loaded && <p role="status">{t("readingFile")}</p>}
-      {image && (
-        <img
-          src={image.url}
-          alt={artifact.name}
-          hidden={!image.loaded}
-          onLoad={() =>
-            setImage((current) =>
-              current ? { ...current, loaded: true } : null,
-            )
-          }
-          onError={() => setError(t("artifactImagePreviewFailed"))}
-        />
-      )}
+      <div className="file-media-viewport">
+        {image && (
+          <img
+            src={image.url}
+            alt={artifact.name}
+            hidden={!image.loaded}
+            onLoad={() =>
+              setImage((current) =>
+                current ? { ...current, loaded: true } : null,
+              )
+            }
+            onError={() => setError(t("artifactImagePreviewFailed"))}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -101,11 +121,22 @@ export const ArtifactProvider = forwardRef<
     sessionPath?: string;
     children?: ReactNode;
     disabled?: boolean;
+    embedded?: boolean;
+    active?: boolean;
     onOpen?: (nested: boolean) => void;
     onClose?: (reason: "user" | "context") => void;
   }
 >(function ArtifactProvider(
-  { sessionId, sessionPath, children, disabled = false, onOpen, onClose },
+  {
+    sessionId,
+    sessionPath,
+    children,
+    disabled = false,
+    embedded = false,
+    active = true,
+    onOpen,
+    onClose,
+  },
   ref,
 ) {
   const { t } = useTranslation();
@@ -124,6 +155,9 @@ export const ArtifactProvider = forwardRef<
   const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(
     null,
   );
+  const [changed, setChanged] = useState(false);
+  const [readingMore, setReadingMore] = useState(false);
+  const moreAbort = useRef<AbortController | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   const copyGeneration = useRef(0);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -168,6 +202,7 @@ export const ArtifactProvider = forwardRef<
       setError(null);
       setAccessDenied(false);
       setCopyStatus(null);
+      setChanged(false);
       nextParent.current = parent;
       setRequest({ reference, parent, sessionId, sessionPath });
     },
@@ -186,6 +221,7 @@ export const ArtifactProvider = forwardRef<
       setRequest(null);
       setPreview(null);
       setCopyStatus(null);
+      moreAbort.current?.abort();
       onClose?.(reason);
       if (focusReturnFrame.current !== null)
         window.cancelAnimationFrame(focusReturnFrame.current);
@@ -222,13 +258,14 @@ export const ArtifactProvider = forwardRef<
     onClose?.("context");
   }, [request, requestInScope, onClose]);
   useEffect(() => {
-    if (!request || !sessionId || !requestInScope) return;
+    if (!request || !sessionId || !requestInScope || !active) return;
     const controller = new AbortController();
     let handle: string | undefined;
     let parent = request.parent;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
     let identity: string | undefined;
+    let readingText = false;
     let delay = 2_000;
     if (focusClose.current) {
       focusClose.current = false;
@@ -274,6 +311,11 @@ export const ArtifactProvider = forwardRef<
             delay = Math.min(delay * 2, 30_000);
             return;
           }
+          if (readingText) {
+            if (!stopped) setChanged(true);
+            delay = 30_000;
+            return;
+          }
         }
         const next = await client.artifactPreview(
           sessionId,
@@ -282,8 +324,19 @@ export const ArtifactProvider = forwardRef<
         );
         if (!stopped) {
           identity = next.identity;
+          readingText = next.text !== undefined;
           delay = 2_000;
-          setPreview(next);
+          setPreview((current) =>
+            current?.artifact.path === next.artifact.path &&
+            current.artifact.revision === next.artifact.revision
+              ? {
+                  ...next,
+                  text: current.text,
+                  truncated: current.truncated,
+                  nextOffset: current.nextOffset,
+                }
+              : next,
+          );
           setError(null);
         }
       } catch (reason) {
@@ -315,6 +368,8 @@ export const ArtifactProvider = forwardRef<
       controller.abort();
       clearTimeout(timer);
       downloadAbort.current?.abort();
+      moreAbort.current?.abort();
+      setReadingMore(false);
       setBusy(false);
       if (handle && handle !== nextParent.current)
         void client.releaseArtifact(sessionId, handle).catch(() => undefined);
@@ -323,7 +378,7 @@ export const ArtifactProvider = forwardRef<
       for (const url of blobUrls.current) URL.revokeObjectURL(url);
       blobUrls.current.clear();
     };
-  }, [client, request, requestInScope, sessionId]);
+  }, [client, request, requestInScope, sessionId, active]);
   const context = useMemo(() => ({ open, disabled }), [open, disabled]);
   const path = preview?.artifact.path ?? request?.reference ?? "";
   const name = preview?.artifact.name ?? path.split(/[\\/]/u).at(-1) ?? path;
@@ -355,12 +410,44 @@ export const ArtifactProvider = forwardRef<
       if (!controller.signal.aborted) setBusy(false);
     }
   };
+  const readMore = async () => {
+    if (!preview?.nextOffset || moreAbort.current) return;
+    const current = preview;
+    const controller = new AbortController();
+    moreAbort.current = controller;
+    setReadingMore(true);
+    try {
+      const next = await client.artifactPreview(
+        current.artifact.sessionId,
+        current.artifact.handle,
+        controller.signal,
+        { offset: current.nextOffset!, revision: current.artifact.revision },
+      );
+      if (!controller.signal.aborted)
+        setPreview((value) =>
+          value?.artifact.handle === current.artifact.handle &&
+          value.artifact.revision === next.artifact.revision
+            ? { ...next, text: (value.text ?? "") + (next.text ?? "") }
+            : value,
+        );
+    } catch (reason) {
+      if (!controller.signal.aborted)
+        setError(
+          reason instanceof Error ? reason.message : t("filesReadFailed"),
+        );
+    } finally {
+      if (moreAbort.current === controller) {
+        moreAbort.current = null;
+        setReadingMore(false);
+      }
+    }
+  };
   return (
     <ArtifactContext.Provider value={context}>
       {children}
       {request && requestInScope && (
         <aside
-          className="artifact-panel"
+          className={`artifact-panel${embedded ? " artifact-panel-embedded" : ""}`}
           aria-label={t("filePreview")}
           onKeyDown={(event) => {
             if (
@@ -376,10 +463,12 @@ export const ArtifactProvider = forwardRef<
         >
           <header>
             <div>
-              <small>
-                {t("filePreview")} · {t("artifactReadOnly")}
+              <small title={path}>
+                {embedded
+                  ? path.split(/[\\/]/u).slice(0, -1).at(-1) || t("files")
+                  : `${t("filePreview")} · ${t("artifactReadOnly")}`}
               </small>
-              <h2 title={name}>{name}</h2>
+              <h2 title={path}>{name}</h2>
             </div>
             <button
               ref={closeButton}
@@ -421,11 +510,13 @@ export const ArtifactProvider = forwardRef<
             <div className="artifact-actions">
               <button
                 type="button"
+                title={t("refreshFile")}
                 onClick={() => {
                   copyGeneration.current++;
                   setCopyStatus(null);
                   setError(null);
                   setAccessDenied(false);
+                  setChanged(false);
                   nextParent.current = undefined;
                   setRequest((value) =>
                     value
@@ -446,6 +537,7 @@ export const ArtifactProvider = forwardRef<
               </button>
               <button
                 type="button"
+                title={t("downloadFile")}
                 disabled={!preview || busy}
                 onClick={() => void download()}
               >
@@ -457,6 +549,11 @@ export const ArtifactProvider = forwardRef<
               <p role="status" className="evidence-warning">
                 {preview ? t("artifactOlderPreview") : ""}
                 {error}
+              </p>
+            )}
+            {changed && (
+              <p className="evidence-warning" role="status">
+                {t("filesContentChanged")}
               </p>
             )}
             {accessDenied &&
@@ -500,22 +597,31 @@ export const ArtifactProvider = forwardRef<
                     artifact={preview.artifact}
                     client={client}
                   />
-                ) : preview.text === undefined ? (
-                  <p>{t("artifactUnsupported")}</p>
-                ) : /\.(?:md|markdown)$/iu.test(preview.artifact.name) ? (
-                  <ArtifactContext.Provider
-                    value={{ open, disabled, parent: preview.artifact.handle }}
-                  >
-                    <Markdown>{preview.text}</Markdown>
-                  </ArtifactContext.Provider>
                 ) : (
-                  <section
-                    aria-label="File preview content"
-                    // biome-ignore lint/a11y/noNoninteractiveTabindex: Long files need a keyboard-focusable scroll region.
-                    tabIndex={0}
+                  <ArtifactContext.Provider
+                    value={{
+                      open,
+                      disabled,
+                      parent: preview.artifact.handle,
+                      sessionId,
+                    }}
                   >
-                    <pre>{preview.text}</pre>
-                  </section>
+                    <FileContent
+                      key={`${preview.artifact.path}:${preview.artifact.revision}`}
+                      preview={preview}
+                      client={client}
+                    />
+                  </ArtifactContext.Provider>
+                )}
+                {preview.nextOffset !== undefined && (
+                  <button
+                    type="button"
+                    className="file-read-more"
+                    disabled={readingMore || changed}
+                    onClick={() => void readMore()}
+                  >
+                    {t(readingMore ? "readingFile" : "filesReadMore")}
+                  </button>
                 )}
                 <details className="artifact-file-details">
                   <summary>{t("artifactFileDetails")}</summary>

@@ -7,6 +7,7 @@ import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
   type ArtifactPreview,
+  type WorkspaceFileListing,
 } from "../../../protocol/artifacts.ts";
 import {
   type WebQuestionAnswers,
@@ -247,6 +248,27 @@ export class WebClient {
     );
   }
 
+  workspaceFiles(
+    sessionId: string,
+    sessionPath: string,
+    path: string,
+    query: string,
+    signal: AbortSignal,
+    cursor?: string,
+  ) {
+    return this.request<WorkspaceFileListing>(
+      `/api/artifacts/files?${new URLSearchParams({ sessionId, sessionPath, path: encodeURI(path), query, ...(cursor ? { cursor } : {}) })}`,
+      { signal },
+    );
+  }
+
+  releaseFileListing(cursor: string) {
+    return this.request(
+      `/api/artifacts/files?${new URLSearchParams({ cursor })}`,
+      { method: "DELETE" },
+    );
+  }
+
   resolveArtifact(
     sessionId: string,
     reference: string,
@@ -272,9 +294,14 @@ export class WebClient {
     );
   }
 
-  artifactPreview(sessionId: string, handle: string, signal?: AbortSignal) {
+  artifactPreview(
+    sessionId: string,
+    handle: string,
+    signal?: AbortSignal,
+    page?: { offset: number; revision: string },
+  ) {
     return this.request<ArtifactPreview>(
-      `/api/artifacts/content?${new URLSearchParams({ sessionId, handle })}`,
+      `/api/artifacts/content?${new URLSearchParams({ sessionId, handle, ...(page ? { offset: String(page.offset), revision: page.revision } : {}) })}`,
       { signal },
     );
   }

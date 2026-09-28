@@ -578,9 +578,9 @@ it("keeps a pending restart modal and its workbar visible when Escape requests n
       requestedTool: "terminal",
       requestRevision: 0,
       sessionId: "a",
+      sessionPath: "/workspace/session.jsonl",
       cwd: "/workspace",
       capabilities: {},
-      messages: [],
       review: {
         result: null,
         loading: false,
@@ -589,7 +589,6 @@ it("keeps a pending restart modal and its workbar visible when Escape requests n
       },
       conversationCollapsed: false,
       onRestoreConversation: () => {},
-      onBeforeArtifactOpen: () => {},
       onClose: () => {
         dismissWorkbar();
         setVisible(false);

@@ -335,7 +335,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(
       page.headers.get("content-security-policy") || "",
-      /frame-src http: https:/u,
+      /frame-src http: https: 'self' blob:/u,
     );
     assert.equal(page.headers.get("referrer-policy"), "no-referrer");
     const pageHtml = await page.text();
