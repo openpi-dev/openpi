@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AxeBuilder } from "@axe-core/playwright";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { expect, type Page, test } from "@playwright/test";
+import { chromium, expect, type Page, test } from "@playwright/test";
 import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
@@ -1063,6 +1063,246 @@ test("native iframe browser supports input, selection, scrolling and independent
       fixture.close((error) => (error ? reject(error) : resolve())),
     );
   }
+});
+
+test.describe("installed browser enhancement", () => {
+  test("defaults on only in OpenPI and bridges native navigation and popup tabs", async ({
+    baseURL,
+  }) => {
+    const profile = await mkdtemp(join(tmpdir(), "openpi-browser-extension-"));
+    const context = await chromium.launchPersistentContext(profile, {
+      baseURL,
+      locale: "zh-CN",
+      executablePath: process.env.OPENPI_WEB_BROWSER_EXECUTABLE,
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: ["--enable-unsafe-extension-debugging"],
+    });
+    const page = context.pages()[0]!;
+    const loads = new Map<string, number>();
+    let origin = "";
+    const fixture = createServer((request, response) => {
+      const path = new URL(request.url ?? "/", "http://localhost").pathname;
+      if (path === "/script.js") {
+        response.setHeader("Content-Type", "text/javascript");
+        response.end(
+          "document.querySelector('#script-popup').onclick=()=>window.open('/script-target','_blank');document.querySelector('#spa').onclick=()=>{history.pushState({},'', '/spa');document.title='SPA title';};document.querySelector('#empty-popup').onclick=()=>window.open('','_blank');",
+        );
+        return;
+      }
+      if (path === "/redirect") {
+        response.writeHead(302, {
+          Location: origin.replace("127.0.0.1", "localhost") + "/final",
+        });
+        response.end();
+        return;
+      }
+      loads.set(path, (loads.get(path) ?? 0) + 1);
+      response.setHeader("Content-Type", "text/html; charset=utf-8");
+      response.setHeader("X-Frame-Options", "DENY");
+      response.setHeader(
+        "Content-Security-Policy",
+        `script-src 'self'; object-src 'none'${path === "/csp" ? "; frame-ancestors 'none'" : ""}`,
+      );
+      if (path === "/outsider") {
+        response.end(
+          `<title>Other local app</title><iframe src="${origin}/denied"></iframe>`,
+        );
+        return;
+      }
+      response.end(
+        `<title>Native ${path}</title><input aria-label="Editor" value="original"><a href="/next">Next</a><a href="/popup" target="_blank">New link</a><a href="/redirect">Cross origin</a><button id="script-popup">Script popup</button><button id="empty-popup">Empty popup</button><button id="spa">SPA</button><script>window.inlineExecuted=true</script><script src="/script.js"></script>`,
+      );
+    });
+    await new Promise<void>((resolve) =>
+      fixture.listen(0, "127.0.0.1", resolve),
+    );
+    const address = fixture.address();
+    if (!address || typeof address === "string")
+      throw new Error("Missing fixture port");
+    origin = `http://127.0.0.1:${address.port}`;
+    try {
+      const cdp = await context.browser()!.newBrowserCDPSession();
+      await cdp.send("Extensions.loadUnpacked", {
+        path: join(process.cwd(), "web/browser-extension"),
+      });
+      const worker =
+        context.serviceWorkers()[0] ??
+        (await context.waitForEvent("serviceworker"));
+      await worker.evaluate(() => true);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await openWorkbench(page);
+      const workbar = await openWorkbarTool(page, "浏览器");
+      const active = workbar.locator(".browser-page:not([hidden])");
+      const addressBar = active.getByRole("textbox", { name: "浏览器地址" });
+      const frame = active.frameLocator("iframe");
+      await expect(active.getByText(/浏览增强已开启/)).toBeVisible();
+      await addressBar.fill(`${origin}/start`);
+      await active
+        .getByRole("button", { name: "打开地址", exact: true })
+        .click();
+      await expect(frame.getByRole("textbox", { name: "Editor" })).toHaveValue(
+        "original",
+      );
+      await expect(
+        workbar.getByRole("tab", { name: "Native /start", exact: true }),
+      ).toBeVisible();
+      expect(
+        await frame
+          .locator("body")
+          .evaluate(() => Reflect.get(window, "inlineExecuted")),
+      ).toBeUndefined();
+      await frame.locator("body").evaluate(
+        (_, id) => {
+          parent.postMessage(
+            {
+              source: "openpi-browser-extension",
+              type: "open",
+              id,
+              url: `${location.origin}/forged`,
+            },
+            "*",
+          );
+        },
+        await active.locator("iframe").getAttribute("data-openpi-browser-page"),
+      );
+      await frame.getByRole("link", { name: "Next", exact: true }).click();
+      await expect(addressBar).toHaveValue(`${origin}/next`);
+      await expect(
+        active.getByRole("button", { name: "后退", exact: true }),
+      ).toBeEnabled();
+      await active.getByRole("button", { name: "后退", exact: true }).click();
+      await expect(addressBar).toHaveValue(`${origin}/start`);
+      await active.getByRole("button", { name: "前进", exact: true }).click();
+      await expect(addressBar).toHaveValue(`${origin}/next`);
+      await frame
+        .getByRole("textbox", { name: "Editor" })
+        .fill("keep current URL");
+      const beforeReload = loads.get("/next") ?? 0;
+      await active
+        .getByRole("button", { name: "重新加载", exact: true })
+        .click();
+      await expect
+        .poll(() => loads.get("/next") ?? 0)
+        .toBeGreaterThan(beforeReload);
+      await expect(frame.getByRole("textbox", { name: "Editor" })).toHaveValue(
+        "original",
+      );
+      await expect(addressBar).toHaveValue(`${origin}/next`);
+      await frame.getByRole("button", { name: "SPA", exact: true }).click();
+      await expect(addressBar).toHaveValue(`${origin}/spa`);
+      await expect(
+        workbar.getByRole("tab", { name: "SPA title", exact: true }),
+      ).toBeVisible();
+      await frame.getByRole("link", { name: "New link", exact: true }).click();
+      await expect(
+        workbar.getByRole("tablist", { name: "网页标签页" }).getByRole("tab"),
+      ).toHaveCount(2);
+      await expect(addressBar).toHaveValue(`${origin}/popup`);
+      await expect(
+        workbar.getByRole("tab", { name: "Native /popup", exact: true }),
+      ).toBeVisible();
+      expect(context.pages()).toHaveLength(1);
+      await frame
+        .getByRole("button", { name: "Script popup", exact: true })
+        .click();
+      await expect(
+        workbar.getByRole("tablist", { name: "网页标签页" }).getByRole("tab"),
+      ).toHaveCount(3);
+      await expect(addressBar).toHaveValue(`${origin}/script-target`);
+      await expect(
+        workbar.getByRole("tab", {
+          name: "Native /script-target",
+          exact: true,
+        }),
+      ).toBeVisible();
+      expect(context.pages()).toHaveLength(1);
+      await frame
+        .getByRole("link", { name: "Cross origin", exact: true })
+        .click();
+      await expect(addressBar).toHaveValue(
+        origin.replace("127.0.0.1", "localhost") + "/final",
+      );
+      await expect(
+        workbar.getByRole("tab", { name: "Native /final", exact: true }),
+      ).toBeVisible();
+      const popupPromise = page.waitForEvent("popup");
+      await frame
+        .getByRole("button", { name: "Empty popup", exact: true })
+        .click();
+      await (await popupPromise).close();
+
+      for (let count = 4; count <= 8; count++) {
+        await frame
+          .getByRole("link", { name: "New link", exact: true })
+          .click();
+        await expect(
+          workbar.getByRole("tablist", { name: "网页标签页" }).getByRole("tab"),
+        ).toHaveCount(count);
+        await expect(
+          frame.getByRole("textbox", { name: "Editor" }),
+        ).toBeVisible();
+      }
+      await frame.getByRole("link", { name: "New link", exact: true }).click();
+      await expect(
+        workbar.locator(".browser-workspace > [role=status]"),
+      ).toContainText("8");
+      expect(context.pages()).toHaveLength(1);
+
+      const cspErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") cspErrors.push(message.text());
+      });
+      await addressBar.fill(`${origin}/csp`);
+      await active
+        .getByRole("button", { name: "打开地址", exact: true })
+        .click();
+      await expect
+        .poll(() =>
+          cspErrors.some((error) => error.includes("frame-ancestors")),
+        )
+        .toBe(true);
+
+      const outsider = await context.newPage();
+      const blocked: string[] = [];
+      outsider.on("console", (message) => blocked.push(message.text()));
+      const response = await outsider.goto(`${origin}/outsider`);
+      expect(response?.headers()["x-frame-options"]).toBe("DENY");
+      await expect
+        .poll(() => blocked.some((error) => /X-Frame-Options/i.test(error)))
+        .toBe(true);
+      await outsider.close();
+      await workbar
+        .getByRole("button", { name: "关闭 浏览器", exact: true })
+        .click();
+      await expect
+        .poll(() =>
+          worker.evaluate("chrome.declarativeNetRequest.getSessionRules()"),
+        )
+        .toEqual([]);
+      await workbar.getByRole("button", { name: /^浏览器/u }).click();
+      await expect(active.getByText(/浏览增强已开启/)).toBeVisible();
+      const retired: string[] = [];
+      page.on("console", (message) => retired.push(message.text()));
+      await page.goto(`${origin}/outsider`);
+      await expect
+        .poll(() =>
+          worker.evaluate("chrome.declarativeNetRequest.getSessionRules()"),
+        )
+        .toEqual([]);
+      // Rule deletion is asynchronous; verify requests made after its completion.
+      await page.reload();
+      await expect
+        .poll(() => retired.some((error) => /X-Frame-Options/i.test(error)))
+        .toBe(true);
+    } finally {
+      await context.close();
+      await rm(profile, { recursive: true, force: true });
+      fixture.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        fixture.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
 });
 
 test("composer sends staged image data with the prompt", async ({ page }) => {

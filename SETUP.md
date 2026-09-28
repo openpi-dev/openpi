@@ -34,6 +34,8 @@ Pi will load the extensions and theme the next time it starts. OpenPI's Backgrou
 
 The terminal theme above remains Pi-owned. OpenPI Web has separate package-owned appearance preferences configured only through `/openpi-setup`: `system`, `light`, `dark`, `mist`, `rose`, and `pine` themes; chat width from 820-2000px; chat font size from 12-24px; and whether thinking blocks start expanded. `system`, 820px, 14px, and collapsed are the defaults.
 
+The optional [OpenPI Browser Bridge](web/browser-extension/README.md) is installed and permissioned through Chrome/Edge 145+, not Pi setup. Once installed, it activates by default when the local OpenPI browser tool is open: actual address/title updates, native navigation and ordinary popup links in internal tabs. It removes X-Frame-Options only for external subframes in connected OpenPI tabs and preserves CSP. It cannot guarantee compatibility with every site, cross-origin history or login popup. Disabling the extension restores plain iframe browsing; there is no additional persisted OpenPI preference.
+
 ## Configure this package
 
 The Web settings forms submit package-owned changes through `/openpi-setup`; they do not introduce another settings writer. Role/model choices, concurrency, skill and plugin configuration requests remain visible in that episode, including required confirmation and its final apply/closure receipt. The Web submission message is not proof of persistence. Pi-owned model definitions and credentials have separate direct forms backed by Pi's `models.json` and native login API; secrets never enter the setup prompt.
