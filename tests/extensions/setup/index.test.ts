@@ -962,28 +962,37 @@ test("session start reports configuration load errors without changing the file 
   rmSync(SETUP_CONFIG_PATH);
 });
 
-test("session start warns about unknown fields and legacy documents without migrating them", async () => {
-  for (const raw of [
-    "{}",
-    '{"configVersion":1,"future":{"token":"PRIVATE_VALUE"}}',
-  ]) {
-    writeFileSync(SETUP_CONFIG_PATH, raw);
-    const h = visibilityHarness();
-    h.ctx.hasUI = true;
-    await h.emit("session_start");
-    assert.equal(h.notifications.length, 1);
-    const notice = h.notifications[0];
-    assert.equal(notice.level, "warning");
-    assert.match(notice.message, /configuration.*warning/i);
-    assert.match(notice.message, /\/openpi-setup/);
-    assert.doesNotMatch(
-      notice.message,
-      /PRIVATE_VALUE|token|safe defaults|writes are blocked/,
-    );
-    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
-    assert.equal(h.isActive(), false);
-    assert.deepEqual(h.customMessages, []);
-  }
+test("session start warns about unknown fields and reports their location without migrating the file", async () => {
+  const raw = '{"configVersion":1,"future":{"token":"PRIVATE_VALUE"}}';
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  const h = visibilityHarness();
+  h.ctx.hasUI = true;
+  await h.emit("session_start");
+  assert.equal(h.notifications.length, 1);
+  const notice = h.notifications[0];
+  assert.equal(notice.level, "warning");
+  assert.match(notice.message, /warning @ future/);
+  assert.doesNotMatch(notice.message, /legacy format or unknown fields/i);
+  assert.match(notice.message, /\/openpi-setup/);
+  assert.doesNotMatch(
+    notice.message,
+    /PRIVATE_VALUE|token|safe defaults|writes are blocked/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  assert.equal(h.isActive(), false);
+  assert.deepEqual(h.customMessages, []);
+  rmSync(SETUP_CONFIG_PATH);
+});
+
+test("session start is silent for a legacy unversioned file with only known fields", async () => {
+  writeFileSync(SETUP_CONFIG_PATH, "{}");
+  const h = visibilityHarness();
+  h.ctx.hasUI = true;
+  await h.emit("session_start");
+  assert.deepEqual(h.notifications, []);
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), "{}");
+  assert.equal(h.isActive(), false);
+  assert.deepEqual(h.customMessages, []);
   rmSync(SETUP_CONFIG_PATH);
 });
 
