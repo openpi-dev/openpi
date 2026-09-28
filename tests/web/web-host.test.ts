@@ -12,16 +12,10 @@ import {
   registerWebCapabilityActions,
 } from "../../extensions/shared/web-observer-registry.ts";
 import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
-import {
-  EmbeddedBrowserInputTargetError,
-  type EmbeddedBrowserService,
-} from "../../web/host/embedded-browser.ts";
 import type { GitReviewService } from "../../web/host/git-review.ts";
 import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
 import type { WebHostOptions } from "../../web/host/web-host.ts";
 import {
-  WEB_BROWSER_INPUT_OWNER_MAX_LENGTH,
-  WEB_BROWSER_TEXT_MAX_LENGTH,
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebInteractiveTerminalEvent,
 } from "../../web/protocol/types.ts";
@@ -341,7 +335,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(
       page.headers.get("content-security-policy") || "",
-      /frame-src 'none'/u,
+      /frame-src http: https:/u,
     );
     assert.equal(page.headers.get("referrer-policy"), "no-referrer");
     const pageHtml = await page.text();
@@ -2069,96 +2063,13 @@ test("external file preview requires an explicit authenticated single-file grant
   }
 });
 
-test("browser frame streaming authenticates, keeps the latest frame and releases subscribers", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "openpi-browser-stream-"));
-  const runtime = testRuntime(cwd);
-  const sessionId = runtime.sessionManager.getSessionId();
-  const state = {
-    sessionId,
-    url: "https://example.com/",
-    title: "Example",
-    width: 800,
-    height: 600,
-    loading: false,
-    canGoBack: false,
-    canGoForward: false,
-  };
-  let subscriptions = 0;
-  const embeddedBrowser: EmbeddedBrowserService = {
-    open: async () => state,
-    state: async () => state,
-    frame: async () => undefined,
-    action: async () => state,
-    retain() {},
-    async dispose() {},
-    async subscribeFrames(_id, listener) {
-      subscriptions++;
-      listener({
-        data: "old-frame",
-        mimeType: "image/png",
-        width: 800,
-        height: 600,
-      });
-      listener({
-        data: "new-frame",
-        mimeType: "image/png",
-        width: 800,
-        height: 600,
-      });
-      return () => {
-        subscriptions--;
-      };
-    },
-  };
-  const { host, launched, headers } = await startTestHost(runtime, {
-    embeddedBrowser,
-  });
-  const controller = new AbortController();
-  try {
-    const url = `${launched.origin}/api/browser/frames?${new URLSearchParams({ sessionId })}`;
-    assert.equal((await fetch(url)).status, 401);
-    const response = await fetch(url, {
-      headers,
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3_000)]),
-    });
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get("content-type"), "text/event-stream");
-    const reader = response.body!.getReader();
-    let body = "";
-    while (!body.includes("new-frame")) {
-      const { value, done } = await reader.read();
-      assert.equal(done, false);
-      body += new TextDecoder().decode(value);
-    }
-    assert.equal(body.includes("old-frame"), false);
-    assert.equal(subscriptions, 1);
-    for (let index = 0; index < 3; index++) {
-      const viewer = await fetch(url, { headers, signal: controller.signal });
-      assert.equal(viewer.status, 200);
-    }
-    assert.equal((await fetch(url, { headers })).status, 429);
-    assert.equal(subscriptions, 4);
-    await reader.cancel();
-    controller.abort();
-    await host.stop();
-    assert.equal(subscriptions, 0);
-  } finally {
-    controller.abort();
-    await host.stop();
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-test("exposes an embedded browser and an active-Session interactive terminal", async () => {
+test("exposes an active-Session interactive terminal", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-tools-"));
   const runtime = testRuntime(cwd);
   const sessionId = runtime.sessionManager.getSessionId();
-  const opened: string[] = [];
-  const browserActions: unknown[] = [];
   const writes: string[] = [];
   const sizes: Array<[number, number]> = [];
   let disposed = false;
-  let browserDisposed = false;
   let subscribedAfter: number | undefined;
   let terminalListener:
     | ((event: WebInteractiveTerminalEvent) => void)
@@ -2216,213 +2127,11 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
       disposed = true;
     },
   };
-  const embeddedBrowser: EmbeddedBrowserService = {
-    async open(owner, url, viewport) {
-      assert.equal(owner, sessionId);
-      opened.push(url);
-      return {
-        sessionId,
-        url,
-        title: "Example",
-        width: viewport?.width ?? 1_024,
-        height: viewport?.height ?? 768,
-        loading: false,
-        canGoBack: false,
-        canGoForward: false,
-      };
-    },
-    async state(owner) {
-      return owner === sessionId
-        ? {
-            sessionId,
-            url: opened.at(-1) ?? "about:blank",
-            title: "Example",
-            width: 1_024,
-            height: 768,
-            loading: false,
-            canGoBack: false,
-            canGoForward: false,
-          }
-        : undefined;
-    },
-    async frame(owner) {
-      return owner === sessionId
-        ? Buffer.from([0xff, 0xd8, 0xff, 0xd9])
-        : undefined;
-    },
-    async action(owner, action) {
-      if (owner !== sessionId) return undefined;
-      if (
-        (action.type === "text" || action.type === "key") &&
-        action.owner === "stale-owner"
-      )
-        throw new EmbeddedBrowserInputTargetError();
-      browserActions.push(action);
-      return {
-        sessionId,
-        url: opened.at(-1) ?? "about:blank",
-        title: "Example",
-        width: 1_024,
-        height: 768,
-        loading: false,
-        canGoBack: action.type !== "back",
-        canGoForward: false,
-      };
-    },
-    retain() {},
-    async dispose() {
-      browserDisposed = true;
-    },
-  };
   const { host, launched, headers } = await startTestHost(runtime, {
-    embeddedBrowser,
     interactiveTerminals,
   });
   const jsonHeaders = { ...headers, "Content-Type": "application/json" };
   try {
-    assert.equal(
-      (
-        await fetch(`${launched.origin}/api/browser/open`, {
-          method: "POST",
-          headers: jsonHeaders,
-          body: JSON.stringify({ sessionId, url: "file:///tmp/private" }),
-        })
-      ).status,
-      400,
-    );
-    const browser = await fetch(`${launched.origin}/api/browser/open`, {
-      method: "POST",
-      headers: jsonHeaders,
-      body: JSON.stringify({ sessionId, url: "https://example.com/path" }),
-    });
-    assert.equal(browser.status, 200);
-    assert.deepEqual(await browser.json(), {
-      sessionId,
-      url: "https://example.com/path",
-      title: "Example",
-      width: 1_024,
-      height: 768,
-      loading: false,
-      canGoBack: false,
-      canGoForward: false,
-    });
-    assert.deepEqual(opened, ["https://example.com/path"]);
-    const browserState = await fetch(
-      `${launched.origin}/api/browser/state?sessionId=${sessionId}`,
-      { headers },
-    );
-    assert.equal(browserState.status, 200);
-    assert.equal((await browserState.json()).title, "Example");
-    const browserFrame = await fetch(
-      `${launched.origin}/api/browser/frame?sessionId=${sessionId}`,
-      { headers },
-    );
-    assert.equal(browserFrame.status, 200);
-    assert.equal(browserFrame.headers.get("content-type"), "image/jpeg");
-    assert.deepEqual(
-      Buffer.from(await browserFrame.arrayBuffer()),
-      Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
-    );
-    const browserAction = await fetch(`${launched.origin}/api/browser/action`, {
-      method: "POST",
-      headers: jsonHeaders,
-      body: JSON.stringify({ sessionId, action: "reload" }),
-    });
-    assert.equal(browserAction.status, 200);
-    assert.deepEqual(browserActions, [{ type: "reload" }]);
-
-    for (const action of [
-      { action: "text", text: "paste 中文\nnext line" },
-      { action: "text", text: "bound input", owner: "opaque-owner" },
-      { action: "key", event: "down", key: "Tab", modifiers: 8 },
-      { action: "key", event: "down", key: "Backspace", owner: "opaque-owner" },
-      { action: "key", event: "up", key: "Backspace", owner: "opaque-owner" },
-      {
-        action: "mouse",
-        event: "move",
-        x: 20,
-        y: 20,
-        button: "left",
-        buttons: 1,
-      },
-    ]) {
-      const response = await fetch(`${launched.origin}/api/browser/action`, {
-        method: "POST",
-        headers: jsonHeaders,
-        body: JSON.stringify({ sessionId, ...action }),
-      });
-      assert.equal(response.status, 200);
-      const { action: type, ...detail } = action;
-      assert.deepEqual(browserActions.at(-1), { type, ...detail });
-    }
-    const acceptedCount = browserActions.length;
-    for (const action of [
-      { action: "text", text: "" },
-      { action: "text", text: "x".repeat(WEB_BROWSER_TEXT_MAX_LENGTH + 1) },
-      { action: "text", text: 42 },
-      { action: "text", text: "bound input", owner: "" },
-      { action: "text", text: "bound input", owner: null },
-      { action: "text", text: "bound input", owner: 42 },
-      { action: "text", text: "bound input", owner: "white space" },
-      {
-        action: "text",
-        text: "bound input",
-        owner: "x".repeat(WEB_BROWSER_INPUT_OWNER_MAX_LENGTH + 1),
-      },
-      { action: "key", event: "down", key: "Backspace", owner: "" },
-      { action: "key", event: "down", key: "Backspace", owner: null },
-      { action: "key", event: "down", key: "Backspace", owner: 42 },
-      { action: "key", event: "down", key: "Backspace", owner: "white space" },
-      {
-        action: "key",
-        event: "down",
-        key: "Backspace",
-        owner: "x".repeat(WEB_BROWSER_INPUT_OWNER_MAX_LENGTH + 1),
-      },
-      { action: "key", event: "down", key: "Tab", modifiers: -1 },
-      { action: "key", event: "down", key: "Tab", modifiers: 16 },
-      { action: "key", event: "down", key: "Tab", modifiers: 1.5 },
-      { action: "mouse", event: "move", x: 20, y: 20, buttons: 8 },
-      { action: "mouse", event: "move", x: 20, y: 20, buttons: -1 },
-      { action: "mouse", event: "move", x: 20, y: 20, buttons: 1.5 },
-    ]) {
-      const response = await fetch(`${launched.origin}/api/browser/action`, {
-        method: "POST",
-        headers: jsonHeaders,
-        body: JSON.stringify({ sessionId, ...action }),
-      });
-      assert.equal(response.status, 400);
-    }
-    assert.equal(browserActions.length, acceptedCount);
-    for (const action of [
-      { action: "text", text: "old composition", owner: "stale-owner" },
-      { action: "key", event: "down", key: "Backspace", owner: "stale-owner" },
-      { action: "key", event: "up", key: "Backspace", owner: "stale-owner" },
-    ]) {
-      const staleOwner = await fetch(`${launched.origin}/api/browser/action`, {
-        method: "POST",
-        headers: jsonHeaders,
-        body: JSON.stringify({ sessionId, ...action }),
-      });
-      assert.equal(staleOwner.status, 409);
-      assert.equal(
-        (await staleOwner.json()).code,
-        "BROWSER_INPUT_TARGET_CHANGED",
-      );
-    }
-    assert.equal(browserActions.length, acceptedCount);
-    const stalePaste = await fetch(`${launched.origin}/api/browser/action`, {
-      method: "POST",
-      headers: jsonHeaders,
-      body: JSON.stringify({
-        sessionId: "another-session",
-        action: "text",
-        text: "private draft",
-      }),
-    });
-    assert.equal(stalePaste.status, 409);
-    assert.equal(browserActions.length, acceptedCount);
-
     const created = await fetch(`${launched.origin}/api/terminal`, {
       method: "POST",
       headers: jsonHeaders,
@@ -2503,7 +2212,6 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
   } finally {
     await host.stop();
     assert.equal(disposed, true);
-    assert.equal(browserDisposed, true);
     await rm(cwd, { recursive: true, force: true });
   }
 });

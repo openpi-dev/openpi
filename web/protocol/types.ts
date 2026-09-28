@@ -289,61 +289,6 @@ export interface WebInteractiveTerminal {
   reused?: boolean;
 }
 
-export interface WebBrowserInputTarget {
-  owner: string;
-  kind: "input" | "textarea" | "contenteditable";
-  anchorRect: { x: number; y: number; width: number; height: number };
-}
-
-export interface WebEmbeddedBrowserState {
-  sessionId: string;
-  url: string;
-  title: string;
-  width: number;
-  height: number;
-  loading: boolean;
-  canGoBack: boolean;
-  canGoForward: boolean;
-  deviceScaleFactor?: number;
-  /** Null confirms a noneditable target; omission means focus is unknown. */
-  inputTarget?: WebBrowserInputTarget | null;
-}
-
-export interface WebBrowserFrame {
-  data: string;
-  mimeType: "image/png";
-  width: number;
-  height: number;
-}
-
-export const WEB_BROWSER_TEXT_MAX_LENGTH = 16_384;
-export const WEB_BROWSER_INPUT_OWNER_MAX_LENGTH = 128;
-
-export type WebEmbeddedBrowserAction =
-  | { type: "navigate"; url: string }
-  | { type: "back" | "forward" | "reload" | "stop" }
-  | { type: "resize"; width: number; height: number; deviceScaleFactor?: number }
-  | { type: "text"; text: string; owner?: string }
-  | {
-      type: "mouse";
-      event: "move" | "down" | "up" | "wheel";
-      x: number;
-      y: number;
-      button?: "left" | "middle" | "right";
-      buttons?: number;
-      deltaX?: number;
-      deltaY?: number;
-    }
-  | {
-      type: "key";
-      event: "down" | "up";
-      key: string;
-      code?: string;
-      text?: string;
-      modifiers?: number;
-      owner?: string;
-    };
-
 export type WebInteractiveTerminalEvent =
   | { type: "output"; data: string; offset: number; reset?: boolean }
   | { type: "exit"; exitCode: number }

@@ -38,7 +38,7 @@ import {
   ReviewPanel,
 } from "../review/ReviewPanel.tsx";
 import { SubagentDetailView } from "../subagents/SubagentPanel.tsx";
-import { EmbeddedBrowserPanel } from "./EmbeddedBrowserPanel.tsx";
+import { BrowserPanel } from "./BrowserPanel.tsx";
 import { generatedFiles } from "./generated-files.ts";
 import { InteractiveTerminal } from "./InteractiveTerminal.tsx";
 import type { WorkbarTool } from "./types.ts";
@@ -677,12 +677,7 @@ export function WorkbarPanel({
                 activity={capabilities["background-terminals"]}
               />
             ) : tool === "browser" ? (
-              <EmbeddedBrowserPanel
-                sessionId={sessionId}
-                active={
-                  visible && !tabs.launcherOpen && tabs.active === "browser"
-                }
-              />
+              <BrowserPanel key={sessionId} />
             ) : (
               <GeneratedFilesPanel
                 messages={messages}

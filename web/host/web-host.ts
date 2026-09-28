@@ -45,9 +45,6 @@ import {
   WEB_PROMPT_MAX_TEXT_LENGTH,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
-  type WebEmbeddedBrowserAction,
-  WEB_BROWSER_INPUT_OWNER_MAX_LENGTH,
-  WEB_BROWSER_TEXT_MAX_LENGTH,
   type WebInteractiveTerminalEvent,
   type WebPromptImage,
   type WebSnapshot,
@@ -60,11 +57,6 @@ import { elapsed, traceWeb } from "../trace.ts";
 import { reduceLiveTools } from "../protocol/live-tools.ts";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import { ArtifactError, ArtifactReader } from "./artifacts.ts";
-import {
-  EmbeddedBrowserManager,
-  EmbeddedBrowserInputTargetError,
-  type EmbeddedBrowserService,
-} from "./embedded-browser.ts";
 import {
   GitReviewBaselineStore,
   type GitReviewService,
@@ -197,119 +189,6 @@ function promptImageSignature(images: readonly WebPromptImage[]) {
   return hash.digest("hex");
 }
 
-function browserAddress(value: unknown) {
-  if (typeof value !== "string" || value.length === 0 || value.length > 2_048)
-    return undefined;
-  try {
-    const target = new URL(value);
-    if (
-      (target.protocol !== "http:" && target.protocol !== "https:") ||
-      target.username ||
-      target.password
-    )
-      return undefined;
-    return target.toString();
-  } catch {
-    return undefined;
-  }
-}
-
-function finiteNumber(
-  value: unknown,
-  min: number,
-  max: number,
-): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
-}
-
-function parseBrowserAction(
-  body: Record<string, unknown>,
-): WebEmbeddedBrowserAction | undefined {
-  const action = body.action;
-  if (
-    (action === "text" || action === "key") && body.owner !== undefined &&
-    (typeof body.owner !== "string" || body.owner.length > WEB_BROWSER_INPUT_OWNER_MAX_LENGTH ||
-      !/^[A-Za-z0-9:_-]+$/u.test(body.owner))
-  ) return undefined;
-  if (
-    action === "text" &&
-    typeof body.text === "string" &&
-    body.text.length > 0 &&
-    body.text.length <= WEB_BROWSER_TEXT_MAX_LENGTH
-  ) return { type: "text", text: body.text, ...(typeof body.owner === "string" ? { owner: body.owner } : {}) };
-  if (action === "navigate") {
-    const url = browserAddress(body.url);
-    return url ? ({ type: "navigate", url } satisfies WebEmbeddedBrowserAction) : undefined;
-  }
-  if (
-    action === "back" ||
-    action === "forward" ||
-    action === "reload" ||
-    action === "stop"
-  )
-    return { type: action } satisfies WebEmbeddedBrowserAction;
-  if (
-    action === "resize" &&
-    isBoundedInteger(body.width, 320, 2_560) &&
-    isBoundedInteger(body.height, 240, 2_560) &&
-    (body.deviceScaleFactor === undefined || finiteNumber(body.deviceScaleFactor, 1, 2))
-  ) {
-    return {
-      type: "resize",
-      width: body.width,
-      height: body.height,
-      ...(typeof body.deviceScaleFactor === "number" ? { deviceScaleFactor: body.deviceScaleFactor } : {}),
-    } satisfies WebEmbeddedBrowserAction;
-  }
-  if (
-    action === "mouse" &&
-    ["move", "down", "up", "wheel"].includes(String(body.event)) &&
-    finiteNumber(body.x, 0, 4_096) &&
-    finiteNumber(body.y, 0, 4_096) &&
-    (body.button === undefined ||
-      ["left", "middle", "right"].includes(String(body.button))) &&
-    (body.buttons === undefined || isBoundedInteger(body.buttons, 0, 7)) &&
-    (body.deltaX === undefined || finiteNumber(body.deltaX, -10_000, 10_000)) &&
-    (body.deltaY === undefined || finiteNumber(body.deltaY, -10_000, 10_000))
-  ) {
-    return {
-      type: "mouse",
-      event: body.event as "move" | "down" | "up" | "wheel",
-      x: body.x,
-      y: body.y,
-      ...(body.button
-        ? { button: body.button as "left" | "middle" | "right" }
-          : {}),
-      ...(typeof body.buttons === "number" ? { buttons: body.buttons } : {}),
-      ...(typeof body.deltaX === "number" ? { deltaX: body.deltaX } : {}),
-      ...(typeof body.deltaY === "number" ? { deltaY: body.deltaY } : {}),
-    } satisfies WebEmbeddedBrowserAction;
-  }
-  if (
-    action === "key" &&
-    (body.event === "down" || body.event === "up") &&
-    typeof body.key === "string" &&
-    body.key.length > 0 &&
-    body.key.length <= 32 &&
-    (body.modifiers === undefined || isBoundedInteger(body.modifiers, 0, 15)) &&
-    (body.code === undefined ||
-      (typeof body.code === "string" && body.code.length <= 64)) &&
-    (body.text === undefined ||
-      (typeof body.text === "string" && body.text.length <= 8))
-  ) {
-    return {
-      type: "key",
-      event: body.event,
-      key: body.key,
-      ...(typeof body.modifiers === "number" ? { modifiers: body.modifiers } : {}),
-      ...(typeof body.code === "string" ? { code: body.code } : {}),
-      ...(typeof body.text === "string" ? { text: body.text } : {}),
-      ...(typeof body.owner === "string" ? { owner: body.owner } : {}),
-    } satisfies WebEmbeddedBrowserAction;
-  }
-  return undefined;
-}
-
 function isBoundedInteger(
   value: unknown,
   min: number,
@@ -372,7 +251,6 @@ export interface WebHostOptions {
   token?: string;
   allowedOrigins?: readonly string[];
   directoryChooser?: (signal: AbortSignal) => Promise<string | undefined>;
-  embeddedBrowser?: EmbeddedBrowserService;
   gitReviews?: GitReviewService;
   interactiveTerminals?: InteractiveTerminalService;
   shutdownTimeoutMs?: number;
@@ -385,7 +263,6 @@ export class WebHost {
   private readonly adapter: PiWebAdapter;
   private readonly clients = new Set<ServerResponse>();
   private readonly terminalStreams = new Set<ServerResponse>();
-  private readonly browserStreams = new Set<() => void>();
   private readonly clientHeartbeats = new Map<
     ServerResponse,
     ReturnType<typeof setInterval>
@@ -402,7 +279,6 @@ export class WebHost {
   private readonly directoryChooser: NonNullable<
     WebHostOptions["directoryChooser"]
   >;
-  private readonly embeddedBrowser: EmbeddedBrowserService;
   private readonly gitReviews: GitReviewService;
   private readonly interactiveTerminals: InteractiveTerminalService;
   private readonly shutdownTimeoutMs: number;
@@ -442,7 +318,6 @@ export class WebHost {
     this.allowedOrigins = new Set(options.allowedOrigins ?? []);
     this.directoryChooser =
       options.directoryChooser ?? (() => this.chooseDirectory());
-    this.embeddedBrowser = options.embeddedBrowser ?? new EmbeddedBrowserManager();
     this.gitReviews =
       options.gitReviews ??
       new GitReviewBaselineStore(this.runtime.sessionDirectory);
@@ -537,15 +412,11 @@ export class WebHost {
     if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) {
       this.artifacts.revoke();
       if (this.runtime.workspaceSelected) {
-        this.embeddedBrowser.retain(
-          this.runtime.sessionManager.getSessionId(),
-        );
         this.interactiveTerminals.retain(
           this.runtime.sessionManager.getSessionId(),
           this.runtime.cwd,
         );
       } else {
-        this.embeddedBrowser.retain();
         this.interactiveTerminals.dispose();
       }
     }
@@ -610,7 +481,6 @@ export class WebHost {
       this.unsubscribeCapabilities();
       this.artifacts.dispose();
       this.interactiveTerminals.dispose();
-      for (const close of this.browserStreams) close();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
       for (const client of [...this.clients]) this.removeSseClient(client, "end");
@@ -642,7 +512,6 @@ export class WebHost {
         await Promise.all([
           this.runtime.dispose(),
           this.gitReviews.dispose?.(),
-          this.embeddedBrowser.dispose(),
         ]);
       })();
       const cleanup = Promise.all([disposeRuntime, closeServer]).then(
@@ -683,8 +552,6 @@ export class WebHost {
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
       if (error instanceof ArtifactError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
-      if (error instanceof EmbeddedBrowserInputTargetError)
-        return this.json(response, 409, { code: "BROWSER_INPUT_TARGET_CHANGED", error: error.message });
       if (error instanceof WebRequestError) {
         return this.json(response, error.statusCode, {
           code: error.code,
@@ -710,7 +577,6 @@ export class WebHost {
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
       pathname.startsWith("/api/terminal") ||
-      pathname.startsWith("/api/browser") ||
       pathname === "/api/model" ||
       pathname === "/api/thinking" ||
       pathname === "/api/capabilities/action";
@@ -759,7 +625,7 @@ export class WebHost {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "Content-Security-Policy":
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src http: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
         "Referrer-Policy": "no-referrer",
         "Cross-Origin-Resource-Policy": "same-origin",
         "Cross-Origin-Opener-Policy": "same-origin",
@@ -793,162 +659,6 @@ export class WebHost {
     }
     if (!this.authorized(request))
       return this.json(response, 401, { error: "invalid or missing token" });
-    if (url.pathname === "/api/browser/open") {
-      if (request.method !== "POST")
-        return this.json(response, 405, {
-          error: "browser launch requires POST",
-        });
-      const body = await this.readJson(request);
-      const target = browserAddress(body.url);
-      if (
-        typeof body.sessionId !== "string" ||
-        !target ||
-        (body.width !== undefined && !isBoundedInteger(body.width, 320, 2_560)) ||
-        (body.height !== undefined && !isBoundedInteger(body.height, 240, 2_560)) ||
-        (body.deviceScaleFactor !== undefined && !finiteNumber(body.deviceScaleFactor, 1, 2)) ||
-        Object.keys(body).some(
-          (key) => !["sessionId", "url", "width", "height", "deviceScaleFactor"].includes(key),
-        )
-      ) {
-        return this.json(response, 400, {
-          code: "INVALID_BROWSER_OPEN_REQUEST",
-          error:
-            "an exact Session id, bounded HTTP address, and optional viewport are required",
-        });
-      }
-      if (!(await this.requireActiveToolSession(body.sessionId, response)))
-        return;
-      const state = await this.embeddedBrowser.open(
-        body.sessionId,
-        target,
-        {
-          width: typeof body.width === "number" ? body.width : 1_024,
-          height: typeof body.height === "number" ? body.height : 768,
-          ...(typeof body.deviceScaleFactor === "number" ? { deviceScaleFactor: body.deviceScaleFactor } : {}),
-        },
-      );
-      return this.json(response, 200, state);
-    }
-    if (url.pathname === "/api/browser/state") {
-      if (request.method !== "GET")
-        return this.json(response, 405, { error: "browser state requires GET" });
-      const sessionId = url.searchParams.get("sessionId");
-      if (!sessionId || !this.validTerminalQuery(url, ["sessionId"]))
-        return this.json(response, 400, {
-          code: "INVALID_BROWSER_TARGET",
-          error: "an exact Session id is required",
-        });
-      if (!(await this.requireActiveToolSession(sessionId, response))) return;
-      const state = await this.embeddedBrowser.state(sessionId);
-      return state
-        ? this.json(response, 200, state)
-        : this.json(response, 404, {
-            code: "BROWSER_NOT_FOUND",
-            error: "the embedded browser is not running",
-          });
-    }
-    if (url.pathname === "/api/browser/frames") {
-      if (request.method !== "GET") return this.json(response, 405, { error: "Browser frames require GET" });
-      const sessionId = url.searchParams.get("sessionId");
-      if (!sessionId || !this.validTerminalQuery(url, ["sessionId"])) return this.json(response, 400, { error: "An exact Session id is required" });
-      if (!(await this.requireActiveToolSession(sessionId, response))) return;
-      if (!this.embeddedBrowser.subscribeFrames) return this.json(response, 501, { error: "Browser streaming is unavailable" });
-      if (this.browserStreams.size >= 4) return this.json(response, 429, { error: "Browser viewer limit reached" });
-      if (!(await this.embeddedBrowser.state(sessionId))) return this.json(response, 404, { error: "Browser is not open" });
-      if (response.destroyed || response.writableEnded) return;
-      if (this.browserStreams.size >= 4) return this.json(response, 429, { error: "Browser viewer limit reached" });
-      let stop: (() => void) | undefined;
-      let pending: import("../protocol/types.ts").WebBrowserFrame | undefined;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let closed = false;
-      let unsubscribe = () => {};
-      const flush = () => {
-        timer = undefined;
-        if (closed || !pending || response.writableNeedDrain) return;
-        if (this.runtime.sessionManager.getSessionId() !== sessionId) { close(); return; }
-        const frame = pending; pending = undefined;
-        response.write(`data: ${JSON.stringify(frame)}\n\n`);
-      };
-      const schedule = () => { if (!closed && !timer) timer = setTimeout(flush, 16); };
-      const heartbeat = setInterval(() => { if (!closed && !response.writableNeedDrain) response.write(": heartbeat\n\n"); }, 15_000);
-      const close = () => {
-        if (closed) return;
-        closed = true; pending = undefined;
-        clearTimeout(timer); clearInterval(heartbeat);
-        stop?.(); unsubscribe();
-        this.browserStreams.delete(close);
-        response.off("drain", schedule);
-        response.destroy();
-      };
-      this.browserStreams.add(close);
-      response.once("close", close);
-      response.on("drain", schedule);
-      unsubscribe = this.runtime.subscribe(() => {
-        if (this.runtime.sessionManager.getSessionId() !== sessionId) close();
-      });
-      response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
-      response.write(": connected\n\n");
-      try {
-        stop = await this.embeddedBrowser.subscribeFrames(sessionId, frame => {
-          if (!frame) { close(); return; }
-          if (!closed) { pending = frame; schedule(); }
-        });
-        if (!stop || closed) { stop?.(); close(); }
-      } catch { close(); }
-      return;
-    }
-    if (url.pathname === "/api/browser/frame") {
-      if (request.method !== "GET")
-        return this.json(response, 405, { error: "browser frame requires GET" });
-      const sessionId = url.searchParams.get("sessionId");
-      if (!sessionId || !this.validTerminalQuery(url, ["sessionId"]))
-        return this.json(response, 400, {
-          code: "INVALID_BROWSER_TARGET",
-          error: "an exact Session id is required",
-        });
-      if (!(await this.requireActiveToolSession(sessionId, response))) return;
-      const frame = await this.embeddedBrowser.frame(sessionId);
-      if (!frame)
-        return this.json(response, 404, {
-          code: "BROWSER_NOT_FOUND",
-          error: "the embedded browser is not running",
-        });
-      response.writeHead(200, {
-        "Content-Type": "image/jpeg",
-        "Content-Length": frame.length,
-        "Cache-Control": "no-store",
-        "Cross-Origin-Resource-Policy": "same-origin",
-        "X-Content-Type-Options": "nosniff",
-      });
-      response.end(frame);
-      return;
-    }
-    if (url.pathname === "/api/browser/action") {
-      if (request.method !== "POST")
-        return this.json(response, 405, { error: "browser actions require POST" });
-      // JSON can escape each UTF-16 code unit into six ASCII bytes.
-      const body = await this.readJson(request, WEB_BROWSER_TEXT_MAX_LENGTH * 6 + MAX_COMMAND_BYTES);
-      if (typeof body.sessionId !== "string")
-        return this.json(response, 400, {
-          code: "INVALID_BROWSER_ACTION",
-          error: "an exact Session id and browser action are required",
-        });
-      const action = parseBrowserAction(body);
-      if (!action)
-        return this.json(response, 400, {
-          code: "INVALID_BROWSER_ACTION",
-          error: "the browser action is invalid",
-        });
-      if (!(await this.requireActiveToolSession(body.sessionId, response)))
-        return;
-      const state = await this.embeddedBrowser.action(body.sessionId, action);
-      return state
-        ? this.json(response, 200, state)
-        : this.json(response, 404, {
-            code: "BROWSER_NOT_FOUND",
-            error: "the embedded browser is not running",
-          });
-    }
     if (url.pathname === "/api/terminal/events") {
       if (request.method !== "GET")
         return this.json(response, 405, {

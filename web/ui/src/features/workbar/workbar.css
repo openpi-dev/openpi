@@ -624,12 +624,56 @@
 .terminal-agent-activity li strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .terminal-agent-activity li small { color: var(--muted); font-size: 10px; }
 
+.browser-workspace, .browser-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.browser-pages {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.browser-page[hidden] { display: none; }
+
+.browser-tabs-header { display: flex; min-width: 0; border-bottom: 1px solid var(--border); }
+.browser-tabs { display: flex; min-width: 0; overflow-x: auto; }
+.browser-tab { display: flex; flex: 0 0 auto; max-width: 190px; border-right: 1px solid var(--border); }
+.browser-tab[data-active="true"] { background: var(--sidebar-hover); }
+.browser-tab button, .browser-add-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.browser-tab button[role="tab"] { padding-left: 10px; }
+.browser-tab button[aria-selected="true"] { color: var(--text); }
+.browser-tab button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.browser-tab svg, .browser-add-tab svg { width: 14px; height: 14px; flex-shrink: 0; }
+.browser-add-tab { flex-shrink: 0; width: 34px; }
+.browser-add-tab:disabled { opacity: .4; cursor: default; }
+.browser-direct-viewport { display: flex; min-height: 0; overflow: hidden; background: #fff; }
+.browser-direct-viewport > iframe { width: 100%; height: 100%; border: 0; }
+.browser-direct-viewport > .workbar-empty { flex: 1; color: #555; }
+.browser-notice { margin: 0; padding: 6px 9px; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+
 .browser-tool {
   display: grid;
   min-width: 0;
   min-height: 0;
   flex: 1;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 .browser-toolbar {
@@ -679,96 +723,6 @@
   font-size: 11px;
 }
 
-.browser-viewport {
-  position: relative;
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  overflow: hidden;
-  background: #fff;
-  color: var(--muted);
-  cursor: default;
-  text-align: center;
-  touch-action: none;
-  outline: 0;
-}
-
-.browser-viewport:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--focus);
-}
-
-.browser-viewport > img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  pointer-events: none;
-  user-select: none;
-}
-
-.browser-text-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  min-width: 0;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  opacity: 0;
-  pointer-events: none;
-  font-size: 16px;
-}
-
-.browser-loading-line {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 38%;
-  height: 2px;
-  background: var(--accent);
-  pointer-events: none;
-  animation: browser-loading-slide 1.1s ease-in-out infinite;
-}
-
-@keyframes browser-loading-slide {
-  from { transform: translateX(-110%); }
-  to { transform: translateX(370%); }
-}
-
-.browser-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  padding: 32px 24px;
-}
-
-.browser-empty > svg {
-  width: 28px;
-  height: 28px;
-  margin-bottom: 12px;
-  color: var(--subtle);
-}
-
-.browser-empty h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 620;
-}
-
-.browser-empty p {
-  max-width: 100%;
-  margin: 6px 0 0;
-  overflow: hidden;
-  font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 @media (max-width: 1100px) {
   .app-shell.with-workbar-panel,
   .app-shell.with-workbar-panel.sidebar-collapsed {
@@ -804,9 +758,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .browser-loading-line { animation: none; }
-}
 .generated-file-edit { margin: 0 12px 12px; font-size: 12px; }
 .generated-file-edit summary { cursor: pointer; color: var(--muted); }
 .generated-file-edit pre { margin: 8px 0; padding: 10px; overflow: auto; max-height: 360px; white-space: pre; background: var(--sidebar); border-radius: 6px; }

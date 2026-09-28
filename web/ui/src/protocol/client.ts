@@ -17,8 +17,6 @@ import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebCommandDiscoveryResult,
-  type WebEmbeddedBrowserAction,
-  type WebEmbeddedBrowserState,
   type WebGitReviewResult,
   type WebHistoryAnchor,
   type WebInteractiveTerminal,
@@ -356,102 +354,6 @@ export class WebClient {
     return this.request<WorkspaceSelectionResult>("/api/workspaces/select", {
       method: "POST",
     });
-  }
-
-  openBrowser(
-    sessionId: string,
-    url: string,
-    viewport: { width: number; height: number; deviceScaleFactor?: number },
-    signal?: AbortSignal,
-  ) {
-    return this.request<WebEmbeddedBrowserState>("/api/browser/open", {
-      method: "POST",
-      body: JSON.stringify({ sessionId, url, ...viewport }),
-      signal,
-    });
-  }
-
-  browserState(sessionId: string, signal?: AbortSignal) {
-    return this.request<WebEmbeddedBrowserState>(
-      `/api/browser/state?${new URLSearchParams({ sessionId })}`,
-      { signal },
-    );
-  }
-
-  browserAction(
-    sessionId: string,
-    action: WebEmbeddedBrowserAction,
-    signal?: AbortSignal,
-  ) {
-    const { type, ...detail } = action;
-    return this.request<WebEmbeddedBrowserState>("/api/browser/action", {
-      method: "POST",
-      body: JSON.stringify({ sessionId, action: type, ...detail }),
-      signal,
-    });
-  }
-
-  async browserFrame(sessionId: string, signal?: AbortSignal) {
-    const response = await fetch(
-      `/api/browser/frame?${new URLSearchParams({ sessionId })}`,
-      { headers: await this.headers(), signal },
-    );
-    if (response.status === 404) return null;
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string; code?: string };
-      throw new WebApiError(
-        body.error || `Request failed (${response.status})`,
-        response.status,
-        body.code,
-      );
-    }
-    return response.blob();
-  }
-
-  async streamBrowserFrames(
-    sessionId: string,
-    signal: AbortSignal,
-    onFrame: (
-      frame: import("../../../protocol/types.ts").WebBrowserFrame,
-    ) => void,
-  ) {
-    const response = await fetch(
-      `/api/browser/frames?${new URLSearchParams({ sessionId })}`,
-      { headers: await this.headers(), signal },
-    );
-    if (!response.ok)
-      throw new WebApiError("Browser stream unavailable", response.status);
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("Browser stream unavailable");
-    const decoder = new TextDecoder();
-    let buffer = "";
-    try {
-      while (!signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        if (buffer.length > 25 * 1024 * 1024)
-          throw new Error("Browser frame exceeds its limit");
-        let boundary = buffer.indexOf("\n\n");
-        while (boundary >= 0) {
-          const record = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          if (record.startsWith("data: ")) {
-            const frame = JSON.parse(
-              record.slice(6),
-            ) as import("../../../protocol/types.ts").WebBrowserFrame;
-            if (
-              frame.mimeType === "image/png" &&
-              typeof frame.data === "string"
-            )
-              onFrame(frame);
-          }
-          boundary = buffer.indexOf("\n\n");
-        }
-      }
-    } finally {
-      await reader.cancel().catch(() => undefined);
-    }
   }
 
   createInteractiveTerminal(

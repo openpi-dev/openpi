@@ -933,292 +933,136 @@ test("model configuration drafts survive switching settings tabs", async ({
   ).toHaveValue("Unfinished model");
 });
 
-test("real embedded Chromium opens bare local addresses and paints shortcut edits", async ({
+test("native iframe browser supports input, selection, scrolling and independent tabs", async ({
   page,
-}, testInfo) => {
-  const inputs: string[] = [];
-  const mouseEvents: Array<{
-    phase: string | null;
-    button: string | null;
-    buttons: string | null;
-  }> = [];
+}) => {
   const fixture = createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://localhost");
-    if (url.pathname === "/mouse") {
-      mouseEvents.push({
-        phase: url.searchParams.get("phase"),
-        button: url.searchParams.get("button"),
-        buttons: url.searchParams.get("buttons"),
-      });
-      response.end("ok");
-      return;
-    }
-    if (url.pathname === "/event") {
-      inputs.push(url.searchParams.get("text") ?? "");
-      response.end("ok");
-      return;
-    }
+    if (request.url === "/blocked")
+      response.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.end(
-      `<!doctype html><title>Real input fixture</title><style>body{margin:0;background:white}input{width:70%;height:60px;font:24px sans-serif}#marker{position:fixed;top:0;right:0;width:48px;height:48px;background:rgb(200,0,0)}#pointer-pad{height:100px;user-select:none}</style><input id="editor" autofocus value="original text" oninput="document.getElementById('marker').style.background=this.value==='X'?'rgb(0,200,0)':'rgb(200,0,0)';fetch('/event?text='+encodeURIComponent(this.value))"><div id="marker"></div><div id="pointer-pad"></div><script>for(const phase of ['mousedown','mouseup','dragstart','dragend'])document.addEventListener(phase,e=>fetch('/mouse?phase='+phase+'&button='+e.button+'&buttons='+e.buttons));document.addEventListener('contextmenu',e=>e.preventDefault());</script>`,
+      `<!doctype html><title>Native fixture</title><input aria-label="Editor" value="original"><p id="selection">Selectable</p><a href="/next">Navigate</a><a href="/popup" target="_blank">Popup</a><div style="height:2500px">Native scrolling</div>`,
     );
   });
   await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
   const address = fixture.address();
   if (!address || typeof address === "string")
     throw new Error("Missing fixture port");
+  const origin = `http://127.0.0.1:${address.port}`;
+  const browserRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/browser/"))
+      browserRequests.push(request.url());
+  });
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openWorkbench(page);
     const workbar = await openWorkbarTool(page, "浏览器");
-    await workbar
-      .getByRole("textbox", { name: "浏览器地址" })
-      .fill(`127.0.0.1:${address.port}`);
-    // The host allows 8s for cold Chromium startup; await its receipt before
-    // beginning the separate painted-frame assertion.
-    const startup = page.waitForResponse(
-      (response) =>
-        response.url().endsWith("/api/browser/open") &&
-        response.request().method() === "POST",
-      { timeout: 20000 },
+    const active = workbar.locator(".browser-page:not([hidden])");
+    const navigate = async (url: string) => {
+      await active.getByRole("textbox", { name: "浏览器地址" }).fill(url);
+      await active
+        .getByRole("button", { name: "打开地址", exact: true })
+        .click();
+    };
+    await navigate(page.url());
+    await expect(active.getByRole("alert")).toContainText("OpenPI 自身地址");
+    await expect(workbar.locator("iframe")).toHaveCount(0);
+    await navigate(`127.0.0.1:${address.port}`);
+    const frame = active.frameLocator("iframe");
+    await expect(frame.getByRole("textbox", { name: "Editor" })).toHaveValue(
+      "original",
     );
+    await frame.getByRole("textbox", { name: "Editor" }).fill("原生中文输入");
+    await frame.locator("#selection").dblclick({ position: { x: 30, y: 8 } });
+    await expect
+      .poll(() =>
+        frame
+          .locator("body")
+          .evaluate((element) =>
+            element.ownerDocument.getSelection()?.toString(),
+          ),
+      )
+      .toBe("Selectable");
+    await frame.locator("#selection").hover();
+    await page.mouse.wheel(0, 500);
+    await expect
+      .poll(() =>
+        frame
+          .locator("body")
+          .evaluate(
+            (element) => element.ownerDocument.defaultView?.scrollY ?? 0,
+          ),
+      )
+      .toBeGreaterThan(0);
     await workbar
-      .getByRole("button", { name: "打开地址", exact: true })
+      .getByRole("button", { name: "新建网页标签页", exact: true })
       .click();
-    const started = await startup;
-    expect(started.ok(), await started.text()).toBe(true);
-    expect(started.request().postDataJSON()).toMatchObject({
-      url: `http://127.0.0.1:${address.port}/`,
-    });
-    const viewport = workbar.locator(".browser-viewport");
-    const frame = viewport.locator("img");
-    await expect(frame).toBeVisible();
-    const painted = () =>
-      frame.evaluate((image) => {
-        if (
-          !(image instanceof HTMLImageElement) ||
-          !image.complete ||
-          !image.naturalWidth
-        )
-          return false;
-        const canvas = document.createElement("canvas");
-        canvas.width = canvas.height = 1;
-        const context = canvas.getContext("2d");
-        if (!context) return false;
-        context.drawImage(image, image.naturalWidth - 20, 20, 1, 1, 0, 0, 1, 1);
-        const [red, green] = context.getImageData(0, 0, 1, 1).data;
-        return green! > 150 && red! < 50;
-      });
-    const samples: Array<{
-      shortcut: string;
-      inputToPaintUpperBoundMs: number;
-    }> = [];
-    for (const modifier of ["Control", "Meta"]) {
-      await viewport.click({ position: { x: 30, y: 30 } });
-      const started = performance.now();
-      await viewport.press(`${modifier}+a`);
-      await viewport.press("X");
-      await expect.poll(() => inputs.at(-1)).toBe("X");
-      await expect.poll(painted).toBe(true);
-      samples.push({
-        shortcut: `${modifier}+a`,
-        inputToPaintUpperBoundMs: Math.round(performance.now() - started),
-      });
-      if (modifier === "Control")
-        await viewport.screenshot({
-          path: testInfo.outputPath("browser-input.png"),
-        });
-      await viewport.press(`${modifier}+z`);
-      await expect.poll(() => inputs.at(-1)).toBe("original text");
-      await expect.poll(painted).toBe(false);
-    }
-    const bounds = await viewport.boundingBox();
-    if (!bounds) throw new Error("Browser viewport missing");
-    const textDragStart = mouseEvents.length;
-    await page.mouse.move(bounds.x + 40, bounds.y + 30);
-    await page.mouse.down();
-    await expect
-      .poll(() =>
-        mouseEvents
-          .slice(textDragStart)
-          .some((event) => event.phase === "mousedown"),
-      )
-      .toBe(true);
-    await page.mouse.move(bounds.x - 40, bounds.y + 30, { steps: 3 });
-    await page.mouse.up();
-    // Undo can leave selected text. Native HTML dragging suppresses mouseup
-    // and ends with dragend instead; both must report the released button.
-    const textRelease = () =>
-      mouseEvents
-        .slice(textDragStart)
-        .find(
-          (event) => event.phase === "mouseup" || event.phase === "dragend",
-        );
-    await expect.poll(textRelease).toMatchObject({
-      phase: expect.stringMatching(/^(mouseup|dragend)$/),
-      button: "0",
-      buttons: "0",
-    });
-    if (textRelease()?.phase === "dragend") {
-      await expect
-        .poll(() =>
-          mouseEvents
-            .slice(textDragStart)
-            .some((event) => event.phase === "dragstart"),
-        )
-        .toBe(true);
-    }
-    // A non-selectable area exercises plain pointer capture independently of
-    // the browser's native drag-and-drop lifecycle.
-    const pointerDragStart = mouseEvents.length;
-    await page.mouse.move(bounds.x + 40, bounds.y + 100);
-    await page.mouse.down();
-    await expect
-      .poll(() =>
-        mouseEvents
-          .slice(pointerDragStart)
-          .some((event) => event.phase === "mousedown"),
-      )
-      .toBe(true);
-    await page.mouse.move(bounds.x - 40, bounds.y + 100, { steps: 3 });
-    await page.mouse.up();
-    await expect
-      .poll(() =>
-        mouseEvents
-          .slice(pointerDragStart)
-          .find((event) => event.phase === "mouseup"),
-      )
-      .toEqual({ phase: "mouseup", button: "0", buttons: "0" });
-    await viewport.click({ button: "right", position: { x: 40, y: 100 } });
-    await expect
-      .poll(() => mouseEvents.at(-1))
-      .toEqual({ phase: "mouseup", button: "2", buttons: "0" });
-    const evidencePath = testInfo.outputPath("input-to-painted-frame.json");
-    await writeFile(
-      evidencePath,
-      JSON.stringify(
-        {
-          samples,
-          mouseEvents,
-          limitation:
-            "Local smoke including automation and polling overhead; not a benchmark.",
-        },
-        null,
-        2,
-      ),
+    await navigate(`${origin}/second`);
+    await expect(frame.getByRole("textbox", { name: "Editor" })).toHaveValue(
+      "original",
     );
-    await testInfo.attach("input-to-painted-frame", {
-      path: evidencePath,
-      contentType: "application/json",
-    });
+    await workbar
+      .getByRole("tablist", { name: "网页标签页" })
+      .getByRole("tab")
+      .first()
+      .click();
+    await expect(frame.getByRole("textbox", { name: "Editor" })).toHaveValue(
+      "原生中文输入",
+    );
+    const popupPromise = page.waitForEvent("popup");
+    await frame.getByRole("link", { name: "Popup", exact: true }).click();
+    const popup = await popupPromise;
+    await expect(popup).toHaveURL(`${origin}/popup`);
+    await popup.close();
+    await frame.getByRole("link", { name: "Navigate", exact: true }).click();
+    await expect(active.getByRole("status")).toContainText("网页已跳转");
+    await expect(
+      active.getByRole("button", { name: "后退", exact: true }),
+    ).toBeDisabled();
+    await active.getByRole("button", { name: "重新加载", exact: true }).click();
+    await expect(frame.getByRole("textbox", { name: "Editor" })).toHaveValue(
+      "original",
+    );
+    await expect(active.getByRole("status")).toHaveCount(0);
+    await navigate(`${origin}/toolbar`);
+    await active.getByRole("button", { name: "后退", exact: true }).click();
+    await expect(active.locator("iframe")).toHaveAttribute("src", `${origin}/`);
+    await active.getByRole("button", { name: "前进", exact: true }).click();
+    await expect(active.locator("iframe")).toHaveAttribute(
+      "src",
+      `${origin}/toolbar`,
+    );
+    await workbar.getByRole("button", { name: "关闭", exact: true }).click();
+    await page.locator(".task-tools-trigger").click();
+    await expect(workbar.locator("iframe")).toHaveCount(2);
+    await navigate(`${origin}/blocked`);
+    await expect(active.locator("iframe")).toHaveAttribute(
+      "src",
+      `${origin}/blocked`,
+    );
+    await expect(active.getByText(/遇到空白页/)).toBeVisible();
+    await expect(
+      active.getByRole("button", { name: "在外部浏览器打开" }),
+    ).toBeEnabled();
+    const tablist = workbar.getByRole("tablist", { name: "网页标签页" });
+    await tablist.getByRole("tab").first().focus();
+    await page.keyboard.press("End");
+    await expect(tablist.getByRole("tab").last()).toBeFocused();
+    await page.keyboard.press("Delete");
+    await expect(workbar.locator("iframe")).toHaveCount(1);
+    await expect(tablist.getByRole("tab")).toBeFocused();
+    await page.keyboard.press("Delete");
+    await expect(workbar.locator("iframe")).toHaveCount(0);
+    await expect(tablist.getByRole("tab", { name: "新标签页" })).toBeFocused();
+    await expect(workbar.locator("video, .browser-viewport")).toHaveCount(0);
+    expect(browserRequests).toEqual([]);
   } finally {
     fixture.closeAllConnections();
     await new Promise<void>((resolve, reject) =>
       fixture.close((error) => (error ? reject(error) : resolve())),
     );
   }
-});
-
-test("browser tool keeps an interactive page inside the workbar", async ({
-  page,
-}) => {
-  await page.route("**/api/browser/frames?**", (route) =>
-    route.fulfill({
-      contentType: "text/event-stream",
-      body: `data: ${JSON.stringify({ mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=", width: 400, height: 600 })}\n\n`,
-    }),
-  );
-  type BrowserState = {
-    sessionId: string;
-    url: string;
-    title: string;
-    width: number;
-    height: number;
-    loading: boolean;
-    canGoBack: boolean;
-    canGoForward: boolean;
-  };
-  let launch:
-    | { sessionId: string; url: string; width: number; height: number }
-    | undefined;
-  let browserState: BrowserState | undefined;
-  const actions: Array<{ action: string }> = [];
-  await page.route("**/api/browser/open", async (route) => {
-    launch = route.request().postDataJSON();
-    browserState = {
-      sessionId: launch!.sessionId,
-      url: launch!.url,
-      title: "Example Domain",
-      width: launch!.width,
-      height: launch!.height,
-      loading: false,
-      canGoBack: false,
-      canGoForward: false,
-    };
-    await route.fulfill({ json: browserState });
-  });
-  await page.route("**/api/browser/state?**", async (route) => {
-    if (!browserState) {
-      await route.fulfill({
-        status: 404,
-        json: { error: "Browser is not open" },
-      });
-      return;
-    }
-    await route.fulfill({ json: browserState });
-  });
-  await page.route("**/api/browser/action", async (route) => {
-    const action = route.request().postDataJSON() as {
-      action: string;
-      width?: number;
-      height?: number;
-    };
-    actions.push(action);
-    if (browserState && action.action === "resize") {
-      browserState = {
-        ...browserState,
-        width: action.width ?? browserState.width,
-        height: action.height ?? browserState.height,
-      };
-    }
-    await route.fulfill({ json: browserState });
-  });
-  await page.route("**/api/browser/frame?**", (route) =>
-    route.fulfill({
-      contentType: "image/jpeg",
-      body: Buffer.from(
-        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/Aaf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/Aaf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z",
-        "base64",
-      ),
-    }),
-  );
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await openWorkbench(page);
-  const workbar = await openWorkbarTool(page, "浏览器");
-  await workbar
-    .getByRole("textbox", { name: "浏览器地址" })
-    .fill("example.com");
-  await workbar.getByRole("button", { name: "打开地址" }).click();
-  await expect(
-    workbar.locator(".browser-viewport img[alt='Example Domain']"),
-  ).toBeVisible();
-  await expect(workbar.locator("iframe")).toHaveCount(0);
-  expect(launch?.url).toBe("https://example.com/");
-  expect(launch?.sessionId).toBeTruthy();
-  expect(launch?.width).toBeGreaterThanOrEqual(320);
-  expect(launch?.height).toBeGreaterThanOrEqual(240);
-  await dragPane(page, "right", -70);
-  await expect
-    .poll(() => actions.some((action) => action.action === "resize"))
-    .toBe(true);
-
-  await workbar.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(workbar).toBeHidden();
-  await page.locator(".task-tools-trigger").click();
-  await expect(workbar).toBeVisible();
-  await expect(
-    workbar.locator(".browser-viewport img[alt='Example Domain']"),
-  ).toBeVisible();
 });
 
 test("composer sends staged image data with the prompt", async ({ page }) => {
@@ -1328,13 +1172,11 @@ test("production workbench is local, keyboard-operable, and accessible", async (
   ).toEqual({ sameToolbar: true, thinkingAfterModel: true });
 
   const workspaceMenu = page.getByRole("button", {
-    name: "Workspace options",
+    name: "工作区选项",
   });
   await workspaceMenu.focus();
   await page.keyboard.press("Enter");
-  await expect(
-    page.getByRole("menu", { name: "Workspace options" }),
-  ).toBeVisible();
+  await expect(page.getByRole("menu", { name: "工作区选项" })).toBeVisible();
   await page.keyboard.press("Escape");
 
   const accessibility = await new AxeBuilder({ page }).analyze();

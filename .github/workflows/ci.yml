@@ -193,11 +193,6 @@ jobs:
         run: |
           bunx playwright install --with-deps chromium
           sudo apt-get install --no-install-recommends -y dbus-daemon
-      - name: Verify isolated Chromium cold starts
-        timeout-minutes: 2
-        run: dbus-run-session -- node --experimental-strip-types tests/web/browser-cold-start-smoke.mjs
-        env:
-          OPENPI_CHROME_PATH: /opt/google/chrome/chrome
       - run: dbus-run-session -- bun run test:web:e2e
         env:
           # The runner's installed Chrome has Ubuntu's native sandbox profile.

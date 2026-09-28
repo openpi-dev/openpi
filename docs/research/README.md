@@ -8,6 +8,10 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md`](WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md) — superseded WebRTC trial: isolated checks and bounded CPU observations, failed deployed acceptance, and the user's native iframe replacement ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
+- [`WEB_BROWSER_DSH_COMPARISON_2026-09-28.md`](WEB_BROWSER_DSH_COMPARISON_2026-09-28.md) - Web-only DSH iframe comparison, actual OpenPI input/paint observations, embedding limits and an isolated Chromium WebRTC transport experiment ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
 - [`WEB_BROWSER_TEXT_INPUT_2026-09-27.md`](WEB_BROWSER_TEXT_INPUT_2026-09-27.md) - committed browser text, native editable-focus receipts, bounded admission, password exclusion, event-order regressions and local desktop observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
 
 - [`WEB_MODEL_ENTRY_2026-09-27.md`](WEB_MODEL_ENTRY_2026-09-27.md) - native unselected-model projection, actionable model configuration, search/return focus, and bounded responsive picker observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).

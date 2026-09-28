@@ -262,6 +262,21 @@ const resources = {
       browserBack: "Back",
       browserForward: "Forward",
       browserReload: "Reload",
+      browserTabs: "Browser tabs",
+      browserNewTab: "New tab",
+      browserAddTab: "New browser tab",
+      browserCloseTab: "Close {{title}}",
+      browserTabLimit: "Up to {{count}} browser tabs",
+      browserPageTitle: "Web page: {{address}}",
+      browserEnteredAddress: "Last address opened from this toolbar",
+      browserAddressNotAllowed:
+        "Enter an HTTP(S) address without embedded credentials, outside this application's origin.",
+      browserLocationUnknown:
+        "This page navigated. Its new address is unavailable. Reload returns to the address you entered.",
+      browserDirectDescription:
+        "Browse pages directly. Sites that refuse embedding can be opened in your external browser.",
+      browserDirectHint:
+        "The address records toolbar navigation only. Page popups open in your external browser. Blank page? Use Open in external browser.",
       generatedFiles: "Generated files",
       workbarFilesDescription:
         "Open files confirmed by successful write and edit results.",
@@ -1085,6 +1100,21 @@ const resources = {
       browserBack: "后退",
       browserForward: "前进",
       browserReload: "重新加载",
+      browserTabs: "网页标签页",
+      browserNewTab: "新标签页",
+      browserAddTab: "新建网页标签页",
+      browserCloseTab: "关闭 {{title}}",
+      browserTabLimit: "最多打开 {{count}} 个网页标签页",
+      browserPageTitle: "网页：{{address}}",
+      browserEnteredAddress: "最近从此地址栏打开的地址",
+      browserAddressNotAllowed:
+        "请输入不含用户名或密码、且不属于 OpenPI 自身地址的 HTTP(S) 网址。",
+      browserLocationUnknown:
+        "网页已跳转，新地址无法读取。重新加载会返回你输入的地址。",
+      browserDirectDescription:
+        "直接浏览网页。不允许嵌入的网站可在外部浏览器打开。",
+      browserDirectHint:
+        "地址栏仅记录手动打开的地址。网页弹窗在外部浏览器打开；遇到空白页，可点击外部打开。",
       generatedFiles: "生成文件",
       workbarFilesDescription: "打开已由成功 write / edit 结果确认的文件。",
       backToSideConversations: "返回侧边对话",
