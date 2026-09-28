@@ -249,6 +249,9 @@ const resources = {
       resizePanes: "Resize panes",
       resizeWorkbar: "Resize workbar",
       browserPasteTooLarge: "Paste at most {{count}} characters at a time.",
+      browserInputTooLarge: "Enter at most {{count}} characters at a time.",
+      browserInputTargetChanged:
+        "The input target changed or could not be confirmed. An input operation was not executed.",
       workbarBrowserDescription:
         "Open and interact with a page inside the OpenPI workbar.",
       browserReady: "Enter an address to start browsing",
@@ -1071,6 +1074,8 @@ const resources = {
       resizePanes: "调整面板宽度",
       resizeWorkbar: "调整工具栏宽度",
       browserPasteTooLarge: "每次最多粘贴 {{count}} 个字符。",
+      browserInputTooLarge: "每次最多输入 {{count}} 个字符。",
+      browserInputTargetChanged: "输入目标已变化或无法确认，有输入操作未执行。",
       workbarBrowserDescription: "在 OpenPI 工作栏内打开并操作网页。",
       browserReady: "输入地址开始浏览",
       browserStarting: "正在启动内嵌浏览器…",

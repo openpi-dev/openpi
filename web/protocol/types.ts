@@ -289,6 +289,12 @@ export interface WebInteractiveTerminal {
   reused?: boolean;
 }
 
+export interface WebBrowserInputTarget {
+  owner: string;
+  kind: "input" | "textarea" | "contenteditable";
+  anchorRect: { x: number; y: number; width: number; height: number };
+}
+
 export interface WebEmbeddedBrowserState {
   sessionId: string;
   url: string;
@@ -299,6 +305,8 @@ export interface WebEmbeddedBrowserState {
   canGoBack: boolean;
   canGoForward: boolean;
   deviceScaleFactor?: number;
+  /** Null confirms a noneditable target; omission means focus is unknown. */
+  inputTarget?: WebBrowserInputTarget | null;
 }
 
 export interface WebBrowserFrame {
@@ -309,12 +317,13 @@ export interface WebBrowserFrame {
 }
 
 export const WEB_BROWSER_TEXT_MAX_LENGTH = 16_384;
+export const WEB_BROWSER_INPUT_OWNER_MAX_LENGTH = 128;
 
 export type WebEmbeddedBrowserAction =
   | { type: "navigate"; url: string }
   | { type: "back" | "forward" | "reload" | "stop" }
   | { type: "resize"; width: number; height: number; deviceScaleFactor?: number }
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; owner?: string }
   | {
       type: "mouse";
       event: "move" | "down" | "up" | "wheel";
@@ -332,6 +341,7 @@ export type WebEmbeddedBrowserAction =
       code?: string;
       text?: string;
       modifiers?: number;
+      owner?: string;
     };
 
 export type WebInteractiveTerminalEvent =

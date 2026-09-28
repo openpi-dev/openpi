@@ -11,12 +11,16 @@ import {
   registerWebCapability,
   registerWebCapabilityActions,
 } from "../../extensions/shared/web-observer-registry.ts";
-import type { EmbeddedBrowserService } from "../../web/host/embedded-browser.ts";
+import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
+import {
+  EmbeddedBrowserInputTargetError,
+  type EmbeddedBrowserService,
+} from "../../web/host/embedded-browser.ts";
 import type { GitReviewService } from "../../web/host/git-review.ts";
 import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
-import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
 import type { WebHostOptions } from "../../web/host/web-host.ts";
 import {
+  WEB_BROWSER_INPUT_OWNER_MAX_LENGTH,
   WEB_BROWSER_TEXT_MAX_LENGTH,
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebInteractiveTerminalEvent,
@@ -2248,6 +2252,11 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
     },
     async action(owner, action) {
       if (owner !== sessionId) return undefined;
+      if (
+        (action.type === "text" || action.type === "key") &&
+        action.owner === "stale-owner"
+      )
+        throw new EmbeddedBrowserInputTargetError();
       browserActions.push(action);
       return {
         sessionId,
@@ -2324,7 +2333,10 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
 
     for (const action of [
       { action: "text", text: "paste 中文\nnext line" },
+      { action: "text", text: "bound input", owner: "opaque-owner" },
       { action: "key", event: "down", key: "Tab", modifiers: 8 },
+      { action: "key", event: "down", key: "Backspace", owner: "opaque-owner" },
+      { action: "key", event: "up", key: "Backspace", owner: "opaque-owner" },
       {
         action: "mouse",
         event: "move",
@@ -2348,6 +2360,25 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
       { action: "text", text: "" },
       { action: "text", text: "x".repeat(WEB_BROWSER_TEXT_MAX_LENGTH + 1) },
       { action: "text", text: 42 },
+      { action: "text", text: "bound input", owner: "" },
+      { action: "text", text: "bound input", owner: null },
+      { action: "text", text: "bound input", owner: 42 },
+      { action: "text", text: "bound input", owner: "white space" },
+      {
+        action: "text",
+        text: "bound input",
+        owner: "x".repeat(WEB_BROWSER_INPUT_OWNER_MAX_LENGTH + 1),
+      },
+      { action: "key", event: "down", key: "Backspace", owner: "" },
+      { action: "key", event: "down", key: "Backspace", owner: null },
+      { action: "key", event: "down", key: "Backspace", owner: 42 },
+      { action: "key", event: "down", key: "Backspace", owner: "white space" },
+      {
+        action: "key",
+        event: "down",
+        key: "Backspace",
+        owner: "x".repeat(WEB_BROWSER_INPUT_OWNER_MAX_LENGTH + 1),
+      },
       { action: "key", event: "down", key: "Tab", modifiers: -1 },
       { action: "key", event: "down", key: "Tab", modifiers: 16 },
       { action: "key", event: "down", key: "Tab", modifiers: 1.5 },
@@ -2361,6 +2392,23 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
         body: JSON.stringify({ sessionId, ...action }),
       });
       assert.equal(response.status, 400);
+    }
+    assert.equal(browserActions.length, acceptedCount);
+    for (const action of [
+      { action: "text", text: "old composition", owner: "stale-owner" },
+      { action: "key", event: "down", key: "Backspace", owner: "stale-owner" },
+      { action: "key", event: "up", key: "Backspace", owner: "stale-owner" },
+    ]) {
+      const staleOwner = await fetch(`${launched.origin}/api/browser/action`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ sessionId, ...action }),
+      });
+      assert.equal(staleOwner.status, 409);
+      assert.equal(
+        (await staleOwner.json()).code,
+        "BROWSER_INPUT_TARGET_CHANGED",
+      );
     }
     assert.equal(browserActions.length, acceptedCount);
     const stalePaste = await fetch(`${launched.origin}/api/browser/action`, {

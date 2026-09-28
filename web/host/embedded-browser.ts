@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,97 @@ const START_TIMEOUT_MS = 8_000;
 const START_STDERR_MAX_BYTES = 4 * 1024;
 const DEFAULT_WIDTH = 1_024;
 const DEFAULT_HEIGHT = 768;
+const INPUT_WORLD = "openpi-browser-input";
+const INPUT_BINDING = "__openpiBrowserInputWake";
+const INPUT_PROBE = "__openpiBrowserInputProbe";
+
+// This isolated-world projection never reads field values or changes page DOM.
+const INPUT_PROBE_SOURCE = `(() => {
+  if (typeof globalThis.${INPUT_PROBE} === "function") return;
+  const roots = new WeakMap();
+  const documents = new WeakSet();
+  let nextRoot = 0;
+  let focusEpoch = 0;
+  const wake = (event) => {
+    if (event.type !== "selectionchange") focusEpoch++;
+    globalThis.${INPUT_BINDING}("");
+  };
+  const observe = (doc) => {
+    if (documents.has(doc)) return;
+    documents.add(doc);
+    for (const event of ["focusin", "focusout", "selectionchange"])
+      doc.addEventListener(event, wake, true);
+    for (const event of ["pagehide", "pageshow"])
+      doc.defaultView.addEventListener(event, wake, true);
+  };
+  globalThis.${INPUT_PROBE} = () => {
+    try {
+      let doc = document;
+      let root = doc.activeElement;
+      let x = 0;
+      let y = 0;
+      let scaleX = 1;
+      let scaleY = 1;
+      for (let depth = 0; depth < 32; depth++) {
+        observe(doc);
+        if (!root) return null;
+        if (root.shadowRoot?.activeElement) {
+          if (depth === 31) return;
+          root = root.shadowRoot.activeElement;
+          continue;
+        }
+        if (root.localName !== "iframe") break;
+        const child = root.contentDocument;
+        if (!child) return;
+        const transform = doc.defaultView.getComputedStyle(root).transform;
+        if (transform && transform !== "none") return;
+        const box = root.getBoundingClientRect();
+        const frameScaleX = root.offsetWidth ? box.width / root.offsetWidth : 1;
+        const frameScaleY = root.offsetHeight ? box.height / root.offsetHeight : 1;
+        x += scaleX * (box.left + root.clientLeft * frameScaleX);
+        y += scaleY * (box.top + root.clientTop * frameScaleY);
+        scaleX *= frameScaleX;
+        scaleY *= frameScaleY;
+        doc = child;
+        root = doc.activeElement;
+        if (depth === 31) return;
+      }
+      if (!root?.isConnected) return;
+      let kind;
+      if (root.localName === "input") {
+        // The local text proxy is not a password control.
+        if (root.type === "password") return;
+        if (!["text", "search", "email", "url", "tel", "number"].includes(root.type)) return null;
+        if (root.readOnly || root.disabled) return null;
+        kind = "input";
+      } else if (root.localName === "textarea") {
+        if (root.readOnly || root.disabled) return null;
+        kind = "textarea";
+      } else if (root.isContentEditable) {
+        while (root.parentElement?.isContentEditable) root = root.parentElement;
+        kind = "contenteditable";
+      } else {
+        // Other elements can conceal a closed shadow root; do not guess.
+        return ["a", "area", "button", "select", "summary"].includes(root.localName) ? null : undefined;
+      }
+      let identity = roots.get(root);
+      if (!identity) { identity = ++nextRoot; roots.set(root, identity); }
+      if (!Number.isSafeInteger(identity) || !Number.isSafeInteger(focusEpoch)) return;
+      const rect = root.getBoundingClientRect();
+      return {
+        owner: identity + ":" + focusEpoch,
+        kind,
+        anchorRect: {
+          x: x + scaleX * rect.left,
+          y: y + scaleY * rect.top,
+          width: scaleX * rect.width,
+          height: scaleY * rect.height,
+        },
+      };
+    } catch { return; }
+  };
+  observe(document);
+})()`;
 
 export interface EmbeddedBrowserService {
   open(
@@ -28,6 +120,12 @@ export interface EmbeddedBrowserService {
   ): Promise<WebEmbeddedBrowserState | undefined>;
   retain(sessionId?: string): void;
   dispose(): Promise<void>;
+}
+
+export class EmbeddedBrowserInputTargetError extends Error {
+  constructor() {
+    super("The browser text target changed before the input was admitted");
+  }
 }
 
 interface CdpMessage {
@@ -146,6 +244,11 @@ interface BrowserSession {
   latestFrame?: WebBrowserFrame;
   frameListeners: Set<(frame: WebBrowserFrame | null) => void>;
   stopListening: () => void;
+  inputTarget?: WebEmbeddedBrowserState["inputTarget"];
+  inputContext?: { id: number; prefix: string };
+  inputRevision?: number;
+  inputTrackingInstalled?: boolean;
+  inputProbeQueued?: boolean;
 }
 
 function isWebAddress(value: unknown): value is string {
@@ -309,6 +412,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
         this.session = await this.start(sessionId, width, height);
       }
       await this.resize(this.session, width, height, viewport.deviceScaleFactor);
+      this.invalidateInputContext(this.session);
       this.session.url = url;
       this.session.loading = true;
       await this.session.cdp.send("Page.navigate", { url });
@@ -317,8 +421,10 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
   }
 
   async state(sessionId: string) {
-    const session = this.forSession(sessionId);
-    return session ? this.readState(session) : undefined;
+    return this.serialize(async () => {
+      const session = this.forSession(sessionId);
+      return session ? this.readState(session) : undefined;
+    });
   }
 
   async frame(sessionId: string) {
@@ -360,11 +466,20 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
     return this.serialize(async () => {
       const session = this.forSession(sessionId);
       if (!session) return undefined;
+      if ((action.type === "text" || action.type === "key") && action.owner !== undefined) {
+        await this.readInputTarget(session);
+        if (!session.inputTarget || session.inputTarget.owner !== action.owner)
+          throw new EmbeddedBrowserInputTargetError();
+      }
+      // CDP admits input to the currently focused widget, not a node-bound
+      // transaction. Page JS can still change focus after this admission check.
       if (action.type === "navigate") {
+        this.invalidateInputContext(session);
         session.url = action.url;
         session.loading = true;
         await session.cdp.send("Page.navigate", { url: action.url });
       } else if (action.type === "reload") {
+        this.invalidateInputContext(session);
         session.loading = true;
         await session.cdp.send("Page.reload", { ignoreCache: false });
       } else if (action.type === "stop") {
@@ -378,6 +493,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
           | Record<string, unknown>
           | undefined;
         if (target && typeof target.id === "number") {
+          this.invalidateInputContext(session);
           session.loading = true;
           await session.cdp.send("Page.navigateToHistoryEntry", {
             entryId: target.id,
@@ -425,6 +541,11 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
             : {}),
         });
       }
+      if (
+        action.type === "text" ||
+        (action.type === "mouse" && action.event === "up") ||
+        (action.type === "key" && action.event === "down" && action.key === "Tab")
+      ) await this.readInputTarget(session);
       // Input dispatch must not wait for three unrelated page-state queries.
       return action.type === "mouse" || action.type === "key" || action.type === "text"
         ? this.snapshot(session)
@@ -461,6 +582,134 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
     session.cdp.close();
     await cleanupBrowser(session.process, session.closed, session.profile);
     this.session = undefined;
+  }
+
+  private invalidateInputContext(session: BrowserSession) {
+    session.inputTarget = undefined;
+    session.inputContext = undefined;
+    session.inputRevision = (session.inputRevision ?? 0) + 1;
+  }
+
+  private queueInputProbe(session: BrowserSession) {
+    if (session.inputProbeQueued || this.session !== session) return;
+    session.inputProbeQueued = true;
+    let reprobe = false;
+    void this.serialize(async () => {
+      if (this.session !== session) return;
+      const revision = session.inputRevision;
+      await this.readInputTarget(session);
+      reprobe = revision !== session.inputRevision;
+    }).finally(() => {
+      session.inputProbeQueued = false;
+      if (reprobe) this.queueInputProbe(session);
+    }).catch(() => undefined);
+  }
+
+  private ensureInputTracking(session: BrowserSession) {
+    if (session.inputTrackingInstalled) return;
+    session.inputTrackingInstalled = true;
+    const stops = [
+      session.cdp.on("Runtime.bindingCalled", params => {
+        if (
+          params.name !== INPUT_BINDING ||
+          params.executionContextId !== session.inputContext?.id
+        ) return;
+        session.inputTarget = undefined;
+        session.inputRevision = (session.inputRevision ?? 0) + 1;
+        this.queueInputProbe(session);
+      }),
+      session.cdp.on("Runtime.executionContextDestroyed", params => {
+        if (params.executionContextId !== session.inputContext?.id) return;
+        this.invalidateInputContext(session);
+        this.queueInputProbe(session);
+      }),
+      session.cdp.on("Runtime.executionContextsCleared", () => {
+        this.invalidateInputContext(session);
+        this.queueInputProbe(session);
+      }),
+      session.cdp.on("Page.frameNavigated", params => {
+        const frame = params.frame;
+        if (!frame || typeof frame !== "object" || "parentId" in frame) return;
+        this.invalidateInputContext(session);
+        this.queueInputProbe(session);
+      }),
+    ];
+    const previous = session.stopListening;
+    session.stopListening = () => {
+      this.invalidateInputContext(session);
+      for (const stop of stops) stop();
+      previous();
+    };
+  }
+
+  private async readInputTarget(session: BrowserSession) {
+    // A caret wake from the preceding insertion can invalidate this read. Reprobe
+    // once before admitting input; never replay a native input operation.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const revision = session.inputRevision;
+      session.inputTarget = undefined;
+      try {
+        this.ensureInputTracking(session);
+        if (!session.inputContext) {
+          const tree = await session.cdp.send("Page.getFrameTree");
+          const frameId = (tree.frameTree as { frame?: { id?: unknown } } | undefined)?.frame?.id;
+          if (typeof frameId !== "string" || !frameId) return;
+          const world = await session.cdp.send("Page.createIsolatedWorld", {
+            frameId,
+            worldName: INPUT_WORLD,
+            grantUniveralAccess: false,
+          });
+          const id = world.executionContextId;
+          if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 0) return;
+          await session.cdp.send("Runtime.addBinding", { name: INPUT_BINDING, executionContextId: id });
+          const installed = await session.cdp.send("Runtime.evaluate", {
+            expression: INPUT_PROBE_SOURCE,
+            contextId: id,
+            returnByValue: true,
+          });
+          if (installed.exceptionDetails || revision !== session.inputRevision) return;
+          session.inputContext = { id, prefix: randomUUID() };
+        }
+        const context = session.inputContext;
+        const result = await session.cdp.send("Runtime.evaluate", {
+          expression: `globalThis.${INPUT_PROBE}()`,
+          contextId: context.id,
+          returnByValue: true,
+        });
+        if (context !== session.inputContext) return;
+        if (revision !== session.inputRevision) continue;
+        if (result.exceptionDetails) { session.inputContext = undefined; return; }
+        const remote = result.result;
+        const value = remote && typeof remote === "object" && "value" in remote
+          ? (remote as { value?: unknown }).value
+          : undefined;
+        if (value === null) { session.inputTarget = null; return; }
+        if (!value || typeof value !== "object") return;
+        const target = value as Record<string, unknown>;
+        if (
+          typeof target.owner !== "string" || !/^\d{1,16}:\d{1,16}$/u.test(target.owner) ||
+          (target.kind !== "input" && target.kind !== "textarea" && target.kind !== "contenteditable") ||
+          !target.anchorRect || typeof target.anchorRect !== "object"
+        ) return;
+        const rect = target.anchorRect as Record<string, unknown>;
+        const bounded = (value: unknown, min: number, max: number): value is number =>
+          typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
+        if (
+          !bounded(rect.x, -65_536, 65_536) || !bounded(rect.y, -65_536, 65_536) ||
+          !bounded(rect.width, 0, 65_536) || !bounded(rect.height, 0, 65_536)
+        ) return;
+        session.inputTarget = {
+          owner: `${context.prefix}:${target.owner}`,
+          kind: target.kind,
+          anchorRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        };
+        return;
+      } catch {
+        session.inputTarget = undefined;
+        session.inputContext = undefined;
+        return;
+      }
+    }
   }
 
   private forSession(sessionId: string) {
@@ -644,6 +893,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
   }
 
   private async readState(session: BrowserSession) {
+    await this.readInputTarget(session);
     const [location, title, history] = await Promise.allSettled([
       session.cdp.send("Runtime.evaluate", {
         expression: "location.href",
@@ -687,6 +937,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
       canGoBack: session.canGoBack,
       canGoForward: session.canGoForward,
       deviceScaleFactor: session.deviceScaleFactor,
+      ...(session.inputTarget !== undefined ? { inputTarget: session.inputTarget } : {}),
     } satisfies WebEmbeddedBrowserState;
   }
 }

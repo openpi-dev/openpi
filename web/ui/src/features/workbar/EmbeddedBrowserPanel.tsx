@@ -21,6 +21,7 @@ import {
   type WebEmbeddedBrowserState,
 } from "../../../../protocol/types.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
+import { BrowserTextInput } from "./BrowserTextInput.tsx";
 
 function normalizedBrowserUrl(value: string) {
   const trimmed = value.trim();
@@ -91,6 +92,7 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const client = useMemo(() => new WebClient(), []);
   const abort = useRef<AbortController | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
+  const textInput = useRef<HTMLTextAreaElement>(null);
   const frameImage = useRef<HTMLImageElement>(null);
   const frameUrl = useRef<string | null>(null);
   const stateRef = useRef<WebEmbeddedBrowserState | null>(null);
@@ -99,6 +101,18 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const addressRevision = useRef(0);
   const inputRevision = useRef(0);
   const navigationRevision = useRef(0);
+  const focusRevision = useRef(0);
+  const ownsInputFocus = useRef(false);
+  const forwardedKeys = useRef(
+    new Map<
+      string,
+      {
+        key: string;
+        code: string;
+        modifiers: number;
+      }
+    >(),
+  );
   const pointerMovePoint = useRef<{
     x: number;
     y: number;
@@ -129,6 +143,7 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const [addressError, setAddressError] = useState<string | null>(null);
   const [inputError, setInputError] = useState<string | null>(null);
   const [frameError, setFrameError] = useState<string | null>(null);
+  const [focusReceipt, setFocusReceipt] = useState<number | null>(null);
   const browserStarted = state !== null;
 
   useEffect(
@@ -249,11 +264,13 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
     };
     const refreshState = async () => {
       const submittedRevision = navigationRevision.current;
+      const submittedFocus = focusRevision.current;
       try {
         const next = await client.browserState(sessionId, controller.signal);
         if (
           !controller.signal.aborted &&
-          submittedRevision === navigationRevision.current
+          submittedRevision === navigationRevision.current &&
+          submittedFocus === focusRevision.current
         )
           applyState(next);
       } catch {
@@ -299,6 +316,7 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         if (!current || (width === current.width && height === current.height))
           return;
         const submittedNavigation = navigationRevision.current;
+        const submittedFocus = focusRevision.current;
         const submittedRevision = ++revision;
         void client
           .browserAction(
@@ -320,7 +338,14 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
               submittedNavigation === navigationRevision.current &&
               submittedRevision === revision
             )
-              applyState(next);
+              applyState(
+                submittedFocus === focusRevision.current
+                  ? next
+                  : {
+                      ...next,
+                      inputTarget: stateRef.current?.inputTarget,
+                    },
+              );
           })
           .catch(() => undefined);
       }, 160);
@@ -353,6 +378,8 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
     abort.current = controller;
     const submittedRevision = addressRevision.current;
     const navigation = ++navigationRevision.current;
+    focusRevision.current++;
+    textInput.current?.blur();
     setBusy(true);
     setDraft(next);
     setAddressError(null);
@@ -403,6 +430,18 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
       syncAddress = false,
     ) => {
       const input = ["mouse", "key", "text"].includes(browserAction.type);
+      const ownedInput =
+        (browserAction.type === "text" || browserAction.type === "key") &&
+        browserAction.owner !== undefined;
+      const focusAction =
+        (browserAction.type === "mouse" && browserAction.event === "up") ||
+        (browserAction.type === "key" &&
+          browserAction.event === "down" &&
+          browserAction.key === "Tab");
+      const submittedFocus = focusAction
+        ? ++focusRevision.current
+        : focusRevision.current;
+      const submittedNavigation = navigationRevision.current;
       const passive =
         (browserAction.type === "mouse" &&
           ["move", "up"].includes(browserAction.event)) ||
@@ -414,15 +453,31 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
           : ++inputRevision.current
         : ++navigationRevision.current;
       if (!input) {
+        focusRevision.current++;
+        textInput.current?.blur();
         inputRevision.current++;
         setInputError(null);
       }
       try {
         const next = await client.browserAction(sessionId, browserAction);
         if (input) {
-          if (!passive && submittedRevision === inputRevision.current)
-            setInputError(null);
-          return;
+          if (
+            focusAction &&
+            pointerMoveEnabled.current &&
+            submittedFocus === focusRevision.current &&
+            submittedNavigation === navigationRevision.current &&
+            stateRef.current
+          ) {
+            if (browserAction.type === "key") setInputError(null);
+            const updated = {
+              ...stateRef.current,
+              inputTarget: next.inputTarget,
+            };
+            stateRef.current = updated;
+            setState(updated);
+            setFocusReceipt(submittedFocus);
+          }
+          return next;
         }
         if (submittedRevision !== navigationRevision.current) return;
         navigationRevision.current++;
@@ -433,11 +488,20 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         if (submittedAddress === addressRevision.current) setAddressError(null);
       } catch (caught) {
         if (
-          submittedRevision ===
-          (input ? inputRevision.current : navigationRevision.current)
+          ownedInput
+            ? pointerMoveEnabled.current &&
+              submittedFocus === focusRevision.current &&
+              submittedNavigation === navigationRevision.current
+            : submittedRevision ===
+              (input ? inputRevision.current : navigationRevision.current)
         ) {
           const message =
-            caught instanceof Error ? caught.message : t("browserOpenFailed");
+            caught instanceof WebApiError &&
+            caught.code === "BROWSER_INPUT_TARGET_CHANGED"
+              ? t("browserInputTargetChanged")
+              : caught instanceof Error
+                ? caught.message
+                : t("browserOpenFailed");
           if (input)
             setInputError((previous) =>
               passive ? (previous ?? message) : message,
@@ -449,6 +513,48 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
     },
     [applyState, client, sessionId, t],
   );
+
+  const releaseKeys = useCallback(() => {
+    for (const key of forwardedKeys.current.values())
+      void action({ type: "key", event: "up", ...key });
+    forwardedKeys.current.clear();
+  }, [action]);
+
+  useEffect(() => {
+    if (!active) {
+      focusRevision.current++;
+      textInput.current?.blur();
+      releaseKeys();
+    }
+    return releaseKeys;
+  }, [active, releaseKeys]);
+
+  useEffect(() => {
+    if (
+      !active ||
+      !state?.inputTarget ||
+      focusReceipt !== focusRevision.current
+    )
+      return;
+    if (
+      document.activeElement === viewport.current ||
+      document.activeElement === textInput.current ||
+      (ownsInputFocus.current && document.activeElement === document.body)
+    )
+      textInput.current?.focus({ preventScroll: true });
+  }, [active, focusReceipt, state?.inputTarget]);
+
+  const submitText = (text: string, owner?: string) => {
+    if (!active || !stateRef.current) return;
+    if (text.length > WEB_BROWSER_TEXT_MAX_LENGTH) {
+      inputRevision.current++;
+      setInputError(
+        t("browserInputTooLarge", { count: WEB_BROWSER_TEXT_MAX_LENGTH }),
+      );
+      return;
+    }
+    void action({ type: "text", text, ...(owner ? { owner } : {}) });
+  };
 
   const browserPoint = useCallback(
     (event: { clientX: number; clientY: number }) => {
@@ -671,8 +777,17 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         role="application"
         aria-label={state?.title || t("browser")}
         aria-busy={state?.loading || undefined}
+        onFocus={(event) => {
+          ownsInputFocus.current = true;
+          if (
+            event.target === event.currentTarget &&
+            !pressedPointer.current &&
+            stateRef.current?.inputTarget
+          )
+            textInput.current?.focus({ preventScroll: true });
+        }}
         onPaste={(event) => {
-          if (!state) return;
+          if (!active || !state) return;
           const text = event.clipboardData.getData("text/plain");
           if (!text) return;
           event.preventDefault();
@@ -684,9 +799,11 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
             );
             return;
           }
-          void action({ type: "text", text });
+          setInputError(null);
+          submitText(text, stateRef.current?.inputTarget?.owner);
         }}
         onPointerDown={(event) => {
+          if (!active) return;
           const point = browserPoint(event);
           const button =
             event.button === 0
@@ -698,8 +815,10 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
                   : undefined;
           if (!point || !button || pressedPointer.current) return;
           event.preventDefault();
-          event.currentTarget.focus();
+          focusRevision.current++;
+          setInputError(null);
           pressedPointer.current = { id: event.pointerId, button, point };
+          event.currentTarget.focus();
           event.currentTarget.setPointerCapture?.(event.pointerId);
           void action({
             type: "mouse",
@@ -719,7 +838,17 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         onLostPointerCapture={(event) => {
           if (pressedPointer.current?.id === event.pointerId) releasePointer();
         }}
-        onBlur={() => releasePointer()}
+        onBlur={(event) => {
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          )
+            return;
+          ownsInputFocus.current = false;
+          focusRevision.current++;
+          releasePointer();
+          releaseKeys();
+        }}
         onContextMenu={(event) => {
           if (state) event.preventDefault();
         }}
@@ -739,9 +868,23 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         onKeyDown={(event) => {
           event.stopPropagation();
           const modifiers = forwardedKeyModifiers(event);
-          if (!state || modifiers === null || event.nativeEvent.isComposing)
+          if (
+            !active ||
+            !state ||
+            modifiers === null ||
+            event.nativeEvent.isComposing ||
+            event.nativeEvent.keyCode === 229 ||
+            event.key === "Process" ||
+            event.key === "Dead" ||
+            event.key === "Unidentified"
+          )
             return;
           event.preventDefault();
+          forwardedKeys.current.set(event.code || event.key, {
+            key: event.key,
+            code: event.code,
+            modifiers,
+          });
           void action({
             type: "key",
             event: "down",
@@ -755,19 +898,38 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         }}
         onKeyUp={(event) => {
           event.stopPropagation();
-          const modifiers = forwardedKeyModifiers(event);
-          if (!state || modifiers === null || event.nativeEvent.isComposing)
-            return;
+          const identifier = event.code || event.key;
+          const key = forwardedKeys.current.get(identifier);
+          if (!key || !active || !state) return;
+          forwardedKeys.current.delete(identifier);
           event.preventDefault();
           void action({
             type: "key",
             event: "up",
-            key: event.key,
-            code: event.code,
-            modifiers,
+            ...key,
           });
         }}
       >
+        <BrowserTextInput
+          inputRef={textInput}
+          target={state?.inputTarget}
+          active={active}
+          label={state?.title || t("browser")}
+          width={state?.width || 1}
+          height={state?.height || 1}
+          onText={submitText}
+          onEditingKey={(key, owner) => {
+            void action({
+              type: "key",
+              event: "down",
+              key,
+              code: key,
+              owner,
+            }).then(() =>
+              action({ type: "key", event: "up", key, code: key, owner }),
+            );
+          }}
+        />
         <img
           ref={frameImage}
           hidden={!frameReady}

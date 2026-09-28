@@ -46,6 +46,7 @@ import {
   WEB_PROTOCOL_VERSION,
   type WebEvent,
   type WebEmbeddedBrowserAction,
+  WEB_BROWSER_INPUT_OWNER_MAX_LENGTH,
   WEB_BROWSER_TEXT_MAX_LENGTH,
   type WebInteractiveTerminalEvent,
   type WebPromptImage,
@@ -61,6 +62,7 @@ import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import { ArtifactError, ArtifactReader } from "./artifacts.ts";
 import {
   EmbeddedBrowserManager,
+  EmbeddedBrowserInputTargetError,
   type EmbeddedBrowserService,
 } from "./embedded-browser.ts";
 import {
@@ -225,11 +227,16 @@ function parseBrowserAction(
 ): WebEmbeddedBrowserAction | undefined {
   const action = body.action;
   if (
+    (action === "text" || action === "key") && body.owner !== undefined &&
+    (typeof body.owner !== "string" || body.owner.length > WEB_BROWSER_INPUT_OWNER_MAX_LENGTH ||
+      !/^[A-Za-z0-9:_-]+$/u.test(body.owner))
+  ) return undefined;
+  if (
     action === "text" &&
     typeof body.text === "string" &&
     body.text.length > 0 &&
     body.text.length <= WEB_BROWSER_TEXT_MAX_LENGTH
-  ) return { type: "text", text: body.text };
+  ) return { type: "text", text: body.text, ...(typeof body.owner === "string" ? { owner: body.owner } : {}) };
   if (action === "navigate") {
     const url = browserAddress(body.url);
     return url ? ({ type: "navigate", url } satisfies WebEmbeddedBrowserAction) : undefined;
@@ -297,6 +304,7 @@ function parseBrowserAction(
       ...(typeof body.modifiers === "number" ? { modifiers: body.modifiers } : {}),
       ...(typeof body.code === "string" ? { code: body.code } : {}),
       ...(typeof body.text === "string" ? { text: body.text } : {}),
+      ...(typeof body.owner === "string" ? { owner: body.owner } : {}),
     } satisfies WebEmbeddedBrowserAction;
   }
   return undefined;
@@ -675,6 +683,8 @@ export class WebHost {
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
       if (error instanceof ArtifactError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
+      if (error instanceof EmbeddedBrowserInputTargetError)
+        return this.json(response, 409, { code: "BROWSER_INPUT_TARGET_CHANGED", error: error.message });
       if (error instanceof WebRequestError) {
         return this.json(response, error.statusCode, {
           code: error.code,

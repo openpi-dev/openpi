@@ -13,11 +13,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   WEB_BROWSER_TEXT_MAX_LENGTH,
   type WebBrowserFrame,
+  type WebEmbeddedBrowserState,
 } from "../../web/protocol/types.ts";
 import { PaneResizeHandle } from "../../web/ui/src/components/PaneResizeHandle.tsx";
 import { EmbeddedBrowserPanel } from "../../web/ui/src/features/workbar/EmbeddedBrowserPanel.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
-import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
 
 afterEach(() => {
   cleanup();
@@ -26,8 +27,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function browserPanel(restore?: Promise<void>) {
-  const state = {
+async function browserPanel(
+  restore?: Promise<void>,
+  inputTarget?: WebEmbeddedBrowserState["inputTarget"],
+) {
+  const state: WebEmbeddedBrowserState = {
     sessionId: "session-1",
     url: "https://example.com/",
     title: "Input fixture",
@@ -36,6 +40,7 @@ async function browserPanel(restore?: Promise<void>) {
     loading: false,
     canGoBack: true,
     canGoForward: false,
+    inputTarget,
   };
   vi.spyOn(WebClient.prototype, "browserState").mockImplementation(async () => {
     await restore;
@@ -87,6 +92,489 @@ async function browserPanel(restore?: Promise<void>) {
     unmount: view.unmount,
   };
 }
+
+const editableTarget = {
+  owner: "native-document:focused-field:1",
+  kind: "textarea",
+  anchorRect: { x: 10, y: 20, width: 300, height: 40 },
+} satisfies NonNullable<WebEmbeddedBrowserState["inputTarget"]>;
+
+function enablePointer(viewport: HTMLElement) {
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    top: 0,
+    width: 800,
+    height: 600,
+  } as DOMRect);
+}
+
+it("uses the text proxy only after the latest native editable pointer receipt", async () => {
+  const { viewport, action, state } = await browserPanel();
+  enablePointer(viewport);
+  let finish!: (value: typeof state) => void;
+  action.mockResolvedValueOnce(state).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  fireEvent.pointerDown(viewport, {
+    button: 0,
+    buttons: 1,
+    clientX: 20,
+    clientY: 30,
+  });
+  fireEvent.pointerUp(viewport, { button: 0, clientX: 20, clientY: 30 });
+  expect(document.activeElement).toBe(viewport);
+  let proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  expect(proxy.disabled).toBe(true);
+  await act(async () => finish({ ...state, inputTarget: editableTarget }));
+  expect(proxy.isConnected).toBe(false);
+  proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  expect(proxy.disabled).toBe(false);
+  expect(document.activeElement).toBe(proxy);
+  fireEvent.input(proxy, { target: { value: "中文" } });
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "text",
+    text: "中文",
+    owner: editableTarget.owner,
+  });
+});
+
+it.each([null, undefined])(
+  "does not claim an editable target for a %s native receipt",
+  async (inputTarget) => {
+    const { viewport, state, action } = await browserPanel();
+    enablePointer(viewport);
+    action.mockResolvedValue({ ...state, inputTarget });
+    fireEvent.pointerDown(viewport, {
+      button: 0,
+      buttons: 1,
+      clientX: 20,
+      clientY: 30,
+    });
+    fireEvent.pointerUp(viewport, { button: 0, clientX: 20, clientY: 30 });
+    await act(async () => {});
+    expect(document.activeElement).toBe(viewport);
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: "Input fixture",
+      }).disabled,
+    ).toBe(true);
+  },
+);
+
+it("does not let a late editable receipt steal address focus", async () => {
+  const { viewport, action, state } = await browserPanel();
+  enablePointer(viewport);
+  let finish!: (value: typeof state) => void;
+  action.mockResolvedValueOnce(state).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  fireEvent.pointerDown(viewport, {
+    button: 0,
+    buttons: 1,
+    clientX: 20,
+    clientY: 30,
+  });
+  fireEvent.pointerUp(viewport, { button: 0, clientX: 20, clientY: 30 });
+  const address = screen.getByRole("textbox", {
+    name: i18n.t("browserAddress"),
+  });
+  act(() => address.focus());
+  await act(async () => finish({ ...state, inputTarget: editableTarget }));
+  expect(document.activeElement).toBe(address);
+  expect(
+    screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Input fixture" })
+      .disabled,
+  ).toBe(true);
+});
+
+it("keeps the newest field owner when two pointer receipts complete out of order", async () => {
+  const { viewport, action, state } = await browserPanel();
+  enablePointer(viewport);
+  let finishOld!: (value: typeof state) => void;
+  let finishNew!: (value: typeof state) => void;
+  action
+    .mockResolvedValueOnce(state)
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishOld = resolve;
+      }),
+    )
+    .mockResolvedValueOnce(state)
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishNew = resolve;
+      }),
+    );
+  for (const x of [20, 60]) {
+    fireEvent.pointerDown(viewport, {
+      button: 0,
+      buttons: 1,
+      clientX: x,
+      clientY: 30,
+    });
+    fireEvent.pointerUp(viewport, { button: 0, clientX: x, clientY: 30 });
+  }
+  const newest = {
+    ...editableTarget,
+    owner: "native-document:focused-field:2",
+  };
+  await act(async () => finishNew({ ...state, inputTarget: newest }));
+  await act(async () => finishOld({ ...state, inputTarget: editableTarget }));
+  const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  expect(document.activeElement).toBe(proxy);
+  fireEvent.input(proxy, { target: { value: "新字段" } });
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "text",
+    text: "新字段",
+    owner: newest.owner,
+  });
+});
+
+it("keeps ASCII key semantics and releases a forwarded key once on host blur", async () => {
+  const { viewport, action } = await browserPanel(undefined, editableTarget);
+  const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  act(() => proxy.focus());
+  fireEvent.keyDown(proxy, { key: "/", code: "Slash" });
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "key",
+    event: "down",
+    key: "/",
+    code: "Slash",
+    modifiers: 0,
+    text: "/",
+  });
+  act(() =>
+    screen.getByRole("textbox", { name: i18n.t("browserAddress") }).focus(),
+  );
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "key",
+    event: "up",
+    key: "/",
+    code: "Slash",
+    modifiers: 0,
+  });
+  const count = action.mock.calls.length;
+  fireEvent.keyUp(viewport, { key: "/", code: "Slash" });
+  expect(action).toHaveBeenCalledTimes(count);
+});
+
+it("moves the real text host to a newly confirmed Tab target and pairs its keyup", async () => {
+  const { state, action } = await browserPanel(undefined, editableTarget);
+  const old = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  act(() => old.focus());
+  const next = { ...editableTarget, owner: "native-document:tab-field:2" };
+  action.mockResolvedValue({ ...state, inputTarget: next });
+  fireEvent.keyDown(old, { key: "Tab", code: "Tab" });
+  await act(async () => {});
+  const current = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  expect(old.isConnected).toBe(false);
+  expect(current).not.toBe(old);
+  expect(document.activeElement).toBe(current);
+  fireEvent.keyUp(current, { key: "Tab", code: "Tab" });
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "key",
+    event: "up",
+    key: "Tab",
+    code: "Tab",
+    modifiers: 0,
+  });
+});
+
+it("uses a confirmed existing editable target when keyboard focus enters the viewport", async () => {
+  const { viewport, action } = await browserPanel(undefined, editableTarget);
+  act(() => viewport.focus());
+  const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  expect(document.activeElement).toBe(proxy);
+  fireEvent.input(proxy, { target: { value: "键盘进入" } });
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "text",
+    text: "键盘进入",
+    owner: editableTarget.owner,
+  });
+});
+
+it("keeps a proxy editing key pair bound to its original owner across navigation", async () => {
+  const { state, action } = await browserPanel(undefined, editableTarget);
+  const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  act(() => proxy.focus());
+  let finishDown!: (value: typeof state) => void;
+  const next = {
+    ...state,
+    inputTarget: { ...editableTarget, owner: "new-document:field" },
+  };
+  action
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishDown = resolve;
+      }),
+    )
+    .mockResolvedValue(next);
+  act(() =>
+    proxy.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "deleteContentBackward",
+      }),
+    ),
+  );
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "key",
+    event: "down",
+    key: "Backspace",
+    code: "Backspace",
+    owner: editableTarget.owner,
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("browserReload") }),
+  );
+  await act(async () => {});
+  await act(async () => finishDown(state));
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "key",
+    event: "up",
+    key: "Backspace",
+    code: "Backspace",
+    owner: editableTarget.owner,
+  });
+  expect(proxy.isConnected).toBe(false);
+});
+
+it("reports rejected focus admission without retrying or erasing its feedback", async () => {
+  const { action, stream } = await browserPanel(undefined, editableTarget);
+  const frame = enableFrames();
+  const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  act(() => proxy.focus());
+  action.mockRejectedValueOnce(
+    new WebApiError(
+      "native target rejected",
+      409,
+      "BROWSER_INPUT_TARGET_CHANGED",
+    ),
+  );
+  fireEvent.input(proxy, { target: { value: "待提交" } });
+  await act(async () => {});
+  expect(action).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("browserInputTargetChanged"),
+  );
+  await act(async () => stream.mock.calls[0]![2](frame));
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("browserInputTargetChanged"),
+  );
+  expect(action).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ["before", "owned text"],
+  ["after", "owned text"],
+  ["before", "physical key"],
+  ["after", "physical key"],
+] as const)(
+  "keeps an owned commit failure that arrives %s a later successful %s",
+  async (timing, nextInput) => {
+    const { action } = await browserPanel(undefined, editableTarget);
+    const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Input fixture",
+    });
+    act(() => proxy.focus());
+    let reject!: (error: WebApiError) => void;
+    action.mockReturnValueOnce(
+      new Promise((_resolve, rejectAction) => {
+        reject = rejectAction;
+      }),
+    );
+    fireEvent.input(proxy, { target: { value: "A" } });
+    const failure = new WebApiError(
+      "native target rejected",
+      409,
+      "BROWSER_INPUT_TARGET_CHANGED",
+    );
+    if (timing === "before") {
+      await act(async () => reject(failure));
+      expect(screen.getByRole("alert").textContent).toBe(
+        i18n.t("browserInputTargetChanged"),
+      );
+    }
+    await act(async () => {
+      if (nextInput === "owned text") {
+        fireEvent.input(proxy, { target: { value: "AB" } });
+      } else {
+        fireEvent.keyDown(proxy, { key: "b", code: "KeyB" });
+        fireEvent.keyUp(proxy, { key: "b", code: "KeyB" });
+      }
+    });
+    if (timing === "after") await act(async () => reject(failure));
+    expect(action.mock.calls.map(([, input]) => input)).toEqual([
+      { type: "text", text: "A", owner: editableTarget.owner },
+      ...(nextInput === "owned text"
+        ? [{ type: "text", text: "B", owner: editableTarget.owner }]
+        : [
+            {
+              type: "key",
+              event: "down",
+              key: "b",
+              code: "KeyB",
+              modifiers: 0,
+              text: "b",
+            },
+            {
+              type: "key",
+              event: "up",
+              key: "b",
+              code: "KeyB",
+              modifiers: 0,
+            },
+          ]),
+    ]);
+    expect(screen.getByRole("alert").textContent).toBe(
+      i18n.t("browserInputTargetChanged"),
+    );
+  },
+);
+
+it.each(["navigation", "blur", "hidden"] as const)(
+  "ignores an owned commit failure arriving after %s changes its scope",
+  async (change) => {
+    const { action, rerender } = await browserPanel(undefined, editableTarget);
+    const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Input fixture",
+    });
+    act(() => proxy.focus());
+    let reject!: (error: WebApiError) => void;
+    action.mockReturnValueOnce(
+      new Promise((_resolve, rejectAction) => {
+        reject = rejectAction;
+      }),
+    );
+    fireEvent.input(proxy, { target: { value: "A" } });
+    await act(async () => {
+      if (change === "navigation") {
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("browserReload") }),
+        );
+      } else if (change === "blur") {
+        screen.getByRole("textbox", { name: i18n.t("browserAddress") }).focus();
+      } else rerender(false);
+    });
+    await act(async () =>
+      reject(
+        new WebApiError(
+          "native target rejected",
+          409,
+          "BROWSER_INPUT_TARGET_CHANGED",
+        ),
+      ),
+    );
+    expect(action).toHaveBeenCalledTimes(change === "navigation" ? 2 : 1);
+    expect(action).toHaveBeenNthCalledWith(1, "session-1", {
+      type: "text",
+      text: "A",
+      owner: editableTarget.owner,
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  },
+);
+
+it("keeps a rejected character visible after an ordinary wheel operation", async () => {
+  const { action, viewport } = await browserPanel(undefined, editableTarget);
+  enablePointer(viewport);
+  const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  act(() => proxy.focus());
+  action.mockRejectedValueOnce(
+    new WebApiError(
+      "native target rejected",
+      409,
+      "BROWSER_INPUT_TARGET_CHANGED",
+    ),
+  );
+  await act(async () => fireEvent.input(proxy, { target: { value: "A" } }));
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("browserInputTargetChanged"),
+  );
+  await act(async () => {
+    fireEvent.wheel(viewport, {
+      clientX: 10,
+      clientY: 10,
+      deltaX: 0,
+      deltaY: 24,
+    });
+  });
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "mouse",
+    event: "wheel",
+    x: 10,
+    y: 10,
+    deltaX: 0,
+    deltaY: 24,
+  });
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("browserInputTargetChanged"),
+  );
+});
+
+it("clears a visible input failure when an explicit valid owned paste retries", async () => {
+  const { action, state } = await browserPanel(undefined, editableTarget);
+  const proxy = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: "Input fixture",
+  });
+  act(() => proxy.focus());
+  action.mockRejectedValueOnce(
+    new WebApiError(
+      "native target rejected",
+      409,
+      "BROWSER_INPUT_TARGET_CHANGED",
+    ),
+  );
+  await act(async () => fireEvent.input(proxy, { target: { value: "A" } }));
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("browserInputTargetChanged"),
+  );
+  let finish!: (value: typeof state) => void;
+  action.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  fireEvent.paste(proxy, {
+    clipboardData: { getData: () => "corrected" },
+  });
+  const errorDuringPaste = screen.queryByRole("alert");
+  expect(action).toHaveBeenLastCalledWith("session-1", {
+    type: "text",
+    text: "corrected",
+    owner: editableTarget.owner,
+  });
+  await act(async () => finish(state));
+  expect(action).toHaveBeenCalledTimes(2);
+  expect(errorDuringPaste).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
 
 function enableFrames() {
   const OriginalURL = URL;
