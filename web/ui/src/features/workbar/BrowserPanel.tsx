@@ -10,22 +10,43 @@ import {
 import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { browserAddress } from "./browser-address.ts";
+import { useBrowserBridge } from "./browser-bridge.ts";
 
 // Fixed resource bound, not a persisted user preference.
 const MAX_PAGES = 8;
 
-function DirectBrowserPage({ onTitle }: { onTitle: (title: string) => void }) {
+function DirectBrowserPage({
+  onTitle,
+  onOpen,
+  initialUrl = "",
+}: {
+  onTitle: (title: string) => void;
+  onOpen: (url: string) => void;
+  initialUrl?: string;
+}) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState("");
+  const prefix = useId();
+  const addressInput = useRef<HTMLInputElement>(null);
+  const [draft, setDraft] = useState(initialUrl);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState({
-    history: [] as string[],
-    index: -1,
+    history: initialUrl ? [initialUrl] : [],
+    index: initialUrl ? 0 : -1,
     revision: 0,
     loaded: false,
     unknown: false,
   });
   const url = page.history[page.index];
+  const pageId = `${prefix}-${page.revision}`;
+  const bridge = useBrowserBridge(
+    pageId,
+    (state) => {
+      if (document.activeElement !== addressInput.current) setDraft(state.url);
+      onTitle(state.title || new URL(state.url).host);
+    },
+    onOpen,
+  );
+  const currentUrl = bridge.page?.url ?? url;
 
   const navigate = (history: string[], index: number) => {
     const next = history[index];
@@ -67,8 +88,16 @@ function DirectBrowserPage({ onTitle }: { onTitle: (title: string) => void }) {
           type="button"
           aria-label={t("browserBack")}
           title={t("browserBack")}
-          disabled={page.unknown || page.index <= 0}
-          onClick={() => navigate(page.history, page.index - 1)}
+          disabled={
+            bridge.page
+              ? !bridge.page.canGoBack
+              : page.unknown || page.index <= 0
+          }
+          onClick={() =>
+            bridge.page
+              ? bridge.command("back")
+              : navigate(page.history, page.index - 1)
+          }
         >
           <ArrowLeft aria-hidden="true" />
         </button>
@@ -76,8 +105,16 @@ function DirectBrowserPage({ onTitle }: { onTitle: (title: string) => void }) {
           type="button"
           aria-label={t("browserForward")}
           title={t("browserForward")}
-          disabled={page.unknown || page.index >= page.history.length - 1}
-          onClick={() => navigate(page.history, page.index + 1)}
+          disabled={
+            bridge.page
+              ? !bridge.page.canGoForward
+              : page.unknown || page.index >= page.history.length - 1
+          }
+          onClick={() =>
+            bridge.page
+              ? bridge.command("forward")
+              : navigate(page.history, page.index + 1)
+          }
         >
           <ArrowRight aria-hidden="true" />
         </button>
@@ -86,13 +123,18 @@ function DirectBrowserPage({ onTitle }: { onTitle: (title: string) => void }) {
           aria-label={t("browserReload")}
           title={t("browserReload")}
           disabled={!url}
-          onClick={() => navigate(page.history, page.index)}
+          onClick={() =>
+            bridge.page
+              ? bridge.command("reload")
+              : navigate(page.history, page.index)
+          }
         >
           <RefreshCw aria-hidden="true" />
         </button>
         <input
+          ref={addressInput}
           aria-label={t("browserAddress")}
-          title={t("browserEnteredAddress")}
+          title={t(bridge.page ? "browserAddress" : "browserEnteredAddress")}
           value={draft}
           placeholder="https://"
           spellCheck={false}
@@ -113,9 +155,10 @@ function DirectBrowserPage({ onTitle }: { onTitle: (title: string) => void }) {
           type="button"
           aria-label={t("openExternalBrowser")}
           title={t("openExternalBrowser")}
-          disabled={!url || page.unknown}
+          disabled={!currentUrl || (!bridge.page && page.unknown)}
           onClick={() =>
-            url && window.open(url, "_blank", "noopener,noreferrer")
+            currentUrl &&
+            window.open(currentUrl, "_blank", "noopener,noreferrer")
           }
         >
           <ExternalLink aria-hidden="true" />
@@ -127,7 +170,7 @@ function DirectBrowserPage({ onTitle }: { onTitle: (title: string) => void }) {
             {error}
           </p>
         )}
-        {page.unknown && (
+        {page.unknown && !bridge.page && (
           <p className="browser-notice" role="status">
             {t("browserLocationUnknown")}
           </p>
@@ -137,6 +180,7 @@ function DirectBrowserPage({ onTitle }: { onTitle: (title: string) => void }) {
         {url ? (
           <iframe
             key={page.revision}
+            data-openpi-browser-page={pageId}
             src={url}
             title={t("browserPageTitle", { address: new URL(url).host })}
             referrerPolicy="no-referrer"
@@ -161,7 +205,9 @@ function DirectBrowserPage({ onTitle }: { onTitle: (title: string) => void }) {
           </div>
         )}
       </div>
-      <p className="browser-notice">{t("browserDirectHint")}</p>
+      <p className="browser-notice">
+        {t(bridge.ready ? "browserEnhancedHint" : "browserDirectHint")}
+      </p>
     </div>
   );
 }
@@ -170,14 +216,37 @@ export function BrowserPanel() {
   const { t } = useTranslation();
   const prefix = useId();
   const nextId = useRef(1);
-  const [tabs, setTabs] = useState([{ id: 0, title: "" }]);
+  const [tabs, setTabs] = useState<
+    { id: number; title: string; initialUrl?: string }[]
+  >([{ id: 0, title: "" }]);
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const [blockedUrl, setBlockedUrl] = useState<string>();
   const [selected, setSelected] = useState(0);
   const focusTab = (id: number) => {
     requestAnimationFrame(() =>
       document.getElementById(`${prefix}-tab-${id}`)?.focus(),
     );
   };
+  const add = (url = "") => {
+    if (tabsRef.current.length >= MAX_PAGES) {
+      if (url) setBlockedUrl(url);
+      return;
+    }
+    const tab = {
+      id: nextId.current++,
+      title: url ? new URL(url).host : "",
+      initialUrl: url,
+    };
+    const next = [...tabsRef.current, tab];
+    tabsRef.current = next;
+    setTabs(next);
+    setSelected(tab.id);
+    setBlockedUrl(undefined);
+    focusTab(tab.id);
+  };
   const close = (id: number) => {
+    setBlockedUrl(undefined);
     const remaining = tabs.filter((tab) => tab.id !== id);
     if (!remaining.length) {
       const blank = { id: nextId.current++, title: "" };
@@ -270,17 +339,19 @@ export function BrowserPanel() {
               : t("browserAddTab")
           }
           disabled={tabs.length >= MAX_PAGES}
-          onClick={() => {
-            if (tabs.length >= MAX_PAGES) return;
-            const tab = { id: nextId.current++, title: "" };
-            setTabs((current) => [...current, tab]);
-            setSelected(tab.id);
-            focusTab(tab.id);
-          }}
+          onClick={() => add()}
         >
           <Plus aria-hidden="true" />
         </button>
       </div>
+      {blockedUrl && (
+        <p className="browser-notice" role="status">
+          {t("browserTabLimit", { count: MAX_PAGES })} ·{" "}
+          <a href={blockedUrl} target="_blank" rel="noopener noreferrer">
+            {t("openExternalBrowser")}
+          </a>
+        </p>
+      )}
       <div className="browser-pages">
         {tabs.map((tab) => (
           <div
@@ -292,6 +363,8 @@ export function BrowserPanel() {
             key={tab.id}
           >
             <DirectBrowserPage
+              initialUrl={tab.initialUrl}
+              onOpen={add}
               onTitle={(title) =>
                 setTabs((current) =>
                   current.map((item) =>

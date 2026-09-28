@@ -276,6 +276,8 @@ const resources = {
         "Browse pages directly. Sites that refuse embedding can be opened in your external browser.",
       browserDirectHint:
         "The address records toolbar navigation only. Page popups open in your external browser. Blank page? Use Open in external browser.",
+      browserEnhancedHint:
+        "Browser enhancement is on: addresses sync and ordinary popup links open in these tabs. Some site policies, login popups and cross-site history still require an external browser.",
       files: "Files",
       filesExplorer: "Workspace files",
       filesSearch: "Filter files…",
@@ -1170,6 +1172,8 @@ const resources = {
         "直接浏览网页。不允许嵌入的网站可在外部浏览器打开。",
       browserDirectHint:
         "地址栏仅记录手动打开的地址。网页弹窗在外部浏览器打开；遇到空白页，可点击外部打开。",
+      browserEnhancedHint:
+        "浏览增强已开启：地址自动同步，普通弹窗链接在内部标签页打开。部分站点限制、登录弹窗和跨站历史仍需外部浏览器。",
       files: "文件",
       filesExplorer: "工作区文件",
       filesSearch: "筛选文件…",
