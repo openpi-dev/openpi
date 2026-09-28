@@ -11,7 +11,20 @@ export type PlanControlRequest =
       expectedRevision: string | null;
     }
   | {
+      action: "prepare";
+      expectedRevision: string | null;
+    }
+  | {
+      action: "authorize";
+      expectedRevision: string | null;
+      prompt: string;
+    }
+  | {
       action: "implement";
+      expectedRevision: string | null;
+    }
+  | {
+      action: "cancel";
       expectedRevision: string | null;
     };
 

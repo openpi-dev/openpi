@@ -77,6 +77,7 @@ export interface WebPromptOptions {
   expectedSessionId?: string;
   expectedSessionPath?: string;
   images?: readonly WebPromptImage[];
+  planRevision?: string;
 }
 
 export interface WebPromptAdmissionReceipt {

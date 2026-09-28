@@ -484,13 +484,16 @@ export class WebClient {
     sessionPath: string,
     expectedRevision: string | null,
   ) {
-    return this.request<{ sessionId: string; prompt: string }>(
-      "/api/plan/implement",
-      {
-        method: "POST",
-        body: JSON.stringify({ sessionId, sessionPath, expectedRevision }),
-      },
-    );
+    return this.request<{
+      sessionId: string;
+      status: "ready";
+      revision: string | null;
+      hasPrompt: boolean;
+      prompt: string;
+    }>("/api/plan/implement", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath, expectedRevision }),
+    });
   }
 
   trust(sessionId: string, signal: AbortSignal) {
@@ -623,6 +626,7 @@ export class WebClient {
     sessionPath: string,
     retry = false,
     images: readonly WebPromptImage[] = [],
+    planRevision?: string,
   ) {
     const receipt = await this.request<CommandReceipt>("/api/prompt", {
       method: "POST",
@@ -633,6 +637,7 @@ export class WebClient {
         commandId,
         retry,
         images,
+        ...(planRevision !== undefined ? { planRevision } : {}),
         controllerId: await controllerIdentity(),
       }),
       timeoutMs: 30_000,

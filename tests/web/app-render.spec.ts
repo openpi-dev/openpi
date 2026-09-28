@@ -108,7 +108,15 @@ it("prepares an editable implementation prompt only after confirming draft repla
   snapshot.runtime.plan = "ready";
   snapshot.runtime.planRevision = "ready-1";
   const store = createWebStore();
-  const preparePlanImplementation = vi.fn(async () => "Implementation prompt");
+  const approval = {
+    sessionId: "session",
+    sessionPath: "/tmp/session",
+    planRevision: "ready-1",
+  };
+  const preparePlanImplementation = vi.fn(async () => ({
+    prompt: "Implementation prompt",
+    ...approval,
+  }));
   const sendPrompt = vi.fn(async () => true);
   const view = renderWithI18n(
     createElement(Composer, {
@@ -147,6 +155,12 @@ it("prepares an editable implementation prompt only after confirming draft repla
   await waitFor(() => expect(input.value).toBe("Implementation prompt"));
   expect(preparePlanImplementation).toHaveBeenCalledExactlyOnceWith();
   expect(sendPrompt).not.toHaveBeenCalled();
+  await act(async () => fireEvent.submit(input.closest("form")!));
+  expect(sendPrompt).toHaveBeenCalledExactlyOnceWith(
+    "Implementation prompt",
+    undefined,
+    approval,
+  );
   confirm.mockRestore();
   view.unmount();
 });

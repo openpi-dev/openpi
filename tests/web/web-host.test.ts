@@ -154,6 +154,9 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     },
   );
   const prompts: string[] = [];
+  const promptOptions: Array<
+    Parameters<WebRuntimeController["sendPrompt"]>[1]
+  > = [];
   const creationCommandIds: string[] = [];
   let newSessions = 0;
   let disposed = false;
@@ -170,8 +173,9 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     isIdle: () => false,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
-    sendPrompt: async (content) => {
+    sendPrompt: async (content, options) => {
       prompts.push(content);
+      promptOptions.push(options);
       return { pendingFollowUps: 0 };
     },
     newSession: async (workspacePath, options) => {
@@ -332,8 +336,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       assert.deepEqual(request, implementationRequest);
       implementationCalls++;
       return {
-        status: "inactive",
-        revision: "inactive-1",
+        status: "ready",
+        revision: "ready-1",
         hasPrompt: false,
         prompt: "Implement the approved plan",
       };
@@ -342,8 +346,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(preparedPlan.status, 200);
     assert.deepEqual(await preparedPlan.json(), {
       sessionId: implementationRequest.sessionId,
-      status: "inactive",
-      revision: "inactive-1",
+      status: "ready",
+      revision: "ready-1",
       hasPrompt: false,
       prompt: "Implement the approved plan",
     });
@@ -1018,10 +1022,12 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         sessionId: sessionManager.getSessionId(),
         sessionPath: mutationSessionPath(sessionManager),
         content: "continue here",
+        planRevision: "ready-1",
       }),
     });
     assert.equal(prompt.status, 202);
     assert.deepEqual(prompts, ["continue here"]);
+    assert.equal(promptOptions[0]?.planRevision, "ready-1");
 
     const importResponse = await fetch(`${launched.origin}/api/workspaces`, {
       method: "POST",
@@ -2885,6 +2891,7 @@ test("replays one prompt admission after a browser timeout", async () => {
     sessionPath: mutationSessionPath(runtime.sessionManager),
     content: "send this exactly once",
     commandId,
+    planRevision: "ready-1",
   };
   try {
     const abort = new AbortController();
@@ -2928,6 +2935,18 @@ test("replays one prompt admission after a browser timeout", async () => {
     });
     assert.equal(runtimePendingFollowUps, 0);
     assert.equal(sendCalls, 1);
+
+    const approvalConflict = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...prompt,
+        planRevision: "another-ready-plan",
+        retry: true,
+      }),
+    });
+    assert.equal(approvalConflict.status, 409);
+    assert.equal((await approvalConflict.json()).code, "COMMAND_CONFLICT");
 
     const conflict = await fetch(`${launched.origin}/api/prompt`, {
       method: "POST",

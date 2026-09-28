@@ -1,6 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -553,3 +553,354 @@ for (const theme of ["light", "dark"] as const) {
     }
   });
 }
+
+test("Plan Ready stays gated through browser preview and unsupported fresh handoff, then releases on submit", async ({
+  page,
+}) => {
+  const workspace = await mkdtemp(join(tmpdir(), "openpi-plan-handoff-"));
+  const implementationFile = join(workspace, "implementation.txt");
+  const provider = await startFakeProvider((_body, index) => {
+    const tool = [
+      {
+        name: "plan_ready",
+        arguments: JSON.stringify({
+          plan: "Create implementation.txt with the approved content.",
+        }),
+      },
+      {
+        name: "write",
+        arguments: JSON.stringify({
+          path: implementationFile,
+          content: "must remain blocked until approval",
+        }),
+      },
+      undefined,
+      {
+        name: "write",
+        arguments: JSON.stringify({
+          path: implementationFile,
+          content: "written after explicit submission",
+        }),
+      },
+      undefined,
+    ][index];
+    const chunk = (delta: unknown, finishReason: string | null) =>
+      "data: " +
+      JSON.stringify({
+        id: "plan-handoff",
+        object: "chat.completion.chunk",
+        created: 1700000000,
+        model: MODEL_ID,
+        choices: [{ index: 0, delta, finish_reason: finishReason }],
+      }) +
+      "\n\n";
+    if (!tool)
+      return (
+        chunk(
+          {
+            role: "assistant",
+            content:
+              index === 2
+                ? "The ready plan remains gated."
+                : "Implementation finished.",
+          },
+          "stop",
+        ) + "data: [DONE]\n\n"
+      );
+    return (
+      chunk(
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              index: 0,
+              id: "plan-handoff-call-" + index,
+              type: "function",
+              function: { name: tool.name, arguments: tool.arguments },
+            },
+          ],
+        },
+        null,
+      ) +
+      chunk({}, "tool_calls") +
+      "data: [DONE]\n\n"
+    );
+  });
+  try {
+    const imported = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspace },
+    });
+    expect(imported.status()).toBe(201);
+    const { path } = await imported.json();
+    const created = await page.request.post("/api/sessions", {
+      headers,
+      data: { workspacePath: path, commandId: "plan-handoff-session" },
+    });
+    expect(created.status()).toBe(201);
+    const session = await created.json();
+    const model = await page.request.post("/api/model", {
+      headers,
+      data: {
+        sessionId: session.sessionId,
+        sessionPath: session.sessionPath,
+        provider: PROVIDER_ID,
+        modelId: MODEL_ID,
+      },
+    });
+    expect(model.status()).toBe(200);
+
+    await page.goto("/");
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("/plan Create a file after approval.");
+    await input.press("Enter");
+    const planCard = page.getByRole("region", { name: "开发计划" });
+    await expect(planCard).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .runtime.plan,
+      )
+      .toBe("ready");
+    expect(provider.requests).toHaveLength(1);
+
+    const readySnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    const readyRevision = readySnapshot.runtime.planRevision;
+    await input.fill("请现在就尝试写文件，验证待审阅计划仍有写入门禁。");
+    await input.press("Enter");
+    await expect(
+      page.getByText("The ready plan remains gated.", { exact: true }),
+    ).toBeVisible();
+    const gatedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(gatedSnapshot.runtime.plan).toBe("ready");
+    expect(gatedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(3);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    await input.fill("/plan fresh");
+    await input.press("Enter");
+    await expect(
+      page.getByText(
+        "Starting a fresh implementation requires an interactive editor.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    const unsupportedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(unsupportedSnapshot.runtime.plan).toBe("ready");
+    expect(unsupportedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(3);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    await page.reload();
+    await expect(page.getByRole("region", { name: "开发计划" })).toBeVisible();
+    const refreshedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(refreshedSnapshot.runtime.plan).toBe("ready");
+    expect(refreshedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(3);
+
+    await page
+      .getByRole("button", { name: "准备实施提示", exact: true })
+      .click();
+    await expect(input).toHaveValue(/approved plan/);
+
+    const secondSessionResponse = await page.request.post("/api/sessions", {
+      headers,
+      data: { workspacePath: path, commandId: "plan-handoff-switch" },
+    });
+    expect(secondSessionResponse.status()).toBe(201);
+    const secondSession = await secondSessionResponse.json();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .currentSessionId,
+      )
+      .toBe(secondSession.sessionId);
+    await expect(input).toHaveValue("");
+    const otherSessionSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(otherSessionSnapshot.runtime.plan).toBe("inactive");
+    expect(provider.requests).toHaveLength(3);
+
+    const selectedOriginal = await page.request.post("/api/sessions/select", {
+      headers,
+      data: { path: session.sessionPath },
+    });
+    expect(selectedOriginal.status()).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .selectedSession?.path,
+      )
+      .toBe(session.sessionPath);
+    const returnedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(returnedSnapshot.runtime.plan).toBe("ready");
+    expect(returnedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(3);
+    await expect(input).toHaveValue("");
+    await input.press("Enter");
+    expect(provider.requests).toHaveLength(3);
+
+    await page
+      .getByRole("button", { name: "准备实施提示", exact: true })
+      .click();
+    await expect(input).toHaveValue(/approved plan/);
+    await input.fill("");
+    const cancelledSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(cancelledSnapshot.runtime.plan).toBe("ready");
+    expect(cancelledSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(3);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    await page
+      .getByRole("button", { name: "准备实施提示", exact: true })
+      .click();
+    await expect(input).toHaveValue(/approved plan/);
+    const preparedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(preparedSnapshot.runtime.plan).toBe("ready");
+    expect(preparedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(3);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    await input.press("Enter");
+    await expect
+      .poll(async () => {
+        try {
+          await access(implementationFile);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(true);
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .runtime.plan,
+      )
+      .toBe("inactive");
+    expect(await readFile(implementationFile, "utf8")).toBe(
+      "written after explicit submission",
+    );
+    expect(provider.requests).toHaveLength(5);
+    await expect(
+      page.getByText("Implementation finished.", { exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .runtime.status,
+      )
+      .toBe("idle");
+  } finally {
+    await provider.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Plan off gives a visible receipt and clears a ready Plan without another model turn", async ({
+  page,
+}) => {
+  const workspace = await mkdtemp(join(tmpdir(), "openpi-plan-off-"));
+  const provider = await startFakeProvider(() => {
+    const delta = {
+      role: "assistant",
+      tool_calls: [
+        {
+          index: 0,
+          id: "plan-off-ready",
+          type: "function",
+          function: {
+            name: "plan_ready",
+            arguments: JSON.stringify({
+              plan: "Prepare a file, but wait for an explicit implementation choice.",
+            }),
+          },
+        },
+      ],
+    };
+    const choices = [
+      { index: 0, delta, finish_reason: null },
+      { index: 0, delta: {}, finish_reason: "tool_calls" },
+    ];
+    return (
+      choices
+        .map(
+          (choice) =>
+            `data: ${JSON.stringify({ id: "plan-off", object: "chat.completion.chunk", created: 1700000000, model: MODEL_ID, choices: [choice] })}\n\n`,
+        )
+        .join("") + "data: [DONE]\n\n"
+    );
+  });
+  try {
+    const imported = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspace },
+    });
+    const { path } = await imported.json();
+    const created = await page.request.post("/api/sessions", {
+      headers,
+      data: { workspacePath: path, commandId: "plan-off-session" },
+    });
+    const session = await created.json();
+    const model = await page.request.post("/api/model", {
+      headers,
+      data: {
+        sessionId: session.sessionId,
+        sessionPath: session.sessionPath,
+        provider: PROVIDER_ID,
+        modelId: MODEL_ID,
+      },
+    });
+    expect(model.status()).toBe(200);
+
+    await page.goto("/");
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("/plan Prepare a file, then wait for my choice.");
+    await input.press("Enter");
+    await expect(page.getByRole("region", { name: "开发计划" })).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .runtime.plan,
+      )
+      .toBe("ready");
+    expect(provider.requests).toHaveLength(1);
+
+    await input.fill("/plan off");
+    await input.press("Enter");
+    await expect(
+      page.getByText("Plan mode off. No implementation was started.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    const cancelled = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(cancelled.runtime.plan).toBe("inactive");
+    expect(provider.requests).toHaveLength(1);
+  } finally {
+    await provider.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

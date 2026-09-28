@@ -40,19 +40,24 @@ It does not imply implementation approval. Ready state remains read-only until
 an explicit owner action. The #470 follow-up adds an authenticated
 `POST /api/plan/implement`: the serialized runtime checks the exact active
 Session id and path, idle state, and Plan extension availability; the extension
-checks the persisted revision and `ready` state, persists `inactive`, and
-returns its existing implementation prompt. The Composer asks before replacing
-a nonempty draft, then makes the prompt editable without sending it. The visible
-exit action remains available while the plan is ready. Starting a fresh
+checks the persisted revision and `ready` state, then returns its existing
+implementation prompt without changing Plan state. The Composer asks before
+replacing a nonempty draft and makes the prompt editable without sending it.
+The prompt carries a Session-scoped approval revision. During Pi preflight, the
+extension recognizes that one submitted prompt and omits the Ready-only system
+instruction for it, while its tool-call gate stays closed. Only after Pi
+accepts the prompt does the runtime persist Plan as inactive, before the agent
+loop can call tools. A rejected or failed preflight clears the transient
+approval and keeps the persisted plan ready. Refreshing, switching Sessions,
+or abandoning the draft also leaves the write gate closed. The visible exit
+action remains available while the plan is ready. Starting a fresh
 implementation Session still requires the TUI. The persisted `plan_ready`
 transcript result remains available after the gate is released.
 
 The handoff uses the existing Plan projection and owner callback; it adds no
-second Plan store or approval state. A stale revision, wrong Session, busy
-runtime, unsupported extension, or failed persistence leaves the Plan gate
-closed. Refreshing or switching Sessions before the explicit handoff leaves the
-persisted ready plan intact. After handoff, the editable prompt follows the
-Composer's existing draft lifecycle.
+second persisted Plan store. A stale revision, wrong Session, busy runtime,
+unsupported extension, or failed persistence leaves the Plan gate closed.
+Prompt admission retries remain bound to the same Plan revision.
 
 ## Native commands and model-visible context
 
@@ -158,18 +163,25 @@ live-provider manual smoke.
 ## #470 Plan Ready handoff follow-up
 
 The 2026-09-28 implementation adds a same-Session Web action to prepare the
-native Plan extension's editable implementation prompt. It does not start a
-model turn; the user reviews and sends the prompt. The API and extension tests
-separately cover Session identity, revision checks, persisted Plan state, and
-the write gate; Composer tests cover draft replacement confirmation and the
-absence of automatic submission. The fresh-Session handoff remains a TUI-only
-operation. Source: [Issue #470](https://github.com/openpi-dev/openpi/issues/470).
+native Plan extension's editable implementation prompt. Preparation is
+read-only; the user reviews and sends the prompt. Plan is consumed only after
+Pi accepts that exact prompt, so model, authentication, or other preflight
+rejection leaves the persisted plan and write gate intact. A request-scoped
+approval lets `before_agent_start` omit the Plan Ready instruction for that
+prompt while the actual tool gate stays closed until acceptance. The fresh-
+Session handoff remains a TUI-only operation.
 
-Local verification on 2026-09-28 used Bun 1.3.14 and the bundled Node 24.19.0:
+Tests cover Session identity, revision-bound prompt admission, rejected and
+thrown preflight, persisted Plan state, a blocked write attempt while ready,
+and a successful write only after submission. Browser preparation leaves the
+prompt editable without starting another provider request.
+Source: [Issue #470](https://github.com/openpi-dev/openpi/issues/470).
 
-- `bun run check` passed, including Web build, format, lint, and both TypeScript checks. Vite reported its existing 500 KB chunk-size advisory.
-- Focused Node tests passed for Plan control persistence/gating, active Session identity, and Web Host handoff request validation/response.
-- Focused Vitest passed 2 Composer/Store tests; 171 unrelated cases were skipped by the name filter.
-- `bun run test` did not complete. Seven existing real-Pi formatter lifecycle cases in `tests/extensions/post-edit/lifecycle.test.ts` timed out at 15 seconds, and the runner remained active without output. The foreground formatter timeout reproduced when run alone; its test process also did not exit cleanly. No aggregate full-suite result is claimed.
+Local verification on 2026-09-28 used Node.js and the installed Chrome browser:
 
-The follow-up PR link is added when the branch can be published.
+- Both TypeScript checks passed; the Web bundle built successfully with Vite's existing 500 KB chunk-size advisory.
+- Plan control tests passed (4/4); runtime admission tests passed (2/2); focused Composer/Store Vitest passed (3 tests, 171 unrelated cases skipped).
+- The Playwright Plan Ready scenario reported `ok` for all browser assertions, including blocked and approved writes, but the runner stayed active after the test and was interrupted; its process did not exit successfully.
+- The aggregate suite and the full 51-case Pi runtime file did not complete. An earlier aggregate attempt timed out two real-Pi setup-writer cases; both passed in isolated reruns. No full-suite result is claimed.
+
+The pull request has not been created or published.

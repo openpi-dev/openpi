@@ -311,6 +311,7 @@ type PromptAdmission = {
   readonly sessionPath: string;
   readonly content: string;
   readonly imageSignature: string;
+  readonly planRevision?: string;
   readonly controllerId?: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
@@ -1223,6 +1224,17 @@ export class WebHost {
           error: "retry must be a boolean when provided",
         });
       }
+      if (
+        body.planRevision !== undefined &&
+        (typeof body.planRevision !== "string" ||
+          body.planRevision.length === 0 ||
+          body.planRevision.length > 256)
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_PLAN_APPROVAL",
+          error: "planRevision must be a non-empty bounded string",
+        });
+      }
       if (typeof body.sessionId !== "string" || !validSessionPath(body.sessionPath)) {
         return this.json(response, 400, {
           error: "sessionId and sessionPath are required",
@@ -1238,6 +1250,7 @@ export class WebHost {
           existing.sessionPath !== body.sessionPath ||
           existing.content !== content ||
           existing.imageSignature !== imageSignature ||
+          existing.planRevision !== body.planRevision ||
           existing.controllerId !== body.controllerId
         ) {
           return this.json(response, 409, {
@@ -1287,6 +1300,7 @@ export class WebHost {
         content,
         parsedImages.images,
         imageSignature,
+        body.planRevision,
         body.controllerId,
       );
       const result = await admission.completion;
@@ -2024,6 +2038,7 @@ export class WebHost {
     content: string,
     images: readonly WebPromptImage[],
     imageSignature: string,
+    planRevision?: string,
     controllerId?: string,
   ) {
     let settle!: (result: PromptAdmissionResponse) => void;
@@ -2032,6 +2047,7 @@ export class WebHost {
       sessionPath,
       content,
       imageSignature,
+      ...(planRevision !== undefined ? { planRevision } : {}),
       controllerId,
       completion: new Promise<PromptAdmissionResponse>((resolve) => {
         settle = resolve;
@@ -2054,6 +2070,7 @@ export class WebHost {
           expectedSessionId: sessionId,
           expectedSessionPath: sessionPath,
           ...(images.length > 0 ? { images } : {}),
+          ...(planRevision !== undefined ? { planRevision } : {}),
         }),
       )
       .then(
