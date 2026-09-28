@@ -615,6 +615,20 @@ export default function planMode(pi: ExtensionAPI) {
           "PLAN_CONFLICT",
           409,
         );
+      if (request.action === "implement") {
+        if (current.status !== "ready" || !readyPlan)
+          throw new PlanControlError(
+            "A ready plan is required before preparing implementation",
+            "PLAN_CONFLICT",
+            409,
+          );
+        const prompt = buildPlanImplementationPrompt(readyPlan);
+        clearPlan(ctx);
+        return {
+          ...projectPlanControl(ctx.sessionManager.getBranch()),
+          prompt,
+        };
+      }
       if (
         request.enabled &&
         (current.status === "ready" || current.status === "invalid")

@@ -159,6 +159,7 @@ export interface WebStoreState {
 
 export interface WebStoreActions {
   selectPlanMode: (enabled: boolean) => Promise<void>;
+  preparePlanImplementation: () => Promise<string | null>;
   start: () => void;
   stop: () => void;
   refreshSnapshot: (options?: {
@@ -1470,6 +1471,70 @@ export function createWebStore(
             await actions.refreshSnapshot({ epoch });
             if (epoch === sessionEpoch) showError(error);
           }
+        } finally {
+          set({ planSelectionPending: false });
+        }
+      },
+      async preparePlanImplementation() {
+        const state = get();
+        const snapshot = state.snapshot;
+        const session = snapshot?.selectedSession;
+        const sessionId = session?.id;
+        if (
+          !sessionId ||
+          sessionId !== snapshot?.currentSessionId ||
+          !session?.path ||
+          state.selectedPath !== session.path ||
+          state.workspaceDraft ||
+          state.sessionSwitching ||
+          state.planSelectionPending ||
+          state.promptAdmissionPending ||
+          state.promptAdmissionRecovery ||
+          state.liveRunning ||
+          snapshot.runtime.status !== "idle" ||
+          snapshot.runtime.plan !== "ready" ||
+          snapshot.runtime.planRevision === undefined
+        )
+          return null;
+        const epoch = sessionEpoch;
+        const sessionPath = session.path;
+        const expectedRevision = snapshot.runtime.planRevision;
+        set({ planSelectionPending: true });
+        try {
+          let result: { sessionId: string; prompt: string };
+          try {
+            result = await client.preparePlanImplementation(
+              sessionId,
+              sessionPath,
+              expectedRevision,
+            );
+          } catch (error) {
+            if (epoch === sessionEpoch) {
+              try {
+                await actions.refreshSnapshot({ epoch });
+              } catch {}
+              if (epoch === sessionEpoch) showError(error);
+            }
+            return null;
+          }
+          const current = get();
+          if (
+            epoch !== sessionEpoch ||
+            current.snapshot?.currentSessionId !== sessionId ||
+            current.snapshot.selectedSession?.path !== sessionPath ||
+            current.selectedPath !== sessionPath
+          )
+            return null;
+          try {
+            if (
+              !(await actions.refreshSnapshot({ epoch })) &&
+              epoch === sessionEpoch
+            )
+              showError(new Error(i18n.t("planModeUnconfirmed")));
+          } catch (error) {
+            if (epoch === sessionEpoch) showError(error);
+          }
+          return result.prompt;
         } finally {
           set({ planSelectionPending: false });
         }

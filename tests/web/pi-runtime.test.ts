@@ -174,7 +174,10 @@ function promptSession(sessionId: string) {
   return {
     isStreaming: false,
     pendingMessageCount: 0,
-    sessionManager: { getSessionId: () => sessionId },
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: (): string | undefined => undefined,
+    },
     abort: async (): Promise<void> => undefined,
     subscribe(
       listener: (event: {
@@ -209,6 +212,7 @@ type FakeAgentRuntime = {
 };
 type PromptRuntimeHarness = {
   setPlanMode: PiWebRuntime["setPlanMode"];
+  preparePlanImplementation: PiWebRuntime["preparePlanImplementation"];
   listCommands: PiWebRuntime["listCommands"];
   runtime: FakeAgentRuntime;
   listeners: Set<(event: WebRuntimeEvent) => void>;
@@ -405,8 +409,15 @@ test("Plan control targets the active idle owned Session without admitting a pro
       PiWebRuntime["listCommands"]
     >;
   let calls = 0;
-  const unregister = registerPlanControl(session.sessionManager, () => {
+  const unregister = registerPlanControl(session.sessionManager, (request) => {
     calls++;
+    if (request.action === "implement")
+      return {
+        status: "inactive",
+        revision: "inactive-revision",
+        hasPrompt: false,
+        prompt: "Implement the approved plan",
+      };
     return { status: "planning", revision: "revision", hasPrompt: false };
   });
   try {
@@ -418,6 +429,22 @@ test("Plan control targets the active idle owned Session without admitting a pro
     assert.equal((await runtime.setPlanMode(request)).status, "planning");
     assert.equal(calls, 1);
     assert.equal(session.calls.length, 0);
+    const prepared = await runtime.preparePlanImplementation({
+      sessionId: "session-a",
+      sessionPath: "current:session-a",
+      expectedRevision: "revision",
+    });
+    assert.equal(prepared.prompt, "Implement the approved plan");
+    assert.equal(prepared.status, "inactive");
+    assert.equal(calls, 2);
+    await assert.rejects(
+      runtime.preparePlanImplementation({
+        sessionId: "session-a",
+        sessionPath: "current:another-session",
+        expectedRevision: "revision",
+      }),
+      { code: "SESSION_CONFLICT" },
+    );
     await assert.rejects(
       runtime.setPlanMode({ ...request, sessionId: "old" }),
       { code: "SESSION_CONFLICT" },
@@ -434,7 +461,7 @@ test("Plan control targets the active idle owned Session without admitting a pro
     await assert.rejects(runtime.setPlanMode(request), {
       code: "PLAN_CONTROL_UNAVAILABLE",
     });
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
   } finally {
     unregister();
   }

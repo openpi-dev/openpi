@@ -175,6 +175,40 @@ it("Plan changes wait for canonical confirmation, prevent duplicate clicks and d
   expect(prompt).not.toHaveBeenCalled();
 });
 
+it("prepares an implementation prompt only for the ready active Session and does not submit it", async () => {
+  const client = new FakeClient();
+  const ready = snapshot();
+  ready.runtime.plan = "ready";
+  ready.runtime.planRevision = "ready-1";
+  client.snapshots.push(Promise.resolve(ready));
+  const prepare = vi
+    .spyOn(client, "preparePlanImplementation")
+    .mockResolvedValue({
+      sessionId: "session-1",
+      prompt: "Implement this plan",
+    });
+  const send = vi.spyOn(client, "prompt");
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+
+  const after = snapshot();
+  after.cursor++;
+  after.runtime.plan = "inactive";
+  after.runtime.planRevision = "inactive-1";
+  client.snapshots.push(Promise.resolve(after));
+  const prompt = await store.getState().actions.preparePlanImplementation();
+
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(
+    "session-1",
+    "/tmp/ws/session.jsonl",
+    "ready-1",
+  );
+  expect(prompt).toBe("Implement this plan");
+  expect(store.getState().snapshot?.runtime.plan).toBe("inactive");
+  expect(store.getState().planSelectionPending).toBe(false);
+  expect(send).not.toHaveBeenCalled();
+});
+
 class FakeClient extends WebClient {
   snapshots: Array<Promise<WebSnapshot>> = [];
   snapshotPaths: Array<string | null | undefined> = [];

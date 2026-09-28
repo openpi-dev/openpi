@@ -680,7 +680,7 @@ export class WebHost {
     if (pathname === "/api/prompt") return false;
     if (pathname === "/api/turns/cancel") return true;
     if (pathname === "/api/questions/answer") return true;
-    if (pathname === "/api/plan") return true;
+    if (pathname.startsWith("/api/plan")) return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
       pathname.startsWith("/api/terminal") ||
@@ -1353,6 +1353,27 @@ export class WebHost {
         accepted: result.state === "accepted",
         cursor: this.sequence,
       });
+    }
+    if (url.pathname === "/api/plan/implement" && request.method === "POST") {
+      const body = await this.readJson(request, 8192);
+      if (typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 256 ||
+        !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096 ||
+        !(body.expectedRevision === null || (typeof body.expectedRevision === "string" && body.expectedRevision.length <= 256)) ||
+        Object.keys(body).some((key) => !["sessionId", "sessionPath", "expectedRevision"].includes(key)))
+        return this.json(response, 400, { code: "INVALID_PLAN_REQUEST", error: "A Session, path and expected Plan revision are required" });
+      if (!this.runtime.preparePlanImplementation)
+        return this.json(response, 501, { code: "PLAN_CONTROL_UNAVAILABLE", error: "Plan implementation is unavailable" });
+      try {
+        const plan = await this.runtime.preparePlanImplementation({
+          sessionId: body.sessionId,
+          sessionPath: body.sessionPath,
+          expectedRevision: body.expectedRevision,
+        });
+        return this.json(response, 200, { sessionId: body.sessionId, ...plan });
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "PLAN_SELECTION_FAILED", "Plan implementation could not be prepared");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
     }
     if (url.pathname === "/api/plan" && request.method === "POST") {
       const body = await this.readJson(request, 1024);

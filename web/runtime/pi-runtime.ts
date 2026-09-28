@@ -500,12 +500,38 @@ export class PiWebRuntime implements WebRuntimeController {
     );
   }
 
-  setPlanMode(request: PlanControlRequest & { sessionId: string }) {
+  setPlanMode(
+    request: {
+      enabled: boolean;
+      expectedRevision: string | null;
+      sessionId: string;
+    },
+  ) {
+    return this.applyPlanControl({ ...request, action: "mode" });
+  }
+
+  async preparePlanImplementation(request: {
+    sessionId: string;
+    sessionPath: string;
+    expectedRevision: string | null;
+  }) {
+    const result = await this.applyPlanControl({ ...request, action: "implement" });
+    if (typeof result.prompt !== "string")
+      throw new Error("Plan control did not return an implementation prompt");
+    return { ...result, prompt: result.prompt };
+  }
+
+  private applyPlanControl(
+    request: PlanControlRequest & { sessionId: string; sessionPath?: string },
+  ) {
     return this.serializeControllerMutation(async () => {
       this.assertActive();
       this.assertWorkspaceSelected();
       const session = this.runtime.session;
-      if (request.sessionId !== session.sessionManager.getSessionId())
+      if (!matchesSessionIdentity(session.sessionManager, {
+        expectedSessionId: request.sessionId,
+        ...(request.sessionPath ? { expectedSessionPath: request.sessionPath } : {}),
+      }))
         throw new WebRuntimeRequestError("The active Session changed", "SESSION_CONFLICT", 409);
       // Include preflight/queued work, not just provider streaming. The owner
       // callback below is synchronous: no prompt can enter mid-transition.

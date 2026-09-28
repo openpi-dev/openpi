@@ -4,10 +4,16 @@ import {
 } from "./persisted-state.ts";
 
 export type PlanStatus = "inactive" | "planning" | "ready" | "invalid";
-export interface PlanControlRequest {
-  enabled: boolean;
-  expectedRevision: string | null;
-}
+export type PlanControlRequest =
+  | {
+      action: "mode";
+      enabled: boolean;
+      expectedRevision: string | null;
+    }
+  | {
+      action: "implement";
+      expectedRevision: string | null;
+    };
 
 /** A projection of Pi's branch, never another state store. */
 export function projectPlanControl(entries: readonly unknown[]) {
@@ -48,11 +54,13 @@ export class PlanControlError extends Error {
   }
 }
 
-type Control = (
-  request: PlanControlRequest,
-) => ReturnType<typeof projectPlanControl>;
+type Control = (request: PlanControlRequest) => PlanControlResult;
+
+export type PlanControlResult = ReturnType<typeof projectPlanControl> & {
+  prompt?: string;
+};
 // The extension loader and Web runtime may evaluate separate module copies.
-const key = Symbol.for("@tt-a1i/openpi/plan-control/v1");
+const key = Symbol.for("@tt-a1i/openpi/plan-control/v2");
 const existing: unknown = Reflect.get(globalThis, key);
 if (existing !== undefined && !(existing instanceof WeakMap))
   throw new Error("Incompatible Plan control bridge");

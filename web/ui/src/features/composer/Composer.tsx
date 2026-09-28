@@ -572,6 +572,37 @@ export function Composer(props: ComposerProps) {
         !props.sessionSwitching && (
           <div className="plan-mode-bar">
             <span>{t(`planMode_${props.snapshot.runtime.plan}`)}</span>
+            {props.snapshot.runtime.plan === "ready" && (
+              <button
+                type="button"
+                disabled={
+                  running ||
+                  attachmentBusy ||
+                  props.planSelectionPending ||
+                  props.promptAdmissionPending ||
+                  Boolean(props.promptAdmissionRecovery)
+                }
+                onClick={() => {
+                  if (
+                    (prompt.trim() || images.length > 0) &&
+                    !window.confirm(t("planImplementationReplaceDraft"))
+                  )
+                    return;
+                  void props.actions
+                    .preparePlanImplementation()
+                    .then((implementationPrompt) => {
+                      if (typeof implementationPrompt !== "string") return;
+                      draftRevision.current += 1;
+                      setPrompt(implementationPrompt);
+                      setImages([]);
+                      setAttachmentError(null);
+                      textarea.current?.focus();
+                    });
+                }}
+              >
+                {t("planModeImplement")}
+              </button>
+            )}
             <button
               type="button"
               disabled={

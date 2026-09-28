@@ -310,6 +310,50 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(planCalls, 1);
     delete runtime.setPlanMode;
 
+    const implementationRequest = {
+      sessionId: sessionManager.getSessionId(),
+      sessionPath: `current:${sessionManager.getSessionId()}`,
+      expectedRevision: "ready-1",
+    };
+    const postImplementation = (data: unknown) =>
+      fetch(`${launched.origin}/api/plan/implement`, {
+        method: "POST",
+        headers: authorized,
+        body: JSON.stringify(data),
+      });
+    assert.equal((await postImplementation(implementationRequest)).status, 501);
+    assert.equal(
+      (await postImplementation({ ...implementationRequest, extra: true }))
+        .status,
+      400,
+    );
+    let implementationCalls = 0;
+    runtime.preparePlanImplementation = async (request) => {
+      assert.deepEqual(request, implementationRequest);
+      implementationCalls++;
+      return {
+        status: "inactive",
+        revision: "inactive-1",
+        hasPrompt: false,
+        prompt: "Implement the approved plan",
+      };
+    };
+    const preparedPlan = await postImplementation(implementationRequest);
+    assert.equal(preparedPlan.status, 200);
+    assert.deepEqual(await preparedPlan.json(), {
+      sessionId: implementationRequest.sessionId,
+      status: "inactive",
+      revision: "inactive-1",
+      hasPrompt: false,
+      prompt: "Implement the approved plan",
+    });
+    runtime.preparePlanImplementation = async () => {
+      throw new WebRuntimeRequestError("Plan changed", "PLAN_CONFLICT", 409);
+    };
+    assert.equal((await postImplementation(implementationRequest)).status, 409);
+    assert.equal(implementationCalls, 1);
+    delete runtime.preparePlanImplementation;
+
     const page = await documentRequest(`${launched.origin}/`);
     assert.equal(page.status, 200);
     assert.match(

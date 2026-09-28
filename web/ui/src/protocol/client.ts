@@ -479,6 +479,20 @@ export class WebClient {
     });
   }
 
+  preparePlanImplementation(
+    sessionId: string,
+    sessionPath: string,
+    expectedRevision: string | null,
+  ) {
+    return this.request<{ sessionId: string; prompt: string }>(
+      "/api/plan/implement",
+      {
+        method: "POST",
+        body: JSON.stringify({ sessionId, sessionPath, expectedRevision }),
+      },
+    );
+  }
+
   trust(sessionId: string, signal: AbortSignal) {
     return this.request<WebProjectTrustStatus>(
       `/api/trust?sessionId=${encodeURIComponent(sessionId)}`,
