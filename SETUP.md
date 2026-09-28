@@ -34,6 +34,8 @@ Pi will load the extensions and theme the next time it starts. OpenPI's Backgrou
 
 The terminal theme above remains Pi-owned. OpenPI Web has separate package-owned appearance preferences configured only through `/openpi-setup`: `system`, `light`, `dark`, `mist`, `rose`, and `pine` themes; chat width from 820-2000px; chat font size from 12-24px; and whether thinking blocks start expanded. `system`, 820px, 14px, and collapsed are the defaults.
 
+Exit Plan mode before starting `/openpi-setup`, including from Web settings. The command checks the current Session branch before starting a setup turn, and queued requests are checked again before delivery. Web disables package configuration controls during planning and offers the existing Plan exit action once the Session is idle; exiting does not start a model turn or authorize implementation. Settings reports the latest setup episode from persisted tool receipts, including unchanged saves, failures, cancellation, and an unconfirmed save. A completed turn or an assistant's claim alone is not proof that configuration was saved.
+
 ## Configure this package
 
 The `compact` footer preset resolves to `plain` style with the default single-row layout; it is not a separate stored style. Applying it to the default footer does not change its appearance. Successful setup receipts distinguish saving the document from changing effective settings and list only fields that actually changed. Keeping defaults without invoking the writer does not create a file.

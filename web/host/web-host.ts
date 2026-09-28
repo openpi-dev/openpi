@@ -24,6 +24,7 @@ import {
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
 import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
+import { projectSetupOutcome } from "../protocol/setup-outcome.ts";
 import { registerWebCommandFeedback, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import {
   PiWebAdapter,
@@ -1912,7 +1913,9 @@ export class WebHost {
           expandThinking: setup.ui.webExpandThinking,
         },
         ...projection,
-        runtime: { ...projection.runtime, liveTools: this.liveTools, ...this.webPlanState() },
+        runtime: { ...projection.runtime, liveTools: this.liveTools, ...this.webPlanState(),
+          setup: this.runtime.workspaceSelected ? projectSetupOutcome(this.runtime.sessionManager.getBranch(), projection.runtime.status === "running") : undefined,
+        },
         thinking: projection.thinking
           ? { ...projection.thinking, revision: this.sequence }
           : undefined,

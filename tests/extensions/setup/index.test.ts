@@ -41,10 +41,59 @@ const { SETUP_CONFIG_PATH, loadSetupConfig } = await import(
 
 after(() => rmSync(setupAgentDir, { recursive: true, force: true }));
 
+test("Setup rejects planning, ready and invalid branches before starting a model turn, including the alias", async () => {
+  for (const status of ["planning", "ready", "invalid"]) {
+    const branch: unknown[] = [
+      {
+        type: "custom",
+        customType: "my-pi-setup-plan-mode-state",
+        data: {
+          version: 1,
+          status,
+          ...(status === "ready" ? { plan: "Review this plan" } : {}),
+        },
+      },
+    ];
+    const h = visibilityHarness({ branch });
+    await h.emit("session_start");
+    for (const name of ["openpi-setup", "my-pi-setup"]) {
+      await assert.rejects(
+        h.runCommand(name, "use dark theme"),
+        /Exit Plan mode/,
+      );
+    }
+    assert.equal(h.isActive(), false);
+    assert.equal(h.setupRequests().length, 0);
+    branch.push({
+      type: "custom",
+      customType: "my-pi-setup-plan-mode-state",
+      data: { version: 1, status: "inactive" },
+    });
+    await h.runCommand("openpi-setup", "use dark theme");
+    assert.equal(h.setupRequests().length, 1);
+  }
+});
+
 type Handler = (
   event: Record<string, unknown>,
   ctx: ExtensionContext,
 ) => unknown;
+
+test("queued setup rechecks the branch before exposing its writer", async () => {
+  const branch: unknown[] = [];
+  const h = visibilityHarness({ branch, idle: false });
+  await h.emit("session_start");
+  await h.runCommand("openpi-setup", "use dark theme");
+  branch.push({
+    type: "custom",
+    customType: "my-pi-setup-plan-mode-state",
+    data: { version: 1, status: "planning" },
+  });
+  await h.emit("agent_settled");
+  assert.equal(h.isActive(), false);
+  assert.equal(h.setupRequests().length, 0);
+  assert.match(JSON.stringify(h.closures()), /plan_mode_active/);
+});
 
 interface CapturedSetupTool {
   readonly name: string;
@@ -63,6 +112,7 @@ function visibilityHarness(
     initialActive?: string[];
     mode?: ExtensionCommandContext["mode"];
     idle?: boolean;
+    branch?: unknown[];
     setupSourcePath?: string;
   } = {},
 ) {
@@ -145,6 +195,7 @@ function visibilityHarness(
     mode: options.mode ?? "rpc",
     hasUI: false,
     cwd: "/tmp/setup-visibility-test",
+    sessionManager: { getBranch: () => options.branch ?? [] },
     isIdle: () => idle,
     model: undefined,
     ui: {

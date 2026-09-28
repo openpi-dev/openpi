@@ -346,6 +346,19 @@ const resources = {
       setupRequestFailed: "The OpenPI setup request was not accepted.",
       setupRequestRunning: "Applying OpenPI settings…",
       setupRequestAccepted: "Configuration request accepted.",
+      setupPlanBlocked:
+        "Exit Plan mode before changing OpenPI settings. Exiting does not start implementation.",
+      setupPlanBusy:
+        "Stop or wait for the current turn, then exit Plan mode to change OpenPI settings.",
+      setupOutcome_pending: "Configuration request is awaiting a save receipt.",
+      setupOutcome_saved: "OpenPI configuration was saved and applied.",
+      setupOutcome_unchanged:
+        "Configuration was saved; effective settings are unchanged.",
+      setupOutcome_failed:
+        "The setup request failed. Review the error and current settings before retrying.",
+      setupOutcome_cancelled: "Setup was cancelled without a confirmed save.",
+      setupOutcome_unconfirmed:
+        "No successful save was confirmed. Review current settings before retrying /openpi-setup.",
       settingsUpdateFailed: "The Web preference could not be saved.",
       settingsCatalogLoading: "Loading Pi resources…",
       settingsCatalogFailed: "Could not load Pi settings resources.",
@@ -977,6 +990,17 @@ const resources = {
       setupRequestFailed: "OpenPI 配置请求未被接收。",
       setupRequestRunning: "正在应用 OpenPI 设置…",
       setupRequestAccepted: "配置请求已接收。",
+      setupPlanBlocked:
+        "请先退出 Plan 模式，再修改 OpenPI 设置。退出不会开始实施计划。",
+      setupPlanBusy:
+        "请先停止或等待当前回合结束，再退出 Plan 模式修改 OpenPI 设置。",
+      setupOutcome_pending: "配置请求正在处理，尚未收到保存回执。",
+      setupOutcome_saved: "OpenPI 配置已保存并应用。",
+      setupOutcome_unchanged: "配置已保存，实际设置没有变化。",
+      setupOutcome_failed: "配置请求失败，请查看错误和当前设置后再重试。",
+      setupOutcome_cancelled: "配置过程已取消，未确认成功保存。",
+      setupOutcome_unconfirmed:
+        "本次未确认成功保存，请核对当前设置后再运行 /openpi-setup。",
       settingsUpdateFailed: "无法保存 Web 显示设置。",
       settingsCatalogLoading: "正在加载 Pi 资源…",
       settingsCatalogFailed: "无法加载 Pi 设置资源。",
