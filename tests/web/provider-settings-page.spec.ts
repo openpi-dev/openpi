@@ -1081,3 +1081,109 @@ it("renders Pi skills, subagent roles, plugins, refreshes, and closes", async ()
   fireEvent.click(screen.getByRole("button", { name: i18n.t("close") }));
   expect(onClose).toHaveBeenCalledTimes(1);
 });
+
+it.each(["planning", "ready", "invalid"])(
+  "blocks setup in %s and waits for confirmed Plan exit without hiding read-only settings",
+  async (plan) => {
+    const payload = settingsPayload();
+    payload.setup.ui.webChatWidth = 1200;
+    payload.setup.ui.webChatFontSize = 18;
+    const fallback = settingsFetcher();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).includes("/api/settings/catalog")
+          ? reply(payload)
+          : fallback(input),
+      ),
+    );
+    const onConfigureOpenPi = vi.fn(async () => true);
+    const onExitPlan = vi.fn(async () => {});
+    const props = { plan, onConfigureOpenPi, onExitPlan };
+    const view = renderSettings(props);
+    await screen.findByText("1200px");
+    await screen.findByText("18px");
+    await screen.findByText(i18n.t("agentBehavior"));
+    const theme = () =>
+      screen.getByRole<HTMLInputElement>("radio", {
+        name: i18n.t("themeDark"),
+      });
+    expect(theme().disabled).toBe(true);
+    for (const name of [
+      "resetChatContentWidth",
+      "resetChatFontSize",
+    ] as const) {
+      const reset = screen.getByRole<HTMLButtonElement>("button", {
+        name: i18n.t(name),
+      });
+      expect(reset.disabled).toBe(true);
+      fireEvent.click(reset);
+    }
+    fireEvent.click(theme());
+    expect(onConfigureOpenPi).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("planModeExit") }),
+    );
+    expect(onExitPlan).toHaveBeenCalledOnce();
+    expect(theme().disabled).toBe(true);
+    fireEvent.click(
+      screen.getByRole("tab", { name: i18n.t("skillsSettings") }),
+    );
+    expect(await screen.findByText("Delegate a bounded task.")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("tab", { name: i18n.t("generalSettings") }),
+    );
+    view.rerender(settingsElement({ ...props, plan: "inactive" }));
+    expect(theme().disabled).toBe(false);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: i18n.t("resetChatContentWidth"),
+      }).disabled,
+    ).toBe(false);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: i18n.t("resetChatFontSize"),
+      }).disabled,
+    ).toBe(false);
+    fireEvent.click(theme());
+    await waitFor(() => expect(onConfigureOpenPi).toHaveBeenCalledOnce());
+  },
+);
+
+it("requires idle state before exiting Plan and shows terminal setup receipts on reopening", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const view = renderSettings({
+    plan: "planning",
+    setupBusy: true,
+    onExitPlan: vi.fn(),
+  });
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("planModeExit"),
+    }).disabled,
+  ).toBe(true);
+  expect(screen.getByText(i18n.t("setupPlanBusy"))).toBeTruthy();
+  for (const status of [
+    "saved",
+    "unchanged",
+    "failed",
+    "cancelled",
+    "unconfirmed",
+  ] as const) {
+    view.rerender(
+      settingsElement({
+        plan: "inactive",
+        setupOutcome: {
+          requestId: "receipt",
+          status,
+          ...(status === "failed" ? { error: "Recovery incomplete" } : {}),
+        },
+      }),
+    );
+    expect(screen.getByText(i18n.t(`setupOutcome_${status}`))).toBeTruthy();
+    if (status === "failed")
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Recovery incomplete",
+      );
+  }
+});

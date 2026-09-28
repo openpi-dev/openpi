@@ -18,6 +18,7 @@ import type {
   WebModelSummary,
   WebSettingsPreferencesPatch,
   WebThemePreference,
+  WebSnapshot,
 } from "../../../../protocol/types.ts";
 import type { WebModelConfiguration } from "../../../../runtime/types.ts";
 import { ModelConfigurationEditor } from "./ModelConfigurationEditor.tsx";
@@ -60,6 +61,10 @@ export function ProviderSettingsPage({
   capabilities,
   setupBusy: sessionBusy,
   setupBlockedReason,
+  plan,
+  planSelectionPending = false,
+  onExitPlan,
+  setupOutcome,
   modelSelectionPending,
   onSelectModel,
   onConfigureOpenPi,
@@ -78,6 +83,10 @@ export function ProviderSettingsPage({
   capabilities?: WebCapabilitySnapshot;
   setupBusy: boolean;
   setupBlockedReason?: string;
+  plan?: WebSnapshot["runtime"]["plan"];
+  planSelectionPending?: boolean;
+  onExitPlan?: () => Promise<void>;
+  setupOutcome?: WebSnapshot["runtime"]["setup"];
   modelSelectionPending: boolean;
   onSelectModel: (value: string) => void;
   onConfigureOpenPi: (request: string) => Promise<boolean>;
@@ -115,6 +124,14 @@ export function ProviderSettingsPage({
     | null
   >(null);
   const saving = modelSaving || credentialSaving;
+  const setupBaseline = useRef<string | undefined>(undefined);
+  const planBlocked = plan !== undefined && plan !== "inactive";
+  const setupDisabled =
+    setupPending || setupBusy || planBlocked || planSelectionPending;
+  const currentOutcome =
+    !setupSubmitted || setupOutcome?.requestId !== setupBaseline.current
+      ? setupOutcome
+      : undefined;
   const {
     catalog,
     error: catalogError,
@@ -184,7 +201,8 @@ export function ProviderSettingsPage({
   useEffect(() => () => window.clearTimeout(setupRefreshTimer.current), []);
 
   const configureOpenPi = async (request: string) => {
-    if (setupPending || setupBusy) return false;
+    if (setupDisabled) return false;
+    setupBaseline.current = setupOutcome?.requestId;
     setSetupPending(true);
     setSetupSubmitted(false);
     setupRefreshPending.current = false;
@@ -235,7 +253,7 @@ export function ProviderSettingsPage({
   };
 
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
-    if (preferencePending || setupPending || setupBusy) return false;
+    if (preferencePending || setupDisabled) return false;
     setPreferencePending(true);
     setSetupError(null);
     try {
@@ -382,6 +400,18 @@ export function ProviderSettingsPage({
           </button>
         </header>
 
+        {planBlocked && (
+          <div className="settings-plan-notice" role="status">
+            <span>{t(setupBusy ? "setupPlanBusy" : "setupPlanBlocked")}</span>
+            <Button
+              label={t("planModeExit")}
+              variant="secondary"
+              size="sm"
+              isDisabled={setupBusy || planSelectionPending || !onExitPlan}
+              onClick={() => void onExitPlan?.()}
+            />
+          </div>
+        )}
         <div className="provider-settings-main">
           <div
             id="settings-panel-general"
@@ -400,6 +430,7 @@ export function ProviderSettingsPage({
               preferencePending={preferencePending || setupPending || setupBusy}
               setupBusy={setupBusy}
               setupBlockedReason={setupBlockedReason}
+              setupBlocked={planBlocked || planSelectionPending}
               onConfigure={configureOpenPi}
               onUpdatePreferences={updateWebPreferences}
               onOpenRuntimeStatus={() => navigate({ kind: "runtime" })}
@@ -586,6 +617,7 @@ export function ProviderSettingsPage({
               models={models}
               activity={capabilities?.subagents}
               setupPending={setupPending || setupBusy}
+              setupBlocked={planBlocked || planSelectionPending}
               onConfigure={configureOpenPi}
               onRefresh={refresh}
             />
@@ -612,9 +644,19 @@ export function ProviderSettingsPage({
             {setupError}
           </div>
         )}
-        {setupSubmitted && !setupError && (
-          <div className="settings-global-status" role="status">
-            {t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
+        {(setupSubmitted || currentOutcome) && !setupError && (
+          <div
+            className={
+              currentOutcome?.status === "failed"
+                ? "settings-global-error"
+                : "settings-global-status"
+            }
+            role={currentOutcome?.status === "failed" ? "alert" : "status"}
+          >
+            {currentOutcome
+              ? t(`setupOutcome_${currentOutcome.status}`)
+              : t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
+            {currentOutcome?.error && <p>{currentOutcome.error}</p>}
           </div>
         )}
       </section>

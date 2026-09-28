@@ -58,6 +58,16 @@ test("subagent titles are sanitized and bounded at ingress", () => {
   assert.equal(normalizeSubagentTitle("x".repeat(200)).length, 160);
 });
 
+test("subagent titles bound on code points instead of splitting a surrogate pair", () => {
+  const emoji = "\u{1F680}";
+  // The complete emoji survives the bound; a UTF-16 unit cut would have left a
+  // lone high surrogate in the snapshot and the strip.
+  assert.equal(
+    normalizeSubagentTitle(`${"x".repeat(159)}${emoji}tail`),
+    `${"x".repeat(159)}${emoji}`,
+  );
+});
+
 test("strip selection prefers newest running, then newest unread settled", () => {
   const entries = [
     snapshot("done", "done", 1, 5),

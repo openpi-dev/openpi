@@ -631,16 +631,42 @@ export default function planMode(pi: ExtensionAPI) {
     });
   };
 
-  // Mode selection does not create a turn. Supply the current stance when
-  // Pi actually starts the next user/background turn, including after restore.
-  pi.on("before_agent_start", (event) => {
-    if (!planning) return;
+  // Custom-message turns (including Setup) bypass before_agent_start. Project
+  // the current stance at every provider call, without persisting a message or
+  // leaving an obsolete restriction in Pi's cached system prompt.
+  pi.on("context", (event, ctx) => {
+    if (!planning) {
+      if (
+        !ctx.sessionManager
+          .getBranch()
+          .some(
+            (entry) =>
+              entry.type === "custom" &&
+              entry.customType === PLAN_MODE_STATE_ENTRY,
+          )
+      )
+        return;
+    }
+    const content = !planning
+      ? "Current Session state: Plan mode is inactive. Earlier Plan-mode restrictions in this conversation are historical and no longer apply. Exiting Plan mode does not authorize implementation of a previous plan; follow the user's current request and normal permissions."
+      : readyPlan
+        ? "The plan is ready. All tools remain blocked until the user explicitly chooses a Plan action or exits planning. Do not start implementation."
+        : BLOCK_REASON;
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${
-        readyPlan
-          ? "The plan is ready. All tools remain blocked until the user explicitly chooses a Plan action or exits planning. Do not start implementation."
-          : BLOCK_REASON
-      }`,
+      messages: [
+        ...event.messages.filter(
+          (message) =>
+            message.role !== "custom" ||
+            message.customType !== "openpi-plan-context",
+        ),
+        {
+          role: "custom" as const,
+          customType: "openpi-plan-context",
+          content,
+          display: false,
+          timestamp: 0,
+        },
+      ],
     };
   });
 

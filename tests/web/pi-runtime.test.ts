@@ -8,6 +8,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type {
   AgentSessionServices,
   ExtensionAPI,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import {
@@ -190,6 +191,7 @@ function promptSession(sessionId: string) {
     sessionManager: {
       getSessionId: () => sessionId,
       getSessionFile: (): string | undefined => undefined,
+      getBranch: (): SessionEntry[] => [],
       appendCustomEntry: (_customType: string, _data?: unknown) =>
         "fixture-entry",
     },

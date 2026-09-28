@@ -79,11 +79,13 @@ function SettingsLoadState({
 
 function SetupAction({
   isPending,
+  isBlocked = false,
   onConfigure,
   request,
   label,
 }: {
   isPending: boolean;
+  isBlocked?: boolean;
   onConfigure: (request: string) => Promise<boolean>;
   request: string;
   label: string;
@@ -94,7 +96,7 @@ function SetupAction({
       variant="secondary"
       size="sm"
       icon={<Wrench aria-hidden="true" />}
-      isDisabled={isPending}
+      isDisabled={isPending || isBlocked}
       isLoading={isPending}
       onClick={() => void onConfigure(request)}
     />
@@ -147,6 +149,7 @@ export function GeneralSettingsPanel({
   cwd,
   theme,
   setupPending,
+  setupBlocked = false,
   preferencePending,
   setupBusy,
   setupBlockedReason,
@@ -162,6 +165,7 @@ export function GeneralSettingsPanel({
   cwd: string;
   theme: WebThemePreference;
   setupPending: boolean;
+  setupBlocked?: boolean;
   preferencePending: boolean;
   setupBusy: boolean;
   setupBlockedReason?: string;
@@ -192,6 +196,7 @@ export function GeneralSettingsPanel({
         </div>
         <SetupAction
           isPending={setupPending}
+          isBlocked={setupBlocked}
           onConfigure={onConfigure}
           request={t("setupRequestReviewAll")}
           label={t("configureOpenPi")}
@@ -222,7 +227,7 @@ export function GeneralSettingsPanel({
                 name="openpi-web-theme"
                 value={id}
                 checked={selectedTheme === id}
-                disabled={preferencePending}
+                disabled={preferencePending || setupPending || setupBlocked}
                 onChange={() => {
                   void onUpdatePreferences({ theme: id });
                 }}
@@ -244,7 +249,7 @@ export function GeneralSettingsPanel({
             width="100%"
             labelPosition="start"
             labelSpacing="spread"
-            isDisabled={preferencePending}
+            isDisabled={preferencePending || setupPending || setupBlocked}
             isLoading={preferencePending}
             onChange={(checked: boolean) => {
               void onUpdatePreferences({ expandThinking: checked });
@@ -259,7 +264,9 @@ export function GeneralSettingsPanel({
                 className="settings-reset-button"
                 aria-label={t("resetChatContentWidth")}
                 title={t("resetChatContentWidth")}
-                disabled={preferencePending || chatWidth === 820}
+                disabled={
+                  preferencePending || setupBlocked || chatWidth === 820
+                }
                 onClick={() => {
                   setChatWidth(820);
                   void onUpdatePreferences({ chatWidth: 820 }).then(
@@ -282,7 +289,7 @@ export function GeneralSettingsPanel({
               width="100%"
               valueDisplay="none"
               formatValue={(value: number) => `${value}px`}
-              isDisabled={preferencePending}
+              isDisabled={preferencePending || setupPending || setupBlocked}
               onChange={(value: number) => setChatWidth(value)}
               onChangeEnd={(value: number) => {
                 if (value !== setup.ui.webChatWidth) {
@@ -304,7 +311,9 @@ export function GeneralSettingsPanel({
                 className="settings-reset-button"
                 aria-label={t("resetChatFontSize")}
                 title={t("resetChatFontSize")}
-                disabled={preferencePending || chatFontSize === 14}
+                disabled={
+                  preferencePending || setupBlocked || chatFontSize === 14
+                }
                 onClick={() => {
                   setChatFontSize(14);
                   void onUpdatePreferences({ chatFontSize: 14 }).then(
@@ -327,7 +336,7 @@ export function GeneralSettingsPanel({
               width="100%"
               valueDisplay="none"
               formatValue={(value: number) => `${value}px`}
-              isDisabled={preferencePending}
+              isDisabled={preferencePending || setupPending || setupBlocked}
               onChange={(value: number) => setChatFontSize(value)}
               onChangeEnd={(value: number) => {
                 if (value !== setup.ui.webChatFontSize) {
@@ -649,6 +658,7 @@ export function SubagentsSettingsPanel({
   models,
   activity,
   setupPending,
+  setupBlocked = false,
   onConfigure,
   onRefresh,
 }: {
@@ -658,6 +668,7 @@ export function SubagentsSettingsPanel({
   models: WebModelSummary[];
   activity?: WebCapabilitySnapshot["subagents"];
   setupPending: boolean;
+  setupBlocked?: boolean;
   onConfigure: (request: string) => Promise<boolean>;
   onRefresh: () => void;
 }) {
@@ -721,6 +732,7 @@ export function SubagentsSettingsPanel({
           <div className="settings-sidebar-footer settings-sidebar-footer-action">
             <SetupAction
               isPending={setupPending}
+              isBlocked={setupBlocked}
               onConfigure={onConfigure}
               request={t("setupRequestSubagents")}
               label={t("configureRoles")}

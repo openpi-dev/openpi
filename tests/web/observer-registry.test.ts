@@ -469,6 +469,27 @@ test("projects bounded canonical activity without private payloads", () => {
   assert.equal("prompt" in subagents.items[0]!, false);
   assert.equal("finalText" in subagents.items[0]!, false);
 
+  const withAdmission = projectSubagentCapability([], {
+    enabled: true,
+    limit: 2,
+    held: 2,
+    queued: 1,
+    heldByOrigin: { workflow: 1, direct: 1, btw: 0 },
+    queuedByOrigin: { workflow: 0, direct: 0, btw: 1 },
+    blockedReason:
+      "Waiting for a shared child execution slot (2 active / 2 limit).",
+  });
+  assert.deepEqual(withAdmission.childExecutionAdmission, {
+    enabled: true,
+    limit: 2,
+    held: 2,
+    queued: 1,
+    heldByOrigin: { workflow: 1, direct: 1, btw: 0 },
+    queuedByOrigin: { workflow: 0, direct: 0, btw: 1 },
+    blockedReason:
+      "Waiting for a shared child execution slot (2 active / 2 limit).",
+  });
+
   const workflowSources = [
     {
       runId: "wf-1",
@@ -613,4 +634,21 @@ test("detail lookup is Session-scoped, exact, and fail-closed", () => {
   } finally {
     unregister();
   }
+});
+
+test("projects bounded activity text on code points instead of splitting a surrogate pair", () => {
+  const emoji = "\u{1F680}";
+  const subagents = projectSubagentCapability([
+    {
+      id: "sa-emoji",
+      title: `${"x".repeat(158)}${emoji}tail`,
+      status: "running",
+      createdAt: 1,
+    },
+  ]);
+
+  // The complete emoji survives the bound; a UTF-16 unit cut would have left a
+  // lone high surrogate in the bounded capability snapshot.
+  assert.equal(subagents.items[0]?.title, `${"x".repeat(158)}${emoji}…`);
+  assert.equal(subagents.truncated, true);
 });

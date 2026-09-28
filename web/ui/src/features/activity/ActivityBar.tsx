@@ -84,6 +84,7 @@ export function ActivityBar({
   const activeSubagentCount = (liveSubagents?.items ?? []).filter(
     (item) => item.status === "running",
   ).length;
+  const admission = liveSubagents?.childExecutionAdmission;
   const running = [
     ...(capabilities?.workflows?.items ?? []),
     ...(capabilities?.["background-terminals"]?.items ?? []),
@@ -143,7 +144,12 @@ export function ActivityBar({
     visible.length +
     (capabilities?.workflows?.omitted ?? 0) +
     (capabilities?.["background-terminals"]?.omitted ?? 0);
-  if (!visible.length && !omitted && !(onInspectSubagent && subagentCount))
+  if (
+    !visible.length &&
+    !omitted &&
+    !(onInspectSubagent && subagentCount) &&
+    !admission?.enabled
+  )
     return null;
   return (
     <div className="activity-bar" role="status" aria-label="Runtime activity">
@@ -158,6 +164,11 @@ export function ActivityBar({
             running: activeSubagentCount,
           })}
         </button>
+      )}
+      {admission?.enabled && admission.limit !== undefined && (
+        <span className="activity-chip subagent-list-trigger">
+          {`${admission.held}/${admission.limit} child slots · ${admission.queued} queued · wf ${admission.heldByOrigin.workflow} / direct ${admission.heldByOrigin.direct} / btw ${admission.heldByOrigin.btw}`}
+        </span>
       )}
       {visible.map(({ key, ...chip }) => (
         <Chip key={key} {...chip} />

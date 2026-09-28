@@ -276,6 +276,9 @@ const makeStubSession = (
       events: Stream.fromQueue(events),
       send: submit,
       interrupt: Effect.gen(function* () {
+        // Test-only: model a transport whose stop acknowledgement never
+        // returns, so manager lifecycle tests can assert fail-closed cleanup.
+        if (task.prompt.includes("STUCKSTOP:")) return yield* Effect.never;
         // Drop queued prompts so interrupting cannot immediately start
         // another turn, then stop the active turn. A prompt may be mid-flight
         // between the driver dequeuing it and registering its fiber, so wait
