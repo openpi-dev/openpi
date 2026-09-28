@@ -8,8 +8,6 @@ import {
   Folder,
   FolderOpen,
   Link,
-  PanelRightClose,
-  PanelRightOpen,
   RefreshCw,
   Search,
   Sheet,
@@ -84,14 +82,12 @@ export function FileIcon({
 function FileTree({
   sessionId,
   sessionPath,
-  cwd,
   active,
   selected,
   onSelect,
 }: {
   sessionId: string;
   sessionPath: string;
-  cwd: string;
   active: boolean;
   selected: string;
   onSelect: (path: string) => void;
@@ -411,23 +407,7 @@ function FileTree({
     });
   return (
     <aside className="file-explorer" aria-label={t("filesExplorer")}>
-      <div className="file-explorer-heading">
-        <FolderOpen aria-hidden="true" />
-        <strong title={cwd}>
-          {cwd.split(/[\\/]/u).filter(Boolean).at(-1) || cwd}
-        </strong>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={t("refreshFiles")}
-          title={t("refreshFiles")}
-          onClick={() => setRefresh((value) => value + 1)}
-          disabled={loading}
-        >
-          <RefreshCw aria-hidden="true" />
-        </button>
-      </div>
-      <label className="file-search">
+      <div className="file-search">
         <Search aria-hidden="true" />
         <input
           value={query}
@@ -442,7 +422,17 @@ function FileTree({
           aria-hidden="true"
           data-loading={loading || undefined}
         />
-      </label>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={t("refreshFiles")}
+          title={t("refreshFiles")}
+          onClick={() => setRefresh((value) => value + 1)}
+          disabled={loading}
+        >
+          <RefreshCw aria-hidden="true" />
+        </button>
+      </div>
       {error && (
         <p className="file-tree-note evidence-warning" role="alert">
           {error}
@@ -494,10 +484,8 @@ export function FilesPanel({
   const { t } = useTranslation();
   const [selected, setSelected] = useState("");
   const [treeVisible, setTreeVisible] = useState(true);
-  const workspace = useRef<HTMLDivElement>(null);
   return (
     <div
-      ref={workspace}
       className="files-workspace"
       data-tree-visible={treeVisible}
       data-preview-open={Boolean(selected)}
@@ -521,11 +509,17 @@ export function FilesPanel({
           onClick={() => setTreeVisible((value) => !value)}
         >
           {treeVisible ? (
-            <PanelRightClose aria-hidden="true" />
+            <FolderOpen aria-hidden="true" />
           ) : (
-            <PanelRightOpen aria-hidden="true" />
+            <Folder aria-hidden="true" />
           )}
         </button>
+        {!selected && (
+          <div className="files-empty-header" title={cwd}>
+            <FolderOpen aria-hidden="true" />
+            {cwd.split(/[\\/]/u).filter(Boolean).at(-1) || cwd}
+          </div>
+        )}
         {!selected && (
           <div className="files-preview-empty">
             <FileText aria-hidden="true" />
@@ -537,14 +531,9 @@ export function FilesPanel({
           <FileTree
             sessionId={sessionId}
             sessionPath={sessionPath}
-            cwd={cwd}
             active={active && treeVisible}
             selected={selected}
-            onSelect={(path) => {
-              setSelected(path);
-              if ((workspace.current?.clientWidth ?? 0) < 560)
-                setTreeVisible(false);
-            }}
+            onSelect={setSelected}
           />
         </div>
       </ArtifactProvider>

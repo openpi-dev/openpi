@@ -822,6 +822,12 @@ export class WebHost {
       const handle = await this.artifacts.authorizeFile(body.sessionId, body.reference);
       return this.json(response, 200, { handle });
     }
+    if (url.pathname === "/api/artifacts/save") {
+      if (request.method !== "POST") return this.json(response, 405, { error: "Saving requires POST" });
+      const body = await this.readJson(request, 6 * 1024 * 1024 + 2048);
+      if (body.access !== "write-workspace-file" || typeof body.sessionId !== "string" || typeof body.handle !== "string" || typeof body.revision !== "string" || typeof body.text !== "string") return this.json(response, 400, { error: "An explicit versioned workspace-file save is required" });
+      return this.json(response, 200, await this.artifacts.save(body.handle, body.sessionId, body.revision, body.text));
+    }
     if (url.pathname === "/api/artifacts/content") {
       const handle = url.searchParams.get("handle");
       const sessionId = url.searchParams.get("sessionId");

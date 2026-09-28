@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AxeBuilder } from "@axe-core/playwright";
@@ -195,7 +195,7 @@ test("workspace files stay beside previews, support rich documents and remain us
     await expect(tree).toBeVisible();
     const bounds = await page.locator(".files-workspace").evaluate((node) => {
       const preview = node
-        .querySelector(".artifact-panel")!
+        .querySelector(".artifact-panel-body")!
         .getBoundingClientRect();
       const files = node
         .querySelector(".file-explorer")!
@@ -219,6 +219,39 @@ test("workspace files stay beside previews, support rich documents and remain us
       path: testInfo.outputPath("files-markdown-desktop.png"),
     });
     await page
+      .getByRole("button", { name: /章节目录|Document outline/u })
+      .click();
+    await expect(
+      page.getByRole("navigation", { name: /章节目录|Document outline/u }),
+    ).toContainText("数据预览");
+    await page.screenshot({
+      path: testInfo.outputPath("files-outline-desktop.png"),
+    });
+    expect(
+      (await new AxeBuilder({ page }).include(".files-workspace").analyze())
+        .violations,
+    ).toEqual([]);
+    await page
+      .getByRole("navigation", { name: /章节目录|Document outline/u })
+      .getByRole("button", { name: "数据预览", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "数据预览", exact: true }),
+    ).toBeFocused();
+    await expect(
+      page.getByRole("navigation", { name: /章节目录|Document outline/u }),
+    ).not.toBeVisible();
+    await page
+      .getByRole("button", { name: /章节目录|Document outline/u })
+      .click();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".artifact-panel-embedded h1")).toHaveText(
+      "OpenPI 文件工作区",
+    );
+    await page.locator(".artifact-panel-body").evaluate((node) => {
+      node.scrollTop = 0;
+    });
+    await page
       .getByRole("button", { name: /放大图表|Expand diagram/u })
       .click();
     await expect(page.locator(".file-diagram-dialog")).toBeVisible();
@@ -236,6 +269,51 @@ test("workspace files stay beside previews, support rich documents and remain us
     expect(
       await page.evaluate(() => Reflect.get(window, "previewUnsafe")),
     ).toBeUndefined();
+    const htmlEditor = page.getByRole("textbox", {
+      name: /文件编辑器|File editor/u,
+    });
+    await page.getByRole("button", { name: /^(编辑|Edit)$/u }).click();
+    await expect(htmlEditor).toBeFocused();
+    const htmlDraft =
+      "<style>body{padding:24px;color:#384455}</style><h1>Edited HTML preview</h1><p>草稿预览与编辑保持一致。</p>";
+    await htmlEditor.fill(htmlDraft);
+    await htmlEditor.press("Home");
+    await htmlEditor.press("ArrowRight");
+    await htmlEditor.press("ArrowRight");
+    const selection = await htmlEditor.evaluate(
+      (node) => (node as HTMLTextAreaElement).selectionStart,
+    );
+    await page.getByRole("button", { name: /^(预览|Preview)$/u }).click();
+    await expect(
+      page
+        .frameLocator(".file-preview-frame")
+        .getByRole("heading", { name: "Edited HTML preview" }),
+    ).toBeVisible();
+    expect(await readFile(join(cwd, "preview.html"), "utf8")).toContain(
+      "HTML sandbox preview",
+    );
+    await page.getByRole("button", { name: /^(编辑|Edit)$/u }).click();
+    await expect(htmlEditor).toBeFocused();
+    await expect(htmlEditor).toHaveValue(htmlDraft);
+    expect(
+      await htmlEditor.evaluate(
+        (node) => (node as HTMLTextAreaElement).selectionStart,
+      ),
+    ).toBe(selection);
+    await page.screenshot({ path: testInfo.outputPath("files-html-edit.png") });
+    await page.getByRole("button", { name: /^(预览|Preview)$/u }).click();
+    await page.getByRole("button", { name: /保存文件|Save file/u }).click();
+    await expect
+      .poll(() => readFile(join(cwd, "preview.html"), "utf8"))
+      .toBe(htmlDraft);
+    await expect(
+      page
+        .frameLocator(".file-preview-frame")
+        .getByRole("heading", { name: "Edited HTML preview" }),
+    ).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath("files-html-preview.png"),
+    });
     await open("data.csv");
     await expect(page.locator(".file-table")).toContainText("OpenPI, files");
     await expect(page.locator(".file-table")).toContainText("line 1\nline 2");
@@ -243,6 +321,59 @@ test("workspace files stay beside previews, support rich documents and remain us
     await expect(page.locator(".file-code .hljs-keyword").first()).toHaveText(
       "export",
     );
+    await page.getByRole("button", { name: /^(编辑|Edit)$/u }).click();
+    const editor = page.getByRole("textbox", {
+      name: /文件编辑器|File editor/u,
+    });
+    const draft = 'export const workspace = "Edited locally";\n';
+    await editor.fill(draft);
+    await open("data.csv");
+    await open("index.ts");
+    await page.getByRole("button", { name: /^(编辑|Edit)$/u }).click();
+    await expect(editor).toHaveValue(draft);
+    await editor.press("ControlOrMeta+s");
+    await expect
+      .poll(() => readFile(join(cwd, "src", "index.ts"), "utf8"))
+      .toBe(draft);
+    await expect(
+      page.getByRole("button", { name: /保存文件|Save file/u }),
+    ).toBeDisabled();
+    await editor.fill('export const workspace = "Preserved draft";\n');
+    await writeFile(
+      join(cwd, "src", "index.ts"),
+      'export const workspace = "External change";\n',
+    );
+    await page.getByRole("button", { name: /保存文件|Save file/u }).click();
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: /磁盘上的文件已改变|file changed on disk/u }),
+    ).toBeVisible();
+    expect(await readFile(join(cwd, "src", "index.ts"), "utf8")).toContain(
+      "External change",
+    );
+    await page
+      .locator(".artifact-header-actions")
+      .getByRole("button", { name: /刷新文件|Refresh file/u })
+      .click();
+    await expect(page.locator(".file-conflict")).toBeVisible();
+    await expect(editor).toHaveValue(
+      'export const workspace = "Preserved draft";\n',
+    );
+    await page
+      .getByText(/查看当前磁盘版本|Inspect current disk version/u)
+      .click();
+    await expect(page.locator(".file-conflict pre")).toContainText(
+      "External change",
+    );
+    await page.getByRole("button", { name: /已核对|Reviewed/u }).click();
+    await editor.fill(
+      'export const workspace = "External change plus draft";\n',
+    );
+    await page.getByRole("button", { name: /保存文件|Save file/u }).click();
+    await expect
+      .poll(() => readFile(join(cwd, "src", "index.ts"), "utf8"))
+      .toContain("External change plus draft");
     await open("document.pdf");
     await expect(page.locator(".file-pdf canvas")).toBeVisible();
     await expect
@@ -318,10 +449,44 @@ test("workspace files stay beside previews, support rich documents and remain us
       tree.getByRole("button", { name: "src", exact: true }),
     ).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("files-dark.png") });
-    await page.setViewportSize({ width: 390, height: 844 });
-    await open("data.csv");
-    await expect(page.locator(".file-table")).toBeVisible();
-    await expect(page.locator(".file-explorer")).not.toBeVisible();
+    await page.emulateMedia({ colorScheme: "light" });
+    for (const width of [720, 560, 456, 390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      await open("README.md");
+      await expect(tree).toBeVisible();
+      await expect(page.locator(".file-markdown h1")).toBeVisible();
+      const layout = await page.locator(".files-workspace").evaluate((node) => {
+        const body = node.querySelector<HTMLElement>(".artifact-panel-body")!;
+        const preview = body.getBoundingClientRect();
+        const files = node
+          .querySelector(".file-explorer")!
+          .getBoundingClientRect();
+        const header = node
+          .querySelector(".artifact-panel > header")!
+          .getBoundingClientRect();
+        return {
+          separated: preview.right <= files.left + 1,
+          wrapped: body.scrollWidth <= body.clientWidth,
+          aligned:
+            Math.abs(preview.top - files.top) <= 1 &&
+            header.bottom <= preview.top + 1,
+          overflow: node.scrollWidth > node.clientWidth,
+        };
+      });
+      expect(layout).toEqual({
+        separated: true,
+        wrapped: true,
+        aligned: true,
+        overflow: false,
+      });
+      await page.screenshot({
+        path: testInfo.outputPath(`files-${width}.png`),
+      });
+    }
+    await page
+      .getByRole("button", { name: /收起文件树|Hide file tree/u })
+      .click();
+    await expect(tree).not.toBeVisible();
     await page
       .getByRole("button", { name: /显示文件树|Show file tree/u })
       .click();

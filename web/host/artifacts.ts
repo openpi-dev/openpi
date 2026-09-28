@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isUtf8 } from "node:buffer";
-import { constants } from "node:fs";
-import { lstat, open, opendir, realpath, stat } from "node:fs/promises";
+import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, renameSync } from "node:fs";
+import { lstat, open, opendir, realpath, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
-import { ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata, type WorkspaceFileEntry } from "../protocol/artifacts.ts";
+import { ARTIFACT_EDIT_BYTES, ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata, type WorkspaceFileEntry } from "../protocol/artifacts.ts";
 
 const MAX_HANDLES = 64;
 const MAX_READS = 4;
@@ -26,19 +26,21 @@ function inside(root: string, path: string) {
 }
 
 interface Scope { sessionId: string; cwd: string; sessionPath?: string }
-interface Grant { scope: Scope; path: string; requested: string; readRoot: string; touched: number }
+interface Grant { scope: Scope; path: string; requested: string; readRoot: string; external: boolean; touched: number }
 
 function metadataIdentity(info: import("node:fs").BigIntStats) {
   return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(":");
 }
 
-/** Authenticated requests grant one read-only file or one scoped directory cursor.
+/** Authenticated reads grant one file or one scoped directory cursor.
+ * Saving is a separate explicit, revision-checked workspace-only operation.
  * No persistence, background filesystem reads, or model-facing tools. */
 export class ArtifactReader {
   private readonly handles = new Map<string, Grant>();
   private readonly listings = new Map<string, { key: string; scan: AsyncGenerator<WorkspaceFileEntry | null>; checks: Map<string, import("node:fs").BigIntStats>; next: IteratorResult<WorkspaceFileEntry | null>; timer: ReturnType<typeof setTimeout> }>();
   private scopeKey = "";
   private reads = 0;
+  private readonly saving = new Set<string>();
   private disposed = false;
   private readonly currentScope: () => Scope | undefined;
   constructor(currentScope: () => Scope | undefined) { this.currentScope = currentScope; }
@@ -211,7 +213,7 @@ export class ArtifactReader {
       this.assertScope(scope);
       if (this.handles.size >= MAX_HANDLES) throw new ArtifactError("ARTIFACT_LIMIT", 429, "Too many open files. Close a preview before opening another.");
       const handle = randomUUID();
-      this.handles.set(handle, { scope, path, requested, readRoot, touched: Date.now() });
+      this.handles.set(handle, { scope, path, requested, readRoot, external, touched: Date.now() });
       return handle;
     } catch (error) { throw this.classify(error); }
   }
@@ -267,7 +269,7 @@ export class ArtifactReader {
         const revision = createHash("sha256").update(bytes).digest("hex");
         if (expectedRevision && revision !== expectedRevision) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file has a newer version. Refresh before downloading.");
         const textual = !/\.(?:pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|zip)$/iu.test(grant.path) && !bytes.includes(0) && isUtf8(bytes);
-        const artifact: ArtifactMetadata = { handle, sessionId, path: grant.path, name: basename(grant.path), revision, bytes: length, preview: textual ? "text" : "unsupported" };
+        const artifact: ArtifactMetadata = { handle, sessionId, path: grant.path, name: basename(grant.path), revision, bytes: length, preview: textual ? "text" : "unsupported", editable: textual && length <= ARTIFACT_EDIT_BYTES && !grant.external };
         const lines = textual ? new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(offset, offset + ARTIFACT_PREVIEW_BYTES), { stream: length > offset + ARTIFACT_PREVIEW_BYTES }).split("\n") : undefined;
         const text = lines?.slice(0, ARTIFACT_PREVIEW_LINES).join("\n");
         const nextOffset = offset + Buffer.byteLength(text ?? "");
@@ -276,6 +278,57 @@ export class ArtifactReader {
       } finally { await file.close(); }
     } catch (error) { throw this.classify(error); }
     finally { this.reads--; }
+  }
+
+  async save(handle: string, sessionId: string, revision: string, text: string) {
+    const grant = this.requireGrant(handle, sessionId);
+    if (grant.external) throw denied();
+    if (!/^[a-f0-9]{64}$/u.test(revision)) throw denied();
+    const bytes = Buffer.from(text, "utf8");
+    if (bytes.length > ARTIFACT_EDIT_BYTES) throw new ArtifactError("ARTIFACT_TOO_LARGE", 413, "Editing is limited to 1 MiB of UTF-8 text.");
+    if (bytes.includes(0) || bytes.toString("utf8") !== text) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Only UTF-8 text can be saved.");
+    if (this.saving.has(grant.path)) throw new ArtifactError("ARTIFACT_BUSY", 409, "This file is already being saved.");
+    this.saving.add(grant.path);
+    let temporary: string | undefined;
+    try {
+      const before = await this.read(handle, sessionId, revision);
+      if (!before.preview.artifact.editable) throw denied();
+      const info = await lstat(grant.path, { bigint: true });
+      if (metadataIdentity(info) !== before.preview.identity) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
+      const directory = dirname(grant.path);
+      const directoryInfo = await lstat(directory, { bigint: true });
+      temporary = resolve(directory, `.openpi-save-${randomUUID()}`);
+      const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), Number(info.mode & 0o777n));
+      try { await file.chmod(Number(info.mode & 0o777n)); await file.writeFile(bytes); await file.sync(); }
+      finally { await file.close(); }
+      const current = await this.canonical(grant.scope, grant.requested);
+      // No await between the final identity/content checks and atomic replacement:
+      // another HTTP save or Session transition cannot interleave this commit.
+      this.assertScope(grant.scope);
+      if (this.handles.get(handle) !== grant || current.path !== grant.path) throw denied();
+      const parent = lstatSync(directory, { bigint: true });
+      const latest = lstatSync(grant.path, { bigint: true });
+      if (parent.dev !== directoryInfo.dev || parent.ino !== directoryInfo.ino || !latest.isFile() || metadataIdentity(latest) !== before.preview.identity)
+        throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
+      const descriptor = openSync(grant.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      try {
+        const snapshot = fstatSync(descriptor, { bigint: true });
+        if (!snapshot.isFile() || metadataIdentity(snapshot) !== before.preview.identity) throw denied();
+        const content = Buffer.alloc(Number(snapshot.size) + 1);
+        let length = 0;
+        while (length < content.length) {
+          const count = readSync(descriptor, content, length, content.length - length, length);
+          if (!count) break;
+          length += count;
+        }
+        if (metadataIdentity(fstatSync(descriptor, { bigint: true })) !== before.preview.identity || createHash("sha256").update(content.subarray(0, length)).digest("hex") !== revision)
+          throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
+        renameSync(temporary, grant.path);
+      } finally { closeSync(descriptor); }
+      temporary = undefined;
+      return { revision: createHash("sha256").update(bytes).digest("hex") };
+    } catch (error) { throw this.classify(error); }
+    finally { if (temporary) await unlink(temporary).catch(() => undefined); this.saving.delete(grant.path); }
   }
 
   release(handle: string, sessionId: string) {

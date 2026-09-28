@@ -329,6 +329,19 @@ export class WebClient {
     );
   }
 
+  saveArtifact(artifact: ArtifactMetadata, revision: string, text: string) {
+    return this.request<{ revision: string }>("/api/artifacts/save", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: artifact.sessionId,
+        handle: artifact.handle,
+        revision,
+        text,
+        access: "write-workspace-file",
+      }),
+    });
+  }
+
   async downloadArtifact(
     artifact: Pick<ArtifactMetadata, "sessionId" | "handle" | "revision">,
     signal: AbortSignal,

@@ -1,5 +1,4 @@
 import DOMPurify from "dompurify";
-import { Code2, Eye } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ArtifactPreview } from "../../../../protocol/artifacts.ts";
@@ -7,6 +6,7 @@ import { Markdown } from "../../components/Markdown.tsx";
 import type { WebClient } from "../../protocol/client.ts";
 import DocumentPreview, { DataTable, HtmlFrame } from "./DocumentPreview.tsx";
 import { parseDelimited } from "./preview-data.ts";
+import { MarkdownOutline } from "./MarkdownOutline.tsx";
 
 function SourcePreview({ text, name }: { text: string; name: string }) {
   const [html, setHtml] = useState("");
@@ -75,24 +75,17 @@ function SourcePreview({ text, name }: { text: string; name: string }) {
 export function FileContent({
   preview,
   client,
+  source = false,
 }: {
   preview: ArtifactPreview;
   client: WebClient;
+  source?: boolean;
 }) {
   const { t } = useTranslation();
-  const [source, setSource] = useState(false);
   const { name } = preview.artifact;
   const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
   const text = preview.text;
-  const visualText = [
-    "md",
-    "markdown",
-    "html",
-    "htm",
-    "svg",
-    "csv",
-    "tsv",
-  ].includes(extension);
+  const visualText = hasVisualFilePreview(name);
   const table = useMemo(
     () =>
       ["csv", "tsv"].includes(extension)
@@ -105,31 +98,12 @@ export function FileContent({
   if (text === undefined) return <p>{t("artifactUnsupported")}</p>;
   return (
     <>
-      {visualText && (
-        <div className="file-preview-toolbar">
-          <button
-            type="button"
-            aria-pressed={!source}
-            onClick={() => setSource(false)}
-          >
-            <Eye aria-hidden="true" />
-            {t("filesPreview")}
-          </button>
-          <button
-            type="button"
-            aria-pressed={source}
-            onClick={() => setSource(true)}
-          >
-            <Code2 aria-hidden="true" />
-            {t("filesSource")}
-          </button>
-          <span>{t("artifactReadOnly")}</span>
-        </div>
-      )}
       {source || !visualText ? (
         <SourcePreview text={text} name={name} />
       ) : ["md", "markdown"].includes(extension) ? (
-        <Markdown filePreview>{text}</Markdown>
+        <MarkdownOutline text={text}>
+          <Markdown filePreview>{text}</Markdown>
+        </MarkdownOutline>
       ) : table ? (
         <DataTable table={table} />
       ) : (
@@ -137,4 +111,8 @@ export function FileContent({
       )}
     </>
   );
+}
+
+export function hasVisualFilePreview(name: string) {
+  return /\.(?:md|markdown|html?|svg|csv|tsv)$/iu.test(name);
 }

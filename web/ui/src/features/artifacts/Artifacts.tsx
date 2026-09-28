@@ -1,10 +1,21 @@
-import { Check, Clipboard, Download, RefreshCw, X } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  Clipboard,
+  Code2,
+  Download,
+  Eye,
+  RotateCcw,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import {
   forwardRef,
   type ReactNode,
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,7 +28,8 @@ import type {
 import { copyText } from "../../lib/clipboard.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
 import { sniffPromptImageMime } from "../composer/image-attachments.ts";
-import { FileContent } from "../files/FileContent.tsx";
+import { FileContent, hasVisualFilePreview } from "../files/FileContent.tsx";
+import { useFileEditor } from "../files/use-file-editor.ts";
 import { ArtifactContext } from "./context.ts";
 import "../files/files.css";
 
@@ -149,6 +161,8 @@ export const ArtifactProvider = forwardRef<
     external?: boolean;
   } | null>(null);
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
+  const [source, setSource] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accessDenied, setAccessDenied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -161,6 +175,9 @@ export const ArtifactProvider = forwardRef<
   const opener = useRef<HTMLElement | null>(null);
   const copyGeneration = useRef(0);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const editorInput = useRef<HTMLTextAreaElement>(null);
+  const previewBody = useRef<HTMLDivElement>(null);
+  const previewScroll = useRef(0);
   const downloadAbort = useRef<AbortController | null>(null);
   const blobUrls = useRef(new Set<string>());
   const nextParent = useRef<string | undefined>(undefined);
@@ -199,6 +216,9 @@ export const ArtifactProvider = forwardRef<
       focusClose.current = true;
       copyGeneration.current++;
       setPreview(null);
+      setSource(false);
+      setEditing(false);
+      previewScroll.current = 0;
       setError(null);
       setAccessDenied(false);
       setCopyStatus(null);
@@ -246,6 +266,11 @@ export const ArtifactProvider = forwardRef<
     [onClose, request, requestInScope, scope],
   );
   useImperativeHandle(ref, () => ({ close }), [close]);
+  useLayoutEffect(() => {
+    if (editing) editorInput.current?.focus({ preventScroll: true });
+    else if (previewBody.current)
+      previewBody.current.scrollTop = previewScroll.current;
+  }, [editing]);
   useEffect(() => {
     if (!request || requestInScope) return;
     copyGeneration.current++;
@@ -382,6 +407,30 @@ export const ArtifactProvider = forwardRef<
   const context = useMemo(() => ({ open, disabled }), [open, disabled]);
   const path = preview?.artifact.path ?? request?.reference ?? "";
   const name = preview?.artifact.name ?? path.split(/[\\/]/u).at(-1) ?? path;
+  const editor = useFileEditor(
+    preview,
+    sessionPath,
+    client,
+    (text, revision) => {
+      setPreview((value) =>
+        value
+          ? {
+              ...value,
+              text,
+              truncated: false,
+              nextOffset: undefined,
+              artifact: {
+                ...value.artifact,
+                revision,
+                bytes: new TextEncoder().encode(text).length,
+              },
+            }
+          : value,
+      );
+      setChanged(false);
+      setRequest((value) => (value ? { ...value } : value));
+    },
+  );
   const download = async () => {
     if (!preview || busy) return;
     const controller = new AbortController();
@@ -451,6 +500,16 @@ export const ArtifactProvider = forwardRef<
           aria-label={t("filePreview")}
           onKeyDown={(event) => {
             if (
+              embedded &&
+              (event.metaKey || event.ctrlKey) &&
+              event.key.toLowerCase() === "s"
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+              void editor.save();
+              return;
+            }
+            if (
               event.key === "Escape" &&
               !event.nativeEvent.isComposing &&
               !event.defaultPrevented
@@ -462,27 +521,107 @@ export const ArtifactProvider = forwardRef<
           }}
         >
           <header>
-            <div>
+            <div className="artifact-title">
               <small title={path}>
                 {embedded
                   ? path.split(/[\\/]/u).slice(0, -1).at(-1) || t("files")
                   : `${t("filePreview")} · ${t("artifactReadOnly")}`}
               </small>
+              {embedded && <ChevronRight aria-hidden="true" />}
               <h2 title={path}>{name}</h2>
+              {editor.dirty && (
+                <span
+                  className="file-unsaved"
+                  role="img"
+                  title={t("filesUnsaved")}
+                  aria-label={t("filesUnsaved")}
+                >
+                  ●
+                </span>
+              )}
             </div>
-            <button
-              ref={closeButton}
-              type="button"
-              aria-label={t("closePreview")}
-              title={t("closePreview")}
-              onClick={() => close()}
-            >
-              <X aria-hidden="true" />
-            </button>
-          </header>
-          <div className="artifact-panel-body">
-            <div className="artifact-source">
-              <code title={path}>{path}</code>
+            <div className="artifact-header-actions">
+              {embedded && preview?.text !== undefined && (
+                <>
+                  <fieldset
+                    className="file-mode-switch"
+                    aria-label={t("filesMode")}
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={!editing}
+                      onClick={() => setEditing(false)}
+                    >
+                      {t("filesPreview")}
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={editing}
+                      disabled={!editor.canEdit}
+                      title={t(
+                        preview.truncated
+                          ? "filesEditLoadFirst"
+                          : !preview.artifact.editable
+                            ? "filesEditUnavailable"
+                            : "filesEdit",
+                      )}
+                      onClick={() => {
+                        previewScroll.current =
+                          previewBody.current?.scrollTop ?? 0;
+                        setEditing(true);
+                      }}
+                    >
+                      {t("filesEdit")}
+                    </button>
+                  </fieldset>
+                  <button
+                    type="button"
+                    title={t(
+                      editor.saving
+                        ? "filesSaving"
+                        : editor.dirty
+                          ? "filesSave"
+                          : "filesSaved",
+                    )}
+                    aria-label={t(editor.saving ? "filesSaving" : "filesSave")}
+                    disabled={!editor.dirty || editor.saving || !editor.canEdit}
+                    onClick={() => void editor.save()}
+                  >
+                    <Check aria-hidden="true" />
+                  </button>
+                  {editor.dirty && (
+                    <button
+                      type="button"
+                      title={t("filesDiscard")}
+                      aria-label={t("filesDiscard")}
+                      disabled={editor.saving}
+                      onClick={() => {
+                        if (window.confirm(t("filesDiscardConfirm")))
+                          editor.discard();
+                      }}
+                    >
+                      <RotateCcw aria-hidden="true" />
+                    </button>
+                  )}
+                </>
+              )}
+              {!embedded &&
+                preview?.text !== undefined &&
+                hasVisualFilePreview(name) && (
+                  <button
+                    type="button"
+                    className="file-source-toggle"
+                    aria-pressed={source}
+                    onClick={() => setSource((value) => !value)}
+                  >
+                    {source ? (
+                      <Eye aria-hidden="true" />
+                    ) : (
+                      <Code2 aria-hidden="true" />
+                    )}
+                    {t(source ? "filesPreview" : "filesSource")}
+                  </button>
+                )}
               <button
                 type="button"
                 aria-label={t("copyFilePath")}
@@ -501,13 +640,6 @@ export const ArtifactProvider = forwardRef<
                   <Clipboard aria-hidden="true" />
                 )}
               </button>
-            </div>
-            {copyStatus && (
-              <p role="status">
-                {t(copyStatus === "copied" ? "filePathCopied" : "copyFailed")}
-              </p>
-            )}
-            <div className="artifact-actions">
               <button
                 type="button"
                 title={t("refreshFile")}
@@ -544,7 +676,28 @@ export const ArtifactProvider = forwardRef<
                 <Download aria-hidden="true" />{" "}
                 {busy ? t("downloadingFile") : t("downloadFile")}
               </button>
+              <button
+                ref={closeButton}
+                type="button"
+                aria-label={t("closePreview")}
+                title={t("closePreview")}
+                onClick={() => close()}
+              >
+                <X aria-hidden="true" />
+              </button>
             </div>
+          </header>
+          <div className="artifact-panel-body" ref={previewBody}>
+            {!embedded && (
+              <div className="artifact-source">
+                <code title={path}>{path}</code>
+              </div>
+            )}
+            {copyStatus && (
+              <p role="status">
+                {t(copyStatus === "copied" ? "filePathCopied" : "copyFailed")}
+              </p>
+            )}
             {error && (
               <p role="status" className="evidence-warning">
                 {preview ? t("artifactOlderPreview") : ""}
@@ -555,6 +708,32 @@ export const ArtifactProvider = forwardRef<
               <p className="evidence-warning" role="status">
                 {t("filesContentChanged")}
               </p>
+            )}
+            {editor.message && (
+              <p
+                role="status"
+                className={
+                  editor.message.error ? "evidence-warning" : "file-save-status"
+                }
+              >
+                {editor.message.text}
+              </p>
+            )}
+            {editor.conflict && (
+              <div className="file-conflict">
+                <p>{t("filesSaveConflict")}</p>
+                <details>
+                  <summary>{t("filesDiskVersion")}</summary>
+                  <pre>{preview?.text}</pre>
+                </details>
+                <button
+                  type="button"
+                  disabled={!editor.canEdit || editor.saving}
+                  onClick={editor.reconcile}
+                >
+                  {t("filesReconcile")}
+                </button>
+              </div>
             )}
             {accessDenied &&
               !request.external &&
@@ -606,11 +785,35 @@ export const ArtifactProvider = forwardRef<
                       sessionId,
                     }}
                   >
-                    <FileContent
-                      key={`${preview.artifact.path}:${preview.artifact.revision}`}
-                      preview={preview}
-                      client={client}
-                    />
+                    {embedded && editor.canEdit && (
+                      <textarea
+                        ref={editorInput}
+                        hidden={!editing}
+                        className="file-editor"
+                        aria-label={t("filesEditor")}
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        maxLength={1024 * 1024}
+                        value={editor.text}
+                        disabled={editor.saving}
+                        onChange={(event) =>
+                          editor.change(event.currentTarget.value)
+                        }
+                      />
+                    )}
+                    {!(embedded && editing && editor.canEdit) && (
+                      <FileContent
+                        key={`${preview.artifact.path}:${preview.artifact.revision}`}
+                        preview={
+                          editor.dirty
+                            ? { ...preview, text: editor.text }
+                            : preview
+                        }
+                        client={client}
+                        source={source}
+                      />
+                    )}
                   </ArtifactContext.Provider>
                 )}
                 {preview.nextOffset !== undefined && (
