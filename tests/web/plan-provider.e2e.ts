@@ -1,11 +1,12 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MODEL_ID,
   PROVIDER_ID,
+  deferProviderWorkspaceCleanup,
   startFakeProvider,
 } from "./provider-e2e-support.ts";
 
@@ -201,7 +202,7 @@ test("Plan switch changes only owner state; first message gets planning context 
     ).toBeVisible();
   } finally {
     await provider.close();
-    await rm(workspace, { recursive: true, force: true });
+    deferProviderWorkspaceCleanup(workspace);
   }
 });
 
@@ -549,7 +550,7 @@ for (const theme of ["light", "dark"] as const) {
       for (const step of streamSteps) step.release();
       releaseFinish();
       await provider.close();
-      await rm(workspace, { recursive: true, force: true });
+      deferProviderWorkspaceCleanup(workspace);
     }
   });
 }
@@ -682,6 +683,28 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     expect(provider.requests).toHaveLength(3);
     await expect(access(implementationFile)).rejects.toThrow();
 
+    await input.fill("/plan");
+    await input.press("Enter");
+    await expect(input).toHaveValue("/plan ");
+    await input.press("Enter");
+    await expect(
+      page.getByText(
+        "Use `/plan implement`, `/plan fresh`, or `/plan off` in a UI session.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    expect(provider.requests).toHaveLength(3);
+
+    await input.fill("/plan implement");
+    await input.press("Enter");
+    await expect(
+      page.getByText(
+        "Implementing a ready plan requires an interactive editor.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    expect(provider.requests).toHaveLength(3);
+
     await input.fill("/plan fresh");
     await input.press("Enter");
     await expect(
@@ -779,6 +802,9 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     expect(provider.requests).toHaveLength(3);
     await expect(access(implementationFile)).rejects.toThrow();
 
+    const editedInstruction =
+      "Additional approved instruction: preserve the existing file.";
+    await input.fill(`${await input.inputValue()}\n\n${editedInstruction}`);
     await input.press("Enter");
     await expect
       .poll(async () => {
@@ -801,6 +827,10 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
       "written after explicit submission",
     );
     expect(provider.requests).toHaveLength(5);
+    expect(provider.requests[3]).toBeDefined();
+    expect(JSON.stringify(provider.requests[3]!.body)).toContain(
+      editedInstruction,
+    );
     await expect(
       page.getByText("Implementation finished.", { exact: true }),
     ).toBeVisible();
@@ -813,7 +843,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
       .toBe("idle");
   } finally {
     await provider.close();
-    await rm(workspace, { recursive: true, force: true });
+    deferProviderWorkspaceCleanup(workspace);
   }
 });
 
@@ -901,6 +931,6 @@ test("Plan off gives a visible receipt and clears a ready Plan without another m
     expect(provider.requests).toHaveLength(1);
   } finally {
     await provider.close();
-    await rm(workspace, { recursive: true, force: true });
+    deferProviderWorkspaceCleanup(workspace);
   }
 });

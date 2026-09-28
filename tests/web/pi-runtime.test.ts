@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
 import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import { matchesSessionIdentity } from "../../web/runtime/session-identity.ts";
@@ -12,7 +13,6 @@ import {
   WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
 import { acquireWebHostLease } from "../../web/runtime/web-host-lease.ts";
-import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
 
 type Trace = {
   commandId: string;
@@ -354,7 +354,7 @@ function lifecycleHarness(runtime: LifecycleRuntime) {
   harness.disposed = false;
   harness.dispatcherLease = { release: async () => undefined };
   harness.webHostLease = { release: async () => undefined };
-  harness.webSessionDirectory = "/tmp/openpi-test-sessions";
+  harness.webSessionDirectory = join(tmpdir(), "openpi-test-sessions");
   return harness;
 }
 

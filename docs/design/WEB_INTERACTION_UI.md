@@ -179,9 +179,8 @@ Source: [Issue #470](https://github.com/openpi-dev/openpi/issues/470).
 
 Local verification on 2026-09-28 used Node.js and the installed Chrome browser:
 
-- Both TypeScript checks passed; the Web bundle built successfully with Vite's existing 500 KB chunk-size advisory.
-- Plan control tests passed (4/4); runtime admission tests passed (2/2); focused Composer/Store Vitest passed (3 tests, 171 unrelated cases skipped).
-- The Playwright Plan Ready scenario reported `ok` for all browser assertions, including blocked and approved writes, but the runner stayed active after the test and was interrupted; its process did not exit successfully.
-- The aggregate suite and the full 51-case Pi runtime file did not complete. An earlier aggregate attempt timed out two real-Pi setup-writer cases; both passed in isolated reruns. No full-suite result is claimed.
-
-The pull request has not been created or published.
+- Both TypeScript checks passed; the Web bundle built successfully with the existing 500 KB chunk-size advisory (main bundle: 1,336.65 kB).
+- A direct Node run using the repository's Windows process-tree grouping, with the remaining files capped at `--test-concurrency=2`, passed the complete Node suite (1,920 passed, 11 skipped, 0 failed); the complete Vitest suite passed (351/351).
+- The provider Playwright suite passed (14/14), including the Plan Ready browser handoff. The server port closed and the deferred workspace-cleanup manifest was removed.
+- The default parallel aggregate command (`node scripts/run-tests.mjs`) exited nonzero on this Windows host with six process-sensitive failures. Those same six passed together in a focused run (6/6), and the complete suite passed under the bounded run above. The default-concurrency run is not claimed green; CI evidence remains pending.
+- Biome format/lint and config/docs/discipline contracts passed.

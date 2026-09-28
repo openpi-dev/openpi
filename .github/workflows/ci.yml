@@ -192,12 +192,15 @@ jobs:
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
       - run: bun run test:web:e2e
+      - run: bun run test:web:e2e:provider
       - name: Upload Playwright failure artifacts
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: openpi-web-playwright-results
-          path: /tmp/openpi-web-playwright-results
+          path: |
+            /tmp/openpi-web-playwright-results
+            /tmp/openpi-web-provider-playwright-results
           if-no-files-found: ignore
           retention-days: 7
 

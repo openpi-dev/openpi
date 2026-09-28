@@ -2,11 +2,7 @@ import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
-import {
-  seedAgentDirectory,
-  WEB_PORT,
-  WEB_TOKEN,
-} from "./provider-e2e-support.ts";
+import { WEB_PORT } from "./provider-e2e-support.ts";
 
 const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -18,13 +14,6 @@ const outputDirectory = resolve(
   tmpdir(),
   "openpi-web-provider-playwright-results",
 );
-const agentDirectory = resolve(outputDirectory, "agent");
-
-// The seeded agent dir is isolated from the default suite. It must exist before
-// the backend starts because ModelConfig reads it during runtime creation.
-seedAgentDirectory(agentDirectory, repositoryRoot);
-
-process.env.OPENPI_WEB_E2E_TOKEN = WEB_TOKEN;
 
 export default defineConfig({
   testDir: repositoryRoot,
@@ -48,16 +37,8 @@ export default defineConfig({
       ? { launchOptions: { executablePath: browserExecutable } }
       : {}),
   },
-  webServer: {
-    command: `node --experimental-strip-types ./bin/openpi.js web --no-workspace --port ${WEB_PORT} --no-open`,
-    cwd: repositoryRoot,
-    env: {
-      ...process.env,
-      OPENPI_WEB_TOKEN: WEB_TOKEN,
-      PI_CODING_AGENT_DIR: agentDirectory,
-    },
-    reuseExistingServer: false,
-    timeout: 30_000,
-    url: origin,
-  },
+  globalSetup: resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "playwright-provider-global-setup.ts",
+  ),
 });
