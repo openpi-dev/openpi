@@ -184,8 +184,9 @@ function promptSession(sessionId: string) {
   let followUpMessages: string[] = [];
   return {
     isStreaming: false,
+    isCompacting: false,
     get isIdle() {
-      return !this.isStreaming;
+      return !this.isStreaming && !this.isCompacting;
     },
     pendingMessageCount: 0,
     sessionManager: {
@@ -417,6 +418,72 @@ function promptHarness(session: ReturnType<typeof promptSession>) {
   harness.webHostLease = { release: async () => undefined };
   return harness;
 }
+
+test("compaction preflight is busy, rejects extra prompts, and projects exact native outcomes without Session writes", async () => {
+  const session = promptSession("compacting-session");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  // Private projection methods are exercised through their native subscriber seam.
+  const projection = runtime as unknown as {
+    projectEvent(session: object, event: object): void;
+    getCompaction(
+      session: object,
+    ): { state: string; startedAt?: number; elapsedMs?: number } | undefined;
+  };
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  let writes = 0;
+  session.sessionManager.appendCustomEntry = () => {
+    writes++;
+    return "unexpected";
+  };
+  session.isCompacting = true;
+  assert.equal(api.isIdle(), false);
+  assert.deepEqual(projection.getCompaction(session), { state: "running" });
+  await assert.rejects(
+    runtime.sendPrompt("extra", { expectedSessionId: "compacting-session" }),
+    /compaction is in progress/,
+  );
+  assert.equal(session.calls.length, 0);
+  for (const [detail, state] of [
+    [{ result: { summary: "private summary" } }, "completed"],
+    [{ aborted: true }, "cancelled"],
+    [{ errorMessage: "private provider error" }, "failed"],
+    [{}, "unchanged"],
+  ] as const) {
+    projection.projectEvent(session, {
+      type: "compaction_start",
+      reason: "overflow",
+    });
+    const running = projection.getCompaction(session)!;
+    assert.equal(running.state, "running");
+    assert.ok(running.startedAt! > 0);
+    assert.ok(running.elapsedMs! >= 0);
+    projection.projectEvent(session, {
+      type: "compaction_end",
+      reason: "overflow",
+      result: undefined,
+      aborted: false,
+      willRetry: false,
+      ...detail,
+    });
+    assert.equal(projection.getCompaction(session)?.state, state);
+  }
+  assert.equal(writes, 0);
+  assert.equal(
+    events.filter((event) => event.type === "session_progress").length,
+    8,
+  );
+  assert.doesNotMatch(JSON.stringify(events), /private/);
+  assert.equal(
+    projection.getCompaction(promptSession("another-session")),
+    undefined,
+  );
+  session.isCompacting = false;
+  session.sessionManager.getSessionFile = () => "/different-copy.jsonl";
+  assert.equal(projection.getCompaction(session), undefined);
+  assert.equal(api.isIdle(), true);
+});
 
 test("Plan control targets the active idle owned Session without admitting a prompt", async () => {
   const session = promptSession("session-a");

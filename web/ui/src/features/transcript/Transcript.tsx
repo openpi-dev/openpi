@@ -63,12 +63,14 @@ import {
 import { ToolEvidence } from "./ToolEvidence.tsx";
 import { TurnChangesCard } from "./TurnChangesCard.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
+import { CompactionStatus } from "./CompactionStatus.tsx";
 import { useSessionHistory } from "./use-session-history.ts";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
 >["entries"][number];
 interface DisplayEntry {
+  compaction?: true;
   key: string;
   entryId?: string;
   timingKey?: string;
@@ -79,6 +81,7 @@ interface DisplayEntry {
 }
 
 interface TranscriptProps {
+  activityObserved?: boolean;
   snapshot: WebSnapshot;
   liveMessages: LiveEntry[];
   liveRunning: boolean;
@@ -821,6 +824,19 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
     ]),
   );
   const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] => {
+    if (entry.type === "compaction")
+      return [
+        {
+          key: entry.id,
+          entryId: entry.id,
+          timestamp: entry.timestamp,
+          compaction: true,
+          message: {
+            role: "custom",
+            content: "",
+          },
+        },
+      ];
     if (
       "turnTiming" in entry &&
       entry.turnTiming &&
@@ -1501,6 +1517,15 @@ export function Transcript(props: TranscriptProps) {
             content: <SettledTurnElapsed timing={entry.timing} />,
           },
         ];
+      if (entry.compaction)
+        return [
+          {
+            key: entry.key,
+            turn,
+            kind: "custom",
+            content: <CompactionStatus compaction={{ state: "completed" }} />,
+          },
+        ];
       if (message.role === "custom") {
         if (
           message.display === false ||
@@ -2121,13 +2146,30 @@ export function Transcript(props: TranscriptProps) {
         )}
         {renderTurns(
           rows,
-          running && !historyPaused,
+          running &&
+            !historyPaused &&
+            selectedExecution?.compaction?.state !== "running",
           props.snapshot.preferences.expandThinking === true,
           activeTurn?.commandId,
           changesByPrompt,
           selected,
         )}
-        {running && (
+        {selectedExecution?.compaction &&
+          selectedExecution.compaction.state !== "completed" && (
+            <CompactionStatus
+              key={JSON.stringify([
+                selected?.id,
+                selected?.path,
+                selectedExecution.compaction.startedAt,
+              ])}
+              compaction={selectedExecution.compaction}
+              observed={
+                props.activityObserved !== false &&
+                selectedExecution.status !== "unknown"
+              }
+            />
+          )}
+        {running && selectedExecution?.compaction?.state !== "running" && (
           <div
             className="conversation-running"
             role="status"

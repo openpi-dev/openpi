@@ -110,12 +110,13 @@ function snapshot({
   } satisfies WebSnapshot;
 }
 
-function view(value: WebSnapshot) {
+function view(value: WebSnapshot, activityObserved = true) {
   return createElement(
     I18nextProvider,
     { i18n },
     createElement(Transcript, {
       snapshot: value,
+      activityObserved,
       liveMessages: [],
       liveRunning: value.runtime.status === "running",
       livePhase: value.runtime.status === "running" ? "running" : "idle",
@@ -129,6 +130,98 @@ function view(value: WebSnapshot) {
 }
 
 afterEach(cleanup);
+
+it("shows one compaction status before an agent turn, freezes on disconnect, and restores persisted completion", () => {
+  const value: WebSnapshot = snapshot();
+  value.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/session.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    compaction: { state: "running", startedAt: 1, elapsedMs: 12_000 },
+  };
+  const { container, rerender, getByText, queryByText } = render(view(value));
+  expect(getByText(i18n.t("compactionRunning"))).toBeTruthy();
+  expect(container.querySelectorAll('[data-state="running"]')).toHaveLength(1);
+  expect(container.querySelector(".conversation-running")).toBeNull();
+  expect(container.querySelector('[role="timer"]')?.textContent).toContain(
+    "12",
+  );
+  rerender(view(value, false));
+  expect(getByText(i18n.t("compactionUnavailable"))).toBeTruthy();
+  expect(container.querySelector('[role="timer"]')).toBeNull();
+  expect(container.querySelector(".context-compaction-spinner")).toBeNull();
+  rerender(view(value));
+  expect(getByText(i18n.t("compactionRunning"))).toBeTruthy();
+  value.selectedExecution = {
+    ...value.selectedExecution,
+    status: "idle",
+    compaction: { state: "completed" },
+  };
+  value.selectedSession = {
+    ...value.selectedSession!,
+    entries: [
+      ...value.selectedSession!.entries,
+      {
+        type: "compaction",
+        id: "native-compaction",
+        timestamp: "2026-09-29T00:00:00Z",
+      },
+    ],
+  };
+  rerender(view({ ...value }));
+  expect(queryByText(i18n.t("compactionRunning"))).toBeNull();
+  expect(container.querySelectorAll('[data-state="completed"]')).toHaveLength(
+    1,
+  );
+  delete value.selectedExecution;
+  rerender(view({ ...value }));
+  expect(getByText(i18n.t("compactionCompleted"))).toBeTruthy();
+});
+
+it.each(["failed", "cancelled", "unchanged"] as const)(
+  "does not label compaction %s as successful or keep its spinner",
+  (state) => {
+    const value: WebSnapshot = snapshot();
+    value.selectedExecution = {
+      sessionId: "session",
+      sessionPath: "/session.jsonl",
+      status: "idle",
+      liveTools: [],
+      liveToolsOmitted: 0,
+      compaction: { state },
+    };
+    const { container, rerender } = render(view(value));
+    expect(container.querySelector(`[data-state="${state}"]`)).toBeTruthy();
+    expect(container.querySelector(".context-compaction-spinner")).toBeNull();
+    expect(container.querySelector('[data-state="completed"]')).toBeNull();
+    value.selectedExecution.sessionPath = "/another-copy.jsonl";
+    rerender(view({ ...value }));
+    expect(container.querySelector(".context-compaction")).toBeNull();
+  },
+);
+
+it("requires a native compaction entry rather than a message claiming compaction completed", () => {
+  const value: WebSnapshot = snapshot();
+  value.selectedSession = {
+    ...value.selectedSession!,
+    entries: [
+      {
+        id: "claim",
+        type: "message",
+        timestamp: "2026-09-29T00:00:00Z",
+        message: {
+          role: "custom",
+          customType: "openpi-context-compacted",
+          content: "Completed",
+        },
+      },
+    ],
+  };
+  const { container } = render(view(value));
+  expect(container.querySelector(".context-compaction")).toBeNull();
+});
 
 it.each([undefined, "aborted", "error"] as const)(
   "keeps an unpaired historical tool neutral after %s instead of inventing execution or completion",

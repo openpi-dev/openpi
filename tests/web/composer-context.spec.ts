@@ -130,6 +130,57 @@ function setup(overrides: Record<string, unknown> = {}) {
   return { ...view, node, props, sendPrompt, discoverCommands };
 }
 
+it("keeps the draft editable during preflight compaction without offering false queue or stop actions", async () => {
+  const value = snapshot();
+  value.runtime.status = "running";
+  value.selectedExecution = {
+    sessionId: "session-1",
+    sessionPath: "/tmp/workspace/one.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    compaction: { state: "running" },
+  };
+  const { sendPrompt, rerender, node, props } = setup({ snapshot: value });
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "Keep this draft" },
+  });
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox").disabled).toBe(false);
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(true);
+  expect(screen.queryByRole("button", { name: i18n.t("stopTurn") })).toBeNull();
+  expect(
+    screen.getAllByText(i18n.t("compactionDraftHelp")).length,
+  ).toBeGreaterThan(0);
+  await act(async () =>
+    fireEvent.submit(screen.getByRole("textbox").closest("form")!),
+  );
+  expect(sendPrompt).not.toHaveBeenCalled();
+  rerender(
+    node({
+      ...props,
+      snapshot: {
+        ...value,
+        selectedExecution: {
+          ...value.selectedExecution,
+          status: "idle",
+          compaction: { state: "completed" },
+        },
+        runtime: { ...value.runtime, status: "idle" },
+      },
+    }),
+  );
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe(
+    "Keep this draft",
+  );
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(false);
+});
+
 it("lets a user click Send for a follow-up while Stop remains available", async () => {
   const value = snapshot();
   value.runtime.status = "running";

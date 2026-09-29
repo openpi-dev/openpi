@@ -1017,6 +1017,7 @@ export function createWebStore(
 
     const runEventLoop = async (signal: AbortSignal) => {
       let reconnectDelay = 500;
+      let refreshOnConnect = false;
       while (!signal.aborted) {
         let recoveryAttempted = false;
         try {
@@ -1035,6 +1036,10 @@ export function createWebStore(
             onConnected: () => {
               reconnectDelay = 500;
               set({ connection: "connected" });
+              if (refreshOnConnect) {
+                refreshOnConnect = false;
+                scheduleSnapshotRefresh(0);
+              }
             },
             onEvent: applyRuntimeEvent,
             onHeartbeat: () => scheduleSnapshotRefresh(0),
@@ -1046,6 +1051,7 @@ export function createWebStore(
           const recovered =
             !recoveryAttempted &&
             (await get().actions.refreshSnapshot({ resetCursor: true }));
+          refreshOnConnect = !recovered;
           if (!recovered) set(resetLivePatch());
           await waitForReconnect(reconnectDelay, signal);
           reconnectDelay = Math.min(reconnectDelay * 2, 5_000);

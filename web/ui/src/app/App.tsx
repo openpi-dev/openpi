@@ -434,12 +434,22 @@ export function App() {
         : "OpenPI";
   const hasMessages =
     selected?.entries.some(
-      (entry) => entry.type === "message" && entry.message,
+      (entry) =>
+        (entry.type === "message" && entry.message) ||
+        entry.type === "compaction",
     ) ||
     Boolean(selected?.history?.beforeEntryId) ||
     state.liveMessages.length > 0;
   const landing =
-    !loading && !state.sessionSwitching && (!selected || !hasMessages);
+    !loading &&
+    !state.sessionSwitching &&
+    (!selected ||
+      (!hasMessages &&
+        !(
+          state.snapshot?.selectedExecution?.sessionId === selected.id &&
+          state.snapshot.selectedExecution?.sessionPath === selected.path &&
+          state.snapshot.selectedExecution.compaction
+        )));
   const resend = useCallback(
     (content: string) => actions.sendPrompt(content),
     [actions],
@@ -621,6 +631,7 @@ export function App() {
                 liveMessages={state.liveMessages}
                 liveRunning={state.liveRunning}
                 livePhase={state.livePhase}
+                activityObserved={state.connection === "connected"}
                 liveRetry={state.liveRetry}
                 thinkingStarts={state.thinkingStarts}
                 thinkingDurations={state.thinkingDurations}

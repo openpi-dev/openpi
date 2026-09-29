@@ -202,6 +202,13 @@ export class PiWebRuntime implements WebRuntimeController {
   private promptOrigins?: AsyncLocalStorage<PromptTrace | undefined>;
   private readonly pendingPromptTraces: PromptTrace[] = [];
   private suspendedPromptTraces?: WeakMap<AgentSession, { active?: PromptTrace; pending: PromptTrace[] }>;
+  private compactionObservations?: WeakMap<AgentSession, {
+    sessionId: string;
+    sessionPath: string;
+    state: NonNullable<WebSessionExecution["compaction"]>["state"];
+    startedAt?: number;
+    clock?: number;
+  }>;
   private nextTurnEpoch = 0;
   private readonly terminalTurnKeys = new Set<string>();
   private readonly turnSettlementWaiters = new Map<
@@ -322,7 +329,7 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   isIdle() {
-    return !this.runtime.session.isStreaming;
+    return !this.runtime.session.isStreaming && !this.runtime.session.isCompacting;
   }
 
   getActiveTurn() {
@@ -337,6 +344,7 @@ export class PiWebRuntime implements WebRuntimeController {
     const followUps = session.getFollowUpMessages();
     const trace = owner === this.runtime ? this.activePromptTrace : this.suspendedPromptTraces?.get(session)?.active;
     const activeTurn = this.activeTurnFromTrace(trace);
+    const compaction = this.getCompaction(session);
     return {
       sessionId, sessionPath,
       status: session.isIdle ? "idle" : "running",
@@ -344,7 +352,44 @@ export class PiWebRuntime implements WebRuntimeController {
       queuedMessages: followUps.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
       ...executingTools(session),
       ...(activeTurn ? { activeTurn } : {}),
+      ...(compaction ? { compaction } : {}),
     };
+  }
+
+  private getCompaction(session: AgentSession) {
+    const observed = this.compactionObservations?.get(session);
+    if (observed && matchesSessionIdentity(session.sessionManager, {
+      expectedSessionId: observed.sessionId, expectedSessionPath: observed.sessionPath,
+    })) {
+      return {
+        state: observed.state,
+        ...(observed.startedAt === undefined ? {} : { startedAt: observed.startedAt }),
+        ...(observed.clock === undefined ? {} : {
+          elapsedMs: elapsed(observed.clock),
+        }),
+      };
+    }
+    // An already-running native compaction may predate the Web subscription.
+    // Its start time is unknown; do not start a fresh timer on reconnect.
+    return session.isCompacting ? { state: "running" as const } : undefined;
+  }
+
+  private observeCompaction(session: AgentSession, event: AgentSessionEvent) {
+    if (event.type !== "compaction_start" && event.type !== "compaction_end") return;
+    this.compactionObservations ??= new WeakMap();
+    const identity = {
+      sessionId: session.sessionManager.getSessionId(),
+      sessionPath: session.sessionManager.getSessionFile() ?? `current:${session.sessionManager.getSessionId()}`,
+    };
+    if (event.type === "compaction_start") {
+      this.compactionObservations.set(session, { ...identity, state: "running", startedAt: Date.now(), clock: performance.now() });
+    } else {
+      this.compactionObservations.set(session, {
+        ...identity,
+        state: event.aborted ? "cancelled" : event.errorMessage ? "failed" : event.result ? "completed" : "unchanged",
+      });
+    }
+    this.emit("session_progress", identity);
   }
 
   getSessionManagerForRead(sessionId: string, sessionPath: string) {
@@ -865,6 +910,9 @@ export class PiWebRuntime implements WebRuntimeController {
     const agentRuntime = this.runtime;
     const session = agentRuntime.session;
     const sessionId = session.sessionManager.getSessionId();
+    if (session.isCompacting) {
+      throw new WebRuntimeRequestError("Context compaction is in progress. Keep your draft and retry when it finishes.", "SESSION_CONFLICT", 409);
+    }
     if (!matchesSessionIdentity(session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
         "Only the active Web session accepts messages",
@@ -923,6 +971,10 @@ export class PiWebRuntime implements WebRuntimeController {
           );
         }
         assertWebCommandSupported(agentRuntime.services, content);
+        if (session.isCompacting) {
+          throw new WebRuntimeRequestError("Context compaction is in progress. Keep your draft and retry when it finishes.", "SESSION_CONFLICT", 409);
+        }
+        this.compactionObservations?.delete(session);
         if (promptTrace && agentRuntime === this.runtime) {
           this.pendingPromptTraces.push(promptTrace);
           this.activePromptTrace ??= this.pendingPromptTraces.shift();
@@ -1402,6 +1454,7 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private projectEvent(session: AgentSession, event: AgentSessionEvent) {
     if (session !== this.runtime.session) return;
+    this.observeCompaction(session, event);
     // A command can return before its native triggerTurn continuation starts.
     // Recover only that async invocation's unused origin, never the last HTTP
     // request or an unrelated run. This also retains its controlling Web tab.
@@ -1680,6 +1733,7 @@ export class PiWebRuntime implements WebRuntimeController {
       });
     };
     const unsubscribe = session.subscribe((event) => {
+      this.observeCompaction(session, event);
       const traces = this.suspendedPromptTraces?.get(session);
       if (traces) {
         if (event.type === "agent_start" || (event.type === "message_start" && event.message.role === "user")) {

@@ -1877,6 +1877,31 @@ describe("OpenPI Web store", () => {
     expect(onEvent).not.toHaveBeenCalled();
   });
 
+  it("closes a silent SSE stream immediately on browser offline without waiting for the heartbeat timeout", async () => {
+    const cancel = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(new ReadableStream({ cancel }), { status: 200 }),
+        ),
+    );
+    const connected = vi.fn();
+    const consuming = consumeEventStream({
+      client: new WebClient(),
+      cursor: 4,
+      onConnected: connected,
+      onEvent: vi.fn(),
+      signal: new AbortController().signal,
+    });
+    const rejected = expect(consuming).rejects.toThrow("event stream aborted");
+    await vi.waitFor(() => expect(connected).toHaveBeenCalledOnce());
+    window.dispatchEvent(new Event("offline"));
+    await rejected;
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("recovers a fresh snapshot when the event stream requires resync", async () => {
     const client = new FakeClient();
     client.snapshots.push(

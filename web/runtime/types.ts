@@ -120,6 +120,12 @@ export interface WebSessionExecution {
   liveTools: LiveToolEvidence[];
   liveToolsOmitted: number;
   activeTurn?: WebActiveTurn;
+  /** Native compaction observation; completion history remains in Pi entries. */
+  compaction?: {
+    state: "running" | "completed" | "failed" | "cancelled" | "unchanged";
+    startedAt?: number;
+    elapsedMs?: number;
+  };
 }
 
 export interface WebTurnCancellationOptions extends WebActiveTurn {}

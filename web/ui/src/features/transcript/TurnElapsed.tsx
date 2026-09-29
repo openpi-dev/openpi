@@ -18,7 +18,13 @@ export function formatTurnDuration(
 }
 
 /** One ticker for the active Pi run; snapshots reconcile its monotonic clock. */
-export function RunningTurnElapsed({ elapsedMs }: { elapsedMs: number }) {
+export function RunningTurnElapsed({
+  elapsedMs,
+  waiting = false,
+}: {
+  elapsedMs: number;
+  waiting?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const baseline = useRef({ elapsedMs, clock: performance.now() });
   const [elapsed, setElapsed] = useState(elapsedMs);
@@ -43,7 +49,7 @@ export function RunningTurnElapsed({ elapsedMs }: { elapsedMs: number }) {
   }, []);
   return (
     <span className="turn-elapsed-running" role="timer" aria-live="off">
-      {t("turnElapsedRunning", {
+      {t(waiting ? "compactionElapsed" : "turnElapsedRunning", {
         duration: formatTurnDuration(elapsed, i18n.language, true),
       })}
     </span>

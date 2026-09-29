@@ -327,6 +327,11 @@ export function Composer(props: ComposerProps) {
         (!selected && !props.snapshot?.currentSessionId)),
   );
   const canCompose = active || draftSession;
+  const compacting =
+    active &&
+    props.snapshot?.selectedExecution?.sessionId === selected?.id &&
+    props.snapshot?.selectedExecution?.sessionPath === selected?.path &&
+    props.snapshot?.selectedExecution?.compaction?.state === "running";
   const running =
     !props.workspaceDraft &&
     (props.snapshot?.runtime.status === "running" || props.liveRunning);
@@ -633,6 +638,10 @@ export function Composer(props: ComposerProps) {
   };
 
   const send = async (event?: FormEvent) => {
+    if (compacting) {
+      event?.preventDefault();
+      return;
+    }
     event?.preventDefault();
     if (
       !canCompose ||
@@ -872,8 +881,9 @@ export function Composer(props: ComposerProps) {
     !props.sessionSwitching &&
     observedQueue !== undefined &&
     queuedMessages.length > 0;
-  const hint =
-    props.promptAdmissionPending && !canStop
+  const hint = compacting
+    ? t("compactionDraftHelp")
+    : props.promptAdmissionPending && !canStop
       ? t("promptPending")
       : props.modelSelectionPending
         ? t("thinkingModelPendingHint")
@@ -900,7 +910,8 @@ export function Composer(props: ComposerProps) {
                     : t("activeOnlyHint");
   const showHint =
     canCompose &&
-    ((props.promptAdmissionPending && !canStop) ||
+    (compacting ||
+      (props.promptAdmissionPending && !canStop) ||
       props.modelSelectionPending ||
       props.thinkingPendingLevel !== null ||
       props.turnCancellationPending ||
@@ -1478,12 +1489,16 @@ export function Composer(props: ComposerProps) {
               </Tooltip>
             )}
             {(!canStop || Boolean(prompt.trim() || images.length)) && (
-              <Tooltip content={t("send")} placement="above">
+              <Tooltip
+                content={t(compacting ? "compactionDraftHelp" : "send")}
+                placement="above"
+              >
                 <button
                   className="send-button"
                   type="submit"
                   aria-label={t("send")}
                   disabled={
+                    compacting ||
                     attachmentBusy ||
                     props.sessionSwitching ||
                     props.modelSelectionPending ||

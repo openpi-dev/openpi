@@ -369,6 +369,19 @@ const resources = {
         "Unable to preview this image. Refresh the file to retry, or download it.",
       artifactFileDetails: "File details",
       turnElapsedRunning: "Working for {{duration}}",
+      compactionElapsed: "Waiting {{duration}}",
+      compactionRunning: "Compacting context…",
+      compactionRunningHelp:
+        "Summarizing earlier conversation. The current request will continue when this finishes.",
+      compactionCompleted: "Earlier context compacted",
+      compactionFailed: "Context compaction failed",
+      compactionCancelled: "Context compaction cancelled",
+      compactionUnchanged: "Compaction finished without a new summary",
+      compactionUnavailable: "Context compaction status unavailable",
+      compactionReconnectHelp:
+        "Connection interrupted. The current status will be checked after reconnecting.",
+      compactionDraftHelp:
+        "You can edit your draft. Send it after compaction finishes.",
       turnElapsedFinished: "Worked for {{duration}}",
       settingsSetupBusyHint:
         "Agent configuration is available after this turn. Display settings can be changed now.",
@@ -1284,6 +1297,16 @@ const resources = {
         "图片预览失败。请刷新文件重试，或下载后查看。",
       artifactFileDetails: "文件信息",
       turnElapsedRunning: "已处理 {{duration}}",
+      compactionElapsed: "已等待 {{duration}}",
+      compactionRunning: "正在压缩上下文…",
+      compactionRunningHelp: "正在整理较早的对话，完成后继续当前请求。",
+      compactionCompleted: "已压缩较早的上下文",
+      compactionFailed: "上下文压缩失败",
+      compactionCancelled: "上下文压缩已取消",
+      compactionUnchanged: "压缩已结束，未生成新的摘要",
+      compactionUnavailable: "上下文压缩状态暂不可用",
+      compactionReconnectHelp: "连接已中断，恢复连接后将核实当前状态。",
+      compactionDraftHelp: "可以继续编辑草稿，请在压缩结束后发送。",
       turnElapsedFinished: "用时 {{duration}}",
       settingsSetupBusyHint:
         "Agent 配置需等待当前轮次结束；显示设置可直接调整。",
