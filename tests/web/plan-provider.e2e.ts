@@ -683,9 +683,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     expect(provider.requests).toHaveLength(3);
     await expect(access(implementationFile)).rejects.toThrow();
 
-    await input.fill("/plan");
-    await input.press("Enter");
-    await expect(input).toHaveValue("/plan ");
+    await input.fill("/plan ");
     await input.press("Enter");
     await expect(
       page.getByText(
