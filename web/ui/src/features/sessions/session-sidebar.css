@@ -236,16 +236,14 @@
   flex: 0 0 auto;
 }
 
-.session-sidebar .session-running {
-  color: var(--accent);
-}
-
 .session-sidebar .session-row:has(.session-state) .session { padding-right: 36px; }
 .session-sidebar .session-row:has(.session-state):has(.session-queue) .session { padding-right: 72px; }
-.session-sidebar .session-row:has(.session-state) .session-status { position: absolute; right: 10px; }
-.session-sidebar .session-state { width: 16px; height: 16px; color: var(--muted); }
+.session-sidebar .session-row:has(.session-state) .session-status { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
+.session-sidebar .session-status .session-state { width: 16px; height: 16px; margin: 0; }
+.session-sidebar .session-state { color: var(--muted); }
+.session-sidebar .session-status > .session-queue { order: -1; }
 .session-sidebar .session-state-running { animation: session-spin 1.1s linear infinite; }
-.session-sidebar .session-state-completed { width: 8px; height: 8px; margin: 4px; fill: currentColor; color: var(--link, #4263eb); }
+.session-sidebar .session-state-completed { fill: currentColor; color: var(--link, #4263eb); }
 .session-sidebar .session-state-attention { color: var(--warning, #a46705); }
 .session-sidebar .session-row:has(.session-state) > .astryx-menu-trigger { right: 28px; }
 .session-sidebar .session-row:has(.session-state) .session-pin-button { right: 58px; }
