@@ -270,7 +270,7 @@ export default function planMode(pi: ExtensionAPI) {
     if (!ctx.hasUI) {
       notifyWebCommand(
         ctx,
-        "Implementing a ready plan requires an interactive editor.",
+        "Use the plan controls above the message box to review and submit the implementation prompt in Web.",
         "warning",
       );
       return;
@@ -293,7 +293,7 @@ export default function planMode(pi: ExtensionAPI) {
     if (!ctx.hasUI) {
       notifyWebCommand(
         ctx,
-        "Starting a fresh implementation requires an interactive editor.",
+        "Web cannot start a fresh implementation session. The plan remains ready; use the plan controls above the message box to implement it in this session.",
         "warning",
       );
       return;
@@ -328,7 +328,7 @@ export default function planMode(pi: ExtensionAPI) {
     if (!ctx.hasUI) {
       notifyWebCommand(
         ctx,
-        "Use `/plan implement`, `/plan fresh`, or `/plan off` in a UI session.",
+        "Use the plan controls above the message box to prepare an implementation prompt, or `/plan off` to exit without implementing. Web does not support a fresh-session handoff.",
         "warning",
       );
       return;
