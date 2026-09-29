@@ -1,8 +1,8 @@
 # Web interaction UI
 
-- Status: draft — follow-up implementation under review, not an accepted architectural Decision
-- Created / verified: 2026-09-20 / 2026-09-28
-- Source boundary: current main `4cda5494f0ea4f0b2fa032f5096ed0389d43ecce`, plus the #470 implementation
+- Status: draft — #470 follow-up implementation under review, not an accepted architectural Decision
+- Created / verified: 2026-09-20 / 2026-09-29
+- Source boundary: base main `ad68e445805a4547d44f46f2f17ec083c28f51da`, plus the #470 implementation
 - Issue: https://github.com/openpi-dev/openpi/issues/562
 - PR: https://github.com/openpi-dev/openpi/pull/595
 - Follow-up issue: https://github.com/openpi-dev/openpi/issues/470
@@ -29,11 +29,12 @@ revisions fail closed. Ready or invalid state requires an explicit exit.
 Registration is removed on shutdown and refreshed on branch restoration.
 
 Changing mode sends no prompt, creates no model turn and preserves the draft.
-The extension projects its current read-only/ready stance at
-`before_agent_start`, including after Session restoration. Permission enforcement
-remains in runtime tool gates. The placeholder appears after a real user message
-in the current planning episode and is derived from branch entries, not a
-second persisted mode flag. `/plan <objective>` retains its immediate-start path.
+The extension projects its current read-only/ready stance into each provider
+context through Pi's `context` event, including after Session restoration.
+Permission enforcement remains in runtime tool gates. The placeholder appears
+after a real user message in the current planning episode and is derived from
+branch entries, not a second persisted mode flag. `/plan <objective>` retains
+its immediate-start path.
 
 The plan card displays a successful `plan_ready` result, not streamed arguments.
 It does not imply implementation approval. Ready state remains read-only until
@@ -43,16 +44,17 @@ Session id and path, idle state, and Plan extension availability; the extension
 checks the persisted revision and `ready` state, then returns its existing
 implementation prompt without changing Plan state. The Composer asks before
 replacing a nonempty draft and makes the prompt editable without sending it.
-The prompt carries a Session-scoped approval revision. During Pi preflight, the
-extension recognizes that one submitted prompt and omits the Ready-only system
-instruction for it, while its tool-call gate stays closed. Only after Pi
-accepts the prompt does the runtime persist Plan as inactive, before the agent
-loop can call tools. A rejected or failed preflight clears the transient
-approval and keeps the persisted plan ready. Refreshing, switching Sessions,
-or abandoning the draft also leaves the write gate closed. The visible exit
-action remains available while the plan is ready. Starting a fresh
-implementation Session still requires the TUI. The persisted `plan_ready`
-transcript result remains available after the gate is released.
+The prompt carries a Session-scoped approval revision. `before_agent_start`
+binds the transient approval to the exact submitted prompt. Once Pi accepts it,
+the runtime persists Plan as inactive before Pi builds provider context or lets
+the agent call tools. The context projection then tells the model Plan mode is
+inactive. Until that acceptance, the Ready tool-call gate stays closed. A
+rejected or failed preflight clears the transient approval and keeps the
+persisted plan ready. Refreshing, switching Sessions, or abandoning the draft
+also leaves the write gate closed. The visible exit action remains available
+while the plan is ready. Starting a fresh implementation Session still
+requires the TUI. The persisted `plan_ready` transcript result remains
+available after the gate is released.
 
 The handoff uses the existing Plan projection and owner callback; it adds no
 second persisted Plan store. A stale revision, wrong Session, busy runtime,
@@ -162,14 +164,15 @@ live-provider manual smoke.
 
 ## #470 Plan Ready handoff follow-up
 
-The 2026-09-28 implementation adds a same-Session Web action to prepare the
+The 2026-09-28/29 implementation adds a same-Session Web action to prepare the
 native Plan extension's editable implementation prompt. Preparation is
 read-only; the user reviews and sends the prompt. Plan is consumed only after
 Pi accepts that exact prompt, so model, authentication, or other preflight
 rejection leaves the persisted plan and write gate intact. A request-scoped
-approval lets `before_agent_start` omit the Plan Ready instruction for that
-prompt while the actual tool gate stays closed until acceptance. The fresh-
-Session handoff remains a TUI-only operation.
+approval is bound to the submitted prompt in `before_agent_start`. After Pi
+accepts preflight, the runtime consumes the Plan state; the `context` hook then
+projects that inactive state. The actual tool gate stays closed until
+acceptance. The fresh-Session handoff remains a TUI-only operation.
 
 Tests cover Session identity, revision-bound prompt admission, rejected and
 thrown preflight, persisted Plan state, a blocked write attempt while ready,
@@ -184,3 +187,22 @@ Local verification on 2026-09-28 used Node.js and the installed Chrome browser:
 - The provider Playwright suite passed (14/14), including the Plan Ready browser handoff. The server port closed and the deferred workspace-cleanup manifest was removed.
 - The default parallel aggregate command (`node scripts/run-tests.mjs`) exited nonzero on this Windows host with six process-sensitive failures. Those same six passed together in a focused run (6/6), and the complete suite passed under the bounded run above. The default-concurrency run is not claimed green; CI evidence remains pending.
 - Biome format/lint and config/docs/discipline contracts passed.
+
+Latest local verification on 2026-09-29, after rebasing onto base main
+`ad68e445805a4547d44f46f2f17ec083c28f51da`:
+
+- `bun run check` passed, including contracts, TypeScript, Biome format/lint,
+  and the production build. The existing bundle advisory remains (1,338.96 kB).
+- Plan control unit tests passed (5/5); the complete Plan provider E2E file
+  passed (5/5), including refresh after prompt preview, a blocked write before
+  re-approval, session switching, and successful implementation after submit.
+- An exploratory wider provider E2E run under installed Chrome, before the
+  Plan test had its own config, passed 12/14. The two failures were in the
+  unrelated `questions-provider.e2e.ts`; their causes were not isolated. CI
+  runs the dedicated Plan provider config.
+- `bun run test` did not complete: several real Pi/post-edit formatter tests
+  timed out, a Windows command-failure test failed, and the remaining runner
+  produced no output while idle. It was interrupted; no full-suite pass is
+  claimed.
+- The user has not authorized opening a PR; no PR has been created or
+  published.

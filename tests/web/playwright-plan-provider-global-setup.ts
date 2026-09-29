@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { FullConfig } from "@playwright/test";
 import { WEB_PROTOCOL_VERSION } from "../../web/protocol/types.ts";
 import {
-  cleanupDeferredProviderWorkspaces,
+  cleanupDeferredPlanWorkspaces,
   seedAgentDirectory,
   WEB_PORT,
 } from "./provider-e2e-support.ts";
@@ -20,7 +20,7 @@ const repositoryRoot = resolve(
 const origin = `http://127.0.0.1:${WEB_PORT}`;
 const agentDirectory = resolve(
   tmpdir(),
-  "openpi-web-provider-playwright-results",
+  "openpi-web-plan-provider-playwright-results",
   "agent",
 );
 
@@ -154,7 +154,7 @@ export default async function globalSetup(_config: FullConfig) {
 
   try {
     await waitForServer(server, token);
-    await cleanupDeferredProviderWorkspaces();
+    await cleanupDeferredPlanWorkspaces();
   } catch (error) {
     await stopServer(server);
     throw error;
@@ -162,6 +162,6 @@ export default async function globalSetup(_config: FullConfig) {
 
   return async () => {
     await stopServer(server);
-    await cleanupDeferredProviderWorkspaces();
+    await cleanupDeferredPlanWorkspaces();
   };
 }

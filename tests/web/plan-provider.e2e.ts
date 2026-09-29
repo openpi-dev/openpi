@@ -6,7 +6,7 @@ import { join } from "node:path";
 import {
   MODEL_ID,
   PROVIDER_ID,
-  deferProviderWorkspaceCleanup,
+  deferPlanWorkspaceCleanup,
   startFakeProvider,
 } from "./provider-e2e-support.ts";
 
@@ -202,7 +202,7 @@ test("Plan switch changes only owner state; first message gets planning context 
     ).toBeVisible();
   } finally {
     await provider.close();
-    deferProviderWorkspaceCleanup(workspace);
+    deferPlanWorkspaceCleanup(workspace);
   }
 });
 
@@ -550,7 +550,7 @@ for (const theme of ["light", "dark"] as const) {
       for (const step of streamSteps) step.release();
       releaseFinish();
       await provider.close();
-      deferProviderWorkspaceCleanup(workspace);
+      deferPlanWorkspaceCleanup(workspace);
     }
   });
 }
@@ -573,6 +573,15 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
         arguments: JSON.stringify({
           path: implementationFile,
           content: "must remain blocked until approval",
+        }),
+      },
+      undefined,
+      {
+        name: "write",
+        arguments: JSON.stringify({
+          path: implementationFile,
+          content:
+            "must remain blocked after refreshing an unsubmitted approval",
         }),
       },
       undefined,
@@ -603,7 +612,9 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
             content:
               index === 2
                 ? "The ready plan remains gated."
-                : "Implementation finished.",
+                : index === 4
+                  ? "The ready plan remains gated after refresh."
+                  : "Implementation finished.",
           },
           "stop",
         ) + "data: [DONE]\n\n"
@@ -716,6 +727,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     ).json();
     expect(unsupportedSnapshot.runtime.plan).toBe("ready");
     expect(unsupportedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(unsupportedSnapshot.currentSessionId).toBe(session.sessionId);
     expect(provider.requests).toHaveLength(3);
     await expect(access(implementationFile)).rejects.toThrow();
 
@@ -732,6 +744,30 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
       .getByRole("button", { name: "准备实施提示", exact: true })
       .click();
     await expect(input).toHaveValue(/approved plan/);
+    await page.reload();
+    await expect(page.getByRole("region", { name: "开发计划" })).toBeVisible();
+    const refreshedPreviewSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(refreshedPreviewSnapshot.currentSessionId).toBe(session.sessionId);
+    expect(refreshedPreviewSnapshot.runtime.plan).toBe("ready");
+    expect(refreshedPreviewSnapshot.runtime.planRevision).toBe(readyRevision);
+    await expect(input).toHaveValue("");
+    expect(provider.requests).toHaveLength(3);
+    await input.fill("Please try writing before I approve again.");
+    await input.press("Enter");
+    await expect(
+      page.getByText("The ready plan remains gated after refresh.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    const refreshedGateSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(refreshedGateSnapshot.runtime.plan).toBe("ready");
+    expect(refreshedGateSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(5);
+    await expect(access(implementationFile)).rejects.toThrow();
 
     const secondSessionResponse = await page.request.post("/api/sessions", {
       headers,
@@ -751,7 +787,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
       await page.request.get("/api/snapshot", { headers })
     ).json();
     expect(otherSessionSnapshot.runtime.plan).toBe("inactive");
-    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests).toHaveLength(5);
 
     const selectedOriginal = await page.request.post("/api/sessions/select", {
       headers,
@@ -770,10 +806,64 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     ).json();
     expect(returnedSnapshot.runtime.plan).toBe("ready");
     expect(returnedSnapshot.runtime.planRevision).toBe(readyRevision);
-    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests).toHaveLength(5);
     await expect(input).toHaveValue("");
     await input.press("Enter");
-    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests).toHaveLength(5);
+
+    await page
+      .getByRole("button", { name: "准备实施提示", exact: true })
+      .click();
+    await expect(input).toHaveValue(/approved plan/);
+    const switchedWithPreparedPrompt = await page.request.post(
+      "/api/sessions",
+      {
+        headers,
+        data: {
+          workspacePath: path,
+          commandId: "plan-handoff-prepared-switch",
+        },
+      },
+    );
+    expect(switchedWithPreparedPrompt.status()).toBe(201);
+    const preparedPromptSession = await switchedWithPreparedPrompt.json();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .currentSessionId,
+      )
+      .toBe(preparedPromptSession.sessionId);
+    await expect(input).toHaveValue("");
+    const switchedWithPreparedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(switchedWithPreparedSnapshot.runtime.plan).toBe("inactive");
+    expect(provider.requests).toHaveLength(5);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    const returnedToOriginalAfterPreview = await page.request.post(
+      "/api/sessions/select",
+      {
+        headers,
+        data: { path: session.sessionPath },
+      },
+    );
+    expect(returnedToOriginalAfterPreview.status()).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .selectedSession?.path,
+      )
+      .toBe(session.sessionPath);
+    const readyAfterSwitchBack = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(readyAfterSwitchBack.runtime.plan).toBe("ready");
+    expect(readyAfterSwitchBack.runtime.planRevision).toBe(readyRevision);
+    await expect(input).toHaveValue("");
+    expect(provider.requests).toHaveLength(5);
 
     await page
       .getByRole("button", { name: "准备实施提示", exact: true })
@@ -785,7 +875,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     ).json();
     expect(cancelledSnapshot.runtime.plan).toBe("ready");
     expect(cancelledSnapshot.runtime.planRevision).toBe(readyRevision);
-    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests).toHaveLength(5);
     await expect(access(implementationFile)).rejects.toThrow();
 
     await page
@@ -797,7 +887,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     ).json();
     expect(preparedSnapshot.runtime.plan).toBe("ready");
     expect(preparedSnapshot.runtime.planRevision).toBe(readyRevision);
-    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests).toHaveLength(5);
     await expect(access(implementationFile)).rejects.toThrow();
 
     const editedInstruction =
@@ -824,9 +914,9 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     expect(await readFile(implementationFile, "utf8")).toBe(
       "written after explicit submission",
     );
-    expect(provider.requests).toHaveLength(5);
-    expect(provider.requests[3]).toBeDefined();
-    expect(JSON.stringify(provider.requests[3]!.body)).toContain(
+    expect(provider.requests).toHaveLength(7);
+    expect(provider.requests[5]).toBeDefined();
+    expect(JSON.stringify(provider.requests[5]!.body)).toContain(
       editedInstruction,
     );
     await expect(
@@ -841,7 +931,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
       .toBe("idle");
   } finally {
     await provider.close();
-    deferProviderWorkspaceCleanup(workspace);
+    deferPlanWorkspaceCleanup(workspace);
   }
 });
 
@@ -929,6 +1019,6 @@ test("Plan off gives a visible receipt and clears a ready Plan without another m
     expect(provider.requests).toHaveLength(1);
   } finally {
     await provider.close();
-    deferProviderWorkspaceCleanup(workspace);
+    deferPlanWorkspaceCleanup(workspace);
   }
 });

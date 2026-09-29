@@ -13,17 +13,19 @@ import { basename, dirname, join, resolve } from "node:path";
  */
 export const PROVIDER_PORT = 57_110;
 export const WEB_PORT = 57_111;
+export const WEB_TOKEN =
+  "6f70656e70692d7765622d70726f76696465722d6532652d746f6b656e212121";
 export const PROVIDER_ID = "fake-provider";
 export const MODEL_ID = "fake-reasoner";
 export const MODEL_NAME = "Fake Reasoner";
 export const PROVIDER_BASE_URL = `http://127.0.0.1:${PROVIDER_PORT}/v1`;
 const workspaceCleanupFile = join(
   tmpdir(),
-  "openpi-web-provider-workspaces-to-clean.txt",
+  "openpi-web-plan-provider-workspaces-to-clean.txt",
 );
 
-/** Defer deletion until the shared Web server has released active sessions. */
-export function deferProviderWorkspaceCleanup(workspace: string) {
+/** Defer deletion until the Plan E2E Web server has released its Session. */
+export function deferPlanWorkspaceCleanup(workspace: string) {
   const resolved = resolve(workspace);
   if (
     dirname(resolved) !== resolve(tmpdir()) ||
@@ -35,8 +37,8 @@ export function deferProviderWorkspaceCleanup(workspace: string) {
   appendFileSync(workspaceCleanupFile, `${resolved}\n`, "utf8");
 }
 
-/** Remove workspaces after the provider web server has fully exited. */
-export async function cleanupDeferredProviderWorkspaces() {
+/** Remove Plan E2E workspaces after its Web server has fully exited. */
+export async function cleanupDeferredPlanWorkspaces() {
   let entries: string;
   try {
     entries = await readFile(workspaceCleanupFile, "utf8");

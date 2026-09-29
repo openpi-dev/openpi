@@ -1,12 +1,11 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MODEL_ID,
   PROVIDER_ID,
-  deferProviderWorkspaceCleanup,
   startFakeProvider,
 } from "./provider-e2e-support.ts";
 
@@ -144,6 +143,6 @@ test("thinking level reaches the provider request end to end", async ({
     await expect(page.locator(".thinking-picker")).toBeEnabled();
   } finally {
     await provider.close();
-    deferProviderWorkspaceCleanup(workspace);
+    await rm(workspace, { recursive: true, force: true });
   }
 });

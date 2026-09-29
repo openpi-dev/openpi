@@ -1,12 +1,11 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MODEL_ID,
   PROVIDER_ID,
-  deferProviderWorkspaceCleanup,
   startFakeProvider,
 } from "./provider-e2e-support.ts";
 import { questionFixture } from "./question-fixtures.ts";
@@ -240,7 +239,7 @@ for (const theme of ["light", "dark"] as const) {
       ).toHaveCount(0);
     } finally {
       await provider.close();
-      deferProviderWorkspaceCleanup(workspace);
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 }
@@ -265,7 +264,7 @@ test("Setup opened in settings completes questions inside the active dialog", as
     await expect(dialog).toBeVisible();
   } finally {
     await provider.close();
-    deferProviderWorkspaceCleanup(workspace);
+    await rm(workspace, { recursive: true, force: true });
   }
 });
 
@@ -337,7 +336,7 @@ for (const [command, fromSettings] of [
       expect(provider.requests.length).toBe(2);
     } finally {
       await provider.close();
-      deferProviderWorkspaceCleanup(workspace);
+      await rm(workspace, { recursive: true, force: true });
     }
   });
 }
@@ -373,6 +372,6 @@ test("human_handoff reviews a status, restores its pending card and returns veri
     await expect(card).toHaveCount(0);
   } finally {
     await provider.close();
-    deferProviderWorkspaceCleanup(workspace);
+    await rm(workspace, { recursive: true, force: true });
   }
 });

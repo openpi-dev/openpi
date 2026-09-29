@@ -1,8 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deferProviderWorkspaceCleanup } from "./provider-e2e-support.ts";
 
 const headers = { Authorization: `Bearer ${process.env.OPENPI_WEB_E2E_TOKEN}` };
 
@@ -59,6 +58,6 @@ test("native command feedback survives refresh without model calls", async ({
     await expect(page.getByText("普通模式", { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath("commands-light.png") });
   } finally {
-    deferProviderWorkspaceCleanup(workspace);
+    await rm(workspace, { recursive: true, force: true });
   }
 });

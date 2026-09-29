@@ -183,12 +183,16 @@ test("busy, stale, ready and failed persistence never silently open the Plan gat
   assert.throws(() => h.set(false), /disk failure/);
   assert.equal(projectPlanControl(h.branch).status, "ready");
   h.authorize("Implement Review this plan", "ready");
-  h.emit("before_agent_start", {
-    prompt: "Implement Review this plan",
-    systemPrompt: "base",
-  });
+  assert.equal(
+    h.emit("before_agent_start", { prompt: "Implement Review this plan" }),
+    undefined,
+  );
   assert.throws(() => h.implement("ready"), /disk failure/);
   assert.equal(projectPlanControl(h.branch).status, "ready");
+  assert.match(
+    JSON.stringify(h.emit("context", { messages: [] })),
+    /plan is ready[\s\S]*Do not start implementation/,
+  );
   assert.equal(
     (h.emit("tool_call", { toolName: "write" }) as { block: boolean }).block,
     true,
@@ -222,19 +226,17 @@ test("preparing is read-only; an admitted approved prompt clears the gate", () =
   const authorized = h.authorize(approvedPrompt, "ready");
   assert.equal(authorized.status, "ready");
   assert.equal(projectPlanControl(h.branch).status, "ready");
+  assert.equal(
+    h.emit("before_agent_start", { prompt: "an unrelated prompt" }),
+    undefined,
+  );
   assert.match(
-    (
-      h.emit("before_agent_start", {
-        prompt: "an unrelated prompt",
-        systemPrompt: "base",
-      }) as { systemPrompt: string }
-    ).systemPrompt,
+    JSON.stringify(h.emit("context", { messages: [] })),
     /plan is ready[\s\S]*Do not start implementation/,
   );
   assert.equal(
     h.emit("before_agent_start", {
       prompt: approvedPrompt,
-      systemPrompt: "base",
     }),
     undefined,
   );
@@ -242,6 +244,10 @@ test("preparing is read-only; an admitted approved prompt clears the gate", () =
   assert.equal(
     (h.emit("tool_call", { toolName: "write" }) as { block: boolean }).block,
     true,
+  );
+  assert.match(
+    JSON.stringify(h.emit("context", { messages: [] })),
+    /plan is ready[\s\S]*Do not start implementation/,
   );
 
   const result = h.implement("ready");
@@ -254,6 +260,10 @@ test("preparing is read-only; an admitted approved prompt clears the gate", () =
     data: { version: 1, status: "inactive" },
   });
   assert.equal(h.emit("tool_call", { toolName: "write" }), undefined);
+  assert.match(
+    JSON.stringify(h.emit("context", { messages: [] })),
+    /Plan mode is inactive/,
+  );
   assert.throws(() => h.implement("ready"), /changed/);
   assert.equal(projectPlanControl(h.branch).status, "inactive");
   h.emit("session_shutdown");
@@ -272,7 +282,6 @@ test("cancelling a rejected prompt keeps Plan Ready and the write gate closed", 
   assert.equal(
     h.emit("before_agent_start", {
       prompt: "Implement Review this plan",
-      systemPrompt: "base",
     }),
     undefined,
   );
@@ -280,12 +289,7 @@ test("cancelling a rejected prompt keeps Plan Ready and the write gate closed", 
 
   assert.equal(projectPlanControl(h.branch).status, "ready");
   assert.match(
-    (
-      h.emit("before_agent_start", {
-        prompt: "Implement Review this plan",
-        systemPrompt: "base",
-      }) as { systemPrompt: string }
-    ).systemPrompt,
+    JSON.stringify(h.emit("context", { messages: [] })),
     /Do not start implementation/,
   );
   assert.throws(() => h.implement("ready"), /Pi did not start/);
