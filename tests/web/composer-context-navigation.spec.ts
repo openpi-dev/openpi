@@ -140,10 +140,13 @@ async function openFileReference(
 ) {
   fireEvent.blur(input);
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: `${i18n.t("composerFile")} file` }),
+  );
   await waitFor(() =>
     expect(document.activeElement).toBe(
       screen.getByRole("menuitem", {
-        name: (label) => label.startsWith(i18n.t("addImages")),
+        name: i18n.t("composerBack"),
       }),
     ),
   );

@@ -593,6 +593,25 @@ export class WebClient {
     });
   }
 
+  compactSession(sessionId: string, sessionPath: string) {
+    return this.request<{ sessionId: string }>("/api/compact", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath }),
+      timeoutMs: 300_000,
+    });
+  }
+
+  updatePromptQueue(
+    sessionId: string,
+    sessionPath: string,
+    action: "retry" | "clear",
+  ) {
+    return this.request<{ sessionId: string }>("/api/prompt-queue", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath, action }),
+    });
+  }
+
   trust(sessionId: string, signal: AbortSignal) {
     return this.request<WebProjectTrustStatus>(
       `/api/trust?sessionId=${encodeURIComponent(sessionId)}`,

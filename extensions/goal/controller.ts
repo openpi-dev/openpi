@@ -4,6 +4,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import { hasWebCommandFeedback } from "../shared/web-command-feedback.ts";
 import {
   budgetLimitPrompt,
   continuationPrompt,
@@ -558,7 +559,14 @@ export class GoalController {
     kind: "continuation" | "objective_updated" | "budget_limit",
     allowBusy: boolean,
   ) {
-    if (!this.automationEnabled || !this.goal || this.continuationPending) {
+    // Web binds Pi in print mode, but its attached Session has an interactive
+    // host. Recheck attachment per dispatch so detached/closed hosts cannot
+    // continue scheduling goal turns through this exception.
+    if (
+      (!this.automationEnabled && !hasWebCommandFeedback(ctx.sessionManager)) ||
+      !this.goal ||
+      this.continuationPending
+    ) {
       return false;
     }
     if (!allowBusy && !ctx.isIdle()) return false;

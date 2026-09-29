@@ -2118,6 +2118,71 @@ async function startTestHost(
   return { host, launched, headers };
 }
 
+test("compaction and queue endpoints require authenticated exact active ownership and bounded typed input", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-compact-"));
+  const runtime = testRuntime(cwd);
+  const { host, launched, headers } = await startTestHost(runtime);
+  const identity = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: mutationSessionPath(runtime.sessionManager),
+  };
+  const calls: unknown[] = [];
+  const post = (route: string, body: unknown, authenticated = true) =>
+    fetch(`${launched.origin}/api/${route}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authenticated ? headers : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  try {
+    for (const [route, request] of [
+      ["compact", identity],
+      ["prompt-queue", { ...identity, action: "clear" }],
+    ] as const) {
+      assert.equal((await post(route, request, false)).status, 401);
+      assert.equal((await post(route, request)).status, 501);
+      assert.equal(
+        (await post(route, { ...request, extra: true })).status,
+        400,
+      );
+      assert.equal(
+        (await post(route, { ...request, sessionPath: "/copied.jsonl" }))
+          .status,
+        409,
+      );
+      assert.equal(
+        (await post(route, { ...request, sessionId: "another" })).status,
+        409,
+      );
+    }
+    assert.equal(
+      (await post("prompt-queue", { ...identity, action: "send" })).status,
+      400,
+    );
+    runtime.compactSession = async (request) => {
+      calls.push(request);
+    };
+    runtime.updatePromptQueue = (request) => {
+      calls.push(request);
+    };
+    assert.equal((await post("compact", identity)).status, 200);
+    assert.equal(
+      (await post("prompt-queue", { ...identity, action: "retry" })).status,
+      200,
+    );
+    assert.deepEqual(calls, [identity, { ...identity, action: "retry" }]);
+    runtime.compactSession = async () => {
+      throw new WebRuntimeRequestError("Busy", "SESSION_CONFLICT", 409);
+    };
+    assert.equal((await post("compact", identity)).status, 409);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("external file preview requires an explicit authenticated single-file grant", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-external-http-"));
   const outside = await mkdtemp(join(tmpdir(), "openpi-external-source-"));

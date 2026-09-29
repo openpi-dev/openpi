@@ -209,6 +209,12 @@ export class PiWebRuntime implements WebRuntimeController {
     startedAt?: number;
     clock?: number;
   }>;
+  private compactionQueues?: Map<AgentSessionRuntime, {
+    items: Array<{ content: string; options: WebPromptOptions }>;
+    draining: boolean;
+    blocked: boolean;
+  }>;
+  private manualCompactionOwner?: AgentSessionRuntime;
   private nextTurnEpoch = 0;
   private readonly terminalTurnKeys = new Set<string>();
   private readonly turnSettlementWaiters = new Map<
@@ -342,14 +348,17 @@ export class PiWebRuntime implements WebRuntimeController {
     if (!owner) return unknown;
     const session = owner.session;
     const followUps = session.getFollowUpMessages();
+    const held = this.compactionQueues?.get(owner);
+    const queued = [...followUps, ...(held?.items.map((item) => item.content) ?? [])];
     const trace = owner === this.runtime ? this.activePromptTrace : this.suspendedPromptTraces?.get(session)?.active;
     const activeTurn = this.activeTurnFromTrace(trace);
     const compaction = this.getCompaction(session);
     return {
       sessionId, sessionPath,
       status: session.isIdle ? "idle" : "running",
-      pendingFollowUps: followUps.length,
-      queuedMessages: followUps.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
+      pendingFollowUps: queued.length,
+      queuedMessages: queued.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
+      ...(held?.blocked ? { promptQueueBlocked: true } : {}),
       ...executingTools(session),
       ...(activeTurn ? { activeTurn } : {}),
       ...(compaction ? { compaction } : {}),
@@ -389,7 +398,108 @@ export class PiWebRuntime implements WebRuntimeController {
         state: event.aborted ? "cancelled" : event.errorMessage ? "failed" : event.result ? "completed" : "unchanged",
       });
     }
+    if (event.type === "compaction_end") {
+      for (const [owner, queue] of this.compactionQueues ?? []) {
+        if (owner.session !== session) continue;
+        if (event.aborted || event.errorMessage) queue.blocked = true;
+        else queueMicrotask(() => void this.drainCompactionQueue(owner));
+      }
+    }
     this.emit("session_progress", identity);
+  }
+
+  private holdCompactionPrompt(owner: AgentSessionRuntime, content: string, options?: WebPromptOptions) {
+    assertWebCommandSupported(owner.services, content);
+    const queues = this.compactionQueues ??= new Map();
+    const queue = queues.get(owner) ?? { items: [], draining: false, blocked: false };
+    // Bound retained text and image payloads as well as message count.
+    const item = { content, options: { ...options } };
+    if (queue.items.length >= 16 || Buffer.byteLength(JSON.stringify([...queue.items, item])) > 16 * 1024 * 1024)
+      throw new WebRuntimeRequestError("The pending-message queue is full. Keep your draft and retry after it drains.", "PROMPT_REJECTED", 422);
+    if (!queues.has(owner)) {
+      queues.set(owner, queue);
+      this.retainRuntimeReference(owner);
+    }
+    queue.items.push(item);
+    this.emit("session_progress", { sessionId: owner.session.sessionManager.getSessionId() });
+    if (!owner.session.isCompacting) queueMicrotask(() => void this.drainCompactionQueue(owner));
+    return { pendingFollowUps: owner.session.getFollowUpMessages().length + queue.items.length };
+  }
+
+  private async drainCompactionQueue(owner: AgentSessionRuntime) {
+    const queue = this.compactionQueues?.get(owner);
+    if (!queue || queue.draining || queue.blocked || this.disposed || owner.session.isCompacting || this.manualCompactionOwner === owner) return;
+    queue.draining = true;
+    try {
+      while (queue.items.length && !this.disposed && !queue.blocked && !owner.session.isCompacting) {
+        const item = queue.items[0]!;
+        try {
+          await this.dispatchPrompt(owner, item.content, item.options, true);
+        } catch {
+          // Acceptance into this queue is not model admission. Retain the
+          // original text/images for explicit retry after a delivery failure.
+          queue.blocked = true;
+          break;
+        }
+        if (queue.items[0] === item) queue.items.shift();
+      }
+    } finally {
+      queue.draining = false;
+      if (!queue.items.length) {
+        this.compactionQueues?.delete(owner);
+        this.releaseRuntimeReference(owner);
+      }
+      this.emit("session_progress", { sessionId: owner.session.sessionManager.getSessionId() });
+    }
+  }
+
+  updatePromptQueue(request: { sessionId: string; sessionPath: string; action: "retry" | "clear" }) {
+    this.assertActive();
+    if (!matchesSessionIdentity(this.runtime.session.sessionManager, { expectedSessionId: request.sessionId, expectedSessionPath: request.sessionPath }))
+      throw new WebRuntimeRequestError("Only the active Web session accepts queue changes", "SESSION_CONFLICT", 409);
+    const owner = this.runtime;
+    const queue = this.compactionQueues?.get(owner);
+    if (queue?.draining) throw new WebRuntimeRequestError("A queued message is being admitted. Retry shortly.", "SESSION_CONFLICT", 409);
+    if (request.action === "retry") {
+      if (queue) queue.blocked = false;
+      queueMicrotask(() => void this.drainCompactionQueue(owner));
+    } else {
+      for (const item of queue?.items ?? [])
+        this.emit("prompt_discarded", { commandId: item.options.commandId, sessionId: request.sessionId });
+      if (queue) {
+        this.compactionQueues?.delete(owner);
+        this.releaseRuntimeReference(owner);
+      }
+      owner.session.clearQueue();
+      for (const trace of [this.activePromptTrace, ...this.pendingPromptTraces]) {
+        if (!trace) continue;
+        if (trace.queued && !trace.started) {
+          this.emit("prompt_discarded", { commandId: trace.commandId, sessionId: request.sessionId });
+          this.removePromptTrace(trace);
+        }
+      }
+    }
+    this.emit("session_progress", { sessionId: request.sessionId });
+  }
+
+  compactSession(request: { sessionId: string; sessionPath: string }) {
+    return this.serializeControllerMutation(async () => {
+      this.assertWorkspaceSelected();
+      const owner = this.runtime;
+      if (!matchesSessionIdentity(owner.session.sessionManager, { expectedSessionId: request.sessionId, expectedSessionPath: request.sessionPath }))
+        throw new WebRuntimeRequestError("Only the active Web session can compact history", "SESSION_CONFLICT", 409);
+      if (!owner.session.isIdle || this.compactionQueues?.has(owner) || this.promptOperations.size > 0)
+        throw new WebRuntimeRequestError("Wait for current work and queued messages before compacting history", "SESSION_CONFLICT", 409);
+      this.retainRuntimeReference(owner);
+      this.manualCompactionOwner = owner;
+      try {
+        await owner.session.compact();
+      } finally {
+        this.manualCompactionOwner = undefined;
+        queueMicrotask(() => void this.drainCompactionQueue(owner));
+        this.releaseRuntimeReference(owner);
+      }
+    });
   }
 
   getSessionManagerForRead(sessionId: string, sessionPath: string) {
@@ -450,6 +560,8 @@ export class PiWebRuntime implements WebRuntimeController {
     });
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
+      const held = this.compactionQueues?.get(this.runtime);
+      if (held) held.blocked = true;
       const abortOperation = this.runtime.session.abort();
       this.turnAbortOperations.set(key, abortOperation);
       void abortOperation.catch(() => {
@@ -907,19 +1019,23 @@ export class PiWebRuntime implements WebRuntimeController {
   async sendPrompt(content: string, options?: WebPromptOptions) {
     this.assertActive();
     this.assertWorkspaceSelected();
-    const agentRuntime = this.runtime;
-    const session = agentRuntime.session;
-    const sessionId = session.sessionManager.getSessionId();
-    if (session.isCompacting) {
-      throw new WebRuntimeRequestError("Context compaction is in progress. Keep your draft and retry when it finishes.", "SESSION_CONFLICT", 409);
-    }
-    if (!matchesSessionIdentity(session.sessionManager, options)) {
+    const owner = this.runtime;
+    if (!matchesSessionIdentity(owner.session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
         "Only the active Web session accepts messages",
         "SESSION_CONFLICT",
         409,
       );
     }
+    const exact = { ...options, expectedSessionId: owner.session.sessionManager.getSessionId(), expectedSessionPath: owner.session.sessionManager.getSessionFile() };
+    if (owner.session.isCompacting || this.manualCompactionOwner === owner || this.compactionQueues?.has(owner))
+      return this.holdCompactionPrompt(owner, content, exact);
+    return this.dispatchPrompt(owner, content, exact);
+  }
+
+  private async dispatchPrompt(agentRuntime: AgentSessionRuntime, content: string, options?: WebPromptOptions, fromCompactionQueue = false) {
+    const session = agentRuntime.session;
+    const sessionId = session.sessionManager.getSessionId();
     const previousAdmission = this.promptAdmission;
     let releaseAdmission: () => void = () => undefined;
     this.promptAdmission = new Promise<void>((resolveAdmission) => {
@@ -957,8 +1073,8 @@ export class PiWebRuntime implements WebRuntimeController {
         this.assertActive();
         this.assertWorkspaceSelected();
         if (
-          agentRuntime !== this.runtime ||
-          session !== this.runtime.session ||
+          (agentRuntime !== this.runtime && !(fromCompactionQueue && this.retainedRuntimes.has(agentRuntime))) ||
+          session !== agentRuntime.session ||
           !matchesSessionIdentity(session.sessionManager, {
             expectedSessionId: sessionId,
             expectedSessionPath: options?.expectedSessionPath,
@@ -971,6 +1087,9 @@ export class PiWebRuntime implements WebRuntimeController {
           );
         }
         assertWebCommandSupported(agentRuntime.services, content);
+        if (agentRuntime !== this.runtime && submittedExtensionCommand(agentRuntime.services, content)) {
+          throw new WebRuntimeRequestError("Return to this Session to retry its queued command.", "SESSION_CONFLICT", 409);
+        }
         if (session.isCompacting) {
           throw new WebRuntimeRequestError("Context compaction is in progress. Keep your draft and retry when it finishes.", "SESSION_CONFLICT", 409);
         }
@@ -978,6 +1097,12 @@ export class PiWebRuntime implements WebRuntimeController {
         if (promptTrace && agentRuntime === this.runtime) {
           this.pendingPromptTraces.push(promptTrace);
           this.activePromptTrace ??= this.pendingPromptTraces.shift();
+        } else if (promptTrace) {
+          this.suspendedPromptTraces ??= new WeakMap();
+          const traces = this.suspendedPromptTraces.get(session) ?? { pending: [] };
+          traces.pending.push(promptTrace);
+          traces.active ??= traces.pending.shift();
+          this.suspendedPromptTraces.set(session, traces);
         }
         if (promptTrace) {
           traceWeb("prompt_dispatch_started", {
@@ -1102,8 +1227,8 @@ export class PiWebRuntime implements WebRuntimeController {
           // Native extension commands may start a triggerTurn asynchronously:
           // their handler returns before the delayed agent_start is projected.
           // Pi already reports an active run, so keep its admitted identity.
-          if (!promptTrace.queued && !promptTrace.started && session.isIdle) {
-            this.removePromptTrace(promptTrace);
+          if (!admitted || (!promptTrace.queued && !promptTrace.started && session.isIdle)) {
+            this.removePromptTrace(promptTrace, session);
           }
         }
       } catch (error) {
@@ -1133,7 +1258,7 @@ export class PiWebRuntime implements WebRuntimeController {
             elapsedMs: elapsed(startedAt),
             error: projectAssistantError(errorText(error)).value,
           });
-          this.removePromptTrace(promptTrace);
+          this.removePromptTrace(promptTrace, session);
         }
       } finally {
         unsubscribePromptLifecycle?.();
@@ -1241,6 +1366,7 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private async disposeInternal() {
     this.disposed = true;
+    this.compactionQueues?.clear();
     this.unsubscribeSession?.();
     this.unsubscribeSession = undefined;
     this.promptOrigins?.disable();
@@ -1304,6 +1430,7 @@ export class PiWebRuntime implements WebRuntimeController {
       this.retainedSubscriptions.clear();
       this.candidateRuntimes.clear();
       this.runtimeOperations.clear();
+      this.inFlightRuntimes.clear();
       this.listeners.clear();
     }
     if (failures.length > 0) {
@@ -1657,7 +1784,15 @@ export class PiWebRuntime implements WebRuntimeController {
     return `${turn.sessionId}\u0000${turn.commandId}\u0000${turn.epoch}`;
   }
 
-  private removePromptTrace(trace: PromptTrace) {
+  private removePromptTrace(trace: PromptTrace, session = this.runtime.session) {
+    if (session !== this.runtime.session) {
+      const traces = this.suspendedPromptTraces?.get(session);
+      if (!traces) return;
+      const index = traces.pending.indexOf(trace);
+      if (index !== -1) traces.pending.splice(index, 1);
+      if (traces.active === trace && !trace.started) traces.active = traces.pending.shift();
+      return;
+    }
     const pendingIndex = this.pendingPromptTraces.indexOf(trace);
     if (pendingIndex !== -1) this.pendingPromptTraces.splice(pendingIndex, 1);
     if (this.activePromptTrace !== trace) return;

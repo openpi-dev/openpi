@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_DSH_COMPOSER_2026-09-29.md`](WEB_DSH_COMPOSER_2026-09-29.md) — DSH 输入区参考、原生目标入口和压缩消息保留/投递边界（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
 - [`WEB_DISPLAY_SETTINGS_2026-09-29.md`](WEB_DISPLAY_SETTINGS_2026-09-29.md) — 显示设置直接保存、Pi Web/Maka/VS Code 交互参考、当前上下文与累计用量分层及隔离验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 - [`WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md`](WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md) — superseded WebRTC trial: isolated checks and bounded CPU observations, failed deployed acceptance, and the user's native iframe replacement ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).

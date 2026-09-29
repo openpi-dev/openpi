@@ -1,6 +1,8 @@
 .composer.composer-m02 {
   min-width: 0;
-  border-radius: 8px;
+  border-radius: 20px;
+  border-color: color-mix(in oklch, var(--border) 65%, transparent);
+  box-shadow: 0 3px 14px #00000006;
 }
 
 .composer-toolbar[hidden] { display: none; }
@@ -9,39 +11,6 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 20%, transparent);
 }
-
-.composer-m02 .composer-target {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.composer-m02 .composer-target svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-
-.composer-m02 .composer-target svg:nth-of-type(2) {
-  width: 11px;
-  height: 11px;
-  color: var(--subtle);
-}
-
-.composer-m02 .composer-target span,
-.composer-m02 .composer-target strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-m02 .composer-target span { flex: 0 1 auto; }
-.composer-m02 .composer-target strong { flex: 0 1 auto; color: var(--text); font-weight: 600; }
 
 .composer-attachments {
   display: flex;
@@ -194,10 +163,10 @@
   justify-content: space-between;
   gap: 8px;
   padding-top: 7px;
-  border-top: 1px solid var(--border);
+  border-top: 0;
 }
 
-.composer-m02 .composer-toolbar-context { flex: none; width: 34px; height: 34px; }
+.composer-m02 .composer-toolbar-context { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .composer-m02 .composer-context-placeholder { display: block; width: 34px; height: 34px; }
 .composer-m02 .composer-context-trigger { width: 34px; height: 34px; padding: 0; color: var(--muted); }
 .composer-m02 .composer-context-trigger svg { width: 17px; height: 17px; }
@@ -283,4 +252,33 @@
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
+}
+
+.composer-workspace-label { display: flex; align-items: center; gap: 5px; max-width: 140px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 12px; }
+.composer-workspace-label svg { width: 14px; height: 14px; flex: none; }
+.composer-plan-chip { color: var(--accent); font-size: 11px; white-space: nowrap; }
+.composer-m02 .model-picker-wrap { max-width: 360px; min-width: 0; }
+.composer-m02 .model-picker-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+.composer-m02 .send-button { border-radius: 50%; }
+.composer-action-menu { position: absolute; z-index: 45; bottom: calc(100% + 6px); left: 0; right: 0; box-sizing: border-box; padding: 6px; overflow-y: auto; border: 1px solid var(--border); border-radius: 20px; background: var(--page); box-shadow: 0 6px 22px #0000000d; }
+.composer-action-menu[data-placement="below"] { bottom: auto; top: calc(100% + 6px); }
+.composer-action-section { padding: 5px 10px; color: var(--muted); font-size: 11px; }
+.composer-action-menu button { display: flex; width: 100%; align-items: center; gap: 7px; min-height: 40px; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.composer-action-menu button:hover, .composer-action-menu button:focus-visible { background: var(--sidebar-hover); outline: none; }
+.composer-action-menu button:disabled { opacity: .45; cursor: default; }
+.composer-action-menu button > svg { flex: none; width: 15px; height: 15px; color: var(--muted); }
+.composer-action-menu small { color: var(--muted); font-size: 12px; }
+.composer-action-description { flex: 1; min-width: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.composer-dock > .composer-queue { width: min(840px, calc(100% - 32px)); margin: 0 auto 10px; padding: 0; border: 0; max-height: min(220px, 25dvh); }
+.composer-dock > .composer-queue ul { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.composer-dock > .composer-queue li { max-width: 85%; }
+.composer-dock > .composer-queue .composer-queue-row { padding: 10px 14px; border-radius: 16px; background: var(--sidebar); color: var(--text); }
+.composer-queue-status { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; padding: 5px; color: var(--muted); font-size: 11px; }
+.composer-queue-status button { padding: 4px 6px; border: 0; border-radius: 6px; background: var(--sidebar); cursor: pointer; }
+@media (max-width: 560px) {
+  .composer-action-menu button { min-height: 44px; }
+  .composer-action-description { white-space: normal; font-size: 11px; }
+  .composer-workspace-label { max-width: 75px; }
+  .composer-m02 .composer-toolbar-context { gap: 4px; }
+  .composer-m02 .model-picker-wrap { max-width: 42vw; }
 }

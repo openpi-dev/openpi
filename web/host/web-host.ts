@@ -575,6 +575,7 @@ export class WebHost {
     if (pathname === "/api/turns/cancel") return true;
     if (pathname === "/api/questions/answer") return true;
     if (pathname === "/api/plan") return true;
+    if (pathname === "/api/compact" || pathname === "/api/prompt-queue") return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
       pathname.startsWith("/api/terminal") ||
@@ -1241,6 +1242,29 @@ export class WebHost {
         accepted: result.state === "accepted",
         cursor: this.sequence,
       });
+    }
+    if (["/api/compact", "/api/prompt-queue"].includes(url.pathname) && request.method === "POST") {
+      const body = await this.readJson(request, 1024);
+      const isQueue = url.pathname === "/api/prompt-queue";
+      if (typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 256 || !validSessionPath(body.sessionPath) ||
+        Object.keys(body).some((key) => !["sessionId", "sessionPath", ...(isQueue ? ["action"] : [])].includes(key)) ||
+        (isQueue && body.action !== "retry" && body.action !== "clear"))
+        return this.json(response, 400, { error: "An exact Session identity and supported action are required" });
+      try {
+        if (!this.adapter.isCurrentSession({ id: body.sessionId, path: body.sessionPath }))
+          throw new WebRuntimeRequestError("Only the active Web session accepts this action", "SESSION_CONFLICT", 409);
+        if (isQueue) {
+          if (!this.runtime.updatePromptQueue) return this.json(response, 501, { error: "Queue control is unavailable" });
+          this.runtime.updatePromptQueue({ sessionId: body.sessionId, sessionPath: body.sessionPath, action: body.action as "retry" | "clear" });
+        } else {
+          if (!this.runtime.compactSession) return this.json(response, 501, { error: "Compaction is unavailable" });
+          await this.runtime.compactSession({ sessionId: body.sessionId, sessionPath: body.sessionPath });
+        }
+        return this.json(response, 200, { sessionId: body.sessionId });
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "SESSION_ACTION_FAILED", "The Session action could not be completed");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
     }
     if (url.pathname === "/api/plan" && request.method === "POST") {
       const body = await this.readJson(request, 1024);

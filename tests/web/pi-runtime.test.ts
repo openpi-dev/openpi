@@ -185,6 +185,7 @@ function promptSession(sessionId: string) {
   return {
     isStreaming: false,
     isCompacting: false,
+    state: { pendingToolCalls: new Set<string>() },
     get isIdle() {
       return !this.isStreaming && !this.isCompacting;
     },
@@ -208,6 +209,10 @@ function promptSession(sessionId: string) {
       return () => listeners.delete(listener);
     },
     getFollowUpMessages: () => followUpMessages,
+    clearQueue() {
+      followUpMessages = [];
+      return { steering: [], followUp: [] };
+    },
     emitFollowUpQueue(messages: string[]) {
       followUpMessages = messages;
       for (const listener of listeners) {
@@ -419,7 +424,214 @@ function promptHarness(session: ReturnType<typeof promptSession>) {
   return harness;
 }
 
-test("compaction preflight is busy, rejects extra prompts, and projects exact native outcomes without Session writes", async () => {
+function finishCompaction(
+  runtime: PromptRuntimeHarness,
+  session: PromptSession,
+  detail: Record<string, unknown> = {},
+) {
+  session.isCompacting = false;
+  (
+    runtime as unknown as {
+      observeCompaction(session: object, event: object): void;
+    }
+  ).observeCompaction(session, { type: "compaction_end", ...detail });
+}
+
+test("compaction-held messages preserve order and images through native admission", async () => {
+  const session = promptSession("queue");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  session.isCompacting = true;
+  const image = { data: "aGVsbG8=", mimeType: "image/png" as const };
+  await runtime.sendPrompt("first", { commandId: "q1", images: [image] });
+  await runtime.sendPrompt("second", { commandId: "q2" });
+  assert.equal(session.calls.length, 0);
+  assert.deepEqual(
+    api.getSessionExecution("queue", "current:queue").queuedMessages,
+    ["first", "second"],
+  );
+  finishCompaction(runtime, session);
+  await new Promise(setImmediate);
+  assert.equal(session.calls.length, 1);
+  assert.equal(session.calls[0]!.content, "first");
+  assert.deepEqual(
+    (session.calls[0]!.options as { images: unknown[] }).images,
+    [{ type: "image", ...image }],
+  );
+  session.isStreaming = true;
+  session.calls[0]!.options.preflightResult!(true);
+  await new Promise(setImmediate);
+  assert.equal(session.calls[1]!.content, "second");
+  assert.equal(
+    (session.calls[1]!.options as { streamingBehavior: string })
+      .streamingBehavior,
+    "followUp",
+  );
+  session.emitFollowUpQueue(["second"]);
+  session.calls[1]!.options.preflightResult!(true);
+  await new Promise(setImmediate);
+  assert.deepEqual(
+    api.getSessionExecution("queue", "current:queue").queuedMessages,
+    ["second"],
+  );
+  for (const call of session.calls) call.run.resolve();
+  await Promise.all(runtime.promptOperations);
+});
+
+test("compaction and admission failure retain queued text until explicit retry or clear", async () => {
+  const session = promptSession("retry");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  const identity = { sessionId: "retry", sessionPath: "current:retry" };
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  session.isCompacting = true;
+  await runtime.sendPrompt("retained draft", { commandId: "retry-1" });
+  finishCompaction(runtime, session, { errorMessage: "provider unavailable" });
+  await new Promise(setImmediate);
+  assert.equal(session.calls.length, 0);
+  assert.equal(
+    api.getSessionExecution(identity.sessionId, identity.sessionPath)
+      .promptQueueBlocked,
+    true,
+  );
+  api.updatePromptQueue({ ...identity, action: "retry" });
+  await new Promise(setImmediate);
+  session.calls[0]!.options.preflightResult!(false);
+  session.calls[0]!.run.resolve();
+  await new Promise(setImmediate);
+  assert.deepEqual(
+    api.getSessionExecution(identity.sessionId, identity.sessionPath)
+      .queuedMessages,
+    ["retained draft"],
+  );
+  assert.equal(runtime.activePromptTrace, undefined);
+  assert.equal(
+    events.some((event) => event.type === "prompt_failed"),
+    false,
+  );
+  api.updatePromptQueue({ ...identity, action: "retry" });
+  await new Promise(setImmediate);
+  assert.equal(session.calls[1]!.content, "retained draft");
+  session.emitFollowUpQueue(["retained draft"]);
+  session.calls[1]!.options.preflightResult!(true);
+  session.calls[1]!.run.resolve();
+  await new Promise(setImmediate);
+  api.updatePromptQueue({ ...identity, action: "clear" });
+  assert.deepEqual(session.getFollowUpMessages(), []);
+  assert.equal(runtime.activePromptTrace, undefined);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "prompt_discarded" &&
+        event.detail?.commandId === "retry-1",
+    ),
+  );
+});
+
+test("held queues are bounded and validate exact Session identity before acceptance", async () => {
+  const session = promptSession("bounded");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  session.isCompacting = true;
+  await assert.rejects(
+    runtime.sendPrompt("wrong", { expectedSessionId: "other" }),
+    /active Web session/,
+  );
+  await assert.rejects(
+    runtime.sendPrompt("wrong", {
+      expectedSessionId: "bounded",
+      expectedSessionPath: "/copied.jsonl",
+    }),
+    /active Web session/,
+  );
+  await assert.rejects(
+    runtime.sendPrompt("x".repeat(16 * 1024 * 1024)),
+    /queue is full/,
+  );
+  for (let index = 0; index < 16; index++)
+    await runtime.sendPrompt(`message ${index}`);
+  await assert.rejects(runtime.sendPrompt("overflow"), /queue is full/);
+  assert.equal(
+    api.getSessionExecution("bounded", "current:bounded").pendingFollowUps,
+    16,
+  );
+  assert.throws(
+    () =>
+      api.updatePromptQueue({
+        sessionId: "bounded",
+        sessionPath: "/copied.jsonl",
+        action: "clear",
+      }),
+    /active Web session/,
+  );
+  api.updatePromptQueue({
+    sessionId: "bounded",
+    sessionPath: "current:bounded",
+    action: "clear",
+  });
+  finishCompaction(runtime, session);
+  await new Promise(setImmediate);
+  assert.equal(session.calls.length, 0);
+  assert.equal(runtime.inFlightRuntimes.size, 0);
+});
+
+test("a held message stays with its retained runtime after switching Sessions", async () => {
+  const session = promptSession("original");
+  const runtime = promptHarness(session);
+  const original = runtime.runtime;
+  session.isCompacting = true;
+  await runtime.sendPrompt("original only", { commandId: "original-command" });
+  runtime.retainedRuntimes.add(original);
+  const other = promptSession("other");
+  runtime.runtime = { session: other, dispose: async () => undefined };
+  finishCompaction(runtime, session);
+  await new Promise(setImmediate);
+  assert.equal(session.calls[0]!.content, "original only");
+  assert.equal(other.calls.length, 0);
+  session.calls[0]!.options.preflightResult!(true);
+  session.calls[0]!.run.resolve();
+  await new Promise(setImmediate);
+  assert.equal(runtime.activePromptTrace, undefined);
+  assert.equal(runtime.inFlightRuntimes.size, 0);
+});
+
+test("manual compaction uses Pi's compact lifecycle and holds concurrent sends", async () => {
+  const session = promptSession("manual");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  const compacted = deferred();
+  let calls = 0;
+  Object.assign(session, {
+    compact: async () => {
+      calls++;
+      session.isCompacting = true;
+      await compacted.promise;
+      finishCompaction(runtime, session);
+    },
+  });
+  await assert.rejects(
+    api.compactSession({ sessionId: "manual", sessionPath: "/copied" }),
+    /active Web session/,
+  );
+  const operation = api.compactSession({
+    sessionId: "manual",
+    sessionPath: "current:manual",
+  });
+  await new Promise(setImmediate);
+  assert.equal(calls, 1);
+  await runtime.sendPrompt("after manual compact");
+  assert.equal(session.calls.length, 0);
+  compacted.resolve();
+  await operation;
+  await new Promise(setImmediate);
+  assert.equal(session.calls[0]!.content, "after manual compact");
+  session.calls[0]!.options.preflightResult!(true);
+  session.calls[0]!.run.resolve();
+  await Promise.all(runtime.promptOperations);
+});
+
+test("compaction is busy, accepts a held prompt, and projects native outcomes without Session writes", async () => {
   const session = promptSession("compacting-session");
   const runtime = promptHarness(session);
   const api = runtime as unknown as PiWebRuntime;
@@ -440,10 +652,17 @@ test("compaction preflight is busy, rejects extra prompts, and projects exact na
   session.isCompacting = true;
   assert.equal(api.isIdle(), false);
   assert.deepEqual(projection.getCompaction(session), { state: "running" });
-  await assert.rejects(
-    runtime.sendPrompt("extra", { expectedSessionId: "compacting-session" }),
-    /compaction is in progress/,
+  assert.deepEqual(
+    await runtime.sendPrompt("extra", {
+      expectedSessionId: "compacting-session",
+    }),
+    { pendingFollowUps: 1 },
   );
+  api.updatePromptQueue({
+    sessionId: "compacting-session",
+    sessionPath: "current:compacting-session",
+    action: "clear",
+  });
   assert.equal(session.calls.length, 0);
   for (const [detail, state] of [
     [{ result: { summary: "private summary" } }, "completed"],
@@ -472,7 +691,7 @@ test("compaction preflight is busy, rejects extra prompts, and projects exact na
   assert.equal(writes, 0);
   assert.equal(
     events.filter((event) => event.type === "session_progress").length,
-    8,
+    10,
   );
   assert.doesNotMatch(JSON.stringify(events), /private/);
   assert.equal(
@@ -814,7 +1033,7 @@ test("prompt completion without a Pi preflight result fails closed", async () =>
   });
 });
 
-test("unadmitted queued prompts reject after the active Session changes", async () => {
+test("unadmitted queued prompts reject after the active Session changes even if the old runtime is retained", async () => {
   const sessionA = promptSession("session-a");
   const sessionB = promptSession("session-b");
   const runtime = promptHarness(sessionA);
@@ -824,6 +1043,7 @@ test("unadmitted queued prompts reject after the active Session changes", async 
   const second = runtime.sendPrompt("belongs-to-a", {
     expectedSessionId: "session-a",
   });
+  runtime.retainedRuntimes.add(runtime.runtime);
   runtime.runtime = { session: sessionB, dispose: async () => undefined };
 
   sessionA.calls[0].options.preflightResult?.(true);

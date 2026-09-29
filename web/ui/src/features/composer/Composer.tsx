@@ -3,16 +3,16 @@ import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Brain,
   Check,
-  ChevronRight,
-  Command,
   CornerDownRight,
   FileText,
   Folder,
   ImagePlus,
-  KeyRound,
   Plus,
-  Send,
-  SlidersHorizontal,
+  ArrowUp,
+  Target,
+  ListChecks,
+  Minimize2,
+  Cpu,
   Square,
   X,
 } from "lucide-react";
@@ -52,6 +52,8 @@ import {
   type StagedPromptImage,
   stagePromptImage,
 } from "./image-attachments.ts";
+import { WebClient } from "../../protocol/client.ts";
+import { ComposerActionMenu } from "./ComposerActionMenu.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import {
   filterWebCommands,
@@ -178,6 +180,19 @@ export function Composer(props: ComposerProps) {
   const [activeCommand, setActiveCommand] = useState(0);
   const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
   const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
+  const [actionMenu, setActionMenu] = useState<"main" | "files" | null>(null);
+  const [sessionActionOwner, setSessionActionOwner] = useState<string | null>(
+    null,
+  );
+  const [modelOpenRequest, setModelOpenRequest] = useState(0);
+  const client = useMemo(() => new WebClient(), []);
+  const contextTrigger = useRef<HTMLButtonElement>(null);
+  const menuOwner = useRef(renderedOwnerKey);
+  useEffect(() => {
+    if (menuOwner.current === renderedOwnerKey) return;
+    menuOwner.current = renderedOwnerKey;
+    setActionMenu(null);
+  }, [renderedOwnerKey]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
@@ -638,10 +653,6 @@ export function Composer(props: ComposerProps) {
   };
 
   const send = async (event?: FormEvent) => {
-    if (compacting) {
-      event?.preventDefault();
-      return;
-    }
     event?.preventDefault();
     if (
       !canCompose ||
@@ -799,7 +810,6 @@ export function Composer(props: ComposerProps) {
       : selected
         ? sessionTitle(sessionSummary ?? {}, selected.id)
         : t("newSession");
-  const targetSummary = compactSummary(targetLabel, 48);
   const placeholder = !props.selectedWorkspace
     ? t("promptStart")
     : active &&
@@ -920,6 +930,132 @@ export function Composer(props: ComposerProps) {
       (!showingQueue && (pendingCount ?? 0) > 0) ||
       (running && Boolean(prompt.trim() || images.length)));
 
+  const sessionActionPending = sessionActionOwner === renderedOwnerKey;
+  const closeActionMenu = (restoreFocus = false) => {
+    setActionMenu(null);
+    if (restoreFocus) contextTrigger.current?.focus();
+  };
+  const choose = (action: () => void) => () => {
+    setActionMenu(null);
+    action();
+  };
+  const sessionAction = async (action: "compact" | "retry" | "clear") => {
+    if (!active || !selected || sessionActionPending || props.sessionSwitching)
+      return;
+    setSessionActionOwner(renderedOwnerKey);
+    try {
+      if (action === "compact")
+        await client.compactSession(selected.id, selected.path);
+      else await client.updatePromptQueue(selected.id, selected.path, action);
+      await props.actions.refreshSnapshot();
+    } catch (error) {
+      if (draftOwner.current.key === renderedOwnerKey)
+        setCommandError(
+          error instanceof Error ? error.message : t("commandPanelUnavailable"),
+        );
+    } finally {
+      setSessionActionOwner((owner) =>
+        owner === renderedOwnerKey ? null : owner,
+      );
+    }
+  };
+  const actionItems =
+    actionMenu === "files"
+      ? [
+          {
+            id: "back",
+            section: t("composerAdd"),
+            label: t("composerBack"),
+            icon: <CornerDownRight />,
+            onClick: () => setActionMenu("main"),
+          },
+          {
+            id: "image",
+            section: t("composerAdd"),
+            label: t("addImages"),
+            description: t("imageAttachmentDescription"),
+            icon: <ImagePlus />,
+            disabled:
+              attachmentBusy || images.length >= WEB_PROMPT_IMAGE_MAX_COUNT,
+            onClick: choose(() => imagePicker.current?.click()),
+          },
+          {
+            id: "workspace-file",
+            section: t("composerAdd"),
+            label: t("fileReference"),
+            icon: <FileText />,
+            onClick: choose(openFileReference),
+          },
+        ]
+      : [
+          {
+            id: "file",
+            section: t("composerAdd"),
+            label: t("composerFile"),
+            alias: "file",
+            icon: <FileText />,
+            onClick: () => setActionMenu("files"),
+          },
+          {
+            id: "goal",
+            section: t("composerAdd"),
+            label: t("composerGoal"),
+            alias: "goal",
+            description: t("composerGoalDescription"),
+            icon: <Target />,
+            disabled: !commandEntryAvailable,
+            onClick: choose(() => {
+              if (!updateDraft({ prompt: "/goal ", caret: 6 })) return;
+              setMenuDismissed(true);
+              queueMicrotask(() => textarea.current?.focus());
+            }),
+          },
+          {
+            id: "plan",
+            section: t("composerAdd"),
+            label: t("composerPlan"),
+            alias: "plan",
+            description: t("composerPlanDescription"),
+            icon: <ListChecks />,
+            disabled:
+              !active ||
+              running ||
+              props.planSelectionPending ||
+              props.promptAdmissionPending,
+            onClick: choose(
+              () =>
+                void props.actions.selectPlanMode(
+                  props.snapshot?.runtime.plan === "inactive",
+                ),
+            ),
+          },
+          {
+            id: "compact",
+            section: t("composerCommands"),
+            label: t("composerCompact"),
+            alias: "compact",
+            description: t("composerCompactDescription"),
+            icon: <Minimize2 />,
+            disabled:
+              !active ||
+              running ||
+              sessionActionPending ||
+              props.promptAdmissionPending ||
+              (pendingCount ?? 0) > 0,
+            onClick: choose(() => void sessionAction("compact")),
+          },
+          {
+            id: "model",
+            section: t("composerCommands"),
+            label: t("composerModel"),
+            alias: "model",
+            description: t("composerModelDescription"),
+            icon: <Cpu />,
+            disabled: running || props.modelSelectionPending,
+            onClick: choose(() => setModelOpenRequest((value) => value + 1)),
+          },
+        ];
+
   return (
     <div className="composer-dock">
       {!active &&
@@ -938,31 +1074,6 @@ export function Composer(props: ComposerProps) {
             </button>
           </div>
         )}
-      {active && props.snapshot?.runtime.plan && !props.sessionSwitching && (
-        <div className="plan-mode-bar">
-          <span>{t(`planMode_${props.snapshot.runtime.plan}`)}</span>
-          <button
-            type="button"
-            disabled={
-              running ||
-              props.planSelectionPending ||
-              props.promptAdmissionPending ||
-              Boolean(props.promptAdmissionRecovery)
-            }
-            onClick={() =>
-              void props.actions.selectPlanMode(
-                props.snapshot?.runtime.plan === "inactive",
-              )
-            }
-          >
-            {t(
-              props.snapshot.runtime.plan === "inactive"
-                ? "planModeEnter"
-                : "planModeExit",
-            )}
-          </button>
-        </div>
-      )}
       {active && (
         <ActivityBar
           snapshot={props.snapshot}
@@ -1059,6 +1170,78 @@ export function Composer(props: ComposerProps) {
           </div>
         </section>
       )}
+      {showingQueue && (
+        <section
+          className="composer-queue"
+          aria-label={t("pendingFollowUpsHint", { count: observedQueue })}
+        >
+          <div className="composer-queue-status" role="status">
+            <span>
+              {t(
+                execution?.promptQueueBlocked
+                  ? "compactionQueueBlocked"
+                  : compacting
+                    ? "compactionQueueWaiting"
+                    : "queuedHint",
+              )}
+            </span>
+            {active && (
+              <span>
+                {execution?.promptQueueBlocked && (
+                  <button
+                    type="button"
+                    disabled={sessionActionPending || compacting}
+                    onClick={() => void sessionAction("retry")}
+                  >
+                    {t("retryPrompt")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={sessionActionPending}
+                  onClick={() => void sessionAction("clear")}
+                >
+                  {t("clearPromptQueue")}
+                </button>
+              </span>
+            )}
+          </div>
+          <ul>
+            {queuedRows.map(({ message, key }) => {
+              const rowKey = `${selected?.id}\0${selected?.path}\0${key}`;
+              const expanded = expandedQueuedMessage === rowKey;
+              const text = message || t("queuedImage");
+              const action = t(
+                expanded ? "queuedMessageCollapse" : "queuedMessageExpand",
+              );
+              return (
+                <li key={key}>
+                  <button
+                    type="button"
+                    className={`composer-queue-row ${expanded ? "expanded" : ""}`}
+                    aria-expanded={expanded}
+                    aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
+                    title={action}
+                    onClick={() =>
+                      setExpandedQueuedMessage(expanded ? null : rowKey)
+                    }
+                  >
+                    <CornerDownRight aria-hidden="true" />
+                    <span>{text}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {observedQueue > queuedMessages.length && (
+            <small>
+              {t("queuedMore", {
+                count: observedQueue - queuedMessages.length,
+              })}
+            </small>
+          )}
+        </section>
+      )}
       <form
         className={`composer composer-m02 ${props.selectedWorkspace ? "" : "dormant"} ${dragActive ? "is-dragging" : ""}`}
         onSubmit={(event) => void send(event)}
@@ -1089,6 +1272,13 @@ export function Composer(props: ComposerProps) {
           void stageFiles(event.dataTransfer.files);
         }}
       >
+        {actionMenu && (
+          <ComposerActionMenu
+            key={actionMenu}
+            items={actionItems}
+            onClose={closeActionMenu}
+          />
+        )}
         {!props.selectedWorkspace && (
           <button
             className="dormant-overlay"
@@ -1096,58 +1286,6 @@ export function Composer(props: ComposerProps) {
             aria-label={t("selectWorkspace")}
             onClick={() => void props.actions.chooseWorkspace()}
           />
-        )}
-        {props.selectedWorkspace && (
-          <div
-            className="composer-target"
-            title={`${workspaceLabel} / ${targetLabel}`}
-          >
-            <Folder aria-hidden="true" />
-            <span>{workspaceLabel}</span>
-            <ChevronRight aria-hidden="true" />
-            <strong>{targetSummary}</strong>
-          </div>
-        )}
-        {showingQueue && (
-          <section
-            className="composer-queue"
-            aria-label={t("pendingFollowUpsHint", { count: observedQueue })}
-          >
-            <ul>
-              {queuedRows.map(({ message, key }) => {
-                const rowKey = `${selected?.id}\0${selected?.path}\0${key}`;
-                const expanded = expandedQueuedMessage === rowKey;
-                const text = message || t("queuedImage");
-                const action = t(
-                  expanded ? "queuedMessageCollapse" : "queuedMessageExpand",
-                );
-                return (
-                  <li key={key}>
-                    <button
-                      type="button"
-                      className={`composer-queue-row ${expanded ? "expanded" : ""}`}
-                      aria-expanded={expanded}
-                      aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
-                      title={action}
-                      onClick={() =>
-                        setExpandedQueuedMessage(expanded ? null : rowKey)
-                      }
-                    >
-                      <CornerDownRight aria-hidden="true" />
-                      <span>{text}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            {observedQueue > queuedMessages.length && (
-              <small>
-                {t("queuedMore", {
-                  count: observedQueue - queuedMessages.length,
-                })}
-              </small>
-            )}
-          </section>
         )}
         <input
           ref={imagePicker}
@@ -1324,93 +1462,45 @@ export function Composer(props: ComposerProps) {
           hidden={Boolean(selected && !active && !props.workspaceDraft)}
         >
           <div className="composer-toolbar-context">
-            {contextEntryAvailable ? (
-              <DropdownMenu
-                className="composer-context-menu"
-                button={{
-                  label: t("addContext"),
-                  icon: <Plus />,
-                  isIconOnly: true,
-                  size: "sm",
-                  variant: "ghost",
-                  className: "composer-context-trigger",
-                }}
-                items={[
-                  {
-                    id: "image-attachment",
-                    label: t("addImages"),
-                    description: t("imageAttachmentDescription"),
-                    icon: <ImagePlus />,
-                    isDisabled:
-                      attachmentBusy ||
-                      images.length >= WEB_PROMPT_IMAGE_MAX_COUNT,
-                    onClick: () => imagePicker.current?.click(),
-                  },
-                  {
-                    id: "file-reference",
-                    label: t("fileReference"),
-                    icon: <FileText />,
-                    onClick: openFileReference,
-                  },
-                  {
-                    id: "slash-commands",
-                    label: t("commands"),
-                    description: !active
-                      ? t("commandsSessionRequired")
-                      : prompt.trim()
-                        ? t("commandsEmptyDraftOnly")
-                        : undefined,
-                    icon: <Command />,
-                    isDisabled: !commandEntryAvailable,
-                    onClick: () => {
-                      if (!updateDraft({ prompt: "/", caret: 1 })) return;
-                      setMenuDismissed(false);
-                      requestAnimationFrame(() => {
-                        if (draftOwner.current.key !== renderedOwnerKey) return;
-                        textarea.current?.focus();
-                        textarea.current?.setSelectionRange(1, 1);
-                      });
-                    },
-                  },
-                ]}
-                menuWidth={200}
-                placement="above"
-                alignment="start"
-                hasChevron={false}
-              />
-            ) : (
-              <span className="composer-context-placeholder" />
-            )}
-          </div>
-          <div className="composer-toolbar-controls">
-            {props.onInspect && (
+            {contextEntryAvailable && (
               <button
+                ref={contextTrigger}
                 type="button"
-                className="icon-button"
-                aria-label={t("runtimeStatus")}
-                title={t("runtimeStatus")}
-                disabled={!active || props.sessionSwitching}
-                onClick={() => props.onInspect?.()}
+                className="composer-context-trigger icon-button"
+                aria-label={t("addContext")}
+                aria-haspopup="menu"
+                aria-expanded={actionMenu !== null}
+                aria-controls={actionMenu ? "composer-action-menu" : undefined}
+                onClick={() => {
+                  setMenuDismissed(true);
+                  setActionMenu(actionMenu ? null : "main");
+                }}
               >
-                <SlidersHorizontal />
+                <Plus />
               </button>
             )}
-            {props.onOpenProviders && (
-              <Tooltip content={t("providerAvailability")} placement="above">
-                <button
-                  type="button"
-                  className="icon-button"
-                  data-provider-settings-trigger
-                  aria-label={t("providerAvailability")}
-                  onClick={props.onOpenProviders}
-                >
-                  <KeyRound />
-                </button>
-              </Tooltip>
+            {!props.landing && (
+              <span
+                className="composer-workspace-label"
+                title={`${workspaceLabel} / ${targetLabel}`}
+              >
+                <Folder />
+                {workspaceLabel}
+              </span>
             )}
+            {active &&
+              props.snapshot?.runtime.plan &&
+              props.snapshot.runtime.plan !== "inactive" && (
+                <span className="composer-plan-chip">
+                  {t(`planMode_${props.snapshot.runtime.plan}`)}
+                </span>
+              )}
+          </div>
+          <div className="composer-toolbar-controls">
             <div className="model-picker-wrap">
               <ModelPicker
                 snapshot={props.snapshot}
+                openRequest={modelOpenRequest}
                 currentModel={currentModel}
                 draftModel={props.draftModel}
                 modelSearch={modelSearch}
@@ -1498,7 +1588,6 @@ export function Composer(props: ComposerProps) {
                   type="submit"
                   aria-label={t("send")}
                   disabled={
-                    compacting ||
                     attachmentBusy ||
                     props.sessionSwitching ||
                     props.modelSelectionPending ||
@@ -1513,7 +1602,7 @@ export function Composer(props: ComposerProps) {
                     (!prompt.trim() && images.length === 0)
                   }
                 >
-                  <Send />
+                  <ArrowUp />
                 </button>
               </Tooltip>
             )}

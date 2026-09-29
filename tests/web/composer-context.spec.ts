@@ -16,7 +16,6 @@ import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { FileReferenceDialog } from "../../web/ui/src/features/composer/FileReferenceDialog.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
-import { compactSummary } from "../../web/ui/src/lib/format.ts";
 import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
 import {
   createWebStore,
@@ -130,7 +129,7 @@ function setup(overrides: Record<string, unknown> = {}) {
   return { ...view, node, props, sendPrompt, discoverCommands };
 }
 
-it("keeps the draft editable during preflight compaction without offering false queue or stop actions", async () => {
+it("accepts a message during preflight compaction and clears only an acknowledged draft", async () => {
   const value = snapshot();
   value.runtime.status = "running";
   value.selectedExecution = {
@@ -149,7 +148,7 @@ it("keeps the draft editable during preflight compaction without offering false 
   expect(
     screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
       .disabled,
-  ).toBe(true);
+  ).toBe(false);
   expect(screen.queryByRole("button", { name: i18n.t("stopTurn") })).toBeNull();
   expect(
     screen.getAllByText(i18n.t("compactionDraftHelp")).length,
@@ -157,7 +156,11 @@ it("keeps the draft editable during preflight compaction without offering false 
   await act(async () =>
     fireEvent.submit(screen.getByRole("textbox").closest("form")!),
   );
-  expect(sendPrompt).not.toHaveBeenCalled();
+  expect(sendPrompt).toHaveBeenCalledWith("Keep this draft");
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe("");
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "Next draft" },
+  });
   rerender(
     node({
       ...props,
@@ -173,12 +176,118 @@ it("keeps the draft editable during preflight compaction without offering false 
     }),
   );
   expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe(
-    "Keep this draft",
+    "Next draft",
   );
   expect(
     screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
       .disabled,
   ).toBe(false);
+});
+
+it("keeps a rejected compaction send in the draft and waits for acceptance before clearing", async () => {
+  const data = snapshot();
+  data.selectedExecution = {
+    sessionId: "session-1",
+    sessionPath: "/tmp/workspace/one.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    compaction: { state: "running" },
+  };
+  let acknowledge: (accepted: boolean) => void = () => {};
+  const pending = new Promise<boolean>((resolve) => {
+    acknowledge = resolve;
+  });
+  const { sendPrompt } = setup({ snapshot: data });
+  sendPrompt.mockReturnValueOnce(pending);
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  fireEvent.change(input, { target: { value: "Preserve until acknowledged" } });
+  fireEvent.submit(input.closest("form")!);
+  expect(input.value).toBe("Preserve until acknowledged");
+  await act(async () => acknowledge(false));
+  expect(input.value).toBe("Preserve until acknowledged");
+  await act(async () => fireEvent.submit(input.closest("form")!));
+  expect(input.value).toBe("");
+});
+
+it("supports keyboard navigation and returns focus only for keyboard dismissal", () => {
+  setup();
+  const trigger = screen.getByRole("button", { name: i18n.t("addContext") });
+  fireEvent.click(trigger);
+  const menu = screen.getByRole("menu");
+  const rows = screen.getAllByRole("menuitem");
+  expect(document.activeElement).toBe(rows[0]);
+  fireEvent.keyDown(menu, { key: "End" });
+  expect(document.activeElement).toBe(rows.at(-1));
+  fireEvent.keyDown(menu, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(rows[0]);
+  fireEvent.keyDown(menu, { key: "Escape" });
+  expect(document.activeElement).toBe(trigger);
+  fireEvent.click(trigger);
+  const input = screen.getByRole("textbox");
+  input.focus();
+  fireEvent.pointerDown(input);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(document.activeElement).toBe(input);
+});
+
+it("manual compaction and queue recovery use exact native Session endpoints without sending a prompt", async () => {
+  const compact = vi
+    .spyOn(WebClient.prototype, "compactSession")
+    .mockResolvedValue({ sessionId: "session-1" });
+  const update = vi
+    .spyOn(WebClient.prototype, "updatePromptQueue")
+    .mockResolvedValue({ sessionId: "session-1" });
+  const store = createWebStore();
+  const sendPrompt = vi.fn(async () => true);
+  const refreshSnapshot = vi.fn(async () => true);
+  const { node, props, rerender } = setup({
+    actions: { ...store.getState().actions, sendPrompt, refreshSnapshot },
+  });
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  fireEvent.change(input, { target: { value: "Keep during compact" } });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  await act(async () =>
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /^Compact compact/u }),
+    ),
+  );
+  expect(compact).toHaveBeenCalledWith("session-1", "/tmp/workspace/one.jsonl");
+  expect(input.value).toBe("Keep during compact");
+  expect(sendPrompt).not.toHaveBeenCalled();
+  const data = snapshot();
+  data.selectedExecution = {
+    sessionId: "session-1",
+    sessionPath: "/tmp/workspace/one.jsonl",
+    status: "idle",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    promptQueueBlocked: true,
+    pendingFollowUps: 1,
+    queuedMessages: ["retained"],
+  };
+  rerender(node({ ...props, snapshot: data }));
+  expect(screen.getByText("retained").closest("form")).toBeNull();
+  await act(async () =>
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("retryPrompt") }),
+    ),
+  );
+  expect(update).toHaveBeenLastCalledWith(
+    "session-1",
+    "/tmp/workspace/one.jsonl",
+    "retry",
+  );
+  await act(async () =>
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("clearPromptQueue") }),
+    ),
+  );
+  expect(update).toHaveBeenLastCalledWith(
+    "session-1",
+    "/tmp/workspace/one.jsonl",
+    "clear",
+  );
 });
 
 it("lets a user click Send for a follow-up while Stop remains available", async () => {
@@ -247,27 +356,31 @@ it("hides another controller's model and stale queue receipt while offering acti
   ).toBeTruthy();
 });
 
-it("shows the snapshot target and unified context actions", async () => {
-  const { discoverCommands, sendPrompt } = setup();
-  expect(screen.getByText("First task")).toBeTruthy();
+it("groups native actions like DSH without extra settings, permission, feedback or export entries", async () => {
+  const { sendPrompt } = setup();
+  expect(screen.getByTitle("Workspace / First task")).toBeTruthy();
+  expect(screen.queryByText("First task")).toBeNull();
   expect(screen.getByText("Workspace")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
-  expect(screen.getAllByRole("menuitem")).toHaveLength(3);
-  expect(screen.getByRole("menuitem", { name: /^Add images/u })).toBeTruthy();
   expect(
-    screen.getByRole("menuitem", { name: /Reference workspace file/u }),
-  ).toBeTruthy();
+    screen.getAllByRole("menuitem").map((item) => item.textContent),
+  ).toEqual([
+    expect.stringContaining("Filefile"),
+    expect.stringContaining("Goalgoal"),
+    expect.stringContaining("Planplan"),
+    expect.stringContaining("Compactcompact"),
+    expect.stringContaining("Modelmodel"),
+  ]);
   expect(
-    screen.getByRole("menuitem", { name: i18n.t("commands") }),
-  ).toBeTruthy();
-  fireEvent.click(screen.getByRole("menuitem", { name: i18n.t("commands") }));
+    screen.queryByRole("button", { name: i18n.t("providerAvailability") }),
+  ).toBeNull();
+  fireEvent.click(screen.getByRole("menuitem", { name: /^Goal goal/u }));
   const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
     name: i18n.t("describeTask"),
   });
   await waitFor(() => expect(document.activeElement).toBe(input));
-  expect(input.value).toBe("/");
-  expect(input.selectionStart).toBe(1);
-  expect(discoverCommands).toHaveBeenCalledOnce();
+  expect(input.value).toBe("/goal ");
+  expect(input.selectionStart).toBe(6);
   expect(sendPrompt).not.toHaveBeenCalled();
   fireEvent.keyDown(input, { key: "Escape" });
   expect(document.activeElement).toBe(input);
@@ -284,7 +397,7 @@ it("bounds a prompt-derived target while retaining the complete identity", () =>
   };
   setup({ snapshot: data });
 
-  expect(screen.getByText(compactSummary(longTitle, 48))).toBeTruthy();
+  expect(screen.getByText("Workspace")).toBeTruthy();
   expect(screen.getByTitle(`Workspace / ${longTitle}`)).toBeTruthy();
   expect(screen.queryByText(longTitle)).toBeNull();
 });
@@ -295,10 +408,9 @@ it("keeps a nonempty draft and its exact text-only prompt contract", async () =>
   fireEvent.change(input, { target: { value: "  Review this\ncarefully  " } });
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
   expect(
-    screen
-      .getByRole("menuitem", { name: /Slash commands/u })
-      .getAttribute("aria-disabled"),
-  ).toBe("true");
+    screen.getByRole<HTMLButtonElement>("menuitem", { name: /^Goal goal/u })
+      .disabled,
+  ).toBe(true);
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   input.focus();
   fireEvent(
@@ -335,6 +447,7 @@ it("validates and inserts a workspace file reference at the caret", async () => 
   fireEvent.select(input);
 
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(screen.getByRole("menuitem", { name: /^File file/u }));
   fireEvent.click(
     screen.getByRole("menuitem", { name: /Reference workspace file/u }),
   );
@@ -378,6 +491,7 @@ it("keeps a failed active-session reference editable", async () => {
   );
   setup();
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(screen.getByRole("menuitem", { name: /^File file/u }));
   fireEvent.click(
     screen.getByRole("menuitem", { name: /Reference workspace file/u }),
   );
@@ -404,6 +518,7 @@ it("allows cancelling a file reference while validation is pending", async () =>
     .mockImplementation(() => new Promise(() => {}));
   setup();
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(screen.getByRole("menuitem", { name: /^File file/u }));
   fireEvent.click(
     screen.getByRole("menuitem", { name: /Reference workspace file/u }),
   );
@@ -478,10 +593,10 @@ it("can add a visible file path to the first message of a new session", async ()
     name: i18n.t("describeTask"),
   });
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
-  // Astryx commits menu focus on the next animation frame.
+  fireEvent.click(screen.getByRole("menuitem", { name: /^File file/u }));
   await waitFor(() =>
     expect(document.activeElement).toBe(
-      screen.getByRole("menuitem", { name: /^Add images/u }),
+      screen.getByRole("menuitem", { name: i18n.t("composerBack") }),
     ),
   );
   fireEvent.click(
@@ -842,7 +957,7 @@ it("does not transfer a settled submission into a different session", async () =
       selectedPath: "/tmp/workspace/two.jsonl",
     }),
   );
-  expect(screen.getByText("Second task")).toBeTruthy();
+  expect(screen.getByTitle("Workspace / Second task")).toBeTruthy();
   fireEvent.change(input, { target: { value: "new draft" } });
   await act(async () => {
     resolve(true);

@@ -111,6 +111,7 @@ export interface WebActiveTurn {
 
 /** Read-only facts for the selected Session, independent of input ownership. */
 export interface WebSessionExecution {
+  promptQueueBlocked?: boolean;
   sessionId: string;
   sessionPath: string;
   status: "running" | "idle" | "unknown";
@@ -205,6 +206,8 @@ export interface WebRuntimeController {
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
   setPlanMode?(request: PlanControlRequest & { sessionId: string; sessionPath: string }): Promise<ReturnType<typeof projectPlanControl>>;
+  updatePromptQueue?(request: { sessionId: string; sessionPath: string; action: "retry" | "clear" }): void;
+  compactSession?(request: { sessionId: string; sessionPath: string }): Promise<void>;
   setThinkingLevel?(
     level: string,
     options?: WebThinkingSelectionOptions,

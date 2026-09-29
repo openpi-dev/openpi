@@ -31,6 +31,11 @@ export function publishWebCommandFeedback(
   return true;
 }
 
+/** True only while the local Web host is attached to this exact Session. */
+export function hasWebCommandFeedback(scope: object) {
+  return bridges.has(scope);
+}
+
 export function notifyWebCommand(
   ctx: Pick<ExtensionContext, "ui" | "sessionManager">,
   text: string,

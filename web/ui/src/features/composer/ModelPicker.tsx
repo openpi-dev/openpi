@@ -17,6 +17,7 @@ import type {
 import { modelIdentity } from "./model-identity.ts";
 
 interface ModelPickerProps {
+  openRequest?: number;
   snapshot: WebSnapshot | null;
   currentModel?: WebModelSummary;
   draftModel?: WebModelSummary | null;
@@ -111,6 +112,12 @@ export function ModelPicker(props: ModelPickerProps) {
   useEffect(() => {
     if (disabled) selector.current?.close();
   }, [disabled]);
+  const consumedOpenRequest = useRef(props.openRequest);
+  useEffect(() => {
+    if (props.openRequest === consumedOpenRequest.current) return;
+    consumedOpenRequest.current = props.openRequest;
+    if (props.openRequest && !disabled) selector.current?.open();
+  }, [props.openRequest, disabled]);
 
   return (
     <ComplexSelector
@@ -118,7 +125,11 @@ export function ModelPicker(props: ModelPickerProps) {
       label={triggerLabel}
       isLabelHidden
       value={selected ? `${selected.provider}/${selected.id}` : ""}
-      triggerLabel={<span className="model-picker-label">{triggerLabel}</span>}
+      triggerLabel={
+        <span className="model-picker-label" title={triggerLabel}>
+          {selected?.name || selected?.id || triggerLabel}
+        </span>
+      }
       variant="ghost"
       size="sm"
       placement="above"

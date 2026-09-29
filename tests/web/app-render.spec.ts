@@ -72,9 +72,8 @@ it("Plan controls preserve drafts without sending prompts, and the placeholder f
     name: i18n.t("describeTask"),
   });
   fireEvent.change(input, { target: { value: "Keep my draft" } });
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("planModeEnter") }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(screen.getByRole("menuitem", { name: /^Plan plan/u }));
   expect(selectPlanMode).toHaveBeenCalledWith(true);
   expect(sendPrompt).not.toHaveBeenCalled();
   expect(input.value).toBe("Keep my draft");
@@ -101,16 +100,18 @@ it("Plan controls preserve drafts without sending prompts, and the placeholder f
   expect(input.placeholder).not.toBe(i18n.t("promptPlanMessage"));
   rerender("planning", true);
   expect(input.placeholder).toBe(i18n.t("promptPlanMessage"));
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("planModeExit") }));
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(screen.getByRole("menuitem", { name: /^Plan plan/u }));
   expect(selectPlanMode).toHaveBeenLastCalledWith(false);
   expect(sendPrompt).not.toHaveBeenCalled();
   rerender("inactive", false);
   expect(input.placeholder).not.toBe(i18n.t("promptPlanMessage"));
   expect(input.value).toBe("Keep my draft");
   rerender("planning", true, true);
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
   expect(
-    screen.getByRole<HTMLButtonElement>("button", {
-      name: i18n.t("planModeExit"),
+    screen.getByRole<HTMLButtonElement>("menuitem", {
+      name: /^Plan plan/u,
     }).disabled,
   ).toBe(true);
   await act(async () => fireEvent.submit(input.closest("form")!));
@@ -339,9 +340,24 @@ it.each([
           target: { value: "Keep this question draft across settings" },
         },
       );
-      await act(async () =>
-        fireEvent.click(screen.getByRole("button", { name: i18n.t(trigger) })),
-      );
+      if (trigger === "providerAvailability") {
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("addContext") }),
+        );
+        fireEvent.click(
+          screen.getByRole("menuitem", { name: /^Model model/u }),
+        );
+        fireEvent.click(
+          await screen.findByRole("button", {
+            name: i18n.t("openModelSettings"),
+          }),
+        );
+      } else
+        await act(async () =>
+          fireEvent.click(
+            screen.getByRole("button", { name: i18n.t(trigger) }),
+          ),
+        );
       const dialog = await screen.findByRole("dialog", {
         name: i18n.t("settings"),
       });
@@ -2454,7 +2470,7 @@ it("shows cancellation and queued follow-up receipts on the active session", () 
   ).toBe(true);
 });
 
-it("shows Pi's queued messages inside the composer after reload and in a background session", () => {
+it("shows Pi's queued messages above the composer after reload and in a background session", () => {
   const snapshot = activeSnapshot();
   const selected = snapshot.selectedSession!;
   const firstMessage = `First follow-up ${"x".repeat(90)} complete queued text`;
@@ -2487,7 +2503,7 @@ it("shows Pi's queued messages inside the composer after reload and in a backgro
   const queued = screen.getByRole("region", {
     name: i18n.t("pendingFollowUpsHint", { count: 2 }),
   });
-  expect(queued.closest("form.composer")).toBeTruthy();
+  expect(queued.closest("form.composer")).toBeNull();
   expect(queued.querySelector("ol")).toBeNull();
   expect(queued.textContent).toContain("First follow-up");
   expect(queued.textContent).toContain(i18n.t("queuedImage"));
@@ -3031,7 +3047,7 @@ it("does not repeat a provider identity used as the fallback model label", () =>
 
   expect(
     screen.getByRole("button", { name: "provider-alpha/model-a" }).textContent,
-  ).toBe("provider-alpha/model-a");
+  ).toBe("model-a");
   expect(
     screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
   ).toBeNull();

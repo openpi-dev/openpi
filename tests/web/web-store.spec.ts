@@ -2302,6 +2302,57 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  it("discarding a queued command removes only its local preview, never native messages", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    store.setState({
+      liveMessages: [
+        {
+          key: "native",
+          message: { role: "assistant", content: "Keep this answer" },
+        },
+        {
+          key: "held",
+          message: { role: "user", content: "Queued" },
+          optimistic: {
+            sessionId: "session-1",
+            sessionPath: "/tmp/ws/session.jsonl",
+            commandId: "held",
+            afterEntryId: null,
+            admitted: true,
+          },
+        },
+      ],
+    });
+    stream.emit(
+      runtimeEvent(5, "prompt_discarded", { sessionId: "session-1" }),
+    );
+    expect(store.getState().liveMessages).toHaveLength(2);
+    stream.emit(
+      runtimeEvent(6, "prompt_discarded", {
+        sessionId: "another",
+        commandId: "held",
+      }),
+    );
+    expect(store.getState().liveMessages).toHaveLength(2);
+    stream.emit(
+      runtimeEvent(7, "prompt_discarded", {
+        sessionId: "session-1",
+        commandId: "held",
+      }),
+    );
+    expect(store.getState().liveMessages.map((entry) => entry.key)).toEqual([
+      "native",
+    ]);
+    store.getState().actions.stop();
+  });
+
   it("ignores prompt_accepted owned by another Session while the current turn is running", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));

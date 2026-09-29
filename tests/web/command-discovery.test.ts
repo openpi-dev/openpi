@@ -46,6 +46,18 @@ test("only reviewed command owners gain Web support; same names from other packa
   const owned = projectWebCommands([plan]).commands[0]!;
   assert.equal(owned.availability, "available");
   assert.equal(owned.support, "plan");
+  const goal = command("goal", "extension");
+  assert.equal(
+    projectWebCommands([goal]).commands[0]!.availability,
+    "unsupported",
+  );
+  goal.sourceInfo.path = fileURLToPath(
+    new URL("../../extensions/goal/index.ts", import.meta.url),
+  );
+  assert.equal(
+    projectWebCommands([goal]).commands[0]!.availability,
+    "available",
+  );
 });
 
 test("projects Pi command identities without exposing source metadata", () => {

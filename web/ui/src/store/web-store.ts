@@ -31,6 +31,7 @@ const refreshEventTypes = new Set([
   "session_progress",
   "queue_update",
   "prompt_failed",
+  "prompt_discarded",
   "model_select",
   "settings_changed",
   "workspace_imported",
@@ -970,6 +971,17 @@ export function createWebStore(
         set({ liveMessages, thinkingDurations, thinkingStarts });
       }
 
+      if (
+        event.type === "prompt_discarded" &&
+        typeof detail.commandId === "string"
+      ) {
+        rememberBounded(terminalPromptIds, detail.commandId);
+        set({
+          liveMessages: get().liveMessages.filter(
+            (entry) => entry.optimistic?.commandId !== detail.commandId,
+          ),
+        });
+      }
       if (event.type === "prompt_failed") {
         rememberBounded(terminalPromptIds, detail.commandId);
         const failedActiveTurn =
