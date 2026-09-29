@@ -1,5 +1,8 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { PlanControlRequest, projectPlanControl } from "../../extensions/plan-mode/control.ts";
+import type {
+  PlanControlResult,
+  projectPlanControl,
+} from "../../extensions/plan-mode/control.ts";
 import type {
   WebModelSearchResult,
   WebCommandDiscoveryResult,
@@ -74,6 +77,7 @@ export interface WebPromptOptions {
   expectedSessionId?: string;
   expectedSessionPath?: string;
   images?: readonly WebPromptImage[];
+  planRevision?: string;
 }
 
 export interface WebPromptAdmissionReceipt {
@@ -156,7 +160,18 @@ export interface WebRuntimeController {
   listProviderAuth?(): WebProviderAuthProjection;
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
-  setPlanMode?(request: PlanControlRequest & { sessionId: string }): Promise<ReturnType<typeof projectPlanControl>>;
+  setPlanMode?(
+    request: {
+      sessionId: string;
+      enabled: boolean;
+      expectedRevision: string | null;
+    },
+  ): Promise<ReturnType<typeof projectPlanControl>>;
+  preparePlanImplementation?(request: {
+    sessionId: string;
+    sessionPath: string;
+    expectedRevision: string | null;
+  }): Promise<PlanControlResult & { prompt: string }>;
   setThinkingLevel?(
     level: string,
     options?: WebThinkingSelectionOptions,

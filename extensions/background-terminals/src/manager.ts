@@ -46,8 +46,9 @@ export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
 export const MAX_SPILL_BYTES_PER_SESSION = 512 * 1024 * 1024;
 const STOP_TIMEOUT_MS = 5_000;
 /** SIGTERM is normally enough; the second deadline covers a wedged process. */
-const FORCE_KILL_AFTER_MS = 2_000;
-const FORCE_CLOSE_WAIT_MS = 500;
+// Reserve more of the same 2.5s termination budget for Windows taskkill /T /F.
+const FORCE_KILL_AFTER_MS = process.platform === "win32" ? 1_500 : 2_000;
+const FORCE_CLOSE_WAIT_MS = process.platform === "win32" ? 1_000 : 500;
 /** Reserve this inside each existing termination phase for helper closure. */
 const TASKKILL_HELPER_CLOSE_WAIT_MS = 100;
 /** After termination, how long to wait for the natural close→flush→settle

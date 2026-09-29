@@ -1,11 +1,12 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MODEL_ID,
   PROVIDER_ID,
+  deferPlanWorkspaceCleanup,
   startFakeProvider,
 } from "./provider-e2e-support.ts";
 
@@ -38,14 +39,29 @@ test("Plan switch changes only owner state; first message gets planning context 
               },
             ],
           }
-        : { role: "assistant", content: "继续讨论方案，不实施。" };
+        : index === 2
+          ? {
+              role: "assistant",
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "setup-theme",
+                  type: "function",
+                  function: {
+                    name: "configure_my_pi_setup",
+                    arguments: JSON.stringify({ ui_web_theme: "dark" }),
+                  },
+                },
+              ],
+            }
+          : { role: "assistant", content: "继续讨论方案，不实施。" };
     return (
       [
         { index: 0, delta, finish_reason: null },
         {
           index: 0,
           delta: {},
-          finish_reason: index === 0 ? "tool_calls" : "stop",
+          finish_reason: index === 0 || index === 2 ? "tool_calls" : "stop",
         },
       ]
         .map(
@@ -93,6 +109,29 @@ test("Plan switch changes only owner state; first message gets planning context 
     await expect(input).not.toHaveAttribute("placeholder", placeholder);
     expect(provider.requests).toHaveLength(0);
     await expect(page.locator(".message-row.user")).toHaveCount(0);
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "设置" });
+    await expect(
+      settings.getByRole("radio", { name: "深色", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      settings.getByText(
+        "请先退出 Plan 模式，再修改 OpenPI 设置。退出不会开始实施计划。",
+      ),
+    ).toBeVisible();
+    const blocked = await page.request.post("/api/prompt", {
+      headers,
+      data: {
+        sessionId,
+        sessionPath,
+        commandId: "plan-setup-blocked",
+        content: "/openpi-setup use dark theme",
+      },
+    });
+    expect(blocked.status()).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(await blocked.json())).toContain("Exit Plan mode");
+    expect(provider.requests).toHaveLength(0);
+    await settings.getByRole("button", { name: "关闭", exact: true }).click();
     const stale = await page.request.post("/api/plan", {
       headers,
       data: {
@@ -134,10 +173,36 @@ test("Plan switch changes only owner state; first message gets planning context 
     await expect(input).not.toHaveAttribute("placeholder", placeholder);
     await expect(input).toHaveValue("下一条草稿");
     expect(provider.requests).toHaveLength(2);
-    await expect(page.locator(".message-row.user")).toHaveCount(1);
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await expect(
+      settings.getByRole("radio", { name: "深色", exact: true }),
+    ).toBeEnabled();
+    await settings
+      .locator(".settings-theme-option")
+      .filter({ hasText: "深色" })
+      .click();
+    await expect(
+      settings.getByText(
+        /OpenPI 配置已保存并应用。|配置已保存，实际设置没有变化。/,
+      ),
+    ).toBeVisible();
+    await expect(
+      settings.getByRole("radio", { name: "深色", exact: true }),
+    ).toBeChecked();
+    expect(provider.requests).toHaveLength(4);
+    expect(JSON.stringify(provider.requests[2]?.body)).toContain(
+      "Plan mode is inactive",
+    );
+    await page.reload();
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await expect(
+      page
+        .getByRole("dialog", { name: "设置" })
+        .getByText(/OpenPI 配置已保存并应用。|配置已保存，实际设置没有变化。/),
+    ).toBeVisible();
   } finally {
     await provider.close();
-    await rm(workspace, { recursive: true, force: true });
+    deferPlanWorkspaceCleanup(workspace);
   }
 });
 
@@ -485,7 +550,475 @@ for (const theme of ["light", "dark"] as const) {
       for (const step of streamSteps) step.release();
       releaseFinish();
       await provider.close();
-      await rm(workspace, { recursive: true, force: true });
+      deferPlanWorkspaceCleanup(workspace);
     }
   });
 }
+
+test("Plan Ready stays gated through browser preview and unsupported fresh handoff, then releases on submit", async ({
+  page,
+}) => {
+  const workspace = await mkdtemp(join(tmpdir(), "openpi-plan-handoff-"));
+  const implementationFile = join(workspace, "implementation.txt");
+  const provider = await startFakeProvider((_body, index) => {
+    const tool = [
+      {
+        name: "plan_ready",
+        arguments: JSON.stringify({
+          plan: "Create implementation.txt with the approved content.",
+        }),
+      },
+      {
+        name: "write",
+        arguments: JSON.stringify({
+          path: implementationFile,
+          content: "must remain blocked until approval",
+        }),
+      },
+      undefined,
+      {
+        name: "write",
+        arguments: JSON.stringify({
+          path: implementationFile,
+          content:
+            "must remain blocked after refreshing an unsubmitted approval",
+        }),
+      },
+      undefined,
+      {
+        name: "write",
+        arguments: JSON.stringify({
+          path: implementationFile,
+          content: "written after explicit submission",
+        }),
+      },
+      undefined,
+    ][index];
+    const chunk = (delta: unknown, finishReason: string | null) =>
+      "data: " +
+      JSON.stringify({
+        id: "plan-handoff",
+        object: "chat.completion.chunk",
+        created: 1700000000,
+        model: MODEL_ID,
+        choices: [{ index: 0, delta, finish_reason: finishReason }],
+      }) +
+      "\n\n";
+    if (!tool)
+      return (
+        chunk(
+          {
+            role: "assistant",
+            content:
+              index === 2
+                ? "The ready plan remains gated."
+                : index === 4
+                  ? "The ready plan remains gated after refresh."
+                  : "Implementation finished.",
+          },
+          "stop",
+        ) + "data: [DONE]\n\n"
+      );
+    return (
+      chunk(
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              index: 0,
+              id: "plan-handoff-call-" + index,
+              type: "function",
+              function: { name: tool.name, arguments: tool.arguments },
+            },
+          ],
+        },
+        null,
+      ) +
+      chunk({}, "tool_calls") +
+      "data: [DONE]\n\n"
+    );
+  });
+  try {
+    const imported = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspace },
+    });
+    expect(imported.status()).toBe(201);
+    const { path } = await imported.json();
+    const created = await page.request.post("/api/sessions", {
+      headers,
+      data: { workspacePath: path, commandId: "plan-handoff-session" },
+    });
+    expect(created.status()).toBe(201);
+    const session = await created.json();
+    const model = await page.request.post("/api/model", {
+      headers,
+      data: {
+        sessionId: session.sessionId,
+        sessionPath: session.sessionPath,
+        provider: PROVIDER_ID,
+        modelId: MODEL_ID,
+      },
+    });
+    expect(model.status()).toBe(200);
+
+    await page.goto("/");
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("/plan Create a file after approval.");
+    await input.press("Enter");
+    const planCard = page.getByRole("region", { name: "开发计划" });
+    await expect(planCard).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .runtime.plan,
+      )
+      .toBe("ready");
+    expect(provider.requests).toHaveLength(1);
+
+    const readySnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    const readyRevision = readySnapshot.runtime.planRevision;
+    await input.fill("请现在就尝试写文件，验证待审阅计划仍有写入门禁。");
+    await input.press("Enter");
+    await expect(
+      page.getByText("The ready plan remains gated.", { exact: true }),
+    ).toBeVisible();
+    const gatedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(gatedSnapshot.runtime.plan).toBe("ready");
+    expect(gatedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(3);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    await input.fill("/plan ");
+    await input.press("Enter");
+    await expect(
+      page.getByText(
+        "Use the plan controls above the message box to prepare an implementation prompt, or `/plan off` to exit without implementing. Web does not support a fresh-session handoff.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    expect(provider.requests).toHaveLength(3);
+
+    await input.fill("/plan implement");
+    await input.press("Enter");
+    await expect(
+      page.getByText(
+        "Use the plan controls above the message box to review and submit the implementation prompt in Web.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    expect(provider.requests).toHaveLength(3);
+
+    await input.fill("/plan fresh");
+    await input.press("Enter");
+    await expect(
+      page.getByText(
+        "Web cannot start a fresh implementation session. The plan remains ready; use the plan controls above the message box to implement it in this session.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    const unsupportedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(unsupportedSnapshot.runtime.plan).toBe("ready");
+    expect(unsupportedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(unsupportedSnapshot.currentSessionId).toBe(session.sessionId);
+    expect(provider.requests).toHaveLength(3);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    await page.reload();
+    await expect(page.getByRole("region", { name: "开发计划" })).toBeVisible();
+    const refreshedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(refreshedSnapshot.runtime.plan).toBe("ready");
+    expect(refreshedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(3);
+
+    await page
+      .getByRole("button", { name: "准备实施提示", exact: true })
+      .click();
+    await expect(input).toHaveValue(/approved plan/);
+    await page.reload();
+    await expect(page.getByRole("region", { name: "开发计划" })).toBeVisible();
+    const refreshedPreviewSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(refreshedPreviewSnapshot.currentSessionId).toBe(session.sessionId);
+    expect(refreshedPreviewSnapshot.runtime.plan).toBe("ready");
+    expect(refreshedPreviewSnapshot.runtime.planRevision).toBe(readyRevision);
+    await expect(input).toHaveValue("");
+    expect(provider.requests).toHaveLength(3);
+    await input.fill("Please try writing before I approve again.");
+    await input.press("Enter");
+    await expect(
+      page.getByText("The ready plan remains gated after refresh.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    const refreshedGateSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(refreshedGateSnapshot.runtime.plan).toBe("ready");
+    expect(refreshedGateSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(5);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    const secondSessionResponse = await page.request.post("/api/sessions", {
+      headers,
+      data: { workspacePath: path, commandId: "plan-handoff-switch" },
+    });
+    expect(secondSessionResponse.status()).toBe(201);
+    const secondSession = await secondSessionResponse.json();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .currentSessionId,
+      )
+      .toBe(secondSession.sessionId);
+    await expect(input).toHaveValue("");
+    const otherSessionSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(otherSessionSnapshot.runtime.plan).toBe("inactive");
+    expect(provider.requests).toHaveLength(5);
+
+    const selectedOriginal = await page.request.post("/api/sessions/select", {
+      headers,
+      data: { path: session.sessionPath },
+    });
+    expect(selectedOriginal.status()).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .selectedSession?.path,
+      )
+      .toBe(session.sessionPath);
+    const returnedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(returnedSnapshot.runtime.plan).toBe("ready");
+    expect(returnedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(5);
+    await expect(input).toHaveValue("");
+    await input.press("Enter");
+    expect(provider.requests).toHaveLength(5);
+
+    await page
+      .getByRole("button", { name: "准备实施提示", exact: true })
+      .click();
+    await expect(input).toHaveValue(/approved plan/);
+    const switchedWithPreparedPrompt = await page.request.post(
+      "/api/sessions",
+      {
+        headers,
+        data: {
+          workspacePath: path,
+          commandId: "plan-handoff-prepared-switch",
+        },
+      },
+    );
+    expect(switchedWithPreparedPrompt.status()).toBe(201);
+    const preparedPromptSession = await switchedWithPreparedPrompt.json();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .currentSessionId,
+      )
+      .toBe(preparedPromptSession.sessionId);
+    await expect(input).toHaveValue("");
+    const switchedWithPreparedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(switchedWithPreparedSnapshot.runtime.plan).toBe("inactive");
+    expect(provider.requests).toHaveLength(5);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    const returnedToOriginalAfterPreview = await page.request.post(
+      "/api/sessions/select",
+      {
+        headers,
+        data: { path: session.sessionPath },
+      },
+    );
+    expect(returnedToOriginalAfterPreview.status()).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .selectedSession?.path,
+      )
+      .toBe(session.sessionPath);
+    const readyAfterSwitchBack = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(readyAfterSwitchBack.runtime.plan).toBe("ready");
+    expect(readyAfterSwitchBack.runtime.planRevision).toBe(readyRevision);
+    await expect(input).toHaveValue("");
+    expect(provider.requests).toHaveLength(5);
+
+    await page
+      .getByRole("button", { name: "准备实施提示", exact: true })
+      .click();
+    await expect(input).toHaveValue(/approved plan/);
+    await input.fill("");
+    const cancelledSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(cancelledSnapshot.runtime.plan).toBe("ready");
+    expect(cancelledSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(5);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    await page
+      .getByRole("button", { name: "准备实施提示", exact: true })
+      .click();
+    await expect(input).toHaveValue(/approved plan/);
+    const preparedSnapshot = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(preparedSnapshot.runtime.plan).toBe("ready");
+    expect(preparedSnapshot.runtime.planRevision).toBe(readyRevision);
+    expect(provider.requests).toHaveLength(5);
+    await expect(access(implementationFile)).rejects.toThrow();
+
+    const editedInstruction =
+      "Additional approved instruction: preserve the existing file.";
+    await input.fill(`${await input.inputValue()}\n\n${editedInstruction}`);
+    await input.press("Enter");
+    await expect
+      .poll(async () => {
+        try {
+          await access(implementationFile);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(true);
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .runtime.plan,
+      )
+      .toBe("inactive");
+    expect(await readFile(implementationFile, "utf8")).toBe(
+      "written after explicit submission",
+    );
+    expect(provider.requests).toHaveLength(7);
+    expect(provider.requests[5]).toBeDefined();
+    expect(JSON.stringify(provider.requests[5]!.body)).toContain(
+      editedInstruction,
+    );
+    await expect(
+      page.getByText("Implementation finished.", { exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .runtime.status,
+      )
+      .toBe("idle");
+  } finally {
+    await provider.close();
+    deferPlanWorkspaceCleanup(workspace);
+  }
+});
+
+test("Plan off gives a visible receipt and clears a ready Plan without another model turn", async ({
+  page,
+}) => {
+  const workspace = await mkdtemp(join(tmpdir(), "openpi-plan-off-"));
+  const provider = await startFakeProvider(() => {
+    const delta = {
+      role: "assistant",
+      tool_calls: [
+        {
+          index: 0,
+          id: "plan-off-ready",
+          type: "function",
+          function: {
+            name: "plan_ready",
+            arguments: JSON.stringify({
+              plan: "Prepare a file, but wait for an explicit implementation choice.",
+            }),
+          },
+        },
+      ],
+    };
+    const choices = [
+      { index: 0, delta, finish_reason: null },
+      { index: 0, delta: {}, finish_reason: "tool_calls" },
+    ];
+    return (
+      choices
+        .map(
+          (choice) =>
+            `data: ${JSON.stringify({ id: "plan-off", object: "chat.completion.chunk", created: 1700000000, model: MODEL_ID, choices: [choice] })}\n\n`,
+        )
+        .join("") + "data: [DONE]\n\n"
+    );
+  });
+  try {
+    const imported = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspace },
+    });
+    const { path } = await imported.json();
+    const created = await page.request.post("/api/sessions", {
+      headers,
+      data: { workspacePath: path, commandId: "plan-off-session" },
+    });
+    const session = await created.json();
+    const model = await page.request.post("/api/model", {
+      headers,
+      data: {
+        sessionId: session.sessionId,
+        sessionPath: session.sessionPath,
+        provider: PROVIDER_ID,
+        modelId: MODEL_ID,
+      },
+    });
+    expect(model.status()).toBe(200);
+
+    await page.goto("/");
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("/plan Prepare a file, then wait for my choice.");
+    await input.press("Enter");
+    await expect(page.getByRole("region", { name: "开发计划" })).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/snapshot", { headers })).json())
+            .runtime.plan,
+      )
+      .toBe("ready");
+    expect(provider.requests).toHaveLength(1);
+
+    await input.fill("/plan off");
+    await input.press("Enter");
+    await expect(
+      page.getByText("Plan mode off. No implementation was started.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    const cancelled = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(cancelled.runtime.plan).toBe("inactive");
+    expect(provider.requests).toHaveLength(1);
+  } finally {
+    await provider.close();
+    deferPlanWorkspaceCleanup(workspace);
+  }
+});

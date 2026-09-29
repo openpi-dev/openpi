@@ -766,6 +766,10 @@ export function App() {
             t("unknownState")
           }
           theme={state.snapshot?.preferences.theme ?? "system"}
+          plan={state.snapshot?.runtime.plan}
+          planSelectionPending={state.planSelectionPending}
+          onExitPlan={() => actions.selectPlanMode(false)}
+          setupOutcome={state.snapshot?.runtime.setup}
           capabilities={state.snapshot?.runtime.capabilities}
           setupBusy={
             state.liveRunning ||

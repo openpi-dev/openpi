@@ -2,7 +2,7 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createEvidenceWriteTool } from "./write-evidence.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { controlPlan, type PlanControlRequest } from "../../extensions/plan-mode/control.ts";
+import { controlPlan, projectPlanControl, type PlanControlRequest } from "../../extensions/plan-mode/control.ts";
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -500,12 +500,54 @@ export class PiWebRuntime implements WebRuntimeController {
     );
   }
 
-  setPlanMode(request: PlanControlRequest & { sessionId: string }) {
+  setPlanMode(
+    request: {
+      enabled: boolean;
+      expectedRevision: string | null;
+      sessionId: string;
+    },
+  ) {
+    return this.applyPlanControl({ ...request, action: "mode" });
+  }
+
+  private invokePlanControl(
+    session: AgentSession["sessionManager"],
+    request: PlanControlRequest,
+  ) {
+    try {
+      return controlPlan(session, request);
+    } catch (error) {
+      // Extension-loader module copies need not share constructor identity.
+      if (error && typeof error === "object" && "code" in error &&
+        "statusCode" in error && "message" in error && typeof error.message === "string" &&
+        (error.code === "PLAN_BUSY" || error.code === "PLAN_CONFLICT" || error.code === "PLAN_CONTROL_UNAVAILABLE"))
+        throw new WebRuntimeRequestError(error.message, error.code, error.statusCode === 501 ? 501 : 409);
+      throw error;
+    }
+  }
+
+  async preparePlanImplementation(request: {
+    sessionId: string;
+    sessionPath: string;
+    expectedRevision: string | null;
+  }) {
+    const result = await this.applyPlanControl({ ...request, action: "prepare" });
+    if (typeof result.prompt !== "string")
+      throw new Error("Plan control did not return an implementation prompt");
+    return { ...result, prompt: result.prompt };
+  }
+
+  private applyPlanControl(
+    request: PlanControlRequest & { sessionId: string; sessionPath?: string },
+  ) {
     return this.serializeControllerMutation(async () => {
       this.assertActive();
       this.assertWorkspaceSelected();
       const session = this.runtime.session;
-      if (request.sessionId !== session.sessionManager.getSessionId())
+      if (!matchesSessionIdentity(session.sessionManager, {
+        expectedSessionId: request.sessionId,
+        ...(request.sessionPath ? { expectedSessionPath: request.sessionPath } : {}),
+      }))
         throw new WebRuntimeRequestError("The active Session changed", "SESSION_CONFLICT", 409);
       // Include preflight/queued work, not just provider streaming. The owner
       // callback below is synchronous: no prompt can enter mid-transition.
@@ -513,18 +555,56 @@ export class PiWebRuntime implements WebRuntimeController {
         throw new WebRuntimeRequestError("Stop the current turn before changing Plan mode", "PLAN_BUSY", 409);
       if (!this.listCommands().commands.some((command) => command.support === "plan"))
         throw new WebRuntimeRequestError("The owned Plan extension is unavailable", "PLAN_CONTROL_UNAVAILABLE", 501);
-      try {
-        const result = controlPlan(session.sessionManager, request);
+      const result = this.invokePlanControl(session.sessionManager, request);
+      if (request.action !== "prepare")
         this.emit("plan_mode_changed", { sessionId: request.sessionId });
-        return result;
-      } catch (error) {
-        // Extension-loader module copies need not share constructor identity.
-        if (error && typeof error === "object" && "code" in error &&
-          "statusCode" in error && "message" in error && typeof error.message === "string" &&
-          (error.code === "PLAN_BUSY" || error.code === "PLAN_CONFLICT" || error.code === "PLAN_CONTROL_UNAVAILABLE"))
-          throw new WebRuntimeRequestError(error.message, error.code, error.statusCode === 501 ? 501 : 409);
-        throw error;
-      }
+      return result;
+    });
+  }
+
+  private consumePlanApproval(
+    session: AgentSession["sessionManager"],
+    sessionId: string,
+    expectedRevision: string,
+  ) {
+    const result = this.invokePlanControl(session, {
+      action: "implement",
+      expectedRevision,
+    });
+    if (result.status !== "inactive")
+      throw new WebRuntimeRequestError(
+        "The approved Plan was not released",
+        "PLAN_CONFLICT",
+        409,
+      );
+    this.emit("plan_mode_changed", { sessionId });
+  }
+
+  private authorizePlanApproval(
+    session: AgentSession["sessionManager"],
+    expectedRevision: string,
+    prompt: string,
+  ) {
+    const result = this.invokePlanControl(session, {
+      action: "authorize",
+      expectedRevision,
+      prompt,
+    });
+    if (result.status !== "ready" || result.revision !== expectedRevision)
+      throw new WebRuntimeRequestError(
+        "The approved Plan changed before prompt admission",
+        "PLAN_CONFLICT",
+        409,
+      );
+  }
+
+  private cancelPlanApproval(
+    session: AgentSession["sessionManager"],
+    expectedRevision: string,
+  ) {
+    this.invokePlanControl(session, {
+      action: "cancel",
+      expectedRevision,
     });
   }
 
@@ -741,6 +821,7 @@ export class PiWebRuntime implements WebRuntimeController {
     const operation = (async () => {
       let preflightObserved = false;
       let admitted = false;
+      let planApprovalAuthorized = false;
       let agentLifecycleStarted = false;
       let queuedForAgent = false;
       let unsubscribePromptLifecycle: (() => void) | undefined;
@@ -793,12 +874,47 @@ export class PiWebRuntime implements WebRuntimeController {
         });
         this.promptOrigins ??= new AsyncLocalStorage<PromptTrace | undefined>();
         const extensionCommand = submittedExtensionCommand(agentRuntime.services, content);
+        if (options?.planRevision !== undefined && extensionCommand)
+          throw new WebRuntimeRequestError(
+            "A Plan approval must be submitted as a prompt, not an extension command",
+            "PLAN_CONFLICT",
+            409,
+          );
         if (extensionCommand) {
+          const projected = commandsForServices(agentRuntime.services).commands.find((command) => command.name === extensionCommand.name);
+          // Check the owned command before Pi's admission callback: command
+          // handlers may reject after the HTTP request has already been accepted.
+          if (projected?.support === "setup" && projectPlanControl(session.sessionManager.getBranch()).status !== "inactive") {
+            throw new WebRuntimeRequestError("Exit Plan mode before changing OpenPI settings, then retry /openpi-setup.", "PLAN_CONFLICT", 409);
+          }
           session.sessionManager.appendCustomEntry(WEB_COMMAND_INPUT, { text: content, commandId: options?.commandId });
           this.emit("command_submitted", { sessionId });
-          const projected = commandsForServices(agentRuntime.services).commands.find((command) => command.name === extensionCommand.name);
           if (projected?.availability !== "available") publishWebCommandFeedback(session.sessionManager,
             "This extension has not been adapted for Web. Pi will handle the command, but dialogs or results may require the TUI.", "warning");
+        }
+        if (options?.planRevision !== undefined) {
+          if (!options.expectedSessionPath)
+            throw new WebRuntimeRequestError(
+              "A Plan approval must target the exact active Session",
+              "SESSION_CONFLICT",
+              409,
+            );
+          if (
+            session.isStreaming ||
+            session.pendingMessageCount > 0 ||
+            session.getFollowUpMessages().length > 0
+          )
+            throw new WebRuntimeRequestError(
+              "Stop the current turn before submitting an approved Plan",
+              "PLAN_BUSY",
+              409,
+            );
+          planApprovalAuthorized = true;
+          this.authorizePlanApproval(
+            session.sessionManager,
+            options.planRevision,
+            content,
+          );
         }
         await this.promptOrigins.run(promptTrace, () => session.prompt(content, {
           ...(options?.images?.length
@@ -816,6 +932,22 @@ export class PiWebRuntime implements WebRuntimeController {
           source: "rpc",
           preflightResult: (accepted) => {
             preflightObserved = true;
+            if (options?.planRevision !== undefined) {
+              if (accepted) {
+                this.consumePlanApproval(
+                  session.sessionManager,
+                  sessionId,
+                  options.planRevision,
+                );
+                planApprovalAuthorized = false;
+              } else if (planApprovalAuthorized) {
+                this.cancelPlanApproval(
+                  session.sessionManager,
+                  options.planRevision,
+                );
+                planApprovalAuthorized = false;
+              }
+            }
             admitted = accepted;
             releaseAdmission();
             if (promptTrace) {
@@ -848,6 +980,13 @@ export class PiWebRuntime implements WebRuntimeController {
         unsubscribePromptLifecycle();
         unsubscribePromptLifecycle = undefined;
         if (!preflightObserved || !admitted) {
+          if (planApprovalAuthorized && options?.planRevision !== undefined) {
+            this.cancelPlanApproval(
+              session.sessionManager,
+              options.planRevision,
+            );
+            planApprovalAuthorized = false;
+          }
           rejectRequest(
             new WebRuntimeRequestError(
               preflightObserved
@@ -885,6 +1024,17 @@ export class PiWebRuntime implements WebRuntimeController {
           }
         }
       } catch (error) {
+        if (planApprovalAuthorized && options?.planRevision !== undefined) {
+          try {
+            this.cancelPlanApproval(
+              session.sessionManager,
+              options.planRevision,
+            );
+          } catch {
+            // Keep the admission error; a disposed Session drops its transient approval on shutdown.
+          }
+          planApprovalAuthorized = false;
+        }
         releaseAdmission();
         if (!admitted) {
           rejectRequest(

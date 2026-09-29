@@ -1,4 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
+import { restorePlanModeState } from "../plan-mode/persisted-state.ts";
 import { applySetupConfiguration } from "../shared/setup-apply.ts";
 import type {
   ExtensionAPI,
@@ -25,6 +26,7 @@ import {
   inspectSetupConfig,
   MAX_WEB_CHAT_FONT_SIZE,
   MAX_WEB_CHAT_WIDTH,
+  MAX_SESSION_CHILD_EXECUTION_LIMIT,
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
   MIN_WEB_CHAT_FONT_SIZE,
@@ -256,6 +258,17 @@ export default function openPiSetup(pi: ExtensionAPI) {
   const dispatchNextRequest = (ctx: ExtensionContext) => {
     const request = pendingRequests.shift();
     if (!request) return;
+    if (restorePlanModeState(ctx.sessionManager.getBranch()).planning) {
+      resetEpisode();
+      pi.sendMessage({
+        customType: "openpi-setup-closed",
+        content:
+          "Setup was not started. Exit Plan mode before changing OpenPI settings, then retry /openpi-setup.",
+        display: true,
+        details: { reason: "plan_mode_active" },
+      });
+      return;
+    }
     if (!showConfigureTool(pi)) {
       resetEpisode();
       if (ctx.hasUI) {
@@ -386,6 +399,21 @@ export default function openPiSetup(pi: ExtensionAPI) {
           description:
             "Maximum total agent() calls in each workflow (default 128, hard maximum 1024). Omit to preserve the current value.",
         }),
+      ),
+      child_execution_limit: Type.Optional(
+        Type.Union(
+          [
+            Type.Integer({
+              minimum: 1,
+              maximum: MAX_SESSION_CHILD_EXECUTION_LIMIT,
+            }),
+            Type.Null(),
+          ],
+          {
+            description:
+              "Optional maximum active child executions shared by Workflow, Direct Subagent, and BTW in this top-level Pi Session (1-64). This is off by default and does not change workflow's own concurrency. Set null to disable the shared admission limit. Omit to preserve the current value.",
+          },
+        ),
       ),
       ui_show_header: Type.Optional(
         Type.Boolean({
@@ -564,6 +592,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
               params.workflow_max_agent_calls ??
               current.workflows.maxAgentCalls,
           },
+          childExecutions:
+            params.child_execution_limit === undefined
+              ? current.childExecutions
+              : params.child_execution_limit === null
+                ? {}
+                : { maxActive: params.child_execution_limit },
           ui: {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??
@@ -627,12 +661,17 @@ export default function openPiSetup(pi: ExtensionAPI) {
         );
       return {
         content: [{ type: "text", text: receipt }],
-        details: config,
+        details: { ...config, setupReceipt: { changed } },
       };
     },
   });
 
   const setupHandler = async (args: string, ctx: ExtensionCommandContext) => {
+    if (restorePlanModeState(ctx.sessionManager.getBranch()).planning) {
+      throw new Error(
+        "Exit Plan mode before changing OpenPI settings, then retry /openpi-setup. No setup turn was started.",
+      );
+    }
     const request = args.trim();
     const inspected = inspectSetupConfig();
     const diagnostics = formatSetupDiagnostics(inspected);

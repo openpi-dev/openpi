@@ -36,7 +36,11 @@ import {
   sessionTitle,
   workspaceName,
 } from "../../lib/format.ts";
-import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
+import type {
+  PlanImplementationApproval,
+  WebStoreActions,
+  WebStoreState,
+} from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 import { FileReferenceDialog } from "./FileReferenceDialog.tsx";
 import {
@@ -102,6 +106,9 @@ export function Composer(props: ComposerProps) {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const planImplementationApproval = useRef<PlanImplementationApproval | null>(
+    null,
+  );
   const imagePicker = useRef<HTMLInputElement>(null);
   const attachmentImport = useRef(false);
   const restoreFileReferenceFocus = useRef(false);
@@ -143,6 +150,27 @@ export function Composer(props: ComposerProps) {
     scope: string;
     canTransferToCreatedSession: boolean;
   } | null>(null);
+
+  useEffect(() => {
+    const approval = planImplementationApproval.current;
+    if (
+      approval &&
+      (props.workspaceDraft ||
+        props.snapshot?.runtime.plan !== "ready" ||
+        props.snapshot.runtime.planRevision !== approval.planRevision ||
+        props.snapshot.currentSessionId !== approval.sessionId ||
+        props.snapshot.selectedSession?.path !== approval.sessionPath ||
+        selectedPath !== approval.sessionPath)
+    )
+      planImplementationApproval.current = null;
+  }, [
+    props.snapshot?.runtime.plan,
+    props.snapshot?.runtime.planRevision,
+    props.snapshot?.currentSessionId,
+    props.snapshot?.selectedSession?.path,
+    props.workspaceDraft,
+    selectedPath,
+  ]);
   const active = Boolean(
     !props.workspaceDraft &&
       selected?.id &&
@@ -163,7 +191,9 @@ export function Composer(props: ComposerProps) {
     running &&
     Boolean(props.activeTurn ?? props.snapshot?.runtime.activeTurn);
   const disabled =
-    props.sessionSwitching || (!canCompose && Boolean(props.selectedWorkspace));
+    props.sessionSwitching ||
+    Boolean(props.planSelectionPending) ||
+    (!canCompose && Boolean(props.selectedWorkspace));
   const commandDiscovery = props.commandDiscovery ?? {
     sessionId: null,
     status: "idle" as const,
@@ -193,7 +223,10 @@ export function Composer(props: ComposerProps) {
   const commandEntryAvailable =
     active && !prompt.trim() && !props.sessionSwitching;
   const contextEntryAvailable =
-    canCompose && Boolean(props.selectedWorkspace) && !props.sessionSwitching;
+    canCompose &&
+    Boolean(props.selectedWorkspace) &&
+    !props.sessionSwitching &&
+    !props.planSelectionPending;
 
   const stageFiles = async (files: Iterable<File>) => {
     if (attachmentImport.current || !contextEntryAvailable) return;
@@ -289,6 +322,7 @@ export function Composer(props: ComposerProps) {
     draftScopeRef.current = draftScope;
 
     const submission = pendingSubmission.current;
+    planImplementationApproval.current = null;
     const createdSession =
       !props.workspaceDraft &&
       (transferDraftToCreatedSession.current ||
@@ -336,7 +370,9 @@ export function Composer(props: ComposerProps) {
     sendPrompt: (
       content: string,
       images?: readonly WebPromptImage[],
+      approval?: PlanImplementationApproval,
     ) => Promise<boolean>,
+    approval?: PlanImplementationApproval,
   ) => {
     if (pendingSubmission.current || props.planSelectionPending) return;
     if (!props.selectedWorkspace) {
@@ -350,8 +386,11 @@ export function Composer(props: ComposerProps) {
     };
     pendingSubmission.current = submission;
     try {
-      const accepted =
-        images.length > 0
+      const accepted = approval
+        ? images.length > 0
+          ? await sendPrompt(prompt, images, approval)
+          : await sendPrompt(prompt, undefined, approval)
+        : images.length > 0
           ? await sendPrompt(prompt, images)
           : await sendPrompt(prompt);
       if (accepted) {
@@ -386,7 +425,10 @@ export function Composer(props: ComposerProps) {
       (!prompt.trim() && images.length === 0)
     )
       return;
-    await sendDraft(props.actions.sendPrompt);
+    await sendDraft(
+      props.actions.sendPrompt,
+      planImplementationApproval.current ?? undefined,
+    );
   };
 
   const sendAsNew = () => sendDraft(props.actions.sendPromptAsNew);
@@ -572,6 +614,49 @@ export function Composer(props: ComposerProps) {
         !props.sessionSwitching && (
           <div className="plan-mode-bar">
             <span>{t(`planMode_${props.snapshot.runtime.plan}`)}</span>
+            {props.snapshot.runtime.plan === "ready" && (
+              <button
+                type="button"
+                disabled={
+                  running ||
+                  attachmentBusy ||
+                  props.planSelectionPending ||
+                  props.promptAdmissionPending ||
+                  Boolean(props.promptAdmissionRecovery)
+                }
+                onClick={() => {
+                  if (
+                    (prompt.trim() || images.length > 0) &&
+                    !window.confirm(t("planImplementationReplaceDraft"))
+                  )
+                    return;
+                  const requestedRevision = draftRevision.current;
+                  const requestedScope = draftScopeRef.current;
+                  void props.actions
+                    .preparePlanImplementation()
+                    .then((prepared) => {
+                      if (
+                        !prepared ||
+                        draftRevision.current !== requestedRevision ||
+                        draftScopeRef.current !== requestedScope
+                      )
+                        return;
+                      draftRevision.current += 1;
+                      planImplementationApproval.current = {
+                        sessionId: prepared.sessionId,
+                        sessionPath: prepared.sessionPath,
+                        planRevision: prepared.planRevision,
+                      };
+                      setPrompt(prepared.prompt);
+                      setImages([]);
+                      setAttachmentError(null);
+                      textarea.current?.focus();
+                    });
+                }}
+              >
+                {t("planModeImplement")}
+              </button>
+            )}
             <button
               type="button"
               disabled={
@@ -786,7 +871,10 @@ export function Composer(props: ComposerProps) {
           placeholder={placeholder}
           onChange={(event) => {
             draftRevision.current += 1;
-            setPrompt(event.target.value);
+            const value = event.target.value;
+            if (!value.trim() || value.startsWith("/"))
+              planImplementationApproval.current = null;
+            setPrompt(value);
             setCursor(event.target.selectionStart);
             setMenuDismissed(false);
           }}

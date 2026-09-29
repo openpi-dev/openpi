@@ -380,6 +380,130 @@ function heredocContainsExecutableRm(command: string) {
   return /\$\(|`/u.test(body) && containsRmReference(body);
 }
 
+/**
+ * Split a command into the segments a shell would run as separate processes.
+ * Quoted separators stay inside their segment.
+ */
+function pipelineSegments(command: string) {
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (const character of command) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      current += character;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      current += character;
+      if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      current += character;
+      continue;
+    }
+    if (
+      character === "\n" ||
+      character === ";" ||
+      character === "&" ||
+      character === "|"
+    ) {
+      if (current.trim()) segments.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  if (current.trim()) segments.push(current.trim());
+  return segments;
+}
+
+/**
+ * Whether one pipeline segment runs an `rm` executable or a command forwarder.
+ * A segment that still cannot be tokenized keeps the fail-closed answer.
+ */
+function segmentRunsRm(segment: string) {
+  const tokens = standaloneShellTokens(segment);
+  if (!tokens) return true;
+
+  const executableIndex = tokens.findIndex(
+    (token) => !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(token),
+  );
+  const executable = tokens[executableIndex]?.split("/").at(-1) ?? "";
+  if (
+    executable === "command" &&
+    (tokens[executableIndex + 1] === "-v" ||
+      tokens[executableIndex + 1] === "-V")
+  ) {
+    return false;
+  }
+  return COMMAND_FORWARDERS.has(executable) || executable === "rm";
+}
+
+/**
+ * Whether `rm` sits where a shell could execute it. Single-quoted text and plain
+ * double-quoted text are inert, so a search pattern or a SQL alias that merely mentions
+ * `rm` stays native. Command substitution or a variable inside double quotes can still
+ * run, so that command keeps failing closed.
+ */
+function containsRunnableRmReference(command: string) {
+  let visible = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (const character of command) {
+    if (quote === "'") {
+      if (character === "'") quote = undefined;
+      visible += "x";
+      continue;
+    }
+    if (quote === '"') {
+      if (escaped) {
+        escaped = false;
+        visible += "x";
+        continue;
+      }
+      if (character === "\\") {
+        escaped = true;
+        visible += "x";
+        continue;
+      }
+      if (character === '"') {
+        quote = undefined;
+        visible += "x";
+        continue;
+      }
+      if (character === "$" || character === "`") return true;
+      visible += "x";
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      visible += `\\${character}`;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      visible += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      visible += "x";
+      continue;
+    }
+    visible += character;
+  }
+  return containsRmReference(visible);
+}
+
 function containsExecutableRmReference(command: string) {
   const heredoc = heredocContainsExecutableRm(command);
   if (heredoc !== undefined) return heredoc;
@@ -387,7 +511,12 @@ function containsExecutableRmReference(command: string) {
   const source = stripShellComment(command);
   if (!containsRmReference(source)) return false;
   const tokens = standaloneShellTokens(source);
-  if (!tokens) return true;
+  if (!tokens) {
+    return (
+      pipelineSegments(source).some(segmentRunsRm) ||
+      containsRunnableRmReference(source)
+    );
+  }
 
   const executableIndex = tokens.findIndex(
     (token) => !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(token),

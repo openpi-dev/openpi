@@ -268,6 +268,41 @@ test("Cursor request encodes image content in the selected image protobuf", asyn
   assert.equal(selectedImage.mimeType, "image/png");
 });
 
+test("Cursor reads the system prompt and tools from a Pi 0.86+ transcript", async () => {
+  // Pi 0.86+ folds Context.systemPrompt / Context.tools into transcript system
+  // messages. The same conversation must encode to the same root prompt either way;
+  // before the fix the folded shape silently fell back to the generic prompt and
+  // advertised no tools.
+  const lookup = {
+    name: "lookup",
+    description: "Look up a public page",
+    parameters: { type: "object", properties: {} },
+  };
+  const user = { role: "user", content: "hello", timestamp: 1 };
+  const fromTranscript = await buildCursorRequest(MODEL, {
+    messages: [
+      {
+        role: "system",
+        content: "",
+        sections: { preamble: "Follow the system rule." },
+        toolsAdded: [lookup],
+        timestamp: 0,
+      },
+      user,
+    ],
+  } as unknown as Context);
+  const fromContext = await buildCursorRequest(MODEL, {
+    systemPrompt: "Follow the system rule.",
+    tools: [lookup],
+    messages: [user],
+  } as unknown as Context);
+  assert.ok(fromTranscript.conversationState.rootPromptMessagesJson.length > 0);
+  assert.deepEqual(
+    [...fromTranscript.conversationState.rootPromptMessagesJson],
+    [...fromContext.conversationState.rootPromptMessagesJson],
+  );
+});
+
 test("Cursor pins bare Composer 2.5 to the Standard lane", async () => {
   const standard = await buildCursorRequest(
     { ...MODEL, id: "composer-2.5" },
@@ -1191,80 +1226,193 @@ test("Cursor rejects custom fetch and bounds an idle HTTP/2 stream", async () =>
   );
 });
 
-test("Cursor advertises the active Pi tool schema over local request_context", async () => {
-  let advertised: McpToolDefinition[] | undefined;
-  const server = await startServer((peer) => {
-    peer.respond({ ":status": 200 });
-    let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-    peer.on("data", (chunk) => {
-      buffer = appendChunk(buffer, chunk);
-      while (buffer.length >= 5) {
-        const size = buffer.readUInt32BE(1);
-        if (buffer.length < size + 5) break;
-        const message = fromBinary(
-          AgentClientMessageSchema,
-          buffer.subarray(5, size + 5),
-        ).message;
-        buffer = buffer.subarray(size + 5);
-        if (message.case === "runRequest") {
-          peer.write(
-            frameServerMessage(
-              create(AgentServerMessageSchema, {
-                message: {
-                  case: "execServerMessage",
-                  value: create(ExecServerMessageSchema, {
-                    id: 1,
-                    execId: "context",
-                    message: { case: "requestContextArgs", value: {} },
-                  }),
-                },
-              }),
-            ),
-          );
-        } else if (
-          message.case === "execClientMessage" &&
-          message.value.message.case === "requestContextResult"
-        ) {
-          const result = message.value.message.value.result;
-          if (result.case === "success")
-            advertised = result.value.requestContext?.tools;
-          peer.end(
-            responseUpdate(
-              create(InteractionUpdateSchema, {
-                message: { case: "turnEnded", value: {} },
-              }),
-            ),
-          );
-        }
-      }
-    });
-  });
-  servers.push(server);
-  await collectEvents(
-    streamCursor(
-      localModel(server.baseUrl),
+const REQUEST_CONTEXT_CASES = [
+  {
+    name: "legacy Context",
+    context: {
+      ...CONTEXT,
+      tools: [
+        {
+          name: "lookup",
+          description: "Look up a public page",
+          parameters: Type.Object({ url: Type.String() }),
+        },
+      ],
+    },
+    expectedSystemPrompt: CONTEXT.systemPrompt,
+    expectedTools: [
       {
-        ...CONTEXT,
-        tools: [
-          {
-            name: "lookup",
-            description: "Look up a public page",
-            parameters: Type.Object({ url: Type.String() }),
-          },
-        ],
+        name: "lookup",
+        description: "Look up a public page",
+        schema: {
+          type: "object",
+          properties: { url: { type: "string" } },
+          required: ["url"],
+        },
       },
-      { apiKey: "token" },
-    ),
-  );
-  assert.equal(advertised?.length, 1);
-  assert.equal(advertised?.[0]?.providerIdentifier, "openpi");
-  assert.equal(advertised?.[0]?.toolName, "lookup");
-  assert.deepEqual(decodeJsonValue(advertised![0]!.inputSchema), {
-    type: "object",
-    properties: { url: { type: "string" } },
-    required: ["url"],
+    ],
+  },
+  {
+    name: "Pi 0.86+ transcript",
+    context: {
+      messages: [
+        {
+          role: "system",
+          content: "Initial transcript instruction.",
+          sections: {
+            preamble: "Initial preamble.",
+            stale: "Remove this stale section.",
+          },
+          toolsAdded: [
+            {
+              name: "legacy",
+              description: "This tool must be removed",
+              parameters: Type.Object({ legacy: Type.String() }),
+            },
+            {
+              name: "lookup",
+              description: "Look up a public page",
+              parameters: Type.Object({ url: Type.String() }),
+            },
+          ],
+          timestamp: 0,
+        },
+        {
+          role: "system",
+          content: "Follow-up transcript instruction.",
+          sections: {
+            preamble: "Patched preamble.",
+            stale: null,
+            details: "Retained details.",
+          },
+          toolsRemoved: [{ name: "legacy" }],
+          toolsAdded: [
+            {
+              name: "search",
+              description: "Search a public page",
+              parameters: Type.Object({ query: Type.String() }),
+            },
+          ],
+          timestamp: 1,
+        },
+        { role: "user", content: "hello", timestamp: 2 },
+      ],
+    } as unknown as Context,
+    expectedSystemPrompt:
+      "Initial transcript instruction.\n\nFollow-up transcript instruction.\n\nPatched preamble.\n\nRetained details.",
+    expectedTools: [
+      {
+        name: "lookup",
+        description: "Look up a public page",
+        schema: {
+          type: "object",
+          properties: { url: { type: "string" } },
+          required: ["url"],
+        },
+      },
+      {
+        name: "search",
+        description: "Search a public page",
+        schema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ],
+  },
+];
+
+for (const scenario of REQUEST_CONTEXT_CASES) {
+  test(`Cursor advertises the active Pi tool schema over local request_context (${scenario.name})`, async () => {
+    let advertised: McpToolDefinition[] | undefined;
+    let advertisedRules:
+      | Array<{ content?: string; fullPath?: string }>
+      | undefined;
+    const server = await startServer((peer) => {
+      peer.respond({ ":status": 200 });
+      let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+      peer.on("data", (chunk) => {
+        buffer = appendChunk(buffer, chunk);
+        while (buffer.length >= 5) {
+          const size = buffer.readUInt32BE(1);
+          if (buffer.length < size + 5) break;
+          const message = fromBinary(
+            AgentClientMessageSchema,
+            buffer.subarray(5, size + 5),
+          ).message;
+          buffer = buffer.subarray(size + 5);
+          if (message.case === "runRequest") {
+            peer.write(
+              frameServerMessage(
+                create(AgentServerMessageSchema, {
+                  message: {
+                    case: "execServerMessage",
+                    value: create(ExecServerMessageSchema, {
+                      id: 1,
+                      execId: "context",
+                      message: { case: "requestContextArgs", value: {} },
+                    }),
+                  },
+                }),
+              ),
+            );
+          } else if (
+            message.case === "execClientMessage" &&
+            message.value.message.case === "requestContextResult"
+          ) {
+            const result = message.value.message.value.result;
+            if (result.case === "success") {
+              const requestContext = result.value.requestContext;
+              advertised = requestContext?.tools;
+              advertisedRules = requestContext?.rules.map(
+                ({ content, fullPath }) => ({ content, fullPath }),
+              );
+            }
+            peer.end(
+              responseUpdate(
+                create(InteractionUpdateSchema, {
+                  message: { case: "turnEnded", value: {} },
+                }),
+              ),
+            );
+          }
+        }
+      });
+    });
+    servers.push(server);
+    await collectEvents(
+      streamCursor(localModel(server.baseUrl), scenario.context, {
+        apiKey: "token",
+      }),
+    );
+    assert.equal(advertisedRules?.[0]?.content, scenario.expectedSystemPrompt);
+    assert.equal(advertisedRules?.[0]?.fullPath, "/pi/system-prompt.mdc");
+    assert.equal(advertisedRules?.[1]?.fullPath, "/pi/cursor-tools.mdc");
+    assert.equal(
+      advertised?.every(
+        ({ providerIdentifier }) => providerIdentifier === "openpi",
+      ),
+      true,
+    );
+    assert.deepEqual(
+      advertised?.map(({ toolName, description }) => ({
+        toolName,
+        description,
+      })),
+      scenario.expectedTools.map(({ name, description }) => ({
+        toolName: name,
+        description,
+      })),
+    );
+    for (const [index, expected] of scenario.expectedTools.entries()) {
+      assert.deepEqual(
+        decodeJsonValue(advertised![index]!.inputSchema),
+        expected.schema,
+      );
+    }
   });
-});
+}
 
 const LOOKUP = {
   name: "lookup",

@@ -17,8 +17,11 @@ const resources = {
       planModeUnconfirmed:
         "Could not confirm Plan mode. Refresh before continuing.",
       planModeExit: "Exit planning",
+      planModeImplement: "Prepare implementation prompt",
+      planImplementationReplaceDraft:
+        "Preparing this plan will replace the current draft and turn off Plan mode. The prompt will not be sent. Continue?",
       commandSupport_plan:
-        "Planning and /plan off are available. Implementation review still requires the TUI.",
+        "Planning and same-session implementation prompts are available. Starting a fresh implementation session still requires the TUI.",
       commandSupport_setup:
         "Configuration uses the active model; questions are answered in Web.",
       handoffWaiting: "Manual action",
@@ -346,6 +349,19 @@ const resources = {
       setupRequestFailed: "The OpenPI setup request was not accepted.",
       setupRequestRunning: "Applying OpenPI settings…",
       setupRequestAccepted: "Configuration request accepted.",
+      setupPlanBlocked:
+        "Exit Plan mode before changing OpenPI settings. Exiting does not start implementation.",
+      setupPlanBusy:
+        "Stop or wait for the current turn, then exit Plan mode to change OpenPI settings.",
+      setupOutcome_pending: "Configuration request is awaiting a save receipt.",
+      setupOutcome_saved: "OpenPI configuration was saved and applied.",
+      setupOutcome_unchanged:
+        "Configuration was saved; effective settings are unchanged.",
+      setupOutcome_failed:
+        "The setup request failed. Review the error and current settings before retrying.",
+      setupOutcome_cancelled: "Setup was cancelled without a confirmed save.",
+      setupOutcome_unconfirmed:
+        "No successful save was confirmed. Review current settings before retrying /openpi-setup.",
       settingsUpdateFailed: "The Web preference could not be saved.",
       settingsCatalogLoading: "Loading Pi resources…",
       settingsCatalogFailed: "Could not load Pi settings resources.",
@@ -679,7 +695,11 @@ const resources = {
       promptPlanMessage: "本次对话使用 Plan 模式 · 继续讨论计划，暂不实施",
       planModeUnconfirmed: "暂时无法确认 Plan 状态，请刷新后再继续。",
       planModeExit: "退出规划",
-      commandSupport_plan: "支持规划和 /plan off；实施确认仍需使用 TUI。",
+      planModeImplement: "准备实施提示",
+      planImplementationReplaceDraft:
+        "准备实施会替换当前草稿并关闭规划模式，但不会发送提示词。是否继续？",
+      commandSupport_plan:
+        "支持规划和准备当前会话的实施提示；新建实施会话仍需使用 TUI。",
       commandSupport_setup: "通过当前模型配置，在 Web 回答问题。",
       handoffWaiting: "需要你操作",
       handoffDone: "已完成",
@@ -977,6 +997,17 @@ const resources = {
       setupRequestFailed: "OpenPI 配置请求未被接收。",
       setupRequestRunning: "正在应用 OpenPI 设置…",
       setupRequestAccepted: "配置请求已接收。",
+      setupPlanBlocked:
+        "请先退出 Plan 模式，再修改 OpenPI 设置。退出不会开始实施计划。",
+      setupPlanBusy:
+        "请先停止或等待当前回合结束，再退出 Plan 模式修改 OpenPI 设置。",
+      setupOutcome_pending: "配置请求正在处理，尚未收到保存回执。",
+      setupOutcome_saved: "OpenPI 配置已保存并应用。",
+      setupOutcome_unchanged: "配置已保存，实际设置没有变化。",
+      setupOutcome_failed: "配置请求失败，请查看错误和当前设置后再重试。",
+      setupOutcome_cancelled: "配置过程已取消，未确认成功保存。",
+      setupOutcome_unconfirmed:
+        "本次未确认成功保存，请核对当前设置后再运行 /openpi-setup。",
       settingsUpdateFailed: "无法保存 Web 显示设置。",
       settingsCatalogLoading: "正在加载 Pi 资源…",
       settingsCatalogFailed: "无法加载 Pi 设置资源。",

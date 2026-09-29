@@ -226,7 +226,7 @@ subagent_spawn({
 
 - 默认继承父会话的 Provider 与模型；用户可明确指定 Thinking Level，否则模型根据角色建议、任务难度与目标模型实际支持的档位选择；
 - 继承父会话当前启用且允许委派的工具、Skills 和项目说明；目标目录的项目扩展按其自身 Trust 决策加载；
-- 最多 4 个模型发起的 Subagent 并发运行，结束后自动回传；
+- 最多 4 个模型发起的 Direct Subagent 并发运行，结束后自动回传；BTW 仍有独立的 2 个本地槽位。可选的 Session child execution limit 会让 Workflow、Direct 与 BTW 在各自本地限制之外共享一个活动执行上限；它不计 dormant child、父 Session、Terminal、Provider 请求或费用；
 - 可 `check`、`wait`、`cancel`，也可用 `subagent_send` 继续同一子会话；
 - 输入框下方显示实时摘要，空输入时按 `↓` 聚焦，`Enter` 或 `→` 打开管理界面。
 
@@ -304,7 +304,7 @@ return agent("Synthesize the verified findings", {
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
 
-Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。普通子代理和 Workflow 都使用 Pi 原生传输超时与重试，不再用额外的 45 秒无可见输出计时器打断思考、排队或重试。显式取消和 Session 清理仍有界，原生 Provider 错误保留在 Child outcome 中。并发上限不代表账号的服务端速率额度；429 仍按 Pi 原生重试策略处理。
+Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。可选的 Session child execution limit 是另一层跨入口的活动 child 槽位：未配置时完全保持原有独立并发行为，配置后 Workflow / Direct / BTW 都先满足各自本地限制，再按 FIFO 竞争同一个顶层 Pi Session 的上限。它不会把 Workflow 默认 8 变成 Session 默认值，也不治理 Terminal、429、费用、token 或内存。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。普通子代理和 Workflow 都使用 Pi 原生传输超时与重试，不再用额外的 45 秒无可见输出计时器打断思考、排队或重试。显式取消和 Session 清理仍有界，原生 Provider 错误保留在 Child outcome 中。并发上限不代表账号的服务端速率额度；429 仍按 Pi 原生重试策略处理。
 
 ---
 
@@ -444,12 +444,15 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+Plan 模式下需先退出规划，再通过 `/openpi-setup` 修改配置。Web 设置页会禁用相关修改入口，并在会话空闲时提供退出按钮；退出仅切换状态，不调用模型或开始实施。Setup 在接收命令和投递排队请求时都检查当前 Session 的 Plan 状态。设置页依据实际工具回执反馈保存、设置未变化、失败或取消；回合结束或模型声称成功都不能替代保存回执。
+
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
 /openpi-setup workflow 同时跑 16 个 agent，总调用最多 256
+/openpi-setup 当前 Pi Session 的 Workflow、Direct 和 BTW 最多同时运行 6 个 child
 /openpi-setup Web 主题跟随系统
 /openpi-setup Web 使用深色主题
 /openpi-setup Web 使用雾青主题，聊天宽度设为 960px
@@ -476,6 +479,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Capability discovery         | `explicit`；`adaptive` 必须显式开启            |
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
+| Session child execution slots | 关闭；显式设为 1-64 后由 Workflow / Direct / BTW 共享 |
 | Web 主题                    | `system`；另有 `light` / `dark` / `mist` / `rose` / `pine` |
 | Web 聊天宽度 / 聊天字号     | 820px / 14px；范围 820-2000px / 12-24px        |
 | Web 思考块                  | 默认折叠                                       |
@@ -592,9 +596,9 @@ Web 可以在选择工作区之前预选可用模型。选择仅保留在当前�
 
 在 Plan／Setup 原有工具范围内，模型调用 `ask_user` 时，发起任务的 Web 标签页会显示结构化问题卡片：选择选项、添加补充说明或填写自己的答案，复核后才提交给正在等待的工具调用。关闭卡片不会提交草稿；留空的自定义答案表示要求澄清问题。刷新同一标签可恢复尚未过期的提问（未提交草稿不持久化），其他标签不能代答。提问最多等待 15 分钟，停止运行、切换 Session 或关闭 Host 会取消等待；它不替代原生权限审批，也不意味着任意终端自定义界面已支持 Web。
 
-OpenPI 的 `/plan` 调研通过 `plan_ready` 成功提交计划后，Web 会在聊天区展示可收起、可复制的 Markdown 计划卡片，刷新后仍可查看。卡片展示的是工具返回的计划，不代表批准或开始实施；超出 Web 传输上限的结果会标明为预览。输入框上方的开关由现有 Plan 扩展切换当前 Session 的规划状态，不调用模型、不发送命令气泡，也不清空草稿；发送任务后才开始规划。首次发送后，输入框占位提示会说明“本次对话使用 Plan 模式”，刷新后保留，退出后恢复。任务运行期间不能切换模式，退出不代表批准或开始实施。手动 `/plan <目标>` 仍会直接开始规划，`/plan off` 仍可退出；Plan Ready 的实施确认仍需使用 TUI。
+OpenPI 的 `/plan` 调研通过 `plan_ready` 成功提交计划后，Web 会在聊天区展示可收起、可复制的 Markdown 计划卡片，刷新后仍可查看。卡片展示的是工具返回的计划，不代表批准或开始实施；超出 Web 传输上限的结果会标明为预览。输入框上方的开关由现有 Plan 扩展切换当前 Session 的规划状态，不调用模型、不发送命令气泡，也不清空草稿；发送任务后才开始规划。首次发送后，输入框占位提示会说明“本次对话使用 Plan 模式”，刷新后保留，退出后恢复。任务运行期间不能切换模式，退出不代表批准或开始实施。Plan Ready 时，用户可选择“准备实施提示”；确认替换现有草稿后，Web 会把扩展生成的实施提示词放入输入框，但此时计划仍为 Ready、写入门禁仍关闭，也不会自动发送。用户检查、编辑并提交提示词后，只有 Pi 接受该 prompt，当前 Session 才会退出 Plan 并开放写入；模型、认证或其他预检拒绝时，计划保持 Ready。准备实施前刷新或切换 Session 不会清除 Pi 中保存的计划；准备后的未提交提示词遵循 Web 编辑框的草稿生命周期。`/plan off` 仍可随时退出；新建实施 Session 仍需使用 TUI。
 
-本地 #562 后续改动还补充了 `human_handoff` 的人工操作卡片：选择“已完成”或“无法完成”、复核后提交，模型仍需验证完成信号。已适配的 `/openpi-setup`、`/plan`、`/usage`、`/cron` 可从命令菜单选择；Plan 会明确提示实施确认的限制。命令原文和 Plan／Cron 通知、Usage 查询结果显示在聊天区，不额外进入模型上下文。Cron 显示的是执行命令时的任务快照，任务本身仍只保存在原生会话内存中。
+本地 #562 后续改动还补充了 `human_handoff` 的人工操作卡片：选择“已完成”或“无法完成”、复核后提交，模型仍需验证完成信号。已适配的 `/openpi-setup`、`/plan`、`/usage`、`/cron` 可从命令菜单选择；Plan 会说明当前 Web 支持当前会话实施，但新建实施 Session 仍需 TUI。命令原文和 Plan／Cron 通知、Usage 查询结果显示在聊天区，不额外进入模型上下文。Cron 显示的是执行命令时的任务快照，任务本身仍只保存在原生会话内存中。
 
 Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和 `auth` 等固定子命令，package 不能注册新的顶层子命令。因此 Web 入口是独立 CLI 的 `openpi web`，不是会被 Pi 当成初始 Prompt 的 `pi open`。Web 进程仍沿用 Pi 的 Provider、模型、凭据、Settings、Trust、Session 格式和 extension 资源加载，不引入第二套 Provider 或 Session 存储。
 
