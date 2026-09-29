@@ -260,7 +260,7 @@ const isCapabilityDiscoveryMode = (
   typeof value === "string" &&
   CAPABILITY_DISCOVERY_MODES.includes(value as CapabilityDiscoveryMode);
 
-const isWebTheme = (value: unknown): value is WebTheme =>
+export const isWebTheme = (value: unknown): value is WebTheme =>
   typeof value === "string" && WEB_THEMES.includes(value as WebTheme);
 
 export function flattenFooterItems(lines: FooterLines): readonly FooterItem[] {

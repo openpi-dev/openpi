@@ -199,10 +199,27 @@ function settingsPayload() {
 }
 
 function settingsFetcher() {
-  return vi.fn(async (input: RequestInfo | URL) => {
+  const payload = settingsPayload();
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
+    if (path.includes("/api/settings/preferences")) {
+      const patch = JSON.parse(String(init?.body));
+      Object.assign(payload.setup.ui, {
+        ...(patch.theme !== undefined ? { webTheme: patch.theme } : {}),
+        ...(patch.chatWidth !== undefined
+          ? { webChatWidth: patch.chatWidth }
+          : {}),
+        ...(patch.chatFontSize !== undefined
+          ? { webChatFontSize: patch.chatFontSize }
+          : {}),
+        ...(patch.expandThinking !== undefined
+          ? { webExpandThinking: patch.expandThinking }
+          : {}),
+      });
+      return reply({ saved: true, setup: payload.setup });
+    }
     if (path.includes("/api/settings/catalog")) {
-      return reply(settingsPayload());
+      return reply(payload);
     }
     if (path.includes("/api/models/configuration"))
       return reply({ revision: "revision", models: [] });
@@ -847,15 +864,21 @@ it("shows canonical General state and routes real setup/runtime actions", async 
       name: i18n.t("themeSystem"),
     }).checked,
   ).toBe(true);
-  expect(onConfigureOpenPi).toHaveBeenCalledWith(
-    i18n.t("setupRequestSetTheme", { value: "dark" }),
+  expect(onConfigureOpenPi).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([input]) =>
+        String(input).includes("/api/settings/preferences"),
+      ),
+    ).toBe(true),
   );
+  await waitFor(() => expect(onPreferencesChanged).toHaveBeenCalledOnce());
   expect(
-    fetcher.mock.calls.some(([input]) =>
-      String(input).includes("/api/settings/preferences"),
-    ),
-  ).toBe(false);
-  expect(onPreferencesChanged).not.toHaveBeenCalled();
+    within(generalPanel).getByRole<HTMLInputElement>("radio", {
+      name: i18n.t("themeDark"),
+    }).checked,
+  ).toBe(true);
+  expect(screen.getByText(i18n.t("settingsPreferencesSaved"))).toBeTruthy();
   expect(screen.getByRole("dialog", { name: i18n.t("settings") })).toBeTruthy();
   await waitFor(() =>
     expect(
@@ -869,10 +892,8 @@ it("shows canonical General state and routes real setup/runtime actions", async 
       name: i18n.t("expandThinkingByDefault"),
     }),
   );
-  await waitFor(() => expect(onConfigureOpenPi).toHaveBeenCalledTimes(2));
-  expect(onConfigureOpenPi).toHaveBeenLastCalledWith(
-    i18n.t("setupRequestEnableExpandedThinking"),
-  );
+  await waitFor(() => expect(onPreferencesChanged).toHaveBeenCalledTimes(2));
+  expect(onConfigureOpenPi).not.toHaveBeenCalled();
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("openRuntimeDetails") }),
   );
@@ -898,7 +919,7 @@ it("keeps an accepted OpenPI setup request inside the settings dialog", async ()
   expect(screen.getByText(i18n.t("setupRequestAccepted"))).toBeTruthy();
 });
 
-it("explains why appearance changes are unavailable during an active turn", async () => {
+it("saves appearance during an active turn without invoking setup", async () => {
   vi.stubGlobal("fetch", settingsFetcher());
   const configure = vi.fn(async () => true);
   const view = renderSettings({
@@ -910,13 +931,14 @@ it("explains why appearance changes are unavailable during an active turn", asyn
   const theme = screen.getByRole<HTMLInputElement>("radio", {
     name: i18n.t("themeDark"),
   });
-  expect(theme.disabled).toBe(true);
+  expect(theme.disabled).toBe(false);
   expect(
     screen.getByRole<HTMLInputElement>("switch", {
       name: i18n.t("expandThinkingByDefault"),
     }).disabled,
-  ).toBe(true);
+  ).toBe(false);
   fireEvent.click(theme);
+  await screen.findByText(i18n.t("settingsPreferencesSaved"));
   expect(configure).not.toHaveBeenCalled();
   view.rerender(
     settingsElement({ setupBusy: false, onConfigureOpenPi: configure }),
@@ -925,13 +947,17 @@ it("explains why appearance changes are unavailable during an active turn", asyn
   expect(screen.queryByText(i18n.t("settingsSetupBusyHint"))).toBeNull();
 });
 
-it("restores chat appearance through setup and rolls back a rejected request", async () => {
+it("restores sliders to persisted values when a direct save fails", async () => {
   const payload = settingsPayload();
   payload.setup.ui.webChatWidth = 1200;
   payload.setup.ui.webChatFontSize = 18;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => reply(payload)),
+    vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes("/api/settings/preferences")
+        ? new Response(JSON.stringify({ error: "failed" }), { status: 422 })
+        : reply(payload),
+    ),
   );
   const configure = vi.fn(async () => false);
   renderSettings({ onConfigureOpenPi: configure });
@@ -941,11 +967,8 @@ it("restores chat appearance through setup and rolls back a rejected request", a
   });
   await waitFor(() => expect(resetWidth.disabled).toBe(false));
   fireEvent.click(resetWidth);
-  await waitFor(() =>
-    expect(configure).toHaveBeenCalledWith(
-      i18n.t("setupRequestSetChatWidth", { value: 820 }),
-    ),
-  );
+  await screen.findByText(i18n.t("settingsPreferencesSaveFailed"));
+  expect(configure).not.toHaveBeenCalled();
   await waitFor(() =>
     expect(
       screen
@@ -956,11 +979,7 @@ it("restores chat appearance through setup and rolls back a rejected request", a
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("resetChatFontSize") }),
   );
-  await waitFor(() =>
-    expect(configure).toHaveBeenCalledWith(
-      i18n.t("setupRequestSetChatFontSize", { value: 14 }),
-    ),
-  );
+  expect(configure).not.toHaveBeenCalled();
   await waitFor(() =>
     expect(
       screen
@@ -979,7 +998,7 @@ it("explains unresolved message admission instead of asking the user to keep wai
   expect(
     screen.getByRole<HTMLInputElement>("radio", { name: i18n.t("themeDark") })
       .disabled,
-  ).toBe(true);
+  ).toBe(false);
 });
 
 it("switches sections through the compact settings picker", async () => {
@@ -1125,7 +1144,7 @@ it("renders Pi skills, subagent roles, plugins, refreshes, and closes", async ()
 });
 
 it.each(["planning", "ready", "invalid"])(
-  "blocks setup in %s and waits for confirmed Plan exit without hiding read-only settings",
+  "allows display settings in %s while requiring Plan exit for agent configuration",
   async (plan) => {
     const payload = settingsPayload();
     payload.setup.ui.webChatWidth = 1200;
@@ -1133,10 +1152,10 @@ it.each(["planning", "ready", "invalid"])(
     const fallback = settingsFetcher();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) =>
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
         String(input).includes("/api/settings/catalog")
           ? reply(payload)
-          : fallback(input),
+          : fallback(input, init),
       ),
     );
     const onConfigureOpenPi = vi.fn(async () => true);
@@ -1150,7 +1169,7 @@ it.each(["planning", "ready", "invalid"])(
       screen.getByRole<HTMLInputElement>("radio", {
         name: i18n.t("themeDark"),
       });
-    expect(theme().disabled).toBe(true);
+    expect(theme().disabled).toBe(false);
     for (const name of [
       "resetChatContentWidth",
       "resetChatFontSize",
@@ -1158,16 +1177,16 @@ it.each(["planning", "ready", "invalid"])(
       const reset = screen.getByRole<HTMLButtonElement>("button", {
         name: i18n.t(name),
       });
-      expect(reset.disabled).toBe(true);
-      fireEvent.click(reset);
+      expect(reset.disabled).toBe(false);
     }
     fireEvent.click(theme());
+    await screen.findByText(i18n.t("settingsPreferencesSaved"));
     expect(onConfigureOpenPi).not.toHaveBeenCalled();
     fireEvent.click(
       screen.getByRole("button", { name: i18n.t("planModeExit") }),
     );
     expect(onExitPlan).toHaveBeenCalledOnce();
-    expect(theme().disabled).toBe(true);
+    expect(theme().disabled).toBe(false);
     fireEvent.click(
       screen.getByRole("tab", { name: i18n.t("skillsSettings") }),
     );
@@ -1177,18 +1196,7 @@ it.each(["planning", "ready", "invalid"])(
     );
     view.rerender(settingsElement({ ...props, plan: "inactive" }));
     expect(theme().disabled).toBe(false);
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: i18n.t("resetChatContentWidth"),
-      }).disabled,
-    ).toBe(false);
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: i18n.t("resetChatFontSize"),
-      }).disabled,
-    ).toBe(false);
-    fireEvent.click(theme());
-    await waitFor(() => expect(onConfigureOpenPi).toHaveBeenCalledOnce());
+    expect(onConfigureOpenPi).not.toHaveBeenCalled();
   },
 );
 

@@ -218,10 +218,29 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .task-tools-trigger:hover:not(:disabled) { background:var(--sidebar-hover); color:var(--text); }
 .task-tools-trigger:disabled { opacity:.4; cursor:default; }
 .task-tools-trigger svg { width:17px; height:17px; }
-.session-usage { display:flex; min-width:0; flex:0 1 auto; align-items:center; gap:11px; margin:0; padding:0; border:0; color:var(--muted); font:10.5px ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric:tabular-nums; }
-.session-usage span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+.session-usage { display:flex; min-width:0; flex:0 0 auto; align-items:center; color:var(--muted); font-variant-numeric:tabular-nums; }
+.session-usage > button { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; border:0; border-radius:6px; padding:6px 8px; color:inherit; background:transparent; font:inherit; font-size:12px; cursor:pointer; }
+.session-usage > button:hover { background:var(--sidebar-hover); color:var(--text); }
+.session-usage > button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .session-usage svg { width:12px; height:12px; stroke-width:1.9; }
-.session-usage b { color:var(--subtle); font-weight:400; }
+.session-usage-details { position:fixed; inset:64px 14px auto auto; margin:0; padding:18px; width:min(340px, calc(100vw - 28px)); max-height:calc(100dvh - 90px); overflow:auto; box-sizing:border-box; border:1px solid var(--border); border-radius:12px; background:var(--page); color:var(--text); box-shadow:0 8px 30px #0002; font-size:13px; }
+.session-usage-details h2 { margin:0 0 10px; font-size:13px; font-weight:600; }
+.usage-context-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.usage-context-heading h2 { margin:0; }
+.usage-context-heading strong { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; }
+.session-usage-details progress { display:block; width:100%; height:6px; border:0; border-radius:6px; overflow:hidden; background:var(--border); accent-color:var(--accent); margin-bottom:12px; }
+.session-usage-details progress::-webkit-progress-bar { background:var(--border); }
+.session-usage-details progress::-webkit-progress-value { background:var(--accent); border-radius:6px; }
+.session-usage-details progress::-moz-progress-bar { background:var(--accent); border-radius:6px; }
+.usage-totals { border-top:1px solid var(--border); padding-top:12px; }
+.usage-totals summary { cursor:pointer; font-size:12px; color:var(--muted); }
+.usage-totals[open] summary { margin-bottom:12px; }
+.session-usage-details p { margin:0 0 18px; font-size:12px; line-height:1.6; color:var(--muted); }
+.session-usage-details p:last-child { margin-bottom:0; }
+.session-usage-details .usage-context-value { color:var(--text); font-size:15px; margin-bottom:6px; }
+.session-usage-details dl { margin:0 0 12px; }
+.session-usage-details dl > div { display:flex; justify-content:space-between; gap:20px; padding:5px 0; }
+.session-usage-details dd { margin:0; font-variant-numeric:tabular-nums; }
 .shell-state { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 12px; width: min(780px, calc(100% - 48px)); min-width: 0; margin: auto; color: var(--muted); }
 .shell-state h2, .shell-state p { margin: 0; font-size: 14px; font-weight: 500; }
 .shell-state button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--page); color: var(--text); cursor: pointer; }
@@ -540,7 +559,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 
 @container conversation-shell (max-width: 960px) {
   .turn-rail { display: none; }
-  .session-usage span:nth-child(3) { display:none; }
 }
 
 .composer-dock { @apply flex flex-col items-center gap-2; padding: 12px 24px 22px; }
@@ -662,8 +680,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .task-header-menu { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; }
   .task-header-menu svg { width: 19px; height: 19px; }
   .task-header-menu:hover { background: var(--sidebar-hover); }
-  .session-usage { gap:7px; }
-  .session-usage span:nth-child(-n+3) { display:none; }
   .session-sidebar { position: fixed; inset: 0 auto 0 0; width: min(86vw, 300px); visibility: hidden; transform: translateX(-100%); border-right: 1px solid var(--border); background: var(--sidebar); backdrop-filter: none; transition: transform 180ms ease; }
   .session-sidebar::before { display: none; }
   .sidebar-open .session-sidebar { visibility: visible; transform: translateX(0); }

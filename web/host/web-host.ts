@@ -21,7 +21,7 @@ import {
   webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
-import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
+import { isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
 import { validModelConfiguration } from "../runtime/model-configuration.ts";
 import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
@@ -1003,6 +1003,36 @@ export class WebHost {
             ? "Model configuration changed; refresh before saving"
             : "Could not complete model save. Wait for an idle Session and refresh configuration before retrying.",
         });
+      }
+    }
+    if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
+      const body = await this.readJson(request);
+      const keys = Object.keys(body);
+      const { theme, chatWidth, chatFontSize, expandThinking } = body;
+      // Browser appearance is package-wide and independent of agent execution.
+      // Keep this surface restricted to presentation fields, including on Plan turns.
+      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "chatFontSize", "expandThinking"].includes(key)) ||
+        (theme !== undefined && !isWebTheme(theme)) ||
+        (chatWidth !== undefined && (typeof chatWidth !== "number" || !Number.isInteger(chatWidth) || chatWidth < 820 || chatWidth > 2000)) ||
+        (chatFontSize !== undefined && (typeof chatFontSize !== "number" || !Number.isInteger(chatFontSize) || chatFontSize < 12 || chatFontSize > 24)) ||
+        (expandThinking !== undefined && typeof expandThinking !== "boolean")) {
+        return this.json(response, 400, { error: "Invalid Web appearance preferences" });
+      }
+      try {
+        const result = await updateSetupConfig((current) => ({
+          ...current,
+          ui: {
+            ...current.ui,
+            ...(theme !== undefined ? { webTheme: theme } : {}),
+            ...(chatWidth !== undefined ? { webChatWidth: chatWidth } : {}),
+            ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
+            ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
+          },
+        }));
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { saved: true, setup: projectWebSetupConfig(result.config) });
+      } catch {
+        return this.json(response, 422, { error: "Could not save Web preferences. Inspect configuration diagnostics before retrying." });
       }
     }
     if (url.pathname === "/api/model" && request.method === "POST") {

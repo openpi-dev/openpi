@@ -371,7 +371,7 @@ const resources = {
       turnElapsedRunning: "Working for {{duration}}",
       turnElapsedFinished: "Worked for {{duration}}",
       settingsSetupBusyHint:
-        "Wait for the current turn to finish before applying settings.",
+        "Agent configuration is available after this turn. Display settings can be changed now.",
       resetChatContentWidth: "Reset chat content width",
       resetChatFontSize: "Reset chat font size",
       setupResolveAdmission:
@@ -396,6 +396,17 @@ const resources = {
       sessionOutputTokens: "Output tokens",
       sessionCacheTokens: "Cached tokens",
       sessionContextUsage: "Context usage and context window",
+      usageContextLabel: "Context",
+      usageContextWindow: "Context window",
+      usageUnknown: "Unknown",
+      usageOpenDetails: "Context {{percent}} · View token usage",
+      usageContextHelp:
+        "Estimated tokens in the current branch / model context limit.",
+      usageSessionTotals: "Session totals · tokens",
+      usageCacheRead: "Cache read",
+      usageCacheWrite: "Cache write",
+      usageTotalsHelp:
+        "Provider-reported totals include saved branches and summaries. Repeated cache reads accumulate across requests.",
       subagentDetails: "Subagents",
       backToSubagents: "Back to subagents",
       subagentActiveGroup: "Active",
@@ -505,9 +516,9 @@ const resources = {
       setupRequestRunning: "Applying OpenPI settings…",
       setupRequestAccepted: "Configuration request accepted.",
       setupPlanBlocked:
-        "Exit Plan mode before changing OpenPI settings. Exiting does not start implementation.",
+        "Exit Plan mode before changing agent configuration. Display settings can be changed directly; exiting does not start implementation.",
       setupPlanBusy:
-        "Stop or wait for the current turn, then exit Plan mode to change OpenPI settings.",
+        "Agent configuration requires an idle turn and leaving Plan mode. Display settings can be changed now.",
       setupOutcome_pending: "Configuration request is awaiting a save receipt.",
       toolCallArguments: "Tool arguments",
       toolCallOutput: "Tool result",
@@ -520,6 +531,9 @@ const resources = {
       setupOutcome_unconfirmed:
         "No successful save was confirmed. Review current settings before retrying /openpi-setup.",
       settingsUpdateFailed: "The Web preference could not be saved.",
+      settingsPreferencesSaved: "Display settings saved.",
+      settingsPreferencesSaveFailed:
+        "Could not save display settings. Check configuration diagnostics and retry.",
       settingsCatalogLoading: "Loading Pi resources…",
       settingsCatalogFailed: "Could not load Pi settings resources.",
       appearance: "Appearance",
@@ -1271,7 +1285,8 @@ const resources = {
       artifactFileDetails: "文件信息",
       turnElapsedRunning: "已处理 {{duration}}",
       turnElapsedFinished: "用时 {{duration}}",
-      settingsSetupBusyHint: "当前轮次结束后即可应用设置。",
+      settingsSetupBusyHint:
+        "Agent 配置需等待当前轮次结束；显示设置可直接调整。",
       resetChatContentWidth: "恢复默认聊天宽度",
       resetChatFontSize: "恢复默认字体大小",
       setupResolveAdmission: "请先返回对话，处理尚未确认的消息，再应用设置。",
@@ -1293,6 +1308,16 @@ const resources = {
       sessionOutputTokens: "输出 Token",
       sessionCacheTokens: "缓存 Token",
       sessionContextUsage: "上下文占用与窗口大小",
+      usageContextLabel: "上下文",
+      usageContextWindow: "上下文窗口",
+      usageUnknown: "未知",
+      usageOpenDetails: "上下文 {{percent}} · 查看 Token 用量",
+      usageContextHelp: "当前分支的估算占用 / 模型上下文容量上限。",
+      usageSessionTotals: "会话累计 · 单位 token",
+      usageCacheRead: "缓存读取",
+      usageCacheWrite: "缓存写入",
+      usageTotalsHelp:
+        "按服务商返回的用量累计，包含已保存分支和摘要。每次请求重复读取缓存也会计入累计值。",
       subagentDetails: "子代理",
       backToSubagents: "返回子代理列表",
       subagentActiveGroup: "运行中",
@@ -1396,9 +1421,9 @@ const resources = {
       setupRequestRunning: "正在应用 OpenPI 设置…",
       setupRequestAccepted: "配置请求已接收。",
       setupPlanBlocked:
-        "请先退出 Plan 模式，再修改 OpenPI 设置。退出不会开始实施计划。",
+        "Agent 配置需先退出 Plan 模式；显示设置可直接调整。退出不会开始实施计划。",
       setupPlanBusy:
-        "请先停止或等待当前回合结束，再退出 Plan 模式修改 OpenPI 设置。",
+        "Agent 配置需等待当前回合结束并退出 Plan 模式；显示设置可直接调整。",
       setupOutcome_pending: "配置请求正在处理，尚未收到保存回执。",
       toolCallArguments: "工具参数",
       toolCallOutput: "工具结果",
@@ -1409,6 +1434,8 @@ const resources = {
       setupOutcome_unconfirmed:
         "本次未确认成功保存，请核对当前设置后再运行 /openpi-setup。",
       settingsUpdateFailed: "无法保存 Web 显示设置。",
+      settingsPreferencesSaved: "显示设置已保存。",
+      settingsPreferencesSaveFailed: "无法保存显示设置，请检查配置诊断后重试。",
       settingsCatalogLoading: "正在加载 Pi 资源…",
       settingsCatalogFailed: "无法加载 Pi 设置资源。",
       appearance: "外观",

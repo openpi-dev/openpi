@@ -17,10 +17,11 @@ import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web
 import type {
   WebModelSummary,
   WebSettingsPreferencesPatch,
-  WebThemePreference,
   WebSnapshot,
+  WebThemePreference,
 } from "../../../../protocol/types.ts";
 import type { WebModelConfiguration } from "../../../../runtime/types.ts";
+import { WebClient } from "../../protocol/client.ts";
 import { ModelConfigurationEditor } from "./ModelConfigurationEditor.tsx";
 import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
 import {
@@ -113,6 +114,7 @@ export function ProviderSettingsPage({
   const setupObservedBusy = useRef(false);
   const setupRefreshTimer = useRef(0);
   const [preferencePending, setPreferencePending] = useState(false);
+  const [preferencesSaved, setPreferencesSaved] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [modelDraftDirty, setModelDraftDirty] = useState(false);
   const [credentialDraftDirty, setCredentialDraftDirty] = useState(false);
@@ -136,6 +138,7 @@ export function ProviderSettingsPage({
     catalog,
     error: catalogError,
     refresh,
+    updateSetup,
   } = useSettingsCatalog(sessionId);
   const [selectedModelKey, setSelectedModelKey] = useState(
     currentModel
@@ -219,6 +222,7 @@ export function ProviderSettingsPage({
   useEffect(() => () => window.clearTimeout(setupRefreshTimer.current), []);
 
   const configureOpenPi = async (request: string) => {
+    setPreferencesSaved(false);
     if (setupDisabled) return false;
     setupBaseline.current = setupOutcome?.requestId;
     setSetupPending(true);
@@ -254,32 +258,19 @@ export function ProviderSettingsPage({
     }
   };
 
-  const preferenceRequest = (patch: WebSettingsPreferencesPatch) => {
-    if (patch.theme !== undefined)
-      return t("setupRequestSetTheme", { value: patch.theme });
-    if (patch.chatWidth !== undefined)
-      return t("setupRequestSetChatWidth", { value: patch.chatWidth });
-    if (patch.chatFontSize !== undefined)
-      return t("setupRequestSetChatFontSize", { value: patch.chatFontSize });
-    if (patch.expandThinking !== undefined)
-      return t(
-        patch.expandThinking
-          ? "setupRequestEnableExpandedThinking"
-          : "setupRequestDisableExpandedThinking",
-      );
-    return t("setupRequestReviewAll");
-  };
-
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
-    if (preferencePending || setupDisabled) return false;
+    if (preferencePending || !catalog) return false;
     setPreferencePending(true);
+    setPreferencesSaved(false);
     setSetupError(null);
     try {
-      return await configureOpenPi(preferenceRequest(patch));
-    } catch (reason) {
-      setSetupError(
-        reason instanceof Error ? reason.message : t("settingsUpdateFailed"),
-      );
+      const result = await new WebClient().savePreferences(patch);
+      updateSetup(result.setup);
+      setPreferencesSaved(true);
+      void onPreferencesChanged();
+      return true;
+    } catch {
+      setSetupError(t("settingsPreferencesSaveFailed"));
       return false;
     } finally {
       setPreferencePending(false);
@@ -445,7 +436,7 @@ export function ProviderSettingsPage({
               cwd={cwd}
               theme={theme}
               setupPending={setupPending || setupBusy}
-              preferencePending={preferencePending || setupPending || setupBusy}
+              preferencePending={preferencePending || !catalog}
               setupBusy={setupBusy}
               setupBlockedReason={setupBlockedReason}
               setupBlocked={planBlocked || planSelectionPending}
@@ -662,21 +653,31 @@ export function ProviderSettingsPage({
             {setupError}
           </div>
         )}
-        {(setupSubmitted || currentOutcome) && !setupError && (
-          <div
-            className={
-              currentOutcome?.status === "failed"
-                ? "settings-global-error"
-                : "settings-global-status"
-            }
-            role={currentOutcome?.status === "failed" ? "alert" : "status"}
-          >
-            {currentOutcome
-              ? t(`setupOutcome_${currentOutcome.status}`)
-              : t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
-            {currentOutcome?.error && <p>{currentOutcome.error}</p>}
+        {(preferencePending || preferencesSaved) && !setupError && (
+          <div className="settings-global-status" role="status">
+            {t(
+              preferencePending ? "savingSettings" : "settingsPreferencesSaved",
+            )}
           </div>
         )}
+        {!preferencePending &&
+          !preferencesSaved &&
+          (setupSubmitted || currentOutcome) &&
+          !setupError && (
+            <div
+              className={
+                currentOutcome?.status === "failed"
+                  ? "settings-global-error"
+                  : "settings-global-status"
+              }
+              role={currentOutcome?.status === "failed" ? "alert" : "status"}
+            >
+              {currentOutcome
+                ? t(`setupOutcome_${currentOutcome.status}`)
+                : t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
+              {currentOutcome?.error && <p>{currentOutcome.error}</p>}
+            </div>
+          )}
       </section>
       {pendingNavigation && (
         <AlertDialog

@@ -28,6 +28,7 @@ import {
   type WebSessionHistoryPage,
   type WebSessionSummary,
   type WebSettingsCatalog,
+  type WebSettingsPreferencesPatch,
   type WebSnapshot,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
@@ -650,6 +651,16 @@ export class WebClient {
     return this.request<WebSettingsCatalog>(
       `/api/settings/catalog?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
+    );
+  }
+
+  savePreferences(patch: WebSettingsPreferencesPatch) {
+    return this.request<{ saved: true; setup: WebSettingsCatalog["setup"] }>(
+      "/api/settings/preferences",
+      {
+        method: "POST",
+        body: JSON.stringify(patch),
+      },
     );
   }
 

@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_DISPLAY_SETTINGS_2026-09-29.md`](WEB_DISPLAY_SETTINGS_2026-09-29.md) — 显示设置直接保存、Pi Web/Maka/VS Code 交互参考、当前上下文与累计用量分层及隔离验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
 - [`WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md`](WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md) — superseded WebRTC trial: isolated checks and bounded CPU observations, failed deployed acceptance, and the user's native iframe replacement ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
 
 - [`WEB_BROWSER_DSH_COMPARISON_2026-09-28.md`](WEB_BROWSER_DSH_COMPARISON_2026-09-28.md) - Web-only DSH iframe comparison, actual OpenPI input/paint observations, embedding limits and an isolated Chromium WebRTC transport experiment ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).

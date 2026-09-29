@@ -29,8 +29,8 @@ import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web
 import type {
   WebModelSummary,
   WebSettingsCatalog,
-  WebSettingsPreferencesPatch,
   WebSettingsPluginSummary,
+  WebSettingsPreferencesPatch,
   WebSettingsSkillSummary,
   WebThemePreference,
 } from "../../../../protocol/types.ts";
@@ -227,7 +227,7 @@ export function GeneralSettingsPanel({
                 name="openpi-web-theme"
                 value={id}
                 checked={selectedTheme === id}
-                disabled={preferencePending || setupPending || setupBlocked}
+                disabled={preferencePending}
                 onChange={() => {
                   void onUpdatePreferences({ theme: id });
                 }}
@@ -249,7 +249,7 @@ export function GeneralSettingsPanel({
             width="100%"
             labelPosition="start"
             labelSpacing="spread"
-            isDisabled={preferencePending || setupPending || setupBlocked}
+            isDisabled={preferencePending}
             isLoading={preferencePending}
             onChange={(checked: boolean) => {
               void onUpdatePreferences({ expandThinking: checked });
@@ -264,9 +264,7 @@ export function GeneralSettingsPanel({
                 className="settings-reset-button"
                 aria-label={t("resetChatContentWidth")}
                 title={t("resetChatContentWidth")}
-                disabled={
-                  preferencePending || setupBlocked || chatWidth === 820
-                }
+                disabled={preferencePending || chatWidth === 820}
                 onClick={() => {
                   setChatWidth(820);
                   void onUpdatePreferences({ chatWidth: 820 }).then(
@@ -289,7 +287,7 @@ export function GeneralSettingsPanel({
               width="100%"
               valueDisplay="none"
               formatValue={(value: number) => `${value}px`}
-              isDisabled={preferencePending || setupPending || setupBlocked}
+              isDisabled={preferencePending}
               onChange={(value: number) => setChatWidth(value)}
               onChangeEnd={(value: number) => {
                 if (value !== setup.ui.webChatWidth) {
@@ -311,9 +309,7 @@ export function GeneralSettingsPanel({
                 className="settings-reset-button"
                 aria-label={t("resetChatFontSize")}
                 title={t("resetChatFontSize")}
-                disabled={
-                  preferencePending || setupBlocked || chatFontSize === 14
-                }
+                disabled={preferencePending || chatFontSize === 14}
                 onClick={() => {
                   setChatFontSize(14);
                   void onUpdatePreferences({ chatFontSize: 14 }).then(
@@ -336,7 +332,7 @@ export function GeneralSettingsPanel({
               width="100%"
               valueDisplay="none"
               formatValue={(value: number) => `${value}px`}
-              isDisabled={preferencePending || setupPending || setupBlocked}
+              isDisabled={preferencePending}
               onChange={(value: number) => setChatFontSize(value)}
               onChangeEnd={(value: number) => {
                 if (value !== setup.ui.webChatFontSize) {

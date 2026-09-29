@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -40,6 +40,109 @@ after(async () => {
     delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = previousHostAgentDirectory;
   await rm(hostAgentDirectory, { recursive: true, force: true });
+});
+
+test("appearance writes preserve package config, reject extra authority, and never prompt the agent", async () => {
+  const path = join(hostAgentDirectory, "my-pi-setup.json");
+  const original = await readFile(path, "utf8").catch(() => undefined);
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-appearance-"));
+  const runtime = testRuntime(cwd);
+  runtime.isIdle = () => false;
+  let prompts = 0;
+  runtime.sendPrompt = async () => {
+    prompts++;
+    return { pendingFollowUps: 0 };
+  };
+  const before = {
+    ...loadSetupConfig(),
+    configVersion: 1,
+    futureSetting: { keep: true },
+  };
+  await writeFile(path, JSON.stringify(before));
+  const host = new WebHost({ runtime });
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    const post = (
+      body: unknown,
+      headers: Record<string, string> = { Authorization: `Bearer ${token}` },
+    ) =>
+      fetch(`${launched.origin}/api/settings/preferences`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await post({ theme: "dark" }, {})).status, 401);
+    assert.equal(
+      (
+        await post(
+          { theme: "dark" },
+          {
+            Authorization: `Bearer ${token}`,
+            Origin: "https://foreign.example",
+          },
+        )
+      ).status,
+      403,
+    );
+    for (const body of [
+      {},
+      { workflows: { concurrency: 64 } },
+      { theme: ["dark"] },
+      { theme: null },
+      { chatWidth: 819 },
+      { chatWidth: 2001 },
+      { chatWidth: "1040" },
+      { chatFontSize: 12.5 },
+      { expandThinking: "true" },
+    ]) {
+      assert.equal((await post(body)).status, 400);
+    }
+    const saved = await post({
+      theme: "dark",
+      chatWidth: 1040,
+      chatFontSize: 16,
+      expandThinking: true,
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json()).setup.ui.webChatWidth, 1040);
+    const after = JSON.parse(await readFile(path, "utf8"));
+    assert.deepEqual(after, {
+      ...before,
+      ui: {
+        ...before.ui,
+        webTheme: "dark",
+        webChatWidth: 1040,
+        webChatFontSize: 16,
+        webExpandThinking: true,
+      },
+    });
+    // Concurrent partial edits share the existing lock and preserve one another.
+    const concurrent = await Promise.all([
+      post({ chatWidth: 1200 }),
+      post({ chatFontSize: 18 }),
+    ]);
+    assert.ok(concurrent.every((response) => response.status === 200));
+    assert.equal(loadSetupConfig().ui.webChatWidth, 1200);
+    assert.equal(loadSetupConfig().ui.webChatFontSize, 18);
+    assert.equal(prompts, 0);
+    assert.equal(runtime.sessionManager.getEntries().length, 0);
+    const snapshot = await fetch(`${launched.origin}/api/snapshot`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal((await snapshot.json()).preferences.chatWidth, 1200);
+    await writeFile(path, "{invalid-private-config");
+    const blocked = await post({ theme: "light" });
+    assert.equal(blocked.status, 422);
+    assert.ok(!(await blocked.text()).includes("invalid-private-config"));
+    assert.equal(await readFile(path, "utf8"), "{invalid-private-config");
+  } finally {
+    await host.stop();
+    if (original !== undefined) await writeFile(path, original);
+    else await rm(path, { force: true });
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
 
 function mutationSessionPath(manager: WebRuntimeController["sessionManager"]) {
@@ -2378,7 +2481,7 @@ test("serves Session-bound command discovery with fail-closed request validation
   }
 });
 
-test("serves a read-only Session-bound settings catalog without a preference write endpoint", async () => {
+test("serves a Session-bound settings catalog and rejects unsupported preference request shapes", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-settings-"));
   const runtime = testRuntime(cwd);
   let workspaceSelected = true;
@@ -2466,9 +2569,9 @@ test("serves a read-only Session-bound settings catalog without a preference wri
         }),
       },
     );
-    assert.equal(writeAttempt.status, 405);
+    assert.equal(writeAttempt.status, 400);
     assert.deepEqual(await writeAttempt.json(), {
-      error: "method not allowed",
+      error: "Invalid Web appearance preferences",
     });
   } finally {
     await host.stop();
