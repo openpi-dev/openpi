@@ -29,6 +29,8 @@ import {
   WEB_MAX_ARCHIVED_SESSION_QUERY,
   WEB_MAX_ARCHIVED_SESSION_SCAN,
   WEB_MAX_SESSIONS,
+  WEB_MAX_SESSION_SEARCH_PAGE,
+  WEB_MAX_SESSION_SEARCH_QUERY,
   WEB_MAX_SESSION_PREVIEW,
   WEB_MAX_SNAPSHOT_BYTES,
   WEB_MAX_WORKSPACES,
@@ -806,6 +808,92 @@ export class PiWebAdapter {
 
   async listSessions(pinnedPath?: string): Promise<WebSessionSummary[]> {
     return (await this.listSessionProjection(pinnedPath)).sessions;
+  }
+
+  async searchSessions(options: {
+    query: string;
+    includeArchived?: boolean;
+    offset?: number;
+    limit?: number;
+  }) {
+    await this.ensureWorkspaceStateLoaded();
+    await this.ensureArchivesLoaded();
+    const query = options.query;
+    const offset = options.offset ?? 0;
+    const limit = options.limit ?? WEB_MAX_SESSION_SEARCH_PAGE;
+    if (
+      typeof query !== "string" ||
+      query.trim().length === 0 ||
+      query.length > WEB_MAX_SESSION_SEARCH_QUERY ||
+      /[\u0000-\u001f\u007f]/u.test(query) ||
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > WEB_MAX_SESSION_SEARCH_PAGE
+    ) {
+      return { status: "invalid" as const };
+    }
+    const normalizedQuery = query.trim().normalize("NFKC").toLocaleLowerCase();
+    if (normalizedQuery.length > WEB_MAX_SESSION_SEARCH_QUERY) {
+      return { status: "invalid" as const };
+    }
+    const allSessions = await SessionManager.listAll(
+      this.runtime.sessionDirectory,
+    );
+    const currentId = this.runtime.sessionManager.getSessionId();
+    const currentFile = this.runtime.sessionManager.getSessionFile();
+    const matches = allSessions.filter((session) => {
+      const archived = this.archivedSessions.has(resolve(session.path));
+      if (!options.includeArchived && archived) return false;
+      const source = [session.name ?? "", session.firstMessage, session.cwd]
+        .join("\n")
+        .normalize("NFKC")
+        .toLocaleLowerCase();
+      return source.includes(normalizedQuery);
+    });
+    const selected = matches.slice(offset, offset + limit);
+    const sessions = selected.map((session) => ({
+      id: session.id,
+      path: session.path,
+      cwd: resolve(session.cwd),
+      source: "web-session" as const,
+      origin: "web" as const,
+      controller:
+        session.id === currentId &&
+        currentFile !== undefined &&
+        resolve(session.path) === resolve(currentFile)
+          ? ("web" as const)
+          : ("none" as const),
+      readOnly: false as const,
+      ...(session.name
+        ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
+        : {}),
+      modified: session.modified.toISOString(),
+      created: session.created.toISOString(),
+      messageCount: session.messageCount,
+      firstMessage: boundedText(
+        session.firstMessage,
+        WEB_MAX_SESSION_PREVIEW,
+      ),
+      ...(this.archivedSessions.has(resolve(session.path))
+        ? { archived: true }
+        : {}),
+      ...(this.ungroupedSessions.has(resolve(session.path))
+        ? { ungrouped: true }
+        : {}),
+    }));
+    const pageEnd = offset + sessions.length;
+    const hasMore = pageEnd < matches.length;
+    return {
+      status: "ok" as const,
+      sessions,
+      ...(hasMore ? { nextOffset: pageEnd } : {}),
+      truncation: {
+        truncated: hasMore,
+        matchesOmitted: Math.max(0, matches.length - pageEnd),
+      },
+    };
   }
 
   async listReadOnlyTerminalSessions(
