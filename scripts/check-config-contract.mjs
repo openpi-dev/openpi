@@ -89,6 +89,13 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["thinking blocks"],
   },
   {
+    path: "ui.webPinnedSort",
+    writerTokens: ["params.ui_web_pinned_sort"],
+    statusTokens: ["config.ui.webPinnedSort"],
+    readmeTerms: ["置顶"],
+    setupTerms: ["pinned conversations"],
+  },
+  {
     path: "ui.showHeader",
     writerTokens: ["params.ui_show_header"],
     statusTokens: ["config.ui.showHeader"],

@@ -404,11 +404,19 @@ test("background settlement records timing in the owning Pi Session, never the c
     undefined,
   );
   const snapshot = await new PiWebAdapter(web).getSnapshot();
+  const receipt = snapshot.sessions.find(
+    (session) => session.path === a.session.sessionManager.getSessionFile(),
+  )?.execution;
+  assert.equal(receipt?.status, "unknown", "release does not prove idle");
+  assert.equal(receipt?.lastTurn?.commandId, "run-a");
+  assert.equal(receipt?.lastTurn?.outcome, "completed");
   assert.equal(
-    snapshot.sessions.find(
-      (session) => session.path === a.session.sessionManager.getSessionFile(),
-    )?.execution,
+    web.getSessionExecution(
+      a.session.sessionManager.getSessionId(),
+      b.session.sessionManager.getSessionFile()!,
+    ).lastTurn,
     undefined,
+    "receipt must not follow an id to another file",
   );
 });
 

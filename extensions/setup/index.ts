@@ -460,6 +460,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "Whether OpenPI Web thinking blocks are expanded by default. Existing blocks remain individually collapsible. Omit to preserve the current value.",
         }),
       ),
+      ui_web_pinned_sort: Type.Optional(
+        StringEnum(["manual", "updated"] as const, {
+          description:
+            "OpenPI Web pinned conversation order: manual (default) or recently updated. Omit to preserve the current value.",
+        }),
+      ),
       ui_custom_footer: Type.Optional(
         Type.Boolean({
           description:
@@ -620,6 +626,8 @@ export default function openPiSetup(pi: ExtensionAPI) {
               params.ui_web_chat_font_size ?? current.ui.webChatFontSize,
             webExpandThinking:
               params.ui_web_expand_thinking ?? current.ui.webExpandThinking,
+            webPinnedSort:
+              params.ui_web_pinned_sort ?? current.ui.webPinnedSort,
             showHeader: params.ui_show_header ?? current.ui.showHeader,
             customFooter: params.ui_custom_footer ?? current.ui.customFooter,
             ...footer,

@@ -40,6 +40,7 @@ const refreshEventTypes = new Set([
   "session_renamed",
   "session_archived",
   "session_unarchived",
+  "session_pins_changed",
   "session_created",
   "prompt_accepted",
   "runtime_changed",
@@ -243,6 +244,12 @@ export interface WebStoreActions {
   selectSession: (path: string) => Promise<void>;
   renameSession: (path: string, name: string) => Promise<void>;
   archiveSession: (path: string) => Promise<void>;
+  setSessionPin: (
+    path: string,
+    id: string,
+    pinned: boolean,
+    before?: { path: string; id: string } | null,
+  ) => Promise<void>;
   unarchiveSession: (path: string) => Promise<boolean>;
   selectModel: (value: string) => Promise<void>;
   searchModels: (query: string) => Promise<void>;
@@ -1601,6 +1608,15 @@ export function createWebStore(
       async renameSession(path, name) {
         try {
           await client.renameSession(path, name);
+          await actions.refreshSnapshot();
+        } catch (error) {
+          showError(error);
+          throw error;
+        }
+      },
+      async setSessionPin(path, id, pinned, before) {
+        try {
+          await client.setSessionPin(path, id, pinned, before);
           await actions.refreshSnapshot();
         } catch (error) {
           showError(error);

@@ -531,6 +531,18 @@ export class WebClient {
     });
   }
 
+  setSessionPin(
+    path: string,
+    id: string,
+    pinned: boolean,
+    before?: { path: string; id: string } | null,
+  ) {
+    return this.request<{ saved: true }>("/api/sessions/pin", {
+      method: "POST",
+      body: JSON.stringify({ path, id, pinned, before }),
+    });
+  }
+
   archiveSession(path: string) {
     return this.request<{ path: string; archived: true }>(
       `/api/sessions/archive?path=${encodeURIComponent(path)}`,
@@ -681,6 +693,34 @@ export class WebClient {
         body: JSON.stringify(patch),
       },
     );
+  }
+
+  discoverProviderModels(
+    sessionId: string,
+    connection: import("../../../runtime/provider-model-discovery.ts").ProviderModelDiscovery,
+    signal: AbortSignal,
+  ) {
+    return this.request<{
+      models: { id: string; name: string }[];
+      truncated: boolean;
+    }>("/api/models/discover", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, connection }),
+      signal,
+    });
+  }
+
+  saveModelConfigurations(
+    sessionId: string,
+    revision: string,
+    models: import("../../../runtime/types.ts").WebModelConfiguration[],
+    signal: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/models/configurations", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, revision, models }),
+      signal,
+    });
   }
 
   terminalDetail(sessionId: string, id: string, signal: AbortSignal) {

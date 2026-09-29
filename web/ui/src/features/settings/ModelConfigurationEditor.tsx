@@ -6,6 +6,7 @@ import type {
   WebModelConfigurations,
 } from "../../../../runtime/types.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
+import { ProviderModelPicker } from "./ProviderModelPicker.tsx";
 
 const emptyModel: WebModelConfiguration = {
   provider: "",
@@ -81,6 +82,7 @@ export function ModelConfigurationEditor({
     discard?: string;
   }>({});
   const [loading, setLoading] = useState(true);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [discardSelection, setDiscardSelection] = useState<string | null>(null);
   const saveOperation = useRef<AbortController | null>(null);
   const [saving, setSaving] = useState(false);
@@ -198,10 +200,58 @@ export function ModelConfigurationEditor({
     if (currentSaveError === "failed") setSaveError(null);
   };
 
+  const renderField = (field: "provider" | "id" | "name" | "baseUrl") => (
+    <label key={field} className="settings-form-field">
+      {t(`modelConfig_${field}`)}
+      <input
+        required
+        type={field === "baseUrl" ? "url" : "text"}
+        value={model[field]}
+        autoComplete="off"
+        maxLength={
+          field === "baseUrl" ? 2048 : field === "provider" ? 160 : 256
+        }
+        disabled={
+          saving ||
+          busy ||
+          loading ||
+          !configuration ||
+          (configuration.models.some(
+            (item) => `${item.provider}/${item.id}` === selected,
+          ) &&
+            (field === "provider" || field === "id"))
+        }
+        onChange={(event) => {
+          editModel({ [field]: event.target.value });
+        }}
+      />
+    </label>
+  );
+
   return (
     <section className="settings-section-block">
       <h2>{t("editModelConfiguration")}</h2>
       <p>{t("modelConfigurationDetail")}</p>
+
+      {pickerOpen && configuration && (
+        <ProviderModelPicker
+          key={selected}
+          sessionId={sessionId}
+          template={model}
+          configuration={configuration}
+          onClose={() => setPickerOpen(false)}
+          onSavingChange={onSavingChange}
+          onSaved={(added) => {
+            setPickerOpen(false);
+            reload({
+              selection: `${added.provider}/${added.id}`,
+              source: selected,
+              saved: true,
+            });
+            void onSaved().catch(() => false);
+          }}
+        />
+      )}
       <form
         className="settings-edit-form"
         onSubmit={(event) => {
@@ -293,79 +343,85 @@ export function ModelConfigurationEditor({
             </select>
           </label>
         )}
-        {(["provider", "id", "name", "baseUrl"] as const).map((field) => (
-          <label key={field} className="settings-form-field">
-            {t(`modelConfig_${field}`)}
-            <input
-              required
-              type={field === "baseUrl" ? "url" : "text"}
-              value={model[field]}
-              autoComplete="off"
-              maxLength={
-                field === "baseUrl" ? 2048 : field === "provider" ? 160 : 256
-              }
+        <fieldset className="model-connection-card">
+          <legend>{t("providerConnectionHeading")}</legend>
+          {(["provider", "baseUrl"] as const).map(renderField)}
+          <label className="settings-form-field">
+            {t("modelConfig_api")}
+            <select
+              value={model.api}
+              disabled={saving || busy || loading || !configuration}
+              onChange={(event) => {
+                const api = event.target.value;
+                if (
+                  api === "openai-responses" ||
+                  api === "openai-completions" ||
+                  api === "anthropic-messages"
+                )
+                  editModel({ api });
+              }}
+            >
+              <option value="openai-responses">OpenAI Responses</option>
+              <option value="openai-completions">
+                OpenAI Chat Completions
+              </option>
+              <option value="anthropic-messages">Anthropic Messages</option>
+            </select>
+          </label>
+          <div className="provider-discovery-action">
+            <button
+              type="button"
               disabled={
                 saving ||
                 busy ||
                 loading ||
                 !configuration ||
-                (configuration.models.some(
-                  (item) => `${item.provider}/${item.id}` === selected,
-                ) &&
-                  (field === "provider" || field === "id"))
+                !model.provider ||
+                !model.baseUrl
               }
-              onChange={(event) => {
-                editModel({ [field]: event.target.value });
-              }}
-            />
-          </label>
-        ))}
-        <label className="settings-form-field">
-          {t("modelConfig_api")}
-          <select
-            value={model.api}
-            disabled={saving || busy || loading || !configuration}
-            onChange={(event) => {
-              const api = event.target.value;
-              if (
-                api === "openai-responses" ||
-                api === "openai-completions" ||
-                api === "anthropic-messages"
-              )
-                editModel({ api });
-            }}
-          >
-            <option value="openai-responses">OpenAI Responses</option>
-            <option value="openai-completions">OpenAI Chat Completions</option>
-            <option value="anthropic-messages">Anthropic Messages</option>
-          </select>
-        </label>
-        {(["contextWindow", "maxTokens"] as const).map((field) => (
-          <label key={field} className="settings-form-field">
-            {t(`modelConfig_${field}`)}
-            <input
-              required
-              type="number"
-              min={1}
-              max={100000000}
-              step={1}
-              value={model[field]}
-              disabled={saving || busy || loading || !configuration}
-              onChange={(event) =>
-                editModel({ [field]: Number(event.target.value) })
-              }
-            />
-          </label>
-        ))}
-        <label>
-          <input
-            type="checkbox"
-            checked={model.reasoning}
-            disabled={saving || busy || loading || !configuration}
-            onChange={(event) => editModel({ reasoning: event.target.checked })}
-          />{" "}
-          {t("modelConfig_reasoning")}
-        </label>
+              onClick={() => setPickerOpen(true)}
+            >
+              {t("providerFetchModels")}
+            </button>
+            <span>{t("providerFetchHint")}</span>
+          </div>
+        </fieldset>
+        <div className="model-identity-fields">
+          {(["id", "name"] as const).map(renderField)}
+        </div>
+        <details className="model-advanced">
+          <summary>{t("modelAdvanced")}</summary>
+          <div>
+            {(["contextWindow", "maxTokens"] as const).map((field) => (
+              <label key={field} className="settings-form-field">
+                {t(`modelConfig_${field}`)}
+                <input
+                  required
+                  type="number"
+                  min={1}
+                  max={100000000}
+                  step={1}
+                  value={model[field]}
+                  disabled={saving || busy || loading || !configuration}
+                  onChange={(event) =>
+                    editModel({ [field]: Number(event.target.value) })
+                  }
+                />
+              </label>
+            ))}
+            <label>
+              <input
+                type="checkbox"
+                checked={model.reasoning}
+                disabled={saving || busy || loading || !configuration}
+                onChange={(event) =>
+                  editModel({ reasoning: event.target.checked })
+                }
+              />{" "}
+              {t("modelConfig_reasoning")}
+            </label>
+          </div>
+        </details>
         <button
           type="submit"
           disabled={

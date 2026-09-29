@@ -40,7 +40,7 @@ import {
 import { projectMessage, projectAssistantError, jsonByteLength, boundedText, WEB_MAX_TEXT } from "../protocol/types.ts";
 import { LIVE_TOOL_LIMIT, type LiveToolEvidence } from "../protocol/evidence.ts";
 import { elapsed, traceWeb } from "../trace.ts";
-import { WEB_TURN_TIMING_ENTRY, type WebTurnTiming } from "../protocol/turn-timing.ts";
+import { WEB_TURN_TIMING_ENTRY, readTurnTiming, type WebTurnTiming } from "../protocol/turn-timing.ts";
 import {
   applyHttpProxySettings,
   configureHttpDispatcher,
@@ -62,7 +62,8 @@ import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
-import { readModelConfigurations, saveModelConfiguration } from "./model-configuration.ts";
+import { readModelConfigurations, saveModelConfigurations } from "./model-configuration.ts";
+import { discoverProviderModels, type ProviderModelDiscovery } from "./provider-model-discovery.ts";
 import { matchesSessionIdentity } from "./session-identity.ts";
 import {
   projectWebSettingsResources,
@@ -217,6 +218,8 @@ export class PiWebRuntime implements WebRuntimeController {
   private manualCompactionOwner?: AgentSessionRuntime;
   private nextTurnEpoch = 0;
   private readonly terminalTurnKeys = new Set<string>();
+  // Presentation receipts outlive released native Sessions; they never imply idle.
+  private completedSessionTurns?: Map<string, NonNullable<WebSessionExecution["lastTurn"]>>;
   private readonly turnSettlementWaiters = new Map<
     string,
     Set<(settlement: TurnSettlement) => void>
@@ -345,7 +348,10 @@ export class PiWebRuntime implements WebRuntimeController {
   getSessionExecution(sessionId: string, sessionPath: string): WebSessionExecution {
     const unknown: WebSessionExecution = { sessionId, sessionPath, status: "unknown", liveTools: [], liveToolsOmitted: 0 };
     const owner = this.sessionRuntimeForRead(sessionId, sessionPath);
-    if (!owner) return unknown;
+    if (!owner) {
+      const lastTurn = this.completedSessionTurns?.get(JSON.stringify([sessionPath, sessionId]));
+      return lastTurn ? { ...unknown, lastTurn } : unknown;
+    }
     const session = owner.session;
     const followUps = session.getFollowUpMessages();
     const held = this.compactionQueues?.get(owner);
@@ -353,8 +359,11 @@ export class PiWebRuntime implements WebRuntimeController {
     const trace = owner === this.runtime ? this.activePromptTrace : this.suspendedPromptTraces?.get(session)?.active;
     const activeTurn = this.activeTurnFromTrace(trace);
     const compaction = this.getCompaction(session);
+    const terminalEntry = session.sessionManager.getBranch().slice().reverse().find((entry) => entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY);
+    const timing = terminalEntry?.type === "custom" ? readTurnTiming(terminalEntry.data) : undefined;
     return {
       sessionId, sessionPath,
+      ...(timing?.sessionId === sessionId ? { lastTurn: { commandId: timing.commandId, finishedAt: timing.finishedAt, outcome: timing.outcome } } : {}),
       status: session.isIdle ? "idle" : "running",
       pendingFollowUps: queued.length,
       queuedMessages: queued.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
@@ -774,16 +783,45 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   saveModelConfiguration(sessionId: string, revision: string, model: WebModelConfiguration) {
+    return this.saveModelConfigurations(sessionId, revision, [model]);
+  }
+
+  saveModelConfigurations(sessionId: string, revision: string, models: WebModelConfiguration[]) {
     return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
-      await saveModelConfiguration(this.runtime.services.agentDir, revision, model);
+      await saveModelConfigurations(this.runtime.services.agentDir, revision, models);
       await this.runtime.services.modelRuntime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(10_000) });
+      for (const model of models) {
       const updated = this.runtime.services.modelRuntime.getModel(model.provider, model.id);
       if (!updated) throw new Error("Saved model was not loaded by Pi");
       const current = this.runtime.session.model;
       if (current?.provider === model.provider && current.id === model.id) {
         await this.runtime.session.setModel(updated);
       }
+      }
     }));
+  }
+
+  async discoverProviderModels(sessionId: string, request: ProviderModelDiscovery, signal: AbortSignal) {
+    if (this.sessionManager.getSessionId() !== sessionId) throw new WebRuntimeRequestError("Session changed", "SESSION_CONFLICT", 409);
+    const headers: Record<string, string> = { Accept: "application/json" };
+    let key = request.apiKey;
+    if (!key) {
+      const saved = (await this.readModelConfigurations()).models.find((model) => model.provider === request.provider && model.baseUrl === request.baseUrl && model.api === request.api);
+      if (saved) {
+        const native = this.runtime.services.modelRuntime.getModel(saved.provider, saved.id);
+        if (native && native.baseUrl !== request.baseUrl) throw new Error("Connection endpoint changed");
+        const auth = native ? await this.runtime.services.modelRuntime.getAuth(native, { signal }) : undefined;
+        if (auth?.auth.baseUrl && auth.auth.baseUrl !== request.baseUrl) throw new Error("Connection endpoint changed");
+        key = auth?.auth.apiKey;
+        Object.assign(headers, auth?.auth.headers);
+      }
+    }
+    if (key) {
+      if (request.api === "anthropic-messages") headers["x-api-key"] = key;
+      else headers.Authorization = `Bearer ${key}`;
+    }
+    if (request.api === "anthropic-messages") headers["anthropic-version"] = "2023-06-01";
+    return discoverProviderModels(request, headers, signal);
   }
 
   getSessionUsage() {
@@ -1734,6 +1772,7 @@ export class PiWebRuntime implements WebRuntimeController {
     trace.executionStartedAt = Date.now();
     trace.executionClock = performance.now();
     trace.sessionPath = sessionManager.getSessionFile?.() ?? `current:${trace.sessionId}`;
+    this.completedSessionTurns?.delete(JSON.stringify([trace.sessionPath, trace.sessionId]));
     trace.epoch = ++this.nextTurnEpoch;
     const activeTurn = this.activeTurnFromTrace(trace);
     if (activeTurn && publish) this.emit("turn_started", { ...activeTurn });
@@ -1761,6 +1800,11 @@ export class PiWebRuntime implements WebRuntimeController {
         elapsedMs: activeTurn.elapsedMs,
         outcome: settlement.outcome,
       };
+      const receipts = this.completedSessionTurns ??= new Map();
+      const identity = JSON.stringify([trace.sessionPath, trace.sessionId]);
+      receipts.delete(identity);
+      receipts.set(identity, { commandId: timing.commandId, finishedAt: timing.finishedAt, outcome: timing.outcome });
+      while (receipts.size > 500) receipts.delete(receipts.keys().next().value!);
       try {
         sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, timing);
       } catch {

@@ -53,6 +53,39 @@ sort mode, generalized menu state or persistent store is needed.
 
 ## Ownership and acceptance
 
+### Local amendment: pinned conversations (2026-09-29)
+
+Status: draft extension based on PR #598 at `4ecc5a3`; pending the user's
+preview review before submission. The earlier no-new-preference conclusion
+applies to the folder refinement above, not to this explicitly requested feature.
+The user's Codex screenshots show a separate collapsible Pinned section and
+Recently updated / Manual order choices; the DSH screenshot shows a row pin.
+
+Project pins above Workspaces, without duplicate rows in the workspace list.
+Both sections share one scroll area. Preserve each Session's native workspace,
+identity, selection and execution facts. Show a row pin on hover/focus or touch;
+keep the same action in its menu. Manual order supports drag placement and
+keyboard-accessible Move up / Move down actions. Updated order is a projection;
+switching back restores the stored manual order. Archive hides a pin, and
+restoring the Session reveals it again. An empty Pinned section is omitted.
+
+Reuse the existing serialized, atomic workspace metadata writer. Store up to
+100 exact file-path / native-id pairs, with their array position as manual order.
+The endpoint changes one pin relative to an existing anchor, preserving unrelated
+concurrent edits; invalid identity/anchor and write failures leave the prior state.
+Retain active pins within the existing bounded Session projection. Pi remains
+the sole Session store; no model calls or model-facing tools are introduced.
+Persist the presentation choice as `ui.webPinnedSort` through the existing setup
+writer, status, docs and appearance API; default to manual.
+
+Simplification: a shared row renderer replaces duplicated pinned/workspace row
+actions. One retention set covers current, selected and user-pinned Sessions;
+removing the separate repeated pin lookup still passes bounded-history checks.
+No drag framework, parallel Session store or optimistic ordering cache is added.
+Local validation covers atomic failure, concurrency, exact identity, reload,
+archive restoration, projection bounds, sorting, drag, keyboard and viewport
+behavior. The preview uses isolated example Sessions and does not call a model.
+
 Pi still owns Sessions. The existing Web store owns selection, collapse and
 mutation receipts; the existing archive API owns pagination and failure facts.
 This change only projects those facts. No model judgment, tool authority,
@@ -103,3 +136,91 @@ passed (2,005 Node tests passed, eight skipped; all 852 Vitest tests passed).
 The full retry is retained as `test-final.log`. These results apply to the base
 revision plus this branch's local sidebar changes. This is functional UI
 evidence, not a performance Benchmark or an accepted architectural Decision.
+
+## Interaction refinement — 2026-09-29 draft amendment
+
+Scope: PR #598 / Issue #597, checkout `4ecc5a3` plus local changes, pending user
+preview review. This amendment does not revise the earlier validation receipt.
+Reference inspection used Maka main `ae71ab319c920b856c2f18ee6c8d022e38376f71`
+(`packages/ui/src/session-status-presentation.ts` and desktop status contracts)
+and local DeepSeek Harness `ddefc45fbc` (`ui-settings-models/ModelListEditor.tsx`
+and its README). The user's Codex screenshots supply visual hierarchy; source
+inspection supplies behavior references, not requirements on OpenPI's runtime.
+
+The chosen design reserves one quiet trailing slot for each Session's own
+activity: rotating ring, input-needed amber, completed green, failure red,
+cancelled neutral and uncertain neutral. Compaction keeps the ring but names
+its activity. Disconnected running rows show uncertainty rather than continuing
+an apparently live ring. Exact file/id ownership and Pi `agent_settled` timing
+evidence determine the projection. A bounded 500-entry in-memory display receipt
+survives background runtime release; its status remains unknown, not idle. It
+is cleared on the next observed turn and does not survive a Host restart.
+Loaded native branches can supply their persisted timing record. Reading the
+selected completed Session for four visible seconds consumes that marker in
+tab-scoped browser storage; it never modifies the canonical Session result.
+
+The model form groups provider, endpoint and API before model identity, with
+less frequent capability fields behind Advanced. A focused picker uses a
+searchable checkbox list, disabled existing entries, retained hidden selections,
+visible-result selection, retry, selected count and one explicit save. Search
+does not mutate native configuration. GET catalog discovery and atomic batch
+write are orthogonal mechanisms; Pi retains credentials, registry refresh,
+Session identity, idle/Plan admission and the existing configuration revision
+guard. Saved credentials are reused only for an exact saved connection;
+temporary query credentials are not persisted. Queries reject redirects and
+bound time, bytes and entries. Capability defaults are disclosed because model
+catalogs do not reliably report context/output limits.
+
+Simplification keeps one row renderer, one existing model writer for both single
+and bulk saves, and native buttons in the picker rather than another button
+adapter. Removing the background receipt fails the real Session-release test;
+removing hidden selections breaks search-and-batch selection. These mechanisms
+are retained. No new runtime owner, model tool, dependency, polling loop, toast
+framework or user preference is introduced.
+
+Local evidence is retained under
+`/Users/admin/Documents/ChatGPT/openpi-evidence/interaction-refinement-20260929`.
+The catalog and state screenshots use explicit test fixtures, not live model
+results. Validation receipts are recorded separately after final checks.
+
+Final local validation (2026-09-29): `bun run check` passed. The default full
+test run hit one existing terminal-focus timing timeout; the full rerun with
+`VITEST_MAX_WORKERS=2 bun run test` passed 2,010 Node tests (eight skipped) and
+856 Vitest tests. Five Chromium scenarios passed, covering pins/reload/order,
+light/dark/touch workspace layouts, per-Session states and model selection.
+The receipt ablation failed the background-settlement check as expected, and
+restoring it passed. Logs: `check-final.log`, `test-final.log`,
+`browser-final.log`, `ablation-without-receipt.log`, `ablation-restored.log`.
+The isolated 57123 Host was restarted and Safari verified the connected page
+and new model connection form. It opens a fresh current Session; resuming an
+older preview-only provider failed, while both pinned example transcripts
+remain available. No real provider or model request was used for validation.
+
+### User review amendment: reduce visible states
+
+The user requested a closer visual match to Codex after inspecting the demo.
+This supersedes the icon vocabulary above: retain only a running ring, a small
+unread completion dot and one attention icon shared by input waits and failures.
+Stopped and uncertain outcomes have no row decoration. Disconnection suppresses
+stale running indicators and uses the existing page-level connection feedback.
+Specific outcomes remain in the canonical receipt and conversation; removing
+their dedicated icons, colors and translations does not erase runtime facts.
+Compaction uses the same ring with its specific accessible/hover description.
+This is a design choice based on the supplied visual reference, not a claim
+about Codex's complete internal state model. The demo's main controls are
+reduced to these three states; edge cases move under an optional disclosure.
+
+Simplification validation: `bun run check` and the complete two-worker test run
+passed again (2,010 Node, eight skipped; 856 Vitest). The real browser scenario
+and interactive demo verify the shared attention marker, quiet stopped row,
+four-second completion acknowledgement and page-level disconnection feedback.
+Removing the three extra icon branches preserves the underlying terminal
+receipt tests and satisfies the revised visual acceptance criteria. Evidence:
+`simplified-check.log`, `simplified-test.log`, `simplified-browser.log` and
+`simplified-demo-validation.log` in the same external evidence directory.
+
+Final menu simplification: pin/unpin is available only through the row's pin
+button. Remove the duplicate overflow-menu item and its unused icon; keep
+rename, archive and manual Move up / Move down. The existing browser scenario
+checks both pinned and unpinned menus and still exercises pin persistence
+through reload. This is the user's final review adjustment before PR update.

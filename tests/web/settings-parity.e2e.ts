@@ -116,6 +116,45 @@ test("settings keep labeled mobile navigation and edit the selected model withou
   await add.click();
   await expect(name).toHaveValue("Unfinished new model");
   expect(configurationReads).toBe(1);
+  await dialog.getByRole("button", { name: /Mock Reasoner/ }).click();
+  await page.route("**/api/models/discover", (route) =>
+    route.fulfill({
+      json: {
+        models: [
+          { id: "reasoner", name: "Mock Reasoner" },
+          { id: "design-model", name: "Design model" },
+          { id: "fast-model", name: "Fast model" },
+          { id: "long-context", name: "Long context model" },
+        ],
+        truncated: false,
+      },
+    }),
+  );
+  await dialog.getByRole("button", { name: "获取可用模型" }).click();
+  const modelPicker = page.getByRole("dialog", { name: "选择要添加的模型" });
+  await expect(
+    modelPicker.getByText("Design model", { exact: true }),
+  ).toBeVisible();
+  await modelPicker.getByRole("checkbox", { name: /Design model/ }).check();
+  await modelPicker.getByRole("searchbox").fill("Fast");
+  await modelPicker.getByRole("button", { name: "全选当前结果" }).click();
+  await expect(modelPicker.getByText("已选 2 个 · 最多 100 个")).toBeVisible();
+  await modelPicker.getByRole("searchbox").fill("");
+  await page.screenshot({
+    path: testInfo.outputPath("model-picker-mobile.png"),
+    animations: "disabled",
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({
+    path: testInfo.outputPath("model-picker-desktop.png"),
+    animations: "disabled",
+  });
+  await modelPicker.getByRole("button", { name: "取消", exact: true }).click();
+  await page.screenshot({
+    path: testInfo.outputPath("provider-connection-desktop.png"),
+    animations: "disabled",
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
   expect(
     await dialog.evaluate(
       (element) => element.scrollWidth <= element.clientWidth,

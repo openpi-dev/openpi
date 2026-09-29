@@ -435,7 +435,7 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 ### 自然语言配置与页面设置
 
-`/openpi-setup` 是自然语言配置入口。Web 的主题、聊天宽度、字号和默认展开思考块控件直接保存，不调用模型、不产生聊天消息，模型运行或 Plan 模式下也可调整。这四项仍使用同一份 `my-pi-setup.json` 和共享配置锁、校验、未知字段保留及原子写入；以保存接口成功回执更新界面。其他 OpenPI 自有配置继续通过 setup 回合修改。
+`/openpi-setup` 是自然语言配置入口。Web 的主题、聊天宽度、字号、默认展开思考块和置顶排序控件直接保存，不调用模型、不产生聊天消息，模型运行或 Plan 模式下也可调整。这些展示偏好仍使用同一份 `my-pi-setup.json` 和共享配置锁、校验、未知字段保留及原子写入；以保存接口成功回执更新界面。其他 OpenPI 自有配置继续通过 setup 回合修改。
 
 个人配置 `my-pi-setup.json` 使用 `configVersion: 1`。无参数 `/openpi-setup` 展示配置来源、版本、字段诊断与是否允许写入。缺文件时仅使用默认值；旧格式仅在明确保存时迁移；JSON 损坏、读取失败、不支持的版本及非法已知字段会阻止覆盖，并保留原文件。未知字段会警告并保留；会丢失未知字段的修改被拒绝。有 UI 的 Session 启动或扩展重载时，加载错误会主动提示正在使用安全默认值且写入已阻止；旧格式或未知字段会给出简短警告，引导到 `/openpi-setup` 查看详情，不触发模型调用或自动改写文件。缺文件和合法的当前版本配置不告警。当前 Session 应用失败时尝试恢复旧文件和配置；若文件已被外部修改或恢复失败，则报告恢复不完整。诊断不展示字段原值或 post-edit 命令。修复文件或明确移除文件后才能恢复配置写入，入口仍为 `/openpi-setup`。
 
@@ -448,7 +448,13 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 Plan 模式下需先退出规划，再通过 `/openpi-setup` 修改配置。Web 设置页会禁用相关修改入口，并在会话空闲时提供退出按钮；退出仅切换状态，不调用模型或开始实施。Setup 在接收命令和投递排队请求时都检查当前 Session 的 Plan 状态。设置页依据实际工具回执反馈保存、设置未变化、失败或取消；回合结束或模型声称成功都不能替代保存回执。
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+Web 侧栏支持独立置顶会话分区。行内图钉可置顶或取消，置顶区菜单切换最近更新和手动排序；手动模式支持拖动以及会话菜单上移/下移。`ui.webPinnedSort` 默认为 `manual`，可选 `updated`，由 `/openpi-setup` 或置顶区菜单保存。置顶顺序保存在当前 Web 会话目录的工作区元数据中；归档暂时隐藏置顶，恢复后保留顺序。
+
+会话行右侧只保留三种提示：执行中的转圈、已完成未读的小圆点、需要处理的提示。等待输入和失败共用需要处理标记，悬停或打开会话可查看具体原因；停止和未知结果恢复普通行。断线时收起执行动画，由页面连接状态统一提示，绝不当作完成。打开会话并在可见页面停留四秒后，完成圆点在当前浏览器标签页内记为已读；后台完成回执在当前 Host 生命周期内保留，不将已释放运行实例误报为空闲。
+
+Web 模型配置先填写提供商连接，再选择“获取可用模型”。列表支持搜索、勾选当前结果和批量添加，已有配置不会重复添加；搜索保留其他结果的勾选。查询仅请求提供商模型目录，不调用模型。可使用同一已保存端点的 Pi 凭据，或输入仅用于本次查询的临时密钥；临时密钥不会保存。新增模型沿用表单里的能力默认值，可在高级参数中逐项调整。提供商不支持目录接口时仍可手动添加。
+
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
@@ -485,6 +491,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Web 主题                    | `system`；另有 `light` / `dark` / `mist` / `rose` / `pine` |
 | Web 聊天宽度 / 聊天字号     | 820px / 14px；范围 820-2000px / 12-24px        |
 | Web 思考块                  | 默认折叠                                       |
+| Web 置顶排序                | `manual` 手动排序；可选 `updated` 最近更新      |
 | 大型 Header                  | 关闭                                           |
 | Dashboard Footer             | 开启；单行 `plain`                           |
 | Subagent / Bash / Write/Edit | `compact` / `compact` / `compact`             |

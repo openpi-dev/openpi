@@ -484,6 +484,7 @@ export function App() {
           }}
         >
           <SessionSidebar
+            connected={state.connection === "connected"}
             snapshot={state.snapshot}
             selectedPath={state.workspaceDraft ? null : state.selectedPath}
             selectedWorkspace={state.selectedWorkspace}

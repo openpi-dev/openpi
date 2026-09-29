@@ -112,6 +112,7 @@ export interface WebActiveTurn {
 /** Read-only facts for the selected Session, independent of input ownership. */
 export interface WebSessionExecution {
   promptQueueBlocked?: boolean;
+  lastTurn?: { commandId: string; finishedAt: number; outcome: "completed" | "cancelled" | "failed" | "uncertain" };
   sessionId: string;
   sessionPath: string;
   status: "running" | "idle" | "unknown";
@@ -203,6 +204,8 @@ export interface WebRuntimeController {
   saveProviderKey?(sessionId: string, provider: string, apiKey: string): Promise<void>;
   readModelConfigurations?(): Promise<WebModelConfigurations>;
   saveModelConfiguration?(sessionId: string, revision: string, model: WebModelConfiguration): Promise<void>;
+  saveModelConfigurations?(sessionId: string, revision: string, models: WebModelConfiguration[]): Promise<void>;
+  discoverProviderModels?(sessionId: string, request: import("./provider-model-discovery.ts").ProviderModelDiscovery, signal: AbortSignal): Promise<{ models: { id: string; name: string }[]; truncated: boolean }>;
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
   setPlanMode?(request: PlanControlRequest & { sessionId: string; sessionPath: string }): Promise<ReturnType<typeof projectPlanControl>>;

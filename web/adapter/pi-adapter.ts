@@ -63,6 +63,7 @@ export class WebReadOnlySessionError extends Error {
 }
 
 type WorkspaceStateSnapshot = {
+  sessionPins: { path: string; id: string }[];
   importedWorkspaces: Set<string>;
   hiddenWorkspaces: Set<string>;
   workspaceNames: Map<string, string>;
@@ -354,6 +355,7 @@ function decodeArchivedSessionCursor(value: string) {
 }
 
 export class PiWebAdapter {
+  private sessionPins: { path: string; id: string }[] = [];
   private readonly runtime: WebRuntimeController;
   private readonly importedWorkspaces = new Set<string>();
   private readonly hiddenWorkspaces = new Set<string>();
@@ -396,6 +398,13 @@ export class PiWebAdapter {
             throw new Error("Workspace metadata must be an object");
           }
           const state = parsed as Record<string, unknown>;
+          if (state.sessionPins !== undefined) {
+            if (!Array.isArray(state.sessionPins) || state.sessionPins.length > 100 ||
+              !state.sessionPins.every((pin) => pin && typeof pin.path === "string" && typeof pin.id === "string")) {
+              throw new Error("Session pins have an invalid shape");
+            }
+            this.sessionPins = state.sessionPins.map((pin) => ({ path: pin.path, id: pin.id }));
+          }
           if (
             !Array.isArray(state.hiddenWorkspaces) ||
             !state.hiddenWorkspaces.every((path) => typeof path === "string") ||
@@ -444,6 +453,7 @@ export class PiWebAdapter {
           hiddenWorkspaces: [...draft.hiddenWorkspaces],
           ungroupedSessions: [...draft.ungroupedSessions],
           workspaceNames: Object.fromEntries(draft.workspaceNames),
+          sessionPins: draft.sessionPins,
         })}\n`,
       );
       this.restoreWorkspaceState(draft);
@@ -756,6 +766,28 @@ export class PiWebAdapter {
     });
   }
 
+  async setSessionPin(path: string, id: string, pinned: boolean, before?: { path: string; id: string } | null) {
+    await this.ensureWorkspaceStateLoaded();
+    return this.enqueueWorkspaceMutation(async (draft) => {
+      const session = await this.requireSession(path);
+      if (session.id !== id) throw new Error("Session identity changed; refresh before pinning");
+      const previousIndex = draft.sessionPins.findIndex((pin) => pin.path === path && pin.id === id);
+      if (!pinned) {
+        if (previousIndex >= 0) draft.sessionPins.splice(previousIndex, 1);
+        return;
+      }
+      if (before?.path === path && before.id === id) return;
+      if (before && !draft.sessionPins.some((pin) => pin.path === before.path && pin.id === before.id)) {
+        throw new Error("Pin order changed; refresh before reordering");
+      }
+      if (previousIndex >= 0 && before === undefined) return;
+      if (previousIndex >= 0) draft.sessionPins.splice(previousIndex, 1);
+      if (draft.sessionPins.length >= 100) throw new Error("At most 100 conversations can be pinned");
+      const index = before ? draft.sessionPins.findIndex((pin) => pin.path === before.path && pin.id === before.id) : draft.sessionPins.length;
+      draft.sessionPins.splice(index, 0, { path, id });
+    });
+  }
+
   async listSessionProjection(pinnedPath?: string) {
     await this.ensureWorkspaceStateLoaded();
     await this.ensureArchivesLoaded();
@@ -775,6 +807,9 @@ export class PiWebAdapter {
         )
         .map((session) => session.path),
     );
+    for (const pin of this.sessionPins) {
+      if (sorted.some((session) => session.path === pin.path && session.id === pin.id) && !this.archivedSessions.has(resolve(pin.path))) pinned.add(pin.path);
+    }
     const retainedPaths = new Set(pinned);
     for (const session of sorted) {
       if (retainedPaths.size >= WEB_MAX_SESSIONS) break;
@@ -854,8 +889,7 @@ export class PiWebAdapter {
         let removeAt = projected.length - 1;
         while (
           removeAt > 0 &&
-          pinnedPath !== undefined &&
-          projected[removeAt]?.path === pinnedPath
+          pinned.has(projected[removeAt]!.path)
         ) {
           removeAt--;
         }
@@ -863,19 +897,23 @@ export class PiWebAdapter {
       }
     }
     return {
-      sessions: projected.map((session) => {
+      sessions: projected.map((record) => {
+        const pinOrder = this.sessionPins.findIndex((pin) => pin.path === record.path && pin.id === record.id);
+        const session = { ...record, ...(pinOrder >= 0 ? { pinOrder } : {}) };
         const execution = this.runtime.getSessionExecution?.(session.id, session.path);
         if (
           !execution ||
           execution.sessionId !== session.id ||
           execution.sessionPath !== session.path ||
-          execution.status === "unknown"
+          (execution.status === "unknown" && !execution.lastTurn)
         ) return session;
         return {
           ...session,
           execution: {
             status: execution.status,
             pendingFollowUps: execution.pendingFollowUps,
+            ...(execution.lastTurn ? { lastTurn: execution.lastTurn } : {}),
+            ...(execution.compaction?.state === "running" ? { compacting: true } : {}),
           },
         };
       }),
@@ -1198,6 +1236,7 @@ export class PiWebAdapter {
 
   private captureWorkspaceState(): WorkspaceStateSnapshot {
     return {
+      sessionPins: this.sessionPins.map((pin) => ({ ...pin })),
       importedWorkspaces: new Set(this.importedWorkspaces),
       hiddenWorkspaces: new Set(this.hiddenWorkspaces),
       workspaceNames: new Map(this.workspaceNames),
@@ -1207,6 +1246,7 @@ export class PiWebAdapter {
   }
 
   private restoreWorkspaceState(state: WorkspaceStateSnapshot) {
+    this.sessionPins = state.sessionPins;
     this.importedWorkspaces.clear();
     for (const path of state.importedWorkspaces) this.importedWorkspaces.add(path);
     this.hiddenWorkspaces.clear();

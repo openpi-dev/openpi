@@ -15,6 +15,7 @@ import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   readModelConfigurations,
   saveModelConfiguration,
+  saveModelConfigurations,
   validModelConfiguration,
 } from "../../web/runtime/model-configuration.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
@@ -30,6 +31,38 @@ const model: WebModelConfiguration = {
   contextWindow: 128000,
   maxTokens: 4096,
 };
+
+test("batch model additions commit together and reject invalid or stale batches without partial writes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-model-batch-"));
+  try {
+    const before = await readModelConfigurations(directory);
+    await assert.rejects(
+      saveModelConfigurations(directory, before.revision, [
+        model,
+        { ...model, id: "other", maxTokens: -1 },
+      ]),
+    );
+    assert.deepEqual((await readModelConfigurations(directory)).models, []);
+    await saveModelConfigurations(directory, before.revision, [
+      model,
+      { ...model, id: "other" },
+    ]);
+    assert.equal((await readModelConfigurations(directory)).models.length, 2);
+    await assert.rejects(
+      saveModelConfigurations(directory, before.revision, [
+        { ...model, id: "third" },
+      ]),
+      /changed/,
+    );
+    assert.equal((await readModelConfigurations(directory)).models.length, 2);
+    assert.equal(
+      (await readdir(directory)).some((name) => name.endsWith(".tmp")),
+      false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("native model configuration preserves other fields, rejects stale writes and never returns credentials", async () => {
   const directory = await mkdtemp(join(tmpdir(), "openpi-model-config-"));

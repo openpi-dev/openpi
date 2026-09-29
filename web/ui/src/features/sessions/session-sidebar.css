@@ -27,6 +27,59 @@
   background: var(--sidebar-active);
 }
 
+.sidebar-navigation {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+@media (width > 760px) {
+  .sidebar-collapsed .sidebar-navigation { display: none; }
+}
+.session-sidebar .workspace-tree { overflow: visible; }
+.pinned-section { margin-bottom: 18px; }
+.session-sidebar :is(.pinned-sessions, .workspace-sessions) { list-style: none; padding: 0; margin: 0; }
+.pinned-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 0 2px 0 8px;
+}
+.pinned-heading .is-collapsed { transform: rotate(-90deg); }
+.session-sidebar .pinned-sessions .session { padding-left: 12px; }
+.session-sidebar .session-row.is-pin-drop-target { box-shadow: 0 -2px var(--accent); }
+.session-sidebar .session-row.is-pin-drop-after { box-shadow: 0 2px var(--accent); }
+.session-pin-button {
+  position: absolute;
+  top: 4px;
+  right: 32px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+}
+.session-pin-button svg { width: 14px; height: 14px; }
+.session-pin-button:hover { background: var(--sidebar-active); color: var(--text); }
+.session-row:is(:hover, :focus-within, :has([aria-expanded="true"])) .session-pin-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+.session-sidebar .session-row:is(:hover, :focus-within, :has([aria-expanded="true"])):has(.session-pin-button) .session { padding-right: 64px; }
+
+@media (hover: none), (pointer: coarse), (max-width: 760px) {
+  .session-pin-button { opacity: 1; pointer-events: auto; width: 44px; height: 44px; right: 44px; top: 0; }
+  .session-sidebar .session-row:has(.session-pin-button) .session { padding-right: 92px; }
+}
+
 .session-sidebar .workspace-heading {
   min-height: 36px;
   padding: 0 2px 0 8px;
@@ -187,6 +240,25 @@
   color: var(--accent);
 }
 
+.session-sidebar .session-row:has(.session-state) .session { padding-right: 36px; }
+.session-sidebar .session-row:has(.session-state):has(.session-queue) .session { padding-right: 72px; }
+.session-sidebar .session-row:has(.session-state) .session-status { position: absolute; right: 10px; }
+.session-sidebar .session-state { width: 16px; height: 16px; color: var(--muted); }
+.session-sidebar .session-state-running { animation: session-spin 1.1s linear infinite; }
+.session-sidebar .session-state-completed { width: 8px; height: 8px; margin: 4px; fill: currentColor; color: var(--link, #4263eb); }
+.session-sidebar .session-state-attention { color: var(--warning, #a46705); }
+.session-sidebar .session-row:has(.session-state) > .astryx-menu-trigger { right: 28px; }
+.session-sidebar .session-row:has(.session-state) .session-pin-button { right: 58px; }
+.session-sidebar .session-row:is(:hover, :focus-within):has(.session-state) .session { padding-right: 90px; }
+@keyframes session-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .session-sidebar .session-state { animation: none; }
+}
+@media (width <= 760px), (pointer: coarse) {
+  .session-sidebar .session-row:has(.session-state) .session-pin-button { right: 70px; }
+  .session-sidebar .session-row:has(.session-state) .session { padding-right: 120px; }
+}
+
 .session-sidebar .session-time {
   min-width: 27px;
   text-align: right;
@@ -339,6 +411,8 @@
 }
 
 @media (width <= 760px), (pointer: coarse) {
+  .session-sidebar .session-row > .astryx-menu-trigger { opacity: 1; pointer-events: auto; }
+  .session-sidebar .session-time { display: none; }
   .session-sidebar :is(.workspace-label, .session, .new-session-button, .sidebar-settings-button, .workspace-heading-label) {
     min-height: 44px;
   }

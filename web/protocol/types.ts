@@ -48,6 +48,7 @@ export interface WebEvent {
 }
 
 export interface WebSessionSummary {
+  pinOrder?: number;
   id: string;
   path: string;
   cwd: string;
@@ -65,10 +66,13 @@ export interface WebSessionSummary {
   firstMessage: string;
   archived?: boolean;
   ungrouped?: boolean;
-  /** Present only while this exact Session is known to the current runtime. */
+  /** Exact live ownership or a confirmed last-turn receipt; unknown never implies idle. */
   execution?: {
-    status: "running" | "idle";
+    status: "running" | "idle" | "unknown";
     pendingFollowUps?: number;
+    waitingForInput?: boolean;
+    compacting?: boolean;
+    lastTurn?: { commandId: string; finishedAt: number; outcome: "completed" | "cancelled" | "failed" | "uncertain" };
   };
 }
 
@@ -202,6 +206,7 @@ export interface WebOpenPiSetupProjection {
     webChatWidth: number;
     webChatFontSize: number;
     webExpandThinking: boolean;
+    webPinnedSort?: "manual" | "updated";
     showHeader: boolean;
     customFooter: boolean;
     footerStyle: string;
@@ -227,6 +232,7 @@ export interface WebSettingsCatalog {
 }
 
 export interface WebSettingsPreferencesPatch {
+  pinnedSort?: "manual" | "updated";
   theme?: WebThemePreference;
   chatWidth?: number;
   chatFontSize?: number;
@@ -429,6 +435,7 @@ export interface WebSnapshot {
     chatWidth?: number;
     chatFontSize?: number;
     expandThinking?: boolean;
+    pinnedSort?: "manual" | "updated";
   };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;

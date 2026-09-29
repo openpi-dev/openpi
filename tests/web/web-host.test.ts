@@ -96,6 +96,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
       { chatWidth: "1040" },
       { chatFontSize: 12.5 },
       { expandThinking: "true" },
+      { pinnedSort: "unknown" },
     ]) {
       assert.equal((await post(body)).status, 400);
     }
@@ -104,6 +105,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
       chatWidth: 1040,
       chatFontSize: 16,
       expandThinking: true,
+      pinnedSort: "updated",
     });
     assert.equal(saved.status, 200);
     assert.equal((await saved.json()).setup.ui.webChatWidth, 1040);
@@ -116,6 +118,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
         webChatWidth: 1040,
         webChatFontSize: 16,
         webExpandThinking: true,
+        webPinnedSort: "updated",
       },
     });
     // Concurrent partial edits share the existing lock and preserve one another.
@@ -126,6 +129,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
     assert.ok(concurrent.every((response) => response.status === 200));
     assert.equal(loadSetupConfig().ui.webChatWidth, 1200);
     assert.equal(loadSetupConfig().ui.webChatFontSize, 18);
+    assert.equal(loadSetupConfig().ui.webPinnedSort, "updated");
     assert.equal(prompts, 0);
     assert.equal(runtime.sessionManager.getEntries().length, 0);
     const snapshot = await fetch(`${launched.origin}/api/snapshot`, {
@@ -3852,6 +3856,86 @@ test("model configuration saves distinguish typed conflicts from sanitized save 
     const generic = await save();
     assert.equal(generic.status, 422);
     assert.deepEqual(await generic.json(), { error: genericMessage });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("catalog and batch model routes validate input and keep provider secrets out of errors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-model-catalog-"));
+  const runtime = testRuntime(cwd);
+  let calls = 0;
+  runtime.discoverProviderModels = async () => {
+    calls++;
+    throw new Error("fixture-secret-from-provider");
+  };
+  runtime.saveModelConfigurations = async () => {
+    throw new WebRuntimeRequestError(
+      "fixture-secret-conflict",
+      "MODEL_CONFIGURATION_CONFLICT",
+      409,
+    );
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const connection = {
+    provider: "fixture",
+    baseUrl: "http://127.0.0.1:9/v1",
+    api: "openai-responses",
+  };
+  const sessionId = runtime.sessionManager.getSessionId();
+  const post = (path: string, body: unknown) =>
+    fetch(`${launched.origin}/api/models/${path}`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal(
+      (await post("discover", { sessionId, connection, extra: true })).status,
+      400,
+    );
+    assert.equal(
+      (
+        await post("discover", {
+          sessionId,
+          connection: { ...connection, apiKey: "invalid\nheader" },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(calls, 0);
+    const response = await post("discover", { sessionId, connection });
+    assert.equal(response.status, 422);
+    assert.doesNotMatch(await response.text(), /fixture-secret/);
+    assert.equal(
+      (
+        await post("configurations", {
+          sessionId,
+          revision: "fixture",
+          models: [],
+        })
+      ).status,
+      400,
+    );
+    const conflict = await post("configurations", {
+      sessionId,
+      revision: "fixture",
+      models: [
+        {
+          ...connection,
+          id: "example",
+          name: "Example",
+          reasoning: false,
+          contextWindow: 128000,
+          maxTokens: 4096,
+        },
+      ],
+    });
+    assert.equal(conflict.status, 409);
+    const result = await conflict.json();
+    assert.equal(result.code, "MODEL_CONFIGURATION_CONFLICT");
+    assert.doesNotMatch(JSON.stringify(result), /fixture-secret/);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

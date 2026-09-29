@@ -6,6 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { validProviderDiscovery } from "../runtime/provider-model-discovery.ts";
 import {
   createServer,
   type IncomingMessage,
@@ -943,6 +944,24 @@ export class WebHost {
       this.publish("session_renamed", { sessionPath: body.path, name });
       return this.json(response, 200, { path: body.path, name });
     }
+    if (url.pathname === "/api/sessions/pin" && request.method === "POST") {
+      const body = await this.readJson(request);
+      const before = body.before;
+      if (typeof body.path !== "string" || typeof body.id !== "string" || typeof body.pinned !== "boolean") {
+        return this.json(response, 400, { error: "Session identity and pin state are required" });
+      }
+      let anchor: { path: string; id: string } | null | undefined;
+      if (before === null) anchor = null;
+      else if (before !== undefined) {
+        if (typeof before !== "object" || !("path" in before) || !("id" in before) || typeof before.path !== "string" || typeof before.id !== "string") {
+          return this.json(response, 400, { error: "Invalid pin order anchor" });
+        }
+        anchor = { path: before.path, id: before.id };
+      }
+      await this.adapter.setSessionPin(body.path, body.id, body.pinned, anchor);
+      this.publish("session_pins_changed", {});
+      return this.json(response, 200, { saved: true });
+    }
     if (url.pathname === "/api/sessions/archive" && request.method === "POST") {
       const path = url.searchParams.get("path");
       if (!path) return this.json(response, 400, { error: "session path is required" });
@@ -1006,13 +1025,40 @@ export class WebHost {
         });
       }
     }
+    if (url.pathname === "/api/models/discover" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).some((key) => !["sessionId", "connection"].includes(key)) || typeof body.sessionId !== "string" || !validProviderDiscovery(body.connection)) return this.json(response, 400, { error: "Invalid provider connection" });
+      if (!this.runtime.discoverProviderModels) return this.json(response, 501, { error: "Model discovery unavailable" });
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      response.once("close", cancel);
+      try {
+        const result = await this.runtime.discoverProviderModels(body.sessionId, body.connection, AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]));
+        return this.json(response, 200, result);
+      } catch {
+        return this.json(response, 422, { error: "Could not read model catalog. Check the endpoint and credentials, or add a model manually." });
+      } finally { response.off("close", cancel); }
+    }
+    if (url.pathname === "/api/models/configurations" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).some((key) => !["sessionId", "revision", "models"].includes(key)) || typeof body.sessionId !== "string" || typeof body.revision !== "string" || !Array.isArray(body.models) || !body.models.length || body.models.length > 100 || !body.models.every(validModelConfiguration)) return this.json(response, 400, { error: "Invalid model configurations" });
+      if (!this.runtime.saveModelConfigurations) return this.json(response, 501, { error: "Model configuration unavailable" });
+      try {
+        await this.runtime.saveModelConfigurations(body.sessionId, body.revision, body.models);
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { saved: true });
+      } catch (error) {
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, { error: "Could not save models. Refresh configuration before retrying.", ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}) });
+      }
+    }
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
-      const { theme, chatWidth, chatFontSize, expandThinking } = body;
+      const { theme, chatWidth, chatFontSize, expandThinking, pinnedSort } = body;
       // Browser appearance is package-wide and independent of agent execution.
       // Keep this surface restricted to presentation fields, including on Plan turns.
-      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "chatFontSize", "expandThinking"].includes(key)) ||
+      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "chatFontSize", "expandThinking", "pinnedSort"].includes(key)) ||
+        (pinnedSort !== undefined && pinnedSort !== "manual" && pinnedSort !== "updated") ||
         (theme !== undefined && !isWebTheme(theme)) ||
         (chatWidth !== undefined && (typeof chatWidth !== "number" || !Number.isInteger(chatWidth) || chatWidth < 820 || chatWidth > 2000)) ||
         (chatFontSize !== undefined && (typeof chatFontSize !== "number" || !Number.isInteger(chatFontSize) || chatFontSize < 12 || chatFontSize > 24)) ||
@@ -1028,6 +1074,7 @@ export class WebHost {
             ...(chatWidth !== undefined ? { webChatWidth: chatWidth } : {}),
             ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
             ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
+            ...(pinnedSort !== undefined ? { webPinnedSort: pinnedSort } : {}),
           },
         }));
         this.publish("settings_changed", {});
@@ -1852,6 +1899,7 @@ export class WebHost {
           chatWidth: setup.ui.webChatWidth,
           chatFontSize: setup.ui.webChatFontSize,
           expandThinking: setup.ui.webExpandThinking,
+          pinnedSort: setup.ui.webPinnedSort,
         },
         ...projection,
         runtime: { ...projection.runtime, liveTools: this.liveTools, ...this.webPlanState(),
@@ -1861,6 +1909,10 @@ export class WebHost {
           ? { ...projection.thinking, revision: this.sequence }
           : undefined,
       };
+      const waitingSessionId = this.questions.waitingSessionId();
+      for (const session of snapshot.sessions) {
+        if (session.execution && session.id === waitingSessionId && this.adapter.isCurrentSession(session)) session.execution.waitingForInput = true;
+      }
       let finalBytes = jsonByteLength(snapshot);
       while (finalBytes > WEB_MAX_SNAPSHOT_BYTES && snapshot.runtime.liveTools?.length) {
         snapshot.runtime.liveTools = snapshot.runtime.liveTools.slice(1);

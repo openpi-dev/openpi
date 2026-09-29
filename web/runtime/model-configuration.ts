@@ -57,9 +57,14 @@ export async function readModelConfigurations(agentDir: string) {
 }
 
 export async function saveModelConfiguration(agentDir: string, revision: string, model: WebModelConfiguration) {
-  if (!validModelConfiguration(model)) throw new Error("Invalid model configuration");
+  return saveModelConfigurations(agentDir, revision, [model]);
+}
+
+export async function saveModelConfigurations(agentDir: string, revision: string, additions: WebModelConfiguration[]) {
+  if (!additions.length || additions.length > 100 || !additions.every(validModelConfiguration) || new Set(additions.map((model) => `${model.provider}/${model.id}`)).size !== additions.length) throw new Error("Invalid model configurations");
   const current = await readConfiguration(agentDir);
   if (revision !== current.revision) throw new WebRuntimeRequestError("Model configuration changed; refresh before saving", "MODEL_CONFIGURATION_CONFLICT", 409);
+  for (const model of additions) {
   const previous = current.providers[model.provider];
   if (previous !== undefined && !record(previous)) throw new Error("Invalid provider configuration");
   const config = record(previous) ? previous : {};
@@ -77,6 +82,7 @@ export async function saveModelConfiguration(agentDir: string, revision: string,
     ...(previous ? {} : { baseUrl: model.baseUrl, api: model.api, authHeader: true }),
     models,
   };
+  }
   const temporary = `${current.path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, `${JSON.stringify(current.value, null, 2)}\n`, { mode: 0o600, flag: "wx" });

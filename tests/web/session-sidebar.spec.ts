@@ -166,6 +166,80 @@ function archivePage(
   };
 }
 
+it("groups pins once, sorts, collapses, and submits identity-bound manual moves", async () => {
+  const a = {
+    ...session("/a.jsonl", "/repos/long-example", "Older pin"),
+    pinOrder: 0,
+  };
+  const b = {
+    ...session("/b.jsonl", "/other/shared", "Newer pin"),
+    pinOrder: 1,
+    modified: "2026-09-29T10:00:00Z",
+  };
+  const ordinary = session("/c.jsonl", "/repos/long-example", "Ordinary");
+  const data = snapshot([b, ordinary, a]);
+  const actions = createWebStore().getState().actions;
+  const pin = vi.spyOn(actions, "setSessionPin").mockResolvedValue();
+  const refresh = vi.spyOn(actions, "refreshSnapshot").mockResolvedValue(true);
+  const save = vi
+    .spyOn(WebClient.prototype, "savePreferences")
+    .mockRejectedValueOnce(new Error("offline"));
+  const view = mount(data, { actions });
+  const section = screen.getByRole("region", { name: "Pinned" });
+  expect(
+    within(section)
+      .getAllByText(/Older pin|Newer pin/)
+      .map((node) => node.textContent),
+  ).toEqual(["Older pin", "Newer pin"]);
+  expect(screen.getAllByText("Older pin")).toHaveLength(1);
+  fireEvent.click(within(section).getByRole("button", { name: "Pinned" }));
+  expect(within(section).queryByText("Older pin")).toBeNull();
+  fireEvent.click(within(section).getByRole("button", { name: "Pinned" }));
+  fireEvent.click(
+    within(section).getAllByRole("button", {
+      name: "Conversation options",
+    })[1]!,
+  );
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Move up" }));
+  await waitFor(() => expect(pin).toHaveBeenCalledWith(b.path, b.id, true, a));
+  fireEvent.click(
+    within(section).getByRole("button", { name: "Pinned options" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Recently updated" }),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toContain("Could not save"),
+  );
+  expect(save).toHaveBeenCalledWith({ pinnedSort: "updated" });
+  expect(refresh).not.toHaveBeenCalled();
+  view.rerender({
+    snapshot: {
+      ...data,
+      preferences: { theme: "system", pinnedSort: "updated" },
+    },
+  });
+  expect(
+    within(section)
+      .getAllByText(/Older pin|Newer pin/)
+      .map((node) => node.textContent),
+  ).toEqual(["Newer pin", "Older pin"]);
+  fireEvent.click(
+    within(section).getAllByRole("button", {
+      name: "Unpin conversation",
+    })[0]!,
+  );
+  await waitFor(() =>
+    expect(pin).toHaveBeenLastCalledWith(b.path, b.id, false, undefined),
+  );
+  view.rerender({ query: "Older" });
+  expect(within(section).queryByText("Newer pin")).toBeNull();
+  expect(within(section).getByText("Older pin")).toBeTruthy();
+  expect(screen.getByText(i18n.t("noMatching")).hasAttribute("hidden")).toBe(
+    true,
+  );
+});
+
 it("shows per-Session running and queue facts without borrowing global runtime state", () => {
   const running = session(
     "/repos/long-example/one.jsonl",
@@ -192,7 +266,7 @@ it("shows per-Session running and queue facts without borrowing global runtime s
   const workingButton = screen.getByRole("button", {
     name: `Working · ${running.path} · Running · 2 messages queued`,
   });
-  expect(workingButton.querySelector(".session-running")).toBeTruthy();
+  expect(workingButton.querySelector(".session-state-running")).toBeTruthy();
   expect(workingButton.querySelector(".session-queue")?.textContent).toBe("2");
   expect(
     screen
@@ -205,7 +279,81 @@ it("shows per-Session running and queue facts without borrowing global runtime s
   expect(waitingButton.querySelector(".session-queue")?.textContent).toBe(
     "99+",
   );
-  expect(waitingButton.querySelector(".session-running")).toBeNull();
+  expect(waitingButton.querySelector(".session-state-running")).toBeNull();
+});
+
+it("shows only running, unread completion and attention; stopped and unknown remain quiet", () => {
+  const entries: WebSessionSummary[] = (
+    ["completed", "failed", "cancelled", "uncertain"] as const
+  ).map((outcome) => ({
+    ...session(`/${outcome}`, "/repos/long-example", outcome),
+    execution: {
+      status: "idle" as const,
+      lastTurn: { commandId: outcome, finishedAt: 1, outcome },
+    },
+  }));
+  entries.push({
+    ...session("/live", "/repos/long-example", "Live"),
+    execution: { status: "running", waitingForInput: true },
+  });
+  const view = mount(snapshot(entries));
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+  expect(document.querySelectorAll(".session-state-attention")).toHaveLength(2);
+  for (const outcome of ["failed", "cancelled", "uncertain", "waiting"])
+    expect(document.querySelector(`.session-state-${outcome}`)).toBeNull();
+  view.rerender({ connected: false });
+  expect(document.querySelectorAll(".session-state-attention")).toHaveLength(1);
+  expect(document.querySelector(".session-state-disconnected")).toBeNull();
+  expect(document.querySelector(".session-state-running")).toBeNull();
+});
+
+it("acknowledges only the visible selected completion and keeps a new turn unread", () => {
+  vi.useFakeTimers();
+  try {
+    const completed = session(
+      "/completion-receipt",
+      "/repos/long-example",
+      "Done",
+    );
+    completed.execution = {
+      status: "unknown",
+      lastTurn: { commandId: "first", finishedAt: 1, outcome: "completed" },
+    };
+    const data = snapshot([completed]);
+    data.selectedSession = {
+      id: completed.id,
+      path: completed.path,
+      cwd: completed.cwd,
+      entries: [],
+      bytes: 0,
+      truncation: {
+        maxBytes: 4 * 1024 * 1024,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+        truncated: false,
+      },
+    };
+    const view = mount(data, { selectedPath: completed.path, connected: true });
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    fireEvent(document, new Event("visibilitychange"));
+    act(() => vi.advanceTimersByTime(5000));
+    expect(document.querySelector(".session-state-completed")).toBeTruthy();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    fireEvent(document, new Event("visibilitychange"));
+    act(() => vi.advanceTimersByTime(4000));
+    expect(document.querySelector(".session-state-completed")).toBeNull();
+    completed.execution.lastTurn = {
+      commandId: "second",
+      finishedAt: 2,
+      outcome: "completed",
+    };
+    view.rerender({ snapshot: { ...data } });
+    expect(document.querySelector(".session-state-completed")).toBeTruthy();
+    view.unmount();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("clears sidebar execution markers when the runtime releases the Session", () => {

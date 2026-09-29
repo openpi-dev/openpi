@@ -85,6 +85,107 @@ function persistSession(
   });
 }
 
+test("pins preserve identity and manual order across reload, archive and workspace changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-pins-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const first = SessionManager.create(root, sessionDirectory);
+    persistSession(first, "first", 1);
+    const second = SessionManager.create(root, sessionDirectory);
+    persistSession(second, "second", 2);
+    const runtime = runtimeFor(root, sessionDirectory, second);
+    const adapter = new PiWebAdapter(runtime);
+    const a = { path: first.getSessionFile()!, id: first.getSessionId() };
+    const b = { path: second.getSessionFile()!, id: second.getSessionId() };
+    const ordered = async (source: PiWebAdapter) =>
+      (await source.listSessions())
+        .filter(
+          (session) => session.pinOrder !== undefined && !session.archived,
+        )
+        .sort((a, b) => a.pinOrder! - b.pinOrder!)
+        .map((session) => session.path);
+    await Promise.all([
+      adapter.setSessionPin(a.path, a.id, true),
+      adapter.setSessionPin(b.path, b.id, true),
+    ]);
+    assert.deepEqual(await ordered(adapter), [a.path, b.path]);
+    await adapter.setSessionPin(b.path, b.id, true, a);
+    await adapter.setSessionPin(b.path, b.id, true); // Retry does not move an existing pin.
+    assert.deepEqual(await ordered(new PiWebAdapter(runtime)), [
+      b.path,
+      a.path,
+    ]);
+    await adapter.archiveSession(b.path);
+    assert.deepEqual(await ordered(adapter), [a.path]);
+    await adapter.unarchiveSession(b.path);
+    assert.deepEqual(await ordered(adapter), [b.path, a.path]);
+    await adapter.renameWorkspace(root, "Renamed");
+    assert.deepEqual(await ordered(new PiWebAdapter(runtime)), [
+      b.path,
+      a.path,
+    ]);
+    await assert.rejects(
+      adapter.setSessionPin(a.path, "stale-id", false),
+      /identity changed/,
+    );
+    await assert.rejects(
+      adapter.setSessionPin(a.path, a.id, true, {
+        path: b.path,
+        id: "stale-id",
+      }),
+      /order changed/,
+    );
+    const copyPath = join(sessionDirectory, "copied.jsonl");
+    await writeFile(copyPath, await readFile(a.path));
+    assert.equal(
+      (await adapter.listSessions()).find(
+        (session) => session.path === copyPath,
+      )?.pinOrder,
+      undefined,
+    );
+    await adapter.setSessionPin(a.path, a.id, false);
+    assert.deepEqual(await ordered(new PiWebAdapter(runtime)), [b.path]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pin writes fail closed and retain the previous persisted order", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-pin-failure-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const manager = SessionManager.create(root, sessionDirectory);
+    persistSession(manager, "first", 1);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, manager),
+    );
+    const path = manager.getSessionFile()!;
+    await adapter.setSessionPin(path, manager.getSessionId(), true);
+    const metadata = join(sessionDirectory, "workspace-state.json");
+    const prior = await readFile(metadata, "utf8");
+    await rm(metadata);
+    await mkdir(metadata);
+    await assert.rejects(
+      adapter.setSessionPin(path, manager.getSessionId(), false),
+    );
+    assert.equal(
+      (await adapter.listSessions()).find((session) => session.path === path)
+        ?.pinOrder,
+      0,
+    );
+    await rm(metadata, { recursive: true });
+    await writeFile(metadata, prior);
+    await adapter.setSessionPin(path, manager.getSessionId(), false);
+    assert.equal(
+      (await adapter.listSessions()).find((session) => session.path === path)
+        ?.pinOrder,
+      undefined,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("session projection uses the selected file when IDs are duplicated", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-session-identity-"));
   const sessionDirectory = join(root, "sessions");
@@ -274,6 +375,16 @@ test("snapshot pins current and selected sessions while bounding the projection"
     await mkdir(selectedCwd);
     const selected = SessionManager.create(selectedCwd, sessionDirectory);
     persistSession(selected, "selected", 2);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+    const pinnedSession = SessionManager.create(root, sessionDirectory);
+    persistSession(pinnedSession, "pinned outside the recent window", 2);
+    await adapter.setSessionPin(
+      pinnedSession.getSessionFile()!,
+      pinnedSession.getSessionId(),
+      true,
+    );
     for (let index = 0; index < WEB_MAX_SESSIONS + 3; index++) {
       const manager = SessionManager.create(root, sessionDirectory);
       persistSession(manager, `session-${index}`, index + 3);
@@ -281,9 +392,13 @@ test("snapshot pins current and selected sessions while bounding the projection"
 
     const selectedPath = selected.getSessionFile();
     assert.ok(selectedPath);
-    const snapshot = await new PiWebAdapter(
-      runtimeFor(root, sessionDirectory, current),
-    ).getSnapshot(selectedPath);
+    const snapshot = await adapter.getSnapshot(selectedPath);
+    assert.equal(
+      snapshot.sessions.find(
+        (session) => session.path === pinnedSession.getSessionFile(),
+      )?.pinOrder,
+      0,
+    );
 
     assert.equal(snapshot.sessions.length, WEB_MAX_SESSIONS);
     assert.ok(
@@ -327,7 +442,7 @@ test("snapshot pins current and selected sessions while bounding the projection"
       ).cwd,
       selectedCwd,
     );
-    assert.equal(snapshot.truncation.sessionsOmitted, 5);
+    assert.equal(snapshot.truncation.sessionsOmitted, 6);
     assert.equal(snapshot.truncation.truncated, true);
     assert.ok(snapshot.truncation.bytes <= WEB_MAX_SNAPSHOT_BYTES);
   } finally {
