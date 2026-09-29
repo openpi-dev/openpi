@@ -197,7 +197,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .sidebar-collapsed .sidebar-brand,
   .sidebar-collapsed .workspace-heading,
   .sidebar-collapsed .workspace-tree,
-  .sidebar-collapsed .session-view-switch,
   .sidebar-collapsed .sidebar-scope-note { display: none; }
   /* Reserve the fixed expand button's 40px height and an 8px gap. */
   .sidebar-collapsed .new-session-button { width: 40px; height: 40px; margin: 48px 0 0; padding: 0; border-color: transparent; border-radius: 6px; background: transparent; }
@@ -246,7 +245,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .shell-state button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--page); color: var(--text); cursor: pointer; }
 .shell-state button:hover { background: var(--sidebar-hover); }
 .shell-state button svg { width: 15px; height: 15px; }
-.shell-loading .session-sidebar :is(.new-session-button, .workspace-heading, .session-view-switch, .workspace-tree),
+.shell-loading .session-sidebar :is(.new-session-button, .workspace-heading, .workspace-tree),
 .conversation { @apply min-h-0 overflow-y-auto; padding:8px 0 28px; scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: oklch(58% 0.02 250 / 45%) transparent; }
 .landing-conversation { @apply grid place-items-center; pointer-events: none; }
 .landing-welcome { padding: 0 24px; text-align: center; transform: translateY(-180px); }
@@ -851,11 +850,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 :root:is([data-theme="dark"], [data-theme="pine"]) .slash-command-icon { background: var(--sidebar-hover); }
 :root:is([data-theme="dark"], [data-theme="pine"]) .thinking-picker:hover, :root:is([data-theme="dark"], [data-theme="pine"]) .thinking-picker[aria-expanded="true"] { background: var(--sidebar-hover) !important; }
 
-.session-view-switch {
-  border: 0;
-  min-width: 0; display: flex; gap: 4px; padding: 4px; margin: 0 12px 8px; border: 1px solid var(--border); border-radius: 8px; }
-.session-view-switch button { flex: 1; padding: 6px 10px; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
-.session-view-switch button[aria-pressed="true"] { background: var(--sidebar-hover); font-weight: 600; }
 .sidebar-scope-note { margin: 4px 18px 10px; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .inspection-panel { padding: 24px; max-height: min(80dvh, 760px); overflow-y: auto; color: var(--text); }
 .inspection-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }

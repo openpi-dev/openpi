@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_WORKSPACE_SIDEBAR.md`](WEB_WORKSPACE_SIDEBAR.md) — draft folder-led workspace navigation and restrained Session hierarchy for #597 / #598
+
 These documents preserve the research, alternatives, and evaluations that led to the current implementation. Runtime behavior is defined by the code and current user documentation.
 
 These records predate [`Decision 0001`](../decisions/0001-documentation-and-evidence-governance.md) and have not been migrated to its metadata contract. Indexing preserves their history; it does not mark every statement as currently validated or adopted.

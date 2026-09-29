@@ -4,6 +4,89 @@ import type {
   WebSnapshot,
 } from "../../web/protocol/types.ts";
 
+test("workspace rail keeps names readable and archive navigation reachable across desktop and touch layouts", async ({
+  page,
+}, testInfo) => {
+  let theme: "light" | "dark" = "light";
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: ": heartbeat\n\n",
+    }),
+  );
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const value = (await response.json()) as WebSnapshot;
+    value.preferences = { ...value.preferences, theme };
+    const current = value.selectedSession;
+    if (!current) throw new Error("Missing real Session fixture");
+    value.workspaces = [
+      { path: current.cwd, name: "openpi", current: true },
+      { path: "/design/notes", name: "设计笔记", current: false },
+      { path: "/projects/experiments", name: "experiments", current: false },
+    ];
+    value.sessions = value.sessions.map((session) => ({
+      ...session,
+      name: "工作区导航与交互细节",
+    }));
+    await route.fulfill({ response, json: value });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  const sidebar = page.locator(".session-sidebar");
+  const workspace = sidebar.locator(".workspace-label").first();
+  await expect(sidebar.getByText("工作区导航与交互细节")).toBeVisible();
+  await expect(sidebar.locator(".workspace-identity small")).toHaveCount(0);
+  await expect(workspace).toHaveAttribute("title", /openpi/);
+  await expect(sidebar.locator(".session.active")).toHaveCSS(
+    "box-shadow",
+    "none",
+  );
+  const archive = sidebar.getByRole("button", { name: "已归档", exact: true });
+  await archive.focus();
+  await page.keyboard.press("Enter");
+  await expect(archive).toHaveAttribute("aria-pressed", "true");
+  await sidebar.getByRole("button", { name: "当前", exact: true }).click();
+  await expect(workspace).toBeVisible();
+  await workspace.focus();
+  await expect(workspace.locator(".workspace-chevron")).toHaveCSS(
+    "opacity",
+    "1",
+  );
+  await page.keyboard.press("Enter");
+  await expect(workspace).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("Enter");
+  await expect(workspace).toHaveAttribute("aria-expanded", "true");
+  await page.locator(".task-header").click();
+  await page.screenshot({
+    path: testInfo.outputPath("workspace-rail-light.png"),
+  });
+  theme = "dark";
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.screenshot({
+    path: testInfo.outputPath("workspace-rail-dark.png"),
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "打开侧边栏" }).click();
+  await expect(sidebar).toBeVisible();
+  for (const control of [
+    archive,
+    workspace,
+    sidebar.locator(".session").first(),
+  ]) {
+    expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(
+    await sidebar.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("workspace-rail-mobile.png"),
+  });
+});
+
 test("long session titles stay compact and elapsed time survives refresh with confirmed settlement", async ({
   page,
 }, testInfo) => {

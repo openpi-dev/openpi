@@ -1745,7 +1745,7 @@ test.describe("touch viewport", () => {
     await expect(menu).toBeHidden();
     await expect(sidebar).toBeVisible();
 
-    await page.getByRole("button", { name: "Workspace options" }).click();
+    await page.getByRole("button", { name: "工作区选项" }).click();
     await page.getByRole("menuitem", { name: "重命名工作区" }).click();
     const dialog = page.getByRole("dialog", { name: "重命名工作区" });
     const dialogBox = await dialog.boundingBox();
@@ -1835,7 +1835,7 @@ for (const width of [320, 390]) {
       ).toBe(true);
     }
 
-    const menu = sidebar.getByRole("button", { name: "Workspace options" });
+    const menu = sidebar.getByRole("button", { name: "工作区选项" });
     await menu.focus();
     await page.keyboard.press("Enter");
     await expect(
