@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_SUBAGENT_OVERVIEW.md`](WEB_SUBAGENT_OVERVIEW.md) — source- and UI-validated session summary popover, grouped child list and reference comparison for #597 / #598
+
 - [`WEB_WORKSPACE_SIDEBAR.md`](WEB_WORKSPACE_SIDEBAR.md) — draft folder-led workspace navigation and restrained Session hierarchy for #597 / #598
 
 These documents preserve the research, alternatives, and evaluations that led to the current implementation. Runtime behavior is defined by the code and current user documentation.

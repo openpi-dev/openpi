@@ -15,6 +15,7 @@ import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
 import { recordedSubagents } from "../../web/ui/src/features/subagents/recorded-subagents.ts";
 import { SubagentPanel } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
+import { subagentOverview } from "../../web/ui/src/features/subagents/subagent-overview.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
@@ -23,6 +24,86 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("does not count saved running receipts as active or failed/interrupted children as completed", () => {
+  const items = subagentOverview(
+    [
+      { id: "live", title: "Live", status: "running", createdAt: 1 },
+      {
+        id: "stopped",
+        title: "Stopped",
+        status: "error",
+        outcome: "interrupted",
+        createdAt: 2,
+      },
+    ],
+    [
+      { id: "live", title: "Old receipt", state: "done" },
+      { id: "old", title: "Old worker", state: "running" },
+      { id: "done", title: "Finished", state: "done" },
+    ],
+  );
+  expect(
+    items.filter((item) => item.state === "running").map((item) => item.id),
+  ).toEqual(["live"]);
+  expect(
+    items.filter((item) => item.state === "done").map((item) => item.id),
+  ).toEqual(["done"]);
+  expect(items.find((item) => item.id === "old")?.state).toBeUndefined();
+  expect(items.find((item) => item.id === "stopped")?.state).toBe(
+    "interrupted",
+  );
+});
+
+it("reveals completed children progressively and preserves expanded rows and scroll on return", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "subagentDetail")
+    .mockResolvedValue(reply());
+  const records = Array.from({ length: 26 }, (_, index) => ({
+    id: `saved-${index}`,
+    title: `Saved ${index}`,
+    state: "done" as const,
+    result: "Saved answer",
+  }));
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(SubagentPanel, {
+        sessionId: "session-a",
+        records,
+        liveAvailable: false,
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+  const list = screen.getByRole("navigation", {
+    name: i18n.t("subagentTasks"),
+  });
+  expect(
+    within(list).getAllByRole("button", { name: /Saved \d/ }),
+  ).toHaveLength(10);
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("subagentShowMore", { count: 16 }),
+    }),
+  );
+  expect(
+    within(list).getAllByRole("button", { name: /Saved \d/ }),
+  ).toHaveLength(26);
+  list.scrollTop = 220;
+  fireEvent.scroll(list);
+  fireEvent.click(screen.getByRole("button", { name: /Saved 25/ }));
+  await flush();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("backToSubagents") }),
+  );
+  expect(
+    screen.getByRole("navigation", { name: i18n.t("subagentTasks") }).scrollTop,
+  ).toBe(220);
+  expect(screen.getByRole("button", { name: /Saved 25/ })).toBeTruthy();
+  expect(read).not.toHaveBeenCalled();
 });
 
 const activity = {

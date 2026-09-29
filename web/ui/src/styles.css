@@ -444,13 +444,45 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .subagent-panel-heading :is(h1,h2) { margin:0; font-size:13px; font-weight:500; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .subagent-breadcrumb > svg { width:17px; height:17px; color:var(--accent); flex-shrink:0; }
 .subagent-list { flex:1; min-height:0; overflow-y:auto; padding:24px; }
-.subagent-list-group { margin-bottom:30px; }
-.subagent-list-group :is(h2,h3) { display:flex; align-items:center; gap:8px; margin:0 0 12px; color:var(--muted); font-size:12px; font-weight:400; }
+.subagent-list-group { margin-bottom:32px; }
+.subagent-list-group :is(h2,h3) { display:flex; align-items:center; gap:6px; margin:0 0 12px; color:var(--muted); font-size:13px; font-weight:400; }
 .subagent-list-group :is(h2,h3) span { color:var(--subtle); }
 .subagent-list-group > p, .subagent-list > p { margin:10px 0; font-size:12px; color:var(--muted); }
-.subagent-task-row { border-radius:8px; min-height:58px; }
-.subagent-task-end { display:flex; align-items:center; gap:12px; font-size:11px; color:var(--subtle); }
-.subagent-task-end svg { width:14px; height:14px; }
+.subagent-task-row { border-radius:8px; min-height:56px; }
+.subagent-task-end { display:flex; align-items:center; justify-content:flex-end; gap:12px; font-size:12px; color:var(--muted); white-space:nowrap; }
+.subagent-task-end svg { width:16px; height:16px; }
+.subagent-running-icon { animation:subagent-spin 1.1s linear infinite; }
+@keyframes subagent-spin { to { transform:rotate(360deg); } }
+.subagent-avatar { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; flex:none; }
+.subagent-avatar svg { width:28px; height:28px; stroke-width:1.65; }
+.subagent-avatar.tone-0 { color:light-dark(#a97523,#f0b961); }
+.subagent-avatar.tone-1 { color:light-dark(#358c7b,#77cfb8); }
+.subagent-avatar.tone-2 { color:light-dark(#bf6474,#f59bac); }
+.subagent-avatar.tone-3 { color:light-dark(#527dbb,#8cb3ef); }
+.subagent-avatar.tone-4 { color:light-dark(#9c73c1,#cba5ef); }
+.subagent-avatar.tone-5 { color:light-dark(#917995,#c8a3ce); }
+.subagent-show-more { margin:8px 0 0 42px; padding:8px 10px; color:var(--muted); font-size:13px; background:transparent; border:0; border-radius:8px; cursor:pointer; }
+.subagent-show-more:hover { background:var(--sidebar); color:var(--text); }
+.session-overview { padding:18px; color:var(--text); }
+.session-overview-title { margin:0 6px 12px; color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.session-overview-row { display:flex; align-items:center; gap:12px; width:100%; padding:11px 6px; text-align:left; background:transparent; border:0; border-radius:8px; color:var(--text); font:inherit; font-size:14px; cursor:pointer; }
+.session-overview-row:hover { background:var(--sidebar); }
+.session-overview-row > svg { width:18px; height:18px; flex:none; }
+.session-overview-row > svg:last-child { width:14px; height:14px; color:var(--muted); }
+.session-overview-row > span:not(.subagent-avatar-stack,.session-overview-diff) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.session-overview-diff { display:flex; gap:7px; font-size:12px; font-variant-numeric:tabular-nums; }
+.session-overview-diff > :first-child { color:var(--healthy); }
+.session-overview-diff > :last-child { color:var(--error); }
+.session-overview-section { margin-top:12px; padding-top:16px; border-top:1px solid var(--border); }
+.session-overview-section > p { margin:0 6px 6px; font-size:13px; color:var(--muted); }
+.session-overview-section > small { display:block; margin:6px; color:var(--muted); }
+.session-overview-agents { flex-wrap:wrap; column-gap:10px; row-gap:8px; font-size:13px; }
+.session-overview-agent-counts { display:flex; flex-wrap:wrap; column-gap:8px; row-gap:2px; }
+.session-overview-agent-counts > span { white-space:nowrap; }
+.subagent-avatar-stack { display:flex; gap:2px; }
+.subagent-avatar-stack .subagent-avatar { width:22px; height:22px; }
+.subagent-avatar-stack .subagent-avatar svg { width:22px; height:22px; }
+@media (prefers-reduced-motion:reduce) { .subagent-running-icon { animation:none; } }
 .subagent-detail { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; gap:12px; padding:24px; }
 .subagent-detail[hidden] { display:none; }
 .subagent-detail-heading { display:flex; justify-content:space-between; gap:12px; }

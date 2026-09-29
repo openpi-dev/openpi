@@ -28,7 +28,9 @@ import { useGitReview } from "../features/review/use-git-review.ts";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.tsx";
 import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
+import { SessionOverview } from "../features/subagents/SessionOverview.tsx";
 import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
+import { subagentOverview } from "../features/subagents/subagent-overview.ts";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import type { SessionReadingCache } from "../features/transcript/session-reading-state.ts";
 import { Transcript } from "../features/transcript/Transcript.tsx";
@@ -298,6 +300,22 @@ export function App() {
     ? undefined
     : state.snapshot?.selectedSession;
   const controlled = isControlledSession(state.snapshot, selected);
+  const savedSubagents = useMemo(
+    () =>
+      recordedSubagents(
+        (selected?.entries ?? []).flatMap((entry) =>
+          entry.message ? [entry.message] : [],
+        ),
+      ),
+    [selected?.entries],
+  );
+  const liveSubagents = controlled
+    ? state.snapshot?.runtime.capabilities.subagents
+    : undefined;
+  const overviewAgents = useMemo(
+    () => subagentOverview(liveSubagents?.items ?? [], savedSubagents),
+    [liveSubagents?.items, savedSubagents],
+  );
   const execution = state.snapshot?.selectedExecution;
   const selectedExecution =
     execution?.sessionId === selected?.id &&
@@ -538,6 +556,20 @@ export function App() {
                 <h1 title={taskTitle}>{taskTitle}</h1>
               </div>
               <SessionUsageBar usage={state.snapshot?.usage} />
+              {selected && !state.sessionSwitching && (
+                <SessionOverview
+                  key={`${selected.id}:${selected.path}`}
+                  sessionId={selected.id}
+                  workspace={workspace?.name || workspaceName(selected.cwd)}
+                  cwd={selected.cwd}
+                  agents={overviewAgents}
+                  omitted={liveSubagents?.omitted ?? 0}
+                  review={gitReview.result}
+                  onSubagents={() => inspectSubagent()}
+                  onReview={() => openWorkbar("review")}
+                  onFiles={() => openWorkbar("files")}
+                />
+              )}
               <button
                 type="button"
                 className="task-tools-trigger"
@@ -741,11 +773,7 @@ export function App() {
                   ? state.snapshot?.runtime.capabilities.subagents
                   : undefined
               }
-              records={recordedSubagents(
-                (state.snapshot?.selectedSession?.entries ?? []).flatMap(
-                  (entry) => (entry.message ? [entry.message] : []),
-                ),
-              )}
+              records={savedSubagents}
               liveAvailable={isControlledSession(state.snapshot, {
                 id: subagentTarget.sessionId,
                 path: subagentTarget.sessionPath,
