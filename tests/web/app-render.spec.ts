@@ -872,6 +872,178 @@ it("folds legacy setup instructions while keeping results and subsequent task me
   expect(screen.queryByText("Apply a dark theme")).toBeNull();
 });
 
+it.each([false, true])(
+  "reconciles persisted setup messages with timestamped live echoes (new episode: %s)",
+  (newEpisode) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    const content = "/openpi-setup set width to 1040";
+    const command = projectEntry({
+      id: "command",
+      parentId: null,
+      type: "custom",
+      customType: "openpi-web-command-input",
+      timestamp: "2026-09-29T02:44:28Z",
+      data: { text: content, commandId: "width-command" },
+    });
+    const setup = projectEntry({
+      id: "setup",
+      parentId: "command",
+      type: "custom_message",
+      customType: "openpi-setup-request",
+      timestamp: "2026-09-29T02:44:28Z",
+      content: "Internal setup instructions",
+      display: true,
+      details: {
+        command: "openpi-setup",
+        request: "set width to 1040",
+        requestId: "setup-2",
+      },
+    });
+    const closed = projectEntry({
+      id: "closed",
+      parentId: "answer",
+      type: "custom_message",
+      customType: "openpi-setup-closed",
+      timestamp: "2026-09-29T02:44:58Z",
+      content: "Setup episode closed",
+      display: true,
+      details: { reason: "closed" },
+    });
+    snapshot.selectedSession!.entries = [
+      command,
+      setup,
+      {
+        id: "answer",
+        type: "message",
+        timestamp: "2026-09-29T02:44:57Z",
+        message: { role: "assistant", content: "Width saved" },
+      },
+      closed,
+    ];
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [
+          {
+            key: "live-closed",
+            message: { ...closed.message!, timestamp: 1790649898000 },
+          },
+          {
+            key: "live-setup",
+            message: {
+              ...setup.message!,
+              timestamp: 1790649868000,
+              ...(newEpisode
+                ? {
+                    details: {
+                      ...(setup.message!.details as object),
+                      requestId: "setup-3",
+                    },
+                  }
+                : {}),
+            },
+          },
+        ],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    );
+    expect(
+      view.container.querySelectorAll(".message-row.user .message-body"),
+    ).toHaveLength(newEpisode ? 2 : 1);
+    expect(
+      screen.getAllByText("Setup episode closed", { selector: "pre" }),
+    ).toHaveLength(1);
+    expect(screen.getByText("Width saved")).toBeTruthy();
+  },
+);
+
+it.each([false, true])(
+  "pairs generic setup calls with their exact result while keeping orphan results (error: %s)",
+  (isError) => {
+    const snapshot = activeSnapshot();
+    const content = isError ? "Configuration failed" : "Saved OpenPI setup";
+    snapshot.selectedSession!.entries = [
+      {
+        id: "call",
+        type: "message",
+        timestamp: "2026-09-29T02:44:44Z",
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "width-call",
+              name: "configure_my_pi_setup",
+              arguments: '{"ui_web_chat_width":1040}',
+            },
+          ],
+        },
+      },
+      {
+        id: "result",
+        type: "message",
+        timestamp: "2026-09-29T02:44:45Z",
+        message: {
+          role: "toolResult",
+          toolName: "configure_my_pi_setup",
+          toolCallId: "width-call",
+          content,
+          isError,
+        },
+      },
+      {
+        id: "orphan",
+        type: "message",
+        timestamp: "2026-09-29T02:44:46Z",
+        message: {
+          role: "toolResult",
+          toolName: "legacy_tool",
+          toolCallId: "missing-call",
+          content: "Orphan evidence",
+          isError: false,
+        },
+      },
+    ];
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    );
+    expect(
+      screen.getAllByText("configure_my_pi_setup", { exact: true }),
+    ).toHaveLength(1);
+    expect(
+      screen.getByLabelText(i18n.t("toolCallArguments")).textContent,
+    ).toContain('"ui_web_chat_width":1040');
+    expect(screen.getByLabelText(i18n.t("toolCallOutput")).textContent).toBe(
+      content,
+    );
+    expect(
+      screen
+        .getByLabelText(i18n.t("toolCallOutput"))
+        .closest("details")
+        ?.classList.contains(isError ? "error" : "done"),
+    ).toBe(true);
+    expect(view.container.textContent).toContain("Orphan evidence");
+  },
+);
+
 it.each([true, false])(
   "only folds a setup echo linked to its exact native command parent (%s)",
   (linked) => {

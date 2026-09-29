@@ -307,6 +307,7 @@ function EvidenceDetails({
   name,
   status,
   summary,
+  output,
   thinking = false,
   defaultOpen = false,
 }: {
@@ -315,9 +316,11 @@ function EvidenceDetails({
   name: string;
   status: Status;
   summary?: string;
+  output?: string;
   thinking?: boolean;
   defaultOpen?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <details
       className={`message-details tool-line ${status} ${thinking ? "thinking-line" : ""}`}
@@ -334,9 +337,24 @@ function EvidenceDetails({
         </span>
         <StatusMark status={status} />
       </summary>
-      <pre className="details-body tool-evidence">
-        {evidenceText(body).text}
-      </pre>
+      {output === undefined ? (
+        <pre className="details-body tool-evidence">
+          {evidenceText(body).text}
+        </pre>
+      ) : (
+        <>
+          <figure aria-label={t("toolCallArguments")} style={{ margin: 0 }}>
+            <pre className="details-body tool-evidence">
+              {evidenceText(body).text}
+            </pre>
+          </figure>
+          <figure aria-label={t("toolCallOutput")} style={{ margin: 0 }}>
+            <pre className="details-body tool-evidence">
+              {evidenceText(output).text || t("noOutput")}
+            </pre>
+          </figure>
+        </>
+      )}
     </details>
   );
 }
@@ -860,6 +878,15 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
     message.role === "user"
       ? signature(message)
       : JSON.stringify({ ...message, timestamp: undefined });
+  // Pi persists custom messages without their live timestamp. Reconcile the
+  // complete native payload before turning setup instructions into user text,
+  // including setup echoes whose native parent already renders the command.
+  const customMessages = persisted.flatMap((entry) =>
+    entry.message?.role === "custom" && !entry.message.truncation?.truncated
+      ? [legacySignature(entry.message)]
+      : [],
+  );
+  const matchedCustomMessages = new Set<number>();
   // Preserve the mainline native-identity reconciliation of thinking/tool-only
   // messages. Legacy matching consumes one full message, rather than a Set.
   const nativeMessages = entries.map((entry) => ({
@@ -915,6 +942,17 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
   const suppressedLiveUsers = new Set<string>();
   for (const live of liveMessages) {
     if (live.optimistic?.projectedEntryId) continue;
+    if (live.message.role === "custom" && !live.message.truncation?.truncated) {
+      const match = customMessages.findIndex(
+        (signature, index) =>
+          !matchedCustomMessages.has(index) &&
+          signature === legacySignature(live.message),
+      );
+      if (match >= 0) {
+        matchedCustomMessages.add(match);
+        continue;
+      }
+    }
     const commandId =
       live.optimistic?.commandId ??
       (live.key.startsWith("optimistic-")
@@ -1373,8 +1411,7 @@ export function Transcript(props: TranscriptProps) {
 
   const { rows, turns } = useMemo(() => {
     const results = new Map<string, DisplayEntry>();
-    const familyIds = new Set<string>();
-    const specializedIds = new Set<string>();
+    const pairedToolIds = new Set<string>();
     const liveTools = historyPaused
       ? []
       : (selectedExecution?.liveTools ??
@@ -1384,31 +1421,14 @@ export function Transcript(props: TranscriptProps) {
       if (message.role === "toolResult" && message.toolCallId)
         results.set(message.toolCallId, entry);
       message.parts?.forEach((part) => {
-        if (part.type === "toolCall" && part.id && isEvidenceTool(part.name))
-          specializedIds.add(part.id);
         if (
           part.type === "toolCall" &&
           part.id &&
-          /^(subagent|workflow)/u.test(part.name)
+          !["ask_user", "human_handoff"].includes(part.name)
         )
-          familyIds.add(part.id);
+          pairedToolIds.add(part.id);
       });
     });
-    const planIds = new Set(
-      entries.flatMap(({ message }) =>
-        (message.parts ?? []).flatMap((part) =>
-          part.type === "toolCall" &&
-          part.name === "plan_ready" &&
-          part.id &&
-          planPresentation(
-            results.get(part.id)?.message ??
-              liveTools.find((item) => item.call.id === part.id)?.result,
-          )
-            ? [part.id]
-            : [],
-        ),
-      ),
-    );
     const turnItems: Array<{ id: number; title: string }> = [];
     let turn = 0;
     let latestUserPrompt: string | undefined;
@@ -1791,7 +1811,16 @@ export function Transcript(props: TranscriptProps) {
                         }
                         icon={toolIcon}
                         name={part.name || "tool"}
-                        summary={toolSummary(part.name, args)}
+                        summary={
+                          result
+                            ? compactSummary(result.content)
+                            : toolSummary(part.name, args)
+                        }
+                        output={
+                          part.id && pairedToolIds.has(part.id)
+                            ? result?.content
+                            : undefined
+                        }
                         status={status}
                       />
                     )}
@@ -1832,7 +1861,8 @@ export function Transcript(props: TranscriptProps) {
         return detailRows;
       }
       if (message.role === "toolResult") {
-        if (message.toolCallId && planIds.has(message.toolCallId)) return [];
+        if (message.toolCallId && pairedToolIds.has(message.toolCallId))
+          return [];
         if (planPresentation(message))
           return [
             {
@@ -1853,9 +1883,6 @@ export function Transcript(props: TranscriptProps) {
               ),
             },
           ];
-        if (message.toolCallId && specializedIds.has(message.toolCallId))
-          return [];
-        if (message.toolCallId && familyIds.has(message.toolCallId)) return [];
         const family = message.toolName?.startsWith("subagent")
           ? "subagent"
           : message.toolName?.startsWith("workflow")

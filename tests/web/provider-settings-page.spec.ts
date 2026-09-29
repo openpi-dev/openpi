@@ -1037,6 +1037,48 @@ it("waits for a running setup request to settle before refreshing", async () => 
   expect(onPreferencesChanged).toHaveBeenCalledOnce();
 });
 
+it("refreshes saved settings on the receipt before the model finishes its reply", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const onConfigureOpenPi = vi.fn(async () => true);
+  const onPreferencesChanged = vi.fn(async () => true);
+  const props = {
+    onConfigureOpenPi,
+    onPreferencesChanged,
+    setupOutcome: { requestId: "previous", status: "saved" },
+  };
+  const view = renderSettings(props);
+  await screen.findByText(i18n.t("agentBehavior"));
+  await act(async () => {
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("configureOpenPi") }),
+    );
+  });
+  view.rerender(settingsElement({ ...props, setupBusy: true }));
+  expect(onPreferencesChanged).not.toHaveBeenCalled();
+  view.rerender(
+    settingsElement({
+      ...props,
+      setupBusy: true,
+      setupOutcome: { requestId: "current", status: "saved" },
+    }),
+  );
+  await waitFor(() => expect(onPreferencesChanged).toHaveBeenCalledOnce());
+  expect(screen.getByText(i18n.t("setupOutcome_saved"))).toBeTruthy();
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("configureOpenPi"),
+    }).disabled,
+  ).toBe(true);
+  view.rerender(
+    settingsElement({
+      ...props,
+      setupBusy: false,
+      setupOutcome: { requestId: "current", status: "saved" },
+    }),
+  );
+  expect(onPreferencesChanged).toHaveBeenCalledOnce();
+});
+
 it("renders Pi skills, subagent roles, plugins, refreshes, and closes", async () => {
   const fetcher = settingsFetcher();
   const onClose = vi.fn();

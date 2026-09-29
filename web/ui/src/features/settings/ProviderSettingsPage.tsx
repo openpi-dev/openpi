@@ -187,6 +187,18 @@ export function ProviderSettingsPage({
   }, []);
   useEffect(() => {
     if (!setupSubmitted) return;
+    if (
+      currentOutcome &&
+      currentOutcome.status !== "pending" &&
+      setupRefreshPending.current
+    ) {
+      setupRefreshPending.current = false;
+      setupObservedBusy.current = false;
+      window.clearTimeout(setupRefreshTimer.current);
+      void refresh();
+      void onPreferencesChanged();
+      return;
+    }
     if (setupBusy) {
       setupObservedBusy.current = true;
       return;
@@ -197,7 +209,13 @@ export function ProviderSettingsPage({
     window.clearTimeout(setupRefreshTimer.current);
     void refresh();
     void onPreferencesChanged();
-  }, [onPreferencesChanged, refresh, setupBusy, setupSubmitted]);
+  }, [
+    onPreferencesChanged,
+    refresh,
+    setupBusy,
+    setupSubmitted,
+    currentOutcome,
+  ]);
   useEffect(() => () => window.clearTimeout(setupRefreshTimer.current), []);
 
   const configureOpenPi = async (request: string) => {

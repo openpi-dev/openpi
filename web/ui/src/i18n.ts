@@ -509,6 +509,8 @@ const resources = {
       setupPlanBusy:
         "Stop or wait for the current turn, then exit Plan mode to change OpenPI settings.",
       setupOutcome_pending: "Configuration request is awaiting a save receipt.",
+      toolCallArguments: "Tool arguments",
+      toolCallOutput: "Tool result",
       setupOutcome_saved: "OpenPI configuration was saved and applied.",
       setupOutcome_unchanged:
         "Configuration was saved; effective settings are unchanged.",
@@ -1398,6 +1400,8 @@ const resources = {
       setupPlanBusy:
         "请先停止或等待当前回合结束，再退出 Plan 模式修改 OpenPI 设置。",
       setupOutcome_pending: "配置请求正在处理，尚未收到保存回执。",
+      toolCallArguments: "工具参数",
+      toolCallOutput: "工具结果",
       setupOutcome_saved: "OpenPI 配置已保存并应用。",
       setupOutcome_unchanged: "配置已保存，实际设置没有变化。",
       setupOutcome_failed: "配置请求失败，请查看错误和当前设置后再重试。",
