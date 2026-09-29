@@ -6,7 +6,6 @@
 - Issue: https://github.com/openpi-dev/openpi/issues/562
 - PR: https://github.com/openpi-dev/openpi/pull/595
 - Follow-up issue: https://github.com/openpi-dev/openpi/issues/470
-- Follow-up PR: pending
 - Related: #348 (Setup), #470 (implementation handoff), #549 (controller identity), #540 (Stop), #561 (Web UI)
 - Supersedes: none; complements [Web structured questions](WEB_STRUCTURED_QUESTIONS.md)
 
@@ -38,23 +37,8 @@ its immediate-start path.
 
 The plan card displays a successful `plan_ready` result, not streamed arguments.
 It does not imply implementation approval. Ready state remains read-only until
-an explicit owner action. The #470 follow-up adds an authenticated
-`POST /api/plan/implement`: the serialized runtime checks the exact active
-Session id and path, idle state, and Plan extension availability; the extension
-checks the persisted revision and `ready` state, then returns its existing
-implementation prompt without changing Plan state. The Composer asks before
-replacing a nonempty draft and makes the prompt editable without sending it.
-The prompt carries a Session-scoped approval revision. `before_agent_start`
-binds the transient approval to the exact submitted prompt. Once Pi accepts it,
-the runtime persists Plan as inactive before Pi builds provider context or lets
-the agent call tools. The context projection then tells the model Plan mode is
-inactive. Until that acceptance, the Ready tool-call gate stays closed. A
-rejected or failed preflight clears the transient approval and keeps the
-persisted plan ready. Refreshing, switching Sessions, or abandoning the draft
-also leaves the write gate closed. The visible exit action remains available
-while the plan is ready. Starting a fresh implementation Session still
-requires the TUI. The persisted `plan_ready` transcript result remains
-available after the gate is released.
+an explicit owner action. Web handoff and admission semantics are specified in
+the #470 follow-up below.
 
 The handoff uses the existing Plan projection and owner callback; it adds no
 second persisted Plan store. A stale revision, wrong Session, busy runtime,
@@ -164,45 +148,17 @@ live-provider manual smoke.
 
 ## #470 Plan Ready handoff follow-up
 
-The 2026-09-28/29 implementation adds a same-Session Web action to prepare the
-native Plan extension's editable implementation prompt. Preparation is
-read-only; the user reviews and sends the prompt. Plan is consumed only after
-Pi accepts that exact prompt, so model, authentication, or other preflight
-rejection leaves the persisted plan and write gate intact. A request-scoped
-approval is bound to the submitted prompt in `before_agent_start`. After Pi
-accepts preflight, the runtime consumes the Plan state; the `context` hook then
-projects that inactive state. The actual tool gate stays closed until
-acceptance. The fresh-Session handoff remains a TUI-only operation.
+The authenticated `POST /api/plan/implement` asks the native Plan extension for
+its existing implementation prompt. The serialized runtime verifies the exact
+active Session, idle state, and Plan revision; preparation does not change Plan
+state or send a prompt. The Composer presents the prompt for review and asks
+before replacing a nonempty draft. On submission, runtime admission binds
+approval to the Session, Plan revision, and exact prompt. Pi consumes the Ready
+state only after accepting that prompt, before provider context is built and
+the agent can call tools. Rejected preflight clears the transient approval and
+keeps the persisted Plan and write gate intact. Refreshing or switching
+Sessions cannot open the gate for another Session. `/plan off` remains
+available; fresh-Session handoff is reported as unsupported while retaining
+the Plan.
 
-Tests cover Session identity, revision-bound prompt admission, rejected and
-thrown preflight, persisted Plan state, a blocked write attempt while ready,
-and a successful write only after submission. Browser preparation leaves the
-prompt editable without starting another provider request.
 Source: [Issue #470](https://github.com/openpi-dev/openpi/issues/470).
-
-Local verification on 2026-09-28 used Node.js and the installed Chrome browser:
-
-- Both TypeScript checks passed; the Web bundle built successfully with the existing 500 KB chunk-size advisory (main bundle: 1,336.65 kB).
-- A direct Node run using the repository's Windows process-tree grouping, with the remaining files capped at `--test-concurrency=2`, passed the complete Node suite (1,920 passed, 11 skipped, 0 failed); the complete Vitest suite passed (351/351).
-- The provider Playwright suite passed (14/14), including the Plan Ready browser handoff. The server port closed and the deferred workspace-cleanup manifest was removed.
-- The default parallel aggregate command (`node scripts/run-tests.mjs`) exited nonzero on this Windows host with six process-sensitive failures. Those same six passed together in a focused run (6/6), and the complete suite passed under the bounded run above. The default-concurrency run is not claimed green; CI evidence remains pending.
-- Biome format/lint and config/docs/discipline contracts passed.
-
-Latest local verification on 2026-09-29, after rebasing onto base main
-`ad68e445805a4547d44f46f2f17ec083c28f51da`:
-
-- `bun run check` passed, including contracts, TypeScript, Biome format/lint,
-  and the production build. The existing bundle advisory remains (1,338.96 kB).
-- Plan control unit tests passed (5/5); the complete Plan provider E2E file
-  passed (5/5), including refresh after prompt preview, a blocked write before
-  re-approval, session switching, and successful implementation after submit.
-- An exploratory wider provider E2E run under installed Chrome, before the
-  Plan test had its own config, passed 12/14. The two failures were in the
-  unrelated `questions-provider.e2e.ts`; their causes were not isolated. CI
-  runs the dedicated Plan provider config.
-- `bun run test` did not complete: several real Pi/post-edit formatter tests
-  timed out, a Windows command-failure test failed, and the remaining runner
-  produced no output while idle. It was interrupted; no full-suite pass is
-  claimed.
-- The user has not authorized opening a PR; no PR has been created or
-  published.
