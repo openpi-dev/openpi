@@ -6,16 +6,37 @@
 .turn-duration {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 16px 0;
+  flex-wrap: wrap;
+  min-height: 32px;
+  gap: 8px;
+  margin: 12px 0 16px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
-.turn-duration::after {
-  flex: 1;
-  height: 1px;
-  background: var(--border);
-  content: "";
+.turn-duration-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.turn-duration-toggle:hover { color: var(--text); }
+.turn-duration-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.turn-duration-toggle svg { width: 14px; height: 14px; }
+.turn-duration-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.turn-duration-outcome { font-size: 12px; }
+.turn-process-body { margin-bottom: 12px; }
+.turn-process-body .message-row { width: 100%; padding: 0; }
+.turn-process-body[hidden] { display: none; }
+
+@media (max-width: 560px) {
+  .turn-duration-toggle { min-height: 44px; }
 }

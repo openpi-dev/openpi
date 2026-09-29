@@ -122,7 +122,6 @@ const resources = {
       turnChangesBack: "Back to turn changes",
       turnChangesLoading: "Loading this turn's changes…",
       turnChangesUnavailable: "This turn's saved diff is unavailable.",
-      turnChangesUnverified: "Unable to verify file changes for this turn.",
       messageCopyRequiresFull: "Load the full message before copying.",
       filesChanged_one: "{{count}} file changed",
       filesChanged_other: "{{count}} files changed",
@@ -383,6 +382,9 @@ const resources = {
       compactionDraftHelp:
         "You can edit your draft. Send it after compaction finishes.",
       turnElapsedFinished: "Worked for {{duration}}",
+      turnElapsedOutcome_cancelled: "Stopped",
+      turnElapsedOutcome_failed: "Failed",
+      turnElapsedOutcome_uncertain: "Outcome unconfirmed",
       settingsSetupBusyHint:
         "Agent configuration is available after this turn. Display settings can be changed now.",
       resetChatContentWidth: "Reset chat content width",
@@ -1073,7 +1075,6 @@ const resources = {
       turnChangesBack: "返回本轮变更",
       turnChangesLoading: "正在加载本轮变更…",
       turnChangesUnavailable: "无法读取本轮保存的差异。",
-      turnChangesUnverified: "无法核实此轮期间的文件变化。",
       messageCopyRequiresFull: "加载完整消息后才能复制。",
       filesChanged: "{{count}} 个文件已更改",
       reviewChanges: "审阅更改",
@@ -1308,6 +1309,9 @@ const resources = {
       compactionReconnectHelp: "连接已中断，恢复连接后将核实当前状态。",
       compactionDraftHelp: "可以继续编辑草稿，请在压缩结束后发送。",
       turnElapsedFinished: "用时 {{duration}}",
+      turnElapsedOutcome_cancelled: "已停止",
+      turnElapsedOutcome_failed: "失败",
+      turnElapsedOutcome_uncertain: "结果待确认",
       settingsSetupBusyHint:
         "Agent 配置需等待当前轮次结束；显示设置可直接调整。",
       resetChatContentWidth: "恢复默认聊天宽度",

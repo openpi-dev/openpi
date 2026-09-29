@@ -3,6 +3,7 @@ import {
   ArrowDown,
   Bot,
   Check,
+  ChevronRight,
   Clipboard,
   FilePenLine,
   FileText,
@@ -22,6 +23,7 @@ import {
   Fragment,
   type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -150,7 +152,10 @@ interface RenderRow {
   pendingPrompt?: boolean;
   promptCommandId?: string;
   promptEntryId?: string;
+  timing?: WebTurnTiming;
 }
+
+type ActiveTurn = NonNullable<WebSnapshot["runtime"]["activeTurn"]>;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object"
@@ -1142,7 +1147,12 @@ function ProcessSequence({
   );
 }
 
-function groupRows(rows: RenderRow[], active: boolean, defaultOpen: boolean) {
+function groupRows(
+  rows: RenderRow[],
+  active: boolean,
+  defaultOpen: boolean,
+  disclosure?: { open: boolean; id: string },
+) {
   const blocks: Array<{ process: boolean; rows: RenderRow[] }> = [];
   for (const row of rows) {
     const last = blocks.at(-1);
@@ -1160,6 +1170,25 @@ function groupRows(rows: RenderRow[], active: boolean, defaultOpen: boolean) {
         <Fragment key={row.key}>{row.content}</Fragment>
       ));
     }
+    if (disclosure)
+      return (
+        <div
+          key={blockKey}
+          className="turn-process-body"
+          hidden={!disclosure.open}
+          id={`${disclosure.id}-${index}`}
+        >
+          {block.rows.map((row) => (
+            <div
+              key={row.key}
+              className={`process-step ${row.processStatus ?? "unknown"}`}
+              data-status={row.processStatus ?? "unknown"}
+            >
+              {row.content}
+            </div>
+          ))}
+        </div>
+      );
     return (
       <ProcessSequence
         key={blockKey}
@@ -1171,6 +1200,85 @@ function groupRows(rows: RenderRow[], active: boolean, defaultOpen: boolean) {
   });
 }
 
+/** One native run, bounded by its settled timing record, within a user turn. */
+function TurnRun({
+  rows,
+  timing,
+  active,
+  expandProcesses,
+  timedTurn,
+}: {
+  rows: RenderRow[];
+  timing?: WebTurnTiming;
+  active: boolean;
+  expandProcesses: boolean;
+  timedTurn?: ActiveTurn;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const [open, setOpen] = useState(active || expandProcesses);
+  useEffect(
+    () => setOpen(active || expandProcesses),
+    [active, expandProcesses],
+  );
+  const processIds: string[] = [];
+  let blockIndex = -1;
+  rows.forEach((row, index) => {
+    if (row.kind !== "process" || rows[index - 1]?.kind !== "process") {
+      blockIndex++;
+      if (row.kind === "process") processIds.push(`${id}-${blockIndex}`);
+    }
+  });
+  const hasTiming = Boolean(timing || timedTurn);
+  const elapsed = timing ? (
+    <SettledTurnElapsed timing={timing} />
+  ) : timedTurn ? (
+    <RunningTurnElapsed
+      key={JSON.stringify([
+        timedTurn.sessionId,
+        timedTurn.sessionPath,
+        timedTurn.commandId,
+        timedTurn.epoch,
+        timedTurn.startedAt,
+      ])}
+      elapsedMs={timedTurn.elapsedMs!}
+    />
+  ) : null;
+  return (
+    <>
+      {hasTiming && (
+        <header className="turn-duration" data-outcome={timing?.outcome}>
+          {processIds.length > 0 ? (
+            <button
+              type="button"
+              className="turn-duration-toggle"
+              aria-expanded={open}
+              aria-controls={processIds.join(" ")}
+              onClick={() => setOpen((value) => !value)}
+            >
+              {elapsed}
+              <ChevronRight aria-hidden="true" />
+            </button>
+          ) : (
+            elapsed
+          )}
+          {timing && timing.outcome !== "completed" && (
+            <span className="turn-duration-outcome">
+              {t(`turnElapsedOutcome_${timing.outcome}`)}
+            </span>
+          )}
+        </header>
+      )}
+      {groupRows(
+        rows,
+        active,
+        expandProcesses,
+        hasTiming ? { open, id } : undefined,
+      )}
+    </>
+  );
+}
+
 function ConversationTurn({
   id,
   rows,
@@ -1178,6 +1286,7 @@ function ConversationTurn({
   expandProcesses,
   changes,
   session,
+  timedTurn,
 }: {
   id: number;
   rows: RenderRow[];
@@ -1185,6 +1294,7 @@ function ConversationTurn({
   expandProcesses: boolean;
   changes?: WebTurnChanges;
   session?: WebSessionProjection;
+  timedTurn?: ActiveTurn;
 }) {
   const { t } = useTranslation();
   const failed = rows.some((row) => row.outcome === "failed");
@@ -1210,12 +1320,46 @@ function ConversationTurn({
             ? "success"
             : "neutral";
   const statusLabel = t(`turnState_${status}`);
+  // A settled snapshot can arrive before the run-status notification.
+  const currentTimedTurn = rows.some(
+    (row) =>
+      row.timing &&
+      row.timing.commandId === timedTurn?.commandId &&
+      row.timing.epoch === timedTurn?.epoch,
+  )
+    ? undefined
+    : timedTurn;
+  const content: ReactNode[] = [];
+  let runRows: RenderRow[] = [];
+  let runIndex = 0;
+  const appendRun = (timing?: WebTurnTiming, current = false) => {
+    content.push(
+      <TurnRun
+        key={`run-${runIndex++}`}
+        rows={runRows}
+        timing={timing}
+        active={active && current}
+        expandProcesses={expandProcesses}
+        timedTurn={current ? currentTimedTurn : undefined}
+      />,
+    );
+    runRows = [];
+  };
+  for (const row of rows) {
+    if (row.kind === "prompt") {
+      if (runRows.length) appendRun();
+      content.push(<Fragment key={row.key}>{row.content}</Fragment>);
+    } else if (row.timing) appendRun(row.timing);
+    else runRows.push(row);
+  }
+  if (runRows.length || currentTimedTurn) appendRun(undefined, true);
+  const hasTiming = Boolean(timedTurn || rows.some((row) => row.timing));
   return (
     <section
       className={`conversation-turn${id === 0 ? " prelude" : ""}`}
       data-turn={id}
     >
-      {id > 0 && status !== "complete" && (
+      {id > 0 && status !== "complete" && !hasTiming && (
         <header className="turn-heading">
           <span className="sr-only">{t("turnLabel", { number: id })}</span>
           <span className={`turn-state ${status}`}>
@@ -1233,7 +1377,7 @@ function ConversationTurn({
           </span>
         </header>
       )}
-      {groupRows(rows, active, expandProcesses)}
+      {content}
       {changes && session && (
         <TurnChangesCard
           key={`${session.id}:${session.path}:${changes.promptEntryId}`}
@@ -1253,6 +1397,7 @@ function renderTurns(
   activeCommandId?: string,
   changesByPrompt?: Map<string, WebTurnChanges>,
   session?: WebSessionProjection,
+  timedTurn?: ActiveTurn,
 ) {
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
@@ -1260,6 +1405,7 @@ function renderTurns(
     if (current?.id === row.turn) current.rows.push(row);
     else turns.push({ id: row.turn, rows: [row] });
   }
+  if (turns.length === 0 && running) turns.push({ id: 0, rows: [] });
   const confirmedTurn = activeCommandId
     ? turns.find((turn) =>
         turn.rows.some((row) => row.promptCommandId === activeCommandId),
@@ -1287,6 +1433,7 @@ function renderTurns(
           ?.promptEntryId ?? "",
       )}
       session={session}
+      timedTurn={running && turn.id === activeTurn ? timedTurn : undefined}
       key={`turn-group-${turn.rows[0]?.key}`}
     />
   ));
@@ -1477,44 +1624,16 @@ export function Transcript(props: TranscriptProps) {
     });
     if (assistantCandidate >= 0) lastAssistantByTurn.add(assistantCandidate);
 
-    // Timing is already settled runtime evidence. Place it beside a final
-    // textual response only within its user/timing boundaries.
-    const timingBeforeResponse = new Map<number, DisplayEntry>();
-    const movedTimings = new Set<string>();
-    let timingCandidate = -1;
-    entries.forEach((entry, index) => {
-      if (entry.timing) {
-        if (timingCandidate >= 0) {
-          timingBeforeResponse.set(timingCandidate, entry);
-          movedTimings.add(entry.key);
-        }
-        timingCandidate = -1;
-      } else if (
-        entry.message.role === "user" ||
-        (entry.message.role === "custom" &&
-          entry.message.customType === "openpi-setup-request") ||
-        entry.message.role === "toolResult"
-      ) {
-        timingCandidate = -1;
-      } else if (entry.message.role === "assistant") {
-        timingCandidate =
-          entry.message.content.trim() &&
-          !entry.message.parts?.some((part) => part.type === "toolCall")
-            ? index
-            : -1;
-      }
-    });
-
     const rendered = entries.flatMap((entry, index): RenderRow[] => {
       const message = entry.message;
-      if (movedTimings.has(entry.key)) return [];
       if (entry.timing)
         return [
           {
             key: entry.key,
             turn,
             kind: "custom",
-            content: <SettledTurnElapsed timing={entry.timing} />,
+            timing: entry.timing,
+            content: null,
           },
         ];
       if (entry.compaction)
@@ -1660,16 +1779,6 @@ export function Transcript(props: TranscriptProps) {
         const appendText = (text: string, key: string, actions: boolean) => {
           if (recoverable && !actions) return;
           if (!recoverable && !text.trim()) return;
-          const settledTiming = actions
-            ? timingBeforeResponse.get(index)
-            : undefined;
-          if (settledTiming?.timing)
-            detailRows.push({
-              key: settledTiming.key,
-              turn,
-              kind: "custom",
-              content: <SettledTurnElapsed timing={settledTiming.timing} />,
-            });
           detailRows.push({
             key,
             turn,
@@ -2153,6 +2262,9 @@ export function Transcript(props: TranscriptProps) {
           activeTurn?.commandId,
           changesByPrompt,
           selected,
+          props.activityObserved !== false && !historyPaused
+            ? timedTurn
+            : undefined,
         )}
         {selectedExecution?.compaction &&
           selectedExecution.compaction.state !== "completed" && (
@@ -2188,18 +2300,6 @@ export function Transcript(props: TranscriptProps) {
                   count: selectedExecution!.pendingFollowUps,
                 })}
               </span>
-            )}
-            {timedTurn && (
-              <RunningTurnElapsed
-                key={JSON.stringify([
-                  timedTurn.sessionId,
-                  timedTurn.sessionPath,
-                  timedTurn.commandId,
-                  timedTurn.epoch,
-                  timedTurn.startedAt,
-                ])}
-                elapsedMs={timedTurn.elapsedMs!}
-              />
             )}
           </div>
         )}

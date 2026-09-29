@@ -20,7 +20,6 @@
 .turn-changes-more svg { width: 14px; height: 14px; }
 .turn-changes-more svg.up { transform: rotate(180deg); }
 .turn-changes-warning { margin: 7px; color: var(--muted); font-size: 12px; }
-.turn-changes-unavailable { margin: 10px 0 4px; padding: 8px 10px; border-left: 2px solid var(--border-strong); color: var(--muted); font-size: 12px; }
 .turn-changes-review { max-height: min(62vh, 560px); overflow: auto; padding: 8px 12px 12px; }
 .turn-changes-review > p[role] { margin: 8px; color: var(--muted); font-size: 12px; }
 .turn-changes-review > p[role] button { padding: 4px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--page); color: var(--text); cursor: pointer; }

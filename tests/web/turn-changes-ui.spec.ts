@@ -248,8 +248,9 @@ it("does not claim exact totals for partial evidence or render unknown evidence"
   );
   expect(container.querySelector(".turn-changes")).toBeNull();
   expect(
-    screen.getByText("Unable to verify file changes for this turn."),
-  ).toBeTruthy();
+    screen.queryByText("Unable to verify file changes for this turn."),
+  ).toBeNull();
+  expect(container.textContent).toBe("");
   rerender(
     withI18n(
       createElement(TurnChangesCard, {
@@ -260,8 +261,9 @@ it("does not claim exact totals for partial evidence or render unknown evidence"
     ),
   );
   expect(
-    screen.getByText("This turn's change record is incomplete."),
-  ).toBeTruthy();
+    screen.queryByText("This turn's change record is incomplete."),
+  ).toBeNull();
+  expect(container.textContent).toBe("");
   rerender(
     withI18n(
       createElement(TurnChangesCard, {

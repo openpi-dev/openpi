@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
@@ -221,7 +227,7 @@ it("does not invent a duration from old timestamps or incomplete runtime evidenc
   expect(view.container.querySelector(".turn-duration")).toBeNull();
 });
 
-it("places settled duration after execution details and before the final text response", () => {
+it("keeps elapsed above execution and answer, with a disclosure that leaves the answer visible", () => {
   const value = snapshot();
   value.runtime = { status: "idle", capabilities: {} };
   value.selectedSession!.entries = [
@@ -259,13 +265,25 @@ it("places settled duration after execution details and before the final text re
     },
   ];
   const view = render(node(value));
-  const process = view.container.querySelector(".process-sequence")!;
+  const process =
+    view.container.querySelector<HTMLElement>(".turn-process-body")!;
   const duration = view.container.querySelector(".turn-duration")!;
   const answer = view.container.querySelector(".final-response")!;
   expect(
-    process.compareDocumentPosition(duration) &
+    duration.compareDocumentPosition(process) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+  expect(process.hidden).toBe(true);
+  const toggle = screen.getByRole("button", { name: "Worked for 2m37s" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(toggle.getAttribute("aria-controls")).toBe(process.id);
+  fireEvent.click(toggle);
+  expect(process.hidden).toBe(false);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(toggle);
+  expect(process.hidden).toBe(true);
+  expect(answer.closest("[hidden]")).toBeNull();
+  expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
   expect(
     duration.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
@@ -335,8 +353,141 @@ it("does not move a duration backward across a user or another timing record", (
   ]);
 });
 
-it("formats the requested running and settled duration styles", () => {
-  expect(formatTurnDuration(2142000, "zh-CN", true)).toBe("35分钟42秒");
-  expect(formatTurnDuration(157000, "zh-CN", false)).toBe("2m37s");
-  expect(formatTurnDuration(3601000, "en", true)).toBe("1h0m1s");
+it("formats readable localized durations for both running and settled turns", () => {
+  expect(formatTurnDuration(2142000, "zh-CN")).toBe("35分钟42秒");
+  expect(formatTurnDuration(157000, "zh-CN")).toBe("2分钟37秒");
+  expect(formatTurnDuration(3601000, "en")).toBe("1h0m1s");
+});
+
+it("keeps one top timer through streaming, manual folding, settlement, and a late running notification", () => {
+  const value = snapshot();
+  const entries = [
+    {
+      id: "prompt",
+      type: "message" as const,
+      message: { role: "user", content: "Question" },
+    },
+    {
+      id: "step-1",
+      type: "message" as const,
+      message: {
+        role: "assistant",
+        content: "First update",
+        parts: [{ type: "thinking" as const, text: "Check one" }],
+      },
+    },
+    {
+      id: "step-2",
+      type: "message" as const,
+      message: {
+        role: "assistant",
+        content: "Final answer",
+        parts: [{ type: "thinking" as const, text: "Check two" }],
+      },
+    },
+  ].map((entry) => ({ ...entry, timestamp: "2026-09-22T00:00:00Z" }));
+  value.selectedSession!.entries = entries;
+  const view = render(node(value));
+  const header = view.container.querySelector(".turn-duration")!;
+  const prompt = screen.getByText("Question");
+  expect(
+    prompt.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    header.compareDocumentPosition(screen.getByText("First update")) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    view.container.querySelector(".conversation-running [role=timer]"),
+  ).toBeNull();
+  const toggle = view.container.querySelector<HTMLButtonElement>(
+    ".turn-duration-toggle",
+  )!;
+  const blocks = [
+    ...view.container.querySelectorAll<HTMLElement>(".turn-process-body"),
+  ];
+  expect(blocks).toHaveLength(2);
+  expect(toggle.getAttribute("aria-controls")?.split(" ")).toEqual(
+    blocks.map((block) => block.id),
+  );
+  expect(blocks.every((block) => !block.hidden)).toBe(true);
+  fireEvent.click(toggle);
+  expect(blocks.every((block) => block.hidden)).toBe(true);
+  view.rerender(node({ ...value, cursor: 2 }));
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.getByText("First update").closest("[hidden]")).toBeNull();
+  expect(screen.getByText("Final answer").closest("[hidden]")).toBeNull();
+
+  const settled = {
+    ...value,
+    selectedSession: {
+      ...value.selectedSession!,
+      entries: [
+        ...entries,
+        {
+          id: "timing",
+          type: "custom" as const,
+          timestamp: "2026-09-22T00:02:37Z",
+          turnTiming: {
+            version: 1 as const,
+            sessionId: "session",
+            commandId: "a",
+            epoch: 1,
+            startedAt: 10000,
+            finishedAt: 167000,
+            elapsedMs: 157000,
+            outcome: "completed" as const,
+          },
+        },
+      ],
+    },
+  };
+  // Settlement evidence is already available, but the status is still running.
+  view.rerender(node(settled));
+  expect(screen.queryByRole("timer")).toBeNull();
+  expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
+  expect(
+    screen
+      .getByRole("button", { name: "Worked for 2m37s" })
+      .getAttribute("aria-expanded"),
+  ).toBe("false");
+  view.rerender(
+    node({ ...settled, runtime: { status: "idle", capabilities: {} } }),
+  );
+  expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
+});
+
+it("does not offer an empty disclosure for a plain answer", () => {
+  const value = snapshot();
+  value.runtime = { status: "idle", capabilities: {} };
+  value.selectedSession!.entries = [
+    {
+      id: "answer",
+      type: "message",
+      timestamp: "2026-09-22T00:00:00Z",
+      message: { role: "assistant", content: "Plain answer" },
+    },
+    {
+      id: "timing",
+      type: "custom",
+      timestamp: "2026-09-22T00:00:01Z",
+      turnTiming: {
+        version: 1,
+        sessionId: "session",
+        commandId: "a",
+        epoch: 1,
+        startedAt: 0,
+        finishedAt: 1000,
+        elapsedMs: 1000,
+        outcome: "completed",
+      },
+    },
+  ];
+  const view = render(node(value));
+  const duration = view.container.querySelector(".turn-duration")!;
+  expect(
+    duration.compareDocumentPosition(screen.getByText("Plain answer")) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(duration.querySelector("button")).toBeNull();
 });

@@ -2,16 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
 
-export function formatTurnDuration(
-  elapsedMs: number,
-  language: string,
-  running: boolean,
-) {
+export function formatTurnDuration(elapsedMs: number, language: string) {
   const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor(seconds / 60) % 60;
   const rest = seconds % 60;
-  if (running && language.startsWith("zh")) {
+  if (language.startsWith("zh")) {
     return `${hours ? `${hours}小时` : ""}${minutes || hours ? `${minutes}分钟` : ""}${rest}秒`;
   }
   return `${hours ? `${hours}h` : ""}${minutes || hours ? `${minutes}m` : ""}${rest}s`;
@@ -50,7 +46,7 @@ export function RunningTurnElapsed({
   return (
     <span className="turn-elapsed-running" role="timer" aria-live="off">
       {t(waiting ? "compactionElapsed" : "turnElapsedRunning", {
-        duration: formatTurnDuration(elapsed, i18n.language, true),
+        duration: formatTurnDuration(elapsed, i18n.language),
       })}
     </span>
   );
@@ -59,12 +55,10 @@ export function RunningTurnElapsed({
 export function SettledTurnElapsed({ timing }: { timing: WebTurnTiming }) {
   const { t, i18n } = useTranslation();
   return (
-    <div className="turn-duration" data-outcome={timing.outcome}>
-      <span>
-        {t("turnElapsedFinished", {
-          duration: formatTurnDuration(timing.elapsedMs, i18n.language, false),
-        })}
-      </span>
-    </div>
+    <span>
+      {t("turnElapsedFinished", {
+        duration: formatTurnDuration(timing.elapsedMs, i18n.language),
+      })}
+    </span>
   );
 }

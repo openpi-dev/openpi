@@ -131,18 +131,10 @@ export function TurnChangesCard({
 
   const selectedFile = detail?.files.find((file) => file.path === selectedPath);
 
-  if (changes.state === "unavailable")
-    return (
-      <p className="turn-changes-unavailable" role="status">
-        {t("turnChangesUnverified")}
-      </p>
-    );
-  if (changes.files.length === 0)
-    return changes.state === "partial" ? (
-      <p className="turn-changes-unavailable" role="status">
-        {t("turnChangesIncomplete")}
-      </p>
-    ) : null;
+  // Absence of displayable files is not a claim that nothing changed.
+  // Keep incomplete/unavailable evidence in the saved record, outside prose.
+  if (changes.state === "unavailable" || changes.files.length === 0)
+    return null;
   const partial = changes.state === "partial";
   const files = expanded
     ? changes.files
