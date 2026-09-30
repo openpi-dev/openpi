@@ -6,14 +6,15 @@ export const WEB_MAX_TURN_CHANGE_FILES = 200;
 
 export type WebTurnChangesFile = Pick<
   WebGitReviewFile,
-  "path" | "previousPath" | "status" | "additions" | "deletions" | "binary"
+  "path" | "previousPath" | "status" | "additions" | "deletions" | "binary" | "statsUnavailable"
 >;
 
 export interface WebTurnChanges {
-  version: 1;
+  version: 1 | 2;
+  source?: "file-tools";
   sessionId: string;
   promptEntryId: string;
-  /** A temporal workspace comparison, not proof of which process wrote a file. */
+  /** v1 is a temporal workspace snapshot; v2 records native file-tool writes. */
   state: "complete" | "partial" | "unavailable";
   fileCount: number | null;
   files: WebTurnChangesFile[];
@@ -46,7 +47,8 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
   if (
-    record.version !== 1 ||
+    (record.version !== 1 && record.version !== 2) ||
+    (record.version === 2 && record.source !== "file-tools") ||
     !boundedId(record.sessionId) ||
     !boundedId(record.promptEntryId) ||
     !["complete", "partial", "unavailable"].includes(String(record.state)) ||
@@ -67,6 +69,7 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
       typeof file.diff !== "string" ||
       typeof file.diffTruncated !== "boolean" ||
       !(file.binary === undefined || typeof file.binary === "boolean") ||
+      !(file.statsUnavailable === undefined || ["before_unavailable", "content_limit", "concurrent_change"].includes(String(file.statsUnavailable))) ||
       !count(file.additions) || !count(file.deletions)
     ) return undefined;
     bytes += new TextEncoder().encode(file.path).byteLength + new TextEncoder().encode(file.diff).byteLength;
@@ -81,14 +84,17 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
       ...(file.binary === true || /^Binary files .* differ$/mu.test(file.diff) ? { binary: true } : {}),
       additions: file.additions,
       deletions: file.deletions,
+      ...(file.statsUnavailable ? { statsUnavailable: file.statsUnavailable as WebGitReviewFile["statsUnavailable"] } : {}),
     });
   }
   if (
-    (record.state === "complete" && (record.fileCount !== files.length || files.some((file) => file.diffTruncated))) ||
-    (record.state !== "complete" && record.fileCount !== null)
+    (record.state === "complete" && (record.fileCount !== files.length || files.some((file) => file.diffTruncated || file.statsUnavailable))) ||
+    (record.version === 1 && record.state !== "complete" && record.fileCount !== null) ||
+    (record.version === 2 && record.fileCount !== null && record.fileCount !== files.length)
   ) return undefined;
   return {
-    version: 1,
+    version: record.version,
+    ...(record.version === 2 ? { source: "file-tools" as const } : {}),
     sessionId: record.sessionId as string,
     promptEntryId: record.promptEntryId as string,
     state: record.state as WebTurnChanges["state"],
@@ -102,13 +108,14 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
 export function summarizeTurnChanges(detail: WebTurnChangesDetail): WebTurnChanges {
   return {
     ...detail,
-    files: detail.files.map(({ path, previousPath, status, additions, deletions, binary }) => ({
+    files: detail.files.map(({ path, previousPath, status, additions, deletions, binary, statsUnavailable }) => ({
       path,
       ...(previousPath ? { previousPath } : {}),
       status,
       additions,
       deletions,
       ...(binary ? { binary } : {}),
+      ...(statsUnavailable ? { statsUnavailable } : {}),
     })),
   };
 }

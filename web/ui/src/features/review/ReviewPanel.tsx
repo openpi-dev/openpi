@@ -13,7 +13,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebGitReviewFile,
@@ -82,6 +82,7 @@ export function ReviewPanel({
   const focusRequested = useRef(true);
   const wasActive = useRef(false);
   const listScrollTop = useRef<number | null>(null);
+  const returnFocusPath = useRef<string | null>(null);
   const [visibleFiles, setVisibleFiles] = useState(FILE_PAGE_SIZE);
   const [query, setQuery] = useState("");
   const [pinnedSnapshot, setPinnedSnapshot] =
@@ -223,7 +224,11 @@ export function ReviewPanel({
     (snapshot?.listComplete === undefined && snapshot?.truncated);
   const partialSearch = partialList || snapshot?.nextOffset !== undefined;
   const comparison = review.historical
-    ? t("turnChangesScope")
+    ? t(
+        snapshot?.evidenceSource === "file-tools"
+          ? "turnEditsScope"
+          : "turnChangesScope",
+      )
     : snapshot
       ? snapshot.comparison === "session"
         ? t("gitReviewSessionSnapshot")
@@ -257,26 +262,30 @@ export function ReviewPanel({
     setPinnedSnapshot(snapshot);
     setSelectedPath(path);
   };
+  useLayoutEffect(() => {
+    const path = returnFocusPath.current;
+    if (selectedPath || !path || !active) return;
+    returnFocusPath.current = null;
+    const body = listBody.current;
+    if (!body?.isConnected || body.closest("[hidden], [inert]")) return;
+    const row = [
+      ...body.querySelectorAll<HTMLButtonElement>("[data-review-file]"),
+    ].find((button) => button.dataset.reviewFile === path);
+    if (listScrollTop.current !== null) body.scrollTop = listScrollTop.current;
+    if (row) row.focus({ preventScroll: listScrollTop.current !== null });
+    else if (embedded) body.focus();
+    else listCloseButton.current?.focus();
+  }, [active, embedded, selectedPath]);
+
   const showFileList = () => {
     const path = selectedPath;
     const index = matchingFiles.findIndex((file) => file.path === path);
     if (index >= visibleFiles)
       setVisibleFiles(Math.ceil((index + 1) / FILE_PAGE_SIZE) * FILE_PAGE_SIZE);
     focusRequested.current = false;
+    returnFocusPath.current = path;
     setSelectedPath(null);
     setPinnedSnapshot(null);
-    requestAnimationFrame(() => {
-      const body = listBody.current;
-      if (!body?.isConnected || body.closest("[hidden], [inert]")) return;
-      const row = [
-        ...body.querySelectorAll<HTMLButtonElement>("[data-review-file]"),
-      ].find((button) => button.dataset.reviewFile === path);
-      if (listScrollTop.current !== null)
-        body.scrollTop = listScrollTop.current;
-      if (row) row.focus({ preventScroll: listScrollTop.current !== null });
-      else if (embedded) body.focus();
-      else listCloseButton.current?.focus();
-    });
   };
 
   return (
@@ -430,6 +439,7 @@ export function ReviewPanel({
             <HStack gap={2} align="center" className="session-review-stats">
               {selectedFile &&
                 !selectedFile.binary &&
+                !selectedFile.statsUnavailable &&
                 selectedFile.additions > 0 && (
                   <Text
                     type="supporting"
@@ -441,6 +451,7 @@ export function ReviewPanel({
                 )}
               {selectedFile &&
                 !selectedFile.binary &&
+                !selectedFile.statsUnavailable &&
                 selectedFile.deletions > 0 && (
                   <Text
                     type="supporting"
@@ -485,6 +496,15 @@ export function ReviewPanel({
               <EmptyState
                 icon={<FileCode2 aria-hidden="true" />}
                 title={t("gitReviewBinary")}
+                isCompact
+              />
+            ) : selectedFile.statsUnavailable ? (
+              <EmptyState
+                icon={<FileCode2 aria-hidden="true" />}
+                title={t("turnEditStatsUnknown")}
+                description={t(
+                  `turnEditReason_${selectedFile.statsUnavailable}`,
+                )}
                 isCompact
               />
             ) : selectedFile.diff ? (
@@ -569,6 +589,7 @@ export function ReviewPanel({
                     !snapshot.files.some(
                       (file) =>
                         file.binary ||
+                        file.statsUnavailable ||
                         (file.status === "untracked" &&
                           file.diffLoaded === false),
                     ) && (
@@ -701,6 +722,8 @@ export function ReviewPanel({
                         >
                           {file.binary ? (
                             <span>{t("gitReviewBinaryShort")}</span>
+                          ) : file.statsUnavailable ? (
+                            <span>{t("turnEditStatsUnknown")}</span>
                           ) : file.status === "untracked" &&
                             file.diffLoaded === false ? (
                             <span>{t("gitReviewPendingStats")}</span>

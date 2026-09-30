@@ -41,13 +41,14 @@ test("saved per-turn review and full native message load at desktop and mobile w
     timestamp: 2,
   });
   const changes: WebTurnChangesDetail = {
-    version: 1,
+    version: 2,
+    source: "file-tools",
     sessionId: manager.getSessionId(),
     promptEntryId: first,
-    state: "complete",
+    state: "partial",
     fileCount: 5,
-    additions: 15,
-    deletions: 5,
+    additions: 10,
+    deletions: 4,
     files: Array.from({ length: 5 }, (_, index) => ({
       path: `src/report-${index + 1}.ts`,
       status: "modified" as const,
@@ -56,6 +57,15 @@ test("saved per-turn review and full native message load at desktop and mobile w
       diff: `@@ -1 +1 @@\n-old-${index}\n+saved-turn-${index}`,
       diffLoaded: true,
       diffTruncated: false,
+      ...(index === 4
+        ? {
+            additions: 0,
+            deletions: 0,
+            diff: "",
+            diffTruncated: true,
+            statsUnavailable: "before_unavailable" as const,
+          }
+        : {}),
     })),
   };
   manager.appendCustomEntry(WEB_TURN_CHANGES_ENTRY, changes);
@@ -108,7 +118,7 @@ test("saved per-turn review and full native message load at desktop and mobile w
       .locator(".conversation-turn")
       .first()
       .locator(".turn-changes");
-    await expect(card).toContainText("本轮更改 5 个文件");
+    await expect(card).toContainText("已编辑 5 个文件");
     await expect(
       card.locator(".turn-changes-list .turn-changes-file"),
     ).toHaveCount(3);
@@ -116,6 +126,7 @@ test("saved per-turn review and full native message load at desktop and mobile w
     await expect(
       card.locator(".turn-changes-list .turn-changes-file"),
     ).toHaveCount(5);
+    await expect(card).toContainText("行数未知");
     await card.getByRole("button", { name: "审阅本轮变更" }).click();
     await expect(
       page.locator(".workbar-panel").getByRole("figure", { name: "变更差异" }),
@@ -126,6 +137,17 @@ test("saved per-turn review and full native message load at desktop and mobile w
     });
     await page.getByRole("button", { name: "返回变更文件" }).click();
     await expect(page.locator(".session-review-file")).toHaveCount(5);
+    await page
+      .locator(".workbar-panel")
+      .getByRole("button", { name: "src/report-5.ts", exact: true })
+      .click();
+    await expect(page.locator(".workbar-panel")).toContainText(
+      "该操作未授权读取旧内容",
+    );
+    await expect(page.locator(".workbar-panel")).not.toContainText(
+      "没有文本差异",
+    );
+    await page.getByRole("button", { name: "返回变更文件" }).click();
     await page.keyboard.press("Escape");
     await expect(page.locator(".workbar-panel")).toBeHidden();
 

@@ -52,6 +52,10 @@ export function useTurnReview(
             result: {
               ok: true,
               snapshot: {
+                ...(changes.source ? { evidenceSource: changes.source } : {}),
+                ...(changes.fileCount !== null
+                  ? { totalFiles: changes.fileCount, listComplete: true }
+                  : {}),
                 repositoryRoot: cwd,
                 currentBranch: null,
                 baseBranch: null,

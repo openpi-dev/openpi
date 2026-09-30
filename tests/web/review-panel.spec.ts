@@ -252,7 +252,7 @@ it("returns to the original row and scroll position before Escape closes its Wor
 });
 
 it.each(["collapsed", "inactive tab", "inert"] as const)(
-  "does not restore focus into a $0 Workbar before its return frame",
+  "does not steal focus after the returned list becomes $0",
   async (state) => {
     const node = (visible: boolean, launcherOpen: boolean) =>
       createElement(
@@ -286,25 +286,24 @@ it.each(["collapsed", "inactive tab", "inert"] as const)(
     fireEvent.click(
       container.querySelector<HTMLButtonElement>(".session-review-file")!,
     );
-    const frames: FrameRequestCallback[] = [];
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.push(callback);
-      return frames.length;
-    });
     fireEvent.keyDown(
       screen.getByRole("region", {
         name: /src\/features\/review\/very-long-file-name\.tsx/u,
       }),
       { key: "Escape" },
     );
-    expect(frames).toHaveLength(1);
+    expect(document.activeElement).toBe(
+      container.querySelector(".session-review-file"),
+    );
     if (state === "inert")
       container.querySelector(".workbar-panel")!.setAttribute("inert", "");
     else rerender(node(state !== "collapsed", state === "inactive tab"));
     const input = screen.getByRole("textbox", { name: "draft" });
     input.focus();
     await act(async () => {
-      for (const frame of frames) frame(0);
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
     });
     expect(document.activeElement).toBe(input);
   },

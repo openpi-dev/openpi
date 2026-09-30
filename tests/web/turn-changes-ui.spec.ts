@@ -245,6 +245,35 @@ it("does not claim exact totals for partial evidence or render unknown evidence"
   expect(container.querySelector(".turn-changes-unavailable")).toBeNull();
 });
 
+it("labels native tool edits separately and keeps known files when line counts are unknown", () => {
+  const edited: WebTurnChanges = {
+    ...changes,
+    version: 2,
+    source: "file-tools",
+    state: "partial",
+    fileCount: 2,
+    files: [
+      { ...files[0]!, additions: 1, deletions: 0 },
+      {
+        ...files[1]!,
+        additions: 0,
+        deletions: 0,
+        statsUnavailable: "before_unavailable",
+      },
+    ],
+  };
+  const { container } = render(
+    withI18n(createElement(TurnChangesCard, { changes: edited })),
+  );
+  expect(screen.getByText("Edited 2 files")).toBeTruthy();
+  expect(screen.getByText("Line counts unavailable")).toBeTruthy();
+  expect(container.querySelectorAll(".turn-changes-file")).toHaveLength(2);
+  expect(container.querySelector(".turn-changes-totals")).toBeNull();
+  expect(
+    container.querySelectorAll(".turn-changes-file-stats")[1]?.textContent,
+  ).not.toContain("+0");
+});
+
 function panel(promptEntryId: string, filePath = files[1]!.path) {
   return withI18n(
     createElement(WorkbarPanel, {

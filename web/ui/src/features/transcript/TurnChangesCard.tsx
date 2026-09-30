@@ -18,6 +18,8 @@ export function TurnChangesCard({
   if (changes.state === "unavailable" || changes.files.length === 0)
     return null;
   const partial = changes.state === "partial";
+  const toolEvidence = changes.source === "file-tools";
+  const incompleteList = changes.fileCount === null;
   const files = expanded ? changes.files : changes.files.slice(0, 3);
   return (
     <section className="turn-changes" aria-label={t("turnChangesReview")}>
@@ -26,18 +28,32 @@ export function TurnChangesCard({
           <FileDiff />
         </span>
         <div className="turn-changes-summary">
-          <strong title={t("turnChangesScope")}>
-            {t(partial ? "turnChangesPartial" : "turnChanges", {
-              count: partial ? changes.files.length : changes.fileCount,
-            })}
+          <strong
+            title={t(toolEvidence ? "turnEditsScope" : "turnChangesScope")}
+          >
+            {t(
+              toolEvidence
+                ? incompleteList
+                  ? "turnEditsPartial"
+                  : "turnEdits"
+                : partial
+                  ? "turnChangesPartial"
+                  : "turnChanges",
+              {
+                count: changes.fileCount ?? changes.files.length,
+              },
+            )}
           </strong>
-          {!partial && !changes.files.some((file) => file.binary) && (
-            <span className="turn-changes-totals">
-              <span className="review-additions">+{changes.additions}</span>
-              <span className="review-deletions">−{changes.deletions}</span>
-            </span>
-          )}
-          {partial && (
+          {!incompleteList &&
+            !changes.files.some(
+              (file) => file.binary || file.statsUnavailable,
+            ) && (
+              <span className="turn-changes-totals">
+                <span className="review-additions">+{changes.additions}</span>
+                <span className="review-deletions">−{changes.deletions}</span>
+              </span>
+            )}
+          {partial && !toolEvidence && (
             <span className="turn-changes-warning">
               {t("turnChangesIncomplete")}
             </span>
@@ -77,6 +93,10 @@ export function TurnChangesCard({
               <span className="turn-changes-file-stats">
                 {file.binary ? (
                   <span>{t("gitReviewBinaryShort")}</span>
+                ) : file.statsUnavailable ? (
+                  <span title={t(`turnEditReason_${file.statsUnavailable}`)}>
+                    {t("turnEditStatsUnknown")}
+                  </span>
                 ) : (
                   <>
                     <span className="review-additions">+{file.additions}</span>

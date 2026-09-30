@@ -128,6 +128,18 @@ const resources = {
       reviewChanges: "Review changes",
       workspaceChanges: "Workspace changes",
       turnChangesScope: "Saved workspace changes during this turn",
+      turnEdits_one: "Edited {{count}} file",
+      turnEdits_other: "Edited {{count}} files",
+      turnEditsPartial: "Recorded edits to {{count}} files",
+      turnEditsScope:
+        "This turn's recorded file-tool writes · saved; shell and external edits are not included",
+      turnEditStatsUnknown: "Line counts unavailable",
+      turnEditReason_before_unavailable:
+        "The write completed, but previous contents were not authorized for reading. A before/after diff is unavailable.",
+      turnEditReason_content_limit:
+        "The write completed. Content exceeds the saved comparison limit, so exact line counts are unavailable.",
+      turnEditReason_concurrent_change:
+        "The file changed between recorded operations. A reliable net diff for this turn is unavailable.",
       gitReviewLoadedCount: "{{count}} files loaded",
       gitReviewPartialLabel: "Partial",
       gitReviewSearch: "Search file paths",
@@ -1166,6 +1178,16 @@ const resources = {
       reviewChanges: "查看变更",
       workspaceChanges: "工作区更改",
       turnChangesScope: "该轮开始至结束的工作区差异 · 已保存",
+      turnEdits: "已编辑 {{count}} 个文件",
+      turnEditsPartial: "已记录 {{count}} 个文件的编辑",
+      turnEditsScope: "本轮文件工具写入记录 · 已保存；不含命令行与外部修改",
+      turnEditStatsUnknown: "行数未知",
+      turnEditReason_before_unavailable:
+        "文件已写入，但该操作未授权读取旧内容，无法提供可靠的前后差异。",
+      turnEditReason_content_limit:
+        "文件已写入，内容超过已保存对比的大小限制，无法提供准确行数。",
+      turnEditReason_concurrent_change:
+        "文件在已记录的操作之间发生了变化，无法确认本轮净增删行数。",
       gitReviewLoadedCount: "已载入 {{count}} 个文件",
       gitReviewPartialLabel: "部分",
       gitReviewSearch: "搜索文件路径",
