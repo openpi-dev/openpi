@@ -1,6 +1,5 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { createEvidenceWriteTool } from "./write-evidence.ts";
 import { createTurnChangeRecorder } from "./turn-changes.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -1208,10 +1207,11 @@ export class PiWebRuntime implements WebRuntimeController {
         await this.promptOrigins.run(promptTrace, () => session.prompt(content, {
           ...(options?.images?.length
             ? {
-                images: options.images.map(({ data, mimeType }) => ({
+                images: options.images.map(({ data, mimeType, name }) => ({
                   type: "image" as const,
                   data,
                   mimeType,
+                  ...(name ? { name } : {}),
                 })),
               }
             : {}),
@@ -1528,13 +1528,14 @@ export class PiWebRuntime implements WebRuntimeController {
         ownsDispatcherLease = true;
       }
       const commandDiscovery = createCommandDiscoveryBridge();
+      const turnChanges = createTurnChangeRecorder(options.sessionManager, options.cwd);
       const services = await createAgentSessionServices({
         cwd: options.cwd,
         agentDir: options.agentDir,
         settingsManager,
         modelRuntimeSignal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
         resourceLoaderOptions: {
-          extensionFactories: [commandDiscovery.extension, createTurnChangeRecorder(options.sessionManager, options.cwd)],
+          extensionFactories: [commandDiscovery.extension, turnChanges.extension],
         },
       });
       registerCommandDiscoveryBridge(services, commandDiscovery);
@@ -1550,7 +1551,7 @@ export class PiWebRuntime implements WebRuntimeController {
       if (errors.length > 0) throw new Error(errors.join("; "));
       const created = await createAgentSessionFromServices({
         services,
-        customTools: [createEvidenceWriteTool(options.cwd)],
+        customTools: [turnChanges.writeTool, turnChanges.editTool],
         sessionManager: options.sessionManager,
         sessionStartEvent: options.sessionStartEvent,
       });

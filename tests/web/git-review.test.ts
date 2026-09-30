@@ -8,6 +8,7 @@ import {
   readFile,
   readdir,
   rm,
+  symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -17,7 +18,6 @@ import { after, test } from "node:test";
 import { promisify } from "node:util";
 import {
   countGitDiffLines,
-  captureGitTurnChanges,
   GitReviewBaselineStore,
   readGitReview,
 } from "../../web/host/git-review.ts";
@@ -86,6 +86,80 @@ test("Git review combines branch, staged, unstaged, and untracked changes", asyn
   assert.equal(result.snapshot.truncated, false);
 });
 
+test("summary pages include files past 200, have exact totals and refuse a changed listing", async () => {
+  const root = await repository();
+  await Promise.all(
+    Array.from({ length: 205 }, (_, i) =>
+      writeFile(join(root, `${i + 1}.stp`), `ISO-10303-21;\n${i}\n`),
+    ),
+  );
+  const first = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(first.ok);
+  if (!first.ok) return;
+  assert.equal(first.snapshot.totalFiles, 205);
+  assert.deepEqual(first.snapshot.totals, {
+    additions: 410,
+    deletions: 0,
+    complete: true,
+  });
+  assert.equal(first.snapshot.files.length, 200);
+  assert.equal(first.snapshot.listComplete, true);
+  assert.equal(first.snapshot.truncated, false);
+  assert.deepEqual(
+    first.snapshot.files.slice(0, 3).map((f) => f.path),
+    ["1.stp", "2.stp", "3.stp"],
+  );
+  const second = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: first.snapshot.nextOffset!,
+    expectedRevision: first.snapshot.revision,
+  });
+  assert.ok(second.ok);
+  if (!second.ok) return;
+  assert.equal(second.snapshot.files.length, 5);
+  assert.deepEqual(second.snapshot.totals, first.snapshot.totals);
+  assert.equal(second.snapshot.nextOffset, undefined);
+  assert.equal(second.snapshot.revision, first.snapshot.revision);
+  assert.equal(
+    new Set(
+      [...first.snapshot.files, ...second.snapshot.files].map((f) => f.path),
+    ).size,
+    205,
+  );
+  await writeFile(join(root, "205.stp"), "changed text\n");
+  assert.deepEqual(
+    await readGitReview(root, {
+      source: "unstaged",
+      summary: true,
+      offset: 200,
+      expectedRevision: first.snapshot.revision,
+    }),
+    { ok: false, reason: "revision_changed" },
+  );
+});
+
+test("binary detection uses contents rather than the STEP extension", async () => {
+  const root = await repository();
+  await writeFile(join(root, "text.stp"), "ISO-10303-21;\nDATA;\n");
+  await writeFile(join(root, "image.dat"), Buffer.from([1, 0, 2, 3]));
+  const result = await readGitReview(root, { source: "unstaged" });
+  assert.ok(result.ok);
+  if (!result.ok) return;
+  assert.equal(
+    result.snapshot.files.find((f) => f.path === "text.stp")?.binary,
+    false,
+  );
+  assert.equal(
+    result.snapshot.files.find((f) => f.path === "image.dat")?.binary,
+    true,
+  );
+});
+
 test("Git review baseline reports only changes made after a Session starts", async () => {
   const root = await repository();
   const baselineDirectory = await mkdtemp(
@@ -121,73 +195,6 @@ test("Git review baseline reports only changes made after a Session starts", asy
     changed.snapshot.files.find((file) => file.path === "preexisting.txt")
       ?.status,
     "modified",
-  );
-});
-
-test("turn capture excludes preexisting dirty work, records edits, and distinguishes no changes", async () => {
-  const root = await repository();
-  await writeFile(join(root, "base.txt"), "base\npreexisting\n", "utf8");
-  await writeFile(join(root, "already-untracked.txt"), "before\n", "utf8");
-  await Promise.all(
-    Array.from({ length: 205 }, (_, index) =>
-      writeFile(join(root, `preexisting-${index}.txt`), "before\n", "utf8"),
-    ),
-  );
-  const first = await captureGitTurnChanges("current:test-turn-1", root);
-  try {
-    const initial = await first.read();
-    assert.equal(initial.ok, true);
-    if (initial.ok) assert.deepEqual(initial.snapshot.files, []);
-    await writeFile(join(root, "base.txt"), "base\nchanged\n", "utf8");
-    await writeFile(join(root, "already-untracked.txt"), "after\n", "utf8");
-    await writeFile(join(root, "new.txt"), "new\n", "utf8");
-    const changed = await first.read();
-    assert.equal(changed.ok, true);
-    if (changed.ok) {
-      assert.deepEqual(changed.snapshot.files.map((file) => file.path).sort(), [
-        "already-untracked.txt",
-        "base.txt",
-        "new.txt",
-      ]);
-      assert.equal(changed.snapshot.additions, 3);
-      assert.equal(changed.snapshot.deletions, 2);
-    }
-  } finally {
-    await first.dispose();
-  }
-  const second = await captureGitTurnChanges("current:test-turn-2", root);
-  try {
-    const unchanged = await second.read();
-    assert.equal(unchanged.ok, true);
-    if (unchanged.ok) assert.deepEqual(unchanged.snapshot.files, []);
-  } finally {
-    await second.dispose();
-  }
-});
-
-test("turn capture fails closed if the workspace switches Git repositories", async () => {
-  const root = await repository();
-  const nested = join(root, "nested");
-  await mkdir(nested);
-  const capture = await captureGitTurnChanges("current:nested-turn", nested);
-  try {
-    await git(nested, "init", "-b", "main");
-    const result = await capture.read();
-    assert.deepEqual(result, { ok: false, reason: "git_failed" });
-  } finally {
-    await capture.dispose();
-  }
-});
-
-test("turn capture does not recapture after its dirty-worktree budget is exceeded", async () => {
-  const root = await repository();
-  await writeFile(
-    join(root, "oversized.bin"),
-    Buffer.alloc(5 * 1024 * 1024, 7),
-  );
-  await assert.rejects(
-    captureGitTurnChanges("current:oversized-turn", root, 4 * 1024 * 1024),
-    /baseline unavailable/iu,
   );
 });
 
@@ -269,6 +276,29 @@ test("Git review reports a non-repository instead of an empty snapshot", async (
   });
 });
 
+test("summary counts stay partial for symlinks and do not read their targets", async () => {
+  const root = await repository();
+  await writeFile(join(root, "small.txt"), "one\ntwo");
+  await symlink("base.txt", join(root, "linked.txt"));
+  const result = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(result.ok);
+  if (!result.ok) return;
+  assert.deepEqual(result.snapshot.totals, {
+    additions: 2,
+    deletions: 0,
+    complete: false,
+  });
+  assert.equal(
+    result.snapshot.files.find((file) => file.path === "linked.txt")
+      ?.statsUnavailable,
+    "content_limit",
+  );
+});
+
 test("native Git views remain usable with an oversized untracked file and load diffs on demand", async () => {
   const root = await repository();
   await writeFile(join(root, "large.bin"), Buffer.alloc(8 * 1024 * 1024));
@@ -280,6 +310,11 @@ test("native Git views remain usable with an oversized untracked file and load d
   assert.equal(overview.ok, true);
   if (!overview.ok) return;
   assert.equal(overview.snapshot.comparison, "unstaged");
+  assert.deepEqual(overview.snapshot.totals, {
+    additions: 1,
+    deletions: 0,
+    complete: false,
+  });
   assert.equal(
     overview.snapshot.files.find((file) => file.path === "large.bin")
       ?.diffLoaded,

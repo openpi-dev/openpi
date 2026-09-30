@@ -24,6 +24,7 @@ import type {
 } from "../../../../../extensions/shared/web-observer-registry.ts";
 import { WebClient } from "../../protocol/client.ts";
 import { FilesPanel } from "../files/FilesPanel.tsx";
+import { useTurnReview } from "../review/use-turn-review.ts";
 import {
   type GitReviewViewState,
   ReviewPanel,
@@ -388,8 +389,11 @@ export function WorkbarPanel({
   capabilities,
   review,
   reviewInitialFilePath,
+  reviewTurn,
+  onWorkspaceReview,
   conversationCollapsed,
   onRestoreConversation,
+  onExpandReview,
   onClose,
   onActiveToolChange,
   canControl = true,
@@ -404,8 +408,11 @@ export function WorkbarPanel({
   capabilities: WebCapabilitySnapshot;
   review: GitReviewViewState;
   reviewInitialFilePath?: string;
+  reviewTurn?: { promptEntryId: string; filePath?: string; revision: number };
+  onWorkspaceReview?: () => void;
   conversationCollapsed: boolean;
   onRestoreConversation: () => void;
+  onExpandReview?: () => void;
   onClose: () => void;
   onActiveToolChange?: (tool: WorkbarTool | null) => void;
   canControl?: boolean;
@@ -413,6 +420,12 @@ export function WorkbarPanel({
 }) {
   const { t } = useTranslation();
   const [tabs, setTabs] = useState(() => initialWorkbarTabs(requestedTool));
+  const savedReview = useTurnReview(
+    sessionId,
+    sessionPath,
+    cwd,
+    reviewTurn?.promptEntryId,
+  );
   const handledRequest = useRef(requestRevision);
   useEffect(() => {
     onActiveToolChange?.(
@@ -518,6 +531,22 @@ export function WorkbarPanel({
           })}
         </div>
         <div className="workbar-tabbar-actions">
+          {!conversationCollapsed &&
+            tabs.active === "review" &&
+            onExpandReview && (
+              <button
+                type="button"
+                className="icon-button review-expand"
+                aria-label={t("gitReviewExpand")}
+                title={t("gitReviewExpand")}
+                onClick={onExpandReview}
+              >
+                <PanelLeftOpen
+                  aria-hidden="true"
+                  style={{ transform: "rotate(180deg)" }}
+                />
+              </button>
+            )}
           {conversationCollapsed && (
             <button
               type="button"
@@ -588,9 +617,24 @@ export function WorkbarPanel({
               />
             ) : tool === "review" ? (
               <ReviewPanel
+                key={
+                  reviewTurn
+                    ? `${reviewTurn.promptEntryId}:${reviewTurn.revision}`
+                    : (review.source ?? "workspace")
+                }
                 active={visible && !tabs.launcherOpen && tabs.active === tool}
-                review={review}
-                initialFilePath={reviewInitialFilePath}
+                review={
+                  reviewTurn
+                    ? {
+                        ...savedReview,
+                        setSource: (source) => {
+                          review.setSource?.(source);
+                          onWorkspaceReview?.();
+                        },
+                      }
+                    : review
+                }
+                initialFilePath={reviewTurn?.filePath ?? reviewInitialFilePath}
                 onOpenFiles={() => select("files")}
                 onClose={() =>
                   setTabs((current) => closeWorkbarTool(current, "review"))

@@ -46,6 +46,7 @@ import type {
   WebThinkingProjection,
 } from "../runtime/types.ts";
 import { matchesSessionIdentity } from "../runtime/session-identity.ts";
+import { collectSessionSources } from "./session-sources.ts";
 import {
   WEB_TURN_CHANGES_ENTRY,
   readTurnChangesDetail,
@@ -1396,6 +1397,36 @@ export class PiWebAdapter {
       return { ok: true, changes: { ...detail, files: [file] } };
     }
     return { ok: true, changes: detail };
+  }
+
+  private async sourceSession(sessionId: string, path: string) {
+    const summary = (await this.listSessions(path)).find((session) => session.path === path);
+    if (!summary || summary.id !== sessionId) return undefined;
+    const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+    return manager.getSessionId() === sessionId ? manager : undefined;
+  }
+
+  async getSessionSources(sessionId: string, path: string, offset: number, revision?: string) {
+    const manager = await this.sourceSession(sessionId, path);
+    if (!manager) return undefined;
+    const current = manager.getLeafId() ?? "empty";
+    if (revision !== undefined && revision !== current) return { changed: true as const };
+    const result = collectSessionSources(manager.getBranch());
+    return { sessionId, path, revision: current, sources: result.sources.slice(offset, offset + 50),
+      ...(offset + 50 < result.sources.length ? { nextOffset: offset + 50 } : {}), truncated: result.truncated };
+  }
+
+  async getSourceImage(sessionId: string, path: string, entryId: string, partIndex: number) {
+    const manager = await this.sourceSession(sessionId, path);
+    const entry = manager?.getBranch().find((item) => item.id === entryId);
+    if (entry?.type !== "message" || entry.message.role !== "user" || !Array.isArray(entry.message.content)) return undefined;
+    const image = entry.message.content[partIndex];
+    // Read only image bytes already supplied to this exact Session; never a client path.
+    if (image?.type !== "image" || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(image.mimeType) ||
+      typeof image.data !== "string" || image.data.length > 12 * 1024 * 1024 ||
+      !/^[A-Za-z0-9+/]*={0,2}$/u.test(image.data)) return undefined;
+    return { data: image.data, mimeType: image.mimeType };
   }
 
   async getSessionItem(sessionId: string, path: string, entryId: string, cursor: number, purpose?: "plan") {

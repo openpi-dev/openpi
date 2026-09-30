@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -34,6 +34,9 @@ test("real Git rename details and index-only edits refresh the open browser diff
     await git("update-index", "--cacheinfo", "100644", oid, "index.txt");
   };
   await updateIndex("staged-a\n");
+  await mkdir(join(root, "web/ui"), { recursive: true });
+  await writeFile(join(root, "web/ui/App.tsx"), "export const app = true;\n");
+  await git("add", "web/ui/App.tsx");
   const originalStat = await lstat(join(root, "index.txt"), { bigint: true });
   const manager = SessionManager.inMemory(root);
   const runtime: WebRuntimeController = {
@@ -75,9 +78,9 @@ test("real Git rename details and index-only edits refresh the open browser diff
   try {
     await host.start();
     await page.goto(host.origin);
-    await page.locator(".task-tools-trigger").click();
+    await page.getByRole("button", { name: "会话概览", exact: true }).click();
+    await page.getByRole("button", { name: /^变更/u }).click();
     const workbar = page.locator(".workbar-panel");
-    await workbar.getByRole("button", { name: /^变更/u }).click();
     await workbar
       .getByRole("combobox", { name: "变更范围" })
       .selectOption("staged");
@@ -103,12 +106,61 @@ test("real Git rename details and index-only edits refresh the open browser diff
     // Returning from an external Git operation triggers the existing refresh
     // path; keep the file open and the input focused during reconciliation.
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(
+      workbar.getByRole("button", { name: "查看最新差异" }),
+    ).toBeVisible();
+    await expect(diff).toContainText("staged-a");
+    await expect(draft).toBeFocused();
+    await workbar.getByRole("button", { name: "查看最新差异" }).click();
     await expect(diff).toContainText("staged-b", { timeout: 10_000 });
     await expect(diff).not.toContainText("staged-a");
-    await expect(draft).toBeFocused();
     await expect(draft).toHaveValue("保留正在编辑的草稿");
     await page.screenshot({
       path: testInfo.outputPath("native-index-refresh.png"),
+    });
+    await workbar
+      .getByRole("button", { name: "展开审阅", exact: true })
+      .click();
+    await expect(workbar.locator(".review-wide")).toBeVisible();
+    const navigation = workbar.locator(".review-navigation");
+    const treeFile = navigation.getByRole("button", {
+      name: "web/ui/App.tsx",
+      exact: true,
+    });
+    await treeFile.click();
+    await expect(treeFile).toHaveAttribute("aria-current", "true");
+    await expect(diff).toContainText("export const app = true");
+    const navBox = await navigation.boundingBox();
+    const previewBox = await workbar
+      .locator(".review-file-screen")
+      .boundingBox();
+    expect(navBox!.x).toBeGreaterThanOrEqual(
+      previewBox!.x + previewBox!.width - 1,
+    );
+    await navigation
+      .getByRole("button", { name: "web/ui", exact: true })
+      .click();
+    await expect(treeFile).toHaveCount(0);
+    await navigation.getByRole("searchbox").fill("App.tsx");
+    await expect(treeFile).toBeVisible();
+    await navigation.getByRole("searchbox").fill("");
+    await expect(treeFile).toHaveCount(0);
+    await navigation
+      .getByRole("button", { name: "web/ui", exact: true })
+      .click();
+    await page.screenshot({
+      path: testInfo.outputPath("review-tree-wide.png"),
+    });
+    await workbar
+      .getByRole("button", { name: "恢复会话", exact: true })
+      .click();
+    await expect(draft).toHaveValue("保留正在编辑的草稿");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(diff).toContainText("export const app = true");
+    await workbar.getByRole("button", { name: "返回变更文件" }).click();
+    await expect(treeFile).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath("review-tree-mobile.png"),
     });
   } finally {
     await context.close();

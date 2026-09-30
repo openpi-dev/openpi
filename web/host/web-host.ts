@@ -1601,13 +1601,41 @@ export class WebHost {
         resources: this.runtime.listSettingsResources(),
       });
     }
+    if (url.pathname === "/api/session-sources" || url.pathname === "/api/session-sources/image") {
+      const sessionId = url.searchParams.get("sessionId");
+      const path = url.searchParams.get("path");
+      const entryId = url.searchParams.get("entryId");
+      const part = url.searchParams.get("part");
+      const offset = url.searchParams.get("offset") ?? "0";
+      const revision = url.searchParams.get("revision") ?? undefined;
+      const image = url.pathname.endsWith("/image");
+      const keys = image ? ["sessionId", "path", "entryId", "part"] : ["sessionId", "path", "offset", "revision"];
+      if (request.method !== "GET" || !sessionId || sessionId.length > 256 || !path || path.length > 4096 ||
+        [...url.searchParams.keys()].some((key) => !keys.includes(key) || url.searchParams.getAll(key).length !== 1) ||
+        (image ? !entryId || entryId.length > 256 || part === null || !/^\d{1,5}$/u.test(part) :
+          !/^\d{1,5}$/u.test(offset) || Number(offset) > 10_000 || (Number(offset) > 0 && !revision) || (revision?.length ?? 0) > 256))
+        return this.json(response, 400, { error: "Invalid Session source target" });
+      const result = image
+        ? await this.adapter.getSourceImage(sessionId, path, entryId!, Number(part))
+        : await this.adapter.getSessionSources(sessionId, path, Number(offset), revision);
+      if (!result) return this.json(response, 404, { error: "Session source unavailable" });
+      if ("changed" in result) return this.json(response, 409, { error: "Session sources changed; refresh the list" });
+      return this.json(response, 200, result);
+    }
     if (url.pathname === "/api/git-review") {
       const sessionId = url.searchParams.get("sessionId");
       const sessionPath = url.searchParams.get("path");
       const source = url.searchParams.get("source") ?? "unstaged";
       const filePath = url.searchParams.get("file");
+      const offset = url.searchParams.get("offset");
+      const expectedRevision = url.searchParams.get("revision");
       if (
         !["unstaged", "staged", "branch", "session"].includes(source) ||
+        (offset !== null && (!/^\d{1,4}$/u.test(offset) || filePath !== null)) ||
+        (offset !== null && Number(offset) > 0 && !expectedRevision) ||
+        (expectedRevision !== null && (!/^[a-f0-9]{64}$/u.test(expectedRevision) || offset === null)) ||
+        url.searchParams.getAll("offset").length > 1 ||
+        url.searchParams.getAll("revision").length > 1 ||
         (filePath !== null && (!filePath || filePath.length > 4096 || filePath.includes("\0"))) ||
         url.searchParams.getAll("source").length > 1 ||
         url.searchParams.getAll("file").length > 1 ||
@@ -1617,7 +1645,7 @@ export class WebHost {
         url.searchParams.getAll("sessionId").length !== 1 ||
         url.searchParams.getAll("path").length !== 1 ||
         [...url.searchParams.keys()].some(
-          (key) => !["sessionId", "path", "source", "file"].includes(key),
+          (key) => !["sessionId", "path", "source", "file", "offset", "revision"].includes(key),
         )
       ) {
         return this.json(response, 400, {
@@ -1638,6 +1666,8 @@ export class WebHost {
         await this.gitReviews.read(session.path, session.cwd, {
           source: source as import("../protocol/types.ts").WebGitReviewSource,
           summary: filePath === null,
+          ...(offset === null ? {} : { offset: Number(offset) }),
+          ...(expectedRevision === null ? {} : { expectedRevision }),
           ...(filePath === null ? {} : { filePath }),
         }),
       );

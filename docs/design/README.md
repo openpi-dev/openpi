@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_CHANGE_REVIEW.md`](WEB_CHANGE_REVIEW.md) — validated turn/workspace scopes, unified review navigation, Codex-style cards and bounded pagination for #597 / #598
+
 - [`WEB_SUBAGENT_OVERVIEW.md`](WEB_SUBAGENT_OVERVIEW.md) — source- and UI-validated session summary popover, grouped child list and reference comparison for #597 / #598
 
 - [`WEB_WORKSPACE_SIDEBAR.md`](WEB_WORKSPACE_SIDEBAR.md) — draft folder-led workspace navigation and restrained Session hierarchy for #597 / #598

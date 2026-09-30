@@ -463,16 +463,30 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .subagent-avatar.tone-5 { color:light-dark(#917995,#c8a3ce); }
 .subagent-show-more { margin:8px 0 0 42px; padding:8px 10px; color:var(--muted); font-size:13px; background:transparent; border:0; border-radius:8px; cursor:pointer; }
 .subagent-show-more:hover { background:var(--sidebar); color:var(--text); }
-.session-overview { padding:18px; color:var(--text); }
+.session-overview { padding:18px; color:var(--text); max-height:calc(100dvh - 130px); overflow-y:auto; }
 .session-overview-title { margin:0 6px 12px; color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .session-overview-row { display:flex; align-items:center; gap:12px; width:100%; padding:11px 6px; text-align:left; background:transparent; border:0; border-radius:8px; color:var(--text); font:inherit; font-size:14px; cursor:pointer; }
 .session-overview-row:hover { background:var(--sidebar); }
 .session-overview-row > svg { width:18px; height:18px; flex:none; }
 .session-overview-row > svg:last-child { width:14px; height:14px; color:var(--muted); }
-.session-overview-row > span:not(.subagent-avatar-stack,.session-overview-diff) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.session-overview-row > span:not(.subagent-avatar-stack,.session-overview-diff,.session-overview-note,.session-source-icon) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .session-overview-diff { display:flex; gap:7px; font-size:12px; font-variant-numeric:tabular-nums; }
-.session-overview-diff > :first-child { color:var(--healthy); }
-.session-overview-diff > :last-child { color:var(--error); }
+.session-overview-diff { align-items:center; white-space:nowrap; }
+.session-overview-note { color:var(--muted); font-size:11px; white-space:nowrap; }
+.session-overview-section-heading { display:flex; align-items:center; justify-content:space-between; margin:0 6px 6px; color:var(--muted); font-size:13px; }
+.session-overview-section-heading button { display:grid; place-items:center; width:32px; height:32px; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; }
+.session-overview-section-heading button:hover { background:var(--sidebar); color:var(--text); }
+.session-overview-section-heading svg { width:18px; height:18px; }
+.session-source-icon { display:grid; place-items:center; width:30px; height:30px; flex:none; overflow:hidden; border:1px solid var(--border); border-radius:6px; background:var(--sidebar); color:var(--muted); }
+.session-source-icon img { width:100%; height:100%; object-fit:cover; }
+.session-source-icon svg { width:16px; height:16px; }
+.session-source-row { gap:12px; min-height:44px; padding-block:7px; }
+.sources-view-all { color:var(--muted); }
+.session-sources-list { max-height:65dvh; overflow:auto; padding:12px 18px; }
+.session-sources-list > p { color:var(--muted); font-size:13px; }
+.sources-load-more { display:block; margin:12px auto; padding:8px 16px; background:transparent; color:var(--text); border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+.session-sources-dialog header > strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.session-sources-dialog header > button { flex:none; }
 .session-overview-section { margin-top:12px; padding-top:16px; border-top:1px solid var(--border); }
 .session-overview-section > p { margin:0 6px 6px; font-size:13px; color:var(--muted); }
 .session-overview-section > small { display:block; margin:6px; color:var(--muted); }

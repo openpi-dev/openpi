@@ -73,6 +73,11 @@ export function App() {
     [],
   );
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
+  const [addSourcesRequest, setAddSourcesRequest] = useState<{
+    sessionId: string;
+    path: string;
+    revision: number;
+  }>();
   const [resizingPane, setResizingPane] = useState(false);
   const [centerCollapsed, setCenterCollapsed] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -115,6 +120,11 @@ export function App() {
     requestRevision: number;
   } | null>(null);
   const [workbarOpen, setWorkbarOpen] = useState(false);
+  const [reviewTurn, setReviewTurn] = useState<{
+    promptEntryId: string;
+    filePath?: string;
+    revision: number;
+  } | null>(null);
   const [workbarActiveTool, setWorkbarActiveTool] =
     useState<WorkbarTool | null>(null);
   const [subagentTarget, setSubagentTarget] = useState<{
@@ -344,10 +354,12 @@ export function App() {
     if (!workbarTarget || workbarBound) return;
     workbarReturnFocus.current = null;
     setWorkbarTarget(null);
+    setReviewTurn(null);
     setWorkbarOpen(false);
   }, [workbarBound, workbarTarget]);
   const openWorkbar = (tool: WorkbarTool = "launcher") => {
     if (!selected || state.sessionSwitching) return;
+    if (tool === "review") setReviewTurn(null);
     if (artifactPanelOpen) {
       artifactProvider.current?.close({ restoreFocus: false });
     }
@@ -561,13 +573,25 @@ export function App() {
                   key={`${selected.id}:${selected.path}`}
                   sessionId={selected.id}
                   workspace={workspace?.name || workspaceName(selected.cwd)}
-                  cwd={selected.cwd}
                   agents={overviewAgents}
                   omitted={liveSubagents?.omitted ?? 0}
                   review={gitReview.result}
+                  reviewLoading={gitReview.loading}
+                  reviewError={gitReview.error}
+                  sessionPath={selected.path}
+                  revision={selected.history?.leafEntryId ?? undefined}
+                  onAddSources={
+                    controlled
+                      ? () =>
+                          setAddSourcesRequest((previous) => ({
+                            sessionId: selected.id,
+                            path: selected.path,
+                            revision: (previous?.revision ?? 0) + 1,
+                          }))
+                      : undefined
+                  }
                   onSubagents={() => inspectSubagent()}
                   onReview={() => openWorkbar("review")}
-                  onFiles={() => openWorkbar("files")}
                 />
               )}
               <button
@@ -671,6 +695,18 @@ export function App() {
                 scrollToBottom={state.scrollToBottom}
                 onResend={resend}
                 onInspectSubagent={inspectSubagent}
+                onReviewTurn={(promptEntryId, filePath) => {
+                  openWorkbar("review");
+                  workbarReturnFocus.current =
+                    document.activeElement instanceof HTMLElement
+                      ? document.activeElement
+                      : null;
+                  setReviewTurn({
+                    promptEntryId,
+                    filePath,
+                    revision: (reviewTurn?.revision ?? 0) + 1,
+                  });
+                }}
                 onHistoryAnchorChange={actions.setHistoryAnchor}
                 onRefreshHistory={actions.refreshSnapshot}
                 onPromptProjection={actions.rememberPromptProjection}
@@ -692,6 +728,7 @@ export function App() {
               )}
             {state.snapshot && (
               <Composer
+                addSourcesRequest={addSourcesRequest}
                 planSelectionPending={state.planSelectionPending}
                 workspaceDraft={state.workspaceDraft}
                 draftModel={state.draftModel}
@@ -804,8 +841,11 @@ export function App() {
               }
               onActiveToolChange={setWorkbarActiveTool}
               review={gitReview}
+              reviewTurn={reviewTurn ?? undefined}
+              onWorkspaceReview={() => setReviewTurn(null)}
               conversationCollapsed={centerCollapsed}
               onRestoreConversation={() => setCenterCollapsed(false)}
+              onExpandReview={() => setCenterCollapsed(true)}
               onClose={closeWorkbar}
             />
           )}

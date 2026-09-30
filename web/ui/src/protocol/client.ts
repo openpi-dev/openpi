@@ -15,6 +15,7 @@ import {
   type WebQuestionRequest,
 } from "../../../protocol/questions.ts";
 import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
+import type { WebSessionSources } from "../../../protocol/session-sources.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebCommandDiscoveryResult,
@@ -241,6 +242,8 @@ export class WebClient {
     options?: {
       source: import("../../../protocol/types.ts").WebGitReviewSource;
       file?: string;
+      offset?: string;
+      revision?: string;
     },
   ) {
     return this.request<WebGitReviewResult>(
@@ -833,6 +836,43 @@ export class WebClient {
         return { state: "stale" } as const;
       throw error;
     }
+  }
+
+  async sessionSources(
+    sessionId: string,
+    path: string,
+    signal: AbortSignal,
+    offset = 0,
+    revision?: string,
+  ) {
+    const query = new URLSearchParams({
+      sessionId,
+      path,
+      offset: String(offset),
+      ...(revision ? { revision } : {}),
+    });
+    return this.request<WebSessionSources>(`/api/session-sources?${query}`, {
+      signal,
+    });
+  }
+
+  async sourceImage(
+    sessionId: string,
+    path: string,
+    entryId: string,
+    part: number,
+    signal: AbortSignal,
+  ) {
+    const query = new URLSearchParams({
+      sessionId,
+      path,
+      entryId,
+      part: String(part),
+    });
+    return this.request<{ data: string; mimeType: string }>(
+      `/api/session-sources/image?${query}`,
+      { signal },
+    );
   }
 
   async prompt(

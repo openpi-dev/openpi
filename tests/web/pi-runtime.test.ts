@@ -442,7 +442,11 @@ test("compaction-held messages preserve order and images through native admissio
   const runtime = promptHarness(session);
   const api = runtime as unknown as PiWebRuntime;
   session.isCompacting = true;
-  const image = { data: "aGVsbG8=", mimeType: "image/png" as const };
+  const image = {
+    data: "aGVsbG8=",
+    mimeType: "image/png" as const,
+    name: "queued-diagram.png",
+  };
   await runtime.sendPrompt("first", { commandId: "q1", images: [image] });
   await runtime.sendPrompt("second", { commandId: "q2" });
   assert.equal(session.calls.length, 0);

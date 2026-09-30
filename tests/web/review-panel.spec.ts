@@ -24,6 +24,168 @@ import { i18n } from "../../web/ui/src/i18n.ts";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function wideReviewContainer() {
+  let resize = (_width: number) => {};
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(
+        private callback: (
+          entries: { contentRect: { width: number } }[],
+        ) => void,
+      ) {}
+      observe(element: Element) {
+        if (!element.classList.contains("review-panel")) return;
+        resize = (width) => this.callback([{ contentRect: { width } }]);
+        resize(900);
+      }
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  return (width: number) => act(() => resize(width));
+}
+
+it("keeps a compact directory tree beside the diff, restores collapsed groups after search, and adapts to panel width", async () => {
+  const resize = wideReviewContainer();
+  const { container } = render(
+    withI18n(
+      createElement(ReviewPanel, {
+        embedded: true,
+        review: {
+          result: { ok: true, snapshot },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        onClose: () => {},
+      }),
+    ),
+  );
+  const first = screen.getByRole("button", {
+    name: snapshot.files[0]!.path,
+  });
+  expect(first.getAttribute("aria-current")).toBe("true");
+  expect(screen.getByRole("figure").textContent).toContain("new");
+  const directory = screen.getByRole("button", {
+    name: "src/features/review",
+  });
+  fireEvent.click(directory);
+  expect(
+    screen.queryByRole("button", {
+      name: snapshot.files[0]!.path,
+    }),
+  ).toBeNull();
+  expect(screen.getByRole("figure")).toBeTruthy();
+  fireEvent.change(screen.getByRole("searchbox"), {
+    target: { value: "very-long" },
+  });
+  expect(
+    screen.getByRole("button", { name: snapshot.files[0]!.path }),
+  ).toBeTruthy();
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
+  expect(directory.getAttribute("aria-expanded")).toBe("false");
+  const second = screen.getByRole("button", {
+    name: "z-new-file.ts",
+  });
+  second.focus();
+  fireEvent.click(second);
+  expect(document.activeElement).toBe(second);
+  expect(second.getAttribute("aria-current")).toBe("true");
+  expect(screen.getByRole("figure").textContent).toContain(
+    "export const value",
+  );
+  resize(480);
+  expect(container.querySelector(".review-navigation")).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Back to changed files" }),
+  );
+  expect(
+    screen
+      .getByRole("button", { name: "src/features/review" })
+      .getAttribute("aria-expanded"),
+  ).toBe("false");
+  resize(900);
+  expect(container.querySelector(".review-navigation")).toBeTruthy();
+  expect(screen.getByRole("figure")).toBeTruthy();
+});
+
+it("adds newly loaded pages to the pinned tree without refetching or replacing the selected diff", async () => {
+  wideReviewContainer();
+  const readFile = vi.fn(async () => snapshot.files[0]);
+  const node = (count: number) =>
+    withI18n(
+      createElement(ReviewPanel, {
+        embedded: true,
+        review: {
+          result: {
+            ok: true,
+            snapshot: {
+              ...snapshot,
+              files: snapshot.files
+                .slice(0, count)
+                .map((file) => ({ ...file, diffLoaded: false, diff: "" })),
+            },
+          },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+          readFile,
+        },
+        onClose: () => {},
+      }),
+    );
+  const { rerender } = render(node(1));
+  await screen.findByRole("figure");
+  rerender(node(2));
+  expect(screen.getByRole("button", { name: "z-new-file.ts" })).toBeTruthy();
+  expect(screen.getByRole("figure").textContent).toContain("new");
+  expect(readFile).toHaveBeenCalledOnce();
+});
+
+it("distinguishes a complete count from partial evidence and searches only loaded paths", () => {
+  const data = {
+    ...snapshot,
+    files: [10, 2, 1].map((n) => ({
+      ...snapshot.files[0]!,
+      path: `models/${n}.stp`,
+    })),
+  };
+  const loadMore = vi.fn(async () => {});
+  const node = (truncated: boolean, totalFiles?: number, nextOffset?: number) =>
+    withI18n(
+      createElement(ReviewPanel, {
+        review: {
+          result: {
+            ok: true,
+            snapshot: { ...data, truncated, totalFiles, nextOffset },
+          },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+          loadMore,
+        },
+        onClose: () => {},
+      }),
+    );
+  const { container, rerender } = render(node(false, 205, 3));
+  expect(screen.getByText("205 files changed")).toBeTruthy();
+  expect(screen.getByText("3 files loaded")).toBeTruthy();
+  expect(
+    [...container.querySelectorAll("[data-review-file]")].map((e) =>
+      e.getAttribute("data-review-file"),
+    ),
+  ).toEqual(["models/1.stp", "models/2.stp", "models/10.stp"]);
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "201" } });
+  expect(screen.getByText("No matches in the loaded files.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load the next files" }));
+  expect(loadMore).toHaveBeenCalledOnce();
+  rerender(node(true));
+  expect(screen.queryByText("3 files changed")).toBeNull();
+  expect(screen.getByText("3 files loaded")).toBeTruthy();
 });
 
 it("does not reload the selected diff for an unchanged snapshot revision", async () => {
@@ -61,6 +223,9 @@ it("does not reload the selected diff for an unchanged snapshot revision", async
   expect(readFile).toHaveBeenCalledTimes(1);
   rerender(makePanel("changed"));
   await act(async () => {});
+  expect(readFile).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Show latest diff" }));
+  await act(async () => {});
   expect(readFile).toHaveBeenCalledTimes(2);
 });
 
@@ -90,7 +255,7 @@ const snapshot: WebGitReviewSnapshot = {
       ].join("\n"),
     },
     {
-      path: "new-file.ts",
+      path: "z-new-file.ts",
       status: "untracked",
       additions: 7,
       deletions: 2,
@@ -207,7 +372,7 @@ it("returns to the original row and scroll position before Escape closes its Wor
 });
 
 it.each(["collapsed", "inactive tab", "inert"] as const)(
-  "does not restore focus into a $0 Workbar before its return frame",
+  "does not steal focus after the returned list becomes $0",
   async (state) => {
     const node = (visible: boolean, launcherOpen: boolean) =>
       createElement(
@@ -241,25 +406,24 @@ it.each(["collapsed", "inactive tab", "inert"] as const)(
     fireEvent.click(
       container.querySelector<HTMLButtonElement>(".session-review-file")!,
     );
-    const frames: FrameRequestCallback[] = [];
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.push(callback);
-      return frames.length;
-    });
     fireEvent.keyDown(
       screen.getByRole("region", {
         name: /src\/features\/review\/very-long-file-name\.tsx/u,
       }),
       { key: "Escape" },
     );
-    expect(frames).toHaveLength(1);
+    expect(document.activeElement).toBe(
+      container.querySelector(".session-review-file"),
+    );
     if (state === "inert")
       container.querySelector(".workbar-panel")!.setAttribute("inert", "");
     else rerender(node(state !== "collapsed", state === "inactive tab"));
     const input = screen.getByRole("textbox", { name: "draft" });
     input.focus();
     await act(async () => {
-      for (const frame of frames) frame(0);
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
     });
     expect(document.activeElement).toBe(input);
   },
@@ -344,6 +508,8 @@ it.each([
     const { rerender } = render(node("unstaged", snapshot.revision, false));
     await screen.findByText("Previous diff unavailable");
     rerender(node(source, revision, true));
+    if (source === "unstaged")
+      fireEvent.click(screen.getByRole("button", { name: "Show latest diff" }));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(
       screen.getByRole("figure", { name: "Change diff" }).textContent,
@@ -496,7 +662,12 @@ it("does not steal composer focus when a refreshed snapshot removes the selected
   rerender(
     node({ ...snapshot, revision: "removed", files: [snapshot.files[1]!] }),
   );
-  expect(screen.queryByRole("figure", { name: "Change diff" })).toBeNull();
+  expect(screen.getByRole("figure", { name: "Change diff" })).toBeTruthy();
+  expect(
+    screen.getByText(
+      "New changes are available. You are reading the previous version.",
+    ),
+  ).toBeTruthy();
   expect(document.activeElement).toBe(input);
   rerender(node(snapshot));
   expect(screen.getByRole("figure", { name: "Change diff" })).toBeTruthy();
@@ -513,7 +684,7 @@ it("opens a selected popover file directly in the dedicated preview", () => {
           error: null,
           refresh: vi.fn(async () => {}),
         },
-        initialFilePath: "new-file.ts",
+        initialFilePath: "z-new-file.ts",
         onClose: vi.fn(),
       }),
     ),
@@ -617,16 +788,16 @@ it("keeps hidden diff reads and focus dormant, then cancels a read when hidden a
   const { rerender } = render(node(false, snapshot.files[0]!.path));
   const input = screen.getByRole("textbox", { name: "draft" });
   input.focus();
-  rerender(node(false, "new-file.ts"));
+  rerender(node(false, "z-new-file.ts"));
   expect(readFile).not.toHaveBeenCalled();
   expect(document.activeElement).toBe(input);
-  rerender(node(true, "new-file.ts"));
+  rerender(node(true, "z-new-file.ts"));
   expect(readFile).toHaveBeenCalledTimes(1);
   expect(document.activeElement).toBe(
     screen.getByRole("region", { name: /new-file\.ts/u }),
   );
   const signal = readFile.mock.calls[0]![1];
-  rerender(node(false, "new-file.ts"));
+  rerender(node(false, "z-new-file.ts"));
   input.focus();
   expect(signal.aborted).toBe(true);
   await act(async () => finish(snapshot.files[1]!));

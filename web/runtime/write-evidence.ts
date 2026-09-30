@@ -1,8 +1,8 @@
-import { createWriteToolDefinition, defineTool } from "@earendil-works/pi-coding-agent";
+import { createWriteToolDefinition, defineTool, type WriteToolOptions } from "@earendil-works/pi-coding-agent";
 
 /** Write admission does not grant permission to disclose previous contents. */
-export function createEvidenceWriteTool(cwd: string) {
-  const native = createWriteToolDefinition(cwd);
+export function createEvidenceWriteTool(cwd: string, options?: WriteToolOptions) {
+  const native = createWriteToolDefinition(cwd, options);
   return defineTool({
     ...native,
     renderResult: undefined,

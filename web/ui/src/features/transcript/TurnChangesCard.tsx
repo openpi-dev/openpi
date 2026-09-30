@@ -1,297 +1,126 @@
-import { ArrowLeft, ChevronDown, FilePenLine } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, FileDiff } from "lucide-react";
+import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type {
-  WebTurnChanges,
-  WebTurnChangesDetail,
-} from "../../../../protocol/turn-changes.ts";
-import { WebClient } from "../../protocol/client.ts";
-import { DiffCodePreview } from "../review/DiffCodePreview.tsx";
+import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
 
-const PREVIEW_FILES = 3;
-
-function fileName(path: string) {
-  return path.split(/[\\/]/u).at(-1) || path;
-}
-
-function FileLine({
-  file,
-  onClick,
-  selected,
-}: {
-  file: WebTurnChanges["files"][number];
-  onClick: () => void;
-  selected?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      className="turn-changes-file"
-      title={file.path}
-      aria-pressed={selected}
-      onClick={onClick}
-    >
-      <span className="turn-changes-path">
-        {file.path.slice(0, -fileName(file.path).length)}
-        <strong>{fileName(file.path)}</strong>
-      </span>
-      <span className="turn-changes-file-stats" aria-hidden="true">
-        <span className="review-additions">+{file.additions}</span>
-        <span className="review-deletions">-{file.deletions}</span>
-      </span>
-    </button>
-  );
-}
+export type OpenTurnReview = (promptEntryId: string, filePath?: string) => void;
 
 export function TurnChangesCard({
   changes,
-  sessionId,
-  sessionPath,
+  onReview,
 }: {
   changes: WebTurnChanges;
-  sessionId: string;
-  sessionPath: string;
+  onReview?: OpenTurnReview;
 }) {
   const { t } = useTranslation();
-  const client = useMemo(() => new WebClient(), []);
   const [expanded, setExpanded] = useState(false);
-  const [reviewing, setReviewing] = useState(false);
-  const [retry, setRetry] = useState(0);
-  const [detail, setDetail] = useState<WebTurnChangesDetail | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [requestedPath, setRequestedPath] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-  const card = useRef<HTMLElement>(null);
-  const review = useRef<HTMLElement>(null);
-  const reviewButton = useRef<HTMLButtonElement>(null);
-  const focusIntent = useRef<"review" | "summary" | null>(null);
-
-  useLayoutEffect(() => {
-    if (focusIntent.current === "review" && reviewing) review.current?.focus();
-    else if (focusIntent.current === "summary" && !reviewing) {
-      const opener = Array.from(
-        card.current?.querySelectorAll<HTMLButtonElement>(
-          ".turn-changes-list .turn-changes-file",
-        ) ?? [],
-      ).find((button) => button.title === requestedPath);
-      (opener ?? reviewButton.current)?.focus();
-    }
-    focusIntent.current = null;
-  }, [reviewing, requestedPath]);
-
-  const returnToSummary = () => {
-    focusIntent.current = "summary";
-    setReviewing(false);
-  };
-
-  useEffect(() => {
-    if (!reviewing) return;
-    void retry;
-    const controller = new AbortController();
-    setDetail(null);
-    setSelectedPath(null);
-    setError(false);
-    void client
-      .turnChanges(
-        sessionId,
-        sessionPath,
-        changes.promptEntryId,
-        controller.signal,
-      )
-      .then((result) => {
-        if (controller.signal.aborted) return;
-        if (
-          !result.ok ||
-          result.changes.promptEntryId !== changes.promptEntryId
-        ) {
-          setError(true);
-          return;
-        }
-        setDetail(result.changes);
-        setSelectedPath(
-          result.changes.files.find((file) => file.path === requestedPath)
-            ?.path ??
-            result.changes.files[0]?.path ??
-            null,
-        );
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setError(true);
-      });
-    return () => controller.abort();
-  }, [
-    reviewing,
-    retry,
-    client,
-    sessionId,
-    sessionPath,
-    changes.promptEntryId,
-    requestedPath,
-  ]);
-
-  const selectedFile = detail?.files.find((file) => file.path === selectedPath);
-
-  // Absence of displayable files is not a claim that nothing changed.
-  // Keep incomplete/unavailable evidence in the saved record, outside prose.
+  const listId = useId();
   if (changes.state === "unavailable" || changes.files.length === 0)
     return null;
   const partial = changes.state === "partial";
-  const files = expanded
-    ? changes.files
-    : changes.files.slice(0, PREVIEW_FILES);
-  const remaining = changes.files.length - files.length;
+  const toolEvidence = changes.source === "file-tools";
+  const incompleteList = changes.fileCount === null;
+  const files = expanded ? changes.files : changes.files.slice(0, 3);
   return (
-    <section
-      ref={card}
-      className="turn-changes"
-      aria-label={t("turnChangesReview")}
-      onKeyDown={(event) => {
-        if (
-          !reviewing ||
-          event.key !== "Escape" ||
-          event.defaultPrevented ||
-          event.nativeEvent.isComposing ||
-          event.nativeEvent.keyCode === 229 ||
-          event.shiftKey ||
-          event.ctrlKey ||
-          event.altKey ||
-          event.metaKey
-        )
-          return;
-        event.preventDefault();
-        event.stopPropagation();
-        returnToSummary();
-      }}
-    >
+    <section className="turn-changes" aria-label={t("turnChangesReview")}>
       <header className="turn-changes-header">
         <span className="turn-changes-icon" aria-hidden="true">
-          <FilePenLine />
+          <FileDiff />
         </span>
-        <span className="turn-changes-summary">
-          <strong>
-            {t(partial ? "turnChangesPartial" : "turnChanges", {
-              count: partial ? changes.files.length : changes.fileCount,
-            })}
+        <div className="turn-changes-summary">
+          <strong
+            title={t(toolEvidence ? "turnEditsScope" : "turnChangesScope")}
+          >
+            {t(
+              toolEvidence
+                ? incompleteList
+                  ? "turnEditsPartial"
+                  : "turnEdits"
+                : partial
+                  ? "turnChangesPartial"
+                  : "turnChanges",
+              {
+                count: changes.fileCount ?? changes.files.length,
+              },
+            )}
           </strong>
-          {!partial && (
-            <span className="turn-changes-totals">
-              <span className="review-additions">+{changes.additions}</span>
-              <span className="review-deletions">-{changes.deletions}</span>
+          {!incompleteList &&
+            !changes.files.some(
+              (file) => file.binary || file.statsUnavailable,
+            ) && (
+              <span className="turn-changes-totals">
+                <span className="review-additions">+{changes.additions}</span>
+                <span className="review-deletions">−{changes.deletions}</span>
+              </span>
+            )}
+          {partial && !toolEvidence && (
+            <span className="turn-changes-warning">
+              {t("turnChangesIncomplete")}
             </span>
           )}
-        </span>
+        </div>
         <button
-          ref={reviewButton}
           type="button"
           className="turn-changes-review-button"
-          aria-label={reviewing ? t("turnChangesBack") : t("turnChangesReview")}
-          onClick={() => {
-            if (reviewing) {
-              returnToSummary();
-              return;
-            }
-            focusIntent.current = "review";
-            setRequestedPath(null);
-            setReviewing(true);
-          }}
+          aria-label={t("turnChangesReview")}
+          disabled={!onReview}
+          onClick={() =>
+            onReview?.(changes.promptEntryId, changes.files[0]?.path)
+          }
         >
-          {reviewing ? (
-            <ArrowLeft aria-hidden="true" />
-          ) : (
-            t("turnChangesReviewButton")
-          )}
+          {t("reviewChanges")}
         </button>
       </header>
-      {reviewing ? (
-        <section
-          ref={review}
-          className="turn-changes-review"
-          aria-label={t("turnChangesReview")}
-          tabIndex={-1}
-        >
-          {error && (
-            <p role="alert">
-              {t("turnChangesUnavailable")}{" "}
-              <button
-                type="button"
-                onClick={() => setRetry((value) => value + 1)}
-              >
-                {t("gitReviewRetry")}
-              </button>
-            </p>
-          )}
-          {!error && !detail && <p role="status">{t("turnChangesLoading")}</p>}
-          {detail && (
-            <>
-              {detail.state === "partial" && (
-                <p className="turn-changes-warning">
-                  {t("turnChangesIncomplete")}
-                </p>
-              )}
-              <div className="turn-changes-review-files">
-                {detail.files.map((file) => (
-                  <FileLine
-                    key={file.path}
-                    file={file}
-                    selected={selectedPath === file.path}
-                    onClick={() => setSelectedPath(file.path)}
-                  />
-                ))}
-              </div>
-              {selectedFile &&
-                (selectedFile.diffLoaded === false ? (
-                  <p role="alert">{t("turnChangesUnavailable")}</p>
-                ) : selectedFile.diff ? (
-                  <DiffCodePreview file={selectedFile} />
-                ) : (
-                  <p className="turn-changes-warning">
-                    {t(
-                      selectedFile.diffTruncated
-                        ? "gitReviewDiffTruncated"
-                        : "gitReviewNoDiff",
-                    )}
-                  </p>
-                ))}
-            </>
-          )}
-        </section>
-      ) : (
-        <div className="turn-changes-list">
-          {partial && (
-            <p className="turn-changes-warning">{t("turnChangesIncomplete")}</p>
-          )}
-          {files.map((file) => (
-            <FileLine
+      <div className="turn-changes-list" id={listId}>
+        {files.map((file) => {
+          const slash = Math.max(
+            file.path.lastIndexOf("/"),
+            file.path.lastIndexOf("\\"),
+          );
+          return (
+            <button
               key={file.path}
-              file={file}
-              onClick={() => {
-                focusIntent.current = "review";
-                setRequestedPath(file.path);
-                setReviewing(true);
-              }}
-            />
-          ))}
-          {remaining > 0 && (
-            <button
               type="button"
-              className="turn-changes-more"
-              onClick={() => setExpanded(true)}
+              className="turn-changes-file"
+              title={file.path}
+              disabled={!onReview}
+              onClick={() => onReview?.(changes.promptEntryId, file.path)}
             >
-              {t("turnChangesMore", { count: remaining })}{" "}
-              <ChevronDown aria-hidden="true" />
+              <span className="turn-changes-path">
+                <span>{file.path.slice(0, slash + 1)}</span>
+                <strong>{file.path.slice(slash + 1)}</strong>
+              </span>
+              <span className="turn-changes-file-stats">
+                {file.binary ? (
+                  <span>{t("gitReviewBinaryShort")}</span>
+                ) : file.statsUnavailable ? (
+                  <span title={t(`turnEditReason_${file.statsUnavailable}`)}>
+                    {t("turnEditStatsUnknown")}
+                  </span>
+                ) : (
+                  <>
+                    <span className="review-additions">+{file.additions}</span>
+                    <span className="review-deletions">−{file.deletions}</span>
+                  </>
+                )}
+              </span>
             </button>
-          )}
-          {expanded && changes.files.length > PREVIEW_FILES && (
-            <button
-              type="button"
-              className="turn-changes-more"
-              onClick={() => setExpanded(false)}
-            >
-              {t("turnChangesLess")}{" "}
-              <ChevronDown aria-hidden="true" className="up" />
-            </button>
-          )}
-        </div>
+          );
+        })}
+      </div>
+      {changes.files.length > 3 && (
+        <button
+          type="button"
+          className="turn-changes-more"
+          aria-expanded={expanded}
+          aria-controls={listId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {t(expanded ? "turnChangesLess" : "turnChangesMore", {
+            count: changes.files.length - 3,
+          })}
+          <ChevronDown className={expanded ? "up" : ""} aria-hidden="true" />
+        </button>
       )}
     </section>
   );
