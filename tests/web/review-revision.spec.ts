@@ -22,6 +22,8 @@ import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
 
 it("rejects changed contents when switching files in a pinned comparison until latest is adopted", async () => {
+  // Real Git subprocesses are slower on Windows than jsdom's default 1s wait.
+  const asyncWait = { timeout: 15_000 };
   const root = mkdtempSync(join(tmpdir(), "openpi-review-revision-"));
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], { stdio: "pipe" });
@@ -91,12 +93,12 @@ it("rejects changed contents when switching files in a pinned comparison until l
       );
     }
     const { rerender } = render(createElement(Panel, { refreshKey: 0 }));
-    await screen.findByRole("figure");
+    await screen.findByRole("figure", {}, asyncWait);
     writeFileSync(join(root, "b.txt"), "NEW_UNADOPTED_B\n");
     rerender(createElement(Panel, { refreshKey: 1 }));
-    await screen.findByRole("button", { name: "Show latest diff" });
+    await screen.findByRole("button", { name: "Show latest diff" }, asyncWait);
     fireEvent.click(screen.getByRole("button", { name: "b.txt" }));
-    await screen.findByText(i18n.t("gitReviewChanged"));
+    await screen.findByText(i18n.t("gitReviewChanged"), {}, asyncWait);
     expect(screen.queryByRole("figure")).toBeNull();
     expect(
       read.mock.calls
@@ -106,13 +108,15 @@ it("rejects changed contents when switching files in a pinned comparison until l
     fireEvent.click(
       screen.getByRole("button", { name: i18n.t("retryAdmissionCheck") }),
     );
-    await screen.findByText(i18n.t("gitReviewChanged"));
+    await screen.findByText(i18n.t("gitReviewChanged"), {}, asyncWait);
     expect(screen.queryByRole("figure")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Show latest diff" }));
-    await waitFor(() =>
-      expect(screen.getByRole("figure").textContent).toContain(
-        "NEW_UNADOPTED_B",
-      ),
+    await waitFor(
+      () =>
+        expect(screen.getByRole("figure").textContent).toContain(
+          "NEW_UNADOPTED_B",
+        ),
+      asyncWait,
     );
     expect(
       screen.queryByRole("button", { name: "Show latest diff" }),
@@ -123,4 +127,4 @@ it("rejects changed contents when switching files in a pinned comparison until l
     vi.unstubAllGlobals();
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, 60_000);
