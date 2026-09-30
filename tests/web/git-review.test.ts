@@ -529,3 +529,48 @@ test("Git review keeps file metadata when an encoded diff exceeds the response b
   assert.equal(result.snapshot.truncated, true);
   assert.ok(jsonByteLength(result) <= WEB_MAX_SNAPSHOT_BYTES);
 });
+
+test("file details retain the selected summary identity and reject worktree or index changes", async () => {
+  const root = await repository();
+  await writeFile(join(root, "base.txt"), "worktree-a\n");
+  const summary = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(summary.ok);
+  const detail = await readGitReview(root, {
+    source: "unstaged",
+    filePath: "base.txt",
+    expectedRevision: summary.snapshot.revision,
+  });
+  assert.ok(detail.ok);
+  assert.equal(detail.snapshot.revision, summary.snapshot.revision);
+  assert.match(detail.snapshot.files[0]!.diff, /worktree-a/);
+  await writeFile(join(root, "base.txt"), "worktree-b\n");
+  assert.deepEqual(
+    await readGitReview(root, {
+      source: "unstaged",
+      filePath: "base.txt",
+      expectedRevision: summary.snapshot.revision,
+    }),
+    { ok: false, reason: "revision_changed" },
+  );
+  await git(root, "add", "base.txt");
+  const staged = await readGitReview(root, {
+    source: "staged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(staged.ok);
+  await writeFile(join(root, "base.txt"), "worktree-c\n");
+  await git(root, "add", "base.txt");
+  assert.deepEqual(
+    await readGitReview(root, {
+      source: "staged",
+      filePath: "base.txt",
+      expectedRevision: staged.snapshot.revision,
+    }),
+    { ok: false, reason: "revision_changed" },
+  );
+});

@@ -526,6 +526,20 @@ export async function readGitReview(
   } & GitReviewReadOptions,
 ): Promise<WebGitReviewResult> {
   try {
+    if (options?.filePath && options.expectedRevision) {
+      const { filePath, expectedRevision, ...comparison } = options;
+      const summaryOptions = { ...comparison, summary: true, offset: 0, expectedRevision };
+      // Detail revisions differ from summary revisions. Verify the selected
+      // comparison on both sides of the read before assigning its identity.
+      const before = await readGitReview(cwd, summaryOptions);
+      if (!before.ok) return before;
+      const detail = await readGitReview(cwd, { ...comparison, filePath });
+      if (!detail.ok) return detail;
+      const after = await readGitReview(cwd, summaryOptions);
+      if (!after.ok) return after;
+      detail.snapshot.revision = expectedRevision;
+      return detail;
+    }
     if (options?.offset !== undefined && (!options.summary || !Number.isSafeInteger(options.offset) || options.offset < 0 || options.offset >= GIT_REVIEW_MAX_SUMMARY_FILES || options.filePath)) return { ok: false, reason: "git_failed" };
     const root = cleanLine(
       await git(cwd, ["rev-parse", "--show-toplevel"]),

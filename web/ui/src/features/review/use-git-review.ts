@@ -168,16 +168,24 @@ export function useGitReview(
   }, [client, sessionId, sessionPath, source, result, t]);
 
   const readFile = useCallback(
-    async (file: string, signal: AbortSignal) => {
+    async (file: string, signal: AbortSignal, revision: string) => {
       if (!sessionId || !sessionPath) return;
       const response = await client.gitReview(sessionId, sessionPath, signal, {
         source,
         file,
+        revision,
       });
-      if (!response.ok) throw new Error("File diff unavailable");
+      if (!response.ok || response.snapshot.revision !== revision)
+        throw new Error(
+          t(
+            !response.ok && response.reason !== "revision_changed"
+              ? "gitReviewFailed"
+              : "gitReviewChanged",
+          ),
+        );
       return response.snapshot.files.find((entry) => entry.path === file);
     },
-    [client, sessionId, sessionPath, source],
+    [client, sessionId, sessionPath, source, t],
   );
 
   useEffect(() => {

@@ -1669,7 +1669,7 @@ export class WebHost {
         !["unstaged", "staged", "branch", "session"].includes(source) ||
         (offset !== null && (!/^\d{1,4}$/u.test(offset) || filePath !== null)) ||
         (offset !== null && Number(offset) > 0 && !expectedRevision) ||
-        (expectedRevision !== null && (!/^[a-f0-9]{64}$/u.test(expectedRevision) || offset === null)) ||
+        (expectedRevision !== null && (!/^[a-f0-9]{64}$/u.test(expectedRevision) || (offset === null && filePath === null))) ||
         url.searchParams.getAll("offset").length > 1 ||
         url.searchParams.getAll("revision").length > 1 ||
         (filePath !== null && (!filePath || filePath.length > 4096 || filePath.includes("\0"))) ||

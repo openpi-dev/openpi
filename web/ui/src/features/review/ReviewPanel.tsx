@@ -57,6 +57,7 @@ export interface GitReviewViewState {
   readFile?: (
     path: string,
     signal: AbortSignal,
+    revision: string,
   ) => Promise<WebGitReviewFile | undefined>;
 }
 
@@ -193,7 +194,7 @@ export function ReviewPanel({
       return;
     const controller = new AbortController();
     setFileError(null);
-    void review.readFile(path, controller.signal).then(
+    void review.readFile(path, controller.signal, revision).then(
       (file) => {
         if (!controller.signal.aborted) {
           if (file) setLoadedFile({ source, revision, file });
