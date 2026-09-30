@@ -9,7 +9,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import {
   createEditToolDefinition,
   defineTool,
@@ -209,7 +209,7 @@ export function createTurnChangeRecorder(manager: SessionManager, cwd: string) {
         const stamp = await fingerprint(path).catch(() => undefined);
         const canonical = await realpath(path)
           .catch(
-            async () => `${await realpath(dirname(path))}/${basename(path)}`,
+            async () => join(await realpath(dirname(path)), basename(path)),
           )
           .catch(() => path);
         const previous = turn.files.get(canonical);

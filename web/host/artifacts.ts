@@ -323,8 +323,10 @@ export class ArtifactReader {
         }
         if (metadataIdentity(fstatSync(descriptor, { bigint: true })) !== before.preview.identity || createHash("sha256").update(content.subarray(0, length)).digest("hex") !== revision)
           throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
-        renameSync(temporary, grant.path);
       } finally { closeSync(descriptor); }
+      // Windows cannot replace the destination while its read handle is open.
+      // Keep closure and replacement synchronous with the final checks above.
+      renameSync(temporary, grant.path);
       temporary = undefined;
       return { revision: createHash("sha256").update(bytes).digest("hex") };
     } catch (error) { throw this.classify(error); }

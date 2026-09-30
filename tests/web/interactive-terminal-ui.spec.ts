@@ -274,10 +274,11 @@ it.each([false, true])(
         }),
       ),
     );
-    await waitFor(() => expect(create).toHaveBeenCalledOnce());
     const restart = screen.getByRole("button", {
       name: i18n.t("restartTerminal"),
     });
+    await waitFor(() => expect(restart.hasAttribute("disabled")).toBe(false));
+    expect(create).toHaveBeenCalledOnce();
     restart.focus();
     fireEvent.click(restart);
     const dialog = await screen.findByRole("dialog", {

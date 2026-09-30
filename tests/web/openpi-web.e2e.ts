@@ -1096,6 +1096,8 @@ test.describe("installed browser enhancement", () => {
     const context = await chromium.launchPersistentContext(profile, {
       baseURL,
       locale: "zh-CN",
+      // Extensions require full Chromium, including in headless CI.
+      channel: "chromium",
       executablePath: process.env.OPENPI_WEB_BROWSER_EXECUTABLE,
       ignoreDefaultArgs: ["--disable-extensions"],
       args: ["--enable-unsafe-extension-debugging"],
