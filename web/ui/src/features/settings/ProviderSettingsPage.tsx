@@ -1,17 +1,8 @@
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog } from "@astryxdesign/core/Dialog";
-import {
-  Bot,
-  Check,
-  Cpu,
-  Layers3,
-  Plug,
-  Plus,
-  SlidersHorizontal,
-  X,
-} from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Cpu, Layers3, Plug, SlidersHorizontal, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type {
@@ -20,10 +11,8 @@ import type {
   WebSnapshot,
   WebThemePreference,
 } from "../../../../protocol/types.ts";
-import type { WebModelConfiguration } from "../../../../runtime/types.ts";
 import { WebClient } from "../../protocol/client.ts";
-import { ModelConfigurationEditor } from "./ModelConfigurationEditor.tsx";
-import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
+import { ProviderModelsSection } from "./ProviderModelsSection.tsx";
 import {
   GeneralSettingsPanel,
   PluginsSettingsPanel,
@@ -47,10 +36,6 @@ const settingsSections = [
   { id: "plugins", label: "pluginsSettings", Icon: Plug },
 ] as const;
 
-function modelKey(model: WebModelSummary) {
-  return `${model.provider}/${model.id}`;
-}
-
 export function ProviderSettingsPage({
   sessionId,
   cwd,
@@ -66,8 +51,6 @@ export function ProviderSettingsPage({
   planSelectionPending = false,
   onExitPlan,
   setupOutcome,
-  modelSelectionPending,
-  onSelectModel,
   onConfigureOpenPi,
   interaction,
   onPreferencesChanged,
@@ -104,11 +87,7 @@ export function ProviderSettingsPage({
     entry === "credentials" ? "models" : "general",
   );
   const [modelsVisited, setModelsVisited] = useState(entry === "credentials");
-  const [configuredModels, setConfiguredModels] = useState<
-    WebModelConfiguration[]
-  >([]);
   const [setupPending, setSetupPending] = useState(false);
-  const [providerRevision, refreshProviders] = useState(0);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
   const setupRefreshPending = useRef(false);
   const setupObservedBusy = useRef(false);
@@ -117,15 +96,11 @@ export function ProviderSettingsPage({
   const [preferencesSaved, setPreferencesSaved] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [modelDraftDirty, setModelDraftDirty] = useState(false);
-  const [credentialDraftDirty, setCredentialDraftDirty] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
-  const [credentialSaving, setCredentialSaving] = useState(false);
-  const [pendingNavigation, setPendingNavigation] = useState<
-    | { kind: "close" | "runtime" }
-    | { kind: "model"; key: string; provider: string }
-    | null
-  >(null);
-  const saving = modelSaving || credentialSaving;
+  const [pendingNavigation, setPendingNavigation] = useState<{
+    kind: "close" | "runtime";
+  } | null>(null);
+  const saving = modelSaving;
   const setupBaseline = useRef<string | undefined>(undefined);
   const planBlocked = plan !== undefined && plan !== "inactive";
   const setupDisabled =
@@ -140,51 +115,6 @@ export function ProviderSettingsPage({
     refresh,
     updateSetup,
   } = useSettingsCatalog(sessionId);
-  const [selectedModelKey, setSelectedModelKey] = useState(
-    currentModel
-      ? modelKey(currentModel)
-      : models[0]
-        ? modelKey(models[0])
-        : "",
-  );
-  const viewedModel = useRef<WebModelSummary | undefined>(undefined);
-
-  const modelCatalog = useMemo(() => {
-    const merged = new Map(models.map((model) => [modelKey(model), model]));
-    for (const model of configuredModels) {
-      const key = `${model.provider}/${model.id}`;
-      if (!merged.has(key))
-        merged.set(key, {
-          provider: model.provider,
-          id: model.id,
-          name: model.name,
-          label: model.name || model.id,
-          current: false,
-        });
-    }
-    return [...merged.values()];
-  }, [configuredModels, models]);
-  const groupedModels = useMemo(() => {
-    const groups = new Map<string, WebModelSummary[]>();
-    for (const model of modelCatalog) {
-      const group = groups.get(model.provider) ?? [];
-      group.push(model);
-      groups.set(model.provider, group);
-    }
-    return [...groups.entries()];
-  }, [modelCatalog]);
-  const catalogModel = modelCatalog.find(
-    (model) => modelKey(model) === selectedModelKey,
-  );
-  if (catalogModel) viewedModel.current = catalogModel;
-  // A catalog refresh cannot authorize leaving an open credential draft.
-  const selectedModel = selectedModelKey
-    ? (catalogModel ??
-      (viewedModel.current && modelKey(viewedModel.current) === selectedModelKey
-        ? viewedModel.current
-        : undefined))
-    : undefined;
-
   useEffect(() => {
     closeButton.current?.focus();
   }, []);
@@ -286,32 +216,15 @@ export function ProviderSettingsPage({
     target: NonNullable<typeof pendingNavigation>,
     discard = false,
   ) => {
-    if (target.kind === "model" ? credentialSaving : saving) return;
-    const changesProvider =
-      target.kind === "model" &&
-      target.provider !== (selectedModel?.provider ?? "");
-    const needsConfirmation =
-      target.kind === "model"
-        ? changesProvider && credentialDraftDirty
-        : modelDraftDirty || credentialDraftDirty;
-    if (needsConfirmation && !discard) {
+    if (saving) return;
+    if (modelDraftDirty && !discard) {
       setPendingNavigation(target);
       return;
     }
     setPendingNavigation(null);
-    if (target.kind === "model") setSelectedModelKey(target.key);
-    else if (target.kind === "runtime") onOpenRuntimeStatus();
+    if (target.kind === "runtime") onOpenRuntimeStatus();
     else onClose();
   };
-  const selectModelDetail = (key: string, provider?: string) =>
-    navigate({
-      kind: "model",
-      key,
-      provider:
-        provider ??
-        modelCatalog.find((model) => modelKey(model) === key)?.provider ??
-        "",
-    });
 
   return (
     <Dialog
@@ -454,148 +367,19 @@ export function ProviderSettingsPage({
             role="tabpanel"
             hidden={section !== "models"}
           >
-            <aside className="settings-model-sidebar">
-              <div className="settings-model-list">
-                {groupedModels.map(([provider, providerModels]) => (
-                  <section className="settings-model-group" key={provider}>
-                    <h2>
-                      <Cpu aria-hidden="true" />
-                      <span>{provider}</span>
-                      <small>{providerModels.length}</small>
-                    </h2>
-                    {providerModels.map((model) => {
-                      const key = modelKey(model);
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          aria-current={
-                            key === selectedModelKey ? "page" : undefined
-                          }
-                          className="settings-model-item"
-                          disabled={credentialSaving}
-                          onClick={() => selectModelDetail(key)}
-                        >
-                          <span>
-                            <strong>{model.name || model.id}</strong>
-                            {model.name !== model.id && (
-                              <small>{model.id}</small>
-                            )}
-                          </span>
-                          {model.current && (
-                            <Check aria-label={t("currentModel")} />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </section>
-                ))}
-                {!modelCatalog.length && (
-                  <p className="settings-model-empty">{t("noModels")}</p>
-                )}
-              </div>
-              <button
-                type="button"
-                className="settings-model-provider-link"
-                disabled={credentialSaving}
-                onClick={() => selectModelDetail("")}
-              >
-                <Plus aria-hidden="true" /> {t("addModel")}
-              </button>
-            </aside>
-            <div className="settings-model-detail">
-              {selectedModel ? (
-                <>
-                  <header className="settings-model-detail-heading">
-                    <div>
-                      <span>{t("model")}</span>
-                      <h1>{selectedModel.name || selectedModel.id}</h1>
-                      <code>{modelKey(selectedModel)}</code>
-                    </div>
-                    <Button
-                      label={
-                        selectedModel.current
-                          ? t("currentModel")
-                          : models.some(
-                                (model) => modelKey(model) === selectedModelKey,
-                              )
-                            ? t("useThisModel")
-                            : t("unavailable")
-                      }
-                      variant={selectedModel.current ? "secondary" : "primary"}
-                      size="sm"
-                      icon={
-                        selectedModel.current ? (
-                          <Check aria-hidden="true" />
-                        ) : undefined
-                      }
-                      isDisabled={
-                        setupBusy ||
-                        saving ||
-                        selectedModel.current ||
-                        modelSelectionPending ||
-                        !models.some(
-                          (model) => modelKey(model) === selectedModelKey,
-                        )
-                      }
-                      isLoading={modelSelectionPending}
-                      onClick={() => {
-                        if (!setupBusy && !saving)
-                          onSelectModel(modelKey(selectedModel));
-                      }}
-                    />
-                  </header>
-                  {setupBusy && !selectedModel.current && (
-                    <p className="settings-edit-state" role="status">
-                      {setupBlockedReason || t("modelSelectionBusy")}
-                    </p>
-                  )}
-                  <dl className="settings-model-metadata">
-                    <div>
-                      <dt>{t("provider")}</dt>
-                      <dd>{selectedModel.provider}</dd>
-                    </div>
-                    <div>
-                      <dt>{t("modelId")}</dt>
-                      <dd>{selectedModel.id}</dd>
-                    </div>
-                  </dl>
-                </>
-              ) : (
-                <header className="settings-model-detail-heading">
-                  <h1>{t("addModel")}</h1>
-                </header>
-              )}
-              {modelsVisited && (
-                <ModelConfigurationEditor
-                  key={`model-config:${sessionId}`}
-                  sessionId={sessionId}
-                  selectedKey={selectedModelKey}
-                  selectedModel={selectedModel}
-                  onSelect={selectModelDetail}
-                  onModelsLoaded={setConfiguredModels}
-                  onDraftChange={setModelDraftDirty}
-                  onSavingChange={setModelSaving}
-                  busy={setupBusy}
-                  onSaved={async () => {
-                    refreshProviders((value) => value + 1);
-                    return onPreferencesChanged();
-                  }}
-                />
-              )}
-              <ProviderStatusSection
-                key={`providers:${sessionId}`}
+            {modelsVisited && (
+              <ProviderModelsSection
+                key={sessionId}
                 sessionId={sessionId}
-                providerId={selectedModel?.provider ?? ""}
-                active={section === "models"}
-                refreshRevision={providerRevision}
-                focusOnOpen={entry === "credentials"}
-                onDraftChange={setCredentialDraftDirty}
-                onSavingChange={setCredentialSaving}
+                models={models}
+                currentModel={currentModel}
                 busy={setupBusy}
+                focusCredentials={entry === "credentials"}
                 onSaved={onPreferencesChanged}
+                onDraftChange={setModelDraftDirty}
+                onSavingChange={setModelSaving}
               />
-            </div>
+            )}
           </section>
 
           <div
@@ -685,16 +469,8 @@ export function ProviderSettingsPage({
           onOpenChange={(open: boolean) => {
             if (!open) setPendingNavigation(null);
           }}
-          title={t(
-            pendingNavigation.kind === "model"
-              ? "unsavedCredentialTitle"
-              : "unsavedSettingsTitle",
-          )}
-          description={t(
-            pendingNavigation.kind === "model"
-              ? "unsavedCredentialDetail"
-              : "unsavedSettingsDetail",
-          )}
+          title={t("unsavedSettingsTitle")}
+          description={t("unsavedSettingsDetail")}
           cancelLabel={t("keepEditing")}
           actionLabel={t("discardAndContinue")}
           onAction={() => navigate(pendingNavigation, true)}

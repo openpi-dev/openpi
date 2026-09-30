@@ -3777,6 +3777,56 @@ test("stop aborts an open workspace picker", async () => {
   }
 });
 
+test("provider configuration edits validate their native scope and redact save failures", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-provider-write-"));
+  const runtime = testRuntime(cwd);
+  let calls = 0;
+  let failure: Error | undefined;
+  runtime.changeProviderConfiguration = async () => {
+    calls++;
+    if (failure) throw failure;
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const save = (change: unknown) =>
+    fetch(`${launched.origin}/api/providers/configuration`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        revision: "r1",
+        change,
+      }),
+    });
+  try {
+    assert.equal(
+      (await save({ action: "remove", provider: "__proto__" })).status,
+      400,
+    );
+    assert.equal(calls, 0);
+    assert.equal(
+      (await save({ action: "remove", provider: "fixture" })).status,
+      200,
+    );
+    failure = new WebRuntimeRequestError(
+      "fixture-secret",
+      "MODEL_CONFIGURATION_CONFLICT",
+      409,
+    );
+    const conflict = await save({ action: "remove", provider: "fixture" });
+    assert.equal(conflict.status, 409);
+    const body = await conflict.text();
+    assert.match(body, /MODEL_CONFIGURATION_CONFLICT/);
+    assert.doesNotMatch(body, /fixture-secret/);
+    failure = new Error("fixture-secret");
+    const failed = await save({ action: "remove", provider: "fixture" });
+    assert.equal(failed.status, 422);
+    assert.doesNotMatch(await failed.text(), /fixture-secret/);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("model configuration saves distinguish typed conflicts from sanitized save failures", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-model-write-"));
   const runtime = testRuntime(cwd);

@@ -3107,7 +3107,7 @@ function thinkingProps(
 }
 
 function thinkingPickerName(level: string) {
-  return `${i18n.t("thinkingLevel")}: ${level}`;
+  return `${i18n.t("configureModels")}, ${i18n.t("thinkingLevel")}: ${level}`;
 }
 
 it.each([null, "/tmp/copy"])(
@@ -3150,10 +3150,10 @@ describe("thinking level picker", () => {
     const { container } = renderWithI18n(
       createElement(Composer, thinkingProps(snapshot)),
     );
-    expect(container.querySelector(".thinking-picker")).toBeNull();
+    expect(container.querySelector(".model-picker-thinking")).toBeNull();
   });
 
-  it("keeps a disabled placeholder with a reason when thinking is unsupported", () => {
+  it("keeps model selection available without a separate unsupported thinking control", () => {
     const snapshot = idleThinkingSnapshot();
     snapshot.thinking = {
       level: "off",
@@ -3165,12 +3165,12 @@ describe("thinking level picker", () => {
       createElement(Composer, thinkingProps(snapshot)),
     );
     const picker = screen.getByRole<HTMLButtonElement>("button", {
-      name: i18n.t("thinkingUnsupported"),
+      name: i18n.t("configureModels"),
     });
-    expect(picker.disabled).toBe(true);
-    expect(
-      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
-    ).toBe(i18n.t("thinkingUnsupportedHint"));
+    expect(picker.disabled).toBe(false);
+    expect(container.querySelector(".model-picker-thinking")).toBeNull();
+    fireEvent.click(picker);
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   it("prepares a native session when opening thinking from a workspace draft", async () => {
@@ -3207,7 +3207,7 @@ describe("thinking level picker", () => {
       }),
     ).toBeNull();
     expect(
-      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
+      container.querySelector(".model-picker-wrap")?.getAttribute("title"),
     ).toBe(i18n.t("thinkingInactiveHint"));
   });
 
@@ -3223,11 +3223,11 @@ describe("thinking level picker", () => {
       }).disabled,
     ).toBe(true);
     expect(
-      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
+      container.querySelector(".model-picker-wrap")?.getAttribute("title"),
     ).toBe(i18n.t("thinkingLockedRunning"));
   });
 
-  it("opens the active picker under a section titled by the thinking level", () => {
+  it("opens a slider with the native supported range and confirmed level", () => {
     renderWithI18n(
       createElement(Composer, thinkingProps(idleThinkingSnapshot())),
     );
@@ -3235,16 +3235,17 @@ describe("thinking level picker", () => {
       name: thinkingPickerName("medium"),
     });
     expect(picker.disabled).toBe(false);
-    expect(picker.getAttribute("aria-label")).toBe(
-      thinkingPickerName("medium"),
-    );
+    expect(picker.textContent).toContain("Medium");
     fireEvent.click(picker);
     expect(
-      screen.getByRole("group", { name: i18n.t("thinkingLevel") }),
+      screen.getByRole("dialog", { name: thinkingPickerName("medium") }),
     ).toBeTruthy();
-    expect(screen.getByText(i18n.t("thinkingLevel"))).toBeTruthy();
-    for (const level of ["off", "minimal", "low", "medium", "high"])
-      expect(screen.getByRole("menuitem", { name: level })).toBeTruthy();
+    const slider = screen.getByRole<HTMLInputElement>("slider", {
+      name: i18n.t("thinkingLevel"),
+    });
+    expect(slider.value).toBe("3");
+    expect(slider.max).toBe("4");
+    expect(slider.getAttribute("aria-valuetext")).toBe("Medium");
   });
 
   it("sends nothing for the confirmed level and one request for another", async () => {
@@ -3264,15 +3265,16 @@ describe("thinking level picker", () => {
       fireEvent.click(
         screen.getByRole("button", { name: thinkingPickerName("medium") }),
       );
-      fireEvent.click(screen.getByRole("menuitem", { name: "medium" }));
+      const slider = screen.getByRole("slider", {
+        name: i18n.t("thinkingLevel"),
+      });
+      fireEvent.change(slider, { target: { value: "3" } });
+      fireEvent.pointerUp(slider);
       expect(client.thinkings).toEqual([]);
-      expect(selectThinking).toHaveBeenCalledTimes(1);
-
-      fireEvent.click(
-        screen.getByRole("button", { name: thinkingPickerName("medium") }),
-      );
+      expect(selectThinking).not.toHaveBeenCalled();
       await act(async () => {
-        fireEvent.click(screen.getByRole("menuitem", { name: "high" }));
+        fireEvent.change(slider, { target: { value: "4" } });
+        fireEvent.pointerUp(slider);
       });
       expect(selectThinking).toHaveBeenLastCalledWith("high");
       expect(client.thinkings).toEqual([
@@ -3284,6 +3286,35 @@ describe("thinking level picker", () => {
     }
   });
 
+  it("discards an unfinished slider edit when the session controller changes", () => {
+    const snapshot = idleThinkingSnapshot();
+    const props = thinkingProps(snapshot);
+    const selectThinking = vi.fn();
+    props.actions = { ...props.actions, selectThinking };
+    const view = renderWithI18n(createElement(Composer, props));
+    fireEvent.click(
+      screen.getByRole("button", { name: thinkingPickerName("medium") }),
+    );
+    const slider = screen.getByRole("slider", {
+      name: i18n.t("thinkingLevel"),
+    });
+    fireEvent.change(slider, { target: { value: "4" } });
+    expect(slider.getAttribute("aria-valuetext")).toBe("High");
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...props,
+          snapshot: { ...snapshot, currentSessionId: "another-session" },
+        }),
+      ),
+    );
+    fireEvent.pointerUp(slider);
+    expect(selectThinking).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("keeps a pending picker interactive while the send button is disabled", () => {
     const snapshot = idleThinkingSnapshot();
     const props = thinkingProps(snapshot);
@@ -3291,12 +3322,12 @@ describe("thinking level picker", () => {
       createElement(Composer, { ...props, thinkingPendingLevel: "high" }),
     );
     const picker = screen.getByRole<HTMLButtonElement>("button", {
-      name: /^Thinking level: high/u,
+      name: /Thinking level: high/u,
     });
     expect(picker.disabled).toBe(false);
     expect(
       view.container
-        .querySelector(".thinking-picker-wrap")
+        .querySelector(".model-picker-wrap")
         ?.getAttribute("data-pending"),
     ).toBe("true");
     fireEvent.change(
@@ -3355,7 +3386,7 @@ describe("thinking level picker", () => {
     );
     expect(
       container
-        .querySelector(".thinking-picker-wrap")
+        .querySelector(".model-picker-wrap")
         ?.getAttribute("data-warning"),
     ).toBe("true");
     fireEvent.click(

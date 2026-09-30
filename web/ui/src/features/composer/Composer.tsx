@@ -1,7 +1,6 @@
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
-  Brain,
   Check,
   CornerDownRight,
   FileText,
@@ -179,7 +178,6 @@ export function Composer(props: ComposerProps) {
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [activeCommand, setActiveCommand] = useState(0);
   const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
-  const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
   const [actionMenu, setActionMenu] = useState<"main" | "files" | null>(null);
   const [sessionActionOwner, setSessionActionOwner] = useState<string | null>(
     null,
@@ -824,16 +822,10 @@ export function Composer(props: ComposerProps) {
   const thinking = props.snapshot?.thinking;
   const confirmed = thinking?.level ?? null;
   const pending = props.thinkingPendingLevel ?? null;
-  const shown = pending ?? confirmed;
   const supported = thinking?.supported ?? false;
-  const thinkingNeedsSession = !active && (draftSession || !selected);
+  const thinkingNeedsSession =
+    Boolean(props.selectedWorkspace) && !active && (draftSession || !selected);
   const weak = thinking ? !thinking.available.includes(confirmed ?? "") : false;
-  const thinkingItems = (thinking?.available ?? []).map((lvl) => ({
-    id: lvl,
-    label: lvl,
-    endContent: lvl === shown ? <Check /> : undefined,
-    onClick: () => void props.actions.selectThinking(lvl),
-  }));
   const thinkingDisabledReason = !thinking
     ? null
     : !supported && !thinkingNeedsSession
@@ -845,30 +837,6 @@ export function Composer(props: ComposerProps) {
           : props.modelSelectionPending
             ? "thinkingModelPendingHint"
             : null;
-  const thinkingAria =
-    !supported && !thinkingNeedsSession
-      ? t("thinkingUnsupported")
-      : `${t("thinkingLevel")}: ${shown ?? t("unknownState")}${pending !== null ? `. ${t("thinkingPendingHint")}` : ""}`;
-  const thinkingMenuItems = thinking
-    ? [
-        ...(weak
-          ? [
-              {
-                id: "thinking-level-mismatch",
-                label: t("thinkingLevelMismatch"),
-                isDisabled: true,
-              },
-              { type: "divider" as const },
-            ]
-          : []),
-        {
-          type: "section" as const,
-          id: "thinking-level",
-          title: t("thinkingLevel"),
-          items: thinkingItems,
-        },
-      ]
-    : [];
   const execution = props.snapshot?.selectedExecution;
   const observedQueue =
     selected &&
@@ -1497,7 +1465,15 @@ export function Composer(props: ComposerProps) {
               )}
           </div>
           <div className="composer-toolbar-controls">
-            <div className="model-picker-wrap">
+            <div
+              className="model-picker-wrap"
+              title={
+                thinkingDisabledReason ? t(thinkingDisabledReason) : undefined
+              }
+              data-level={confirmed ?? "none"}
+              data-pending={pending !== null}
+              data-warning={weak}
+            >
               <ModelPicker
                 snapshot={props.snapshot}
                 openRequest={modelOpenRequest}
@@ -1509,60 +1485,13 @@ export function Composer(props: ComposerProps) {
                 sessionSwitching={props.sessionSwitching}
                 liveRunning={running}
                 workspaceDraft={Boolean(props.workspaceDraft)}
+                thinkingPendingLevel={pending}
+                thinkingNeedsSession={thinkingNeedsSession}
+                thinkingDisabledReason={thinkingDisabledReason}
                 onOpenProviders={props.onOpenProviders}
                 actions={props.actions}
               />
             </div>
-            {thinking && (
-              <div
-                className="thinking-picker-wrap"
-                data-level={confirmed ?? "none"}
-                data-pending={pending !== null}
-                data-warning={weak}
-                title={
-                  thinkingDisabledReason ? t(thinkingDisabledReason) : undefined
-                }
-              >
-                <DropdownMenu
-                  className="thinking-menu"
-                  isMenuOpen={
-                    thinkingMenuOpen &&
-                    thinkingDisabledReason === null &&
-                    !props.sessionSwitching
-                  }
-                  onOpenChange={(open: boolean) => {
-                    if (!open) {
-                      setThinkingMenuOpen(false);
-                      return;
-                    }
-                    if (!thinkingNeedsSession) {
-                      setThinkingMenuOpen(true);
-                      return;
-                    }
-                    void props.actions.prepareSession().then((target) => {
-                      if (target) setThinkingMenuOpen(true);
-                    });
-                  }}
-                  button={{
-                    label: thinkingAria,
-                    icon: <Brain />,
-                    isIconOnly: true,
-                    size: "sm",
-                    variant: "ghost",
-                    className: "thinking-picker",
-                    isDisabled:
-                      props.sessionSwitching ||
-                      thinkingDisabledReason !== null ||
-                      (thinkingItems.length === 0 && !thinkingNeedsSession),
-                  }}
-                  items={thinkingMenuItems}
-                  menuWidth={220}
-                  placement="above"
-                  alignment="end"
-                  hasChevron={false}
-                />
-              </div>
-            )}
             {canStop && (
               <Tooltip content={t("stopTurn")} placement="above">
                 <button

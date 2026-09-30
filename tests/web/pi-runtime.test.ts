@@ -1119,6 +1119,8 @@ test("provider auth projection is bounded and never serializes credentials", () 
   }));
   const modelRuntime = {
     getProviders: () => providers,
+    getModels: () => [],
+    getRegisteredProviderIds: () => [],
     getProviderAuthStatus: () => ({
       configured: true,
       source: "stored" as const,
@@ -1145,6 +1147,7 @@ test("provider auth projection is bounded and never serializes credentials", () 
     source: "stored",
     subscription: false,
     nameTruncated: true,
+    custom: true,
   });
   assert.deepEqual(projection.providers[1]?.authMethods, ["api_key", "oauth"]);
   assert.equal(projection.providers[1]?.subscription, true);

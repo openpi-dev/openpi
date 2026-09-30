@@ -671,6 +671,19 @@ export class WebClient {
     });
   }
 
+  changeProviderConfiguration(
+    sessionId: string,
+    revision: string,
+    change: import("../../../runtime/types.ts").WebProviderConfigurationChange,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/providers/configuration", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, revision, change }),
+      signal,
+    });
+  }
+
   commands(sessionId: string, signal?: AbortSignal) {
     return this.request<WebCommandDiscoveryResult>(
       `/api/commands?sessionId=${encodeURIComponent(sessionId)}`,
@@ -701,7 +714,7 @@ export class WebClient {
     signal: AbortSignal,
   ) {
     return this.request<{
-      models: { id: string; name: string }[];
+      models: import("../../../runtime/provider-model-discovery.ts").DiscoveredProviderModel[];
       truncated: boolean;
     }>("/api/models/discover", {
       method: "POST",

@@ -8,6 +8,34 @@ export interface ProviderModelDiscovery {
   apiKey?: string;
 }
 
+export type DiscoveredProviderModel = Pick<WebModelConfiguration, "id" | "name"> &
+  Partial<Pick<WebModelConfiguration, "contextWindow" | "maxTokens" | "input" | "reasoning">>;
+
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function modelCapabilities(item: Record<string, unknown>) {
+  const result: Partial<DiscoveredProviderModel> = {};
+  const top = record(item.top_provider) ? item.top_provider : {};
+  const capabilities = record(item.capabilities) ? item.capabilities : {};
+  const architecture = record(item.architecture) ? item.architecture : {};
+  const capacity = (...values: unknown[]) => values.find((value): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 100_000_000);
+  const context = capacity(item.contextWindow, top.context_length, item.context_length, item.context_window);
+  const output = capacity(item.maxTokens, top.max_completion_tokens, item.max_completion_tokens, item.max_output_tokens);
+  if (context !== undefined) result.contextWindow = context;
+  if (output !== undefined) result.maxTokens = output;
+  const input = item.input ?? architecture.input_modalities;
+  if (Array.isArray(input) && input.every((kind) => typeof kind === "string")) {
+    const supported = input.filter((kind): kind is "text" | "image" => kind === "text" || kind === "image");
+    if (supported.length) result.input = [...new Set(supported)];
+  }
+  const reasoning = item.reasoning ?? capabilities.reasoning;
+  if (typeof reasoning === "boolean") result.reasoning = reasoning;
+  else if (Array.isArray(item.supported_parameters) && item.supported_parameters.some((name) => name === "reasoning" || name === "reasoning_effort")) result.reasoning = true;
+  return result;
+}
+
 export function validProviderDiscovery(value: unknown): value is ProviderModelDiscovery {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
@@ -38,11 +66,11 @@ export async function discoverProviderModels(request: ProviderModelDiscovery, he
   } finally { await reader.cancel().catch(() => undefined); }
   const data: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   if (!data || typeof data !== "object" || !("data" in data) || !Array.isArray(data.data)) throw new Error("Unsupported model catalog");
-  const models = new Map<string, { id: string; name: string }>();
+  const models = new Map<string, DiscoveredProviderModel>();
   for (const item of data.data) {
     if (!item || typeof item !== "object" || typeof item.id !== "string" || !item.id || item.id.length > 256 || /[\u0000-\u001f]/u.test(item.id)) continue;
     const name = typeof item.name === "string" ? item.name : typeof item.display_name === "string" ? item.display_name : item.id;
-    models.set(item.id, { id: item.id, name: name.slice(0, 256).replace(/[\u0000-\u001f]/gu, "") || item.id });
+    models.set(item.id, { ...modelCapabilities(item), id: item.id, name: name.slice(0, 256).replace(/[\u0000-\u001f]/gu, "") || item.id });
     if (models.size >= 500) break;
   }
   return { models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)), truncated: data.data.length > 500 };

@@ -2,6 +2,13 @@
 
 ## Project origins and acknowledgments
 
+The Web model settings page adapts the provider cards, inline editors and model
+selection interactions of `@deepseek-ai/dsh-client-ui-settings-models` version
+`0.1.7-rc.2`, from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+The styles are adapted to OpenPI's existing settings shell and theme tokens;
+configuration and authentication remain owned by Pi. The applicable MIT notice
+is reproduced in [`web/ui/src/features/settings/LICENSE.dsh`](web/ui/src/features/settings/LICENSE.dsh).
+
 The workspace Files explorer and preview interactions were informed by
 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar), revision
 `9b5834f74ad197534c821c35b8357edac1ad3919`. OpenPI uses its own Session-bound

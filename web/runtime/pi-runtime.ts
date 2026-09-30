@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { createEvidenceWriteTool } from "./write-evidence.ts";
 import { createTurnChangeRecorder } from "./turn-changes.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { controlPlan, projectPlanControl, type PlanControlRequest } from "../../extensions/plan-mode/control.ts";
 import {
   type AgentSession,
@@ -26,6 +27,7 @@ import {
   type WebPromptAdmissionReceipt,
   type WebProviderAuthProjection,
   type WebProviderAuthSource,
+  type WebProviderConfigurationChange,
   type WebRuntimeController,
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
@@ -62,7 +64,7 @@ import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
-import { readModelConfigurations, saveModelConfigurations } from "./model-configuration.ts";
+import { changeProviderConfiguration, readModelConfigurations, saveModelConfigurations } from "./model-configuration.ts";
 import { discoverProviderModels, type ProviderModelDiscovery } from "./provider-model-discovery.ts";
 import { matchesSessionIdentity } from "./session-identity.ts";
 import {
@@ -683,6 +685,7 @@ export class PiWebRuntime implements WebRuntimeController {
     const modelRuntime = this.runtime.services.modelRuntime;
     const allProviders = modelRuntime.getProviders();
     const providers = allProviders.slice(0, WEB_MAX_PROVIDER_AUTH_SCANNED);
+    const builtinProviders = new Set<string>(getBuiltinProviders());
     const projection: WebProviderAuthProjection["providers"][number][] = [];
     let omitted = Math.max(
       0,
@@ -703,6 +706,9 @@ export class PiWebRuntime implements WebRuntimeController {
         const name = boundedProviderName(provider.name || id);
         if (name.truncated) namesTruncated++;
         const status = modelRuntime.getProviderAuthStatus(id);
+        const model = modelRuntime.getModels(id)[0];
+        const endpoint = model?.baseUrl ? URL.parse(model.baseUrl) : null;
+        const api = model?.api === "openai-responses" ? "openai-responses" as const : model?.api === "openai-completions" ? "openai-completions" as const : model?.api === "anthropic-messages" ? "anthropic-messages" as const : undefined;
         const source =
           status.source && WEB_PROVIDER_AUTH_SOURCES.has(status.source)
             ? status.source
@@ -718,6 +724,9 @@ export class PiWebRuntime implements WebRuntimeController {
           ...(source ? { source } : {}),
           subscription: modelRuntime.isUsingSubscription(id),
           nameTruncated: name.truncated,
+          custom: !builtinProviders.has(id) && !modelRuntime.getRegisteredProviderIds().includes(id),
+          ...(endpoint && ["http:", "https:"].includes(endpoint.protocol) && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash ? { baseUrl: endpoint.href } : {}),
+          ...(api ? { api } : {}),
         });
       } catch {
         omitted++;
@@ -801,17 +810,32 @@ export class PiWebRuntime implements WebRuntimeController {
     }));
   }
 
+  changeProviderConfiguration(sessionId: string, revision: string, change: WebProviderConfigurationChange) {
+    return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
+      const current = this.runtime.session.model;
+      const provider = change.action === "remove" ? change.provider : change.configuration.provider;
+      if (current?.provider === provider && !getBuiltinProviders().some((id) => id === provider) && (change.action === "remove" || !change.configuration.models.some((model) => model.id === current.id))) {
+        throw new WebRuntimeRequestError("Select another model before removing the current model", "MODEL_NOT_AVAILABLE", 409);
+      }
+      await changeProviderConfiguration(this.runtime.services.agentDir, revision, change);
+      await this.runtime.services.modelRuntime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(10_000) });
+      if (current) {
+        const updated = this.runtime.services.modelRuntime.getModel(current.provider, current.id);
+        if (updated) await this.runtime.session.setModel(updated);
+      }
+    }));
+  }
+
   async discoverProviderModels(sessionId: string, request: ProviderModelDiscovery, signal: AbortSignal) {
     if (this.sessionManager.getSessionId() !== sessionId) throw new WebRuntimeRequestError("Session changed", "SESSION_CONFLICT", 409);
     const headers: Record<string, string> = { Accept: "application/json" };
     let key = request.apiKey;
     if (!key) {
-      const saved = (await this.readModelConfigurations()).models.find((model) => model.provider === request.provider && model.baseUrl === request.baseUrl && model.api === request.api);
-      if (saved) {
-        const native = this.runtime.services.modelRuntime.getModel(saved.provider, saved.id);
-        if (native && native.baseUrl !== request.baseUrl) throw new Error("Connection endpoint changed");
-        const auth = native ? await this.runtime.services.modelRuntime.getAuth(native, { signal }) : undefined;
-        if (auth?.auth.baseUrl && auth.auth.baseUrl !== request.baseUrl) throw new Error("Connection endpoint changed");
+      // Reuse native auth only for the exact registered connection, including built-in providers.
+      const native = this.runtime.services.modelRuntime.getModels(request.provider).find((model) => URL.parse(model.baseUrl)?.href === URL.parse(request.baseUrl)?.href && model.api === request.api);
+      if (native) {
+        const auth = await this.runtime.services.modelRuntime.getAuth(native, { signal });
+        if (auth?.auth.baseUrl && URL.parse(auth.auth.baseUrl)?.href !== URL.parse(request.baseUrl)?.href) throw new Error("Connection endpoint changed");
         key = auth?.auth.apiKey;
         Object.assign(headers, auth?.auth.headers);
       }

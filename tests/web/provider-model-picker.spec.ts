@@ -1,17 +1,12 @@
 // @vitest-environment jsdom
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { ProviderModelPicker } from "../../web/ui/src/features/settings/ProviderModelPicker.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
-import { ProviderModelPicker } from "../../web/ui/src/features/settings/ProviderModelPicker.tsx";
+import type { DiscoveredProviderModel } from "../../web/runtime/provider-model-discovery.ts";
 
 beforeAll(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -41,23 +36,9 @@ const template = {
   contextWindow: 128000,
   maxTokens: 8192,
 };
-
-it("preserves hidden selections, excludes configured models and retains selection after save failure", async () => {
-  const discover = vi
-    .spyOn(WebClient.prototype, "discoverProviderModels")
-    .mockResolvedValue({
-      models: [
-        { id: "existing", name: "Existing" },
-        { id: "a", name: "Alpha" },
-        { id: "b", name: "Beta" },
-      ],
-      truncated: false,
-    });
-  const save = vi
-    .spyOn(WebClient.prototype, "saveModelConfigurations")
-    .mockRejectedValueOnce(new Error("offline"))
-    .mockResolvedValue({ saved: true });
-  const saved = vi.fn();
+function mount(existingIds = ["existing"]) {
+  const onAdd = vi.fn();
+  const onClose = vi.fn();
   render(
     createElement(
       I18nextProvider,
@@ -65,30 +46,100 @@ it("preserves hidden selections, excludes configured models and retains selectio
       createElement(ProviderModelPicker, {
         sessionId: "session",
         template,
-        configuration: { revision: "original", models: [template] },
-        onClose: vi.fn(),
-        onSaved: saved,
+        existingIds,
+        apiKey: "draft-key",
+        onClose,
+        onAdd,
       }),
     ),
   );
-  await screen.findByText("Alpha");
-  expect(discover.mock.calls[0]?.[1]).not.toHaveProperty("apiKey");
+  return { onAdd, onClose };
+}
+const candidates: DiscoveredProviderModel[] = [
+  { id: "existing", name: "Existing" },
+  {
+    id: "a",
+    name: "Alpha",
+    contextWindow: 256000,
+    maxTokens: 32000,
+    input: ["text", "image"],
+    reasoning: true,
+  },
+  { id: "b", name: "Beta" },
+];
+
+it("preserves hidden selections, disables existing models and adds only to the parent draft", async () => {
+  const discover = vi
+    .spyOn(WebClient.prototype, "discoverProviderModels")
+    .mockResolvedValue({ models: candidates, truncated: false });
+  const save = vi.spyOn(WebClient.prototype, "saveModelConfigurations");
+  const { onAdd } = mount();
+  await screen.findByRole("checkbox", { name: "a" });
+  expect(discover.mock.calls[0]?.[1]).toMatchObject({ apiKey: "draft-key" });
   expect(
-    (screen.getByRole("checkbox", { name: /Existing/ }) as HTMLInputElement)
+    (screen.getByRole("checkbox", { name: /existing/ }) as HTMLInputElement)
       .disabled,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("checkbox", { name: /Alpha/ }));
+  expect(
+    (screen.getByRole("checkbox", { name: "a" }) as HTMLInputElement).checked,
+  ).toBe(true);
+  expect(
+    (screen.getByRole("checkbox", { name: "b" }) as HTMLInputElement).checked,
+  ).toBe(true);
   fireEvent.change(screen.getByRole("searchbox"), {
     target: { value: "Beta" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Select visible" }));
-  fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
-  await screen.findByRole("alert");
-  expect(saved).not.toHaveBeenCalled();
-  expect(save.mock.calls[0]?.[2].map((model) => model.id)).toEqual(["a", "b"]);
-  expect(screen.getByText("2 selected · up to 100")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
-  await waitFor(() =>
-    expect(saved).toHaveBeenCalledWith({ ...template, id: "a", name: "Alpha" }),
+  expect(screen.getByText("2 selected")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("providerPickerClear") }),
   );
+  expect(screen.getByText("1 selected")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("providerPickerSelectAll") }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("providerPickerSave") }),
+  );
+  expect(onAdd).toHaveBeenCalledWith(candidates.slice(1));
+  expect(save).not.toHaveBeenCalled();
+});
+
+it("supports safe failure, retry, no-match search and cancel without writing", async () => {
+  vi.spyOn(WebClient.prototype, "discoverProviderModels")
+    .mockRejectedValueOnce(new Error("private provider details"))
+    .mockResolvedValue({ models: candidates, truncated: false });
+  const { onAdd, onClose } = mount();
+  await screen.findByRole("alert");
+  expect(screen.getByRole("alert").textContent).not.toContain(
+    "private provider",
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("retryAdmissionCheck") }),
+  );
+  await screen.findByRole("checkbox", { name: "a" });
+  fireEvent.change(screen.getByRole("searchbox"), {
+    target: { value: "nothing" },
+  });
+  expect(screen.getByText(i18n.t("providerPickerNoMatch"))).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("cancel") }));
+  expect(onClose).toHaveBeenCalledOnce();
+  expect(onAdd).not.toHaveBeenCalled();
+});
+
+it("limits additions by the remaining capacity of the whole provider", async () => {
+  vi.spyOn(WebClient.prototype, "discoverProviderModels").mockResolvedValue({
+    models: candidates.slice(1),
+    truncated: false,
+  });
+  const { onAdd } = mount(
+    Array.from({ length: 99 }, (_, index) => `already-${index}`),
+  );
+  await screen.findByRole("checkbox", { name: "a" });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("providerPickerSelectAll") }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("providerPickerSave") }),
+  );
+  expect(onAdd).toHaveBeenCalledWith([candidates[1]]);
 });

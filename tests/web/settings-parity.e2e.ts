@@ -6,7 +6,7 @@ import {
   MOCK_SESSION_ID,
 } from "./thinking-e2e-support.ts";
 
-test("settings keep labeled mobile navigation and edit the selected model without losing drafts", async ({
+test("model provider cards preserve drafts, stage discovery and keep the existing settings shell", async ({
   page,
 }, testInfo) => {
   await installThinkingFixture(page);
@@ -62,6 +62,15 @@ test("settings keep labeled mobile navigation and edit the selected model withou
             authMethods: ["api_key"],
             subscription: false,
             nameTruncated: false,
+            custom: true,
+          },
+          {
+            id: "extra",
+            name: "Extra provider",
+            configured: false,
+            authMethods: ["api_key"],
+            subscription: false,
+            nameTruncated: false,
           },
         ],
         truncation: {
@@ -104,27 +113,74 @@ test("settings keep labeled mobile navigation and edit the selected model withou
   await expect(picker).toBeVisible();
   await expect(dialog.getByRole("tablist")).toBeHidden();
   await picker.selectOption("models");
-  const name = dialog.getByRole("textbox", { name: "显示名称", exact: true });
+  await expect(
+    dialog.getByRole("button", { name: "编辑 Mock", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("models-list-mobile.png"),
+  });
+  await dialog.getByRole("button", { name: "编辑 Mock", exact: true }).click();
+  await dialog.getByText("自定义设置", { exact: true }).click();
+  const name = dialog.getByRole("textbox", {
+    name: "模型 1 名称",
+    exact: true,
+  });
   await expect(name).toHaveValue("Mock Reasoner");
   await name.fill("Unfinished reasoner");
-  const add = dialog.locator(".settings-model-provider-link");
-  await add.click();
-  await expect(name).toHaveValue("");
-  await name.fill("Unfinished new model");
-  await dialog.getByRole("button", { name: /Mock Reasoner/ }).click();
+  await picker.selectOption("general");
+  await picker.selectOption("models");
   await expect(name).toHaveValue("Unfinished reasoner");
-  await add.click();
-  await expect(name).toHaveValue("Unfinished new model");
   expect(configurationReads).toBe(1);
-  await dialog.getByRole("button", { name: /Mock Reasoner/ }).click();
+  await page.screenshot({
+    path: testInfo.outputPath("models-edit-mobile.png"),
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({
+    path: testInfo.outputPath("models-edit-desktop.png"),
+  });
+  await dialog
+    .getByRole("button", { name: "添加模型提供商", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("button", { name: "第三方模型提供商" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await dialog
+    .getByLabel("API 密钥", { exact: true })
+    .filter({ visible: true })
+    .fill("fixture-unsaved-key");
+  await page.screenshot({
+    path: testInfo.outputPath("models-add-catalog-desktop.png"),
+  });
+  await dialog.getByRole("button", { name: "自定义模型 API" }).click();
+  await dialog.getByLabel("服务商 ID", { exact: true }).fill("gateway");
+  await dialog
+    .getByLabel("提供商名称", { exact: true })
+    .filter({ visible: true })
+    .fill("Local gateway");
+  await dialog
+    .getByLabel("API 地址", { exact: true })
+    .filter({ visible: true })
+    .fill("http://127.0.0.1:12345/v1");
+  await dialog.getByRole("button", { name: "第三方模型提供商" }).click();
+  await expect(
+    dialog.getByLabel("API 密钥", { exact: true }).filter({ visible: true }),
+  ).toHaveValue("fixture-unsaved-key");
+  await dialog.getByRole("button", { name: "自定义模型 API" }).click();
+  await expect(
+    dialog.getByLabel("提供商名称", { exact: true }).filter({ visible: true }),
+  ).toHaveValue("Local gateway");
+  let writes = 0;
+  await page.route("**/api/providers/configuration", (route) => {
+    writes++;
+    return route.fulfill({ json: { saved: true } });
+  });
   await page.route("**/api/models/discover", (route) =>
     route.fulfill({
       json: {
         models: [
-          { id: "reasoner", name: "Mock Reasoner" },
           { id: "design-model", name: "Design model" },
           { id: "fast-model", name: "Fast model" },
-          { id: "long-context", name: "Long context model" },
+          { id: "long-context", name: "Long context" },
         ],
         truncated: false,
       },
@@ -132,35 +188,103 @@ test("settings keep labeled mobile navigation and edit the selected model withou
   );
   await dialog.getByRole("button", { name: "获取可用模型" }).click();
   const modelPicker = page.getByRole("dialog", { name: "选择要添加的模型" });
+  await expect(modelPicker.getByRole("searchbox")).toBeFocused();
   await expect(
-    modelPicker.getByText("Design model", { exact: true }),
-  ).toBeVisible();
-  await modelPicker.getByRole("checkbox", { name: /Design model/ }).check();
-  await modelPicker.getByRole("searchbox").fill("Fast");
-  await modelPicker.getByRole("button", { name: "全选当前结果" }).click();
-  await expect(modelPicker.getByText("已选 2 个 · 最多 100 个")).toBeVisible();
+    modelPicker.getByRole("checkbox", { name: "design-model" }),
+  ).toBeChecked();
+  await expect(modelPicker.getByText("已选 3 个")).toBeVisible();
+  await modelPicker.getByRole("checkbox", { name: "long-context" }).uncheck();
+  await modelPicker.getByRole("searchbox").fill("fast");
+  await modelPicker.getByRole("searchbox").press("Enter");
+  expect(writes).toBe(0);
+  await expect(modelPicker).toBeVisible();
+  await expect(
+    modelPicker.getByRole("checkbox", { name: "fast-model" }),
+  ).toBeChecked();
+  await expect(modelPicker.getByText("已选 2 个")).toBeVisible();
   await modelPicker.getByRole("searchbox").fill("");
   await page.screenshot({
-    path: testInfo.outputPath("model-picker-mobile.png"),
-    animations: "disabled",
-  });
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.screenshot({
-    path: testInfo.outputPath("model-picker-desktop.png"),
-    animations: "disabled",
-  });
-  await modelPicker.getByRole("button", { name: "取消", exact: true }).click();
-  await page.screenshot({
-    path: testInfo.outputPath("provider-connection-desktop.png"),
-    animations: "disabled",
+    path: testInfo.outputPath("models-picker-desktop.png"),
   });
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: testInfo.outputPath("models-picker-mobile.png"),
+  });
+  await modelPicker.getByRole("button", { name: "添加所选" }).click();
+  await expect(modelPicker).toHaveCount(0);
+  await expect(
+    dialog.getByRole("button", { name: "获取可用模型" }),
+  ).toBeFocused();
+  await expect(
+    dialog
+      .getByRole("textbox", { name: "模型 2 名称", exact: true })
+      .filter({ visible: true }),
+  ).toHaveValue("Fast model");
+  expect(writes).toBe(0);
+  await dialog.getByRole("button", { name: "模型参数：Design model" }).click();
+  const context = dialog.getByRole("textbox", {
+    name: "上下文窗口 1",
+    exact: true,
+  });
+  await expect(context).toHaveValue("");
+  await expect(context).toHaveAttribute("placeholder", "256K");
+  const output = dialog.getByRole("textbox", {
+    name: "最大输出 token 数 1",
+    exact: true,
+  });
+  await expect(output).toHaveValue("");
+  await expect(output).toHaveAttribute("placeholder", "32K");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await dialog
+    .locator(".models-entry")
+    .filter({
+      has: page.getByRole("textbox", { name: "上下文窗口 1", exact: true }),
+    })
+    .screenshot({
+      path: testInfo.outputPath("models-capacity-placeholders.png"),
+    });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await context.fill("128K");
+  await dialog
+    .getByRole("textbox", { name: "最大输出 token 数 1", exact: true })
+    .fill("32K");
+  await dialog.getByRole("checkbox", { name: "支持推理" }).check();
+  await expect(
+    dialog.getByRole("checkbox", { name: "文本", exact: true }),
+  ).toBeDisabled();
+  await dialog.getByRole("checkbox", { name: "图片", exact: true }).check();
+  await expect(
+    dialog.getByRole("checkbox", { name: "文本", exact: true }),
+  ).toBeEnabled();
+  await dialog
+    .getByRole("button", { name: "保存", exact: true })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("models-add-custom-mobile.png"),
+  });
   expect(
     await dialog.evaluate(
       (element) => element.scrollWidth <= element.clientWidth,
     ),
   ).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.screenshot({
-    path: testInfo.outputPath("settings-model-mobile.png"),
+    path: testInfo.outputPath("models-add-custom-desktop.png"),
   });
+  await dialog
+    .locator(".models-entry")
+    .filter({
+      has: page.getByRole("textbox", { name: "上下文窗口 1", exact: true }),
+    })
+    .screenshot({
+      path: testInfo.outputPath("models-capacity-details-desktop.png"),
+    });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.screenshot({
+    path: testInfo.outputPath("models-add-custom-dark.png"),
+  });
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  expect(writes).toBe(0);
+  await dialog.getByRole("button", { name: "编辑 Mock", exact: true }).click();
+  await expect(name).toHaveValue("Unfinished reasoner");
 });

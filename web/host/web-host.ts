@@ -24,7 +24,7 @@ import {
 } from "../../extensions/shared/web-observer-registry.ts";
 import { isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
-import { validModelConfiguration } from "../runtime/model-configuration.ts";
+import { validModelConfiguration, validProviderConfigurationChange } from "../runtime/model-configuration.ts";
 import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
 import { projectSetupOutcome } from "../protocol/setup-outcome.ts";
 import { registerWebCommandFeedback, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
@@ -1003,6 +1003,21 @@ export class WebHost {
         // Provider errors can contain credential material. Never project them.
         return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
           error: "Could not complete credential save. Wait for an idle Session, refresh status and retry; this provider may require additional authentication settings.",
+        });
+      }
+    }
+    if (url.pathname === "/api/providers/configuration" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.revision !== "string" || !validProviderConfigurationChange(body.change)) return this.json(response, 400, { error: "Invalid provider configuration" });
+      if (!this.runtime.changeProviderConfiguration) return this.json(response, 501, { error: "Provider configuration unavailable" });
+      try {
+        await this.runtime.changeProviderConfiguration(body.sessionId, body.revision, body.change);
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { saved: true });
+      } catch (error) {
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
+          error: "Could not save provider configuration. Refresh configuration before retrying.",
+          ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}),
         });
       }
     }

@@ -1,45 +1,37 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
-import { Search, X, LoaderCircle } from "lucide-react";
+import { LoaderCircle, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type {
-  WebModelConfiguration,
-  WebModelConfigurations,
-} from "../../../../runtime/types.ts";
-import { WebApiError, WebClient } from "../../protocol/client.ts";
+import type { WebModelConfiguration } from "../../../../runtime/types.ts";
+import type { DiscoveredProviderModel } from "../../../../runtime/provider-model-discovery.ts";
+import { WebClient } from "../../protocol/client.ts";
 
 export function ProviderModelPicker({
   sessionId,
   template,
-  configuration,
+  existingIds,
+  apiKey,
   onClose,
-  onSaved,
-  onSavingChange,
+  onAdd,
 }: {
   sessionId: string;
   template: WebModelConfiguration;
-  configuration: WebModelConfigurations;
+  existingIds: string[];
+  apiKey: string;
   onClose: () => void;
-  onSaved: (model: WebModelConfiguration) => void;
-  onSavingChange?: (saving: boolean) => void;
+  onAdd: (models: DiscoveredProviderModel[]) => void;
 }) {
   const { t } = useTranslation();
-  const [models, setModels] = useState<{ id: string; name: string }[]>([]);
+  const [models, setModels] = useState<DiscoveredProviderModel[]>([]);
   const [selected, setSelected] = useState(new Set<string>());
   const [query, setQuery] = useState("");
-  const [key, setKey] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [truncated, setTruncated] = useState(false);
-  const [error, setError] = useState<"load" | "save" | "conflict" | null>(null);
-  const operation = useRef<AbortController | null>(null);
-  const saveInFlight = useRef(false);
-  const existing = new Set(
-    configuration.models
-      .filter((model) => model.provider === template.provider)
-      .map((model) => model.id),
-  );
+  const [error, setError] = useState(false);
+  const [revision, refresh] = useState(0);
+  const connection = useRef({ template, apiKey, existingIds });
+  const existing = new Set(existingIds);
+  const capacity = Math.max(0, 100 - existing.size);
   const visible = models.filter((model) =>
     `${model.id} ${model.name}`
       .toLowerCase()
@@ -49,167 +41,116 @@ export function ProviderModelPicker({
   const allVisible =
     selectable.length > 0 &&
     selectable.every((model) => selected.has(model.id));
-  const discover = async () => {
-    operation.current?.abort();
+  useEffect(() => {
+    void revision;
     const controller = new AbortController();
-    operation.current = controller;
+    const { template, apiKey, existingIds } = connection.current;
     setLoading(true);
-    setError(null);
-    try {
-      const result = await new WebClient().discoverProviderModels(
+    setError(false);
+    void new WebClient()
+      .discoverProviderModels(
         sessionId,
         {
           provider: template.provider,
           baseUrl: template.baseUrl,
           api: template.api,
-          ...(key.trim() ? { apiKey: key.trim() } : {}),
+          ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         },
         controller.signal,
-      );
-      if (controller.signal.aborted) return;
-      setModels(result.models);
-      setTruncated(result.truncated);
-      setSelected(
-        (current) =>
-          new Set(
-            [...current].filter((id) =>
-              result.models.some((model) => model.id === id),
+      )
+      .then(
+        (result) => {
+          if (controller.signal.aborted) return;
+          setModels(result.models);
+          setTruncated(result.truncated);
+          setLoading(false);
+          setSelected(
+            new Set(
+              result.models
+                .filter((model) => !existingIds.includes(model.id))
+                .slice(0, Math.max(0, 100 - existingIds.length))
+                .map((model) => model.id),
             ),
-          ),
+          );
+        },
+        () => {
+          if (!controller.signal.aborted) {
+            setError(true);
+            setLoading(false);
+          }
+        },
       );
-      setLoaded(true);
-    } catch {
-      if (!controller.signal.aborted) setError("load");
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  };
-  const initialDiscover = useRef(discover);
-  useEffect(() => {
-    void initialDiscover.current();
-    return () => operation.current?.abort();
-  }, []);
-  const save = async () => {
-    if (saveInFlight.current || !selected.size || error === "conflict") return;
-    saveInFlight.current = true;
-    setSaving(true);
-    onSavingChange?.(true);
-    setError(null);
-    const controller = new AbortController();
-    operation.current = controller;
-    const additions = models
-      .filter((model) => selected.has(model.id) && !existing.has(model.id))
-      .map((model) => ({ ...template, id: model.id, name: model.name }));
-    try {
-      await new WebClient().saveModelConfigurations(
-        sessionId,
-        configuration.revision,
-        additions,
-        controller.signal,
-      );
-      if (!controller.signal.aborted) onSaved(additions[0]!);
-    } catch (reason) {
-      if (!controller.signal.aborted)
-        setError(
-          reason instanceof WebApiError &&
-            reason.code === "MODEL_CONFIGURATION_CONFLICT"
-            ? "conflict"
-            : "save",
-        );
-    } finally {
-      saveInFlight.current = false;
-      if (!controller.signal.aborted) {
-        setSaving(false);
-        onSavingChange?.(false);
-      }
-    }
-  };
+    return () => controller.abort();
+  }, [sessionId, revision]);
   return (
     <Dialog
       isOpen
-      onOpenChange={(open: boolean) => !open && !saving && onClose()}
-      width={480}
+      width={380}
+      padding={0}
+      className="models-picker-dialog"
       aria-label={t("providerPickerTitle")}
+      onOpenChange={(open: boolean) => !open && onClose()}
     >
-      <div className="provider-model-picker">
+      <div className="models-picker">
         <header>
-          <div>
-            <h2>{t("providerPickerTitle")}</h2>
-            <p>{template.provider}</p>
-          </div>
+          <h2>{t("providerPickerTitle")}</h2>
           <button
             type="button"
-            className="icon-button"
+            className="models-icon"
             aria-label={t("close")}
-            disabled={saving}
             onClick={onClose}
           >
             <X />
           </button>
         </header>
-        <p className="provider-endpoint">{template.baseUrl}</p>
-        <details
-          className="provider-access"
-          open={error === "load" || undefined}
-        >
-          <summary>{t("providerPickerAccess")}</summary>
-          <label className="settings-form-field">
-            {t("providerPickerKey")}
-            <input
-              type="password"
-              autoComplete="off"
-              value={key}
-              disabled={saving || loading}
-              onChange={(event) => setKey(event.target.value)}
-            />
-          </label>
-          <p>{t("providerPickerKeyHint")}</p>
-        </details>
-        <div className="provider-picker-search">
-          <Search aria-hidden="true" />
+        <p>{t("providerPickerIntro")}</p>
+        <div className="models-picker-toolbar">
           <input
+            data-autofocus
             type="search"
             aria-label={t("providerPickerSearch")}
             placeholder={t("providerPickerSearch")}
             value={query}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.preventDefault();
+            }}
             onChange={(event) => setQuery(event.target.value)}
           />
           <button
             type="button"
-            disabled={saving || loading || !selectable.length}
+            className="models-link"
+            disabled={loading || !selectable.length}
             onClick={() =>
-              setSelected(
-                allVisible
-                  ? new Set()
-                  : new Set(
-                      [
-                        ...selected,
-                        ...selectable.map((model) => model.id),
-                      ].slice(0, 100),
-                    ),
-              )
+              setSelected((previous) => {
+                const next = new Set(previous);
+                for (const model of selectable) {
+                  if (allVisible) next.delete(model.id);
+                  else if (next.size < capacity) next.add(model.id);
+                }
+                return next;
+              })
             }
           >
             {t(allVisible ? "providerPickerClear" : "providerPickerSelectAll")}
           </button>
         </div>
-        <div className="provider-picker-list" aria-busy={loading}>
+        <div className="models-picker-list" aria-busy={loading}>
           {loading && (
-            <p className="provider-picker-empty" role="status">
-              <LoaderCircle className="provider-picker-spinner" />
+            <p className="models-picker-empty" role="status">
+              <LoaderCircle className="models-spinner" />
               {t("providerPickerLoading")}
             </p>
           )}
           {!loading &&
+            !error &&
             visible.map((model) => (
-              <label className="provider-picker-row" key={model.id}>
+              <label key={model.id} className="models-picker-row">
                 <input
                   type="checkbox"
                   checked={existing.has(model.id) || selected.has(model.id)}
                   disabled={
-                    saving ||
                     existing.has(model.id) ||
-                    (!selected.has(model.id) && selected.size >= 100)
+                    (!selected.has(model.id) && selected.size >= capacity)
                   }
                   onChange={(event) =>
                     setSelected((previous) => {
@@ -220,67 +161,49 @@ export function ProviderModelPicker({
                     })
                   }
                 />
-                <span>
-                  <strong>{model.name}</strong>
-                  <code>{model.id}</code>
-                </span>
+                <span title={model.name}>{model.id}</span>
                 {existing.has(model.id) && (
                   <small>{t("providerPickerAdded")}</small>
                 )}
               </label>
             ))}
-          {!loading && loaded && !visible.length && (
-            <p className="provider-picker-empty">
+          {!loading && !error && !visible.length && (
+            <p className="models-picker-empty">
               {t(query ? "providerPickerNoMatch" : "providerPickerEmpty")}
             </p>
           )}
+          {error && (
+            <div className="models-error" role="alert">
+              <p>{t("providerPickerError_load")}</p>
+              <button
+                type="button"
+                className="models-button"
+                onClick={() => refresh((value) => value + 1)}
+              >
+                {t("retryAdmissionCheck")}
+              </button>
+            </div>
+          )}
         </div>
         {truncated && (
-          <p className="settings-edit-state">{t("providerPickerBounded")}</p>
+          <p className="models-hint">{t("providerPickerBounded")}</p>
         )}
-        {error && (
-          <p role="alert" className="provider-picker-error">
-            {t(`providerPickerError_${error}`)}
-          </p>
-        )}
-        <p className="settings-edit-state">
-          {t("providerPickerDefaults", {
-            context: template.contextWindow.toLocaleString(),
-            output: template.maxTokens.toLocaleString(),
-          })}
-        </p>
         <footer>
-          <button
-            type="button"
-            disabled={loading || saving}
-            onClick={() => void discover()}
-          >
-            {t("providerPickerRetry")}
-          </button>
-          <span>{t("providerPickerCount", { count: selected.size })}</span>
-          <button
-            type="button"
-            className="provider-picker-cancel"
-            disabled={saving}
-            onClick={onClose}
-          >
+          <span className="models-hint" aria-live="polite">
+            {selected.size > 0 &&
+              t("providerPickerSelected", { count: selected.size })}
+          </span>
+          <button type="button" className="models-button" onClick={onClose}>
             {t("cancel")}
           </button>
           <button
             type="button"
-            className="provider-picker-save"
-            disabled={
-              !selected.size || loading || saving || error === "conflict"
+            className="models-button"
+            disabled={!selected.size || loading || error}
+            onClick={() =>
+              onAdd(models.filter((model) => selected.has(model.id)))
             }
-            aria-busy={saving}
-            onClick={() => void save()}
           >
-            {saving && (
-              <LoaderCircle
-                className="provider-picker-spinner"
-                aria-hidden="true"
-              />
-            )}
             {t("providerPickerSave")}
           </button>
         </footer>

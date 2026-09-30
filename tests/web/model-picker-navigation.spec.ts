@@ -202,6 +202,30 @@ it("keeps an empty catalog actionable without a meaningless search", async () =>
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
 });
 
+it("keeps a provider together when the current model is prepended to the catalog", async () => {
+  const catalog = snapshot();
+  catalog.models.push({
+    ...catalog.models[0]!,
+    id: "second",
+    name: "Second",
+    label: "Second",
+    current: false,
+  });
+  const ui = setup({ snapshot: catalog });
+  await ui.open();
+  expect(
+    screen
+      .getAllByRole("option")
+      .map((option) => option.getAttribute("aria-label")),
+  ).toEqual([
+    "Zen (alpha/zen)",
+    "Second (alpha/second)",
+    "River (beta/river)",
+    "Kite (beta/kite/model)",
+  ]);
+  expect(screen.getAllByText("alpha")).toHaveLength(1);
+});
+
 it("does not treat an unreceived catalog as an empty one", () => {
   const openSettings = vi.fn();
   setup({

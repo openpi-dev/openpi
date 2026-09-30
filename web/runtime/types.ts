@@ -27,6 +27,9 @@ export interface WebProviderAuthSummary {
   readonly source?: WebProviderAuthSource;
   readonly subscription: boolean;
   readonly nameTruncated: boolean;
+  readonly custom?: boolean;
+  readonly baseUrl?: string;
+  readonly api?: WebModelConfiguration["api"];
 }
 
 export interface WebProviderAuthProjection {
@@ -46,14 +49,37 @@ export interface WebModelConfiguration {
   baseUrl: string;
   api: "openai-responses" | "openai-completions" | "anthropic-messages";
   reasoning: boolean;
-  contextWindow: number;
-  maxTokens: number;
+  contextWindow?: number;
+  maxTokens?: number;
+  input?: ("text" | "image")[];
 }
 
 export interface WebModelConfigurations {
   revision: string;
   models: WebModelConfiguration[];
+  providers?: WebProviderConfigurationSummary[];
 }
+
+export interface WebProviderConfigurationSummary {
+  provider: string;
+  name: string;
+  baseUrl: string;
+  api: WebModelConfiguration["api"] | "";
+  /** False when the native file contains models this editor cannot project. */
+  editable: boolean;
+}
+
+export interface WebProviderConfiguration {
+  provider: string;
+  name: string;
+  baseUrl: string;
+  api: WebModelConfiguration["api"];
+  models: WebModelConfiguration[];
+}
+
+export type WebProviderConfigurationChange =
+  | { action: "save"; configuration: WebProviderConfiguration }
+  | { action: "remove"; provider: string };
 
 export interface WebRuntimeEvent {
   type: string;
@@ -205,7 +231,8 @@ export interface WebRuntimeController {
   readModelConfigurations?(): Promise<WebModelConfigurations>;
   saveModelConfiguration?(sessionId: string, revision: string, model: WebModelConfiguration): Promise<void>;
   saveModelConfigurations?(sessionId: string, revision: string, models: WebModelConfiguration[]): Promise<void>;
-  discoverProviderModels?(sessionId: string, request: import("./provider-model-discovery.ts").ProviderModelDiscovery, signal: AbortSignal): Promise<{ models: { id: string; name: string }[]; truncated: boolean }>;
+  changeProviderConfiguration?(sessionId: string, revision: string, change: WebProviderConfigurationChange): Promise<void>;
+  discoverProviderModels?(sessionId: string, request: import("./provider-model-discovery.ts").ProviderModelDiscovery, signal: AbortSignal): Promise<{ models: import("./provider-model-discovery.ts").DiscoveredProviderModel[]; truncated: boolean }>;
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
   setPlanMode?(request: PlanControlRequest & { sessionId: string; sessionPath: string }): Promise<ReturnType<typeof projectPlanControl>>;

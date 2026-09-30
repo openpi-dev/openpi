@@ -54,9 +54,9 @@ for (const firstControl of ["settings", "thinking"] as const) {
         },
       ];
       snapshot.thinking = {
-        supported: true,
-        available: ["low", "high"],
-        level,
+        supported: created,
+        available: created ? ["low", "high"] : ["off"],
+        level: created ? level : "off",
         revision,
       };
       snapshot.runtime = { status: "idle", capabilities: {} };
@@ -156,7 +156,7 @@ for (const firstControl of ["settings", "thinking"] as const) {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openWorkbench(page);
     const settings = page.getByRole("button", { name: "设置", exact: true });
-    const thinking = page.locator(".thinking-picker");
+    const thinking = page.locator(".model-picker > button");
     await expect(settings).toBeEnabled();
     await expect(thinking).toBeEnabled();
     await page.locator(".workspace-picker").click();
@@ -176,8 +176,9 @@ for (const firstControl of ["settings", "thinking"] as const) {
     };
     const chooseThinking = async () => {
       await thinking.click();
-      await page.getByRole("menuitem", { name: "low", exact: true }).click();
-      await expect(thinking).toHaveAttribute("aria-label", "思考等级: low");
+      await page.getByRole("slider", { name: "思考等级" }).press("Home");
+      await expect(thinking).toHaveAccessibleName(/思考等级: low/);
+      await page.keyboard.press("Escape");
     };
     if (firstControl === "settings") {
       await openSettings();
@@ -1391,25 +1392,10 @@ test("production workbench is local, keyboard-operable, and accessible", async (
     )
     .not.toBe("0");
 
-  const thinkingPicker = page.locator(".thinking-picker");
-  await expect(thinkingPicker).toBeVisible();
-  expect(
-    await page.evaluate(() => {
-      const model = document.querySelector(".model-picker");
-      const thinking = document.querySelector(".thinking-picker");
-      if (!model || !thinking) return null;
-      return {
-        sameToolbar: Boolean(
-          model.closest(".composer-toolbar") &&
-            thinking.closest(".composer-toolbar"),
-        ),
-        thinkingAfterModel: Boolean(
-          model.compareDocumentPosition(thinking) &
-            Node.DOCUMENT_POSITION_FOLLOWING,
-        ),
-      };
-    }),
-  ).toEqual({ sameToolbar: true, thinkingAfterModel: true });
+  const modelControl = page.locator(".composer-toolbar .model-picker > button");
+  await expect(modelControl).toHaveCount(1);
+  await expect(modelControl).toBeVisible();
+  await expect(page.locator(".thinking-picker")).toHaveCount(0);
 
   const workspaceMenu = page.getByRole("button", {
     name: "工作区选项",
@@ -3219,43 +3205,64 @@ test("a delayed creation receipt never retargets the first prompt to another tab
   }
 });
 
+async function clickThinkingLevel(page: Page, index: number) {
+  const slider = page.getByRole("slider", { name: "思考等级" });
+  const bounds = await slider.boundingBox();
+  if (!bounds) throw new Error("Thinking slider is not visible");
+  const max = Number(await slider.getAttribute("max"));
+  await slider.click({
+    position: {
+      x: 14 + ((bounds.width - 28) * index) / max,
+      y: bounds.height / 2,
+    },
+  });
+}
+
 test.describe("thinking picker", () => {
-  test("disables thinking when the runtime reports it unsupported", async ({
+  test("shows the capability setting when the runtime reports thinking unsupported", async ({
     page,
   }) => {
     await installThinkingFixture(page, { supported: false, available: [] });
     await openWorkbench(page);
-    const thinkingPicker = page.locator(".thinking-picker");
-    await expect(thinkingPicker).toBeDisabled();
-    await expect(thinkingPicker).toHaveAttribute("aria-label", "暂不支持思考");
+    const thinkingPicker = page.locator(".model-picker > button");
+    await expect(thinkingPicker).toBeEnabled();
+    await expect(page.locator(".model-picker-thinking")).toHaveCount(0);
+    await thinkingPicker.click();
+    await expect(
+      page.getByText(
+        "此模型未启用思考。如提供商支持，可在模型设置中开启「支持推理」。",
+      ),
+    ).toBeVisible();
   });
 
-  test("opens with a section heading and marks the confirmed level", async ({
+  test("opens with the confirmed level and only the native supported stops", async ({
     page,
   }) => {
     await installThinkingFixture(page);
     await openWorkbench(page);
-    const picker = page.locator(".thinking-picker");
+    const picker = page.locator(".model-picker > button");
     await expect(picker).toBeEnabled();
     await picker.click();
-    await expect(page.getByRole("group", { name: "思考等级" })).toBeVisible();
     await expect(
-      page
-        .getByRole("menuitem", { name: "off", exact: true })
-        .locator("svg.lucide-check"),
-    ).toHaveCount(1);
+      page.locator('[role="dialog"]:has(.thinking-controls)'),
+    ).toBeVisible();
+    const slider = page.getByRole("slider", { name: "思考等级" });
+    await expect(slider).toHaveValue("0");
+    await expect(slider).toHaveAttribute("max", "3");
+    await expect(slider).toHaveAttribute("aria-valuetext", "Off");
+    await expect(page.locator(".thinking-reset")).toBeDisabled();
   });
 
   test("selecting the confirmed level issues no write", async ({ page }) => {
     const fixture = await installThinkingFixture(page);
     await openWorkbench(page);
-    await page.locator(".thinking-picker").click();
-    await page.getByRole("menuitem", { name: "off", exact: true }).click();
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await page.locator(".model-picker > button").click();
+    await clickThinkingLevel(page, 0);
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-level",
       "off",
     );
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-pending",
       "false",
     );
@@ -3267,13 +3274,13 @@ test.describe("thinking picker", () => {
   }) => {
     const fixture = await installThinkingFixture(page);
     await openWorkbench(page);
-    await page.locator(".thinking-picker").click();
-    await page.getByRole("menuitem", { name: "high", exact: true }).click();
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await page.locator(".model-picker > button").click();
+    await clickThinkingLevel(page, 2);
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-level",
       "high",
     );
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-pending",
       "false",
     );
@@ -3289,18 +3296,12 @@ test.describe("thinking picker", () => {
   test("is keyboard-operable and cancels with Escape", async ({ page }) => {
     const fixture = await installThinkingFixture(page);
     await openWorkbench(page);
-    const picker = page.locator(".thinking-picker");
+    const picker = page.locator(".model-picker > button");
     await picker.focus();
     await page.keyboard.press("Enter");
-    await expect(
-      page.getByRole("menuitem", { name: "off", exact: true }),
-    ).toBeFocused();
-    await page.keyboard.press("ArrowDown");
-    await expect(
-      page.getByRole("menuitem", { name: "low", exact: true }),
-    ).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await expect(page.getByRole("slider", { name: "思考等级" })).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-level",
       "low",
     );
@@ -3312,11 +3313,14 @@ test.describe("thinking picker", () => {
       },
     ]);
 
-    await picker.focus();
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("menu")).toBeVisible();
+    await expect(
+      page.locator('[role="dialog"]:has(.thinking-controls)'),
+    ).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(
+      page.locator('[role="dialog"]:has(.thinking-controls)'),
+    ).toHaveCount(0);
+    await expect(picker).toBeFocused();
     expect(fixture.posts).toHaveLength(1);
   });
 
@@ -3325,24 +3329,23 @@ test.describe("thinking picker", () => {
   }) => {
     const fixture = await installThinkingFixture(page);
     await openWorkbench(page);
-    const picker = page.locator(".thinking-picker");
+    const picker = page.locator(".model-picker > button");
     fixture.holdNextPost();
     await picker.click();
-    await page.getByRole("menuitem", { name: "low", exact: true }).click();
+    await clickThinkingLevel(page, 1);
     await expect.poll(() => fixture.posts.length, { timeout: 5_000 }).toBe(1);
 
-    await picker.click();
-    await page.getByRole("menuitem", { name: "high", exact: true }).click();
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await clickThinkingLevel(page, 2);
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-pending",
       "true",
     );
     fixture.releaseHeldPost();
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-level",
       "high",
     );
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-pending",
       "false",
     );
@@ -3366,17 +3369,17 @@ test.describe("thinking picker", () => {
     const fixture = await installThinkingFixture(page);
     fixture.failNextPost(500, { error: "Mock thinking failure" });
     await openWorkbench(page);
-    await page.locator(".thinking-picker").click();
-    await page.getByRole("menuitem", { name: "high", exact: true }).click();
+    await page.locator(".model-picker > button").click();
+    await clickThinkingLevel(page, 2);
     await expect(page.getByRole("alert")).toContainText(
       "Mock thinking failure",
     );
     await expect.poll(() => fixture.getCount()).toBe(1);
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-level",
       "off",
     );
-    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+    await expect(page.locator(".model-picker-wrap")).toHaveAttribute(
       "data-pending",
       "false",
     );
@@ -3391,8 +3394,8 @@ test.describe("thinking picker", () => {
       error: "thinking control is unavailable",
     });
     await openWorkbench(page);
-    await page.locator(".thinking-picker").click();
-    await page.getByRole("menuitem", { name: "low", exact: true }).click();
+    await page.locator(".model-picker > button").click();
+    await clickThinkingLevel(page, 1);
     await expect(page.getByRole("alert")).toContainText(
       "thinking control is unavailable",
     );
@@ -3406,26 +3409,30 @@ test.describe("thinking picker", () => {
       available: ["off", "low", "high"],
     });
     await openWorkbench(page);
-    await page.locator(".thinking-picker").click();
+    await page.locator(".model-picker > button").click();
     await expect(
-      page.locator('.thinking-picker-wrap[data-warning="true"]'),
+      page.locator('.model-picker-wrap[data-warning="true"]'),
     ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: /当前确认的思考等级/ }),
-    ).toBeVisible();
+    await expect(page.locator(".thinking-control-notice")).toBeVisible();
   });
 
   test("locks the picker while a turn is running", async ({ page }) => {
     await installThinkingFixture(page, { runtimeStatus: "running" });
     await openWorkbench(page);
-    await expect(page.locator(".thinking-picker")).toBeDisabled();
+    await expect(page.locator(".model-picker > button")).toBeDisabled();
   });
 
   test("keeps the toolbar inside a narrow viewport", async ({ page }) => {
     await installThinkingFixture(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await openWorkbench(page);
-    await expect(page.locator(".thinking-picker")).toBeVisible();
+    await expect(page.locator(".model-picker > button")).toBeVisible();
+    await page.locator(".model-picker > button").click();
+    const popup = await page
+      .locator('[role="dialog"]:has(.thinking-controls)')
+      .boundingBox();
+    expect(popup!.x).toBeGreaterThanOrEqual(0);
+    expect(popup!.x + popup!.width).toBeLessThanOrEqual(390);
     const width = await page.evaluate(() => ({
       client: document.body.clientWidth,
       scroll: document.body.scrollWidth,
@@ -3433,16 +3440,137 @@ test.describe("thinking picker", () => {
     expect(width.scroll).toBeLessThanOrEqual(width.client);
   });
 
-  test("has an accessible trigger and an accessible open menu", async ({
+  test("has an accessible trigger and an accessible slider", async ({
     page,
   }) => {
     await installThinkingFixture(page);
     await openWorkbench(page);
-    const picker = page.locator(".thinking-picker");
+    const picker = page.locator(".model-picker > button");
     await expect(picker).toHaveAccessibleName(/思考等级.*off/);
     await picker.click();
-    await expect(page.getByRole("group", { name: "思考等级" })).toBeVisible();
+    await expect(page.getByRole("slider", { name: "思考等级" })).toBeVisible();
     const accessibility = await new AxeBuilder({ page }).analyze();
     expect(accessibility.violations).toEqual([]);
+  });
+
+  test("previews a drag and writes only on release; Escape discards the preview", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    await page.locator(".model-picker > button").click();
+    const slider = page.getByRole("slider", { name: "思考等级" });
+    const bounds = (await slider.boundingBox())!;
+    const y = bounds.y + bounds.height / 2;
+    await page.mouse.move(bounds.x + 14, y);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width - 14, y, { steps: 8 });
+    await expect(slider).toHaveAttribute("aria-valuetext", "Max");
+    expect(fixture.posts).toEqual([]);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect(
+      page.locator('[role="dialog"]:has(.thinking-controls)'),
+    ).toHaveCount(0);
+    expect(fixture.posts).toEqual([]);
+    await page.locator(".model-picker > button").click();
+    await page.mouse.move(bounds.x + 14, y);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width - 14, y, { steps: 8 });
+    await page.mouse.up();
+    await expect
+      .poll(() => fixture.posts.map((post) => post.level))
+      .toEqual(["max"]);
+  });
+
+  test("reset restores the level from when the popover opened", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page, { level: "low" });
+    await openWorkbench(page);
+    await page.locator(".model-picker > button").click();
+    await clickThinkingLevel(page, 3);
+    const reset = page.getByRole("button", { name: "恢复打开时的等级（Low）" });
+    await expect(reset).toBeEnabled();
+    await reset.click();
+    await expect(
+      page.getByRole("slider", { name: "思考等级" }),
+    ).toHaveAttribute("aria-valuetext", "Low");
+    await expect(reset).toBeDisabled();
+    await expect
+      .poll(() => fixture.posts.map((post) => post.level))
+      .toEqual(["max", "low"]);
+  });
+
+  test("toggles closed and preserves the clicked composer focus on light dismissal", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    const trigger = page.locator(".model-picker > button");
+    const popup = page.locator('[role="dialog"]:has(.thinking-controls)');
+    await trigger.click();
+    await expect(popup).toBeVisible();
+    await trigger.click();
+    await expect(popup).toHaveCount(0);
+    await trigger.click();
+    await expect(popup).toBeVisible();
+    const composer = page.getByRole("textbox", { name: "描述任务" });
+    await composer.click();
+    await expect(popup).toHaveCount(0);
+    await expect(composer).toBeFocused();
+    await page.keyboard.type("Keep composing");
+    await expect(composer).toHaveValue("Keep composing");
+    expect(fixture.posts).toEqual([]);
+  });
+
+  test("model link opens the grouped model picker without changing thinking", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    await page.locator(".model-picker > button").click();
+    await page.locator(".thinking-model-link").click();
+    await expect(
+      page.locator('[role="dialog"]:has(.thinking-controls)'),
+    ).toHaveCount(0);
+    await expect(page.getByRole("listbox", { name: "选择模型" })).toBeVisible();
+    await expect(page.locator(".model-provider-heading")).toHaveText("mock");
+    await expect(page.getByRole("option", { selected: true })).toContainText(
+      "Mock Reasoner",
+    );
+    expect(fixture.posts).toEqual([]);
+  });
+
+  test("reference popover fits light, dark and narrow layouts", async ({
+    page,
+  }, testInfo) => {
+    await installThinkingFixture(page, {
+      level: "max",
+      available: ["low", "medium", "high", "xhigh", "max", "ultra"],
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openWorkbench(page);
+    await page.locator(".model-picker > button").click();
+    const popup = page.locator('[role="dialog"]:has(.thinking-controls)');
+    await expect(popup).toBeVisible();
+    await popup.screenshot({
+      path: testInfo.outputPath("thinking-popover-light.png"),
+    });
+    await page.screenshot({
+      path: testInfo.outputPath("thinking-composer-light.png"),
+    });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await popup.screenshot({
+      path: testInfo.outputPath("thinking-popover-dark.png"),
+    });
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: testInfo.outputPath("thinking-composer-mobile.png"),
+    });
+    const bounds = (await popup.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
   });
 });
