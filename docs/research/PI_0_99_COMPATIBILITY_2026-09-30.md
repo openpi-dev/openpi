@@ -5,7 +5,8 @@
 - Source baseline: OpenPI `1c4d3318ae9cfd207255820246f7041821fb36da` (0.9.0)
 - Host boundary: `@earendil-works/pi-ai`, `pi-coding-agent`, and `pi-tui` 0.99.1, with the lockfile's native Pi transitive packages
 - Fix boundary: the compatibility changes linked from the Issue below
-- Issue / related PR tracking: [#635](https://github.com/openpi-dev/openpi/issues/635)
+- Issue: [#635](https://github.com/openpi-dev/openpi/issues/635)
+- Related PR: [#636](https://github.com/openpi-dev/openpi/pull/636)
 - Supersedes: none
 
 ## Verified upstream facts
@@ -59,6 +60,10 @@ OpenPI executor or authority mechanism.
   the compaction call instead of making a remote summarization request.
 - Web regressions cover all three admission dispositions, unchanged queue length,
   preflight failures, and handled Plan implementation input.
+- The five Plan provider browser tests passed with Pi 0.99.1, local HTTP fixture
+  responses, and headless Google Chrome. They cover planning context, light/dark
+  plan cards, explicit implementation admission, and leaving Plan mode. They do
+  not establish compatibility with a remote provider service.
 - Plan rendering tests distinguish Pi's native argument preview from OpenPI's
   bounded result preview. The 24-case rendering suite passed.
 - An isolated Pi agent directory reported exactly one OpenPI source: the
