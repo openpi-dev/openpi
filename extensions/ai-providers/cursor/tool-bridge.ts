@@ -42,7 +42,7 @@ export function decodeCursorTool(
   }
   if (!args.toolCallId.trim())
     throw new Error("Cursor MCP tool call has no identity");
-  const values: Record<string, unknown> = {};
+  const values: ToolCall["arguments"] = {};
   for (const [key, value] of Object.entries(args.args)) {
     // google.protobuf.Value, not JSON text. Define own properties so keys such
     // as __proto__ cannot alter the decoded argument object's prototype.

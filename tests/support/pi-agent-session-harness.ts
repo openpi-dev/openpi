@@ -180,13 +180,8 @@ export function createPiAgentSessionHarness(
       promptOptions?: Parameters<AgentSession["prompt"]>[1],
     ) {
       calls.prompts.push(text);
-      try {
-        await options.preflight?.(text, harness);
-      } catch (error) {
-        promptOptions?.preflightResult?.(false);
-        throw error;
-      }
-      promptOptions?.preflightResult?.(true);
+      await options.preflight?.(text, harness);
+      promptOptions?.preflightResult?.("started");
       if (options.prompt) {
         await options.prompt(text, harness);
         return;

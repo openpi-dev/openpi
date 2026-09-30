@@ -3,7 +3,10 @@ import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  type PromptOptions,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
 import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
@@ -152,10 +155,6 @@ test("projects current Pi token and context statistics without inference", () =>
     },
   });
 });
-
-type PromptOptions = {
-  preflightResult?: (accepted: boolean) => void;
-};
 
 function promptSession(sessionId: string) {
   const calls: Array<{
@@ -463,7 +462,7 @@ test("Plan control targets the active idle owned Session without admitting a pro
     assert.deepEqual(controlActions, ["mode", "prepare", "authorize"]);
     assert.equal(session.calls.length, 1);
     assert.equal(session.calls[0]!.content, "Implement the approved plan");
-    session.calls[0]!.options.preflightResult?.(true);
+    session.calls[0]!.options.preflightResult?.("started");
     assert.equal(calls, 4);
     assert.equal(controlActions.at(-1), "implement");
     assert.deepEqual(await submitting, { pendingFollowUps: 0 });
@@ -498,7 +497,7 @@ test("Plan control targets the active idle owned Session without admitting a pro
   }
 });
 
-test("Plan approval stays ready when Pi rejects or throws during prompt preflight", async () => {
+test("Plan approval stays ready when Pi rejects preflight or handles input without starting a run", async () => {
   const session = promptSession("session-a");
   const runtime = promptHarness(session);
   let planStatus: "ready" | "inactive" = "ready";
@@ -526,7 +525,6 @@ test("Plan approval stays ready when Pi rejects or throws during prompt prefligh
     await Promise.resolve();
     assert.deepEqual(actions, ["authorize"]);
     assert.equal(planStatus, "ready");
-    session.calls[0]!.options.preflightResult?.(false);
     session.calls[0]!.run.reject(new Error("authentication unavailable"));
     await assert.rejects(rejected, { code: "PROMPT_REJECTED" });
     await Promise.resolve();
@@ -546,6 +544,20 @@ test("Plan approval stays ready when Pi rejects or throws during prompt prefligh
     await Promise.resolve();
     assert.deepEqual(actions, ["authorize", "cancel", "authorize", "cancel"]);
     assert.equal(planStatus, "ready");
+
+    const handled = runtime.sendPrompt("Implement the approved plan", {
+      commandId: "handled-implementation",
+      expectedSessionId: "session-a",
+      expectedSessionPath: "current:session-a",
+      planRevision: "revision",
+    });
+    await Promise.resolve();
+    session.calls[2]!.options.preflightResult?.("handled");
+    assert.deepEqual(await handled, { pendingFollowUps: 0 });
+    session.calls[2]!.run.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(planStatus, "ready");
+    assert.deepEqual(actions.slice(-2), ["authorize", "cancel"]);
   } finally {
     unregister();
   }
@@ -568,12 +580,47 @@ test("prompt admission waits for Pi preflight acceptance", async () => {
   assert.equal(session.calls.length, 1);
   assert.equal(settled, false);
 
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("started");
   assert.deepEqual(await admission, { pendingFollowUps: 0 });
   assert.equal(settled, true);
 
   session.calls[0].run.resolve();
   await Promise.resolve();
+});
+
+test("native prompt dispositions distinguish handled input from started or queued runs", async (t) => {
+  for (const disposition of ["started", "queued", "handled"] as const) {
+    await t.test(disposition, async () => {
+      const session = promptSession("session-a");
+      const runtime = promptHarness(session);
+      const events: WebRuntimeEvent[] = [];
+      runtime.subscribe((event) => events.push(event));
+      const admission = runtime.sendPrompt("hello", { commandId: "command-a" });
+      await Promise.resolve();
+      // A queued input can replace an existing queue item without increasing its length.
+      session.calls[0].options.preflightResult?.(disposition);
+      assert.deepEqual(await admission, { pendingFollowUps: 0 });
+      session.calls[0].run.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.deepEqual(
+        events,
+        disposition === "handled"
+          ? [
+              {
+                type: "prompt_settled",
+                detail: {
+                  commandId: "command-a",
+                  sessionId: "session-a",
+                  outcome: "handled",
+                },
+              },
+            ]
+          : [],
+      );
+      if (disposition === "queued")
+        assert.equal(runtime.activePromptTrace?.queued, true);
+    });
+  }
 });
 
 test("prompt admission snapshots Pi follow-up messages", async () => {
@@ -586,7 +633,7 @@ test("prompt admission snapshots Pi follow-up messages", async () => {
   });
   await Promise.resolve();
   session.emitFollowUpQueue(["queued"]);
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("started");
   assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
@@ -605,7 +652,7 @@ test("prompt admission snapshots a follow-up queue that shrinks before it grows"
 
   session.emitFollowUpQueue([]);
   session.emitFollowUpQueue(["queued"]);
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("queued");
   assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
@@ -625,13 +672,13 @@ test("prompt admission observes streaming after an earlier admission gate", asyn
   });
   await Promise.resolve();
 
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("started");
   session.isStreaming = true;
   assert.deepEqual(await first, { pendingFollowUps: 0 });
   session.calls[0].run.resolve();
   await Promise.resolve();
   session.emitFollowUpQueue(["second"]);
-  session.calls[1].options.preflightResult?.(true);
+  session.calls[1].options.preflightResult?.("queued");
   assert.deepEqual(await second, { pendingFollowUps: 1 });
 
   session.calls[1].run.resolve();
@@ -649,7 +696,7 @@ test("handled input snapshots an externally pending follow-up without claiming o
   await Promise.resolve();
 
   session.emitFollowUpQueue(["external delivery"]);
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("handled");
   assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
@@ -664,7 +711,7 @@ test("prompt preflight rejection is a typed non-admission", async () => {
   });
   await Promise.resolve();
 
-  session.calls[0].options.preflightResult?.(false);
+  session.calls[0].run.reject(new Error("no model selected"));
   const outcome = await Promise.race([
     admission.then(
       () => "resolved" as const,
@@ -672,7 +719,6 @@ test("prompt preflight rejection is a typed non-admission", async () => {
     ),
     new Promise<"pending">((resolve) => setImmediate(() => resolve("pending"))),
   ]);
-  session.calls[0].run.reject(new Error("no model selected"));
   await Promise.resolve();
   assert.ok(outcome instanceof WebRuntimeRequestError);
   assert.equal(outcome.code, "PROMPT_REJECTED");
@@ -707,7 +753,7 @@ test("unadmitted queued prompts reject after the active Session changes", async 
   });
   runtime.runtime = { session: sessionB, dispose: async () => undefined };
 
-  sessionA.calls[0].options.preflightResult?.(true);
+  sessionA.calls[0].options.preflightResult?.("started");
   await first;
   await Promise.resolve();
   assert.deepEqual(
@@ -745,7 +791,7 @@ test("copied Session rejects a queued prompt before admission", async (t) => {
   gate.resolve();
   await new Promise<void>((resolve) => setImmediate(resolve));
   for (const call of session.calls) {
-    call.options.preflightResult?.(true);
+    call.options.preflightResult?.("started");
     call.run.resolve();
   }
   assertSessionConflict(await admission);
@@ -1098,7 +1144,7 @@ test("handled prompt emits a correlated settlement without agent events", async 
     expectedSessionId: "session-a",
   });
   await Promise.resolve();
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("handled");
   await admission;
   session.calls[0].run.resolve();
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1131,7 +1177,7 @@ test("a command's delayed native turn retains its origin without lending it to a
   ).projectEvent;
   const delayed = deferred();
   session.prompt = async (_content, options) => {
-    options.preflightResult?.(true);
+    options.preflightResult?.("handled");
     // Created inside the real sendPrompt invocation, after handler return.
     setImmediate(() => {
       project.call(runtime, session, { type: "agent_start" });
@@ -1171,7 +1217,7 @@ test("later prompt failures retain their command and Session correlation", async
     expectedSessionId: "session-a",
   });
   await Promise.resolve();
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("started");
   await admission;
   session.calls[0].run.reject(new Error("provider failed"));
 
@@ -1379,13 +1425,13 @@ test("retained Session cleanup waits for all of its prompt operations", async ()
 
   const first = runtime.sendPrompt("first", { expectedSessionId: "session-a" });
   await Promise.resolve();
-  sessionA.calls[0].options.preflightResult?.(true);
+  sessionA.calls[0].options.preflightResult?.("started");
   await first;
   const second = runtime.sendPrompt("second", {
     expectedSessionId: "session-a",
   });
   await Promise.resolve();
-  sessionA.calls[1].options.preflightResult?.(true);
+  sessionA.calls[1].options.preflightResult?.("started");
   await second;
   runtime.runtime = {
     session: sessionB,

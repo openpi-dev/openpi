@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { stripVTControlCharacters } from "node:util";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -153,7 +154,7 @@ test("overrides all seven activity renderers without changing model-facing defin
       { command: "printf native-bash" },
       undefined,
       undefined,
-      ctx,
+      toolExecutionContext(ctx),
     );
     assert.equal(bashResult.content[0]?.type, "text");
     assert.match(
@@ -165,7 +166,7 @@ test("overrides all seven activity renderers without changing model-facing defin
       { path: "fixture.txt", content: "before\n" },
       undefined,
       undefined,
-      ctx,
+      toolExecutionContext(ctx),
     );
     await edit!.execute(
       "edit-1",
@@ -175,7 +176,7 @@ test("overrides all seven activity renderers without changing model-facing defin
       },
       undefined,
       undefined,
-      ctx,
+      toolExecutionContext(ctx),
     );
     assert.equal(
       await readFile(path.join(cwd, "fixture.txt"), "utf8"),

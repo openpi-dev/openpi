@@ -67,9 +67,9 @@
     "@astryxdesign/theme-neutral": "0.5.2",
     "@axe-core/playwright": "4.13.0",
     "@biomejs/biome": "2.5.8",
-    "@earendil-works/pi-ai": "^0.85.1",
-    "@earendil-works/pi-coding-agent": "^0.85.1",
-    "@earendil-works/pi-tui": "^0.85.1",
+    "@earendil-works/pi-ai": "^0.99.1",
+    "@earendil-works/pi-coding-agent": "^0.99.1",
+    "@earendil-works/pi-tui": "^0.99.1",
     "@effect/tsgo": "^0.24.2",
     "@effect/vitest": "4.0.0-beta.103",
     "@playwright/test": "1.62.1",
@@ -102,9 +102,9 @@
     "yaml": "2.9.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.85.1",
-    "@earendil-works/pi-coding-agent": ">=0.85.1",
-    "@earendil-works/pi-tui": ">=0.85.1",
+    "@earendil-works/pi-ai": ">=0.99.1",
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
+    "@earendil-works/pi-tui": ">=0.99.1",
     "typebox": "*"
   },
   "type": "module",

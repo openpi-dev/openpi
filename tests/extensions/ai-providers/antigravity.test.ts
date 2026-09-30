@@ -804,7 +804,6 @@ function transcriptContext(extraSystem: Record<string, unknown>[] = []) {
 
 test("resolveTranscript replays the system prompt and tools from a Pi 0.86+ transcript", () => {
   const resolved = resolveTranscript(transcriptContext());
-  assert.equal(resolved.source, "transcript");
   assert.deepEqual(resolved.systemPrompts, [
     "You are an expert coding assistant.\n\n- be concise",
   ]);
@@ -848,12 +847,11 @@ test("resolveTranscript applies tool removals and section patches in order", () 
   );
 });
 
-test("resolveTranscript leaves the Pi <= 0.85.1 Context shape untouched", () => {
+test("resolveTranscript accepts Pi's shorthand Context input", () => {
   const resolved = resolveTranscript(SIMPLE_CONTEXT);
-  assert.equal(resolved.source, "context");
   assert.deepEqual(resolved.systemPrompts, ["You are helpful."]);
   assert.equal(resolved.tools, undefined);
-  assert.equal(resolved.messages, SIMPLE_CONTEXT.messages);
+  assert.deepEqual(resolved.messages, SIMPLE_CONTEXT.messages);
 });
 
 test("buildRequestBody reads the system prompt and tools from a Pi 0.86+ transcript", () => {

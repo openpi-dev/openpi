@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`PI_0_99_COMPATIBILITY_2026-09-30.md`](PI_0_99_COMPATIBILITY_2026-09-30.md) — native transcript and prompt admission migration, nested child authority regressions, and local Pi CLI verification ([#635](https://github.com/openpi-dev/openpi/issues/635)).
+
 - [`SESSIONS_VISIBLE_FOCUS_2026-09-23.md`](SESSIONS_VISIBLE_FOCUS_2026-09-23.md) — hidden preview focus in narrow Session pickers, resize ordering, and native selection-component regressions ([#608](https://github.com/openpi-dev/openpi/issues/608)).
 
 - [`WEB_MODULE_IMPLEMENTATION_2026-09-19.md`](WEB_MODULE_IMPLEMENTATION_2026-09-19.md) — Web 工作区十二模块的实现边界、现有/第三方组件复用判断、测试与非 Benchmark 的性能限制（[#559](https://github.com/openpi-dev/openpi/issues/559)、[#560](https://github.com/openpi-dev/openpi/issues/560)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。

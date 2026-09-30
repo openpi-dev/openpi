@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import test from "node:test";
 import type {
   CompactOptions,
@@ -131,7 +132,7 @@ test("translates native no-history failures and clears the pivot state", async (
     { brief: "Continue with the next phase." },
     undefined,
     undefined,
-    ctx,
+    toolExecutionContext(ctx),
   );
   assert.ok(compactOptions?.onError);
   compactOptions.onError(new Error("Nothing to compact (session too small)"));
@@ -150,7 +151,7 @@ test("translates native no-history failures and clears the pivot state", async (
     { brief: "Continue with the next phase." },
     undefined,
     undefined,
-    ctx,
+    toolExecutionContext(ctx),
   );
   assert.ok(compactOptions?.onError);
   compactOptions.onError(new Error("provider unavailable"));
@@ -197,7 +198,7 @@ test("reports native no-history failures without a UI", async () => {
       { brief: "Continue with the next phase." },
       undefined,
       undefined,
-      ctx,
+      toolExecutionContext(ctx),
     );
     assert.ok(compactOptions?.onError);
     compactOptions.onError(new Error("Nothing to compact (session too small)"));

@@ -8,6 +8,7 @@ import {
   type AgentSessionEvent,
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
+  type PromptOptions,
   ProjectTrustStore,
   SessionManager,
   SettingsManager,
@@ -76,6 +77,8 @@ const WEB_PROVIDER_AUTH_SOURCES = new Set<WebProviderAuthSource>([
   "models_json_key",
   "models_json_command",
 ]);
+
+type PromptDisposition = Parameters<NonNullable<PromptOptions["preflightResult"]>>[0];
 
 type PromptTrace = {
   commandId: string;
@@ -819,11 +822,9 @@ export class PiWebRuntime implements WebRuntimeController {
       },
     );
     const operation = (async () => {
-      let preflightObserved = false;
-      let admitted = false;
+      let admissionDisposition: PromptDisposition | undefined;
       let planApprovalAuthorized = false;
       let agentLifecycleStarted = false;
-      let queuedForAgent = false;
       let unsubscribePromptLifecycle: (() => void) | undefined;
       try {
         await previousAdmission;
@@ -861,16 +862,8 @@ export class PiWebRuntime implements WebRuntimeController {
             elapsedMs: elapsed(startedAt),
           });
         }
-        let followUpMessages = session.getFollowUpMessages().length;
         unsubscribePromptLifecycle = session.subscribe((event) => {
           if (event.type === "agent_start") agentLifecycleStarted = true;
-          if (event.type === "queue_update") {
-            if (event.followUp.length > followUpMessages) {
-              queuedForAgent = true;
-              if (promptTrace) promptTrace.queued = true;
-            }
-            followUpMessages = event.followUp.length;
-          }
         });
         this.promptOrigins ??= new AsyncLocalStorage<PromptTrace | undefined>();
         const extensionCommand = submittedExtensionCommand(agentRuntime.services, content);
@@ -930,10 +923,9 @@ export class PiWebRuntime implements WebRuntimeController {
             ? { streamingBehavior: "followUp" as const }
             : {}),
           source: "rpc",
-          preflightResult: (accepted) => {
-            preflightObserved = true;
+          preflightResult: (disposition) => {
             if (options?.planRevision !== undefined) {
-              if (accepted) {
+              if (disposition !== "handled") {
                 this.consumePlanApproval(
                   session.sessionManager,
                   sessionId,
@@ -948,38 +940,28 @@ export class PiWebRuntime implements WebRuntimeController {
                 planApprovalAuthorized = false;
               }
             }
-            admitted = accepted;
+            admissionDisposition = disposition;
+            if (promptTrace && disposition === "queued") promptTrace.queued = true;
             releaseAdmission();
             if (promptTrace) {
               traceWeb(
-                accepted
-                  ? "prompt_preflight_accepted"
-                  : "prompt_preflight_rejected",
+                "prompt_preflight_accepted",
                 {
                   commandId: promptTrace.commandId,
                   sessionId,
+                  disposition,
                   elapsedMs: elapsed(startedAt),
                 },
               );
             }
-            if (accepted) {
-              resolveRequest({
-                pendingFollowUps: session.getFollowUpMessages().length,
-              });
-            } else {
-              rejectRequest(
-                new WebRuntimeRequestError(
-                  "Prompt was rejected before admission",
-                  "PROMPT_REJECTED",
-                  422,
-                ),
-              );
-            }
+            resolveRequest({
+              pendingFollowUps: session.getFollowUpMessages().length,
+            });
           },
         }));
         unsubscribePromptLifecycle();
         unsubscribePromptLifecycle = undefined;
-        if (!preflightObserved || !admitted) {
+        if (admissionDisposition === undefined) {
           if (planApprovalAuthorized && options?.planRevision !== undefined) {
             this.cancelPlanApproval(
               session.sessionManager,
@@ -989,19 +971,16 @@ export class PiWebRuntime implements WebRuntimeController {
           }
           rejectRequest(
             new WebRuntimeRequestError(
-              preflightObserved
-                ? "Prompt was rejected before admission"
-                : "Pi completed the prompt without confirming admission",
+              "Pi completed the prompt without confirming admission",
               "PROMPT_REJECTED",
               422,
             ),
           );
         }
         if (
-          admitted &&
+          admissionDisposition === "handled" &&
           options?.commandId &&
-          !agentLifecycleStarted &&
-          !queuedForAgent
+          !agentLifecycleStarted
         ) {
           this.emit("prompt_settled", {
             commandId: options.commandId,
@@ -1036,7 +1015,7 @@ export class PiWebRuntime implements WebRuntimeController {
           planApprovalAuthorized = false;
         }
         releaseAdmission();
-        if (!admitted) {
+        if (admissionDisposition === undefined) {
           rejectRequest(
             error instanceof WebRuntimeRequestError
               ? error
@@ -1046,7 +1025,7 @@ export class PiWebRuntime implements WebRuntimeController {
                   422,
                 ),
           );
-        } else if (admitted) {
+        } else {
           this.emit("prompt_failed", {
             ...(options?.commandId ? { commandId: options.commandId } : {}),
             sessionId,

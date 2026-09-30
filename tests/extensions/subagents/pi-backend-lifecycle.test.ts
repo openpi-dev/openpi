@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -290,7 +291,7 @@ test("a direct subagent validates, persists, and delivers structured output", as
           { verdict: "pass" },
           undefined,
           undefined,
-          {} as ExtensionContext,
+          toolExecutionContext({} as ExtensionContext),
         );
         harness.setStreaming(true);
         harness.emit({ type: "agent_start" });

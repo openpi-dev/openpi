@@ -291,10 +291,8 @@ export function buildRequestBody(
   projectId: string,
   state?: AntigravitySessionState,
 ): Record<string, unknown> {
-  // Pi 0.86+ folds the system prompt and tool declarations into transcript system
-  // messages; Pi <= 0.85.1 still passes them as Context fields. Resolve both shapes
-  // before converting, so the conversation never carries a system message and the
-  // prompt/tools are never silently dropped.
+  // Pi owns prompt sections and tool deltas in the transcript. Resolve their
+  // current values before converting conversation messages to provider wire data.
   const transcript = resolveTranscript(context);
   const contents = convertMessages(model, {
     ...context,
@@ -386,7 +384,7 @@ interface CcaPart {
   functionCall?: {
     id?: string;
     name?: string;
-    args?: Record<string, unknown>;
+    args?: ToolCall["arguments"];
   };
 }
 

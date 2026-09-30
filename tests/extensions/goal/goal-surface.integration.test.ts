@@ -8,6 +8,8 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  getCurrentTools,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -51,12 +53,9 @@ test("real Pi fixture: /goal <objective> loads capability and exposes get_goal/u
     models: [{ id: "fixture", name: "Fixture", reasoning: false }],
   });
 
-  const capture = (context: {
-    tools?: Array<{ name: string }>;
-    messages: Array<{ role: string; content: unknown }>;
-  }) => {
+  const capture = (context: TranscriptContext) => {
     snapshots.push({
-      tools: context.tools?.map(({ name }) => ({ name })),
+      tools: getCurrentTools(context.messages).map(({ name }) => ({ name })),
       messages: structuredClone(context.messages),
     });
   };

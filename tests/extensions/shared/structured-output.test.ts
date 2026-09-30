@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -24,7 +25,7 @@ test("the shared terminating tool captures one complete validated JSON value", a
     { answer: "ready" },
     undefined,
     undefined,
-    {} as ExtensionContext,
+    toolExecutionContext({} as ExtensionContext),
   );
 
   assert.equal(result.terminate, true);

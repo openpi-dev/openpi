@@ -19,9 +19,12 @@ import type {
 } from "@earendil-works/pi-ai/compat";
 import {
   AgentSession,
+  createAgentSession,
   createReadTool,
+  DefaultResourceLoader,
   type ExtensionContext,
-  VERSION as PI_VERSION,
+  SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
@@ -109,19 +112,6 @@ async function withCleanProxyEnvironment<T>(run: () => Promise<T>) {
       else process.env[name] = value;
     }
   }
-}
-
-function piVersionAtLeast(
-  version: string,
-  minimum: readonly number[],
-): boolean {
-  const current = version.split(".").map((part) => Number.parseInt(part, 10));
-  for (let index = 0; index < minimum.length; index++) {
-    const currentPart = current[index] ?? 0;
-    const minimumPart = minimum[index] ?? 0;
-    if (currentPart !== minimumPart) return currentPart > minimumPart;
-  }
-  return true;
 }
 
 function localModel(baseUrl: string): Model<Api> {
@@ -905,25 +895,44 @@ test("Cursor output-only token deltas preserve Pi's real compaction boundary", a
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
 
-  const compactionCalls: Array<{ reason: string; willRetry: boolean }> = [];
-  const session = {
-    settingsManager: {
-      getCompactionSettings: () => ({
+  const directory = await mkdtemp(join(tmpdir(), "openpi-cursor-compaction-"));
+  const settingsManager = SettingsManager.inMemory(
+    {
+      compaction: {
         enabled: true,
         reserveTokens: 16_384,
         keepRecentTokens: 20_000,
-      }),
+      },
     },
+    { projectTrusted: false },
+  );
+  const loader = new DefaultResourceLoader({
+    cwd: directory,
+    agentDir: directory,
+    settingsManager,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+  });
+  await loader.reload();
+  const sessionManager = SessionManager.inMemory(directory);
+  sessionManager.appendMessage(user);
+  sessionManager.appendMessage(done.message);
+  const { session } = await createAgentSession({
+    cwd: directory,
+    agentDir: directory,
     model: { ...MODEL, contextWindow: 200_000 },
-    sessionManager: { getBranch: () => [] },
-    agent: { state: { messages: [user, done.message] } },
-    _overflowRecoveryAttempted: false,
-    _emit: () => {},
+    settingsManager,
+    resourceLoader: loader,
+    sessionManager,
+  });
+  const compactionCalls: Array<{ reason: string; willRetry: boolean }> = [];
+  Object.assign(session, {
     _runAutoCompaction: async (reason: string, willRetry: boolean) => {
       compactionCalls.push({ reason, willRetry });
       return true;
     },
-  };
+  });
   const checkCompaction = (
     AgentSession.prototype as unknown as {
       _checkCompaction: (
@@ -932,19 +941,15 @@ test("Cursor output-only token deltas preserve Pi's real compaction boundary", a
       ) => Promise<boolean>;
     }
   )._checkCompaction;
-  const compacted = await checkCompaction.call(session, done.message);
-  const hostSupportsZeroUsageCompaction = piVersionAtLeast(
-    PI_VERSION,
-    [0, 84, 3],
-  );
-
-  assert.equal(compacted, hostSupportsZeroUsageCompaction);
-  assert.deepEqual(
-    compactionCalls,
-    hostSupportsZeroUsageCompaction
-      ? [{ reason: "threshold", willRetry: false }]
-      : [],
-  );
+  try {
+    assert.equal(await checkCompaction.call(session, done.message), true);
+    assert.deepEqual(compactionCalls, [
+      { reason: "threshold", willRetry: false },
+    ]);
+  } finally {
+    session.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("Cursor request_context succeeds with global rules and empty tools; other exec is thrown", {
