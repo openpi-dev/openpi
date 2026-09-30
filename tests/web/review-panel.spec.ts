@@ -24,6 +24,126 @@ import { i18n } from "../../web/ui/src/i18n.ts";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function wideReviewContainer() {
+  let resize = (_width: number) => {};
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(
+        private callback: (
+          entries: { contentRect: { width: number } }[],
+        ) => void,
+      ) {}
+      observe(element: Element) {
+        if (!element.classList.contains("review-panel")) return;
+        resize = (width) => this.callback([{ contentRect: { width } }]);
+        resize(900);
+      }
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  return (width: number) => act(() => resize(width));
+}
+
+it("keeps a compact directory tree beside the diff, restores collapsed groups after search, and adapts to panel width", async () => {
+  const resize = wideReviewContainer();
+  const { container } = render(
+    withI18n(
+      createElement(ReviewPanel, {
+        embedded: true,
+        review: {
+          result: { ok: true, snapshot },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        onClose: () => {},
+      }),
+    ),
+  );
+  const first = screen.getByRole("button", {
+    name: snapshot.files[0]!.path,
+  });
+  expect(first.getAttribute("aria-current")).toBe("true");
+  expect(screen.getByRole("figure").textContent).toContain("new");
+  const directory = screen.getByRole("button", {
+    name: "src/features/review",
+  });
+  fireEvent.click(directory);
+  expect(
+    screen.queryByRole("button", {
+      name: snapshot.files[0]!.path,
+    }),
+  ).toBeNull();
+  expect(screen.getByRole("figure")).toBeTruthy();
+  fireEvent.change(screen.getByRole("searchbox"), {
+    target: { value: "very-long" },
+  });
+  expect(
+    screen.getByRole("button", { name: snapshot.files[0]!.path }),
+  ).toBeTruthy();
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
+  expect(directory.getAttribute("aria-expanded")).toBe("false");
+  const second = screen.getByRole("button", {
+    name: "z-new-file.ts",
+  });
+  second.focus();
+  fireEvent.click(second);
+  expect(document.activeElement).toBe(second);
+  expect(second.getAttribute("aria-current")).toBe("true");
+  expect(screen.getByRole("figure").textContent).toContain(
+    "export const value",
+  );
+  resize(480);
+  expect(container.querySelector(".review-navigation")).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Back to changed files" }),
+  );
+  expect(
+    screen
+      .getByRole("button", { name: "src/features/review" })
+      .getAttribute("aria-expanded"),
+  ).toBe("false");
+  resize(900);
+  expect(container.querySelector(".review-navigation")).toBeTruthy();
+  expect(screen.getByRole("figure")).toBeTruthy();
+});
+
+it("adds newly loaded pages to the pinned tree without refetching or replacing the selected diff", async () => {
+  wideReviewContainer();
+  const readFile = vi.fn(async () => snapshot.files[0]);
+  const node = (count: number) =>
+    withI18n(
+      createElement(ReviewPanel, {
+        embedded: true,
+        review: {
+          result: {
+            ok: true,
+            snapshot: {
+              ...snapshot,
+              files: snapshot.files
+                .slice(0, count)
+                .map((file) => ({ ...file, diffLoaded: false, diff: "" })),
+            },
+          },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+          readFile,
+        },
+        onClose: () => {},
+      }),
+    );
+  const { rerender } = render(node(1));
+  await screen.findByRole("figure");
+  rerender(node(2));
+  expect(screen.getByRole("button", { name: "z-new-file.ts" })).toBeTruthy();
+  expect(screen.getByRole("figure").textContent).toContain("new");
+  expect(readFile).toHaveBeenCalledOnce();
 });
 
 it("distinguishes a complete count from partial evidence and searches only loaded paths", () => {

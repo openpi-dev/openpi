@@ -11,6 +11,7 @@ import {
   GitBranch,
   Plus,
   RefreshCw,
+  Search,
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +23,7 @@ import type {
   WebGitReviewSnapshot,
 } from "../../../../protocol/types.ts";
 import { DiffCodePreview } from "./DiffCodePreview.tsx";
+import { ReviewFileTree } from "./ReviewFileTree.tsx";
 
 const FILE_PAGE_SIZE = 20;
 const REVIEW_SKELETON_ROWS = [0, 1, 2, 3] as const;
@@ -76,6 +78,20 @@ export function ReviewPanel({
   onOpenFiles?: () => void;
 }) {
   const { t } = useTranslation();
+  const panel = useRef<HTMLElement>(null);
+  const [wide, setWide] = useState(false);
+  const [collapsedDirectories, setCollapsedDirectories] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  useEffect(() => {
+    const element = panel.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setWide(entry.contentRect.width >= 720);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const listCloseButton = useRef<HTMLButtonElement>(null);
   const listBody = useRef<HTMLDivElement>(null);
   const preview = useRef<HTMLElement>(null);
@@ -117,6 +133,8 @@ export function ReviewPanel({
     focusRequested.current = true;
     listScrollTop.current = null;
     setSelectedPath(initialFilePath ?? null);
+    setQuery("");
+    setCollapsedDirectories(new Set());
     setPinnedSnapshot(null);
   }, [initialFilePath, review.source]);
   const Surface = embedded ? "section" : narrow ? "main" : "aside";
@@ -126,7 +144,9 @@ export function ReviewPanel({
     selectedPath &&
     pinnedSnapshot &&
     pinnedSnapshot.comparison === (review.source ?? latestSnapshot?.comparison)
-      ? pinnedSnapshot
+      ? latestSnapshot?.revision === pinnedSnapshot.revision
+        ? latestSnapshot
+        : pinnedSnapshot
       : latestSnapshot;
   const updated = Boolean(
     selectedPath &&
@@ -217,7 +237,13 @@ export function ReviewPanel({
         .sort((a, b) => a.path.localeCompare(b.path, "en", { numeric: true })),
     [snapshot?.files, query],
   );
-  const files = matchingFiles.slice(0, visibleFiles);
+  const files = wide ? matchingFiles : matchingFiles.slice(0, visibleFiles);
+  useEffect(() => {
+    if (!wide || selectedPath || !snapshot?.files.length) return;
+    // Opening a wide review selects a file without moving focus out of the chat.
+    focusRequested.current = false;
+    setSelectedPath(snapshot.files[0]!.path);
+  }, [wide, selectedPath, snapshot]);
   const remaining = Math.max(0, matchingFiles.length - files.length);
   const partialList =
     snapshot?.listComplete === false ||
@@ -258,7 +284,7 @@ export function ReviewPanel({
 
   const openFile = (path: string) => {
     listScrollTop.current = listBody.current?.scrollTop ?? null;
-    focusRequested.current = true;
+    focusRequested.current = !wide;
     setPinnedSnapshot(snapshot);
     setSelectedPath(path);
   };
@@ -290,7 +316,8 @@ export function ReviewPanel({
 
   return (
     <Surface
-      className={`review-panel${embedded ? " embedded" : ""}`}
+      ref={panel}
+      className={`review-panel${embedded ? " embedded" : ""}${wide ? " review-wide" : ""}`}
       aria-label={t("changeEvidence")}
       aria-busy={review.loading || undefined}
       onKeyDown={(event) => {
@@ -305,10 +332,10 @@ export function ReviewPanel({
           event.defaultPrevented
         )
           return;
-        if (!selectedPath && embedded) return;
+        if ((!selectedPath || wide) && embedded) return;
         event.preventDefault();
         event.stopPropagation();
-        if (selectedPath) showFileList();
+        if (selectedPath && !wide) showFileList();
         else if (!embedded) onClose();
       }}
     >
@@ -391,401 +418,383 @@ export function ReviewPanel({
           }
         />
       )}
-      {selectedPath ? (
-        <div className="review-file-screen">
-          <header className="review-file-header">
-            <Button
-              label={t("gitReviewBackToFiles")}
-              variant="ghost"
-              size="sm"
-              isIconOnly
-              icon={<ArrowLeft aria-hidden="true" />}
-              onClick={showFileList}
-            />
-            <div className="review-file-heading">
-              <strong title={selectedPath}>{fileName(selectedPath)}</strong>
-              <span title={selectedPath}>{selectedPath}</span>
-            </div>
-            {!embedded && (
-              <div className="review-file-actions">
-                {onOpenTools && (
-                  <Button
-                    label={t("openTools")}
-                    variant="ghost"
-                    size="sm"
-                    isIconOnly
-                    icon={<Plus aria-hidden="true" />}
-                    onClick={onOpenTools}
-                  />
-                )}
+      <div className="review-workspace">
+        {selectedPath && (
+          <div className="review-file-screen">
+            <header className="review-file-header">
+              {!wide && (
                 <Button
-                  label={t("close")}
+                  label={t("gitReviewBackToFiles")}
                   variant="ghost"
                   size="sm"
                   isIconOnly
-                  icon={<X aria-hidden="true" />}
-                  onClick={onClose}
+                  icon={<ArrowLeft aria-hidden="true" />}
+                  onClick={showFileList}
                 />
-              </div>
-            )}
-          </header>
-          <div className="review-file-toolbar">
-            <div className="review-file-context">
-              {selectedFile && (
-                <span>{t(`gitFileStatus_${selectedFile.status}`)}</span>
               )}
-              <code>{comparison}</code>
-            </div>
-            <HStack gap={2} align="center" className="session-review-stats">
-              {selectedFile &&
-                !selectedFile.binary &&
-                !selectedFile.statsUnavailable &&
-                selectedFile.additions > 0 && (
-                  <Text
-                    type="supporting"
-                    hasTabularNumbers
-                    className="review-additions"
-                  >
-                    +{selectedFile.additions}
-                  </Text>
-                )}
-              {selectedFile &&
-                !selectedFile.binary &&
-                !selectedFile.statsUnavailable &&
-                selectedFile.deletions > 0 && (
-                  <Text
-                    type="supporting"
-                    hasTabularNumbers
-                    className="review-deletions"
-                  >
-                    -{selectedFile.deletions}
-                  </Text>
-                )}
-            </HStack>
-            <span className="review-file-mode" aria-current="true">
-              {t("diffView")}
-            </span>
-          </div>
-          <section
-            ref={preview}
-            className="review-file-preview"
-            aria-label={t("gitReviewFilePreview", {
-              file: selectedPath,
-            })}
-            tabIndex={-1}
-          >
-            {!selectedFile ? (
-              <p role="status">
-                {t(
-                  review.loading ? "gitReviewLoading" : "gitReviewFileMissing",
-                )}
-              </p>
-            ) : detailError ? (
-              <div role="alert">
-                <p>{detailError}</p>
-                <button
-                  type="button"
-                  onClick={() => setFileRetry((value) => value + 1)}
-                >
-                  {t("retryAdmissionCheck")}
-                </button>
+              <div className="review-file-heading">
+                <strong title={selectedPath}>{fileName(selectedPath)}</strong>
+                <span title={selectedPath}>{selectedPath}</span>
               </div>
-            ) : selectedFile.diffLoaded === false && review.readFile ? (
-              <p role="status">{t("gitReviewLoading")}</p>
-            ) : selectedFile.binary ? (
-              <EmptyState
-                icon={<FileCode2 aria-hidden="true" />}
-                title={t("gitReviewBinary")}
-                isCompact
-              />
-            ) : selectedFile.statsUnavailable ? (
-              <EmptyState
-                icon={<FileCode2 aria-hidden="true" />}
-                title={t("turnEditStatsUnknown")}
-                description={t(
-                  `turnEditReason_${selectedFile.statsUnavailable}`,
-                )}
-                isCompact
-              />
-            ) : selectedFile.diff ? (
-              <>
-                {selectedFile.diffTruncated && (
-                  <p className="review-hidden-lines">
-                    {t("gitReviewDiffTruncated")}
-                  </p>
-                )}
-                <DiffCodePreview file={selectedFile} />
-              </>
-            ) : (
-              <EmptyState
-                icon={<FileCode2 aria-hidden="true" />}
-                title={t(
-                  selectedFile.diffTruncated
-                    ? "gitReviewDiffTruncated"
-                    : "gitReviewNoDiff",
-                )}
-                description={
-                  selectedFile.diffTruncated
-                    ? t("gitReviewDiffTruncated")
-                    : undefined
-                }
-                isCompact
-              />
-            )}
-          </section>
-        </div>
-      ) : (
-        <>
-          {!embedded && (
-            <header className="review-heading">
-              <div>
-                <h2>
-                  <FileDiff aria-hidden="true" /> {t("changeEvidence")}
-                </h2>
-                <small>{t("changeEvidenceScope")}</small>
-              </div>
-              <div className="review-heading-actions">
-                {onOpenTools && (
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={t("openTools")}
-                    title={t("openTools")}
-                    onClick={onOpenTools}
-                  >
-                    <Plus aria-hidden="true" />
-                  </button>
-                )}
-                <button
-                  ref={listCloseButton}
-                  type="button"
-                  className="icon-button review-close"
-                  aria-label={t("close")}
-                  title={t("close")}
-                  onClick={onClose}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            </header>
-          )}
-          <div
-            ref={listBody}
-            className="review-body"
-            tabIndex={embedded ? -1 : undefined}
-          >
-            {snapshot && (
-              <VStack gap={1} align="stretch" className="review-summary">
-                <HStack gap={3} align="center" justify="between">
-                  <Text type="label">
-                    {t(partialList ? "gitReviewLoadedCount" : "filesChanged", {
-                      count: partialList
-                        ? snapshot.files.length
-                        : (snapshot.totalFiles ?? snapshot.files.length),
-                    })}
-                  </Text>
-                  {!snapshot.truncated &&
-                    snapshot.nextOffset === undefined &&
-                    !snapshot.files.some(
-                      (file) =>
-                        file.binary ||
-                        file.statsUnavailable ||
-                        (file.status === "untracked" &&
-                          file.diffLoaded === false),
-                    ) && (
-                      <HStack
-                        gap={2}
-                        align="center"
-                        className="review-summary-counts"
-                        aria-hidden="true"
-                      >
-                        <Text
-                          type="supporting"
-                          hasTabularNumbers
-                          className="review-additions"
-                        >
-                          +{snapshot.additions}
-                        </Text>
-                        <Text
-                          type="supporting"
-                          hasTabularNumbers
-                          className="review-deletions"
-                        >
-                          -{snapshot.deletions}
-                        </Text>
-                      </HStack>
-                    )}
-                </HStack>
-                <Text type="supporting" color="secondary" maxLines={1}>
-                  {comparison}
-                </Text>
-                {snapshot.nextOffset !== undefined && (
-                  <Text type="supporting" color="secondary">
-                    {t("gitReviewLoadedCount", {
-                      count: snapshot.files.length,
-                    })}
-                  </Text>
-                )}
-              </VStack>
-            )}
-            {review.loading && !snapshot && (
-              <div className="review-loading" role="status">
-                <span className="sr-only">{t("gitReviewLoading")}</span>
-                <VStack gap={2} align="stretch" aria-hidden="true">
-                  <Skeleton
-                    width="42%"
-                    height={16}
-                    radius="rounded"
-                    index={0}
-                  />
-                  <div className="review-loading-list">
-                    {REVIEW_SKELETON_ROWS.map((index) => (
-                      <Skeleton
-                        key={index}
-                        width="100%"
-                        height={36}
-                        radius={0}
-                        index={index + 1}
-                      />
-                    ))}
-                  </div>
-                </VStack>
-              </div>
-            )}
-            {snapshot?.truncated && (
-              <Banner
-                status="info"
-                title={t("gitReviewTruncated")}
-                className="review-banner"
-              />
-            )}
-            {snapshot && snapshot.files.length > 0 && (
-              <label className="review-search">
-                <span className="sr-only">
-                  {t(
-                    partialSearch ? "gitReviewSearchLoaded" : "gitReviewSearch",
-                  )}
-                </span>
-                <input
-                  type="search"
-                  value={query}
-                  placeholder={t(
-                    partialSearch ? "gitReviewSearchLoaded" : "gitReviewSearch",
-                  )}
-                  onChange={(event) => {
-                    setQuery(event.target.value);
-                    setVisibleFiles(FILE_PAGE_SIZE);
-                  }}
-                />
-              </label>
-            )}
-            {query && matchingFiles.length === 0 && (
-              <p className="review-search-empty" role="status">
-                {t(
-                  partialSearch ? "gitReviewNoLoadedMatch" : "gitReviewNoMatch",
-                )}
-              </p>
-            )}
-            {snapshot && snapshot.files.length === 0 && (
-              <EmptyState
-                icon={<GitBranch aria-hidden="true" />}
-                title={t("gitReviewEmpty")}
-                isCompact
-                className="review-empty"
-              />
-            )}
-            {files.length > 0 && (
-              <div className="session-review-list">
-                <ul
-                  aria-label={t("filesChanged", {
-                    count: snapshot?.files.length ?? 0,
-                  })}
-                >
-                  {files.map((file) => (
-                    <li key={file.path}>
-                      <button
-                        className="session-review-file"
-                        type="button"
-                        data-review-file={file.path}
-                        title={file.path}
-                        onClick={() => openFile(file.path)}
-                      >
-                        <span className="session-review-path">
-                          <span>
-                            {file.path.slice(0, -fileName(file.path).length)}
-                          </span>
-                          <strong>{fileName(file.path)}</strong>
-                        </span>
-                        <span
-                          className="session-review-stats"
-                          aria-hidden="true"
-                        >
-                          {file.binary ? (
-                            <span>{t("gitReviewBinaryShort")}</span>
-                          ) : file.statsUnavailable ? (
-                            <span>{t("turnEditStatsUnknown")}</span>
-                          ) : file.status === "untracked" &&
-                            file.diffLoaded === false ? (
-                            <span>{t("gitReviewPendingStats")}</span>
-                          ) : (
-                            <>
-                              {file.additions >= 0 && (
-                                <span className="review-additions">
-                                  +{file.additions}
-                                </span>
-                              )}
-                              {file.deletions >= 0 && (
-                                <span className="review-deletions">
-                                  -{file.deletions}
-                                </span>
-                              )}
-                            </>
-                          )}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                {remaining > 0 && (
-                  <div className="session-review-more">
+              {!embedded && (
+                <div className="review-file-actions">
+                  {onOpenTools && (
                     <Button
+                      label={t("openTools")}
                       variant="ghost"
                       size="sm"
-                      width="100%"
-                      label={t("gitReviewShowMore", {
-                        count: Math.min(FILE_PAGE_SIZE, remaining),
-                      })}
-                      onClick={() =>
-                        setVisibleFiles((count) =>
-                          Math.min(
-                            count + FILE_PAGE_SIZE,
-                            matchingFiles.length,
-                          ),
-                        )
-                      }
+                      isIconOnly
+                      icon={<Plus aria-hidden="true" />}
+                      onClick={onOpenTools}
                     />
-                  </div>
+                  )}
+                  <Button
+                    label={t("close")}
+                    variant="ghost"
+                    size="sm"
+                    isIconOnly
+                    icon={<X aria-hidden="true" />}
+                    onClick={onClose}
+                  />
+                </div>
+              )}
+            </header>
+            <div className="review-file-toolbar">
+              <div className="review-file-context">
+                {selectedFile && (
+                  <span>{t(`gitFileStatus_${selectedFile.status}`)}</span>
                 )}
+                <code>{comparison}</code>
               </div>
-            )}
-            {snapshot?.nextOffset !== undefined && review.loadMore && (
-              <div className="session-review-more">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  width="100%"
-                  label={t("gitReviewLoadNext")}
-                  isLoading={review.loading}
-                  isDisabled={review.loading}
-                  onClick={() => {
-                    void review.loadMore?.();
-                  }}
+              <HStack gap={2} align="center" className="session-review-stats">
+                {selectedFile &&
+                  !selectedFile.binary &&
+                  !selectedFile.statsUnavailable &&
+                  selectedFile.additions > 0 && (
+                    <Text
+                      type="supporting"
+                      hasTabularNumbers
+                      className="review-additions"
+                    >
+                      +{selectedFile.additions}
+                    </Text>
+                  )}
+                {selectedFile &&
+                  !selectedFile.binary &&
+                  !selectedFile.statsUnavailable &&
+                  selectedFile.deletions > 0 && (
+                    <Text
+                      type="supporting"
+                      hasTabularNumbers
+                      className="review-deletions"
+                    >
+                      -{selectedFile.deletions}
+                    </Text>
+                  )}
+              </HStack>
+              <span className="review-file-mode" aria-current="true">
+                {t("diffView")}
+              </span>
+            </div>
+            <section
+              ref={preview}
+              className="review-file-preview"
+              aria-label={t("gitReviewFilePreview", {
+                file: selectedPath,
+              })}
+              tabIndex={-1}
+            >
+              {!selectedFile ? (
+                <p role="status">
+                  {t(
+                    review.loading
+                      ? "gitReviewLoading"
+                      : "gitReviewFileMissing",
+                  )}
+                </p>
+              ) : detailError ? (
+                <div role="alert">
+                  <p>{detailError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setFileRetry((value) => value + 1)}
+                  >
+                    {t("retryAdmissionCheck")}
+                  </button>
+                </div>
+              ) : selectedFile.diffLoaded === false && review.readFile ? (
+                <p role="status">{t("gitReviewLoading")}</p>
+              ) : selectedFile.binary ? (
+                <EmptyState
+                  icon={<FileCode2 aria-hidden="true" />}
+                  title={t("gitReviewBinary")}
+                  isCompact
                 />
-              </div>
-            )}
+              ) : selectedFile.statsUnavailable ? (
+                <EmptyState
+                  icon={<FileCode2 aria-hidden="true" />}
+                  title={t("turnEditStatsUnknown")}
+                  description={t(
+                    `turnEditReason_${selectedFile.statsUnavailable}`,
+                  )}
+                  isCompact
+                />
+              ) : selectedFile.diff ? (
+                <>
+                  {selectedFile.diffTruncated && (
+                    <p className="review-hidden-lines">
+                      {t("gitReviewDiffTruncated")}
+                    </p>
+                  )}
+                  <DiffCodePreview file={selectedFile} />
+                </>
+              ) : (
+                <EmptyState
+                  icon={<FileCode2 aria-hidden="true" />}
+                  title={t(
+                    selectedFile.diffTruncated
+                      ? "gitReviewDiffTruncated"
+                      : "gitReviewNoDiff",
+                  )}
+                  description={
+                    selectedFile.diffTruncated
+                      ? t("gitReviewDiffTruncated")
+                      : undefined
+                  }
+                  isCompact
+                />
+              )}
+            </section>
           </div>
-        </>
-      )}
+        )}
+        {(!selectedPath || wide) && (
+          <div className="review-navigation">
+            {!embedded && !wide && (
+              <header className="review-heading">
+                <div>
+                  <h2>
+                    <FileDiff aria-hidden="true" /> {t("changeEvidence")}
+                  </h2>
+                  <small>{t("changeEvidenceScope")}</small>
+                </div>
+                <div className="review-heading-actions">
+                  {onOpenTools && (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={t("openTools")}
+                      title={t("openTools")}
+                      onClick={onOpenTools}
+                    >
+                      <Plus aria-hidden="true" />
+                    </button>
+                  )}
+                  <button
+                    ref={listCloseButton}
+                    type="button"
+                    className="icon-button review-close"
+                    aria-label={t("close")}
+                    title={t("close")}
+                    onClick={onClose}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              </header>
+            )}
+            <div
+              ref={listBody}
+              className="review-body"
+              tabIndex={embedded ? -1 : undefined}
+            >
+              {snapshot && (
+                <VStack gap={1} align="stretch" className="review-summary">
+                  <HStack gap={3} align="center" justify="between">
+                    <Text type="label">
+                      {t(
+                        partialList ? "gitReviewLoadedCount" : "filesChanged",
+                        {
+                          count: partialList
+                            ? snapshot.files.length
+                            : (snapshot.totalFiles ?? snapshot.files.length),
+                        },
+                      )}
+                    </Text>
+                    {!snapshot.truncated &&
+                      snapshot.nextOffset === undefined &&
+                      !snapshot.files.some(
+                        (file) =>
+                          file.binary ||
+                          file.statsUnavailable ||
+                          (file.status === "untracked" &&
+                            file.diffLoaded === false),
+                      ) && (
+                        <HStack
+                          gap={2}
+                          align="center"
+                          className="review-summary-counts"
+                          aria-hidden="true"
+                        >
+                          <Text
+                            type="supporting"
+                            hasTabularNumbers
+                            className="review-additions"
+                          >
+                            +{snapshot.additions}
+                          </Text>
+                          <Text
+                            type="supporting"
+                            hasTabularNumbers
+                            className="review-deletions"
+                          >
+                            -{snapshot.deletions}
+                          </Text>
+                        </HStack>
+                      )}
+                  </HStack>
+                  <Text type="supporting" color="secondary" maxLines={1}>
+                    {comparison}
+                  </Text>
+                  {snapshot.nextOffset !== undefined && (
+                    <Text type="supporting" color="secondary">
+                      {t("gitReviewLoadedCount", {
+                        count: snapshot.files.length,
+                      })}
+                    </Text>
+                  )}
+                </VStack>
+              )}
+              {review.loading && !snapshot && (
+                <div className="review-loading" role="status">
+                  <span className="sr-only">{t("gitReviewLoading")}</span>
+                  <VStack gap={2} align="stretch" aria-hidden="true">
+                    <Skeleton
+                      width="42%"
+                      height={16}
+                      radius="rounded"
+                      index={0}
+                    />
+                    <div className="review-loading-list">
+                      {REVIEW_SKELETON_ROWS.map((index) => (
+                        <Skeleton
+                          key={index}
+                          width="100%"
+                          height={36}
+                          radius={0}
+                          index={index + 1}
+                        />
+                      ))}
+                    </div>
+                  </VStack>
+                </div>
+              )}
+              {snapshot?.truncated && (
+                <Banner
+                  status="info"
+                  title={t("gitReviewTruncated")}
+                  className="review-banner"
+                />
+              )}
+              {snapshot && snapshot.files.length > 0 && (
+                <label className="review-search">
+                  <Search aria-hidden="true" />
+                  <span className="sr-only">
+                    {t(
+                      partialSearch
+                        ? "gitReviewSearchLoaded"
+                        : "gitReviewSearch",
+                    )}
+                  </span>
+                  <input
+                    type="search"
+                    value={query}
+                    placeholder={t(
+                      partialSearch
+                        ? "gitReviewSearchLoaded"
+                        : "gitReviewSearch",
+                    )}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setVisibleFiles(FILE_PAGE_SIZE);
+                    }}
+                  />
+                </label>
+              )}
+              {query && matchingFiles.length === 0 && (
+                <p className="review-search-empty" role="status">
+                  {t(
+                    partialSearch
+                      ? "gitReviewNoLoadedMatch"
+                      : "gitReviewNoMatch",
+                  )}
+                </p>
+              )}
+              {snapshot && snapshot.files.length === 0 && (
+                <EmptyState
+                  icon={<GitBranch aria-hidden="true" />}
+                  title={t("gitReviewEmpty")}
+                  isCompact
+                  className="review-empty"
+                />
+              )}
+              {files.length > 0 && (
+                <>
+                  <ReviewFileTree
+                    files={files}
+                    selectedPath={selectedPath}
+                    collapsed={collapsedDirectories}
+                    searching={Boolean(query)}
+                    onToggle={(path) =>
+                      setCollapsedDirectories((current) => {
+                        const next = new Set(current);
+                        if (next.has(path)) next.delete(path);
+                        else next.add(path);
+                        return next;
+                      })
+                    }
+                    onSelect={openFile}
+                  />
+                  {remaining > 0 && (
+                    <div className="session-review-more">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        width="100%"
+                        label={t("gitReviewShowMore", {
+                          count: Math.min(FILE_PAGE_SIZE, remaining),
+                        })}
+                        onClick={() =>
+                          setVisibleFiles((count) =>
+                            Math.min(
+                              count + FILE_PAGE_SIZE,
+                              matchingFiles.length,
+                            ),
+                          )
+                        }
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+              {snapshot?.nextOffset !== undefined && review.loadMore && (
+                <div className="session-review-more">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    width="100%"
+                    label={t("gitReviewLoadNext")}
+                    isLoading={review.loading}
+                    isDisabled={review.loading}
+                    onClick={() => {
+                      void review.loadMore?.();
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </Surface>
   );
 }

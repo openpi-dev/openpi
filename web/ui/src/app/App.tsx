@@ -845,6 +845,7 @@ export function App() {
               onWorkspaceReview={() => setReviewTurn(null)}
               conversationCollapsed={centerCollapsed}
               onRestoreConversation={() => setCenterCollapsed(false)}
+              onExpandReview={() => setCenterCollapsed(true)}
               onClose={closeWorkbar}
             />
           )}

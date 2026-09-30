@@ -393,6 +393,7 @@ export function WorkbarPanel({
   onWorkspaceReview,
   conversationCollapsed,
   onRestoreConversation,
+  onExpandReview,
   onClose,
   onActiveToolChange,
   canControl = true,
@@ -411,6 +412,7 @@ export function WorkbarPanel({
   onWorkspaceReview?: () => void;
   conversationCollapsed: boolean;
   onRestoreConversation: () => void;
+  onExpandReview?: () => void;
   onClose: () => void;
   onActiveToolChange?: (tool: WorkbarTool | null) => void;
   canControl?: boolean;
@@ -529,6 +531,22 @@ export function WorkbarPanel({
           })}
         </div>
         <div className="workbar-tabbar-actions">
+          {!conversationCollapsed &&
+            tabs.active === "review" &&
+            onExpandReview && (
+              <button
+                type="button"
+                className="icon-button review-expand"
+                aria-label={t("gitReviewExpand")}
+                title={t("gitReviewExpand")}
+                onClick={onExpandReview}
+              >
+                <PanelLeftOpen
+                  aria-hidden="true"
+                  style={{ transform: "rotate(180deg)" }}
+                />
+              </button>
+            )}
           {conversationCollapsed && (
             <button
               type="button"
