@@ -573,7 +573,6 @@ export function App() {
                   key={`${selected.id}:${selected.path}`}
                   sessionId={selected.id}
                   workspace={workspace?.name || workspaceName(selected.cwd)}
-                  cwd={selected.cwd}
                   agents={overviewAgents}
                   omitted={liveSubagents?.omitted ?? 0}
                   review={gitReview.result}
@@ -593,7 +592,6 @@ export function App() {
                   }
                   onSubagents={() => inspectSubagent()}
                   onReview={() => openWorkbar("review")}
-                  onFiles={() => openWorkbar("files")}
                 />
               )}
               <button

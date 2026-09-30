@@ -2,13 +2,7 @@ import {
   Popover,
   type PopoverTriggerRenderProps,
 } from "@astryxdesign/core/Popover";
-import {
-  ChevronRight,
-  Folder,
-  FileDiff,
-  Plus,
-  Link as LinkIcon,
-} from "lucide-react";
+import { ChevronRight, FileDiff, Plus, Link as LinkIcon } from "lucide-react";
 import { useContext, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebGitReviewResult } from "../../../../protocol/types.ts";
@@ -25,13 +19,11 @@ import {
 export function SessionOverview({
   sessionId,
   workspace,
-  cwd,
   agents,
   omitted,
   review,
   onSubagents,
   onReview,
-  onFiles,
   sessionPath,
   revision,
   onAddSources,
@@ -40,13 +32,11 @@ export function SessionOverview({
 }: {
   sessionId: string;
   workspace: string;
-  cwd: string;
   agents: ReturnType<typeof subagentOverview>;
   omitted: number;
   review: WebGitReviewResult | null;
   onSubagents: () => void;
   onReview: () => void;
-  onFiles: () => void;
   sessionPath?: string;
   revision?: string;
   onAddSources?: () => void;
@@ -162,16 +152,6 @@ export function SessionOverview({
                   )}
                 </span>
               )}
-            </button>
-            <button
-              type="button"
-              className="session-overview-row"
-              title={cwd}
-              onClick={() => activate(onFiles)}
-            >
-              <Folder aria-hidden="true" />
-              <span>{t("files")}</span>
-              <ChevronRight aria-hidden="true" />
             </button>
             {sessionPath && (
               <div className="session-overview-section">
