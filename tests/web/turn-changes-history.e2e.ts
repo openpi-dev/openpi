@@ -108,7 +108,7 @@ test("saved per-turn review and full native message load at desktop and mobile w
       .locator(".conversation-turn")
       .first()
       .locator(".turn-changes");
-    await expect(card).toContainText("此轮期间 5 个文件发生变化");
+    await expect(card).toContainText("本轮更改 5 个文件");
     await expect(
       card.locator(".turn-changes-list .turn-changes-file"),
     ).toHaveCount(3);
@@ -117,14 +117,17 @@ test("saved per-turn review and full native message load at desktop and mobile w
       card.locator(".turn-changes-list .turn-changes-file"),
     ).toHaveCount(5);
     await card.getByRole("button", { name: "审阅本轮变更" }).click();
-    await expect(card.getByRole("figure", { name: "变更差异" })).toContainText(
-      "saved-turn-0",
-    );
+    await expect(
+      page.locator(".workbar-panel").getByRole("figure", { name: "变更差异" }),
+    ).toContainText("saved-turn-0");
     await expect(page.locator(".session-changes-trigger")).toHaveCount(0);
     await page.screenshot({
       path: testInfo.outputPath("turn-review-desktop.png"),
     });
-    await card.getByRole("button", { name: "返回本轮变更" }).click();
+    await page.getByRole("button", { name: "返回变更文件" }).click();
+    await expect(page.locator(".session-review-file")).toHaveCount(5);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".workbar-panel")).toBeHidden();
 
     const full = page.getByRole("button", { name: "加载完整消息" });
     await expect(full).toHaveCount(1);
@@ -149,6 +152,15 @@ test("saved per-turn review and full native message load at desktop and mobile w
     await page.screenshot({
       path: testInfo.outputPath("turn-review-mobile.png"),
     });
+    await card.locator(".turn-changes-file").nth(1).click();
+    await expect(
+      page.locator(".workbar-panel").getByRole("figure"),
+    ).toContainText("saved-turn-1");
+    await expect(page.locator(".conversation-shell")).toBeHidden();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".session-review-file")).toHaveCount(5);
+    await page.keyboard.press("Escape");
+    await expect(card).toBeVisible();
   } finally {
     await context.close();
     await host.stop();

@@ -372,6 +372,7 @@ export type WebGitReviewFileStatus =
   | "unknown";
 
 export interface WebGitReviewFile {
+  binary?: boolean;
   path: string;
   previousPath?: string;
   status: WebGitReviewFileStatus;
@@ -385,6 +386,10 @@ export interface WebGitReviewFile {
 export type WebGitReviewSource = "unstaged" | "staged" | "branch" | "session";
 
 export interface WebGitReviewSnapshot {
+  /** Available only for a bounded, versioned summary listing. */
+  totalFiles?: number;
+  nextOffset?: number;
+  listComplete?: boolean;
   repositoryRoot: string;
   currentBranch: string | null;
   baseBranch: string | null;
@@ -401,6 +406,7 @@ export type WebGitReviewResult =
   | {
       ok: false;
       reason:
+        | "revision_changed"
         | "not_git_repository"
         | "unborn_repository"
         | "baseline_unavailable"

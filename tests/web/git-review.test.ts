@@ -86,6 +86,74 @@ test("Git review combines branch, staged, unstaged, and untracked changes", asyn
   assert.equal(result.snapshot.truncated, false);
 });
 
+test("summary pages include files past 200, have exact totals and refuse a changed listing", async () => {
+  const root = await repository();
+  await Promise.all(
+    Array.from({ length: 205 }, (_, i) =>
+      writeFile(join(root, `${i + 1}.stp`), `ISO-10303-21;\n${i}\n`),
+    ),
+  );
+  const first = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(first.ok);
+  if (!first.ok) return;
+  assert.equal(first.snapshot.totalFiles, 205);
+  assert.equal(first.snapshot.files.length, 200);
+  assert.equal(first.snapshot.listComplete, true);
+  assert.equal(first.snapshot.truncated, false);
+  assert.deepEqual(
+    first.snapshot.files.slice(0, 3).map((f) => f.path),
+    ["1.stp", "2.stp", "3.stp"],
+  );
+  const second = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: first.snapshot.nextOffset!,
+    expectedRevision: first.snapshot.revision,
+  });
+  assert.ok(second.ok);
+  if (!second.ok) return;
+  assert.equal(second.snapshot.files.length, 5);
+  assert.equal(second.snapshot.nextOffset, undefined);
+  assert.equal(second.snapshot.revision, first.snapshot.revision);
+  assert.equal(
+    new Set(
+      [...first.snapshot.files, ...second.snapshot.files].map((f) => f.path),
+    ).size,
+    205,
+  );
+  await writeFile(join(root, "205.stp"), "changed text\n");
+  assert.deepEqual(
+    await readGitReview(root, {
+      source: "unstaged",
+      summary: true,
+      offset: 200,
+      expectedRevision: first.snapshot.revision,
+    }),
+    { ok: false, reason: "revision_changed" },
+  );
+});
+
+test("binary detection uses contents rather than the STEP extension", async () => {
+  const root = await repository();
+  await writeFile(join(root, "text.stp"), "ISO-10303-21;\nDATA;\n");
+  await writeFile(join(root, "image.dat"), Buffer.from([1, 0, 2, 3]));
+  const result = await readGitReview(root, { source: "unstaged" });
+  assert.ok(result.ok);
+  if (!result.ok) return;
+  assert.equal(
+    result.snapshot.files.find((f) => f.path === "text.stp")?.binary,
+    false,
+  );
+  assert.equal(
+    result.snapshot.files.find((f) => f.path === "image.dat")?.binary,
+    true,
+  );
+});
+
 test("Git review baseline reports only changes made after a Session starts", async () => {
   const root = await repository();
   const baselineDirectory = await mkdtemp(

@@ -12,6 +12,7 @@ import type {
   WebSessionProjection,
 } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
+import { useTranslation } from "react-i18next";
 
 export function useGitReview(
   session: WebSessionProjection | undefined,
@@ -21,6 +22,7 @@ export function useGitReview(
     running = false,
   }: { active?: boolean; running?: boolean } = {},
 ) {
+  const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const request = useRef<AbortController | null>(null);
   const timer = useRef<number | null>(null);
@@ -59,9 +61,30 @@ export function useGitReview(
         sessionId,
         sessionPath,
         controller.signal,
-        { source },
+        { source, offset: "0" },
       );
-      if (!controller.signal.aborted) setResult(next);
+      if (!controller.signal.aborted) {
+        if (!next.ok)
+          setError(
+            t(
+              next.reason === "not_git_repository"
+                ? "gitReviewNotRepository"
+                : next.reason === "baseline_unavailable"
+                  ? "gitReviewBaselineUnavailable"
+                  : "gitReviewFailed",
+            ),
+          );
+        setResult((previous) => {
+          if (!next.ok && previous?.ok) return previous;
+          if (
+            next.ok &&
+            previous?.ok &&
+            next.snapshot.revision === previous.snapshot.revision
+          )
+            return previous;
+          return next;
+        });
+      }
     } catch (nextError) {
       if (!controller.signal.aborted)
         setError(
@@ -88,7 +111,61 @@ export function useGitReview(
         }
       }
     }
-  }, [client, sessionId, sessionPath, source]);
+  }, [client, sessionId, sessionPath, source, t]);
+
+  const loadMore = useCallback(async () => {
+    if (
+      !sessionId ||
+      !sessionPath ||
+      !result?.ok ||
+      result.snapshot.nextOffset === undefined ||
+      request.current
+    )
+      return;
+    const snapshot = result.snapshot;
+    const controller = new AbortController();
+    request.current = controller;
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await client.gitReview(
+        sessionId,
+        sessionPath,
+        controller.signal,
+        {
+          source,
+          offset: String(snapshot.nextOffset),
+          revision: snapshot.revision,
+        },
+      );
+      if (controller.signal.aborted) return;
+      if (!next.ok || next.snapshot.revision !== snapshot.revision)
+        throw new Error(
+          t(
+            !next.ok && next.reason === "revision_changed"
+              ? "gitReviewChanged"
+              : "gitReviewFailed",
+          ),
+        );
+      setResult({
+        ok: true,
+        snapshot: {
+          ...next.snapshot,
+          files: [...snapshot.files, ...next.snapshot.files],
+          additions: snapshot.additions + next.snapshot.additions,
+          deletions: snapshot.deletions + next.snapshot.deletions,
+        },
+      });
+    } catch (error) {
+      if (!controller.signal.aborted)
+        setError(error instanceof Error ? error.message : t("gitReviewFailed"));
+    } finally {
+      if (!controller.signal.aborted) {
+        request.current = null;
+        setLoading(false);
+      }
+    }
+  }, [client, sessionId, sessionPath, source, result, t]);
 
   const readFile = useCallback(
     async (file: string, signal: AbortSignal) => {
@@ -160,7 +237,16 @@ export function useGitReview(
   }, [refresh, sessionId]);
 
   return useMemo(
-    () => ({ result, loading, error, refresh, source, setSource, readFile }),
-    [result, loading, error, refresh, source, readFile],
+    () => ({
+      result,
+      loading,
+      error,
+      refresh,
+      source,
+      setSource,
+      readFile,
+      loadMore,
+    }),
+    [result, loading, error, refresh, source, readFile, loadMore],
   );
 }

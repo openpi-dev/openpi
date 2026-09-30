@@ -87,18 +87,18 @@ export function SessionOverview({
             onClick={() => activate(onReview)}
           >
             <GitBranch aria-hidden="true" />
-            <span>
-              {review?.ok
-                ? review.snapshot.currentBranch || t("reviewChanges")
-                : t("reviewChanges")}
-            </span>
+            <span>{t("workspaceChanges")}</span>
             {review?.ok ? (
               <span
                 className="session-overview-diff"
                 title={t("sessionOverviewChanges")}
               >
-                <span>+{review.snapshot.additions}</span>
-                <span>−{review.snapshot.deletions}</span>
+                <span>
+                  {review.snapshot.truncated
+                    ? t("gitReviewPartialLabel")
+                    : (review.snapshot.totalFiles ??
+                      review.snapshot.files.length)}
+                </span>
               </span>
             ) : (
               <ChevronRight aria-hidden="true" />

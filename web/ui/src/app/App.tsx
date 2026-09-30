@@ -115,6 +115,11 @@ export function App() {
     requestRevision: number;
   } | null>(null);
   const [workbarOpen, setWorkbarOpen] = useState(false);
+  const [reviewTurn, setReviewTurn] = useState<{
+    promptEntryId: string;
+    filePath?: string;
+    revision: number;
+  } | null>(null);
   const [workbarActiveTool, setWorkbarActiveTool] =
     useState<WorkbarTool | null>(null);
   const [subagentTarget, setSubagentTarget] = useState<{
@@ -344,10 +349,12 @@ export function App() {
     if (!workbarTarget || workbarBound) return;
     workbarReturnFocus.current = null;
     setWorkbarTarget(null);
+    setReviewTurn(null);
     setWorkbarOpen(false);
   }, [workbarBound, workbarTarget]);
   const openWorkbar = (tool: WorkbarTool = "launcher") => {
     if (!selected || state.sessionSwitching) return;
+    if (tool === "review") setReviewTurn(null);
     if (artifactPanelOpen) {
       artifactProvider.current?.close({ restoreFocus: false });
     }
@@ -671,6 +678,18 @@ export function App() {
                 scrollToBottom={state.scrollToBottom}
                 onResend={resend}
                 onInspectSubagent={inspectSubagent}
+                onReviewTurn={(promptEntryId, filePath) => {
+                  openWorkbar("review");
+                  workbarReturnFocus.current =
+                    document.activeElement instanceof HTMLElement
+                      ? document.activeElement
+                      : null;
+                  setReviewTurn({
+                    promptEntryId,
+                    filePath,
+                    revision: (reviewTurn?.revision ?? 0) + 1,
+                  });
+                }}
                 onHistoryAnchorChange={actions.setHistoryAnchor}
                 onRefreshHistory={actions.refreshSnapshot}
                 onPromptProjection={actions.rememberPromptProjection}
@@ -804,6 +823,8 @@ export function App() {
               }
               onActiveToolChange={setWorkbarActiveTool}
               review={gitReview}
+              reviewTurn={reviewTurn ?? undefined}
+              onWorkspaceReview={() => setReviewTurn(null)}
               conversationCollapsed={centerCollapsed}
               onRestoreConversation={() => setCenterCollapsed(false)}
               onClose={closeWorkbar}

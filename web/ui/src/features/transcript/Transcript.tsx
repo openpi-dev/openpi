@@ -63,7 +63,7 @@ import {
   sessionReadingScope,
 } from "./session-reading-state.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
-import { TurnChangesCard } from "./TurnChangesCard.tsx";
+import { type OpenTurnReview, TurnChangesCard } from "./TurnChangesCard.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
 import { CompactionStatus } from "./CompactionStatus.tsx";
 import { useSessionHistory } from "./use-session-history.ts";
@@ -95,6 +95,7 @@ interface TranscriptProps {
   readingCache?: SessionReadingCache;
   onResend: (content: string) => Promise<boolean>;
   onInspectSubagent?: (id: string) => void;
+  onReviewTurn?: OpenTurnReview;
   onHistoryAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
   onRefreshHistory?: () => Promise<boolean>;
   onPromptProjection?: (
@@ -1287,6 +1288,7 @@ function ConversationTurn({
   changes,
   session,
   timedTurn,
+  onReviewTurn,
 }: {
   id: number;
   rows: RenderRow[];
@@ -1295,6 +1297,7 @@ function ConversationTurn({
   changes?: WebTurnChanges;
   session?: WebSessionProjection;
   timedTurn?: ActiveTurn;
+  onReviewTurn?: OpenTurnReview;
 }) {
   const { t } = useTranslation();
   const failed = rows.some((row) => row.outcome === "failed");
@@ -1382,8 +1385,7 @@ function ConversationTurn({
         <TurnChangesCard
           key={`${session.id}:${session.path}:${changes.promptEntryId}`}
           changes={changes}
-          sessionId={session.id}
-          sessionPath={session.path}
+          onReview={onReviewTurn}
         />
       )}
     </section>
@@ -1398,6 +1400,7 @@ function renderTurns(
   changesByPrompt?: Map<string, WebTurnChanges>,
   session?: WebSessionProjection,
   timedTurn?: ActiveTurn,
+  onReviewTurn?: OpenTurnReview,
 ) {
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
@@ -1434,6 +1437,7 @@ function renderTurns(
       )}
       session={session}
       timedTurn={running && turn.id === activeTurn ? timedTurn : undefined}
+      onReviewTurn={onReviewTurn}
       key={`turn-group-${turn.rows[0]?.key}`}
     />
   ));
@@ -2265,6 +2269,7 @@ export function Transcript(props: TranscriptProps) {
           props.activityObserved !== false && !historyPaused
             ? timedTurn
             : undefined,
+          props.onReviewTurn,
         )}
         {selectedExecution?.compaction &&
           selectedExecution.compaction.state !== "completed" && (

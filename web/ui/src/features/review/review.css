@@ -87,7 +87,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -120,8 +120,7 @@
 .session-review-list {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .session-review-list ul {
@@ -138,10 +137,10 @@
   display: flex;
   width: 100%;
   min-width: 0;
-  min-height: 38px;
+  min-height: 44px;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 10px 8px;
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
@@ -171,15 +170,22 @@
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
 }
+
+.session-review-path strong { color: var(--text); font-weight: 500; }
+.review-search { display: block; margin: 12px 0; }
+.review-search input { width: 100%; min-height: 38px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--text); font: inherit; font-size: 13px; }
+.review-search-empty { color: var(--muted); font-size: 13px; padding: 12px 4px; }
+.review-update { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.review-update button { border: 0; background: none; color: var(--text); cursor: pointer; font: inherit; text-decoration: underline; }
 
 .session-review-stats {
   display: flex;
   gap: 7px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .session-review-more {
@@ -223,7 +229,9 @@
 
 .review-file-heading span {
   color: var(--muted);
-  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .review-file-toolbar {
@@ -242,6 +250,7 @@
   display: flex;
   min-width: 0;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -257,9 +266,9 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 9.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .review-file-mode {
@@ -380,8 +389,10 @@
   }
 
   .review-file-context code {
-    display: none;
+    display: block;
   }
+
+  .review-search input { min-height: 44px; font-size: 16px; }
 
   .review-file-mode {
     display: none;

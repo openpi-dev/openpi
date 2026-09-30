@@ -38,6 +38,11 @@ import {
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 10_000;
 const GIT_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const GIT_REVIEW_MAX_SUMMARY_FILES = 10_000;
+
+function reviewFileLimit(options?: GitReviewReadOptions) {
+  return options?.summary && options.offset !== undefined ? GIT_REVIEW_MAX_SUMMARY_FILES : WEB_MAX_GIT_REVIEW_FILES;
+}
 const GIT_REVIEW_BASELINE_VERSION = 2;
 export const GIT_REVIEW_MAX_BASELINES = 64;
 export const GIT_REVIEW_MAX_BASELINE_BYTES = 4 * 1024 * 1024;
@@ -98,6 +103,8 @@ export async function captureGitTurnChanges(sessionPath: string, cwd: string, ma
 }
 
 export interface GitReviewReadOptions {
+  offset?: number;
+  expectedRevision?: string;
   source?: WebGitReviewSource;
   filePath?: string;
   summary?: boolean;
@@ -351,7 +358,7 @@ async function trackedChanges(
     identity.update(JSON.stringify(comparison)).update("\0").update(status).update("\0");
     const entries = parseRawStatus(status);
     const chunks = options.summary ? [] : splitDiff(diff);
-    const stats = new Map<string, { additions: number; deletions: number }>();
+    const stats = new Map<string, { additions: number; deletions: number; binary: boolean }>();
     if (options.summary) {
       const records = diff.split("\0");
       for (let index = 0; index < records.length; index++) {
@@ -361,13 +368,13 @@ async function trackedChanges(
         if (first < 0 || second < 0) continue;
         let path = record.slice(second + 1);
         if (!path) { index++; path = records[++index] ?? ""; }
-        stats.set(path, { additions: Number(record.slice(0, first)) || 0, deletions: Number(record.slice(first + 1, second)) || 0 });
+        stats.set(path, { additions: Number(record.slice(0, first)) || 0, deletions: Number(record.slice(first + 1, second)) || 0, binary: record.slice(0, first) === "-" });
       }
     }
     for (const [index, entry] of entries.entries()) {
       if (options.filePath && entry.path !== options.filePath) continue;
       const body = chunks[index] ?? "";
-      if (files.length >= WEB_MAX_GIT_REVIEW_FILES) {
+      if (files.length >= reviewFileLimit(options)) {
         truncated = true;
         break;
       }
@@ -379,6 +386,7 @@ async function trackedChanges(
         ...(options.summary ? { diffLoaded: false } : { diffLoaded: true }),
         diff: includeDiff ? body : "",
         diffTruncated: !includeDiff,
+        ...(!options.summary ? { binary: /^Binary files .* differ$/mu.test(body) } : {}),
         ...(options.summary ? stats.get(entry.path) ?? { additions: 0, deletions: 0 } : countGitDiffLines(body)),
       });
       if (includeDiff) diffBytes += bodyBytes;
@@ -465,6 +473,7 @@ async function untrackedChanges(
       status: "untracked",
       diff: includeDiff ? fullDiff : "",
       diffTruncated: !includeDiff,
+      ...(bytes ? { binary: bytes.includes(0) } : {}),
       ...countGitDiffLines(fullDiff),
     });
     if (includeDiff) diffBytes += fullDiffBytes;
@@ -519,6 +528,7 @@ export async function readGitReview(
   } & GitReviewReadOptions,
 ): Promise<WebGitReviewResult> {
   try {
+    if (options?.offset !== undefined && (!options.summary || !Number.isSafeInteger(options.offset) || options.offset < 0 || options.offset >= GIT_REVIEW_MAX_SUMMARY_FILES || options.filePath)) return { ok: false, reason: "git_failed" };
     const root = cleanLine(
       await git(cwd, ["rev-parse", "--show-toplevel"]),
     );
@@ -569,28 +579,41 @@ export async function readGitReview(
     );
     const untracked = source === "staged" ? { files: [], diffBytes: 0, truncated: false } : await untrackedChanges(
       root,
-      WEB_MAX_GIT_REVIEW_FILES - tracked.files.length,
+      reviewFileLimit(options) - tracked.files.length,
       WEB_MAX_GIT_REVIEW_DIFF_BYTES - tracked.diffBytes,
       environment,
       options,
     );
+    const allFiles = dedupe([...tracked.files, ...untracked.files]);
+    const paged = options?.summary && options.offset !== undefined;
+    if (paged) allFiles.sort((a, b) => a.path.localeCompare(b.path, "en", { numeric: true }));
+    const incomplete = tracked.truncated || untracked.truncated;
+    const offset = options?.offset ?? 0;
     const snapshot = boundSnapshot({
       repositoryRoot: root,
       currentBranch,
       baseBranch: base,
       comparison: source,
       revision: "0".repeat(64),
-      files: dedupe([...tracked.files, ...untracked.files]),
+      files: paged ? allFiles.slice(offset, offset + WEB_MAX_GIT_REVIEW_FILES) : allFiles,
       additions: 0,
       deletions: 0,
-      truncated: tracked.truncated || untracked.truncated,
+      truncated: incomplete,
+      ...(paged ? { listComplete: !incomplete, ...(!incomplete ? { totalFiles: allFiles.length } : {}) } : {}),
     });
-    const fileIdentities = options?.summary && source !== "staged" ? await Promise.all(snapshot.files.map(async file => {
-      try {
-        const info = await lstat(resolve(root, file.path), { bigint: true });
-        return [file.path, String(info.size), String(info.mtimeNs), String(info.ctimeNs)];
-      } catch { return [file.path, "missing"]; }
-    })) : undefined;
+    const fileIdentities: string[][] = [];
+    if (options?.summary && source !== "staged") {
+      const identityFiles = paged ? allFiles : snapshot.files;
+      // Bound filesystem fan-out even when the summary spans many pages.
+      for (let index = 0; index < identityFiles.length; index += 64) {
+        fileIdentities.push(...await Promise.all(identityFiles.slice(index, index + 64).map(async file => {
+          try {
+            const info = await lstat(resolve(root, file.path), { bigint: true });
+            return [file.path, String(info.size), String(info.mtimeNs), String(info.ctimeNs)];
+          } catch { return [file.path, "missing"]; }
+        })));
+      }
+    }
     const revision = createHash("sha256")
       .update(
         JSON.stringify({
@@ -600,7 +623,7 @@ export async function readGitReview(
           fileIdentities,
           currentBranch,
           base,
-          files: snapshot.files.map(
+          files: (paged ? allFiles : snapshot.files).map(
             ({ path, previousPath, status, diff, diffTruncated, additions, deletions }) => ({
               path,
               previousPath,
@@ -615,6 +638,11 @@ export async function readGitReview(
       )
       .digest("hex");
     snapshot.revision = revision;
+    if (paged) {
+      if (options.expectedRevision && options.expectedRevision !== revision) return { ok: false, reason: "revision_changed" };
+      const next = offset + snapshot.files.length;
+      if (next < allFiles.length && next > offset) snapshot.nextOffset = next;
+    }
     return {
       ok: true,
       snapshot,

@@ -75,9 +75,9 @@ test("real Git rename details and index-only edits refresh the open browser diff
   try {
     await host.start();
     await page.goto(host.origin);
-    await page.locator(".task-tools-trigger").click();
+    await page.getByRole("button", { name: "会话概览", exact: true }).click();
+    await page.getByRole("button", { name: /^工作区更改/u }).click();
     const workbar = page.locator(".workbar-panel");
-    await workbar.getByRole("button", { name: /^变更/u }).click();
     await workbar
       .getByRole("combobox", { name: "变更范围" })
       .selectOption("staged");
@@ -103,9 +103,14 @@ test("real Git rename details and index-only edits refresh the open browser diff
     // Returning from an external Git operation triggers the existing refresh
     // path; keep the file open and the input focused during reconciliation.
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(
+      workbar.getByRole("button", { name: "查看最新差异" }),
+    ).toBeVisible();
+    await expect(diff).toContainText("staged-a");
+    await expect(draft).toBeFocused();
+    await workbar.getByRole("button", { name: "查看最新差异" }).click();
     await expect(diff).toContainText("staged-b", { timeout: 10_000 });
     await expect(diff).not.toContainText("staged-a");
-    await expect(draft).toBeFocused();
     await expect(draft).toHaveValue("保留正在编辑的草稿");
     await page.screenshot({
       path: testInfo.outputPath("native-index-refresh.png"),

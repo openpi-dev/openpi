@@ -13,12 +13,13 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebGitReviewFile,
   WebGitReviewResult,
   WebGitReviewSource,
+  WebGitReviewSnapshot,
 } from "../../../../protocol/types.ts";
 import { DiffCodePreview } from "./DiffCodePreview.tsx";
 
@@ -43,6 +44,8 @@ function failureLabel(
 }
 
 export interface GitReviewViewState {
+  historical?: boolean;
+  loadMore?: () => Promise<void>;
   result: WebGitReviewResult | null;
   loading: boolean;
   error: string | null;
@@ -80,6 +83,9 @@ export function ReviewPanel({
   const wasActive = useRef(false);
   const listScrollTop = useRef<number | null>(null);
   const [visibleFiles, setVisibleFiles] = useState(FILE_PAGE_SIZE);
+  const [query, setQuery] = useState("");
+  const [pinnedSnapshot, setPinnedSnapshot] =
+    useState<WebGitReviewSnapshot | null>(null);
   const [selectedPath, setSelectedPath] = useState(initialFilePath ?? null);
   const [loadedFile, setLoadedFile] = useState<{
     source: WebGitReviewSource;
@@ -105,12 +111,32 @@ export function ReviewPanel({
     return () => media.removeEventListener("change", update);
   }, []);
   useEffect(() => {
+    // Scope changes invalidate the pinned comparison even for the same path.
+    void review.source;
     focusRequested.current = true;
     listScrollTop.current = null;
     setSelectedPath(initialFilePath ?? null);
-  }, [initialFilePath]);
+    setPinnedSnapshot(null);
+  }, [initialFilePath, review.source]);
   const Surface = embedded ? "section" : narrow ? "main" : "aside";
-  const snapshot = review.result?.ok ? review.result.snapshot : null;
+  const latestSnapshot = review.result?.ok ? review.result.snapshot : null;
+  const snapshot =
+    !review.historical &&
+    selectedPath &&
+    pinnedSnapshot &&
+    pinnedSnapshot.comparison === (review.source ?? latestSnapshot?.comparison)
+      ? pinnedSnapshot
+      : latestSnapshot;
+  const updated = Boolean(
+    selectedPath &&
+      snapshot &&
+      latestSnapshot &&
+      snapshot.revision !== latestSnapshot.revision,
+  );
+  useEffect(() => {
+    if (selectedPath && !pinnedSnapshot && latestSnapshot)
+      setPinnedSnapshot(latestSnapshot);
+  }, [selectedPath, pinnedSnapshot, latestSnapshot]);
   const source = review.source ?? snapshot?.comparison ?? "unstaged";
   const failure = failureLabel(
     review.result && !review.result.ok ? review.result : null,
@@ -181,24 +207,38 @@ export function ReviewPanel({
     fileRetry,
     t,
   ]);
-  const files = snapshot?.files.slice(0, visibleFiles) ?? [];
-  const remaining = Math.max(0, (snapshot?.files.length ?? 0) - files.length);
-  const comparison = snapshot
-    ? snapshot.comparison === "session"
-      ? t("gitReviewSessionSnapshot")
-      : snapshot.comparison === "unstaged"
-        ? t("gitReviewUnstaged")
-        : snapshot.comparison === "staged"
-          ? t("gitReviewStaged")
-          : snapshot.baseBranch
-            ? t("gitReviewComparison", {
-                current: snapshot.currentBranch ?? t("gitReviewDetached"),
-                base: snapshot.baseBranch,
-              })
-            : t("gitReviewWorkingTree")
-    : null;
+  const matchingFiles = useMemo(
+    () =>
+      (snapshot?.files ?? [])
+        .filter((file) =>
+          file.path.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+        )
+        .sort((a, b) => a.path.localeCompare(b.path, "en", { numeric: true })),
+    [snapshot?.files, query],
+  );
+  const files = matchingFiles.slice(0, visibleFiles);
+  const remaining = Math.max(0, matchingFiles.length - files.length);
+  const partialList =
+    snapshot?.listComplete === false ||
+    (snapshot?.listComplete === undefined && snapshot?.truncated);
+  const partialSearch = partialList || snapshot?.nextOffset !== undefined;
+  const comparison = review.historical
+    ? t("turnChangesScope")
+    : snapshot
+      ? snapshot.comparison === "session"
+        ? t("gitReviewSessionSnapshot")
+        : snapshot.comparison === "unstaged"
+          ? t("gitReviewUnstaged")
+          : snapshot.comparison === "staged"
+            ? t("gitReviewStaged")
+            : snapshot.baseBranch
+              ? t("gitReviewComparison", {
+                  current: snapshot.currentBranch ?? t("gitReviewDetached"),
+                  base: snapshot.baseBranch,
+                })
+              : t("gitReviewWorkingTree")
+      : null;
 
-  const selectedFilePath = selectedFile?.path;
   useEffect(() => {
     // Snapshot refreshes can remove a preview without a navigation intent.
     const activated = active && !wasActive.current;
@@ -206,23 +246,25 @@ export function ReviewPanel({
     if (!active) return;
     if (!activated && !focusRequested.current) return;
     focusRequested.current = false;
-    if (selectedFilePath) preview.current?.focus();
+    if (selectedPath) preview.current?.focus();
     else if (embedded) listBody.current?.focus();
     else listCloseButton.current?.focus();
-  }, [active, embedded, selectedFilePath]);
+  }, [active, embedded, selectedPath]);
 
   const openFile = (path: string) => {
     listScrollTop.current = listBody.current?.scrollTop ?? null;
     focusRequested.current = true;
+    setPinnedSnapshot(snapshot);
     setSelectedPath(path);
   };
   const showFileList = () => {
-    const path = selectedFile?.path;
-    const index = snapshot?.files.findIndex((file) => file.path === path) ?? -1;
+    const path = selectedPath;
+    const index = matchingFiles.findIndex((file) => file.path === path);
     if (index >= visibleFiles)
       setVisibleFiles(Math.ceil((index + 1) / FILE_PAGE_SIZE) * FILE_PAGE_SIZE);
     focusRequested.current = false;
     setSelectedPath(null);
+    setPinnedSnapshot(null);
     requestAnimationFrame(() => {
       const body = listBody.current;
       if (!body?.isConnected || body.closest("[hidden], [inert]")) return;
@@ -246,13 +288,18 @@ export function ReviewPanel({
         if (
           event.key !== "Escape" ||
           event.nativeEvent.isComposing ||
+          event.keyCode === 229 ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.altKey ||
+          event.shiftKey ||
           event.defaultPrevented
         )
           return;
-        if (!selectedFile && embedded) return;
+        if (!selectedPath && embedded) return;
         event.preventDefault();
         event.stopPropagation();
-        if (selectedFile) showFileList();
+        if (selectedPath) showFileList();
         else if (!embedded) onClose();
       }}
     >
@@ -261,13 +308,16 @@ export function ReviewPanel({
           <label>
             {t("gitReviewSource")}{" "}
             <select
-              value={review.source ?? "unstaged"}
+              value={review.historical ? "turn" : (review.source ?? "unstaged")}
               onChange={(event) =>
                 review.setSource?.(
                   event.currentTarget.value as WebGitReviewSource,
                 )
               }
             >
+              {review.historical && (
+                <option value="turn">{t("turnChangesReview")}</option>
+              )}
               <option value="unstaged">{t("gitReviewUnstaged")}</option>
               <option value="staged">{t("gitReviewStaged")}</option>
               <option value="branch">{t("gitReviewBranch")}</option>
@@ -296,6 +346,21 @@ export function ReviewPanel({
           </button>
         </div>
       </div>
+      {updated && (
+        <div className="review-update" role="status">
+          <span>{t("gitReviewNewVersion")}</span>
+          <button
+            type="button"
+            onClick={() => {
+              preview.current?.focus();
+              setPinnedSnapshot(latestSnapshot);
+              setLoadedFile(null);
+            }}
+          >
+            {t("gitReviewShowLatest")}
+          </button>
+        </div>
+      )}
       {(review.error || failure) && (
         <Banner
           status="error"
@@ -317,7 +382,7 @@ export function ReviewPanel({
           }
         />
       )}
-      {selectedFile ? (
+      {selectedPath ? (
         <div className="review-file-screen">
           <header className="review-file-header">
             <Button
@@ -329,10 +394,8 @@ export function ReviewPanel({
               onClick={showFileList}
             />
             <div className="review-file-heading">
-              <strong title={selectedFile.path}>
-                {fileName(selectedFile.path)}
-              </strong>
-              <span title={selectedFile.path}>{selectedFile.path}</span>
+              <strong title={selectedPath}>{fileName(selectedPath)}</strong>
+              <span title={selectedPath}>{selectedPath}</span>
             </div>
             {!embedded && (
               <div className="review-file-actions">
@@ -359,28 +422,34 @@ export function ReviewPanel({
           </header>
           <div className="review-file-toolbar">
             <div className="review-file-context">
-              <span>{t(`gitFileStatus_${selectedFile.status}`)}</span>
+              {selectedFile && (
+                <span>{t(`gitFileStatus_${selectedFile.status}`)}</span>
+              )}
               <code>{comparison}</code>
             </div>
             <HStack gap={2} align="center" className="session-review-stats">
-              {selectedFile.additions > 0 && (
-                <Text
-                  type="supporting"
-                  hasTabularNumbers
-                  className="review-additions"
-                >
-                  +{selectedFile.additions}
-                </Text>
-              )}
-              {selectedFile.deletions > 0 && (
-                <Text
-                  type="supporting"
-                  hasTabularNumbers
-                  className="review-deletions"
-                >
-                  -{selectedFile.deletions}
-                </Text>
-              )}
+              {selectedFile &&
+                !selectedFile.binary &&
+                selectedFile.additions > 0 && (
+                  <Text
+                    type="supporting"
+                    hasTabularNumbers
+                    className="review-additions"
+                  >
+                    +{selectedFile.additions}
+                  </Text>
+                )}
+              {selectedFile &&
+                !selectedFile.binary &&
+                selectedFile.deletions > 0 && (
+                  <Text
+                    type="supporting"
+                    hasTabularNumbers
+                    className="review-deletions"
+                  >
+                    -{selectedFile.deletions}
+                  </Text>
+                )}
             </HStack>
             <span className="review-file-mode" aria-current="true">
               {t("diffView")}
@@ -390,11 +459,17 @@ export function ReviewPanel({
             ref={preview}
             className="review-file-preview"
             aria-label={t("gitReviewFilePreview", {
-              file: selectedFile.path,
+              file: selectedPath,
             })}
             tabIndex={-1}
           >
-            {detailError ? (
+            {!selectedFile ? (
+              <p role="status">
+                {t(
+                  review.loading ? "gitReviewLoading" : "gitReviewFileMissing",
+                )}
+              </p>
+            ) : detailError ? (
               <div role="alert">
                 <p>{detailError}</p>
                 <button
@@ -406,12 +481,29 @@ export function ReviewPanel({
               </div>
             ) : selectedFile.diffLoaded === false && review.readFile ? (
               <p role="status">{t("gitReviewLoading")}</p>
+            ) : selectedFile.binary ? (
+              <EmptyState
+                icon={<FileCode2 aria-hidden="true" />}
+                title={t("gitReviewBinary")}
+                isCompact
+              />
             ) : selectedFile.diff ? (
-              <DiffCodePreview file={selectedFile} />
+              <>
+                {selectedFile.diffTruncated && (
+                  <p className="review-hidden-lines">
+                    {t("gitReviewDiffTruncated")}
+                  </p>
+                )}
+                <DiffCodePreview file={selectedFile} />
+              </>
             ) : (
               <EmptyState
                 icon={<FileCode2 aria-hidden="true" />}
-                title={t("gitReviewNoDiff")}
+                title={t(
+                  selectedFile.diffTruncated
+                    ? "gitReviewDiffTruncated"
+                    : "gitReviewNoDiff",
+                )}
                 description={
                   selectedFile.diffTruncated
                     ? t("gitReviewDiffTruncated")
@@ -466,41 +558,53 @@ export function ReviewPanel({
               <VStack gap={1} align="stretch" className="review-summary">
                 <HStack gap={3} align="center" justify="between">
                   <Text type="label">
-                    {t("filesChanged", { count: snapshot.files.length })}
+                    {t(partialList ? "gitReviewLoadedCount" : "filesChanged", {
+                      count: partialList
+                        ? snapshot.files.length
+                        : (snapshot.totalFiles ?? snapshot.files.length),
+                    })}
                   </Text>
-                  {!snapshot.files.some(
-                    (file) =>
-                      file.status === "untracked" && file.diffLoaded === false,
-                  ) && (
-                    <HStack
-                      gap={2}
-                      align="center"
-                      className="review-summary-counts"
-                      aria-hidden="true"
-                    >
-                      <Text
-                        type="supporting"
-                        hasTabularNumbers
-                        className="review-additions"
+                  {!snapshot.truncated &&
+                    snapshot.nextOffset === undefined &&
+                    !snapshot.files.some(
+                      (file) =>
+                        file.binary ||
+                        (file.status === "untracked" &&
+                          file.diffLoaded === false),
+                    ) && (
+                      <HStack
+                        gap={2}
+                        align="center"
+                        className="review-summary-counts"
+                        aria-hidden="true"
                       >
-                        +{snapshot.additions}
-                      </Text>
-                      <Text
-                        type="supporting"
-                        hasTabularNumbers
-                        className="review-deletions"
-                      >
-                        -{snapshot.deletions}
-                      </Text>
-                    </HStack>
-                  )}
+                        <Text
+                          type="supporting"
+                          hasTabularNumbers
+                          className="review-additions"
+                        >
+                          +{snapshot.additions}
+                        </Text>
+                        <Text
+                          type="supporting"
+                          hasTabularNumbers
+                          className="review-deletions"
+                        >
+                          -{snapshot.deletions}
+                        </Text>
+                      </HStack>
+                    )}
                 </HStack>
                 <Text type="supporting" color="secondary" maxLines={1}>
                   {comparison}
                 </Text>
-                <code title={snapshot.repositoryRoot}>
-                  {snapshot.repositoryRoot}
-                </code>
+                {snapshot.nextOffset !== undefined && (
+                  <Text type="supporting" color="secondary">
+                    {t("gitReviewLoadedCount", {
+                      count: snapshot.files.length,
+                    })}
+                  </Text>
+                )}
               </VStack>
             )}
             {review.loading && !snapshot && (
@@ -534,6 +638,33 @@ export function ReviewPanel({
                 className="review-banner"
               />
             )}
+            {snapshot && snapshot.files.length > 0 && (
+              <label className="review-search">
+                <span className="sr-only">
+                  {t(
+                    partialSearch ? "gitReviewSearchLoaded" : "gitReviewSearch",
+                  )}
+                </span>
+                <input
+                  type="search"
+                  value={query}
+                  placeholder={t(
+                    partialSearch ? "gitReviewSearchLoaded" : "gitReviewSearch",
+                  )}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setVisibleFiles(FILE_PAGE_SIZE);
+                  }}
+                />
+              </label>
+            )}
+            {query && matchingFiles.length === 0 && (
+              <p className="review-search-empty" role="status">
+                {t(
+                  partialSearch ? "gitReviewNoLoadedMatch" : "gitReviewNoMatch",
+                )}
+              </p>
+            )}
             {snapshot && snapshot.files.length === 0 && (
               <EmptyState
                 icon={<GitBranch aria-hidden="true" />}
@@ -558,21 +689,34 @@ export function ReviewPanel({
                         title={file.path}
                         onClick={() => openFile(file.path)}
                       >
-                        <FileCode2 aria-hidden="true" />
-                        <span className="session-review-path">{file.path}</span>
+                        <span className="session-review-path">
+                          <span>
+                            {file.path.slice(0, -fileName(file.path).length)}
+                          </span>
+                          <strong>{fileName(file.path)}</strong>
+                        </span>
                         <span
                           className="session-review-stats"
                           aria-hidden="true"
                         >
-                          {file.additions > 0 && (
-                            <span className="review-additions">
-                              +{file.additions}
-                            </span>
-                          )}
-                          {file.deletions > 0 && (
-                            <span className="review-deletions">
-                              -{file.deletions}
-                            </span>
+                          {file.binary ? (
+                            <span>{t("gitReviewBinaryShort")}</span>
+                          ) : file.status === "untracked" &&
+                            file.diffLoaded === false ? (
+                            <span>{t("gitReviewPendingStats")}</span>
+                          ) : (
+                            <>
+                              {file.additions >= 0 && (
+                                <span className="review-additions">
+                                  +{file.additions}
+                                </span>
+                              )}
+                              {file.deletions >= 0 && (
+                                <span className="review-deletions">
+                                  -{file.deletions}
+                                </span>
+                              )}
+                            </>
                           )}
                         </span>
                       </button>
@@ -585,18 +729,35 @@ export function ReviewPanel({
                       variant="ghost"
                       size="sm"
                       width="100%"
-                      label={t("gitReviewShowMore", { count: remaining })}
+                      label={t("gitReviewShowMore", {
+                        count: Math.min(FILE_PAGE_SIZE, remaining),
+                      })}
                       onClick={() =>
                         setVisibleFiles((count) =>
                           Math.min(
                             count + FILE_PAGE_SIZE,
-                            snapshot!.files.length,
+                            matchingFiles.length,
                           ),
                         )
                       }
                     />
                   </div>
                 )}
+              </div>
+            )}
+            {snapshot?.nextOffset !== undefined && review.loadMore && (
+              <div className="session-review-more">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  width="100%"
+                  label={t("gitReviewLoadNext")}
+                  isLoading={review.loading}
+                  isDisabled={review.loading}
+                  onClick={() => {
+                    void review.loadMore?.();
+                  }}
+                />
               </div>
             )}
           </div>

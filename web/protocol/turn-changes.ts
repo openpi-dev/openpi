@@ -6,7 +6,7 @@ export const WEB_MAX_TURN_CHANGE_FILES = 200;
 
 export type WebTurnChangesFile = Pick<
   WebGitReviewFile,
-  "path" | "previousPath" | "status" | "additions" | "deletions"
+  "path" | "previousPath" | "status" | "additions" | "deletions" | "binary"
 >;
 
 export interface WebTurnChanges {
@@ -66,6 +66,7 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
       !fileStatuses.has(file.status as WebGitReviewFileStatus) ||
       typeof file.diff !== "string" ||
       typeof file.diffTruncated !== "boolean" ||
+      !(file.binary === undefined || typeof file.binary === "boolean") ||
       !count(file.additions) || !count(file.deletions)
     ) return undefined;
     bytes += new TextEncoder().encode(file.path).byteLength + new TextEncoder().encode(file.diff).byteLength;
@@ -77,6 +78,7 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
       diff: file.diff,
       diffTruncated: file.diffTruncated,
       diffLoaded: true,
+      ...(file.binary === true || /^Binary files .* differ$/mu.test(file.diff) ? { binary: true } : {}),
       additions: file.additions,
       deletions: file.deletions,
     });
@@ -100,12 +102,13 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
 export function summarizeTurnChanges(detail: WebTurnChangesDetail): WebTurnChanges {
   return {
     ...detail,
-    files: detail.files.map(({ path, previousPath, status, additions, deletions }) => ({
+    files: detail.files.map(({ path, previousPath, status, additions, deletions, binary }) => ({
       path,
       ...(previousPath ? { previousPath } : {}),
       status,
       additions,
       deletions,
+      ...(binary ? { binary } : {}),
     })),
   };
 }

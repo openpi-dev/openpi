@@ -8,11 +8,56 @@ import type {
 } from "../../web/protocol/types.ts";
 import { useGitReview } from "../../web/ui/src/features/review/use-git-review.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import { i18n } from "../../web/ui/src/i18n.ts";
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("requests a versioned next page and rejects changed or late session pages", async () => {
+  vi.useFakeTimers();
+  const first = {
+    ...oldResult,
+    snapshot: { ...oldResult.snapshot, nextOffset: 1, totalFiles: 2 },
+  };
+  const read = vi
+    .spyOn(WebClient.prototype, "gitReview")
+    .mockResolvedValueOnce(first)
+    .mockResolvedValueOnce({ ok: false, reason: "revision_changed" });
+  const { result, rerender } = renderHook(
+    ({ selected }) => useGitReview(selected, 1),
+    { initialProps: { selected: session("a") } },
+  );
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  await act(() => result.current.loadMore());
+  expect(result.current.result).toEqual(first);
+  expect(result.current.error).toBe(i18n.t("gitReviewChanged"));
+  expect(read.mock.calls[1]?.[3]).toEqual({
+    source: "unstaged",
+    offset: "1",
+    revision: "old",
+  });
+  let finish!: (value: WebGitReviewResult) => void;
+  read
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValueOnce({ ok: false, reason: "not_git_repository" });
+  let pending!: Promise<void>;
+  act(() => {
+    pending = result.current.loadMore();
+  });
+  rerender({ selected: session("b") });
+  await act(async () => {
+    finish(oldResult);
+    await pending;
+  });
+  expect(result.current.result).toBeNull();
 });
 
 function session(id: string): WebSessionProjection {
@@ -31,7 +76,7 @@ function session(id: string): WebSessionProjection {
     },
   };
 }
-const oldResult: WebGitReviewResult = {
+const oldResult: Extract<WebGitReviewResult, { ok: true }> = {
   ok: true,
   snapshot: {
     repositoryRoot: "/workspace",

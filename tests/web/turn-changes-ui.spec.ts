@@ -5,7 +5,7 @@ import {
   fireEvent,
   render,
   screen,
-  within,
+  waitFor,
 } from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -16,6 +16,7 @@ import type {
 } from "../../web/protocol/turn-changes.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { TurnChangesCard } from "../../web/ui/src/features/transcript/TurnChangesCard.tsx";
+import { WorkbarPanel } from "../../web/ui/src/features/workbar/WorkbarPanel.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
@@ -161,58 +162,28 @@ it("attaches a saved change receipt to its native prompt, not an adjacent turn",
   expect(container.querySelectorAll(".turn-changes")).toHaveLength(1);
 });
 
-it("shows a bounded file summary and reviews the saved turn diff on demand", async () => {
-  const detail: WebTurnChangesDetail = {
-    ...changes,
-    files: files.map((file, index) => ({
-      ...file,
-      diff: `@@ -1 +1 @@\n-old\n+saved-turn-${index}`,
-      diffTruncated: false,
-      diffLoaded: true,
-    })),
-  };
-  const read = vi
-    .spyOn(WebClient.prototype, "turnChanges")
-    .mockResolvedValueOnce({ ok: true, changes: detail });
+it("shows three file names and line counts, expands locally, and opens the exact saved turn in the workbar", () => {
+  const onReview = vi.fn();
+  const read = vi.spyOn(WebClient.prototype, "turnChanges");
   const { container } = render(
-    withI18n(
-      createElement(TurnChangesCard, {
-        changes,
-        sessionId: "session",
-        sessionPath: "/tmp/session",
-      }),
-    ),
+    withI18n(createElement(TurnChangesCard, { changes, onReview })),
   );
-  expect(
-    container.querySelectorAll(".turn-changes-list .turn-changes-file"),
-  ).toHaveLength(3);
+  expect(container.querySelectorAll(".turn-changes-file")).toHaveLength(3);
+  expect(screen.queryByText("Modified")).toBeNull();
   expect(screen.getByText("+15")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /Show 2 more files/u }));
-  expect(
-    container.querySelectorAll(".turn-changes-list .turn-changes-file"),
-  ).toHaveLength(5);
-  fireEvent.click(screen.getByRole("button", { name: "Review turn changes" }));
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-  expect(read).toHaveBeenNthCalledWith(
-    1,
-    "session",
-    "/tmp/session",
+  fireEvent.click(screen.getByRole("button", { name: /file-5.ts/u }));
+  expect(onReview).toHaveBeenLastCalledWith(
     "prompt-1",
-    expect.any(AbortSignal),
+    "src/feature/file-5.ts",
   );
-  expect(read).toHaveBeenCalledTimes(1);
-  expect(
-    within(screen.getByRole("figure", { name: "Change diff" })).getByText(
-      "saved-turn-0",
-    ),
-  ).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Back to turn changes" }));
-  expect(
-    container.querySelectorAll(".turn-changes-list .turn-changes-file"),
-  ).toHaveLength(5);
+  fireEvent.click(screen.getByRole("button", { name: "Review turn changes" }));
+  expect(onReview).toHaveBeenLastCalledWith(
+    "prompt-1",
+    "src/feature/file-1.ts",
+  );
+  expect(read).not.toHaveBeenCalled();
+  expect(container.querySelector(".turn-changes-review")).toBeNull();
 });
 
 it("does not claim exact totals for partial evidence or render unknown evidence", () => {
@@ -220,8 +191,6 @@ it("does not claim exact totals for partial evidence or render unknown evidence"
     withI18n(
       createElement(TurnChangesCard, {
         changes: { ...changes, state: "partial", fileCount: null },
-        sessionId: "session",
-        sessionPath: "/tmp/session",
       }),
     ),
   );
@@ -241,8 +210,6 @@ it("does not claim exact totals for partial evidence or render unknown evidence"
           files: [],
           fileCount: null,
         },
-        sessionId: "session",
-        sessionPath: "/tmp/session",
       }),
     ),
   );
@@ -255,8 +222,6 @@ it("does not claim exact totals for partial evidence or render unknown evidence"
     withI18n(
       createElement(TurnChangesCard, {
         changes: { ...changes, state: "partial", files: [], fileCount: null },
-        sessionId: "session",
-        sessionPath: "/tmp/session",
       }),
     ),
   );
@@ -274,114 +239,122 @@ it("does not claim exact totals for partial evidence or render unknown evidence"
           additions: 0,
           deletions: 0,
         },
-        sessionId: "session",
-        sessionPath: "/tmp/session",
       }),
     ),
   );
   expect(container.querySelector(".turn-changes-unavailable")).toBeNull();
 });
 
-it("moves keyboard focus into saved review and returns to the expanded file opener", async () => {
-  vi.spyOn(WebClient.prototype, "turnChanges").mockResolvedValue({
-    ok: true,
-    changes: emptyDetail,
-  });
-  const { container } = render(
-    withI18n(
-      createElement(TurnChangesCard, {
-        changes,
-        sessionId: "session",
-        sessionPath: "/tmp/session",
-      }),
-    ),
+function panel(promptEntryId: string, filePath = files[1]!.path) {
+  return withI18n(
+    createElement(WorkbarPanel, {
+      visible: true,
+      requestedTool: "review",
+      requestRevision: 1,
+      sessionId: "session",
+      sessionPath: "/tmp/session",
+      cwd: "/workspace",
+      capabilities: {},
+      conversationCollapsed: false,
+      onRestoreConversation: () => {},
+      onClose: () => {},
+      review: {
+        result: null,
+        loading: false,
+        error: null,
+        refresh: async () => {},
+      },
+      reviewTurn: { promptEntryId, filePath, revision: 1 },
+    }),
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show 2 more files/u }));
-  const opener = screen.getByRole("button", { name: /file-5.ts/u });
-  opener.focus();
-  await act(async () => fireEvent.click(opener));
-  const review = container.querySelector(".turn-changes-review");
-  expect(document.activeElement).toBe(review);
-  fireEvent.keyDown(review!, { key: "Escape" });
-  expect(container.querySelector(".turn-changes-review")).toBeNull();
-  expect(document.activeElement).toBe(
-    screen.getByRole("button", { name: /file-5.ts/u }),
+}
+it("reads exact saved evidence into the shared workbar without reading live Git", async () => {
+  const detail = {
+    ...emptyDetail,
+    files: emptyDetail.files.map((f, i) => ({
+      ...f,
+      diff: "@@ -1 +1 @@\\n-old\\n+saved-" + i,
+    })),
+  };
+  const read = vi
+    .spyOn(WebClient.prototype, "turnChanges")
+    .mockResolvedValue({ ok: true, changes: detail });
+  const git = vi.spyOn(WebClient.prototype, "gitReview");
+  const { container } = render(panel("prompt-1"));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("figure", { name: "Change diff" }).textContent,
+    ).toContain("saved-1"),
   );
+  expect(read).toHaveBeenCalledWith(
+    "session",
+    "/tmp/session",
+    "prompt-1",
+    expect.any(AbortSignal),
+  );
+  expect(git).not.toHaveBeenCalled();
   expect(
-    container.querySelectorAll(".turn-changes-list .turn-changes-file"),
-  ).toHaveLength(5);
+    container.querySelector(".review-file-context")?.textContent,
+  ).toContain("Saved workspace changes during this turn");
+  fireEvent.keyDown(container.querySelector(".review-file-preview")!, {
+    key: "Escape",
+    isComposing: true,
+  });
+  expect(
+    screen.getByRole("figure", { name: "Change diff" }).textContent,
+  ).toContain("saved-1");
+  fireEvent.keyDown(container.querySelector(".review-file-preview")!, {
+    key: "Escape",
+  });
+  await waitFor(() =>
+    expect(container.querySelectorAll(".session-review-file")).toHaveLength(5),
+  );
 });
-
-it("owns Escape from its review header and ignores composition and modified Escape", async () => {
+it("rejects mismatched saved identity and never falls back to the current workspace", async () => {
   vi.spyOn(WebClient.prototype, "turnChanges").mockResolvedValue({
     ok: true,
-    changes: emptyDetail,
+    changes: { ...emptyDetail, promptEntryId: "other" },
   });
-  const onKeyDown = vi.fn();
-  const { container } = render(
-    withI18n(
-      createElement(
-        "div",
-        { onKeyDown },
-        createElement(TurnChangesCard, {
-          changes,
-          sessionId: "session",
-          sessionPath: "/tmp/session",
-        }),
-      ),
-    ),
+  const git = vi.spyOn(WebClient.prototype, "gitReview");
+  render(panel("prompt-1"));
+  await waitFor(() =>
+    expect(
+      screen.getByText("This turn's saved diff is unavailable."),
+    ).toBeTruthy(),
   );
-  const opener = screen.getByRole("button", { name: "Review turn changes" });
-  opener.focus();
-  await act(async () => fireEvent.click(opener));
-  const back = screen.getByRole("button", { name: "Back to turn changes" });
-  back.focus();
-  for (const options of [
-    { isComposing: true },
-    { keyCode: 229 },
-    { ctrlKey: true },
-    { altKey: true },
-    { metaKey: true },
-    { shiftKey: true },
-  ]) {
-    fireEvent.keyDown(back, { key: "Escape", ...options });
-    expect(container.querySelector(".turn-changes-review")).toBeTruthy();
-  }
-  onKeyDown.mockClear();
-  fireEvent.keyDown(back, { key: "Escape" });
-  expect(container.querySelector(".turn-changes-review")).toBeNull();
-  expect(document.activeElement).toBe(
-    screen.getByRole("button", { name: "Review turn changes" }),
-  );
-  expect(onKeyDown).not.toHaveBeenCalled();
+  expect(git).not.toHaveBeenCalled();
 });
-
-it("does not steal a new focus intent when a saved diff arrives late", async () => {
+it("ignores late evidence from a previous turn and does not steal focus on completion", async () => {
   let finish!: (result: { ok: true; changes: WebTurnChangesDetail }) => void;
-  vi.spyOn(WebClient.prototype, "turnChanges").mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
-  const { container } = render(
-    withI18n(
-      createElement(
-        "div",
-        null,
-        createElement(TurnChangesCard, {
-          changes,
-          sessionId: "session",
-          sessionPath: "/tmp/session",
+  vi.spyOn(WebClient.prototype, "turnChanges")
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
         }),
-        createElement("button", { type: "button" }, "Continue reading"),
-      ),
-    ),
+    )
+    .mockResolvedValueOnce({
+      ok: true,
+      changes: { ...emptyDetail, promptEntryId: "prompt-2" },
+    });
+  const { rerender, container } = render(panel("prompt-1"));
+  rerender(panel("prompt-2"));
+  const scope = screen.getByRole("combobox");
+  scope.focus();
+  await waitFor(() =>
+    expect(container.querySelector(".review-file-context")).toBeTruthy(),
   );
-  fireEvent.click(screen.getByRole("button", { name: /file-1.ts/u }));
-  const other = screen.getByRole("button", { name: "Continue reading" });
-  other.focus();
-  await act(async () => finish({ ok: true, changes: emptyDetail }));
-  expect(document.activeElement).toBe(other);
-  expect(container.querySelector(".turn-changes-review")).toBeTruthy();
+  await act(async () =>
+    finish({
+      ok: true,
+      changes: {
+        ...emptyDetail,
+        files: [
+          { ...emptyDetail.files[0]!, diff: "@@ -1 +1 @@\\n+wrong-turn" },
+        ],
+      },
+    }),
+  );
+  expect(screen.queryByText("wrong-turn")).toBeNull();
+  expect(document.activeElement).toBe(scope);
 });

@@ -241,6 +241,8 @@ export class WebClient {
     options?: {
       source: import("../../../protocol/types.ts").WebGitReviewSource;
       file?: string;
+      offset?: string;
+      revision?: string;
     },
   ) {
     return this.request<WebGitReviewResult>(

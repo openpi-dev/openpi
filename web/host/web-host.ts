@@ -1591,8 +1591,15 @@ export class WebHost {
       const sessionPath = url.searchParams.get("path");
       const source = url.searchParams.get("source") ?? "unstaged";
       const filePath = url.searchParams.get("file");
+      const offset = url.searchParams.get("offset");
+      const expectedRevision = url.searchParams.get("revision");
       if (
         !["unstaged", "staged", "branch", "session"].includes(source) ||
+        (offset !== null && (!/^\d{1,4}$/u.test(offset) || filePath !== null)) ||
+        (offset !== null && Number(offset) > 0 && !expectedRevision) ||
+        (expectedRevision !== null && (!/^[a-f0-9]{64}$/u.test(expectedRevision) || offset === null)) ||
+        url.searchParams.getAll("offset").length > 1 ||
+        url.searchParams.getAll("revision").length > 1 ||
         (filePath !== null && (!filePath || filePath.length > 4096 || filePath.includes("\0"))) ||
         url.searchParams.getAll("source").length > 1 ||
         url.searchParams.getAll("file").length > 1 ||
@@ -1602,7 +1609,7 @@ export class WebHost {
         url.searchParams.getAll("sessionId").length !== 1 ||
         url.searchParams.getAll("path").length !== 1 ||
         [...url.searchParams.keys()].some(
-          (key) => !["sessionId", "path", "source", "file"].includes(key),
+          (key) => !["sessionId", "path", "source", "file", "offset", "revision"].includes(key),
         )
       ) {
         return this.json(response, 400, {
@@ -1623,6 +1630,8 @@ export class WebHost {
         await this.gitReviews.read(session.path, session.cwd, {
           source: source as import("../protocol/types.ts").WebGitReviewSource,
           summary: filePath === null,
+          ...(offset === null ? {} : { offset: Number(offset) }),
+          ...(expectedRevision === null ? {} : { expectedRevision }),
           ...(filePath === null ? {} : { filePath }),
         }),
       );
