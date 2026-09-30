@@ -387,6 +387,8 @@ export interface WebGitReviewFile {
 export type WebGitReviewSource = "unstaged" | "staged" | "branch" | "session";
 
 export interface WebGitReviewSnapshot {
+  /** Text-line totals across the entire enumerated comparison, not this page. */
+  totals?: { additions: number; deletions: number; complete: boolean };
   evidenceSource?: "file-tools";
   /** Available only for a bounded, versioned summary listing. */
   totalFiles?: number;

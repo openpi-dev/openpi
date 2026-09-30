@@ -53,6 +53,7 @@ import {
   stagePromptImage,
 } from "./image-attachments.ts";
 import { WebClient } from "../../protocol/client.ts";
+import { formatSourceReference } from "../../../../protocol/session-sources.ts";
 import { ComposerActionMenu } from "./ComposerActionMenu.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import {
@@ -63,6 +64,7 @@ import {
 } from "./SlashCommandMenu.tsx";
 
 interface ComposerProps {
+  addSourcesRequest?: { sessionId: string; path: string; revision: number };
   planSelectionPending?: boolean;
   workspaceDraft?: boolean;
   draftModel?: WebStoreState["draftModel"];
@@ -386,6 +388,26 @@ export function Composer(props: ComposerProps) {
     active && !prompt.trim() && !props.sessionSwitching;
   const contextEntryAvailable =
     canCompose && Boolean(props.selectedWorkspace) && !props.sessionSwitching;
+
+  const handledSourceRequest = useRef(props.addSourcesRequest?.revision ?? 0);
+  useEffect(() => {
+    const request = props.addSourcesRequest;
+    if (!request || request.revision === handledSourceRequest.current) return;
+    handledSourceRequest.current = request.revision;
+    if (
+      !contextEntryAvailable ||
+      selected?.id !== request.sessionId ||
+      selected.path !== request.path
+    )
+      return;
+    contextTrigger.current?.focus();
+    setActionMenu("files");
+  }, [
+    props.addSourcesRequest,
+    contextEntryAvailable,
+    selected?.id,
+    selected?.path,
+  ]);
 
   useEffect(() => {
     if (contextEntryAvailable) return;
@@ -745,7 +767,7 @@ export function Composer(props: ComposerProps) {
       return t("fileReferenceDraftChanged");
     const before = current.prompt.slice(0, target.start);
     const after = current.prompt.slice(target.end);
-    const formatted = `\`${reference.replaceAll("`", "\\`")}\``;
+    const formatted = formatSourceReference(reference);
     const leading = before && !/\s$/u.test(before) ? " " : "";
     const trailing = after && !/^\s/u.test(after) ? " " : "";
     const value = `${before}${leading}${formatted}${trailing}${after}`;

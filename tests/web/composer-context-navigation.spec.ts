@@ -160,6 +160,33 @@ async function openFileReference(
   return reference;
 }
 
+it("opens source picking without replacing the draft and rejects another session path", async () => {
+  const { input, update, sendPrompt } = setup();
+  fireEvent.change(input, { target: { value: "keep this draft" } });
+  update({
+    addSourcesRequest: {
+      sessionId: "A",
+      path: "/workspace/copied.jsonl",
+      revision: 1,
+    },
+  });
+  expect(
+    screen.queryByRole("menuitem", { name: /Reference workspace file/u }),
+  ).toBeNull();
+  update({
+    addSourcesRequest: {
+      sessionId: "A",
+      path: "/workspace/a.jsonl",
+      revision: 2,
+    },
+  });
+  expect(
+    await screen.findByRole("menuitem", { name: /Reference workspace file/u }),
+  ).toBeTruthy();
+  expect(input.value).toBe("keep this draft");
+  expect(sendPrompt).not.toHaveBeenCalled();
+});
+
 function insertReference() {
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("insertReference") }),
@@ -220,10 +247,10 @@ it("replaces the selected text instead of inserting before it", async () => {
   await openFileReference(input);
   insertReference();
   await waitFor(() =>
-    expect(input.value).toBe("Inspect `README.md` then continue"),
+    expect(input.value).toBe("Inspect [README.md](<README.md>) then continue"),
   );
   await waitFor(() => expect(document.activeElement).toBe(input));
-  expect(input.selectionStart).toBe("Inspect `README.md`".length);
+  expect(input.selectionStart).toBe("Inspect [README.md](<README.md>)".length);
   expect(input.selectionEnd).toBe(input.selectionStart);
 });
 
@@ -234,10 +261,12 @@ it("preserves the unselected prefix and suffix around a collapsed caret", async 
   fireEvent.select(input);
   await openFileReference(input);
   insertReference();
-  await waitFor(() => expect(input.value).toBe("before `README.md` after"));
+  await waitFor(() =>
+    expect(input.value).toBe("before [README.md](<README.md>) after"),
+  );
 });
 
-it("encodes literal percent and Unicode at the Artifact API boundary only", async () => {
+it("encodes literal percent and Unicode in a persisted, readable source link", async () => {
   const resolve = vi
     .spyOn(WebClient.prototype, "resolveArtifact")
     .mockResolvedValue({ handle: "literal-file" });
@@ -251,7 +280,9 @@ it("encodes literal percent and Unicode at the Artifact API boundary only", asyn
   const path = "src/100% %20 \u6587\u6863.txt";
   await openFileReference(input, path);
   insertReference();
-  await waitFor(() => expect(input.value).toBe(`\`${path}\``));
+  await waitFor(() =>
+    expect(input.value).toBe(`[100% %20 文档.txt](<${encodeURI(path)}>)`),
+  );
   expect(resolve.mock.calls[0]?.[1]).toBe(encodeURI(path));
   expect(decodeURIComponent(resolve.mock.calls[0]?.[1] ?? "")).toBe(path);
   expect(release).toHaveBeenCalledWith("A", "literal-file");

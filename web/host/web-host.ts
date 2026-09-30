@@ -1586,6 +1586,27 @@ export class WebHost {
         resources: this.runtime.listSettingsResources(),
       });
     }
+    if (url.pathname === "/api/session-sources" || url.pathname === "/api/session-sources/image") {
+      const sessionId = url.searchParams.get("sessionId");
+      const path = url.searchParams.get("path");
+      const entryId = url.searchParams.get("entryId");
+      const part = url.searchParams.get("part");
+      const offset = url.searchParams.get("offset") ?? "0";
+      const revision = url.searchParams.get("revision") ?? undefined;
+      const image = url.pathname.endsWith("/image");
+      const keys = image ? ["sessionId", "path", "entryId", "part"] : ["sessionId", "path", "offset", "revision"];
+      if (request.method !== "GET" || !sessionId || sessionId.length > 256 || !path || path.length > 4096 ||
+        [...url.searchParams.keys()].some((key) => !keys.includes(key) || url.searchParams.getAll(key).length !== 1) ||
+        (image ? !entryId || entryId.length > 256 || part === null || !/^\d{1,5}$/u.test(part) :
+          !/^\d{1,5}$/u.test(offset) || Number(offset) > 10_000 || (Number(offset) > 0 && !revision) || (revision?.length ?? 0) > 256))
+        return this.json(response, 400, { error: "Invalid Session source target" });
+      const result = image
+        ? await this.adapter.getSourceImage(sessionId, path, entryId!, Number(part))
+        : await this.adapter.getSessionSources(sessionId, path, Number(offset), revision);
+      if (!result) return this.json(response, 404, { error: "Session source unavailable" });
+      if ("changed" in result) return this.json(response, 409, { error: "Session sources changed; refresh the list" });
+      return this.json(response, 200, result);
+    }
     if (url.pathname === "/api/git-review") {
       const sessionId = url.searchParams.get("sessionId");
       const sessionPath = url.searchParams.get("path");

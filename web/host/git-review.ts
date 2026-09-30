@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import type { Dirent } from "node:fs";
+import { constants, type Dirent } from "node:fs";
 import {
   access,
   chmod,
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
@@ -272,6 +273,7 @@ function dedupe(files: WebGitReviewFile[]) {
       diffTruncated: file.diffTruncated || previous.diffTruncated,
       additions: previous.additions + file.additions,
       deletions: previous.deletions + file.deletions,
+      ...((previous.statsUnavailable || file.statsUnavailable) ? { statsUnavailable: previous.statsUnavailable ?? file.statsUnavailable } : {}),
     });
   }
   return [...byPath.values()];
@@ -352,7 +354,7 @@ async function trackedChanges(
         diff: includeDiff ? body : "",
         diffTruncated: !includeDiff,
         ...(!options.summary ? { binary: /^Binary files .* differ$/mu.test(body) } : {}),
-        ...(options.summary ? stats.get(entry.path) ?? { additions: 0, deletions: 0 } : countGitDiffLines(body)),
+        ...(options.summary ? stats.get(entry.path) ?? { additions: 0, deletions: 0, statsUnavailable: "content_limit" as const } : countGitDiffLines(body)),
       });
       if (includeDiff) diffBytes += bodyBytes;
       else truncated = true;
@@ -405,6 +407,8 @@ async function untrackedChanges(
   const files: WebGitReviewFile[] = [];
   let diffBytes = 0;
   let truncated = paths.length > room;
+  let summaryBytes = 0;
+  let summaryReads = 0;
   for (const path of paths.slice(0, Math.max(0, room))) {
     const target = resolve(root, path);
     const child = relative(root, target);
@@ -413,7 +417,36 @@ async function untrackedChanges(
       continue;
     }
     if (options.summary) {
-      files.push({ path, status: "untracked", diff: "", diffLoaded: false, diffTruncated: false, additions: 0, deletions: 0 });
+      const file: WebGitReviewFile = { path, status: "untracked", diff: "", diffLoaded: false, diffTruncated: false, additions: 0, deletions: 0, statsUnavailable: "content_limit" };
+      // Count text without building a patch or copying the workspace. The list remains available past the budget.
+      if (summaryReads < 2000 && summaryBytes < 8 * 1024 * 1024) {
+        summaryReads++;
+        const metadata = await lstat(target).catch(() => undefined);
+        // Nonblocking also protects the lstat/open race with a FIFO or device.
+        const handle = metadata?.isFile()
+          ? await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(() => undefined)
+          : undefined;
+        if (handle) {
+          try {
+            const before = await handle.stat();
+            if (before.isFile() && before.size <= 1024 * 1024 && summaryBytes + before.size <= 8 * 1024 * 1024) {
+              summaryBytes += before.size;
+              const buffer = Buffer.alloc(before.size + 1);
+              const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+              const after = await handle.stat();
+              if (bytesRead === before.size && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs) {
+                const bytes = buffer.subarray(0, bytesRead);
+                const text = bytes.toString("utf8");
+                file.binary = bytes.includes(0) || text.includes("\uFFFD");
+                file.additions = file.binary || !text ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+                delete file.statsUnavailable;
+              }
+            }
+          } catch { /* Unknown counts are not zero counts. */ }
+          finally { await handle.close(); }
+        }
+      }
+      files.push(file);
       continue;
     }
     let bytes: Buffer | null = null;
@@ -564,6 +597,11 @@ export async function readGitReview(
       additions: 0,
       deletions: 0,
       truncated: incomplete,
+      ...(options?.summary ? { totals: {
+        additions: allFiles.reduce((sum, file) => sum + file.additions, 0),
+        deletions: allFiles.reduce((sum, file) => sum + file.deletions, 0),
+        complete: !incomplete && allFiles.every((file) => !file.statsUnavailable),
+      } } : {}),
       ...(paged ? { listComplete: !incomplete, ...(!incomplete ? { totalFiles: allFiles.length } : {}) } : {}),
     });
     const fileIdentities: string[][] = [];
@@ -588,6 +626,7 @@ export async function readGitReview(
           fileIdentities,
           currentBranch,
           base,
+          totals: snapshot.totals,
           files: (paged ? allFiles : snapshot.files).map(
             ({ path, previousPath, status, diff, diffTruncated, additions, deletions }) => ({
               path,

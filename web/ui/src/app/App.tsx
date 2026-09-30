@@ -73,6 +73,11 @@ export function App() {
     [],
   );
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
+  const [addSourcesRequest, setAddSourcesRequest] = useState<{
+    sessionId: string;
+    path: string;
+    revision: number;
+  }>();
   const [resizingPane, setResizingPane] = useState(false);
   const [centerCollapsed, setCenterCollapsed] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -572,6 +577,20 @@ export function App() {
                   agents={overviewAgents}
                   omitted={liveSubagents?.omitted ?? 0}
                   review={gitReview.result}
+                  reviewLoading={gitReview.loading}
+                  reviewError={gitReview.error}
+                  sessionPath={selected.path}
+                  revision={selected.history?.leafEntryId ?? undefined}
+                  onAddSources={
+                    controlled
+                      ? () =>
+                          setAddSourcesRequest((previous) => ({
+                            sessionId: selected.id,
+                            path: selected.path,
+                            revision: (previous?.revision ?? 0) + 1,
+                          }))
+                      : undefined
+                  }
                   onSubagents={() => inspectSubagent()}
                   onReview={() => openWorkbar("review")}
                   onFiles={() => openWorkbar("files")}
@@ -711,6 +730,7 @@ export function App() {
               )}
             {state.snapshot && (
               <Composer
+                addSourcesRequest={addSourcesRequest}
                 planSelectionPending={state.planSelectionPending}
                 workspaceDraft={state.workspaceDraft}
                 draftModel={state.draftModel}

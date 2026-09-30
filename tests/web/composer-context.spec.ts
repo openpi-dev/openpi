@@ -461,7 +461,9 @@ it("validates and inserts a workspace file reference at the caret", async () => 
   );
 
   await waitFor(() =>
-    expect(input.value).toBe("Review `web/ui/src/app/App.tsx` carefully"),
+    expect(input.value).toBe(
+      "Review [App.tsx](<web/ui/src/app/App.tsx>) carefully",
+    ),
   );
   expect(resolve).toHaveBeenCalledWith(
     "session-1",
@@ -481,7 +483,9 @@ it("validates and inserts a workspace file reference at the caret", async () => 
   // Artifact release and text insertion can finish before that timer fires.
   await waitFor(() => {
     expect(document.activeElement).toBe(input);
-    expect(input.selectionStart).toBe(`Review \`${reference}\``.length);
+    expect(input.selectionStart).toBe(
+      "Review [App.tsx](<web/ui/src/app/App.tsx>)".length,
+    );
   });
 });
 
@@ -610,7 +614,7 @@ it("can add a visible file path to the first message of a new session", async ()
     screen.getByRole("button", { name: i18n.t("insertReference") }),
   );
 
-  await waitFor(() => expect(input.value).toBe("`README.md`"));
+  await waitFor(() => expect(input.value).toBe("[README.md](<README.md>)"));
   expect(resolve).not.toHaveBeenCalled();
   await waitFor(() => expect(document.activeElement).toBe(input));
 });

@@ -8,6 +8,7 @@ import {
   readFile,
   readdir,
   rm,
+  symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -100,6 +101,11 @@ test("summary pages include files past 200, have exact totals and refuse a chang
   assert.ok(first.ok);
   if (!first.ok) return;
   assert.equal(first.snapshot.totalFiles, 205);
+  assert.deepEqual(first.snapshot.totals, {
+    additions: 410,
+    deletions: 0,
+    complete: true,
+  });
   assert.equal(first.snapshot.files.length, 200);
   assert.equal(first.snapshot.listComplete, true);
   assert.equal(first.snapshot.truncated, false);
@@ -116,6 +122,7 @@ test("summary pages include files past 200, have exact totals and refuse a chang
   assert.ok(second.ok);
   if (!second.ok) return;
   assert.equal(second.snapshot.files.length, 5);
+  assert.deepEqual(second.snapshot.totals, first.snapshot.totals);
   assert.equal(second.snapshot.nextOffset, undefined);
   assert.equal(second.snapshot.revision, first.snapshot.revision);
   assert.equal(
@@ -269,6 +276,29 @@ test("Git review reports a non-repository instead of an empty snapshot", async (
   });
 });
 
+test("summary counts stay partial for symlinks and do not read their targets", async () => {
+  const root = await repository();
+  await writeFile(join(root, "small.txt"), "one\ntwo");
+  await symlink("base.txt", join(root, "linked.txt"));
+  const result = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(result.ok);
+  if (!result.ok) return;
+  assert.deepEqual(result.snapshot.totals, {
+    additions: 2,
+    deletions: 0,
+    complete: false,
+  });
+  assert.equal(
+    result.snapshot.files.find((file) => file.path === "linked.txt")
+      ?.statsUnavailable,
+    "content_limit",
+  );
+});
+
 test("native Git views remain usable with an oversized untracked file and load diffs on demand", async () => {
   const root = await repository();
   await writeFile(join(root, "large.bin"), Buffer.alloc(8 * 1024 * 1024));
@@ -280,6 +310,11 @@ test("native Git views remain usable with an oversized untracked file and load d
   assert.equal(overview.ok, true);
   if (!overview.ok) return;
   assert.equal(overview.snapshot.comparison, "unstaged");
+  assert.deepEqual(overview.snapshot.totals, {
+    additions: 1,
+    deletions: 0,
+    complete: false,
+  });
   assert.equal(
     overview.snapshot.files.find((file) => file.path === "large.bin")
       ?.diffLoaded,

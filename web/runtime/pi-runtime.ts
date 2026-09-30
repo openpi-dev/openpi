@@ -1183,10 +1183,11 @@ export class PiWebRuntime implements WebRuntimeController {
         await this.promptOrigins.run(promptTrace, () => session.prompt(content, {
           ...(options?.images?.length
             ? {
-                images: options.images.map(({ data, mimeType }) => ({
+                images: options.images.map(({ data, mimeType, name }) => ({
                   type: "image" as const,
                   data,
                   mimeType,
+                  ...(name ? { name } : {}),
                 })),
               }
             : {}),
