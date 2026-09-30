@@ -7,6 +7,7 @@ import {
   type WebEvent,
   type WebModelSearchResult,
   type WebModelSummary,
+  type WebPromptImage,
   type WebSnapshot,
   type WebThinkingState,
 } from "../../web/protocol/types.ts";
@@ -252,6 +253,94 @@ it("keeps a newer Plan write pending when an older receipt arrives after retakin
   expect(store.getState().snapshot?.runtime.plan).toBe("inactive");
 });
 
+it("prepares an implementation prompt only for the ready active Session and does not submit it", async () => {
+  const client = new FakeClient();
+  const ready = snapshot();
+  ready.runtime.plan = "ready";
+  ready.runtime.planRevision = "ready-1";
+  client.snapshots.push(Promise.resolve(ready));
+  const prepare = vi
+    .spyOn(client, "preparePlanImplementation")
+    .mockResolvedValue({
+      sessionId: "session-1",
+      status: "ready",
+      revision: "ready-1",
+      hasPrompt: false,
+      prompt: "Implement this plan",
+    });
+  const send = vi
+    .spyOn(client, "prompt")
+    .mockResolvedValue({ id: "implementation", accepted: true });
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+
+  const prepared = await store.getState().actions.preparePlanImplementation();
+
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(
+    "session-1",
+    "/tmp/ws/session.jsonl",
+    "ready-1",
+  );
+  expect(prepared).toEqual({
+    prompt: "Implement this plan",
+    sessionId: "session-1",
+    sessionPath: "/tmp/ws/session.jsonl",
+    planRevision: "ready-1",
+  });
+  expect(store.getState().snapshot?.runtime.plan).toBe("ready");
+  expect(store.getState().planSelectionPending).toBe(false);
+  expect(
+    await store
+      .getState()
+      .actions.sendPrompt("Implement this plan", [], prepared!),
+  ).toBe(true);
+  expect(send).toHaveBeenCalledExactlyOnceWith(
+    "session-1",
+    "Implement this plan",
+    expect.any(String),
+    "/tmp/ws/session.jsonl",
+    false,
+    [],
+    "ready-1",
+  );
+});
+
+it("drops a prepared implementation prompt when the active Session changes mid-request", async () => {
+  const client = new FakeClient();
+  const ready = snapshot();
+  ready.runtime.plan = "ready";
+  ready.runtime.planRevision = "ready-1";
+  client.snapshots.push(Promise.resolve(ready));
+  let resolvePreparation!: (value: {
+    sessionId: string;
+    status: "ready";
+    revision: string;
+    hasPrompt: boolean;
+    prompt: string;
+  }) => void;
+  vi.spyOn(client, "preparePlanImplementation").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolvePreparation = resolve;
+      }),
+  );
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+
+  const preparing = store.getState().actions.preparePlanImplementation();
+  store.getState().actions.setWorkspace("/tmp/another-workspace");
+  resolvePreparation({
+    sessionId: "session-1",
+    status: "ready",
+    revision: "ready-1",
+    hasPrompt: false,
+    prompt: "Must not leak into another Session",
+  });
+
+  expect(await preparing).toBeNull();
+  expect(store.getState().selectedWorkspace).toBe("/tmp/another-workspace");
+});
+
 class FakeClient extends WebClient {
   snapshots: Array<Promise<WebSnapshot>> = [];
   snapshotPaths: Array<string | null | undefined> = [];
@@ -368,6 +457,8 @@ class FakeClient extends WebClient {
     _commandId: string,
     _sessionPath: string,
     _retry = false,
+    _images: readonly WebPromptImage[] = [],
+    _planRevision?: string,
   ) {
     this.prompts.push({ sessionId, content });
     return this.promptResult;
@@ -3247,6 +3338,91 @@ describe("OpenPI Web store", () => {
       store.getState().actions.stop();
     },
   );
+
+  it.each(["PLAN_BUSY", "PLAN_CONFLICT", "PLAN_CONTROL_UNAVAILABLE"] as const)(
+    "retries a rejected Plan admission with a new command identity (%s)",
+    async (code) => {
+      const client = new FakeClient();
+      const ready = snapshot();
+      ready.runtime.plan = "ready";
+      ready.runtime.planRevision = "ready-1";
+      client.snapshots.push(Promise.resolve(ready), Promise.resolve(ready));
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockRejectedValueOnce(
+          new WebApiError("Plan admission rejected", 409, code),
+        )
+        .mockResolvedValueOnce({ id: "implementation", accepted: true });
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+      const approval = {
+        prompt: "Implement the reviewed plan",
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+        planRevision: "ready-1",
+      };
+
+      expect(
+        await store
+          .getState()
+          .actions.sendPrompt(approval.prompt, [], approval),
+      ).toBe(false);
+      expect(store.getState().snapshot?.runtime.plan).toBe("ready");
+      expect(store.getState().liveRunning).toBe(false);
+
+      expect(
+        await store
+          .getState()
+          .actions.sendPrompt(approval.prompt, [], approval),
+      ).toBe(true);
+      expect(prompt).toHaveBeenCalledTimes(2);
+      expect(prompt.mock.calls[1]?.[2]).not.toBe(prompt.mock.calls[0]?.[2]);
+      expect(prompt.mock.calls[1]?.[4]).toBe(false);
+      expect(prompt.mock.calls[1]?.[6]).toBe("ready-1");
+    },
+  );
+
+  it("retries an uncertain Plan approval with the original revision and request identity", async () => {
+    const client = new FakeClient();
+    const ready = snapshot();
+    ready.runtime.plan = "ready";
+    ready.runtime.planRevision = "ready-1";
+    vi.spyOn(client, "snapshot").mockResolvedValue(ready);
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockImplementationOnce(async (_sessionId, _content, commandId) => ({
+        id: commandId,
+        accepted: true,
+      }));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const approval = {
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+      planRevision: "ready-1",
+    };
+    expect(
+      await store.getState().actions.sendPrompt("Implement", [], approval),
+    ).toBe(false);
+    expect(store.getState().promptAdmissionRecovery).toMatchObject({
+      ...approval,
+      retryable: true,
+      phase: "ready",
+    });
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(true);
+    expect(prompt.mock.calls[1]).toEqual([
+      "session-1",
+      "Implement",
+      prompt.mock.calls[0]![2],
+      "/tmp/ws/session.jsonl",
+      true,
+      [],
+      "ready-1",
+    ]);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    store.getState().actions.stop();
+  });
 
   it("reconciles an unknown admission and requires an explicit new request", async () => {
     const client = new FakeClient();

@@ -108,14 +108,93 @@ it("Plan controls preserve drafts without sending prompts, and the placeholder f
   expect(input.placeholder).not.toBe(i18n.t("promptPlanMessage"));
   expect(input.value).toBe("Keep my draft");
   rerender("planning", true, true);
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
   expect(
-    screen.getByRole<HTMLButtonElement>("menuitem", {
-      name: /^Plan plan/u,
-    }).disabled,
-  ).toBe(true);
+    screen.queryByRole("button", { name: i18n.t("addContext") }),
+  ).toBeNull();
+  expect(input.disabled).toBe(true);
   await act(async () => fireEvent.submit(input.closest("form")!));
   expect(sendPrompt).not.toHaveBeenCalled();
+});
+
+it("prepares an editable implementation prompt only after confirming draft replacement and never auto-sends", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.runtime.plan = "ready";
+  snapshot.runtime.planRevision = "ready-1";
+  const store = createWebStore();
+  const approval = {
+    sessionId: "session",
+    sessionPath: "/tmp/session",
+    planRevision: "ready-1",
+  };
+  const preparePlanImplementation = vi.fn(async () => ({
+    prompt: "Implementation prompt",
+    ...approval,
+  }));
+  const sendPrompt = vi.fn(async () => true);
+  const renderComposer = (currentSnapshot: WebSnapshot) =>
+    createElement(Composer, {
+      snapshot: currentSnapshot,
+      selectedWorkspace: "/tmp",
+      sessionSwitching: false,
+      promptAdmissionPending: false,
+      liveRunning: false,
+      landing: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      thinkingPendingLevel: null,
+      actions: {
+        ...store.getState().actions,
+        preparePlanImplementation,
+        sendPrompt,
+      },
+    });
+  const view = renderWithI18n(renderComposer(snapshot));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  fireEvent.change(input, { target: { value: "Keep this draft" } });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const implement = screen.getByRole("button", {
+    name: i18n.t("planModeImplement"),
+  });
+  fireEvent.click(implement);
+  expect(preparePlanImplementation).not.toHaveBeenCalled();
+  expect(input.value).toBe("Keep this draft");
+
+  confirm.mockReturnValue(true);
+  fireEvent.click(implement);
+  await waitFor(() => expect(input.value).toBe("Implementation prompt"));
+  expect(preparePlanImplementation).toHaveBeenCalledExactlyOnceWith();
+  expect(sendPrompt).not.toHaveBeenCalled();
+
+  // Same-ID copied Sessions must not inherit a prepared approval. Returning
+  // restores the original draft but requires another explicit preparation.
+  const copy = structuredClone(snapshot);
+  copy.currentSessionPath = "/tmp/copied-session";
+  copy.selectedSession!.path = copy.currentSessionPath;
+  view.rerender(createElement(I18nextProvider, { i18n }, renderComposer(copy)));
+  expect(input.value).toBe("");
+  view.rerender(
+    createElement(I18nextProvider, { i18n }, renderComposer(snapshot)),
+  );
+  expect(input.value).toBe("Implementation prompt");
+  sendPrompt.mockResolvedValueOnce(false);
+  await act(async () => fireEvent.submit(input.closest("form")!));
+  expect(sendPrompt).toHaveBeenCalledExactlyOnceWith("Implementation prompt");
+  sendPrompt.mockClear();
+  await act(async () => fireEvent.click(implement));
+  expect(preparePlanImplementation).toHaveBeenCalledTimes(2);
+  await act(async () => fireEvent.submit(input.closest("form")!));
+  expect(sendPrompt).toHaveBeenCalledExactlyOnceWith(
+    "Implementation prompt",
+    undefined,
+    approval,
+  );
+  confirm.mockRestore();
+  view.unmount();
 });
 
 it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {

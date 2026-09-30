@@ -1950,7 +1950,7 @@ export function Transcript(props: TranscriptProps) {
                         icon={toolIcon}
                         name={part.name || "tool"}
                         summary={
-                          result
+                          result && part.id && pairedToolIds.has(part.id)
                             ? compactSummary(result.content)
                             : toolSummary(part.name, args)
                         }

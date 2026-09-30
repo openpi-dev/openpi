@@ -277,6 +277,39 @@ it("loads native older entries before the current page and reaches the start", a
   });
 });
 
+it("never pauses live messages for a verified append to the reading window", () => {
+  const paused: boolean[] = [];
+  const { result, rerender } = renderHook(
+    ({ selected }) => {
+      const history = useSessionHistory(selected, { beforePrepend: vi.fn() });
+      paused.push(history.hasNewer || history.verifying);
+      return history;
+    },
+    { initialProps: { selected: session() } },
+  );
+  act(() => {
+    result.current.retainReading();
+  });
+  paused.length = 0;
+  rerender({
+    selected: session(3, 4, {
+      history: {
+        leafEntryId: "e4",
+        beforeEntryId: "e3",
+        anchorEntryId: "e3",
+        anchorOnBranch: true,
+      },
+    }),
+  });
+  expect(paused.length).toBeGreaterThan(0);
+  expect(paused.every((value) => !value)).toBe(true);
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e2",
+    "e3",
+    "e4",
+  ]);
+});
+
 it("keeps an in-flight older page when a verified append arrives", async () => {
   let finish!: (page: WebSessionHistoryPage) => void;
   const read = vi

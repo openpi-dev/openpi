@@ -592,7 +592,9 @@ async function dragPane(page: Page, side: "left" | "right", deltaX: number) {
 }
 
 async function openWorkbarTool(page: Page, name: string) {
-  await page.locator(".task-tools-trigger").click();
+  await page
+    .locator('button.task-tools-trigger[aria-label="打开工具"]')
+    .click();
   const workbar = page.locator(".workbar-panel");
   await expect(workbar).toBeVisible();
   const existingTab = workbar
@@ -679,7 +681,7 @@ test("refreshing an open diff preserves the draft and composer focus", async ({
           repositoryRoot: "/workspace",
           currentBranch: "main",
           baseBranch: null,
-          comparison: "session",
+          comparison: "unstaged",
           revision: refreshed ? "new" : "old",
           additions: 1,
           deletions: 0,
@@ -708,8 +710,14 @@ test("refreshing an open diff preserves the draft and composer focus", async ({
   await input.fill("Keep editing this draft");
   refreshed = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(workbar.getByRole("figure")).toContainText("refreshed");
+  await expect(
+    workbar.getByRole("button", { name: "查看最新差异" }),
+  ).toBeVisible();
+  await expect(workbar.getByRole("figure")).toContainText("original");
   await expect(input).toBeFocused();
+  await workbar.getByRole("button", { name: "查看最新差异" }).click();
+  await expect(workbar.getByRole("figure")).toContainText("refreshed");
+  await input.focus();
   await input.press("End");
   await input.pressSequentially(" safely");
   await expect(input).toHaveValue("Keep editing this draft safely");
@@ -738,6 +746,9 @@ test("file reference validation can be cancelled without changing the draft", as
     const input = page.getByRole("textbox", { name: "描述任务" });
     await input.fill("Keep this draft");
     await page.getByRole("button", { name: "添加上下文", exact: true }).click();
+    await page
+      .getByRole("menuitem", { name: "文件 file", exact: true })
+      .click();
     await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("textbox").fill("README.md");
@@ -833,7 +844,9 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await openWorkbench(page);
-  await page.getByRole("button", { name: "打开工具", exact: true }).click();
+  await page
+    .locator('button.task-tools-trigger[aria-label="打开工具"]')
+    .click();
   const launcher = page.locator(".workbar-panel");
   const launcherButtons = launcher.locator(".workbar-launcher-list > button");
   await expect(launcherButtons).toHaveCount(5);
@@ -913,10 +926,17 @@ test("model configuration drafts survive switching settings tabs", async ({
     dialog.getByRole("tab", { name: "模型", exact: true }),
   ).toBeFocused();
   await dialog
+    .getByRole("button", { name: "添加模型提供商", exact: true })
+    .click();
+  await dialog
+    .getByRole("button", { name: "自定义模型 API", exact: true })
+    .click();
+  await dialog
     .getByRole("textbox", { name: "API 地址", exact: true })
     .fill("http://localhost:12345/v1");
+  await dialog.getByRole("button", { name: "添加模型", exact: true }).click();
   await dialog
-    .getByRole("textbox", { name: "显示名称", exact: true })
+    .getByRole("textbox", { name: "模型 1 名称", exact: true })
     .fill("Unfinished model");
   await dialog.getByRole("tab", { name: "技能", exact: true }).click();
   await page.keyboard.press("End");
@@ -930,7 +950,7 @@ test("model configuration drafts survive switching settings tabs", async ({
     dialog.getByRole("textbox", { name: "API 地址", exact: true }),
   ).toHaveValue("http://localhost:12345/v1");
   await expect(
-    dialog.getByRole("textbox", { name: "显示名称", exact: true }),
+    dialog.getByRole("textbox", { name: "模型 1 名称", exact: true }),
   ).toHaveValue("Unfinished model");
 });
 
@@ -1035,7 +1055,9 @@ test("native iframe browser supports input, selection, scrolling and independent
       `${origin}/toolbar`,
     );
     await workbar.getByRole("button", { name: "关闭", exact: true }).click();
-    await page.locator(".task-tools-trigger").click();
+    await page
+      .locator('button.task-tools-trigger[aria-label="打开工具"]')
+      .click();
     await expect(workbar.locator("iframe")).toHaveCount(2);
     await navigate(`${origin}/blocked`);
     await expect(active.locator("iframe")).toHaveAttribute(
@@ -1226,7 +1248,11 @@ test.describe("installed browser enhancement", () => {
       await expect(
         workbar.getByRole("tab", { name: "Native /final", exact: true }),
       ).toBeVisible();
-      const popupPromise = page.waitForEvent("popup");
+      // The title can arrive before the external script attaches its click handler.
+      await expect
+        .poll(() => frame.locator("body").evaluate(() => document.readyState))
+        .toBe("complete");
+      const popupPromise = context.waitForEvent("page");
       await frame
         .getByRole("button", { name: "Empty popup", exact: true })
         .click();
@@ -1464,7 +1490,9 @@ for (const theme of ["light", "dark"]) {
       exact: true,
     });
     await archived.click();
-    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeVisible();
+    await expect(
+      sidebar.getByRole("button", { name: "刷新归档会话", exact: true }),
+    ).toBeVisible();
     await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
     const expand = page.getByRole("button", { name: "展开侧边栏" });
     await expect(expand).toBeVisible();
@@ -1472,7 +1500,9 @@ for (const theme of ["light", "dark"]) {
     await expect(create).toHaveAttribute("title", "新建会话");
     await expect(current).toBeHidden();
     await expect(archived).toBeHidden();
-    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeHidden();
+    await expect(
+      sidebar.getByRole("button", { name: "刷新归档会话", exact: true }),
+    ).toBeHidden();
     await expect(sidebar.locator(".workspace-tree")).toBeHidden();
     await expect(sidebar).toHaveCSS("width", "56px");
     const createBox = await create.boundingBox();
@@ -1493,7 +1523,9 @@ for (const theme of ["light", "dark"]) {
 
     await expand.click();
     await expect(archived).toHaveAttribute("aria-pressed", "true");
-    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeVisible();
+    await expect(
+      sidebar.getByRole("button", { name: "刷新归档会话", exact: true }),
+    ).toBeVisible();
     await current.click();
     await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
     await expect(sidebar.locator(".session-view-switch")).toBeHidden();
@@ -1925,6 +1957,7 @@ test("mobile sidebar recovers focus when archived and restored rows disappear", 
     await trigger.click();
     for (const action of ["归档会话", "恢复会话"]) {
       const rows = sidebar.locator(".session-row");
+      await expect(rows.first()).toBeVisible();
       const count = await rows.count();
       await rows
         .filter({ hasNot: page.locator('[aria-current="page"]') })
@@ -2153,7 +2186,7 @@ test("recovers an unknown prompt admission only after an explicit user decision"
   await draft.fill("可能产生副作用的请求");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect.poll(() => promptRequests.length).toBe(1);
-  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page.getByRole("button", { name: "重试原消息", exact: true }).click();
 
   await expect(
     page
@@ -2313,10 +2346,25 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
       await route.fulfill({ json: body });
     });
   }
+  await page.route("**/api/models/configuration?**", (route) =>
+    route.fulfill({
+      json: { revision: "inspection", providers: [], models: [] },
+    }),
+  );
   await openWorkbench(page);
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 844 });
-    await page.getByRole("button", { name: "运行状态", exact: true }).click();
+    const openSettings = async () => {
+      if (width <= 640)
+        await page
+          .getByRole("button", { name: "打开侧边栏", exact: true })
+          .click();
+      await page.getByRole("button", { name: "设置", exact: true }).click();
+    };
+    await openSettings();
+    await page
+      .getByRole("button", { name: "打开运行详情", exact: true })
+      .click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toHaveCSS("opacity", "1");
     await expect(dialog).toContainText("medium");
@@ -2331,7 +2379,7 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     });
     await page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();
-    await page.getByRole("button", { name: "服务商凭据", exact: true }).click();
+    await openSettings();
     const providerSettings = page.getByRole("dialog", { name: "设置" });
     await expect(providerSettings).toHaveCSS("opacity", "1");
     const settingsNavigation = providerSettings.getByRole("tablist", {
@@ -2355,7 +2403,10 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     ).toBeVisible();
     await selectSettings("models", "模型");
     await expect(
-      providerSettings.getByRole("heading", { name: "Inspection Model" }),
+      providerSettings.getByRole("button", {
+        name: "编辑 Example",
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(providerSettings).toContainText("Example");
     await expect
@@ -2370,7 +2421,10 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     ).toBeVisible();
     await selectSettings("models", "模型");
     await expect(
-      providerSettings.getByRole("heading", { name: "Inspection Model" }),
+      providerSettings.getByRole("button", {
+        name: "编辑 Example",
+        exact: true,
+      }),
     ).toBeVisible();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     await page.screenshot({
@@ -2470,26 +2524,32 @@ test("adds validated file references without hiding the prompt contract", async 
     await page.setViewportSize({ width, height: 844 });
     const draft = page.getByRole("textbox", { name: "描述任务" });
     await page.getByRole("button", { name: "添加上下文" }).click();
+    await page
+      .getByRole("menuitem", { name: "文件 file", exact: true })
+      .click();
     await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
     const dialog = page.getByRole("dialog", { name: "引用工作区文件" });
     await dialog
       .getByRole("textbox", { name: "工作区文件路径" })
       .fill("README.md");
     await dialog.getByRole("button", { name: "插入引用" }).click();
-    await expect(draft).toHaveValue("`README.md`");
+    await expect(draft).toHaveValue("[README.md](<README.md>)");
     await expect(draft).toBeFocused();
 
     await page.getByRole("button", { name: "添加上下文" }).click();
     await expect(
-      page.getByRole("menuitem", { name: /斜杠命令/u }),
-    ).toHaveAttribute("aria-disabled", "true");
+      page.getByRole("menuitem", { name: "压缩 compact", exact: true }),
+    ).toBeEnabled();
+    await page
+      .getByRole("menuitem", { name: "文件 file", exact: true })
+      .click();
     await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
     await dialog
       .getByRole("textbox", { name: "工作区文件路径" })
       .fill("../outside.txt");
     await dialog.getByRole("button", { name: "插入引用" }).click();
     await expect(dialog).toContainText("请选择当前会话工作区内的文件。");
-    await expect(draft).toHaveValue("`README.md`");
+    await expect(draft).toHaveValue("[README.md](<README.md>)");
     await expect(dialog).toHaveCSS("opacity", "1");
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     await page.screenshot({
@@ -2522,26 +2582,45 @@ test("restores archived history without switching the active Session", async ({
       activations.push(pathname);
   });
   const path = "/archived/browser.jsonl";
+  const archivedSession = {
+    id: "archived-browser",
+    path,
+    cwd: "/archived",
+    name: "Saved browser work",
+    archived: true,
+    source: "web-session",
+    origin: "web",
+    controller: "none",
+    readOnly: false,
+    created: "2026-09-07T00:00:00Z",
+    modified: "2026-09-07T00:00:00Z",
+    messageCount: 1,
+    firstMessage: "saved",
+  };
+  await page.route("**/api/sessions/archived?**", async (route) => {
+    const query = new URL(route.request().url()).searchParams.get("q") ?? "";
+    await route.fulfill({
+      json: {
+        sessions:
+          archived && archivedSession.name.includes(query)
+            ? [archivedSession]
+            : [],
+        truncation: {
+          truncated: true,
+          matchesOmitted: 0,
+          recordsUnscanned: 20,
+          maxPageSize: 100,
+          maxScanned: 1000,
+        },
+      },
+    });
+  });
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const snapshot = await response.json();
     snapshot.sessions = [
       ...snapshot.sessions,
-      {
-        id: "archived-browser",
-        path,
-        cwd: "/archived",
-        name: "Saved browser work",
-        archived,
-        source: "web-session",
-        origin: "web",
-        controller: "none",
-        readOnly: false,
-        created: "2026-09-07T00:00:00Z",
-        modified: "2026-09-07T00:00:00Z",
-        messageCount: 1,
-        firstMessage: "saved",
-      },
+      { ...archivedSession, archived },
     ];
     snapshot.workspaces = [];
     snapshot.truncation.sessionsOmitted = 20;
@@ -2549,12 +2628,6 @@ test("restores archived history without switching the active Session", async ({
     snapshot.truncation.truncated = true;
     await route.fulfill({ response, json: snapshot });
   });
-  await page.route("**/events?**", (route) =>
-    route.fulfill({
-      contentType: "text/event-stream",
-      body: ": heartbeat\n\n",
-    }),
-  );
   await page.route("**/api/sessions/unarchive?**", async (route) => {
     expect(new URL(route.request().url()).searchParams.get("path")).toBe(path);
     restores++;
@@ -2575,9 +2648,11 @@ test("restores archived history without switching the active Session", async ({
     .getByRole("searchbox", { name: "搜索会话" })
     .fill("not-in-loaded-history");
   await expect(
-    page.getByText("已加载历史中没有匹配的会话", { exact: true }),
+    page.getByText("已扫描历史中没有匹配的归档会话。", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText(/搜索仅覆盖已加载列表/u)).toBeVisible();
+  await expect(
+    page.getByText("还有 20 条更早记录未扫描。", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "关闭搜索" }).click();
   await expect(
     page.getByText("Saved browser work", { exact: true }),
@@ -2808,7 +2883,10 @@ test("model picker distinguishes same-named models before choosing a directory",
   const modelPicker = page.getByRole("button", {
     name: "Shared model (provider-alpha/one)",
   });
-  await expect(modelPicker).toHaveText("Shared model (provider-alpha/one)");
+  await expect(modelPicker).toHaveText("Shared model");
+  await expect(modelPicker).toHaveAccessibleName(
+    "Shared model (provider-alpha/one)",
+  );
   expect(
     await modelPicker.evaluate((element) => {
       const label = element.querySelector(".model-picker-label");
@@ -2833,6 +2911,10 @@ test("model picker distinguishes same-named models before choosing a directory",
       name: "Shared model (provider-beta/two)",
     }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "搜索可用模型", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowDown");
   await expect(
     page.getByRole("option", {
       name: "Shared model (provider-alpha/one)",

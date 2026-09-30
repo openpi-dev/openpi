@@ -39,7 +39,11 @@ import {
   workspaceName,
 } from "../../lib/format.ts";
 import { isControlledSession } from "../../lib/session-control.ts";
-import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
+import type {
+  PlanImplementationApproval,
+  WebStoreActions,
+  WebStoreState,
+} from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 import {
   type ComposerDraft,
@@ -201,6 +205,9 @@ export function Composer(props: ComposerProps) {
     string | null
   >(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const planImplementationApproval = useRef<PlanImplementationApproval | null>(
+    null,
+  );
   const imagePicker = useRef<HTMLInputElement>(null);
   const attachmentImport = useRef<{
     ownerKey: string;
@@ -241,6 +248,7 @@ export function Composer(props: ComposerProps) {
   useLayoutEffect(() => {
     const previous = draftOwner.current;
     if (previous.key === nextOwner.key) return;
+    planImplementationApproval.current = null;
     let nextDraft = draftMemory.read(nextOwner.key);
     let limit = false;
     const handoff =
@@ -326,10 +334,35 @@ export function Composer(props: ComposerProps) {
         submissions.current.delete(ownerKey);
       setAttachmentError((error) => (error === t("draftLimit") ? null : error));
     }
+    if (
+      patch.prompt !== undefined &&
+      (!patch.prompt.trim() || patch.prompt.startsWith("/"))
+    )
+      planImplementationApproval.current = null;
     currentDraft.current = next;
     setDraft(next);
     return true;
   };
+  useEffect(() => {
+    const approval = planImplementationApproval.current;
+    if (
+      approval &&
+      (props.workspaceDraft ||
+        props.snapshot?.runtime.plan !== "ready" ||
+        props.snapshot.runtime.planRevision !== approval.planRevision ||
+        props.snapshot.currentSessionId !== approval.sessionId ||
+        props.snapshot.selectedSession?.path !== approval.sessionPath ||
+        selectedPath !== approval.sessionPath)
+    )
+      planImplementationApproval.current = null;
+  }, [
+    props.snapshot?.runtime.plan,
+    props.snapshot?.runtime.planRevision,
+    props.snapshot?.currentSessionId,
+    props.snapshot?.selectedSession?.path,
+    props.workspaceDraft,
+    selectedPath,
+  ]);
   const active = Boolean(
     !props.workspaceDraft &&
       selected?.id &&
@@ -355,7 +388,9 @@ export function Composer(props: ComposerProps) {
     running &&
     Boolean(props.activeTurn ?? props.snapshot?.runtime.activeTurn);
   const disabled =
-    props.sessionSwitching || (!canCompose && Boolean(props.selectedWorkspace));
+    props.sessionSwitching ||
+    Boolean(props.planSelectionPending) ||
+    (!canCompose && Boolean(props.selectedWorkspace));
   const commandDiscovery = props.commandDiscovery ?? {
     sessionId: null,
     status: "idle" as const,
@@ -385,7 +420,10 @@ export function Composer(props: ComposerProps) {
   const commandEntryAvailable =
     active && !prompt.trim() && !props.sessionSwitching;
   const contextEntryAvailable =
-    canCompose && Boolean(props.selectedWorkspace) && !props.sessionSwitching;
+    canCompose &&
+    Boolean(props.selectedWorkspace) &&
+    !props.sessionSwitching &&
+    !props.planSelectionPending;
 
   const handledSourceRequest = useRef(props.addSourcesRequest?.revision ?? 0);
   useEffect(() => {
@@ -620,8 +658,10 @@ export function Composer(props: ComposerProps) {
     sendPrompt: (
       content: string,
       images?: readonly WebPromptImage[],
+      approval?: PlanImplementationApproval,
     ) => Promise<boolean>,
     explicitImages = false,
+    approval?: PlanImplementationApproval,
   ) => {
     if (
       submissions.current.get(draftOwner.current.key)?.pending ||
@@ -645,11 +685,20 @@ export function Composer(props: ComposerProps) {
     submissions.current.set(submission.owner.key, submission);
     let accepted = false;
     try {
-      accepted =
-        explicitImages || captured.images.length > 0
+      accepted = approval
+        ? await sendPrompt(
+            captured.prompt,
+            captured.images.length > 0 || explicitImages
+              ? captured.images
+              : undefined,
+            approval,
+          )
+        : explicitImages || captured.images.length > 0
           ? await sendPrompt(captured.prompt, captured.images)
           : await sendPrompt(captured.prompt);
       if (accepted) {
+        if (approval === planImplementationApproval.current)
+          planImplementationApproval.current = null;
         const cleared = draftMemory.clear(
           submission.owner.key,
           submission.revision,
@@ -712,7 +761,11 @@ export function Composer(props: ComposerProps) {
       return;
     }
     setCommandError(null);
-    await sendDraft(props.actions.sendPrompt);
+    await sendDraft(
+      props.actions.sendPrompt,
+      false,
+      planImplementationApproval.current ?? undefined,
+    );
   };
 
   const sendAsNew = () => {
@@ -1048,6 +1101,62 @@ export function Composer(props: ComposerProps) {
 
   return (
     <div className="composer-dock">
+      {active &&
+        props.snapshot?.runtime.plan === "ready" &&
+        !props.sessionSwitching && (
+          <div className="plan-mode-bar">
+            <button
+              type="button"
+              disabled={
+                running ||
+                attachmentBusy ||
+                Boolean(attachmentImport.current) ||
+                props.planSelectionPending ||
+                props.promptAdmissionPending ||
+                Boolean(props.promptAdmissionRecovery)
+              }
+              onClick={() => {
+                if (
+                  (prompt.trim() || images.length > 0) &&
+                  !window.confirm(t("planImplementationReplaceDraft"))
+                )
+                  return;
+                const requestedRevision = currentDraft.current.revision;
+                const requestedOwner = draftOwner.current.key;
+                void props.actions
+                  .preparePlanImplementation()
+                  .then((prepared) => {
+                    if (
+                      !prepared ||
+                      currentDraft.current.revision !== requestedRevision ||
+                      draftOwner.current.key !== requestedOwner
+                    )
+                      return;
+                    if (
+                      !updateDraft(
+                        {
+                          prompt: prepared.prompt,
+                          images: [],
+                          caret: prepared.prompt.length,
+                        },
+                        requestedOwner,
+                      )
+                    )
+                      return;
+                    planImplementationApproval.current = {
+                      sessionId: prepared.sessionId,
+                      sessionPath: prepared.sessionPath,
+                      planRevision: prepared.planRevision,
+                    };
+                    setAttachmentError(null);
+                    textarea.current?.focus();
+                  });
+              }}
+            >
+              {t("planModeImplement")}
+            </button>
+          </div>
+        )}
       {!active &&
         !props.workspaceDraft &&
         !props.sessionSwitching &&

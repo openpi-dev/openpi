@@ -55,6 +55,49 @@ function truncationFor(
   };
 }
 
+function extendVerifiedWindow(
+  current: ReadingWindow,
+  selected: WebSessionProjection,
+) {
+  const leaf = selected.history?.leafEntryId ?? null;
+  if (leaf === current.validatedLeaf) return current;
+  const overlap = selected.entries.findIndex(
+    (entry) => entry.id === current.anchor,
+  );
+  const following =
+    overlap >= 0
+      ? selected.entries.slice(overlap + 1)
+      : selected.entries[0]?.parentId === current.anchor
+        ? selected.entries
+        : null;
+  const addedBytes =
+    following?.reduce((sum, entry) => sum + jsonByteLength(entry) + 1, 0) ?? 0;
+  if (
+    following &&
+    current.session.entries.length + following.length <= MAX_READING_ENTRIES &&
+    current.session.bytes + addedBytes <= MAX_READING_BYTES
+  ) {
+    return {
+      ...current,
+      anchor: leaf ?? current.anchor,
+      validatedLeaf: leaf,
+      session: {
+        ...current.session,
+        entries: [...current.session.entries, ...following],
+        bytes: current.session.bytes + addedBytes,
+        truncation: truncationFor(
+          [...current.session.entries, ...following],
+          current.session.truncation,
+        ),
+      },
+    };
+  } else {
+    // A missed snapshot can leave a gap. Keep the verified reading window
+    // intact; Jump to latest returns to the bounded, current snapshot.
+    return { ...current, validatedLeaf: leaf };
+  }
+}
+
 export function useSessionHistory(
   selected: WebSessionProjection | undefined,
   callbacks: {
@@ -242,43 +285,7 @@ export function useSessionHistory(
     );
     const leaf = selected.history?.leafEntryId ?? null;
     if (leaf !== current.validatedLeaf) {
-      const overlap = selected.entries.findIndex(
-        (entry) => entry.id === current!.anchor,
-      );
-      const following =
-        overlap >= 0
-          ? selected.entries.slice(overlap + 1)
-          : selected.entries[0]?.parentId === current.anchor
-            ? selected.entries
-            : null;
-      const addedBytes =
-        following?.reduce((sum, entry) => sum + jsonByteLength(entry) + 1, 0) ??
-        0;
-      if (
-        following &&
-        current.session.entries.length + following.length <=
-          MAX_READING_ENTRIES &&
-        current.session.bytes + addedBytes <= MAX_READING_BYTES
-      ) {
-        current = {
-          ...current,
-          anchor: leaf ?? current.anchor,
-          validatedLeaf: leaf,
-          session: {
-            ...current.session,
-            entries: [...current.session.entries, ...following],
-            bytes: current.session.bytes + addedBytes,
-            truncation: truncationFor(
-              [...current.session.entries, ...following],
-              current.session.truncation,
-            ),
-          },
-        };
-      } else {
-        // A missed snapshot can leave a gap. Keep the verified reading window
-        // intact; Jump to latest returns to the bounded, current snapshot.
-        current = { ...current, validatedLeaf: leaf };
-      }
+      current = extendVerifiedWindow(current, selected);
       publish(current);
     }
     if (request.current?.page) applyPage(request.current);
@@ -386,7 +393,14 @@ export function useSessionHistory(
       } else setError("historyUnavailable");
     }
   };
-  const visible = window && scopeFor(window.session) === scope ? window : null;
+  const storedWindow =
+    window && scopeFor(window.session) === scope ? window : null;
+  // Project a verified append before committing the cache update. Otherwise a
+  // single stale render hides live messages and remounts their DOM on recovery.
+  const visible =
+    storedWindow && selected && compatible(storedWindow, selected)
+      ? extendVerifiedWindow(storedWindow, selected)
+      : storedWindow;
   const resetToLatest = useCallback(() => clear(), [clear]);
   const verifying = Boolean(
     visible && selected && !compatible(visible, selected),

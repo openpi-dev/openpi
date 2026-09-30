@@ -17,8 +17,11 @@ const resources = {
       planModeUnconfirmed:
         "Could not confirm Plan mode. Refresh before continuing.",
       planModeExit: "Exit planning",
+      planModeImplement: "Prepare implementation prompt",
+      planImplementationReplaceDraft:
+        "Preparing this plan will replace the current draft and turn off Plan mode. The prompt will not be sent. Continue?",
       commandSupport_plan:
-        "Planning and /plan off are available. Implementation review still requires the TUI.",
+        "Planning and same-session implementation prompts are available. Starting a fresh implementation session still requires the TUI.",
       commandSupport_setup:
         "Configuration uses the active model; questions are answered in Web.",
       handoffWaiting: "Manual action",
@@ -1159,7 +1162,11 @@ const resources = {
       promptPlanMessage: "本次对话使用 Plan 模式 · 继续讨论计划，暂不实施",
       planModeUnconfirmed: "暂时无法确认 Plan 状态，请刷新后再继续。",
       planModeExit: "退出规划",
-      commandSupport_plan: "支持规划和 /plan off；实施确认仍需使用 TUI。",
+      planModeImplement: "准备实施提示",
+      planImplementationReplaceDraft:
+        "准备实施会替换当前草稿并关闭规划模式，但不会发送提示词。是否继续？",
+      commandSupport_plan:
+        "支持规划和准备当前会话的实施提示；新建实施会话仍需使用 TUI。",
       commandSupport_setup: "通过当前模型配置，在 Web 回答问题。",
       handoffWaiting: "需要你操作",
       handoffDone: "已完成",

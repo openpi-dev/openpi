@@ -214,6 +214,7 @@ type PromptAdmission = {
   readonly sessionPath: string;
   readonly content: string;
   readonly imageSignature: string;
+  readonly planRevision?: string;
   readonly controllerId?: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
@@ -575,7 +576,7 @@ export class WebHost {
     if (pathname === "/api/prompt") return false;
     if (pathname === "/api/turns/cancel") return true;
     if (pathname === "/api/questions/answer") return true;
-    if (pathname === "/api/plan") return true;
+    if (pathname.startsWith("/api/plan")) return true;
     if (pathname === "/api/compact" || pathname === "/api/prompt-queue") return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
@@ -1174,6 +1175,17 @@ export class WebHost {
           error: "retry must be a boolean when provided",
         });
       }
+      if (
+        body.planRevision !== undefined &&
+        (typeof body.planRevision !== "string" ||
+          body.planRevision.length === 0 ||
+          body.planRevision.length > 256)
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_PLAN_APPROVAL",
+          error: "planRevision must be a non-empty bounded string",
+        });
+      }
       if (typeof body.sessionId !== "string" || !validSessionPath(body.sessionPath)) {
         return this.json(response, 400, {
           error: "sessionId and sessionPath are required",
@@ -1189,6 +1201,7 @@ export class WebHost {
           existing.sessionPath !== body.sessionPath ||
           existing.content !== content ||
           existing.imageSignature !== imageSignature ||
+          existing.planRevision !== body.planRevision ||
           existing.controllerId !== body.controllerId
         ) {
           return this.json(response, 409, {
@@ -1238,6 +1251,7 @@ export class WebHost {
         content,
         parsedImages.images,
         imageSignature,
+        body.planRevision,
         body.controllerId,
       );
       const result = await admission.completion;
@@ -1325,6 +1339,28 @@ export class WebHost {
         return this.json(response, 200, { sessionId: body.sessionId });
       } catch (error) {
         const failure = this.runtimeRequestFailure(error, "SESSION_ACTION_FAILED", "The Session action could not be completed");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
+    }
+
+    if (url.pathname === "/api/plan/implement" && request.method === "POST") {
+      const body = await this.readJson(request, 8192);
+      if (typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 256 ||
+        !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096 ||
+        !(body.expectedRevision === null || (typeof body.expectedRevision === "string" && body.expectedRevision.length <= 256)) ||
+        Object.keys(body).some((key) => !["sessionId", "sessionPath", "expectedRevision"].includes(key)))
+        return this.json(response, 400, { code: "INVALID_PLAN_REQUEST", error: "A Session, path and expected Plan revision are required" });
+      if (!this.runtime.preparePlanImplementation)
+        return this.json(response, 501, { code: "PLAN_CONTROL_UNAVAILABLE", error: "Plan implementation is unavailable" });
+      try {
+        const plan = await this.runtime.preparePlanImplementation({
+          sessionId: body.sessionId,
+          sessionPath: body.sessionPath,
+          expectedRevision: body.expectedRevision,
+        });
+        return this.json(response, 200, { sessionId: body.sessionId, ...plan });
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "PLAN_SELECTION_FAILED", "Plan implementation could not be prepared");
         return this.json(response, failure.status, { code: failure.code, error: failure.error });
       }
     }
@@ -2106,6 +2142,7 @@ export class WebHost {
     content: string,
     images: readonly WebPromptImage[],
     imageSignature: string,
+    planRevision?: string,
     controllerId?: string,
   ) {
     let settle!: (result: PromptAdmissionResponse) => void;
@@ -2114,6 +2151,7 @@ export class WebHost {
       sessionPath,
       content,
       imageSignature,
+      ...(planRevision !== undefined ? { planRevision } : {}),
       controllerId,
       completion: new Promise<PromptAdmissionResponse>((resolve) => {
         settle = resolve;
@@ -2136,6 +2174,7 @@ export class WebHost {
           expectedSessionId: sessionId,
           expectedSessionPath: sessionPath,
           ...(images.length > 0 ? { images } : {}),
+          ...(planRevision !== undefined ? { planRevision } : {}),
         }),
       )
       .then(

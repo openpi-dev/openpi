@@ -15,6 +15,7 @@ import {
   createCommandDiscoveryBridge,
   registerCommandDiscoveryBridge,
 } from "../../web/runtime/command-discovery.ts";
+import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
 import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import { matchesSessionIdentity } from "../../web/runtime/session-identity.ts";
@@ -23,7 +24,6 @@ import {
   WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
 import { acquireWebHostLease } from "../../web/runtime/web-host-lease.ts";
-import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
 
 type Trace = {
   commandId: string;
@@ -236,6 +236,7 @@ type FakeAgentRuntime = {
 };
 type PromptRuntimeHarness = {
   setPlanMode: PiWebRuntime["setPlanMode"];
+  preparePlanImplementation: PiWebRuntime["preparePlanImplementation"];
   listCommands: PiWebRuntime["listCommands"];
   runtime: FakeAgentRuntime;
   listeners: Set<(event: WebRuntimeEvent) => void>;
@@ -377,7 +378,7 @@ function lifecycleHarness(runtime: LifecycleRuntime) {
   harness.disposed = false;
   harness.dispatcherLease = { release: async () => undefined };
   harness.webHostLease = { release: async () => undefined };
-  harness.webSessionDirectory = "/tmp/openpi-test-sessions";
+  harness.webSessionDirectory = join(tmpdir(), "openpi-test-sessions");
   return harness;
 }
 
@@ -716,8 +717,30 @@ test("Plan control targets the active idle owned Session without admitting a pro
       PiWebRuntime["listCommands"]
     >;
   let calls = 0;
-  const unregister = registerPlanControl(session.sessionManager, () => {
+  const controlActions: string[] = [];
+  const unregister = registerPlanControl(session.sessionManager, (request) => {
     calls++;
+    controlActions.push(request.action);
+    if (request.action === "prepare")
+      return {
+        status: "ready",
+        revision: "revision",
+        hasPrompt: true,
+        prompt: "Implement the approved plan",
+      };
+    if (request.action === "authorize" || request.action === "cancel")
+      return {
+        status: "ready",
+        revision: "revision",
+        hasPrompt: true,
+      };
+    if (request.action === "implement")
+      return {
+        status: "inactive",
+        revision: "inactive-revision",
+        hasPrompt: false,
+        prompt: "Implement the approved plan",
+      };
     return { status: "planning", revision: "revision", hasPrompt: false };
   });
   try {
@@ -730,6 +753,38 @@ test("Plan control targets the active idle owned Session without admitting a pro
     assert.equal((await runtime.setPlanMode(request)).status, "planning");
     assert.equal(calls, 1);
     assert.equal(session.calls.length, 0);
+    const prepared = await runtime.preparePlanImplementation({
+      sessionId: "session-a",
+      sessionPath: "current:session-a",
+      expectedRevision: "revision",
+    });
+    assert.equal(prepared.prompt, "Implement the approved plan");
+    assert.equal(prepared.status, "ready");
+    assert.equal(calls, 2);
+    const submitting = runtime.sendPrompt("Implement the approved plan", {
+      commandId: "implementation",
+      expectedSessionId: "session-a",
+      expectedSessionPath: "current:session-a",
+      planRevision: "revision",
+    });
+    await Promise.resolve();
+    assert.equal(calls, 3);
+    assert.deepEqual(controlActions, ["mode", "prepare", "authorize"]);
+    assert.equal(session.calls.length, 1);
+    assert.equal(session.calls[0]!.content, "Implement the approved plan");
+    session.calls[0]!.options.preflightResult?.(true);
+    assert.equal(calls, 4);
+    assert.equal(controlActions.at(-1), "implement");
+    assert.deepEqual(await submitting, { pendingFollowUps: 0 });
+    session.calls[0]!.run.resolve();
+    await assert.rejects(
+      runtime.preparePlanImplementation({
+        sessionId: "session-a",
+        sessionPath: "current:another-session",
+        expectedRevision: "revision",
+      }),
+      { code: "SESSION_CONFLICT" },
+    );
     await assert.rejects(
       runtime.setPlanMode({ ...request, sessionId: "old" }),
       { code: "SESSION_CONFLICT" },
@@ -746,7 +801,60 @@ test("Plan control targets the active idle owned Session without admitting a pro
     await assert.rejects(runtime.setPlanMode(request), {
       code: "PLAN_CONTROL_UNAVAILABLE",
     });
-    assert.equal(calls, 1);
+    assert.equal(calls, 4);
+  } finally {
+    unregister();
+  }
+});
+
+test("Plan approval stays ready when Pi rejects or throws during prompt preflight", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  let planStatus: "ready" | "inactive" = "ready";
+  const actions: string[] = [];
+  const unregister = registerPlanControl(session.sessionManager, (request) => {
+    actions.push(request.action);
+    if (request.action === "implement") planStatus = "inactive";
+    if (request.action === "authorize" || request.action === "cancel")
+      return { status: planStatus, revision: "revision", hasPrompt: false };
+    return {
+      status: planStatus,
+      revision: "revision",
+      hasPrompt: false,
+      prompt: "Implement the approved plan",
+    };
+  });
+
+  try {
+    const rejected = runtime.sendPrompt("Implement the approved plan", {
+      commandId: "rejected-implementation",
+      expectedSessionId: "session-a",
+      expectedSessionPath: "current:session-a",
+      planRevision: "revision",
+    });
+    await Promise.resolve();
+    assert.deepEqual(actions, ["authorize"]);
+    assert.equal(planStatus, "ready");
+    session.calls[0]!.options.preflightResult?.(false);
+    session.calls[0]!.run.reject(new Error("authentication unavailable"));
+    await assert.rejects(rejected, { code: "PROMPT_REJECTED" });
+    await Promise.resolve();
+    assert.deepEqual(actions, ["authorize", "cancel"]);
+    assert.equal(planStatus, "ready");
+
+    const thrown = runtime.sendPrompt("Implement the approved plan", {
+      commandId: "thrown-implementation",
+      expectedSessionId: "session-a",
+      expectedSessionPath: "current:session-a",
+      planRevision: "revision",
+    });
+    await Promise.resolve();
+    assert.equal(planStatus, "ready");
+    session.calls[1]!.run.reject(new Error("prompt setup failed"));
+    await assert.rejects(thrown, { code: "PROMPT_REJECTED" });
+    await Promise.resolve();
+    assert.deepEqual(actions, ["authorize", "cancel", "authorize", "cancel"]);
+    assert.equal(planStatus, "ready");
   } finally {
     unregister();
   }

@@ -1,6 +1,9 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
-import type { PlanControlRequest, projectPlanControl } from "../../extensions/plan-mode/control.ts";
+import type {
+  PlanControlResult,
+  projectPlanControl,
+} from "../../extensions/plan-mode/control.ts";
 import type {
   WebModelSearchResult,
   WebCommandDiscoveryResult,
@@ -118,6 +121,7 @@ export interface WebPromptOptions {
   expectedSessionId?: string;
   expectedSessionPath?: string;
   images?: readonly WebPromptImage[];
+  planRevision?: string;
 }
 
 export interface WebPromptAdmissionReceipt {
@@ -235,7 +239,19 @@ export interface WebRuntimeController {
   discoverProviderModels?(sessionId: string, request: import("./provider-model-discovery.ts").ProviderModelDiscovery, signal: AbortSignal): Promise<{ models: import("./provider-model-discovery.ts").DiscoveredProviderModel[]; truncated: boolean }>;
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
-  setPlanMode?(request: PlanControlRequest & { sessionId: string; sessionPath: string }): Promise<ReturnType<typeof projectPlanControl>>;
+  setPlanMode?(
+    request: {
+      sessionId: string;
+      sessionPath: string;
+      enabled: boolean;
+      expectedRevision: string | null;
+    },
+  ): Promise<ReturnType<typeof projectPlanControl>>;
+  preparePlanImplementation?(request: {
+    sessionId: string;
+    sessionPath: string;
+    expectedRevision: string | null;
+  }): Promise<PlanControlResult & { prompt: string }>;
   updatePromptQueue?(request: { sessionId: string; sessionPath: string; action: "retry" | "clear" }): void;
   compactSession?(request: { sessionId: string; sessionPath: string }): Promise<void>;
   setThinkingLevel?(

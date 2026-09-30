@@ -214,12 +214,18 @@ it("keeps answered tool evidence mounted and open as a snapshot absorbs live mes
   };
   const live = [feedback, answered, next];
   const view = render(transcript([asked], live));
+  expect(
+    screen.getAllByText(answered.content, { selector: ".tool-summary" }),
+  ).toHaveLength(1);
   const evidence = screen
     .getByText(answered.content, { selector: "pre" })
     .closest("details")!;
   fireEvent.click(evidence.querySelector("summary")!);
   expect(evidence.open).toBe(true);
   view.rerender(transcript([asked, answered], live));
+  expect(
+    screen.getAllByText(answered.content, { selector: ".tool-summary" }),
+  ).toHaveLength(1);
   expect(
     screen.getByText(answered.content, { selector: "pre" }).closest("details"),
   ).toBe(evidence);

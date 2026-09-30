@@ -236,12 +236,12 @@ test("a readonly observer keeps its pending messages and native progress, then r
       "aria-label",
       `Observer A · ${aPath}`,
     );
-    await expect(sidebarA.locator(".session-running")).toHaveCount(0);
+    await expect(sidebarA.locator(".session-state-running")).toHaveCount(0);
     await expect(sidebarB).toHaveAttribute(
       "aria-label",
-      `Observer B · ${bPath} · 运行中`,
+      `Observer B · ${bPath} · 执行中`,
     );
-    await expect(sidebarB.locator(".session-running")).toBeVisible();
+    await expect(sidebarB.locator(".session-state-running")).toBeVisible();
     const input = page.getByRole("textbox", { name: "描述任务" });
     await input.fill("Run observer A");
     await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -274,7 +274,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
     await expect(ownPending).toHaveCount(2);
     await expect(sidebarA).toHaveAttribute(
       "aria-label",
-      `Observer A · ${aPath} · 运行中 · 2 条消息正在排队`,
+      `Observer A · ${aPath} · 执行中 · 2 条消息正在排队`,
     );
     await expect(sidebarA.locator(".session-queue")).toHaveText("2");
     await expect(sidebarB.locator(".session-queue")).toHaveCount(0);
@@ -292,13 +292,14 @@ test("a readonly observer keeps its pending messages and native progress, then r
     await page.setViewportSize({ width: 390, height: 740 });
     await expect(queue).toBeInViewport();
     const queueBounds = await queue.boundingBox();
+    const dockBounds = await page.locator(".composer-dock").boundingBox();
     const composerBounds = await page.locator(".composer").boundingBox();
     expect(
       queueBounds &&
+        dockBounds &&
         composerBounds &&
-        queueBounds.y >= composerBounds.y &&
-        queueBounds.y + queueBounds.height <=
-          composerBounds.y + composerBounds.height,
+        queueBounds.y >= dockBounds.y &&
+        queueBounds.y + queueBounds.height <= composerBounds.y,
     ).toBe(true);
     expect(
       await page.evaluate(
@@ -314,7 +315,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
         async () => (await page.locator(".session-sidebar").boundingBox())?.x,
       )
       .toBe(0);
-    await expect(sidebarA.locator(".session-running")).toBeVisible();
+    await expect(sidebarA.locator(".session-state-running")).toBeVisible();
     await expect(sidebarA.locator(".session-queue")).toBeVisible();
     const titleBounds = await sidebarA.locator(".session-title").boundingBox();
     const statusBounds = await sidebarA
@@ -352,11 +353,11 @@ test("a readonly observer keeps its pending messages and native progress, then r
     await expect(input).toBeDisabled();
     await expect(sidebarA).toHaveAttribute(
       "aria-label",
-      `Observer A · ${aPath} · 运行中 · 2 条消息正在排队`,
+      `Observer A · ${aPath} · 执行中 · 2 条消息正在排队`,
     );
     await expect(sidebarB).toHaveAttribute(
       "aria-label",
-      `Observer B · ${bPath} · 运行中`,
+      `Observer B · ${bPath} · 执行中`,
     );
     await expect(toolbar).toBeHidden();
     await expect(hint).toHaveAttribute("data-visible", "false");
@@ -442,7 +443,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
       "aria-label",
       `Observer A · ${aPath}`,
     );
-    await expect(sidebarB.locator(".session-running")).toBeVisible();
+    await expect(sidebarB.locator(".session-state-running")).toBeVisible();
     await expect(
       conversation
         .locator(".message-row.user .message-body")

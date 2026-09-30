@@ -142,7 +142,18 @@ export interface PromptAdmissionRecovery {
   timestamp?: string;
   images?: readonly WebPromptImage[];
   retryable?: boolean;
+  planRevision?: string;
   phase: "checking" | "verification-failed" | "ready" | "submitting";
+}
+
+export interface PlanImplementationApproval {
+  sessionId: string;
+  sessionPath: string;
+  planRevision: string;
+}
+
+export interface PreparedPlanImplementation extends PlanImplementationApproval {
+  prompt: string;
 }
 
 export interface PromptAdmissionResolution {
@@ -228,6 +239,7 @@ export interface WebStoreActions {
     pairs: { key: string; entryId: string }[],
   ) => void;
   selectPlanMode: (enabled: boolean) => Promise<void>;
+  preparePlanImplementation: () => Promise<PreparedPlanImplementation | null>;
   start: () => void;
   stop: () => void;
   refreshSnapshot: (options?: {
@@ -259,12 +271,14 @@ export interface WebStoreActions {
   sendPrompt: (
     content: string,
     images?: readonly WebPromptImage[],
+    approval?: PlanImplementationApproval,
   ) => Promise<boolean>;
   checkPromptAdmissionRecovery: () => Promise<void>;
   retryPromptAdmission: () => Promise<boolean>;
   sendPromptAsNew: (
     content: string,
     images?: readonly WebPromptImage[],
+    approval?: PlanImplementationApproval,
   ) => Promise<boolean>;
   abandonPromptAdmission: () => void;
   acknowledgePromptAdmissionResolution: (commandId: string) => void;
@@ -323,6 +337,7 @@ export function createWebStore(
     optimisticKey: string;
     afterEntryId: string | null;
     timestamp: string;
+    planRevision?: string;
   } | null = null;
   let sessionActivation: SessionActivation | null = null;
   let creationRetry: { workspacePath: string; commandId: string } | null = null;
@@ -1829,6 +1844,90 @@ export function createWebStore(
             set({ planSelectionPending: false });
         }
       },
+      async preparePlanImplementation() {
+        const state = get();
+        const snapshot = state.snapshot;
+        const session = snapshot?.selectedSession;
+        const sessionId = session?.id;
+        if (
+          !sessionId ||
+          !isControlledSession(snapshot, session) ||
+          sessionId !== snapshot?.currentSessionId ||
+          !session?.path ||
+          state.selectedPath !== session.path ||
+          state.workspaceDraft ||
+          state.sessionSwitching ||
+          state.planSelectionPending ||
+          state.promptAdmissionPending ||
+          state.promptAdmissionRecovery ||
+          state.liveRunning ||
+          snapshot.runtime.status !== "idle" ||
+          snapshot.runtime.plan !== "ready" ||
+          typeof snapshot.runtime.planRevision !== "string"
+        )
+          return null;
+        const epoch = sessionEpoch;
+        const generation = ++planSelectionGeneration;
+        const sessionPath = session.path;
+        const expectedRevision = snapshot.runtime.planRevision;
+        set({ planSelectionPending: true });
+        try {
+          let result: Awaited<
+            ReturnType<typeof client.preparePlanImplementation>
+          >;
+          try {
+            result = await client.preparePlanImplementation(
+              sessionId,
+              sessionPath,
+              expectedRevision,
+            );
+          } catch (error) {
+            if (
+              epoch === sessionEpoch &&
+              generation === planSelectionGeneration
+            ) {
+              try {
+                await actions.refreshSnapshot({ epoch });
+              } catch {}
+              if (
+                epoch === sessionEpoch &&
+                generation === planSelectionGeneration
+              )
+                showError(error);
+            }
+            return null;
+          }
+          const current = get();
+          if (
+            epoch !== sessionEpoch ||
+            generation !== planSelectionGeneration ||
+            !isControlledSession(current.snapshot) ||
+            current.snapshot?.currentSessionId !== sessionId ||
+            current.snapshot.selectedSession?.path !== sessionPath ||
+            current.selectedPath !== sessionPath
+          )
+            return null;
+          if (
+            result.sessionId !== sessionId ||
+            result.status !== "ready" ||
+            result.revision !== expectedRevision ||
+            current.snapshot?.runtime.plan !== "ready" ||
+            current.snapshot.runtime.planRevision !== expectedRevision
+          ) {
+            showError(new Error(i18n.t("planModeUnconfirmed")));
+            return null;
+          }
+          return {
+            prompt: result.prompt,
+            sessionId,
+            sessionPath,
+            planRevision: expectedRevision,
+          };
+        } finally {
+          if (epoch === sessionEpoch && generation === planSelectionGeneration)
+            set({ planSelectionPending: false });
+        }
+      },
       async cancelActiveTurn() {
         const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
         if (
@@ -1850,7 +1949,7 @@ export function createWebStore(
           if (epoch === sessionEpoch) set({ turnCancellationPending: false });
         }
       },
-      async sendPrompt(rawContent, promptImages = []) {
+      async sendPrompt(rawContent, promptImages = [], planApproval) {
         if (get().planSelectionPending) return false;
         const content = rawContent.trim();
         if (content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
@@ -1888,6 +1987,7 @@ export function createWebStore(
         }
         const creating =
           get().workspaceDraft || !get().snapshot?.selectedSession?.id;
+        if (planApproval && creating) return false;
         const createdTarget = creating
           ? await actions.createSession(workspace)
           : null;
@@ -1927,6 +2027,13 @@ export function createWebStore(
         }
         const { epoch, sessionId, sessionPath } = target;
         if (!sessionPath) return false;
+        if (
+          planApproval &&
+          (planApproval.sessionId !== sessionId ||
+            planApproval.sessionPath !== sessionPath ||
+            !planApproval.planRevision)
+        )
+          return false;
         const draft = get().draftModel;
         if (draft && !(await applyModel(draft, epoch, sessionId, sessionPath)))
           return false;
@@ -1944,7 +2051,8 @@ export function createWebStore(
           promptAdmission?.sessionId === sessionId &&
           promptAdmission.sessionPath === sessionPath &&
           promptAdmission.content === content &&
-          promptAdmission.imageSignature === imageSignature;
+          promptAdmission.imageSignature === imageSignature &&
+          promptAdmission.planRevision === planApproval?.planRevision;
         const commandId = retrying
           ? promptAdmission!.commandId
           : (globalThis.crypto?.randomUUID?.() ??
@@ -1970,6 +2078,7 @@ export function createWebStore(
           optimisticKey,
           timestamp,
           afterEntryId,
+          ...(planApproval ? { planRevision: planApproval.planRevision } : {}),
         };
         promptAdmissionToken = admission;
         set({
@@ -2010,14 +2119,24 @@ export function createWebStore(
           scrollToBottom: get().scrollToBottom + 1,
         });
         try {
-          const receipt = await client.prompt(
-            sessionId,
-            content,
-            commandId,
-            sessionPath,
-            retrying,
-            images,
-          );
+          const receipt = planApproval
+            ? await client.prompt(
+                sessionId,
+                content,
+                commandId,
+                sessionPath,
+                retrying,
+                images,
+                planApproval.planRevision,
+              )
+            : await client.prompt(
+                sessionId,
+                content,
+                commandId,
+                sessionPath,
+                retrying,
+                images,
+              );
           if (
             epoch !== sessionEpoch ||
             sessionPath !== get().selectedPath ||
@@ -2071,17 +2190,23 @@ export function createWebStore(
             promptAdmissionToken !== admission
           )
             return false;
-          const knownRejection =
+          const planAdmissionRejected =
             error instanceof WebApiError &&
-            [
-              "WORKSPACE_REQUIRED",
-              "SESSION_CONFLICT",
-              "PROMPT_REJECTED",
-              "COMMAND_CONFLICT",
-              "PROMPT_ADMISSION_CAPACITY",
-              "INVALID_PROMPT",
-              "INVALID_PROMPT_IMAGES",
-            ].includes(error.code ?? "");
+            ["PLAN_BUSY", "PLAN_CONFLICT", "PLAN_CONTROL_UNAVAILABLE"].includes(
+              error.code ?? "",
+            );
+          const knownRejection =
+            planAdmissionRejected ||
+            (error instanceof WebApiError &&
+              [
+                "WORKSPACE_REQUIRED",
+                "SESSION_CONFLICT",
+                "PROMPT_REJECTED",
+                "COMMAND_CONFLICT",
+                "PROMPT_ADMISSION_CAPACITY",
+                "INVALID_PROMPT",
+                "INVALID_PROMPT_IMAGES",
+              ].includes(error.code ?? ""));
           const confirmedAdmission =
             terminalPromptIds.has(commandId) ||
             get().liveMessages.some(
@@ -2181,6 +2306,15 @@ export function createWebStore(
               ? { promptAdmissionRecovery: null }
               : {}),
           });
+          if (planAdmissionRejected) {
+            await actions.refreshSnapshot({ epoch });
+            if (
+              epoch !== sessionEpoch ||
+              sessionPath !== get().selectedPath ||
+              promptAdmissionToken !== admission
+            )
+              return false;
+          }
           showError(error);
           return false;
         } finally {
@@ -2244,7 +2378,17 @@ export function createWebStore(
           notice: null,
         });
         try {
-          return await actions.sendPrompt(recovery.content, images);
+          return await actions.sendPrompt(
+            recovery.content,
+            images,
+            recovery.planRevision
+              ? {
+                  sessionId: recovery.sessionId,
+                  sessionPath: recovery.sessionPath,
+                  planRevision: recovery.planRevision,
+                }
+              : undefined,
+          );
         } finally {
           const currentRecovery = get().promptAdmissionRecovery;
           if (
@@ -2257,7 +2401,7 @@ export function createWebStore(
           }
         }
       },
-      async sendPromptAsNew(rawContent, promptImages) {
+      async sendPromptAsNew(rawContent, promptImages, planApproval) {
         const recovery = get().promptAdmissionRecovery;
         if (
           !recovery ||
@@ -2278,7 +2422,16 @@ export function createWebStore(
         });
         let admitted = false;
         try {
-          admitted = await actions.sendPrompt(content, images);
+          const approval = recovery.planRevision
+            ? {
+                sessionId: recovery.sessionId,
+                sessionPath: recovery.sessionPath,
+                planRevision: recovery.planRevision,
+              }
+            : planApproval;
+          admitted = approval
+            ? await actions.sendPrompt(content, images, approval)
+            : await actions.sendPrompt(content, images);
           return admitted;
         } finally {
           const currentRecovery = get().promptAdmissionRecovery;

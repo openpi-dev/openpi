@@ -201,6 +201,9 @@ export default function planMode(pi: ExtensionAPI) {
   let planning = false;
   let unregisterControl: (() => void) | undefined;
   let readyPlan: string | undefined;
+  let pendingImplementationApproval:
+    | { revision: string | null; prompt: string; beforeAgentStart: boolean }
+    | undefined;
   const syncPlanTool = () =>
     patchOwnedTools(pi, "plan", {
       ...(planning && !readyPlan
@@ -267,7 +270,7 @@ export default function planMode(pi: ExtensionAPI) {
     if (!ctx.hasUI) {
       notifyWebCommand(
         ctx,
-        "Implementing a ready plan requires an interactive editor.",
+        "Use the plan controls above the message box to review and submit the implementation prompt in Web.",
         "warning",
       );
       return;
@@ -290,7 +293,7 @@ export default function planMode(pi: ExtensionAPI) {
     if (!ctx.hasUI) {
       notifyWebCommand(
         ctx,
-        "Starting a fresh implementation requires an interactive editor.",
+        "Web cannot start a fresh implementation session. The plan remains ready; use the plan controls above the message box to implement it in this session.",
         "warning",
       );
       return;
@@ -325,7 +328,7 @@ export default function planMode(pi: ExtensionAPI) {
     if (!ctx.hasUI) {
       notifyWebCommand(
         ctx,
-        "Use `/plan implement`, `/plan fresh`, or `/plan off` in a UI session.",
+        "Use the plan controls above the message box to prepare an implementation prompt, or `/plan off` to exit without implementing. Web does not support a fresh-session handoff.",
         "warning",
       );
       return;
@@ -592,6 +595,7 @@ export default function planMode(pi: ExtensionAPI) {
   });
 
   const restoreRuntimeState = (ctx: ExtensionContext) => {
+    pendingImplementationApproval = undefined;
     const restored = restorePlanModeState(ctx.sessionManager.getBranch());
     planning = restored.planning;
     readyPlan = restored.readyPlan;
@@ -602,6 +606,13 @@ export default function planMode(pi: ExtensionAPI) {
   const bindControl = (ctx: ExtensionContext) => {
     unregisterControl?.();
     unregisterControl = registerPlanControl(ctx.sessionManager, (request) => {
+      if (request.action === "cancel") {
+        if (
+          pendingImplementationApproval?.revision === request.expectedRevision
+        )
+          pendingImplementationApproval = undefined;
+        return projectPlanControl(ctx.sessionManager.getBranch());
+      }
       if (!ctx.isIdle())
         throw new PlanControlError(
           "Stop the current turn before changing Plan mode",
@@ -615,6 +626,52 @@ export default function planMode(pi: ExtensionAPI) {
           "PLAN_CONFLICT",
           409,
         );
+      if (request.action === "prepare" || request.action === "implement") {
+        if (current.status !== "ready" || !readyPlan)
+          throw new PlanControlError(
+            "A ready plan is required before preparing implementation",
+            "PLAN_CONFLICT",
+            409,
+          );
+        const prompt = buildPlanImplementationPrompt(readyPlan);
+        if (request.action === "prepare") return { ...current, prompt };
+        if (
+          pendingImplementationApproval?.revision !==
+            request.expectedRevision ||
+          !pendingImplementationApproval.beforeAgentStart
+        )
+          throw new PlanControlError(
+            "Pi did not start the approved implementation prompt",
+            "PLAN_CONFLICT",
+            409,
+          );
+        clearPlan(ctx);
+        pendingImplementationApproval = undefined;
+        return {
+          ...projectPlanControl(ctx.sessionManager.getBranch()),
+          prompt,
+        };
+      }
+      if (request.action === "authorize") {
+        if (current.status !== "ready" || !readyPlan)
+          throw new PlanControlError(
+            "A ready plan is required before approving implementation",
+            "PLAN_CONFLICT",
+            409,
+          );
+        if (request.prompt.trim().length === 0)
+          throw new PlanControlError(
+            "An implementation prompt is required",
+            "PLAN_CONFLICT",
+            409,
+          );
+        pendingImplementationApproval = {
+          revision: request.expectedRevision,
+          prompt: request.prompt,
+          beforeAgentStart: false,
+        };
+        return current;
+      }
       if (
         request.enabled &&
         (current.status === "ready" || current.status === "invalid")
@@ -670,6 +727,18 @@ export default function planMode(pi: ExtensionAPI) {
     };
   });
 
+  // before_agent_start carries the raw user prompt, so use it only to bind an
+  // explicit Web approval to the prompt Pi is about to admit. The context hook
+  // above remains the single source of Plan instructions for provider calls.
+  pi.on("before_agent_start", (event) => {
+    if (
+      planning &&
+      pendingImplementationApproval !== undefined &&
+      event.prompt === pendingImplementationApproval.prompt
+    )
+      pendingImplementationApproval.beforeAgentStart = true;
+  });
+
   pi.on("session_start", (_event, ctx) => {
     restoreRuntimeState(ctx);
     bindControl(ctx);
@@ -683,6 +752,7 @@ export default function planMode(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     unregisterControl?.();
     unregisterControl = undefined;
+    pendingImplementationApproval = undefined;
     planning = false;
     readyPlan = undefined;
     syncPlanTool();

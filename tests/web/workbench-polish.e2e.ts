@@ -286,12 +286,6 @@ test("long session titles stay compact and elapsed time survives refresh with co
     "持续优化侧边工具与配置体验，保留原生执行事实并验证真实浏览器。".repeat(12);
   let settled = false;
   const start = Date.now() - 2142000;
-  await page.route("**/events?**", (route) =>
-    route.fulfill({
-      contentType: "text/event-stream",
-      body: ": heartbeat\n\n",
-    }),
-  );
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const value = (await response.json()) as WebSnapshot;
@@ -300,7 +294,6 @@ test("long session titles stay compact and elapsed time survives refresh with co
     value.sessions = value.sessions.map((item) =>
       item.path === session.path ? { ...item, name: title } : item,
     );
-    value.cursor = settled ? 92002 : 92001;
     value.runtime = {
       ...value.runtime,
       status: settled ? "idle" : "running",
@@ -400,7 +393,7 @@ test("long session titles stay compact and elapsed time survives refresh with co
   expect((await row.boundingBox())!.height).toBeLessThanOrEqual(40);
   await expect(row.locator(".session-title")).toHaveAttribute("title", title);
   await expect(page.getByRole("timer")).toContainText("已处理 35分钟");
-  await expect(page.getByText("用时 2m37s", { exact: true })).toBeVisible();
+  await expect(page.getByText("用时 2分钟37秒", { exact: true })).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("compact-sidebar-running-time.png"),
   });
@@ -409,7 +402,7 @@ test("long session titles stay compact and elapsed time survives refresh with co
   settled = true;
   await page.reload();
   await expect(page.getByRole("timer")).toHaveCount(0);
-  const elapsed = page.getByText("用时 35m45s", { exact: true });
+  const elapsed = page.getByText("用时 35分钟45秒", { exact: true });
   await expect(elapsed).toBeVisible();
   const answer = page.getByText("Current completed answer", { exact: true });
   expect((await elapsed.boundingBox())!.y).toBeLessThan(

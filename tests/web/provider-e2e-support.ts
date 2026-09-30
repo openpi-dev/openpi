@@ -1,6 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 
 /**
  * Shared identity for the hermetic provider round-trip end-to-end test.
@@ -17,6 +19,47 @@ export const PROVIDER_ID = "fake-provider";
 export const MODEL_ID = "fake-reasoner";
 export const MODEL_NAME = "Fake Reasoner";
 export const PROVIDER_BASE_URL = `http://127.0.0.1:${PROVIDER_PORT}/v1`;
+const workspaceCleanupFile = join(
+  tmpdir(),
+  "openpi-web-plan-provider-workspaces-to-clean.txt",
+);
+
+/** Defer deletion until the Plan E2E Web server has released its Session. */
+export function deferPlanWorkspaceCleanup(workspace: string) {
+  const resolved = resolve(workspace);
+  if (
+    dirname(resolved) !== resolve(tmpdir()) ||
+    !basename(resolved).startsWith("openpi-")
+  ) {
+    throw new Error("Refusing to defer cleanup for a non-test workspace.");
+  }
+  mkdirSync(dirname(workspaceCleanupFile), { recursive: true });
+  appendFileSync(workspaceCleanupFile, `${resolved}\n`, "utf8");
+}
+
+/** Remove Plan E2E workspaces after its Web server has fully exited. */
+export async function cleanupDeferredPlanWorkspaces() {
+  let entries: string;
+  try {
+    entries = await readFile(workspaceCleanupFile, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+
+  for (const entry of entries.split(/\r?\n/u)) {
+    if (!entry) continue;
+    const workspace = resolve(entry);
+    if (
+      dirname(workspace) !== resolve(tmpdir()) ||
+      !basename(workspace).startsWith("openpi-")
+    ) {
+      throw new Error("Refusing to remove a non-test workspace.");
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+  await rm(workspaceCleanupFile, { force: true });
+}
 
 export type RecordedProviderRequest = {
   method: string;
