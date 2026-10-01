@@ -8,6 +8,84 @@ import {
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
 } from "../../web/protocol/types.ts";
 import { WEB_TURN_CHANGES_ENTRY } from "../../web/protocol/turn-changes.ts";
+import { WEB_COMMAND_HANDLED } from "../../extensions/shared/web-command-feedback.ts";
+
+test("image projection retains bounded native names for prompt reconciliation and omits image bytes", () => {
+  const projected = projectMessage({
+    role: "user",
+    content: [
+      {
+        type: "image",
+        mimeType: "image/png",
+        name: "截屏 100%.png",
+        data: "private-bytes",
+        previewUrl: "private-preview",
+      },
+    ],
+  });
+  assert.deepEqual(projected.parts, [
+    {
+      type: "image",
+      mimeType: "image/png",
+      name: "截屏 100%.png",
+      sourcePartIndex: 0,
+    },
+  ]);
+  assert.equal(JSON.stringify(projected).includes("private-"), false);
+  const oversized = projectMessage({
+    role: "user",
+    content: [{ type: "image", mimeType: "image/png", name: "x".repeat(400) }],
+  });
+  assert.equal(
+    oversized.parts?.[0]?.type === "image" && oversized.parts[0].name?.length,
+    255,
+  );
+});
+
+test("image source indices refer to original native parts even when unsupported parts are skipped", () => {
+  const projected = projectMessage({
+    role: "user",
+    content: [
+      { type: "unknown", data: "omitted" },
+      { type: "image", mimeType: "image/png", data: "first" },
+      { type: "text", text: "caption" },
+      null,
+      { type: "image", mimeType: "image/jpeg", data: "second" },
+    ],
+  });
+  assert.deepEqual(projected.parts, [
+    { type: "image", mimeType: "image/png", sourcePartIndex: 1 },
+    { type: "text", text: "caption" },
+    { type: "image", mimeType: "image/jpeg", sourcePartIndex: 4 },
+  ]);
+  assert.equal(JSON.stringify(projected).includes("omitted"), false);
+});
+
+test("command handler-return projection retains exact identities without inventing an assistant result", () => {
+  const entry = {
+    id: "handled",
+    parentId: "feedback",
+    timestamp: "2026-10-01T00:00:00Z",
+    type: "custom" as const,
+    customType: WEB_COMMAND_HANDLED,
+    data: { inputEntryId: "input", commandId: "command" },
+  };
+  const projected = projectEntry(entry);
+  assert.deepEqual(projected.message, {
+    role: "custom",
+    customType: WEB_COMMAND_HANDLED,
+    content: "",
+    details: { inputEntryId: "input", commandId: "command" },
+  });
+  for (const data of [
+    null,
+    { commandId: "command" },
+    { inputEntryId: "bad id", commandId: "command" },
+    { inputEntryId: "input", commandId: "" },
+  ]) {
+    assert.equal(projectEntry({ ...entry, data }).message, undefined);
+  }
+});
 
 test("message projection does not create phantom text for detail-only messages", () => {
   const projected = projectMessage({
@@ -104,6 +182,59 @@ test("message projection keeps tool result correlation and details", () => {
   assert.deepEqual(projected.details, {
     results: [{ id: "sa-1", status: "done" }],
   });
+});
+
+test("native subagent display receipts survive projection while model follow-ups stay hidden", () => {
+  const details = {
+    results: [
+      { id: "sa-1", status: "done" },
+      { id: "sa-2", status: "done" },
+    ],
+  };
+  const display = projectEntry({
+    type: "custom",
+    id: "receipt",
+    parentId: "answer",
+    timestamp: "2026-09-30T00:00:00Z",
+    customType: "subagent-result",
+    data: { content: "First result\n\nSecond result", details },
+  });
+  assert.equal(display.type, "message");
+  assert.equal(display.id, "receipt");
+  assert.equal(display.message?.display, true);
+  assert.equal(display.message?.content, "First result\n\nSecond result");
+  assert.deepEqual(display.message?.details, details);
+  const transport = projectEntry({
+    type: "custom_message",
+    id: "transport",
+    parentId: "receipt",
+    timestamp: "2026-09-30T00:00:00Z",
+    customType: "subagent-result",
+    content: "Private model transport instruction",
+    details,
+    display: false,
+  });
+  assert.equal(transport.message?.display, false);
+});
+
+test("native subagent display receipts use bounded content and do not invoke getters", () => {
+  const entry = {
+    type: "custom" as const,
+    id: "receipt",
+    parentId: "answer",
+    timestamp: "2026-09-30T00:00:00Z",
+    customType: "subagent-result",
+    data: { content: "x".repeat(20_000) },
+  };
+  const projected = projectEntry(entry);
+  assert.ok((projected.message?.content.length ?? 0) < 12_100);
+  assert.equal(projected.message?.truncation?.text, true);
+  const data = Object.defineProperty({}, "content", {
+    get() {
+      throw new Error("not display evidence");
+    },
+  });
+  assert.equal(projectEntry({ ...entry, data }).message, undefined);
 });
 
 test("message projection drops oversized details", () => {

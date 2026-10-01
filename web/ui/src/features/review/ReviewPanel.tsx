@@ -17,15 +17,19 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
+  WebGitReviewBranches,
   WebGitReviewFile,
   WebGitReviewResult,
-  WebGitReviewSource,
   WebGitReviewSnapshot,
+  WebGitReviewSource,
 } from "../../../../protocol/types.ts";
-import { DiffCodePreview } from "./DiffCodePreview.tsx";
+import { useWorkbarReadingState } from "../workbar/workbar-reading-state.ts";
+import { DiffCodePreview, type DiffLineReference } from "./DiffCodePreview.tsx";
+import { ReviewBasePicker } from "./ReviewBasePicker.tsx";
 import { ReviewFileTree } from "./ReviewFileTree.tsx";
 
 const FILE_PAGE_SIZE = 20;
+const VIEWED_FILE_LIMIT = 200;
 const REVIEW_SKELETON_ROWS = [0, 1, 2, 3] as const;
 
 function fileName(path: string) {
@@ -42,6 +46,9 @@ function failureLabel(
   if (result.reason === "unborn_repository") return t("gitReviewUnborn");
   if (result.reason === "baseline_unavailable")
     return t("gitReviewBaselineUnavailable");
+  if (result.reason === "base_branch_unavailable")
+    return t("gitReviewBaseUnavailable");
+  if (result.reason === "invalid_base_branch") return t("gitReviewBaseInvalid");
   return t("gitReviewFailed");
 }
 
@@ -54,10 +61,12 @@ export interface GitReviewViewState {
   refresh: () => Promise<void>;
   source?: WebGitReviewSource;
   setSource?: (source: WebGitReviewSource) => void;
+  baseRef?: string;
+  setBaseRef?: (ref: string) => void;
   readFile?: (
     path: string,
     signal: AbortSignal,
-    revision: string,
+    expectedRevision: string,
   ) => Promise<WebGitReviewFile | undefined>;
 }
 
@@ -69,6 +78,8 @@ export function ReviewPanel({
   embedded = false,
   active = true,
   onOpenFiles,
+  readingScope,
+  onReferenceLine,
 }: {
   review: GitReviewViewState;
   initialFilePath?: string;
@@ -77,13 +88,29 @@ export function ReviewPanel({
   embedded?: boolean;
   active?: boolean;
   onOpenFiles?: () => void;
+  readingScope?: string;
+  onReferenceLine?: (reference: DiffLineReference) => void;
 }) {
   const { t } = useTranslation();
+  const reading = useWorkbarReadingState();
+  // Workbar's exact Session key owns this component. Retain only branch
+  // choices during a base switch so its focused trigger survives loading;
+  // previous comparison contents still clear at the existing scope seam.
+  const branchChoices = useRef<WebGitReviewBranches | undefined>(undefined);
+  if (review.result?.branches) branchChoices.current = review.result.branches;
+  else if (review.result && !review.loading) branchChoices.current = undefined;
+  const branches =
+    review.result?.branches ??
+    (review.loading ? branchChoices.current : undefined);
+  const scope = `${readingScope ?? review.source ?? "unstaged"}:${review.baseRef ?? ""}`;
+  const savedReading =
+    reading?.review?.scope === scope ? reading.review : undefined;
+  const previousScope = useRef(JSON.stringify([scope, initialFilePath]));
   const panel = useRef<HTMLElement>(null);
   const [wide, setWide] = useState(false);
   const [collapsedDirectories, setCollapsedDirectories] = useState<
     ReadonlySet<string>
-  >(new Set());
+  >(new Set(savedReading?.collapsedDirectories));
   useEffect(() => {
     const element = panel.current;
     if (!element || typeof ResizeObserver === "undefined") return;
@@ -98,13 +125,71 @@ export function ReviewPanel({
   const preview = useRef<HTMLElement>(null);
   const focusRequested = useRef(true);
   const wasActive = useRef(false);
-  const listScrollTop = useRef<number | null>(null);
+  const listScrollTop = useRef<number | null>(savedReading?.listScroll ?? null);
   const returnFocusPath = useRef<string | null>(null);
-  const [visibleFiles, setVisibleFiles] = useState(FILE_PAGE_SIZE);
-  const [query, setQuery] = useState("");
+  const [visibleFiles, setVisibleFiles] = useState(
+    savedReading?.visibleFiles ?? FILE_PAGE_SIZE,
+  );
+  const [query, setQuery] = useState(savedReading?.query ?? "");
   const [pinnedSnapshot, setPinnedSnapshot] =
     useState<WebGitReviewSnapshot | null>(null);
-  const [selectedPath, setSelectedPath] = useState(initialFilePath ?? null);
+  const [selectedPath, setSelectedPath] = useState(
+    savedReading ? savedReading.selected : (initialFilePath ?? null),
+  );
+  // Operator reading memory only: opening a diff is not a viewed decision.
+  // Workbar owns the exact Session; this one bounded record adds scope and
+  // displayed-summary identity so new evidence cannot inherit old marks.
+  const [viewedState, setViewedState] = useState<{
+    scope: string;
+    revision: string;
+    paths: ReadonlySet<string>;
+  } | null>(() =>
+    savedReading?.viewed
+      ? {
+          scope,
+          revision: savedReading.viewed.revision,
+          paths: new Set(savedReading.viewed.paths.slice(0, VIEWED_FILE_LIMIT)),
+        }
+      : null,
+  );
+  const restoreScroll = useRef(
+    savedReading
+      ? { list: savedReading.listScroll, preview: savedReading.previewScroll }
+      : null,
+  );
+  useLayoutEffect(() => {
+    if (reading)
+      reading.review = {
+        source: review.source ?? "unstaged",
+        baseRef: review.baseRef,
+        scope,
+        selected: selectedPath,
+        query,
+        collapsedDirectories: [...collapsedDirectories],
+        visibleFiles,
+        listScroll:
+          reading.review?.scope === scope ? reading.review.listScroll : 0,
+        previewScroll:
+          reading.review?.scope === scope ? reading.review.previewScroll : 0,
+        viewed:
+          viewedState?.scope === scope
+            ? {
+                revision: viewedState.revision,
+                paths: [...viewedState.paths].slice(0, VIEWED_FILE_LIMIT),
+              }
+            : undefined,
+      };
+  }, [
+    reading,
+    review.source,
+    review.baseRef,
+    scope,
+    selectedPath,
+    query,
+    collapsedDirectories,
+    visibleFiles,
+    viewedState,
+  ]);
   const [loadedFile, setLoadedFile] = useState<{
     source: WebGitReviewSource;
     revision: string;
@@ -130,14 +215,24 @@ export function ReviewPanel({
   }, []);
   useEffect(() => {
     // Scope changes invalidate the pinned comparison even for the same path.
-    void review.source;
-    focusRequested.current = true;
+    const next = JSON.stringify([scope, initialFilePath]);
+    if (previousScope.current === next) return;
+    previousScope.current = next;
+    focusRequested.current =
+      Boolean(initialFilePath) ||
+      !(
+        document.activeElement instanceof Element &&
+        document.activeElement.closest(
+          ".review-base-picker, .review-base-popup",
+        )
+      );
     listScrollTop.current = null;
     setSelectedPath(initialFilePath ?? null);
     setQuery("");
     setCollapsedDirectories(new Set());
     setPinnedSnapshot(null);
-  }, [initialFilePath, review.source]);
+    setViewedState(null);
+  }, [initialFilePath, scope]);
   const Surface = embedded ? "section" : narrow ? "main" : "aside";
   const latestSnapshot = review.result?.ok ? review.result.snapshot : null;
   const snapshot =
@@ -174,6 +269,45 @@ export function ReviewPanel({
       ? loadedFile.file
       : fileSummary;
   const revision = snapshot?.revision;
+  const viewed =
+    viewedState?.scope === scope && viewedState.revision === revision
+      ? viewedState.paths
+      : new Set<string>();
+  const viewedCount =
+    snapshot?.files.filter((file) => viewed.has(file.path)).length ?? 0;
+  useEffect(() => {
+    if (
+      revision &&
+      viewedState &&
+      (viewedState.scope !== scope || viewedState.revision !== revision)
+    )
+      setViewedState(null);
+  }, [revision, scope, viewedState]);
+  const markViewed = (path: string, checked: boolean) => {
+    if (!revision || !snapshot?.files.some((file) => file.path === path))
+      return;
+    setViewedState((current) => {
+      const paths = new Set(
+        current?.scope === scope && current.revision === revision
+          ? current.paths
+          : [],
+      );
+      if (checked) {
+        if (paths.size >= VIEWED_FILE_LIMIT) return current;
+        paths.add(path);
+      } else paths.delete(path);
+      return { scope, revision, paths };
+    });
+  };
+  useLayoutEffect(() => {
+    if (!active || !snapshot || !restoreScroll.current) return;
+    if (selectedPath && selectedFile?.diffLoaded === false) return;
+    if (listBody.current)
+      listBody.current.scrollTop = restoreScroll.current.list;
+    if (preview.current)
+      preview.current.scrollTop = restoreScroll.current.preview;
+    restoreScroll.current = null;
+  }, [active, snapshot, selectedPath, selectedFile?.diffLoaded]);
   const detailError =
     fileError?.source === source &&
     fileError?.path === selectedPath &&
@@ -266,7 +400,10 @@ export function ReviewPanel({
             : snapshot.baseBranch
               ? t("gitReviewComparison", {
                   current: snapshot.currentBranch ?? t("gitReviewDetached"),
-                  base: snapshot.baseBranch,
+                  base: snapshot.baseBranch.replace(
+                    /^refs\/(?:heads|remotes)\//u,
+                    "",
+                  ),
                 })
               : t("gitReviewWorkingTree")
       : null;
@@ -285,6 +422,14 @@ export function ReviewPanel({
 
   const openFile = (path: string) => {
     listScrollTop.current = listBody.current?.scrollTop ?? null;
+    if (path !== selectedPath) {
+      restoreScroll.current = {
+        list: listScrollTop.current ?? 0,
+        preview: 0,
+      };
+      if (preview.current) preview.current.scrollTop = 0;
+      if (reading?.review?.scope === scope) reading.review.previewScroll = 0;
+    }
     focusRequested.current = !wide;
     setPinnedSnapshot(snapshot);
     setSelectedPath(path);
@@ -362,6 +507,19 @@ export function ReviewPanel({
             </select>
           </label>
         )}
+        {review.source === "branch" && review.setBaseRef && branches && (
+          <ReviewBasePicker
+            branches={branches}
+            value={
+              review.baseRef ??
+              (review.result?.ok
+                ? (review.result.snapshot.baseBranch ?? undefined)
+                : undefined)
+            }
+            loading={review.loading}
+            onChange={review.setBaseRef}
+          />
+        )}
         <div className="review-source-actions">
           {onOpenFiles && (
             <button type="button" onClick={onOpenFiles}>
@@ -437,6 +595,25 @@ export function ReviewPanel({
                 <strong title={selectedPath}>{fileName(selectedPath)}</strong>
                 <span title={selectedPath}>{selectedPath}</span>
               </div>
+              {selectedFile && revision && (
+                <label className="review-file-viewed">
+                  <input
+                    type="checkbox"
+                    aria-label={t("gitReviewMarkCurrentViewed", {
+                      path: selectedPath,
+                    })}
+                    checked={viewed.has(selectedPath)}
+                    disabled={
+                      viewed.size >= VIEWED_FILE_LIMIT &&
+                      !viewed.has(selectedPath)
+                    }
+                    onChange={(event) =>
+                      markViewed(selectedPath, event.currentTarget.checked)
+                    }
+                  />
+                  <span>{t("gitReviewViewedLabel")}</span>
+                </label>
+              )}
               {!embedded && (
                 <div className="review-file-actions">
                   {onOpenTools && (
@@ -504,6 +681,10 @@ export function ReviewPanel({
                 file: selectedPath,
               })}
               tabIndex={-1}
+              onScroll={(event) => {
+                if (reading?.review)
+                  reading.review.previewScroll = event.currentTarget.scrollTop;
+              }}
             >
               {!selectedFile ? (
                 <p role="status">
@@ -547,7 +728,10 @@ export function ReviewPanel({
                       {t("gitReviewDiffTruncated")}
                     </p>
                   )}
-                  <DiffCodePreview file={selectedFile} />
+                  <DiffCodePreview
+                    file={selectedFile}
+                    onReferenceLine={onReferenceLine}
+                  />
                 </>
               ) : (
                 <EmptyState
@@ -605,6 +789,10 @@ export function ReviewPanel({
             )}
             <div
               ref={listBody}
+              onScroll={(event) => {
+                if (reading?.review)
+                  reading.review.listScroll = event.currentTarget.scrollTop;
+              }}
               className="review-body"
               tabIndex={embedded ? -1 : undefined}
             >
@@ -656,6 +844,17 @@ export function ReviewPanel({
                   <Text type="supporting" color="secondary" maxLines={1}>
                     {comparison}
                   </Text>
+                  <Text type="supporting" color="secondary">
+                    {t("gitReviewViewedProgress", {
+                      viewed: viewedCount,
+                      loaded: snapshot.files.length,
+                    })}
+                  </Text>
+                  {viewed.size >= VIEWED_FILE_LIMIT && (
+                    <Text type="supporting" color="secondary">
+                      {t("gitReviewViewedLimit", { count: VIEWED_FILE_LIMIT })}
+                    </Text>
+                  )}
                   {snapshot.nextOffset !== undefined && (
                     <Text type="supporting" color="secondary">
                       {t("gitReviewLoadedCount", {
@@ -754,6 +953,9 @@ export function ReviewPanel({
                       })
                     }
                     onSelect={openFile}
+                    viewed={viewed}
+                    onViewedChange={markViewed}
+                    viewedLimitReached={viewed.size >= VIEWED_FILE_LIMIT}
                   />
                   {remaining > 0 && (
                     <div className="session-review-more">

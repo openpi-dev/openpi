@@ -454,7 +454,9 @@ Web 侧栏支持独立置顶会话分区。行内图钉可置顶或取消，置�
 
 Web 模型配置先填写提供商连接，再选择“获取可用模型”。列表支持搜索、勾选当前结果和批量添加，已有配置不会重复添加；搜索保留其他结果的勾选。查询仅请求提供商模型目录，不调用模型。可使用同一已保存端点的 Pi 凭据，或输入仅用于本次查询的临时密钥；临时密钥不会保存。新增模型沿用表单里的能力默认值，可在高级参数中逐项调整。提供商不支持目录接口时仍可手动添加。
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px（360–720px）。拖动或键盘调整后保存到同一份配置，刷新后恢复；小窗口按当前视口临时限制显示宽度，不覆盖已保存值。也可用 `/openpi-setup` 修改 `ui.webSidebarWidth` 和 `ui.webAuxiliaryWidth`。
+
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
@@ -619,7 +621,9 @@ Web 设置页可以添加或编辑自定义模型、保存服务商 API Key。�
 
 变更面板默认展示 Git 未暂存变更，也可切换到暂存、分支或会话基线；输入框不再显示整个工作区的累计变更文件。新 Web 回合在对话中展示该轮期间的文件变化，审阅读取随 Pi Session 保存的有界 diff，不会用当前工作树冒充历史结果。此比较不能区分同一时间其他进程的改动；非 Git 工作区、过大的初始变更或超出记录上限时会标明无法验证或部分结果，旧回合不回填。手动变更面板的列表与逐文件 diff 分开加载，大型未跟踪文件不会阻止读取整个工作区；达到显示限额会标注截断。会话基线仍是有容量限制的附加视图，不能替代 Git。原生编辑记录保留在对话的工具证据中；读取工作区外的文件需点击“只读打开此文件”，仅授权该文件，不放宽整个目录。
 
-内嵌浏览器采用 React + TypeScript 工具栏和原生 iframe，输入、滚动和选中文字由用户浏览器直接处理，不启动额外 Chromium 或传输视频。支持最多 8 个页内标签页。未安装扩展时只记录手动地址历史，跨站实际地址无法读取，网页弹窗由外部浏览器打开。
+输入区支持选择、粘贴和拖入图片或普通文件。每条消息最多 8 个附件；图片单张不超过 10 MiB、合计不超过 32 MiB，普通文件合计不超过 50 MiB。文本、代码、PDF、DOCX、XLSX 和 PPTX 可提取文本；每份提取文本上限为 1 MiB，达到页数、单元格或文本限额时会明确标注部分提取。扫描 PDF 和其他无法提取文本的文件保留原文件供原生工具读取，不声称已完成 OCR 或文档理解。发送时普通文件及提取文本保存到原生 Session 的私有附件目录，以可见文件引用进入 Pi 的普通消息；图片复用 Pi 图片输入。未发送的附件随各会话草稿保存在当前浏览器；接收失败保留草稿，收到原生接收确认后才清除。
+
+内嵌浏览器采用 React + TypeScript 工具栏和原生 iframe，输入、滚动和选中文字由用户浏览器直接处理，不启动额外 Chromium 或传输视频。支持最多 8 个页内标签页；同一会话内切换工作栏工具会保留已打开网页的表单和滚动位置，隐藏的网页不接受焦点。关闭浏览器工具、关闭工作栏或切换会话时释放网页。未安装扩展时只记录手动地址历史，跨站实际地址无法读取，网页弹窗由外部浏览器打开。
 
 可选安装 [OpenPI Browser Bridge](web/browser-extension/README.md)（Chrome/Edge 145+）：安装后在本机工作台默认启用，同步实际地址/标题、刷新当前页面，并把普通新窗口链接转为内部标签页。扩展仅在连接的 OpenPI 标签页中移除外部子框架的 `X-Frame-Options`，保留完整 CSP；仍不保证所有网站可嵌入，跨站历史及部分登录弹窗需外部浏览器。扩展由浏览器原生安装/权限流程管理，不自动安装，不增加 Pi 配置。浏览器标签页随当前会话/工具的关闭而释放，面板暂时隐藏时保留。路线切换与已放弃的视频试验见 [浏览器试用记录](docs/research/WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md)。
 在 Plan／Setup 原有工具范围内，模型调用 `ask_user` 时，发起任务的 Web 标签页会显示结构化问题卡片：选择选项、添加补充说明或填写自己的答案，复核后才提交给正在等待的工具调用。关闭卡片不会提交草稿；留空的自定义答案表示要求澄清问题。刷新同一标签可恢复尚未过期的提问（未提交草稿不持久化），其他标签不能代答。提问最多等待 15 分钟，停止运行、切换 Session 或关闭 Host 会取消等待；它不替代原生权限审批，也不意味着任意终端自定义界面已支持 Web。

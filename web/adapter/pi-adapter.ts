@@ -34,9 +34,15 @@ import {
   WEB_MAX_SESSION_PREVIEW,
   WEB_MAX_SNAPSHOT_BYTES,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
+  WEB_MAX_PROMPT_HISTORY_PAGE,
+  WEB_MAX_PROMPT_PREVIEW_CHARS,
   WEB_MAX_WORKSPACES,
+  WEB_PROMPT_IMAGE_MAX_BYTES,
+  WEB_PROMPT_IMAGE_MAX_BASE64_CHARS,
   type WebSessionProjection,
   type WebSessionHistoryPage,
+  type WebSessionPromptHistoryPage,
+  type WebSessionPromptPreview,
   type WebSessionSummary,
   type WebSnapshotTruncation,
   type WebWorkspaceSummary,
@@ -46,7 +52,9 @@ import type {
   WebThinkingProjection,
 } from "../runtime/types.ts";
 import { matchesSessionIdentity } from "../runtime/session-identity.ts";
+import { searchWebTranscripts } from "../search/transcript-search.ts";
 import { collectSessionSources } from "./session-sources.ts";
+import { isSessionPrompt, setupDisplayMessage } from "../protocol/prompt-navigation.ts";
 import {
   WEB_TURN_CHANGES_ENTRY,
   readTurnChangesDetail,
@@ -76,6 +84,28 @@ const TERMINAL_DISCOVERY_MAX_BYTES = 256 * 1024;
 const TERMINAL_DISCOVERY_MAX_FILES = WEB_MAX_SESSIONS;
 const HISTORY_PAGE_TURNS = 20;
 const ITEM_PAGE_TEXT_CHARS = 32_000;
+
+function promptPreviewText(content: unknown) {
+  const segments = visibleTextSegments(content);
+  while (segments.length && segments[0]!.trim().length === 0) segments.shift();
+  while (segments.length && segments.at(-1)!.trim().length === 0) segments.pop();
+  if (segments.length) {
+    segments[0] = segments[0]!.trimStart();
+    segments[segments.length - 1] = segments.at(-1)!.trimEnd();
+  }
+  let text = "";
+  let characters = 0;
+  let lastCharacter = "";
+  for (const part of segments) {
+    for (const character of part) {
+      if (characters === WEB_MAX_PROMPT_PREVIEW_CHARS) return text.slice(0, -lastCharacter.length) + "…";
+      text += character;
+      lastCharacter = character;
+      characters++;
+    }
+  }
+  return text;
+}
 
 function visibleTextSegments(content: unknown) {
   if (typeof content === "string") return [content];
@@ -913,6 +943,7 @@ export class PiWebAdapter {
           execution: {
             status: execution.status,
             pendingFollowUps: execution.pendingFollowUps,
+            ...(execution.pendingSteering !== undefined && execution.pendingSteering > 0 ? { pendingSteering: execution.pendingSteering } : {}),
             ...(execution.lastTurn ? { lastTurn: execution.lastTurn } : {}),
             ...(execution.compaction?.state === "running" ? { compacting: true } : {}),
           },
@@ -932,6 +963,34 @@ export class PiWebAdapter {
 
   async listSessions(pinnedPath?: string): Promise<WebSessionSummary[]> {
     return (await this.listSessionProjection(pinnedPath)).sessions;
+  }
+
+  async searchTranscripts(query: string, options: { includeArchived?: boolean; signal?: AbortSignal } = {}) {
+    await this.ensureWorkspaceStateLoaded();
+    await this.ensureArchivesLoaded();
+    options.signal?.throwIfAborted();
+    // Use Pi's catalog and the same workspace visibility as requireSession.
+    // The caller supplies a query, never paths or a broader file capability.
+    const catalog = await SessionManager.listAll(this.runtime.sessionDirectory);
+    options.signal?.throwIfAborted();
+    const sessions = catalog.filter((session) =>
+      (options.includeArchived || !this.archivedSessions.has(resolve(session.path))) &&
+      (!this.hiddenWorkspaces.has(resolve(session.cwd)) || this.ungroupedSessions.has(session.path)),
+    ).map((session) => ({
+      id: session.id,
+      path: session.path,
+      cwd: resolve(session.cwd),
+      modified: session.modified.toISOString(),
+      source: "web" as const,
+      ...(session.name ? { name: session.name } : {}),
+    }));
+    return searchWebTranscripts({
+      query,
+      sessions,
+      allowedSessionRoots: [this.runtime.sessionDirectory],
+      allowedWorkspaces: [...new Set(sessions.map((session) => session.cwd))],
+      signal: options.signal,
+    });
   }
 
   async listReadOnlyTerminalSessions(
@@ -1363,6 +1422,93 @@ export class PiWebAdapter {
     return { status: "ok" as const, session };
   }
 
+  async getSessionPromptHistory(sessionId: string, path: string, anchorEntryId: string, beforeEntryId: string | null = null) {
+    const summary = (await this.listSessions(path)).find((session) => session.path === path);
+    if (!summary) return { status: "not_found" as const };
+    const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+    if (summary.id !== sessionId || manager.getSessionId() !== sessionId) return { status: "changed" as const };
+    const branch = manager.getBranch();
+    const anchor = branch.findIndex((entry) => entry.id === anchorEntryId);
+    const before = beforeEntryId === null ? anchor + 1 : branch.findIndex((entry) => entry.id === beforeEntryId);
+    if (anchor < 0 || before < 0 || (beforeEntryId !== null &&
+      (before > anchor || !isSessionPrompt(branch[before]!, branch[before - 1])))) return { status: "changed" as const };
+    const entryIds: string[] = [];
+    for (let index = before - 1; index >= 0 && entryIds.length <= WEB_MAX_PROMPT_HISTORY_PAGE; index--) {
+      if (isSessionPrompt(branch[index]!, branch[index - 1])) entryIds.push(branch[index]!.id);
+    }
+    const more = entryIds.length > WEB_MAX_PROMPT_HISTORY_PAGE;
+    if (more) entryIds.pop();
+    entryIds.reverse();
+    const page: WebSessionPromptHistoryPage = {
+      sessionId, sessionPath: summary.path, anchorEntryId,
+      requestedBeforeEntryId: beforeEntryId, entryIds,
+      nextBeforeEntryId: more ? entryIds[0]! : null,
+    };
+    return { status: "ok" as const, page };
+  }
+
+  async getSessionPromptPreview(sessionId: string, path: string, anchorEntryId: string, entryId: string) {
+    const summary = (await this.listSessions(path)).find((session) => session.path === path);
+    if (!summary) return { status: "not_found" as const };
+    const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+    if (summary.id !== sessionId || manager.getSessionId() !== sessionId) return { status: "changed" as const };
+    const branch = manager.getBranch();
+    const anchor = branch.findIndex((entry) => entry.id === anchorEntryId);
+    const prompt = branch.findIndex((entry, index) => entry.id === entryId && isSessionPrompt(entry, branch[index - 1]));
+    if (anchor < 0 || prompt < 0 || prompt > anchor) return { status: "changed" as const };
+    const entry = branch[prompt]!;
+    const promptText = entry.type === "message" && entry.message.role === "user" ? entry.message.content :
+      entry.type === "custom_message" ? setupDisplayMessage(projectEntry(entry).message!).content :
+      entry.type === "custom" && entry.data && typeof entry.data === "object" && "text" in entry.data ? entry.data.text : "";
+    let response = "";
+    for (let index = prompt + 1; index <= anchor; index++) {
+      const item = branch[index]!;
+      if (isSessionPrompt(item, branch[index - 1])) break;
+      if (item.type === "message" && item.message.role === "assistant") {
+        const text = promptPreviewText(item.message.content);
+        if (text.length > 0) response = text;
+      }
+    }
+    const preview: WebSessionPromptPreview = {
+      sessionId, sessionPath: summary.path, anchorEntryId, entryId,
+      prompt: promptPreviewText(promptText), response,
+    };
+    return { status: "ok" as const, preview };
+  }
+
+  async getSessionMessageWindow(sessionId: string, path: string, entryId: string) {
+    const summary = await this.requireSession(path).catch(() => undefined);
+    if (!summary) return { status: "not_found" as const };
+    const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+    if (summary.id !== sessionId || manager.getSessionId() !== sessionId) return { status: "changed" as const };
+    const branch = manager.getBranch();
+    const target = branch.findIndex((entry, index) => entry.id === entryId && (entry.type === "message" || isSessionPrompt(entry, branch[index - 1])));
+    if (target < 0) return { status: "changed" as const };
+    let end = target + 1;
+    if (isSessionPrompt(branch[target]!, branch[target - 1])) {
+      while (end < branch.length && !isSessionPrompt(branch[end]!, branch[end - 1])) end++;
+    }
+    let prefix = branch.slice(0, end);
+    const budget = WEB_MAX_SELECTED_TRANSCRIPT_BYTES - jsonByteLength(summary) - 2048;
+    let projected = alignHistoryPage(projectEntries(prefix, (file) => resolve(summary.cwd, file), budget), prefix.length);
+    // A long turn may exceed the bounded projection. Always retain the native target.
+    if (!projected.entries.some((entry) => entry.id === entryId) && end > target + 1) {
+      prefix = branch.slice(0, target + 1);
+      projected = alignHistoryPage(projectEntries(prefix, (file) => resolve(summary.cwd, file), budget), prefix.length);
+      projected.truncation = { ...projected.truncation, truncated: true };
+    }
+    if (!projected.entries.some((entry) => entry.id === entryId)) return { status: "changed" as const };
+    const session: WebSessionProjection = {
+      id: summary.id, path: summary.path, cwd: summary.cwd, ...projected,
+      history: { leafEntryId: manager.getLeafId(), anchorEntryId: entryId, anchorOnBranch: true,
+        beforeEntryId: projected.truncation.entriesOmitted > 0 ? projected.entries[0]?.id ?? null : null },
+    };
+    return { status: "ok" as const, session };
+  }
+
   async getTurnChanges(
     sessionId: string,
     path: string,
@@ -1424,8 +1570,9 @@ export class PiWebAdapter {
     const image = entry.message.content[partIndex];
     // Read only image bytes already supplied to this exact Session; never a client path.
     if (image?.type !== "image" || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(image.mimeType) ||
-      typeof image.data !== "string" || image.data.length > 12 * 1024 * 1024 ||
-      !/^[A-Za-z0-9+/]*={0,2}$/u.test(image.data)) return undefined;
+      typeof image.data !== "string" || image.data.length > WEB_PROMPT_IMAGE_MAX_BASE64_CHARS) return undefined;
+    const bytes = Buffer.from(image.data, "base64");
+    if (bytes.byteLength > WEB_PROMPT_IMAGE_MAX_BYTES || bytes.toString("base64") !== image.data) return undefined;
     return { data: image.data, mimeType: image.mimeType };
   }
 

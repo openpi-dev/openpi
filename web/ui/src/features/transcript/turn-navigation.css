@@ -1,0 +1,65 @@
+.turn-rail {
+  position: absolute;
+  z-index: 10;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  width: 36px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  transform: translateY(-50%);
+}
+
+.turn-rail::-webkit-scrollbar { display: none; }
+
+.turn-tick {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  height: 10px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--subtle);
+  cursor: pointer;
+}
+
+.turn-tick-mark {
+  display: block;
+  width: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: scaleX(0.53846);
+  transform-origin: right center;
+  transition: transform 120ms ease, color 120ms ease;
+}
+
+.turn-tick[aria-current] { color: var(--text); }
+.turn-tick[aria-current] .turn-tick-mark { transform: scaleX(1); }
+.turn-tick:hover, .turn-tick:focus-visible { color: var(--muted); }
+.turn-tick:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 3px; }
+
+.turn-preview-layer {
+  width: 320px;
+  max-width: min(320px, calc(100vw - 16px));
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--text);
+}
+
+.turn-preview { display: flex; flex-direction: column; gap: 4px; max-width: 320px; text-align: start; font-size: 12px; line-height: 1.45; }
+.turn-preview-prompt, .turn-preview-reply { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.turn-preview-prompt { -webkit-line-clamp: 1; }
+.turn-preview-reply { -webkit-line-clamp: 3; }
+.turn-preview-prompt { color: var(--text); font-weight: 500; }
+.turn-preview-reply { color: var(--muted); }
+.message-row[data-history-entry]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+
+.turn-navigation-error { position: absolute; right: 56px; top: 50%; max-width: 280px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--muted); font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-tick-mark { transition: none; }
+}

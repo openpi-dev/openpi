@@ -7,10 +7,11 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { browserAddress } from "./browser-address.ts";
 import { useBrowserBridge } from "./browser-bridge.ts";
+import { useWorkbarReadingState } from "./workbar-reading-state.ts";
 
 // Fixed resource bound, not a persisted user preference.
 const MAX_PAGES = 8;
@@ -19,28 +20,49 @@ function DirectBrowserPage({
   onTitle,
   onOpen,
   initialUrl = "",
+  readingId,
 }: {
   onTitle: (title: string) => void;
   onOpen: (url: string) => void;
   initialUrl?: string;
+  readingId: number;
 }) {
   const { t } = useTranslation();
   const prefix = useId();
   const addressInput = useRef<HTMLInputElement>(null);
-  const [draft, setDraft] = useState(initialUrl);
+  const reading = useWorkbarReadingState();
+  const savedReading = reading?.browser?.pages[readingId];
+  const [draft, setDraft] = useState(savedReading?.draft ?? initialUrl);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState({
-    history: initialUrl ? [initialUrl] : [],
-    index: initialUrl ? 0 : -1,
+    history: savedReading?.history ?? (initialUrl ? [initialUrl] : []),
+    index: savedReading?.index ?? (initialUrl ? 0 : -1),
     revision: 0,
     loaded: false,
     unknown: false,
   });
   const url = page.history[page.index];
+  const lastKnownUrl = useRef(url);
+  useLayoutEffect(() => {
+    if (reading?.browser)
+      reading.browser.pages[readingId] = {
+        draft,
+        history: page.history.map((item, index) =>
+          index === page.index ? (lastKnownUrl.current ?? item) : item,
+        ),
+        index: page.index,
+      };
+  }, [reading, readingId, draft, page]);
   const pageId = `${prefix}-${page.revision}`;
   const bridge = useBrowserBridge(
     pageId,
     (state) => {
+      lastKnownUrl.current = state.url;
+      const cached = reading?.browser?.pages[readingId];
+      if (cached)
+        cached.history = cached.history.map((url, index) =>
+          index === cached.index ? state.url : url,
+        );
       if (document.activeElement !== addressInput.current) setDraft(state.url);
       onTitle(state.title || new URL(state.url).host);
     },
@@ -51,6 +73,7 @@ function DirectBrowserPage({
   const navigate = (history: string[], index: number) => {
     const next = history[index];
     if (!next) return;
+    lastKnownUrl.current = next;
     setPage((current) => ({
       history,
       index,
@@ -215,14 +238,19 @@ function DirectBrowserPage({
 export function BrowserPanel() {
   const { t } = useTranslation();
   const prefix = useId();
-  const nextId = useRef(1);
+  const reading = useWorkbarReadingState();
   const [tabs, setTabs] = useState<
     { id: number; title: string; initialUrl?: string }[]
-  >([{ id: 0, title: "" }]);
+  >(reading?.browser?.tabs ?? [{ id: 0, title: "" }]);
+  const nextId = useRef(Math.max(...tabs.map((tab) => tab.id)) + 1);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const [blockedUrl, setBlockedUrl] = useState<string>();
-  const [selected, setSelected] = useState(0);
+  const [selected, setSelected] = useState(reading?.browser?.selected ?? 0);
+  useLayoutEffect(() => {
+    if (reading)
+      reading.browser = { tabs, selected, pages: reading.browser?.pages ?? {} };
+  }, [reading, tabs, selected]);
   const focusTab = (id: number) => {
     requestAnimationFrame(() =>
       document.getElementById(`${prefix}-tab-${id}`)?.focus(),
@@ -246,6 +274,7 @@ export function BrowserPanel() {
     focusTab(tab.id);
   };
   const close = (id: number) => {
+    if (reading?.browser) delete reading.browser.pages[id];
     setBlockedUrl(undefined);
     const remaining = tabs.filter((tab) => tab.id !== id);
     if (!remaining.length) {
@@ -363,6 +392,7 @@ export function BrowserPanel() {
             key={tab.id}
           >
             <DirectBrowserPage
+              readingId={tab.id}
               initialUrl={tab.initialUrl}
               onOpen={add}
               onTitle={(title) =>

@@ -208,3 +208,242 @@ it("keeps a partial answer and a distinct cancelled terminal state", () => {
   );
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+function error(reason: string) {
+  return projectMessage({
+    role: "assistant",
+    content: [],
+    stopReason: "error",
+    errorMessage: reason,
+  });
+}
+
+function turnSnapshot(messages: ReturnType<typeof projectMessage>[]) {
+  const state = snapshot(messages[0]!);
+  state.selectedSession!.entries = messages.map((message, index) => ({
+    id: `entry-${index}`,
+    type: "message",
+    timestamp: `2026-09-19T00:00:0${index}Z`,
+    message,
+  }));
+  return state;
+}
+
+function transcriptNode(
+  state: WebSnapshot,
+  options: Partial<Parameters<typeof Transcript>[0]> = {},
+) {
+  return createElement(
+    I18nextProvider,
+    { i18n },
+    createElement(Transcript, {
+      snapshot: state,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+      ...options,
+    }),
+  );
+}
+
+it("keeps recovered failed attempts folded after refreshing a successful run", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+    error("first 502"),
+    error("second 502"),
+    error("third 502"),
+    projectMessage({
+      role: "assistant",
+      content: "Recovered answer",
+      stopReason: "stop",
+    }),
+  ]);
+  const { container } = render(transcriptNode(state));
+  expect(screen.getByText("Recovered answer")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+  expect(container.querySelector(".turn-state.failed")).toBeNull();
+  const attempts =
+    container.querySelector<HTMLDetailsElement>(".provider-attempts")!;
+  expect(attempts.open).toBe(false);
+  expect(attempts.querySelector("summary")?.textContent).toContain(
+    "Request recovered",
+  );
+  expect(attempts.querySelector("summary")?.textContent).toContain("3");
+  fireEvent.click(attempts.querySelector("summary")!);
+  expect(attempts.open).toBe(true);
+  expect(
+    [...attempts.querySelectorAll("li")].map((item) => item.textContent),
+  ).toEqual(["first 502", "second 502", "third 502"]);
+});
+
+it("updates the failed attempt projection during retry and live recovery without offering resend", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+    error("transient 502"),
+  ]);
+  const { container, rerender } = render(
+    transcriptNode(state, {
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: { attempt: 1, maxAttempts: 3 },
+    }),
+  );
+  expect(container.querySelector(".provider-attempts.retrying")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+  expect(container.querySelector(".turn-state.failed")).toBeNull();
+  rerender(
+    transcriptNode(state, {
+      liveRunning: true,
+      livePhase: "running",
+      liveMessages: [
+        {
+          key: "success",
+          message: projectMessage({
+            role: "assistant",
+            content: "Live success",
+            stopReason: "stop",
+          }),
+        },
+      ],
+    }),
+  );
+  expect(container.querySelector(".provider-attempts.recovered")).toBeTruthy();
+  expect(screen.getByText("Live success")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+});
+
+it("offers one final retry after exhaustion while folding the earlier attempts", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Retry this task" }),
+    error("first 502"),
+    error("second 502"),
+    error("exhausted 502"),
+  ]);
+  const { container } = render(transcriptNode(state));
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByRole("alert").textContent).toContain("exhausted 502");
+  expect(screen.getAllByRole("button", { name: "Retry prompt" })).toHaveLength(
+    1,
+  );
+  expect(container.querySelector(".turn-state.failed")).toBeTruthy();
+  expect(container.querySelector(".provider-attempts li")?.textContent).toBe(
+    "first 502",
+  );
+  expect(container.querySelectorAll(".provider-attempts li")).toHaveLength(2);
+});
+
+it("uses a persisted cancelled run to stop retry controls even without an aborted assistant", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Stopped task" }),
+    error("502 before cancellation"),
+  ]);
+  state.selectedSession!.entries.push({
+    id: "cancelled-timing",
+    type: "custom",
+    timestamp: "2026-09-19T00:00:02Z",
+    turnTiming: {
+      version: 1,
+      sessionId: "session",
+      commandId: "stopped",
+      epoch: 1,
+      startedAt: 0,
+      finishedAt: 2000,
+      elapsedMs: 2000,
+      outcome: "cancelled",
+    },
+  });
+  const { container } = render(transcriptNode(state));
+  expect(
+    container.querySelector(".provider-attempts.interrupted"),
+  ).toBeTruthy();
+  expect(
+    container.querySelector(".provider-attempts summary")?.textContent,
+  ).toContain("Model request stopped");
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+  expect(
+    container.querySelector('.turn-duration[data-outcome="cancelled"]'),
+  ).toBeTruthy();
+});
+
+it("does not let a new user turn erase a previous failure or retry the wrong prompt", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Earlier task" }),
+    error("earlier final failure"),
+    projectMessage({ role: "user", content: "Different task" }),
+    projectMessage({
+      role: "assistant",
+      content: "Different success",
+      stopReason: "stop",
+    }),
+  ]);
+  const { container } = render(transcriptNode(state));
+  expect(screen.getByRole("alert").textContent).toContain(
+    "earlier final failure",
+  );
+  expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+  expect(container.querySelector(".provider-attempts.recovered")).toBeNull();
+});
+
+it("does not treat a partial streaming answer as successful recovery", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+    error("transient 502"),
+  ]);
+  const { container } = render(
+    transcriptNode(state, {
+      liveRunning: true,
+      livePhase: "running",
+      liveMessages: [
+        {
+          key: "stream",
+          message: projectMessage({ role: "assistant", content: "Partial" }),
+        },
+      ],
+    }),
+  );
+  expect(container.querySelector(".provider-attempts.recovered")).toBeNull();
+  expect(container.querySelector(".provider-attempts.retrying")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+});
+
+it("keeps partial output from failed attempts inside their disclosure after recovery", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+    projectMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Interrupted reasoning" },
+        { type: "text", text: "Interrupted partial answer" },
+      ],
+      stopReason: "error",
+      errorMessage: "stream disconnected",
+    }),
+    projectMessage({
+      role: "assistant",
+      content: "Complete answer",
+      stopReason: "stop",
+    }),
+  ]);
+  const { container } = render(transcriptNode(state));
+  const partial = screen.getByText("Interrupted partial answer");
+  const attempts = partial.closest<HTMLDetailsElement>(".provider-attempts")!;
+  expect(attempts).toBeTruthy();
+  expect(attempts.open).toBe(false);
+  expect(attempts.textContent).toContain("Interrupted reasoning");
+  expect(
+    screen.getByText("Complete answer").closest(".provider-attempts"),
+  ).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(
+    container.querySelector('[data-history-highlighted="true"]'),
+  ).toBeNull();
+});

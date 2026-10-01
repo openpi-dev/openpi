@@ -18,11 +18,13 @@ import {
 import {
   type FormEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -30,6 +32,7 @@ import {
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebCommandSummary,
+  type WebPromptDelivery,
   type WebPromptImage,
   type WebSnapshot,
 } from "../../../../protocol/types.ts";
@@ -49,11 +52,19 @@ import {
   type ComposerDraft,
   createComposerDraftMemory,
 } from "./composer-drafts.ts";
+import { createBrowserComposerDraftStorage } from "./composer-draft-storage.ts";
 import { DraftImagePreview } from "./DraftImagePreview.tsx";
+import { DraftFilePreview } from "./DraftFilePreview.tsx";
+import { stagePromptFile, type StagedPromptFile } from "./file-attachments.ts";
+import {
+  WEB_PROMPT_FILE_MAX_COUNT,
+  WEB_PROMPT_FILE_MAX_TOTAL_BYTES,
+} from "../../../../protocol/prompt-files.ts";
 import { FileReferenceDialog } from "./FileReferenceDialog.tsx";
 import {
   type StagedPromptImage,
   stagePromptImage,
+  sniffPromptImageMime,
 } from "./image-attachments.ts";
 import { WebClient } from "../../protocol/client.ts";
 import { formatSourceReference } from "../../../../protocol/session-sources.ts";
@@ -67,7 +78,17 @@ import {
 } from "./SlashCommandMenu.tsx";
 
 interface ComposerProps {
-  addSourcesRequest?: { sessionId: string; path: string; revision: number };
+  addSourcesRequest?: {
+    sessionId: string;
+    path: string;
+    revision: number;
+    feedback?: {
+      filePath: string;
+      side: "new" | "old";
+      line: number;
+      code: string;
+    };
+  };
   planSelectionPending?: boolean;
   workspaceDraft?: boolean;
   draftModel?: WebStoreState["draftModel"];
@@ -95,6 +116,7 @@ interface ComposerProps {
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
+  pendingSteeringReceipt?: number | null;
   commandDiscovery?: WebStoreState["commandDiscovery"];
   accessory?: ReactNode;
 }
@@ -135,7 +157,13 @@ export function Composer(props: ComposerProps) {
     !props.workspaceDraft && !props.sessionSwitching && selected && sessionPath
       ? sessionDraftOwner(selected)
       : null;
-  const [draftMemory] = useState(createComposerDraftMemory);
+  const [draftMemory] = useState(() =>
+    createComposerDraftMemory(createBrowserComposerDraftStorage()),
+  );
+  const draftStorage = useSyncExternalStore(
+    draftMemory.subscribe,
+    draftMemory.storageState,
+  );
   const draftOwner = useRef<DraftOwner>(
     canonicalOwner ?? workspaceDraftOwner(props.selectedWorkspace),
   );
@@ -148,7 +176,7 @@ export function Composer(props: ComposerProps) {
   );
   const currentDraft = useRef(draft);
   currentDraft.current = draft;
-  const { prompt, images, caret: cursor } = draft;
+  const { prompt, images, files = [], caret: cursor } = draft;
   const promptLength = prompt.trim().length;
   const promptTooLong = promptLength > WEB_PROMPT_MAX_TEXT_LENGTH;
   const renderedOwnerKey = nextOwner.key;
@@ -204,6 +232,10 @@ export function Composer(props: ComposerProps) {
   const [expandedQueuedMessage, setExpandedQueuedMessage] = useState<
     string | null
   >(null);
+  const [steeringDelivery, setSteeringDelivery] = useState<{
+    ownerKey: string;
+    expectedTurnCommandId: string;
+  } | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const planImplementationApproval = useRef<PlanImplementationApproval | null>(
     null,
@@ -213,6 +245,8 @@ export function Composer(props: ComposerProps) {
     ownerKey: string;
     files: File[];
     staged: StagedPromptImage[];
+    stagedFiles: StagedPromptFile[];
+    controller: AbortController;
   } | null>(null);
   const restoreFileReferenceFocus = useRef(false);
   const fileReferenceTarget = useRef<{
@@ -221,6 +255,38 @@ export function Composer(props: ComposerProps) {
     start: number;
     end: number;
   } | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    void draftMemory.ready.then(() => {
+      if (!mounted) return;
+      const restored = draftMemory.read(draftOwner.current.key);
+      currentDraft.current = restored;
+      restoreCaret.current = true;
+      setDraft(restored);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [draftMemory]);
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (
+        !attachmentImport.current &&
+        !Array.from(submissions.current.values()).some(
+          (entry) => entry.pending,
+        ) &&
+        !(
+          draftMemory.storageState().status !== "saved" &&
+          (draftMemory.hasContent() || draftMemory.hasUnsavedChanges())
+        )
+      )
+        return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [draftMemory]);
   useLayoutEffect(() => {
     // Programmatic clears and recovered drafts need the same sizing as typing.
     void prompt;
@@ -280,17 +346,20 @@ export function Composer(props: ComposerProps) {
         props.workspaceDraft &&
         props.sessionSwitching &&
         !nextDraft.prompt &&
-        nextDraft.images.length === 0
+        nextDraft.images.length === 0 &&
+        !nextDraft.files?.length
       ) {
-        const { prompt, images, caret } = currentDraft.current;
+        const { prompt, images, files, caret } = currentDraft.current;
         const copied = draftMemory.edit(nextOwner.key, nextDraft, {
           prompt,
           images,
+          files,
           caret,
         });
         if (copied) nextDraft = copied;
         else limit = true;
       }
+      attachmentImport.current?.controller.abort();
       attachmentImport.current = null;
       setAttachmentBusy(false);
     }
@@ -301,6 +370,7 @@ export function Composer(props: ComposerProps) {
     setDraft(nextDraft);
     setAttachmentError(limit ? t("draftLimit") : null);
     setCommandError(null);
+    setSteeringDelivery(null);
     setDragActive(false);
     setFileReferenceOpen(false);
     setMenuDismissed(true);
@@ -314,35 +384,43 @@ export function Composer(props: ComposerProps) {
   ]);
   useLayoutEffect(
     () => () => {
+      attachmentImport.current?.controller.abort();
       attachmentImport.current = null;
     },
     [],
   );
-  const updateDraft = (
-    patch: Partial<Pick<ComposerDraft, "prompt" | "images" | "caret">>,
-    ownerKey = renderedOwnerKey,
-  ) => {
-    if (draftOwner.current.key !== ownerKey) return false;
-    const current = currentDraft.current;
-    const next = draftMemory.edit(ownerKey, current, patch);
-    if (!next) {
-      setAttachmentError(t("draftLimit"));
-      return false;
-    }
-    if (next.revision !== current.revision) {
-      if (!submissions.current.get(ownerKey)?.pending)
-        submissions.current.delete(ownerKey);
-      setAttachmentError((error) => (error === t("draftLimit") ? null : error));
-    }
-    if (
-      patch.prompt !== undefined &&
-      (!patch.prompt.trim() || patch.prompt.startsWith("/"))
-    )
-      planImplementationApproval.current = null;
-    currentDraft.current = next;
-    setDraft(next);
-    return true;
-  };
+  const updateDraft = useCallback(
+    (
+      patch: Partial<
+        Pick<ComposerDraft, "prompt" | "images" | "files" | "caret">
+      >,
+      ownerKey = renderedOwnerKey,
+    ) => {
+      if (draftOwner.current.key !== ownerKey) return false;
+      const current = currentDraft.current;
+      const next = draftMemory.edit(ownerKey, current, patch);
+      if (!next) {
+        setAttachmentError(t("draftLimit"));
+        return false;
+      }
+      if (next.revision !== current.revision) {
+        if (!submissions.current.get(ownerKey)?.pending)
+          submissions.current.delete(ownerKey);
+        setAttachmentError((error) =>
+          error === t("draftLimit") ? null : error,
+        );
+      }
+      if (
+        patch.prompt !== undefined &&
+        (!patch.prompt.trim() || patch.prompt.startsWith("/"))
+      )
+        planImplementationApproval.current = null;
+      currentDraft.current = next;
+      setDraft(next);
+      return true;
+    },
+    [draftMemory, renderedOwnerKey, t],
+  );
   useEffect(() => {
     const approval = planImplementationApproval.current;
     if (
@@ -387,6 +465,16 @@ export function Composer(props: ComposerProps) {
     active &&
     running &&
     Boolean(props.activeTurn ?? props.snapshot?.runtime.activeTurn);
+  const activeTurn = props.activeTurn ?? props.snapshot?.runtime.activeTurn;
+  const canSteer =
+    active &&
+    running &&
+    !compacting &&
+    !props.turnCancellationPending &&
+    activeTurn?.sessionId === selected?.id &&
+    Boolean(activeTurn?.commandId);
+  const selectedSteering =
+    steeringDelivery?.ownerKey === renderedOwnerKey ? steeringDelivery : null;
   const disabled =
     props.sessionSwitching ||
     Boolean(props.planSelectionPending) ||
@@ -436,6 +524,21 @@ export function Composer(props: ComposerProps) {
       selected.path !== request.path
     )
       return;
+    if (request.feedback) {
+      const { filePath, side, line, code } = request.feedback;
+      const quote = `${formatSourceReference(filePath)} — ${t(side === "new" ? "sourceFeedbackNew" : "sourceFeedbackOld", { path: filePath, line })}\n> ${code.split("\n").join("\n> ")}`;
+      const current = currentDraft.current.prompt;
+      const value = `${current}${current ? "\n\n" : ""}${quote}`;
+      if (!updateDraft({ prompt: value, caret: value.length })) return;
+      setActionMenu(null);
+      setMenuDismissed(true);
+      queueMicrotask(() => {
+        if (draftOwner.current.key !== renderedOwnerKey) return;
+        textarea.current?.focus();
+        textarea.current?.setSelectionRange(value.length, value.length);
+      });
+      return;
+    }
     contextTrigger.current?.focus();
     setActionMenu("files");
   }, [
@@ -443,6 +546,9 @@ export function Composer(props: ComposerProps) {
     contextEntryAvailable,
     selected?.id,
     selected?.path,
+    renderedOwnerKey,
+    t,
+    updateDraft,
   ]);
 
   useEffect(() => {
@@ -459,12 +565,13 @@ export function Composer(props: ComposerProps) {
     const pending = attachmentImport.current;
     if (
       currentDraft.current.images.length +
+        (currentDraft.current.files?.length ?? 0) +
         (pending?.files.length ?? 0) +
         selectedFiles.length >
-      WEB_PROMPT_IMAGE_MAX_COUNT
+      WEB_PROMPT_FILE_MAX_COUNT
     ) {
       setAttachmentError(
-        t("imageAttachmentCount", { count: WEB_PROMPT_IMAGE_MAX_COUNT }),
+        t("fileAttachmentCount", { count: WEB_PROMPT_FILE_MAX_COUNT }),
       );
       return;
     }
@@ -476,6 +583,8 @@ export function Composer(props: ComposerProps) {
       ownerKey: draftOwner.current.key,
       files: selectedFiles,
       staged: [] as StagedPromptImage[],
+      stagedFiles: [] as StagedPromptFile[],
+      controller: new AbortController(),
     };
     attachmentImport.current = importing;
     setAttachmentBusy(true);
@@ -483,7 +592,38 @@ export function Composer(props: ComposerProps) {
     try {
       // This bounded list also accepts later pastes while its current file reads.
       for (const file of importing.files) {
+        let readingImage = /^image\/(?:png|jpeg|gif|webp)$/iu.test(file.type);
         try {
+          if (!readingImage) {
+            const header = new Uint8Array(
+              await file.slice(0, 12).arrayBuffer(),
+            );
+            readingImage = Boolean(sniffPromptImageMime(header));
+          }
+          if (!readingImage) {
+            const attachment = await stagePromptFile(
+              file,
+              importing.controller.signal,
+            );
+            if (
+              attachmentImport.current !== importing ||
+              draftOwner.current.key !== importing.ownerKey
+            )
+              return;
+            const total = [
+              ...(currentDraft.current.files ?? []),
+              ...importing.stagedFiles,
+            ].reduce((sum, item) => sum + item.size, attachment.size);
+            if (total > WEB_PROMPT_FILE_MAX_TOTAL_BYTES)
+              throw new Error("file-total-size");
+            importing.stagedFiles.push(attachment);
+            continue;
+          }
+          if (
+            currentDraft.current.images.length + importing.staged.length >=
+            WEB_PROMPT_IMAGE_MAX_COUNT
+          )
+            throw new Error("image-count");
           const image = await stagePromptImage(file);
           if (
             attachmentImport.current !== importing ||
@@ -501,17 +641,33 @@ export function Composer(props: ComposerProps) {
           if (attachmentImport.current !== importing) return;
           const code = error instanceof Error ? error.message : "image-type";
           const reason =
-            code === "image-size"
-              ? t("imageAttachmentTooLarge")
-              : code === "image-total-size"
-                ? t("imageAttachmentTotalTooLarge")
-                : t("imageAttachmentUnsupported");
+            code === "file-size" || code === "file-total-size"
+              ? t("fileAttachmentTooLarge")
+              : code === "image-count"
+                ? t("imageAttachmentCount", {
+                    count: WEB_PROMPT_IMAGE_MAX_COUNT,
+                  })
+                : !readingImage
+                  ? t("fileAttachmentReadFailed")
+                  : code === "image-size"
+                    ? t("imageAttachmentTooLarge")
+                    : code === "image-total-size"
+                      ? t("imageAttachmentTotalTooLarge")
+                      : code === "image-read"
+                        ? t("imageAttachmentReadFailed")
+                        : t("imageAttachmentUnsupported");
           setAttachmentError(`${file.name || t("attachedImage")}: ${reason}`);
         }
       }
-      if (importing.staged.length > 0) {
+      if (importing.staged.length > 0 || importing.stagedFiles.length > 0) {
         updateDraft(
-          { images: [...currentDraft.current.images, ...importing.staged] },
+          {
+            images: [...currentDraft.current.images, ...importing.staged],
+            files: [
+              ...(currentDraft.current.files ?? []),
+              ...importing.stagedFiles,
+            ],
+          },
           importing.ownerKey,
         );
       }
@@ -586,7 +742,8 @@ export function Composer(props: ComposerProps) {
       draftOwner.current.key === key
         ? currentDraft.current
         : draftMemory.read(key);
-    if (current.prompt || current.images.length > 0) return;
+    if (current.prompt || current.images.length > 0 || current.files?.length)
+      return;
     const restoredImages = (recovery.images ?? []).map((image) => ({
       ...image,
       id:
@@ -655,13 +812,10 @@ export function Composer(props: ComposerProps) {
   }, [draftMemory, props.actions, props.promptAdmissionResolution]);
 
   const sendDraft = async (
-    sendPrompt: (
-      content: string,
-      images?: readonly WebPromptImage[],
-      approval?: PlanImplementationApproval,
-    ) => Promise<boolean>,
+    sendPrompt: WebStoreActions["sendPrompt"],
     explicitImages = false,
     approval?: PlanImplementationApproval,
+    delivery?: WebPromptDelivery,
   ) => {
     if (
       submissions.current.get(draftOwner.current.key)?.pending ||
@@ -684,19 +838,76 @@ export function Composer(props: ComposerProps) {
     };
     submissions.current.set(submission.owner.key, submission);
     let accepted = false;
+    let sendingFiles = false;
     try {
-      accepted = approval
-        ? await sendPrompt(
-            captured.prompt,
-            captured.images.length > 0 || explicitImages
-              ? captured.images
-              : undefined,
-            approval,
+      let content = captured.prompt;
+      let expectedTarget: Awaited<
+        ReturnType<WebStoreActions["prepareSession"]>
+      > = null;
+      if (captured.files?.length) {
+        sendingFiles = true;
+        setAttachmentBusy(true);
+        setAttachmentError(null);
+        expectedTarget = await props.actions.prepareSession();
+        if (!expectedTarget?.sessionPath) return;
+        const uploaded = await client.uploadPromptFiles(
+          expectedTarget.sessionId,
+          expectedTarget.sessionPath,
+          captured.files.map(({ name, data, mimeType, text }) => ({
+            name,
+            data,
+            mimeType,
+            ...(text === undefined ? {} : { text }),
+          })),
+        );
+        if (
+          uploaded.sessionId !== expectedTarget.sessionId ||
+          uploaded.sessionPath !== expectedTarget.sessionPath ||
+          draftOwner.current.key !== submission.owner.key ||
+          uploaded.files.length !== captured.files.length ||
+          uploaded.files.some(
+            (file, index) =>
+              file.name !== captured.files?.[index]?.name ||
+              file.size !== captured.files?.[index]?.size,
           )
-        : explicitImages || captured.images.length > 0
-          ? await sendPrompt(captured.prompt, captured.images)
-          : await sendPrompt(captured.prompt);
+        )
+          return;
+        const references = uploaded.files
+          .map(
+            (file, index) =>
+              `${JSON.stringify(file.name)}: ${formatSourceReference(file.path, file.path)}${file.textPath ? `\n  ${t("fileAttachmentExtractedContent")}${captured.files?.[index]?.extraction === "truncated" ? ` (${t("fileAttachmentTextTruncated")})` : ""}: ${formatSourceReference(file.textPath, file.textPath)}` : ""}`,
+          )
+          .join("\n");
+        content = `${content.trim()}${content.trim() ? "\n\n" : ""}${t("fileAttachmentPromptLabel")}\n${references}`;
+        if (content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
+          setAttachmentError(t("fileAttachmentPromptTooLong"));
+          return;
+        }
+        submission.content = content;
+      }
+      accepted = expectedTarget
+        ? await sendPrompt(
+            content,
+            captured.images,
+            approval,
+            delivery,
+            expectedTarget,
+          )
+        : delivery
+          ? await sendPrompt(content, captured.images, approval, delivery)
+          : approval
+            ? await sendPrompt(
+                content,
+                captured.images.length > 0 || explicitImages
+                  ? captured.images
+                  : undefined,
+                approval,
+              )
+            : explicitImages || captured.images.length > 0
+              ? await sendPrompt(content, captured.images)
+              : await sendPrompt(content);
       if (accepted) {
+        if (delivery?.streamingBehavior === "steer") setSteeringDelivery(null);
         if (approval === planImplementationApproval.current)
           planImplementationApproval.current = null;
         const cleared = draftMemory.clear(
@@ -709,11 +920,27 @@ export function Composer(props: ComposerProps) {
           setAttachmentError(null);
         }
       }
+    } catch (error) {
+      if (draftOwner.current.key === submission.owner.key)
+        setAttachmentError(
+          error instanceof Error
+            ? error.message
+            : t("fileAttachmentReadFailed"),
+        );
     } finally {
+      if (
+        sendingFiles &&
+        draftOwner.current.key === submission.owner.key &&
+        !attachmentImport.current
+      )
+        setAttachmentBusy(false);
       submission.pending = false;
       const retained = draftMemory.read(submission.owner.key);
       if (
-        (accepted || (!retained.prompt && retained.images.length === 0)) &&
+        (accepted ||
+          (!retained.prompt &&
+            retained.images.length === 0 &&
+            !retained.files?.length)) &&
         submissions.current.get(submission.owner.key) === submission
       ) {
         submissions.current.delete(submission.owner.key);
@@ -733,10 +960,19 @@ export function Composer(props: ComposerProps) {
       props.promptAdmissionRecovery ||
       props.promptAdmissionResolution ||
       promptTooLong ||
-      (!prompt.trim() && images.length === 0)
+      (!prompt.trim() && images.length === 0 && files.length === 0)
     )
       return;
     if (attachmentImport.current) return;
+    if (
+      selectedSteering &&
+      (!canSteer ||
+        activeTurn?.commandId !== selectedSteering.expectedTurnCommandId ||
+        planImplementationApproval.current)
+    ) {
+      setCommandError(t("steerStaleTurn"));
+      return;
+    }
     const commandName = /^\/([^\s/]+)/u.exec(prompt.trim())?.[1];
     const command = commandDiscovery.commands.find(
       (item) => item.name === commandName,
@@ -748,7 +984,11 @@ export function Composer(props: ComposerProps) {
       return;
     }
     if (command?.action) {
-      if (prompt.trim() !== `/${command.name}` || images.length > 0) {
+      if (
+        prompt.trim() !== `/${command.name}` ||
+        images.length > 0 ||
+        files.length > 0
+      ) {
         setCommandError(t("commandPanelArguments"));
         return;
       }
@@ -765,6 +1005,12 @@ export function Composer(props: ComposerProps) {
       props.actions.sendPrompt,
       false,
       planImplementationApproval.current ?? undefined,
+      selectedSteering
+        ? {
+            streamingBehavior: "steer",
+            expectedTurnCommandId: selectedSteering.expectedTurnCommandId,
+          }
+        : undefined,
     );
   };
 
@@ -921,6 +1167,19 @@ export function Composer(props: ComposerProps) {
       ? execution.pendingFollowUps
       : undefined;
   const pendingCount = observedQueue ?? props.pendingFollowUpsReceipt;
+  const observedSteering =
+    selected &&
+    execution?.sessionId === selected.id &&
+    execution.sessionPath === selected.path
+      ? execution.pendingSteering
+      : undefined;
+  const steeringCount = observedSteering ?? props.pendingSteeringReceipt;
+  const steeringMessages =
+    observedSteering !== undefined ? (execution?.steeringMessages ?? []) : [];
+  const showingSteering =
+    !props.workspaceDraft &&
+    !props.sessionSwitching &&
+    steeringMessages.length > 0;
   const queuedMessages =
     observedQueue !== undefined ? (execution?.queuedMessages ?? []) : [];
   const queueOccurrences = new Map<string, number>();
@@ -948,19 +1207,21 @@ export function Composer(props: ComposerProps) {
               ? t("stoppingTurn")
               : props.turnTerminalStatus === "cancelled"
                 ? t("stoppedTurn")
-                : !showingQueue &&
-                    (props.pendingFollowUpsReceipt !== null ||
-                      (pendingCount ?? 0) > 0)
-                  ? (pendingCount ?? 0) > 0
-                    ? t("pendingFollowUpsHint", {
-                        count: pendingCount ?? 0,
-                      })
-                    : t("acceptedHint")
-                  : canCompose
-                    ? running
-                      ? t("queuedHint")
-                      : t("enterHint")
-                    : t("activeOnlyHint");
+                : !showingSteering && (steeringCount ?? 0) > 0
+                  ? t("pendingSteeringHint", { count: steeringCount })
+                  : !showingQueue &&
+                      (props.pendingFollowUpsReceipt !== null ||
+                        (pendingCount ?? 0) > 0)
+                    ? (pendingCount ?? 0) > 0
+                      ? t("pendingFollowUpsHint", {
+                          count: pendingCount ?? 0,
+                        })
+                      : t("acceptedHint")
+                    : canCompose
+                      ? running
+                        ? t(selectedSteering ? "steeringHint" : "queuedHint")
+                        : t("enterHint")
+                      : t("activeOnlyHint");
   const showHint =
     canCompose &&
     (compacting ||
@@ -971,7 +1232,8 @@ export function Composer(props: ComposerProps) {
       props.turnTerminalStatus === "cancelled" ||
       (!showingQueue && props.pendingFollowUpsReceipt !== null) ||
       (!showingQueue && (pendingCount ?? 0) > 0) ||
-      (running && Boolean(prompt.trim() || images.length)));
+      (!showingSteering && (steeringCount ?? 0) > 0) ||
+      (running && Boolean(prompt.trim() || images.length || files.length)));
 
   const sessionActionPending = sessionActionOwner === renderedOwnerKey;
   const closeActionMenu = (restoreFocus = false) => {
@@ -1013,6 +1275,22 @@ export function Composer(props: ComposerProps) {
             onClick: () => setActionMenu("main"),
           },
           {
+            id: "file-upload",
+            section: t("composerAdd"),
+            label: t("addFiles"),
+            description: t("fileAttachmentDescription"),
+            icon: <FileText />,
+            disabled:
+              attachmentBusy ||
+              images.length + files.length >= WEB_PROMPT_FILE_MAX_COUNT,
+            onClick: choose(() => {
+              if (imagePicker.current) {
+                imagePicker.current.accept = "";
+                imagePicker.current.click();
+              }
+            }),
+          },
+          {
             id: "image",
             section: t("composerAdd"),
             label: t("addImages"),
@@ -1020,7 +1298,13 @@ export function Composer(props: ComposerProps) {
             icon: <ImagePlus />,
             disabled:
               attachmentBusy || images.length >= WEB_PROMPT_IMAGE_MAX_COUNT,
-            onClick: choose(() => imagePicker.current?.click()),
+            onClick: choose(() => {
+              if (imagePicker.current) {
+                imagePicker.current.accept =
+                  "image/png,image/jpeg,image/gif,image/webp";
+                imagePicker.current.click();
+              }
+            }),
           },
           {
             id: "workspace-file",
@@ -1117,7 +1401,7 @@ export function Composer(props: ComposerProps) {
               }
               onClick={() => {
                 if (
-                  (prompt.trim() || images.length > 0) &&
+                  (prompt.trim() || images.length > 0 || files.length > 0) &&
                   !window.confirm(t("planImplementationReplaceDraft"))
                 )
                   return;
@@ -1258,7 +1542,7 @@ export function Composer(props: ComposerProps) {
                 props.thinkingPendingLevel !== null ||
                 promptTooLong ||
                 props.promptAdmissionRecovery.phase !== "ready" ||
-                (!prompt.trim() && images.length === 0)
+                (!prompt.trim() && images.length === 0 && files.length === 0)
               }
               onClick={() => void sendAsNew()}
             >
@@ -1341,6 +1625,59 @@ export function Composer(props: ComposerProps) {
           )}
         </section>
       )}
+      {showingSteering && (
+        <section
+          className="composer-queue"
+          aria-label={t("steeringMessagesTitle")}
+        >
+          <div className="composer-queue-status" role="status">
+            <span>{t("pendingSteeringHint", { count: steeringCount })}</span>
+            {active && (
+              <button
+                type="button"
+                disabled={sessionActionPending}
+                onClick={() => void sessionAction("clear")}
+              >
+                {t("clearPromptQueue")}
+              </button>
+            )}
+          </div>
+          <ul>
+            {steeringMessages.map((message, index) => {
+              const rowKey = `${selected?.id}\0${selected?.path}\0steer:${index}:${message}`;
+              const expanded = expandedQueuedMessage === rowKey;
+              const text = message || t("queuedImage");
+              const action = t(
+                expanded ? "queuedMessageCollapse" : "queuedMessageExpand",
+              );
+              return (
+                <li key={rowKey}>
+                  <button
+                    type="button"
+                    className={`composer-queue-row ${expanded ? "expanded" : ""}`}
+                    aria-expanded={expanded}
+                    aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
+                    title={action}
+                    onClick={() =>
+                      setExpandedQueuedMessage(expanded ? null : rowKey)
+                    }
+                  >
+                    <CornerDownRight aria-hidden="true" />
+                    <span>{text}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {(steeringCount ?? 0) > steeringMessages.length && (
+            <small>
+              {t("queuedMore", {
+                count: (steeringCount ?? 0) - steeringMessages.length,
+              })}
+            </small>
+          )}
+        </section>
+      )}
       <form
         className={`composer composer-m02 ${props.selectedWorkspace ? "" : "dormant"} ${dragActive ? "is-dragging" : ""}`}
         onSubmit={(event) => void send(event)}
@@ -1390,7 +1727,6 @@ export function Composer(props: ComposerProps) {
           ref={imagePicker}
           className="sr-only"
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
           multiple
           tabIndex={-1}
           aria-hidden="true"
@@ -1413,9 +1749,46 @@ export function Composer(props: ComposerProps) {
               setAttachmentError(null);
           }}
         />
+        <DraftFilePreview
+          ownerKey={renderedOwnerKey}
+          files={files}
+          onRemove={(id) => {
+            if (
+              updateDraft({
+                files: (currentDraft.current.files ?? []).filter(
+                  (item) => item.id !== id,
+                ),
+              })
+            )
+              setAttachmentError(null);
+          }}
+        />
         {attachmentError && (
           <p className="composer-attachment-error" role="alert">
             {attachmentError}
+          </p>
+        )}
+        {draftStorage.status === "failed" && (
+          <p className="composer-attachment-error" role="status">
+            {t("draftStorageUnavailable")}{" "}
+            <button
+              type="button"
+              onClick={() => {
+                void draftMemory.retryStorage().then(() => {
+                  const restored = draftMemory.read(draftOwner.current.key);
+                  currentDraft.current = restored;
+                  restoreCaret.current = true;
+                  setDraft(restored);
+                });
+              }}
+            >
+              {t("draftStorageRetry")}
+            </button>
+          </p>
+        )}
+        {draftStorage.invalid && (
+          <p className="composer-attachment-error" role="status">
+            {t("draftStorageInvalid")}
           </p>
         )}
         {attachmentBusy && <p role="status">{t("imageAttachmentsLoading")}</p>}
@@ -1596,6 +1969,46 @@ export function Composer(props: ComposerProps) {
               )}
           </div>
           <div className="composer-toolbar-controls">
+            {(canSteer || selectedSteering) && (
+              <DropdownMenu
+                button={{
+                  label: t(
+                    selectedSteering ? "steerCurrentTurn" : "sendNextTurn",
+                  ),
+                  variant: "ghost",
+                  size: "sm",
+                  isDisabled:
+                    props.promptAdmissionPending ||
+                    Boolean(props.promptAdmissionRecovery),
+                }}
+                items={[
+                  {
+                    id: "followUp",
+                    label: t("sendNextTurn"),
+                    onClick: () => {
+                      setSteeringDelivery(null);
+                      setCommandError(null);
+                    },
+                  },
+                  {
+                    id: "steer",
+                    label: t("steerCurrentTurn"),
+                    isDisabled: !canSteer,
+                    onClick: () => {
+                      if (!canSteer || !activeTurn) return;
+                      setSteeringDelivery({
+                        ownerKey: renderedOwnerKey,
+                        expectedTurnCommandId: activeTurn.commandId,
+                      });
+                      setCommandError(null);
+                    },
+                  },
+                ]}
+                placement="above"
+                alignment="end"
+                hasChevron
+              />
+            )}
             <div
               className="model-picker-wrap"
               title={
@@ -1638,7 +2051,8 @@ export function Composer(props: ComposerProps) {
                 </button>
               </Tooltip>
             )}
-            {(!canStop || Boolean(prompt.trim() || images.length)) && (
+            {(!canStop ||
+              Boolean(prompt.trim() || images.length || files.length)) && (
               <Tooltip
                 content={t(compacting ? "compactionDraftHelp" : "send")}
                 placement="above"
@@ -1659,7 +2073,9 @@ export function Composer(props: ComposerProps) {
                     props.planSelectionPending ||
                     Boolean(props.promptAdmissionRecovery) ||
                     Boolean(props.promptAdmissionResolution) ||
-                    (!prompt.trim() && images.length === 0)
+                    (!prompt.trim() &&
+                      images.length === 0 &&
+                      files.length === 0)
                   }
                 >
                   <ArrowUp />

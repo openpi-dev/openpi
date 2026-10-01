@@ -20,7 +20,14 @@ export function useGitReview(
   {
     active = true,
     running = false,
-  }: { active?: boolean; running?: boolean } = {},
+    initialSource = "unstaged",
+    initialBaseRef,
+  }: {
+    active?: boolean;
+    running?: boolean;
+    initialSource?: WebGitReviewSource;
+    initialBaseRef?: string;
+  } = {},
 ) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
@@ -32,18 +39,51 @@ export function useGitReview(
   const [result, setResult] = useState<WebGitReviewResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<WebGitReviewSource>("unstaged");
   const sessionId = session?.id;
   const sessionPath = session?.path;
+  const [sourceSelection, setSourceSelection] = useState({
+    sessionId,
+    sessionPath,
+    source: initialSource,
+    baseRef: initialBaseRef,
+  });
+  const source =
+    sourceSelection.sessionId === sessionId &&
+    sourceSelection.sessionPath === sessionPath
+      ? sourceSelection.source
+      : initialSource;
+  const baseRef =
+    sourceSelection.sessionId === sessionId &&
+    sourceSelection.sessionPath === sessionPath
+      ? sourceSelection.baseRef
+      : initialBaseRef;
+  const setSource = useCallback(
+    (next: WebGitReviewSource) => {
+      setSourceSelection({ sessionId, sessionPath, source: next, baseRef });
+    },
+    [sessionId, sessionPath, baseRef],
+  );
+  const setBaseRef = useCallback(
+    (next: string) => {
+      setSourceSelection({
+        sessionId,
+        sessionPath,
+        source: "branch",
+        baseRef: next,
+      });
+    },
+    [sessionId, sessionPath],
+  );
 
   useLayoutEffect(() => {
     // A new target must not display the previous target's files, even briefly.
     void sessionPath;
     void source;
+    void baseRef;
     setResult(null);
     setError(null);
     setLoading(Boolean(sessionId));
-  }, [sessionId, sessionPath, source]);
+  }, [sessionId, sessionPath, source, baseRef]);
 
   const refresh = useCallback(async () => {
     if (!sessionId || !sessionPath) return;
@@ -61,7 +101,11 @@ export function useGitReview(
         sessionId,
         sessionPath,
         controller.signal,
-        { source, offset: "0" },
+        {
+          source,
+          offset: "0",
+          ...(source === "branch" && baseRef ? { baseRef } : {}),
+        },
       );
       if (!controller.signal.aborted) {
         if (!next.ok)
@@ -71,17 +115,27 @@ export function useGitReview(
                 ? "gitReviewNotRepository"
                 : next.reason === "baseline_unavailable"
                   ? "gitReviewBaselineUnavailable"
-                  : "gitReviewFailed",
+                  : next.reason === "base_branch_unavailable"
+                    ? "gitReviewBaseUnavailable"
+                    : next.reason === "invalid_base_branch"
+                      ? "gitReviewBaseInvalid"
+                      : "gitReviewFailed",
             ),
           );
         setResult((previous) => {
-          if (!next.ok && previous?.ok) return previous;
+          if (!next.ok && previous?.ok)
+            return next.branches
+              ? { ...previous, branches: next.branches }
+              : previous;
           if (
             next.ok &&
             previous?.ok &&
             next.snapshot.revision === previous.snapshot.revision
           )
-            return previous;
+            return JSON.stringify(next.branches) ===
+              JSON.stringify(previous.branches)
+              ? previous
+              : { ...previous, branches: next.branches };
           return next;
         });
       }
@@ -111,7 +165,7 @@ export function useGitReview(
         }
       }
     }
-  }, [client, sessionId, sessionPath, source, t]);
+  }, [client, sessionId, sessionPath, source, baseRef, t]);
 
   const loadMore = useCallback(async () => {
     if (
@@ -136,6 +190,7 @@ export function useGitReview(
           source,
           offset: String(snapshot.nextOffset),
           revision: snapshot.revision,
+          ...(source === "branch" && baseRef ? { baseRef } : {}),
         },
       );
       if (controller.signal.aborted) return;
@@ -148,7 +203,7 @@ export function useGitReview(
           ),
         );
       setResult({
-        ok: true,
+        ...next,
         snapshot: {
           ...next.snapshot,
           files: [...snapshot.files, ...next.snapshot.files],
@@ -165,17 +220,23 @@ export function useGitReview(
         setLoading(false);
       }
     }
-  }, [client, sessionId, sessionPath, source, result, t]);
+  }, [client, sessionId, sessionPath, source, baseRef, result, t]);
 
   const readFile = useCallback(
-    async (file: string, signal: AbortSignal, revision: string) => {
+    async (file: string, signal: AbortSignal, expectedRevision: string) => {
       if (!sessionId || !sessionPath) return;
       const response = await client.gitReview(sessionId, sessionPath, signal, {
         source,
         file,
-        revision,
+        revision: expectedRevision,
+        ...(source === "branch" && baseRef ? { baseRef } : {}),
       });
-      if (!response.ok || response.snapshot.revision !== revision)
+      if (!response.ok || response.summaryRevision !== expectedRevision) {
+        if (
+          (response.ok || response.reason === "revision_changed") &&
+          !signal.aborted
+        )
+          void refresh();
         throw new Error(
           t(
             !response.ok && response.reason !== "revision_changed"
@@ -183,9 +244,10 @@ export function useGitReview(
               : "gitReviewChanged",
           ),
         );
+      }
       return response.snapshot.files.find((entry) => entry.path === file);
     },
-    [client, sessionId, sessionPath, source, t],
+    [client, sessionId, sessionPath, source, baseRef, refresh, t],
   );
 
   useEffect(() => {
@@ -252,9 +314,22 @@ export function useGitReview(
       refresh,
       source,
       setSource,
+      baseRef,
+      setBaseRef,
       readFile,
       loadMore,
     }),
-    [result, loading, error, refresh, source, readFile, loadMore],
+    [
+      result,
+      loading,
+      error,
+      refresh,
+      source,
+      setSource,
+      baseRef,
+      setBaseRef,
+      readFile,
+      loadMore,
+    ],
   );
 }

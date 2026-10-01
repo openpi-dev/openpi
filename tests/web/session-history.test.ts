@@ -10,6 +10,8 @@ import {
   jsonByteLength,
   WEB_MAX_ENTRIES,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
+  WEB_MAX_PROMPT_HISTORY_PAGE,
+  WEB_MAX_PROMPT_PREVIEW_CHARS,
 } from "../../web/protocol/types.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
@@ -72,6 +74,500 @@ function assistant(manager: SessionManager, text: string) {
     timestamp: Date.now(),
   });
 }
+
+test("prompt index pages carry only chronological native IDs and use a 100+1 cursor", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  const ids: string[] = [];
+  for (let turn = 0; turn < 205; turn++) {
+    ids.push(
+      manager.appendMessage({
+        role: "user",
+        content: `Private prompt ${turn}`,
+        timestamp: turn,
+      }),
+    );
+    assistant(manager, `Private reply ${turn}`);
+  }
+  const identity = (await adapter.getSnapshot()).selectedSession!;
+  const anchor = manager.getLeafId()!;
+  const beforeRead = JSON.stringify(manager.getEntries());
+  const pages: string[][] = [];
+  let cursor: string | null = null;
+  do {
+    const result = await adapter.getSessionPromptHistory(
+      identity.id,
+      identity.path,
+      anchor,
+      cursor,
+    );
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") return;
+    assert.deepEqual(
+      Object.keys(result.page).sort(),
+      [
+        "anchorEntryId",
+        "entryIds",
+        "nextBeforeEntryId",
+        "requestedBeforeEntryId",
+        "sessionId",
+        "sessionPath",
+      ].sort(),
+    );
+    assert.equal(result.page.requestedBeforeEntryId, cursor);
+    assert.ok(result.page.entryIds.length <= WEB_MAX_PROMPT_HISTORY_PAGE);
+    assert.ok(!JSON.stringify(result.page).includes("Private"));
+    pages.unshift(result.page.entryIds);
+    cursor = result.page.nextBeforeEntryId;
+  } while (cursor);
+  assert.deepEqual(
+    pages.map((page) => page.length),
+    [5, 100, 100],
+  );
+  assert.deepEqual(pages.flat(), ids);
+  assert.equal(new Set(pages.flat()).size, 205);
+  assert.equal(
+    JSON.stringify(manager.getEntries()),
+    beforeRead,
+    "read-only index must not append or acknowledge entries",
+  );
+  const exact = await adapter.getSessionPromptHistory(
+    identity.id,
+    identity.path,
+    ids[99]!,
+  );
+  assert.equal(exact.status, "ok");
+  if (exact.status === "ok") {
+    assert.deepEqual(exact.page.entryIds, ids.slice(0, 100));
+    assert.equal(exact.page.nextBeforeEntryId, null);
+  }
+});
+
+test("prompt preview bounds Unicode, excludes thinking/tools, and ends at the next human prompt", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  const first = manager.appendMessage({
+    role: "user",
+    content: [
+      { type: "text", text: "😀".repeat(245) },
+      { type: "image", mimeType: "image/png", data: "private-image" },
+    ],
+    timestamp: 1,
+  });
+  assistant(manager, "Earlier partial response");
+  manager.appendMessage({
+    role: "toolResult",
+    toolCallId: "tool-1",
+    toolName: "bash",
+    content: [{ type: "text", text: "private tool result" }],
+    isError: false,
+    timestamp: 2,
+  });
+  const response = manager.appendMessage({
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "private reasoning" },
+      { type: "text", text: "𠮷".repeat(245) },
+    ],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    stopReason: "stop",
+    usage,
+    timestamp: 3,
+  });
+  const second = manager.appendMessage({
+    role: "user",
+    content: "Next request",
+    timestamp: 4,
+  });
+  const anchor = assistant(manager, "Wrong turn response");
+  const identity = (await adapter.getSnapshot()).selectedSession!;
+  const beforeRead = JSON.stringify(manager.getEntries());
+  const result = await adapter.getSessionPromptPreview(
+    identity.id,
+    identity.path,
+    anchor,
+    first,
+  );
+  assert.equal(result.status, "ok");
+  if (result.status !== "ok") return;
+  assert.equal(
+    result.preview.prompt,
+    "😀".repeat(WEB_MAX_PROMPT_PREVIEW_CHARS - 1) + "…",
+  );
+  assert.equal(
+    result.preview.response,
+    "𠮷".repeat(WEB_MAX_PROMPT_PREVIEW_CHARS - 1) + "…",
+  );
+  assert.equal(
+    Array.from(result.preview.prompt).length,
+    WEB_MAX_PROMPT_PREVIEW_CHARS,
+  );
+  assert.ok(!JSON.stringify(result.preview).includes("private"));
+  assert.equal(JSON.stringify(manager.getEntries()), beforeRead);
+  assert.equal(
+    (
+      await adapter.getSessionPromptPreview(
+        identity.id,
+        identity.path,
+        first,
+        second,
+      )
+    ).status,
+    "changed",
+  );
+  assert.equal(
+    (
+      await adapter.getSessionPromptPreview(
+        identity.id,
+        identity.path,
+        anchor,
+        response,
+      )
+    ).status,
+    "changed",
+  );
+  const early = await adapter.getSessionPromptPreview(
+    identity.id,
+    identity.path,
+    first,
+    first,
+  );
+  assert.equal(early.status, "ok");
+  if (early.status === "ok") assert.equal(early.preview.response, "");
+});
+
+test("standalone native setup prompts have a preview and a target-retaining same-turn window", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  const setup = manager.appendCustomMessageEntry(
+    "openpi-setup-request",
+    "/openpi-setup adjust theme",
+    true,
+    { command: "openpi-setup", request: "adjust theme" },
+  );
+  const setupResponse = assistant(manager, "Configuration response");
+  manager.appendCustomMessageEntry(
+    "subagent-result",
+    "Not a human prompt",
+    true,
+  );
+  const next = manager.appendMessage({
+    role: "user",
+    content: "Next task",
+    timestamp: 2,
+  });
+  const anchor = assistant(manager, "Later task response");
+  const identity = (await adapter.getSnapshot()).selectedSession!;
+  const index = await adapter.getSessionPromptHistory(
+    identity.id,
+    identity.path,
+    anchor,
+  );
+  assert.equal(index.status, "ok");
+  if (index.status === "ok")
+    assert.deepEqual(index.page.entryIds, [setup, next]);
+  const preview = await adapter.getSessionPromptPreview(
+    identity.id,
+    identity.path,
+    anchor,
+    setup,
+  );
+  assert.equal(preview.status, "ok");
+  if (preview.status === "ok") {
+    assert.equal(preview.preview.prompt, "/openpi-setup adjust theme");
+    assert.equal(preview.preview.response, "Configuration response");
+  }
+  const window = await adapter.getSessionMessageWindow(
+    identity.id,
+    identity.path,
+    setup,
+  );
+  assert.equal(window.status, "ok");
+  if (window.status === "ok") {
+    assert.equal(window.session.history?.anchorEntryId, setup);
+    assert.ok(window.session.entries.some((entry) => entry.id === setup));
+    assert.ok(
+      window.session.entries.some((entry) => entry.id === setupResponse),
+    );
+    assert.ok(!window.session.entries.some((entry) => entry.id === next));
+    assert.ok(
+      jsonByteLength({ session: window.session }) <=
+        WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
+    );
+  }
+});
+
+test("short previews trim visible prose, keep text-part order, and disclose only actual truncation", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  const exact = manager.appendMessage({
+    role: "user",
+    content: "  " + "😀".repeat(240) + "  ",
+    timestamp: 1,
+  });
+  assistant(manager, "  First text  ");
+  const second = manager.appendMessage({
+    role: "user",
+    content: [
+      { type: "text", text: "  First" },
+      { type: "image", data: "private bytes", mimeType: "image/png" },
+      { type: "text", text: "Second  " },
+    ],
+    timestamp: 2,
+  });
+  const anchor = assistant(manager, "  Visible reply  ");
+  const identity = (await adapter.getSnapshot()).selectedSession!;
+  const firstPreview = await adapter.getSessionPromptPreview(
+    identity.id,
+    identity.path,
+    anchor,
+    exact,
+  );
+  assert.equal(firstPreview.status, "ok");
+  if (firstPreview.status === "ok") {
+    assert.equal(firstPreview.preview.prompt, "😀".repeat(240));
+    assert.equal(firstPreview.preview.response, "First text");
+  }
+  const secondPreview = await adapter.getSessionPromptPreview(
+    identity.id,
+    identity.path,
+    anchor,
+    second,
+  );
+  assert.equal(secondPreview.status, "ok");
+  if (secondPreview.status === "ok") {
+    assert.equal(secondPreview.preview.prompt, "First\nSecond");
+    assert.equal(secondPreview.preview.response, "Visible reply");
+  }
+});
+
+test("prompt navigation rejects foreign branch boundaries and copied-ID paths stay distinct", async (t) => {
+  const { manager, adapter, directory } = await fixture(t, true);
+  const root = manager.appendMessage({
+    role: "user",
+    content: "Shared root",
+    timestamp: 1,
+  });
+  const original = assistant(manager, "Original response");
+  const later = manager.appendMessage({
+    role: "user",
+    content: "Later original prompt",
+    timestamp: 2,
+  });
+  const anchor = assistant(manager, "Later original response");
+  const identity = (await adapter.getSnapshot()).selectedSession!;
+  const copyPath = join(directory, "navigation-copy.jsonl");
+  await writeFile(copyPath, await readFile(manager.getSessionFile()!));
+  const copy = SessionManager.open(copyPath);
+  copy.branch(root);
+  const copyAnchor = assistant(copy, "Copied path response");
+  assert.equal(copy.getSessionId(), identity.id);
+  assert.equal(
+    (await adapter.getSessionPromptHistory(identity.id, copyPath, anchor))
+      .status,
+    "changed",
+  );
+  const preview = await adapter.getSessionPromptPreview(
+    identity.id,
+    copyPath,
+    copyAnchor,
+    root,
+  );
+  assert.equal(preview.status, "ok");
+  if (preview.status === "ok") {
+    assert.equal(preview.preview.sessionPath, copyPath);
+    assert.equal(preview.preview.response, "Copied path response");
+  }
+  assert.equal(
+    (
+      await adapter.getSessionPromptHistory(
+        identity.id,
+        identity.path,
+        original,
+        later,
+      )
+    ).status,
+    "changed",
+  );
+  assert.equal(
+    (
+      await adapter.getSessionPromptHistory(
+        identity.id,
+        identity.path,
+        anchor,
+        original,
+      )
+    ).status,
+    "changed",
+    "cursor must be a human prompt",
+  );
+  assert.equal(
+    (await adapter.getSessionPromptHistory("wrong-id", identity.path, anchor))
+      .status,
+    "changed",
+  );
+  assert.equal(
+    (
+      await adapter.getSessionPromptHistory(
+        identity.id,
+        join(directory, "unknown.jsonl"),
+        anchor,
+      )
+    ).status,
+    "not_found",
+  );
+  manager.branch(root);
+  assistant(manager, "New live branch");
+  assert.ok(
+    manager.getEntry(anchor),
+    "removed branch entries remain in the native tree",
+  );
+  assert.equal(
+    (await adapter.getSessionPromptHistory(identity.id, identity.path, anchor))
+      .status,
+    "changed",
+  );
+  assert.equal(
+    (
+      await adapter.getSessionPromptPreview(
+        identity.id,
+        identity.path,
+        manager.getLeafId()!,
+        later,
+      )
+    ).status,
+    "changed",
+  );
+});
+
+test("native command prompts remain navigable and only their exact setup echo is omitted", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  const command = manager.appendCustomEntry(WEB_COMMAND_INPUT, {
+    text: "/openpi-setup same request",
+    commandId: "episode-1",
+  });
+  const echo = manager.appendCustomMessageEntry(
+    "openpi-setup-request",
+    "Model-facing setup episode",
+    true,
+    { command: "openpi-setup", request: "same request" },
+  );
+  const reply = assistant(manager, "Setup response");
+  const independent = manager.appendCustomMessageEntry(
+    "openpi-setup-request",
+    "Another model-facing episode",
+    true,
+    { command: "openpi-setup", request: "same request" },
+  );
+  assistant(manager, "Independent response");
+  const slash = manager.appendCustomEntry(WEB_COMMAND_INPUT, {
+    text: "/model fixture",
+    commandId: "episode-2",
+  });
+  manager.appendCustomEntry(WEB_COMMAND_INPUT, {
+    text: 12,
+    commandId: "invalid",
+  });
+  const invalidSetup = manager.appendCustomMessageEntry(
+    "openpi-setup-request",
+    "Fallback custom prompt",
+    true,
+    { command: "unknown", request: "literal" },
+  );
+  const anchor = assistant(manager, "Custom fallback response");
+  const identity = (await adapter.getSnapshot()).selectedSession!;
+  const index = await adapter.getSessionPromptHistory(
+    identity.id,
+    identity.path,
+    anchor,
+  );
+  assert.equal(index.status, "ok");
+  if (index.status === "ok")
+    assert.deepEqual(index.page.entryIds, [command, independent, slash]);
+  assert.equal(
+    (
+      await adapter.getSessionPromptPreview(
+        identity.id,
+        identity.path,
+        anchor,
+        echo,
+      )
+    ).status,
+    "changed",
+  );
+  const preview = await adapter.getSessionPromptPreview(
+    identity.id,
+    identity.path,
+    anchor,
+    command,
+  );
+  assert.equal(preview.status, "ok");
+  if (preview.status === "ok")
+    assert.deepEqual(
+      [preview.preview.prompt, preview.preview.response],
+      ["/openpi-setup same request", "Setup response"],
+    );
+  const independentPreview = await adapter.getSessionPromptPreview(
+    identity.id,
+    identity.path,
+    anchor,
+    independent,
+  );
+  assert.equal(independentPreview.status, "ok");
+  if (independentPreview.status === "ok")
+    assert.equal(
+      independentPreview.preview.prompt,
+      "/openpi-setup same request",
+    );
+  const fallback = await adapter.getSessionPromptPreview(
+    identity.id,
+    identity.path,
+    anchor,
+    invalidSetup,
+  );
+  assert.equal(
+    fallback.status,
+    "changed",
+    "a setup record without a user display stays custom",
+  );
+  const window = await adapter.getSessionMessageWindow(
+    identity.id,
+    identity.path,
+    command,
+  );
+  assert.equal(window.status, "ok");
+  if (window.status === "ok") {
+    assert.ok(window.session.entries.some((entry) => entry.id === command));
+    assert.ok(window.session.entries.some((entry) => entry.id === reply));
+    assert.ok(
+      !window.session.entries.some((entry) => entry.id === independent),
+    );
+  }
+});
+
+test("an oversized same-turn window falls back to its target without crossing the transcript budget", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  const target = manager.appendMessage({
+    role: "user",
+    content: "Target of a long turn",
+    timestamp: 1,
+  });
+  for (let index = 0; index < 310; index++)
+    assistant(manager, `Response ${index}:` + "Long evidence ".repeat(900));
+  const latest = (await adapter.getSnapshot()).selectedSession!;
+  const window = await adapter.getSessionMessageWindow(
+    latest.id,
+    latest.path,
+    target,
+  );
+  assert.equal(window.status, "ok");
+  if (window.status !== "ok") return;
+  assert.ok(window.session.entries.some((entry) => entry.id === target));
+  assert.equal(window.session.history?.anchorEntryId, target);
+  assert.equal(window.session.truncation.truncated, true);
+  assert.ok(
+    jsonByteLength({ session: window.session }) <=
+      WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
+  );
+});
 
 test("bounded native pages recover the user request omitted by a long single turn", async (t) => {
   const { manager, adapter } = await fixture(t);

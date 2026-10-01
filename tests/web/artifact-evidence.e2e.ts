@@ -250,9 +250,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       .click();
     const workbar = page.locator(".workbar-panel");
     await workbar.getByRole("button", { name: /^(文件|Files)/u }).click();
-    const generatedReport = workbar.getByRole("button", {
-      name: /report space\.md/u,
-    });
+    const generatedReport = workbar.locator(
+      '[data-file-row="report space.md"]',
+    );
     await expect(generatedReport).toBeVisible();
     await generatedReport.click();
     const generatedPreview = page.getByRole("complementary", {
@@ -364,7 +364,12 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       name: /变更|Changes/u,
     });
     await expect(mobileReview).toBeVisible();
-    await expect(page.locator(".conversation-shell")).toBeHidden();
+    await expect(page.locator(".composer")).toHaveCount(1);
+    await expect(page.locator(".composer")).toBeVisible();
+    await expect(page.locator(".task-header")).toBeHidden();
+    await expect(
+      workbar.getByRole("button", { name: /返回聊天|Back to chat/u }),
+    ).toBeVisible();
     expect(
       await mobileReview.evaluate(
         (element) => element.scrollWidth <= element.clientWidth,

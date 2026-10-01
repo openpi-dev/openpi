@@ -1,0 +1,10 @@
+.message-row[data-history-highlighted="true"] {
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+  box-shadow: inset 3px 0 var(--accent);
+  border-radius: 8px;
+}
+
+.message-row[data-history-highlighted="true"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

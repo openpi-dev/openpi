@@ -5,21 +5,21 @@ import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
   ArrowLeft,
   ArrowUp,
-  ArrowDown,
   Check,
-  Pin,
   ChevronDown,
-  LoaderCircle,
   Circle,
   CircleAlert,
   Folder,
   FolderOpen,
   FolderPlus,
   ListOrdered,
+  LoaderCircle,
   MoreHorizontal,
   PanelLeftClose,
+  Pin,
   Plus,
   RefreshCw,
   Search,
@@ -39,8 +39,8 @@ import {
 import { useTranslation } from "react-i18next";
 import {
   WEB_MAX_ARCHIVED_SESSION_QUERY,
-  type WebSnapshot,
   type WebSessionSummary,
+  type WebSnapshot,
 } from "../../../../protocol/types.ts";
 import { OpenPiLogo } from "../../components/OpenPiLogo.tsx";
 import { compactPath, relativeTime, sessionTitle } from "../../lib/format.ts";
@@ -50,6 +50,8 @@ import {
   WebClient,
 } from "../../protocol/client.ts";
 import type { WebStoreActions } from "../../store/web-store.ts";
+import type { CompletedResultExposure } from "../transcript/Transcript.tsx";
+import { TranscriptSearchDialog } from "./TranscriptSearchDialog.tsx";
 
 interface SessionSidebarProps {
   snapshot: WebSnapshot | null;
@@ -61,6 +63,7 @@ interface SessionSidebarProps {
   mobileOpen: boolean;
   settingsDisabled: boolean;
   connected?: boolean;
+  completedResultSeen?: CompletedResultExposure | null;
   returnFocusRef?: RefObject<HTMLButtonElement | null>;
   onOpenSettings: () => void;
   actions: WebStoreActions;
@@ -115,6 +118,7 @@ function ActionMenu({
 export function SessionSidebar(props: SessionSidebarProps) {
   const { t } = useTranslation();
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const [transcriptSearchOpen, setTranscriptSearchOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [draft, setDraft] = useState("");
   const [editError, setEditError] = useState(false);
@@ -145,47 +149,46 @@ export function SessionSidebar(props: SessionSidebarProps) {
       session.path === snapshot.selectedSession?.path &&
       session.id === snapshot.selectedSession?.id,
   );
-  const completedSelection =
-    props.selectedPath === selectedSummary?.path &&
-    selectedSummary?.execution?.status !== "running" &&
-    selectedSummary?.execution?.lastTurn?.outcome === "completed"
-      ? completionKey(selectedSummary)
-      : "";
+  const completedSelection = completionKey(
+    selectedSummary ?? { id: "", path: "" },
+  );
   useEffect(() => {
+    const seen = props.completedResultSeen;
+    const turn = selectedSummary?.execution?.lastTurn;
     if (
-      !completedSelection ||
+      !seen ||
+      !selectedSummary ||
+      props.selectedPath !== seen.sessionPath ||
+      selectedSummary.id !== seen.sessionId ||
+      selectedSummary.path !== seen.sessionPath ||
+      turn?.outcome !== "completed" ||
+      turn.commandId !== seen.commandId ||
+      turn.finishedAt !== seen.finishedAt ||
+      turn.resultEntryId !== seen.resultEntryId ||
       seenCompletions.has(completedSelection) ||
       props.connected === false
     )
       return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const acknowledge = () => {
-      clearTimeout(timer);
-      if (document.visibilityState === "hidden") return;
-      timer = setTimeout(
-        () =>
-          setSeenCompletions((previous) => {
-            const next = new Set([...previous, completedSelection].slice(-500));
-            try {
-              window.sessionStorage.setItem(
-                seenCompletionsKey,
-                JSON.stringify([...next]),
-              );
-            } catch {
-              /* Reading still works without browser storage. */
-            }
-            return next;
-          }),
-        4000,
-      );
-    };
-    acknowledge();
-    document.addEventListener("visibilitychange", acknowledge);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", acknowledge);
-    };
-  }, [completedSelection, seenCompletions, props.connected]);
+    setSeenCompletions((previous) => {
+      const next = new Set([...previous, completedSelection].slice(-500));
+      try {
+        window.sessionStorage.setItem(
+          seenCompletionsKey,
+          JSON.stringify([...next]),
+        );
+      } catch {
+        /* Reading still works without browser storage. */
+      }
+      return next;
+    });
+  }, [
+    completedSelection,
+    selectedSummary,
+    seenCompletions,
+    props.completedResultSeen,
+    props.selectedPath,
+    props.connected,
+  ]);
   const client = useMemo(() => new WebClient(), []);
   const [archived, setArchived] = useState(false);
   const [pinsCollapsed, setPinsCollapsed] = useState(false);
@@ -1022,6 +1025,23 @@ export function SessionSidebar(props: SessionSidebarProps) {
           </div>
         </div>
 
+        {props.searchOpen && (
+          <button
+            type="button"
+            className="sidebar-content-search"
+            onClick={() => setTranscriptSearchOpen(true)}
+          >
+            <Search aria-hidden="true" />
+            {t("transcriptSearch")}
+          </button>
+        )}
+        <TranscriptSearchDialog
+          open={transcriptSearchOpen}
+          initialQuery={props.query}
+          initialIncludeArchived={archived}
+          onClose={() => setTranscriptSearchOpen(false)}
+          onOpenMessage={props.actions.navigateToMessage}
+        />
         {archived && (
           <div className="sidebar-archive-actions">
             <button

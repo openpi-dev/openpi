@@ -305,6 +305,8 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   assert.equal("capability_discovery" in parameters.properties, true);
   assert.equal("ui_web_theme" in parameters.properties, true);
   assert.equal("ui_web_chat_width" in parameters.properties, true);
+  assert.equal("ui_web_sidebar_width" in parameters.properties, true);
+  assert.equal("ui_web_auxiliary_width" in parameters.properties, true);
   assert.equal("ui_web_chat_font_size" in parameters.properties, true);
   assert.equal("ui_web_expand_thinking" in parameters.properties, true);
   assert.equal("child_execution_limit" in parameters.properties, true);
@@ -343,10 +345,14 @@ test("post-edit stays off or preserved unless the setup request changes it", asy
 
   await apply({
     ui_web_chat_width: 960,
+    ui_web_sidebar_width: 320,
+    ui_web_auxiliary_width: 600,
     ui_web_chat_font_size: 16,
     ui_web_expand_thinking: true,
   });
   assert.equal(loadSetupConfig().ui.webChatWidth, 960);
+  assert.equal(loadSetupConfig().ui.webSidebarWidth, 320);
+  assert.equal(loadSetupConfig().ui.webAuxiliaryWidth, 600);
   assert.equal(loadSetupConfig().ui.webChatFontSize, 16);
   assert.equal(loadSetupConfig().ui.webExpandThinking, true);
 

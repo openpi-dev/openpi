@@ -82,6 +82,20 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["font size"],
   },
   {
+    path: "ui.webSidebarWidth",
+    writerTokens: ["params.ui_web_sidebar_width"],
+    statusTokens: ["config.ui.webSidebarWidth"],
+    readmeTerms: ["侧栏宽度"],
+    setupTerms: ["sidebar width"],
+  },
+  {
+    path: "ui.webAuxiliaryWidth",
+    writerTokens: ["params.ui_web_auxiliary_width"],
+    statusTokens: ["config.ui.webAuxiliaryWidth"],
+    readmeTerms: ["工具面板宽度"],
+    setupTerms: ["tool pane width"],
+  },
+  {
     path: "ui.webExpandThinking",
     writerTokens: ["params.ui_web_expand_thinking"],
     statusTokens: ["config.ui.webExpandThinking"],

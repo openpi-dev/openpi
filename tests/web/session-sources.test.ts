@@ -8,10 +8,12 @@ import { collectSessionSources } from "../../web/adapter/session-sources.ts";
 import { WebHost } from "../../web/host/web-host.ts";
 import {
   formatSourceReference,
+  sourceReferenceTokens,
   sourceReferences,
   type WebSessionSources,
 } from "../../web/protocol/session-sources.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
+import { WEB_PROMPT_IMAGE_MAX_BYTES } from "../../web/protocol/types.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
 
 const image = {
@@ -20,6 +22,43 @@ const image = {
   data: "aGk=",
   name: "diagram.png",
 };
+
+test("source tokens preserve exact spans and optional raw path labels without changing source shape", () => {
+  const path = `/private/${"x".repeat(270)}/中文 100% [1].txt`;
+  const reference = formatSourceReference(path, path);
+  const content = `前言\n${reference}\n尾声`;
+  const tokens = sourceReferenceTokens(content);
+  assert.deepEqual(tokens, [
+    {
+      name: path,
+      reference: encodeURI(path),
+      start: 3,
+      end: 3 + reference.length,
+    },
+  ]);
+  assert.equal(content.slice(tokens[0]!.start, tokens[0]!.end), reference);
+  assert.deepEqual(sourceReferences(content), [
+    { name: path.slice(0, 255), reference: encodeURI(path) },
+  ]);
+  assert.deepEqual(
+    sourceReferenceTokens(
+      "[remote](<https://example.com/a.txt>) ![image](<a.txt>) [unsafe](<javascript:x>)",
+    ),
+    [],
+  );
+  assert.deepEqual(
+    sourceReferenceTokens("[newline\nlabel](<a.txt>) [broken](<a.txt>"),
+    [],
+  );
+  assert.equal(
+    sourceReferenceTokens(
+      Array.from({ length: 101 }, (_, i) =>
+        formatSourceReference(`${i}.txt`),
+      ).join("\n"),
+    ).length,
+    100,
+  );
+});
 
 test("sources use native saved user attachments and explicit links, respecting branches", async () => {
   const directory = await mkdtemp(join(tmpdir(), "openpi-native-sources-"));
@@ -79,6 +118,32 @@ test("sources use native saved user attachments and explicit links, respecting b
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("saved source names shorten only complete raw path labels before the display cap", () => {
+  const manager = SessionManager.inMemory("/ws");
+  const path = `/private/${"x".repeat(300)}/中文 100% [1].txt`;
+  const custom = "custom " + "x".repeat(300);
+  manager.appendMessage({
+    role: "user",
+    timestamp: 1,
+    content: [
+      {
+        type: "text",
+        text: `${formatSourceReference(path, path)}\n${formatSourceReference("custom.txt", custom)}\n[bad % path](<bad%path.txt>)`,
+      },
+    ],
+  });
+  const sources = collectSessionSources(manager.getBranch()).sources;
+  assert.deepEqual(
+    sources.map(({ name, reference }) => ({ name, reference })),
+    [
+      { name: "中文 100% [1].txt", reference: encodeURI(path) },
+      { name: custom.slice(0, 255), reference: "custom.txt" },
+      { name: "bad % path", reference: "bad%path.txt" },
+    ],
+  );
+  assert.equal(Object.hasOwn(sources[0]!, "start"), false);
 });
 
 test("source HTTP reads authenticate, bind exact session/branch, and freeze pagination", async () => {
@@ -173,6 +238,72 @@ test("source HTTP reads authenticate, bind exact session/branch, and freeze pagi
       ).json(),
       { mimeType: image.mimeType, data: image.data },
     );
+    const maximum = Buffer.alloc(WEB_PROMPT_IMAGE_MAX_BYTES, 127).toString(
+      "base64",
+    );
+    const large = manager.appendMessage({
+      role: "user",
+      timestamp: 98,
+      content: [
+        { type: "text", text: "large source" },
+        { ...image, data: maximum },
+      ],
+    });
+    const largeResponse = await fetch(
+      `${endpoint}/image?${query}&entryId=${large}&part=1`,
+      { headers },
+    );
+    assert.equal(
+      largeResponse.status,
+      200,
+      largeResponse.status === 200 ? "HTTP 200" : await largeResponse.text(),
+    );
+    assert.deepEqual(await largeResponse.json(), {
+      mimeType: image.mimeType,
+      data: maximum,
+    });
+    for (const target of [
+      new URLSearchParams({ sessionId: "wrong", path: session.path }),
+      new URLSearchParams({
+        sessionId: session.id,
+        path: `${session.path}.wrong`,
+      }),
+    ]) {
+      const denied = await fetch(
+        `${endpoint}/image?${target}&entryId=${large}&part=1`,
+        { headers },
+      );
+      assert.equal(denied.status, 404);
+      assert.deepEqual(await denied.json(), {
+        error: "Session source unavailable",
+      });
+    }
+    assert.equal(
+      (await fetch(`${endpoint}/image?${query}&entryId=${large}&part=1`))
+        .status,
+      401,
+    );
+    for (const data of [
+      Buffer.alloc(WEB_PROMPT_IMAGE_MAX_BYTES + 1).toString("base64"),
+      "aGk",
+      "aGk=\n",
+      "!!!!",
+      "aGl=",
+    ]) {
+      const invalid = manager.appendMessage({
+        role: "user",
+        timestamp: 98,
+        content: [{ ...image, data }],
+      });
+      assert.equal(
+        (
+          await fetch(`${endpoint}/image?${query}&entryId=${invalid}&part=0`, {
+            headers,
+          })
+        ).status,
+        404,
+      );
+    }
     manager.appendMessage({ role: "user", timestamp: 99, content: "next" });
     assert.equal(
       (

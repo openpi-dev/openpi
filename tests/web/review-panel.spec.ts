@@ -19,12 +19,126 @@ import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { parseDiffRows } from "../../web/ui/src/features/review/DiffCodePreview.tsx";
 import { ReviewPanel } from "../../web/ui/src/features/review/ReviewPanel.tsx";
 import { WorkbarPanel } from "../../web/ui/src/features/workbar/WorkbarPanel.tsx";
+import {
+  WorkbarReadingContext,
+  type WorkbarReadingState,
+} from "../../web/ui/src/features/workbar/workbar-reading-state.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
+
+installCheckVisibilityFixture();
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("keeps real branch choices available after a missing base, searches them and restores keyboard focus", async () => {
+  const choose = vi.fn();
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(ReviewPanel, {
+        embedded: true,
+        onClose: () => {},
+        review: {
+          result: {
+            ok: false,
+            reason: "base_branch_unavailable",
+            branches: {
+              currentBranch: "feature",
+              truncated: false,
+              options: [
+                { ref: "refs/heads/release", label: "release" },
+                { ref: "refs/remotes/origin/release", label: "origin/release" },
+              ],
+            },
+          },
+          source: "branch",
+          setBaseRef: choose,
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+      }),
+    ),
+  );
+  expect(screen.getByRole("alert").textContent).toContain(
+    i18n.t("gitReviewBaseUnavailable"),
+  );
+  const trigger = screen.getByRole("button", {
+    name: i18n.t("gitReviewBaseBranch"),
+  });
+  fireEvent.click(trigger);
+  const search = await screen.findByRole("searchbox", {
+    name: i18n.t("gitReviewSearchBranches"),
+  });
+  await waitFor(() => expect(document.activeElement).toBe(search));
+  fireEvent.change(search, { target: { value: "origin" } });
+  const option = screen.getByRole("option", { name: /origin\/release/u });
+  expect(screen.queryByRole("option", { name: /^release/u })).toBeNull();
+  fireEvent.keyDown(search, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(option);
+  fireEvent.click(option);
+  expect(choose).toHaveBeenCalledWith("refs/remotes/origin/release");
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+});
+
+it("keeps the branch trigger through loading but clears the previous base's diff", async () => {
+  const branches = {
+    currentBranch: "feature",
+    options: [
+      { ref: "refs/heads/release", label: "release" },
+      { ref: "refs/heads/main", label: "main" },
+    ],
+    truncated: false,
+  };
+  const node = (baseRef: string, loading: boolean) =>
+    createElement(
+      Providers,
+      null,
+      createElement(ReviewPanel, {
+        embedded: true,
+        onClose: () => {},
+        review: {
+          source: "branch",
+          baseRef,
+          setBaseRef: () => {},
+          loading,
+          error: null,
+          refresh: async () => {},
+          result: loading
+            ? null
+            : {
+                ok: true,
+                branches,
+                snapshot: {
+                  ...snapshot,
+                  comparison: "branch",
+                  baseBranch: baseRef,
+                },
+              },
+        },
+      }),
+    );
+  const { rerender } = render(node("refs/heads/release", false));
+  fireEvent.click(
+    screen.getByRole("button", { name: snapshot.files[0]!.path }),
+  );
+  expect(screen.getByRole("figure").textContent).toContain("new");
+  const trigger = screen.getByRole("button", {
+    name: i18n.t("gitReviewBaseBranch"),
+  });
+  trigger.focus();
+  rerender(node("refs/heads/main", true));
+  expect(screen.queryByRole("figure")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: i18n.t("gitReviewBaseBranch") }),
+  ).toBe(trigger);
+  expect(document.activeElement).toBe(trigger);
+  expect(trigger.getAttribute("aria-busy")).toBe("true");
 });
 
 function wideReviewContainer() {
@@ -48,6 +162,150 @@ function wideReviewContainer() {
   );
   return (width: number) => act(() => resize(width));
 }
+
+it("starts a newly selected wide diff at the top but keeps the current file's reading position", () => {
+  wideReviewContainer();
+  const { container } = render(
+    withI18n(
+      createElement(ReviewPanel, {
+        embedded: true,
+        review: {
+          result: { ok: true, snapshot },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        onClose: () => {},
+      }),
+    ),
+  );
+  const preview = container.querySelector<HTMLElement>(".review-file-preview")!;
+  preview.scrollTop = 480;
+  fireEvent.scroll(preview);
+  fireEvent.click(
+    screen.getByRole("button", { name: snapshot.files[0]!.path }),
+  );
+  expect(preview.scrollTop).toBe(480);
+  fireEvent.click(
+    screen.getByRole("button", { name: snapshot.files[1]!.path }),
+  );
+  expect(screen.getByRole("figure").textContent).toContain(
+    "export const value",
+  );
+  expect(container.querySelector(".review-file-preview")).toBe(preview);
+  expect(preview.scrollTop).toBe(0);
+});
+
+it("starts a newly selected lazy diff at the top after its exact detail resolves", async () => {
+  wideReviewContainer();
+  let resolve!: (file: (typeof snapshot.files)[number]) => void;
+  const readFile = vi.fn(
+    () =>
+      new Promise<(typeof snapshot.files)[number]>((done) => {
+        resolve = done;
+      }),
+  );
+  const data = {
+    ...snapshot,
+    files: [
+      snapshot.files[0]!,
+      { ...snapshot.files[1]!, diff: "", diffLoaded: false },
+    ],
+  };
+  const { container } = render(
+    withI18n(
+      createElement(ReviewPanel, {
+        embedded: true,
+        review: {
+          result: { ok: true, snapshot: data },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+          readFile,
+        },
+        onClose: () => {},
+      }),
+    ),
+  );
+  const preview = container.querySelector<HTMLElement>(".review-file-preview")!;
+  preview.scrollTop = 480;
+  fireEvent.scroll(preview);
+  fireEvent.click(
+    screen.getByRole("button", { name: snapshot.files[1]!.path }),
+  );
+  expect(readFile).toHaveBeenCalledOnce();
+  expect(preview.scrollTop).toBe(0);
+  await act(async () => resolve({ ...snapshot.files[1]!, diffLoaded: true }));
+  expect(screen.getByRole("figure").textContent).toContain(
+    "export const value",
+  );
+  expect(preview.scrollTop).toBe(0);
+});
+
+it("replaces the pending scroll of an unread lazy file and preserves the new file on tool return", () => {
+  wideReviewContainer();
+  const reading: WorkbarReadingState = {
+    review: {
+      scope: "unstaged:",
+      source: "unstaged",
+      selected: snapshot.files[0]!.path,
+      query: "",
+      collapsedDirectories: [],
+      visibleFiles: 200,
+      listScroll: 90,
+      previewScroll: 480,
+    },
+  };
+  const readFile = vi.fn(
+    () => new Promise<(typeof snapshot.files)[number]>(() => {}),
+  );
+  const data = {
+    ...snapshot,
+    files: [
+      { ...snapshot.files[0]!, diff: "", diffLoaded: false },
+      snapshot.files[1]!,
+    ],
+  };
+  const node = () =>
+    withI18n(
+      createElement(
+        WorkbarReadingContext.Provider,
+        { value: reading },
+        createElement(ReviewPanel, {
+          embedded: true,
+          review: {
+            result: { ok: true, snapshot: data },
+            loading: false,
+            error: null,
+            refresh: async () => {},
+            readFile,
+          },
+          onClose: () => {},
+        }),
+      ),
+    );
+  const view = render(node());
+  expect(readFile).toHaveBeenCalledOnce();
+  fireEvent.click(
+    screen.getByRole("button", { name: snapshot.files[1]!.path }),
+  );
+  const preview = view.container.querySelector<HTMLElement>(
+    ".review-file-preview",
+  )!;
+  expect(preview.scrollTop).toBe(0);
+  expect(reading.review?.previewScroll).toBe(0);
+  preview.scrollTop = 135;
+  fireEvent.scroll(preview);
+  view.unmount();
+  const returned = render(node());
+  expect(
+    returned.container.querySelector<HTMLElement>(".review-file-preview")!
+      .scrollTop,
+  ).toBe(135);
+  expect(screen.getByRole("figure").textContent).toContain(
+    "export const value",
+  );
+});
 
 it("keeps a compact directory tree beside the diff, restores collapsed groups after search, and adapts to panel width", async () => {
   const resize = wideReviewContainer();

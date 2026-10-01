@@ -178,7 +178,9 @@ test("saved per-turn review and full native message load at desktop and mobile w
     await expect(
       page.locator(".workbar-panel").getByRole("figure"),
     ).toContainText("saved-turn-1");
-    await expect(page.locator(".conversation-shell")).toBeHidden();
+    await expect(page.locator(".composer")).toHaveCount(1);
+    await expect(page.locator(".composer")).toBeVisible();
+    await expect(page.locator(".task-header")).toBeHidden();
     await page.keyboard.press("Escape");
     await expect(page.locator(".session-review-file")).toHaveCount(5);
     await page.keyboard.press("Escape");

@@ -8,14 +8,16 @@ import {
   type ArtifactMetadata,
   type ArtifactPreview,
   type WorkspaceFileListing,
+  type WorkspaceFileMutation,
+  type WorkspaceFileMutationResult,
 } from "../../../protocol/artifacts.ts";
 import {
   type WebQuestionAnswers,
   type WebQuestionReceipt,
   type WebQuestionRequest,
 } from "../../../protocol/questions.ts";
-import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import type { WebSessionSources } from "../../../protocol/session-sources.ts";
+import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebCommandDiscoveryResult,
@@ -25,8 +27,12 @@ import {
   type WebInteractiveTerminalEvent,
   type WebModelSearchResult,
   type WebModelSummary,
+  type WebPromptDelivery,
   type WebPromptImage,
   type WebSessionHistoryPage,
+  type WebSessionPromptHistoryPage,
+  type WebSessionPromptPreview,
+  type WebSessionProjection,
   type WebSessionSummary,
   type WebSettingsCatalog,
   type WebSettingsPreferencesPatch,
@@ -38,7 +44,14 @@ import type {
   WebModelConfiguration,
   WebModelConfigurations,
   WebProviderAuthProjection,
+  WebSessionForkRequest,
+  WebSessionForkResult,
 } from "../../../runtime/types.ts";
+import type { WebTranscriptSearchResponse } from "../../../search/transcript-search.ts";
+import type {
+  WebPromptFileUpload,
+  WebPromptFilesResponse,
+} from "../../../protocol/prompt-files.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -83,6 +96,8 @@ export interface CommandReceipt {
   id: string;
   accepted: boolean;
   pendingFollowUps?: number;
+  pendingSteering?: number;
+  delivery?: "prompt" | "followUp" | "steer";
 }
 
 export interface SessionMutationResult {
@@ -187,6 +202,26 @@ export class WebClient {
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
   }
 
+  searchTranscripts(
+    query: string,
+    options: { includeArchived?: boolean; signal?: AbortSignal } = {},
+  ) {
+    const params = new URLSearchParams({ q: query });
+    if (options.includeArchived) params.set("includeArchived", "1");
+    return this.request<WebTranscriptSearchResponse>(
+      `/api/sessions/search?${params}`,
+      { signal: options.signal },
+    );
+  }
+
+  async sessionMessageWindow(anchor: WebHistoryAnchor, signal?: AbortSignal) {
+    const result = await this.request<{ session: WebSessionProjection }>(
+      `/api/session/message-window?${new URLSearchParams({ sessionId: anchor.sessionId, path: anchor.sessionPath, entryId: anchor.entryId })}`,
+      { signal },
+    );
+    return result.session;
+  }
+
   async sessionHistory(
     anchor: WebHistoryAnchor,
     beforeEntryId: string,
@@ -197,6 +232,44 @@ export class WebClient {
       { signal, timeoutMessage: "History request timed out. Please retry." },
     );
     return result.session;
+  }
+
+  sessionPromptHistory(
+    anchor: WebHistoryAnchor,
+    beforeEntryId: string | null,
+    signal: AbortSignal,
+  ) {
+    return this.request<WebSessionPromptHistoryPage>(
+      `/api/session/prompt-history?${new URLSearchParams({
+        sessionId: anchor.sessionId,
+        path: anchor.sessionPath,
+        anchorEntryId: anchor.entryId,
+        ...(beforeEntryId === null ? {} : { beforeEntryId }),
+      })}`,
+      {
+        signal,
+        timeoutMessage: "Prompt history request timed out. Please retry.",
+      },
+    );
+  }
+
+  sessionPromptPreview(
+    anchor: WebHistoryAnchor,
+    entryId: string,
+    signal: AbortSignal,
+  ) {
+    return this.request<WebSessionPromptPreview>(
+      `/api/session/prompt-preview?${new URLSearchParams({
+        sessionId: anchor.sessionId,
+        path: anchor.sessionPath,
+        anchorEntryId: anchor.entryId,
+        entryId,
+      })}`,
+      {
+        signal,
+        timeoutMessage: "Prompt preview request timed out. Please retry.",
+      },
+    );
   }
 
   sessionItem(
@@ -244,6 +317,7 @@ export class WebClient {
       file?: string;
       offset?: string;
       revision?: string;
+      baseRef?: string;
     },
   ) {
     return this.request<WebGitReviewResult>(
@@ -271,6 +345,25 @@ export class WebClient {
       `/api/artifacts/files?${new URLSearchParams({ cursor })}`,
       { method: "DELETE" },
     );
+  }
+
+  mutateWorkspaceFile(
+    sessionId: string,
+    sessionPath: string,
+    mutation: WorkspaceFileMutation,
+  ) {
+    return this.request<WorkspaceFileMutationResult>("/api/files/mutate", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId,
+        sessionPath,
+        access: "write-workspace-file",
+        kind: mutation.kind,
+        directory: encodeURI(mutation.directory),
+        name: mutation.name,
+        ...(mutation.kind === "import-file" ? { data: mutation.data } : {}),
+      }),
+    });
   }
 
   resolveArtifact(
@@ -524,6 +617,13 @@ export class WebClient {
     return this.request<SessionMutationResult>("/api/sessions/select", {
       method: "POST",
       body: JSON.stringify({ path }),
+    });
+  }
+
+  forkSession(request: WebSessionForkRequest) {
+    return this.request<WebSessionForkResult>("/api/session/fork", {
+      method: "POST",
+      body: JSON.stringify(request),
     });
   }
 
@@ -892,6 +992,22 @@ export class WebClient {
     );
   }
 
+  uploadPromptFiles(
+    sessionId: string,
+    sessionPath: string,
+    files: readonly WebPromptFileUpload[],
+    signal?: AbortSignal,
+  ) {
+    return this.request<WebPromptFilesResponse>("/api/prompt-files", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath, files }),
+      signal,
+      timeoutMs: 60_000,
+      timeoutMessage:
+        "File upload timed out. Keep the attachments and retry; an identical upload safely recovers its original paths.",
+    });
+  }
+
   async prompt(
     sessionId: string,
     content: string,
@@ -900,6 +1016,7 @@ export class WebClient {
     retry = false,
     images: readonly WebPromptImage[] = [],
     planRevision?: string,
+    delivery?: WebPromptDelivery,
   ) {
     const receipt = await this.request<CommandReceipt>("/api/prompt", {
       method: "POST",
@@ -911,6 +1028,7 @@ export class WebClient {
         retry,
         images,
         ...(planRevision !== undefined ? { planRevision } : {}),
+        ...delivery,
         controllerId: await controllerIdentity(),
       }),
       timeoutMs: 30_000,

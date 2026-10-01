@@ -889,6 +889,8 @@ test("Web appearance fields accept canonical bounds and remain known on explicit
       { webChatWidth: 820, webChatFontSize: 12, webExpandThinking: false },
       { webChatWidth: 960, webChatFontSize: 16, webExpandThinking: true },
       { webChatWidth: 2000, webChatFontSize: 24, webExpandThinking: true },
+      { webSidebarWidth: 220, webAuxiliaryWidth: 360 },
+      { webSidebarWidth: 420, webAuxiliaryWidth: 720 },
     ]) {
       const raw = JSON.stringify({ configVersion, ui });
       writeFileSync(SETUP_CONFIG_PATH, raw);
@@ -917,6 +919,8 @@ test("invalid Web appearance values are diagnosed and block both stored and cand
   const invalidValues = {
     webChatWidth: [819, 2001, 960.5, "960", null, true, {}, []],
     webChatFontSize: [11, 25, 16.5, "16", null, false, {}, []],
+    webSidebarWidth: [219, 421, 320.5, "320", null, false],
+    webAuxiliaryWidth: [359, 721, 520.5, "520", null, false],
     webExpandThinking: [0, 1, "true", null, {}, []],
   };
   for (const [key, values] of Object.entries(invalidValues)) {

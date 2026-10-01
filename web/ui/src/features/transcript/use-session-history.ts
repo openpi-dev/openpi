@@ -1,4 +1,11 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   jsonByteLength,
   WEB_MAX_ENTRIES,
@@ -9,10 +16,10 @@ import {
 } from "../../../../protocol/types.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
 import {
-  rememberSessionReading,
-  sessionReadingScope as scopeFor,
   type ReadingWindow,
+  rememberSessionReading,
   type SessionReadingCache,
+  sessionReadingScope as scopeFor,
 } from "./session-reading-state.ts";
 
 const MAX_READING_ENTRIES = WEB_MAX_ENTRIES * 4;
@@ -22,7 +29,10 @@ type PageRequest = {
   scope: string;
   anchor: WebHistoryAnchor;
   before: string;
+  source: ReadingWindow;
+  consuming: boolean;
   page?: WebSessionHistoryPage;
+  done?: Promise<void>;
 };
 
 function compatible(window: ReadingWindow, session: WebSessionProjection) {
@@ -104,8 +114,13 @@ export function useSessionHistory(
     onAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
     onRefresh?: () => Promise<boolean>;
     beforePrepend: () => void;
+    /** Observe a visible, connected transcript; only one unseen page is read. */
+    preload?: boolean;
   },
   readingCache?: SessionReadingCache,
+  navigation?:
+    | (WebHistoryAnchor & { revision: number; session: WebSessionProjection })
+    | null,
 ) {
   const client = useMemo(() => new WebClient(), []);
   const savedReaders = useMemo<SessionReadingCache>(
@@ -123,12 +138,39 @@ export function useSessionHistory(
     savedOnEntry.current.state?.window ?? null,
   );
   const request = useRef<PageRequest | null>(null);
+  const prefetchAttempt = useRef<string | null>(null);
   const refreshAttempt = useRef<string | null>(null);
   const [window, setWindow] = useState(cache.current);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reset, setReset] = useState(0);
   const previousScope = useRef(scope);
+  const appliedNavigation = useRef<string | null>(null);
+  const navigationKey = navigation
+    ? JSON.stringify([
+        navigation.sessionId,
+        navigation.sessionPath,
+        navigation.entryId,
+        navigation.revision,
+      ])
+    : null;
+  const navigationWindow =
+    navigation &&
+    selected &&
+    navigationKey !== appliedNavigation.current &&
+    navigation.sessionId === selected.id &&
+    navigation.sessionPath === selected.path &&
+    navigation.session.id === selected.id &&
+    navigation.session.path === selected.path &&
+    navigation.session.history?.anchorEntryId === navigation.entryId &&
+    navigation.session.history.anchorOnBranch === true &&
+    navigation.session.entries.some((entry) => entry.id === navigation.entryId)
+      ? {
+          session: navigation.session,
+          anchor: navigation.session.entries.at(-1)!.id,
+          validatedLeaf: navigation.session.history?.leafEntryId ?? null,
+        }
+      : null;
 
   const publish = useCallback(
     (next: ReadingWindow) => {
@@ -149,6 +191,7 @@ export function useSessionHistory(
     (changed = false) => {
       request.current?.controller.abort();
       request.current = null;
+      prefetchAttempt.current = null;
       savedReaders.delete(
         scopeFor(cache.current?.session ?? latest.current.selected),
       );
@@ -203,11 +246,13 @@ export function useSessionHistory(
       const session = latest.current.selected;
       if (
         !pending.page ||
+        !pending.consuming ||
         request.current !== pending ||
         pending.controller.signal.aborted ||
         !current ||
         !session ||
         pending.scope !== scopeFor(session) ||
+        current.session.history?.beforeEntryId !== pending.before ||
         !compatible(current, session)
       )
         return;
@@ -254,10 +299,23 @@ export function useSessionHistory(
   );
 
   useLayoutEffect(() => {
+    if (navigationWindow && navigationKey !== appliedNavigation.current) {
+      previousScope.current = scope;
+      request.current?.controller.abort();
+      request.current = null;
+      prefetchAttempt.current = null;
+      refreshAttempt.current = null;
+      setLoading(false);
+      setError(null);
+      appliedNavigation.current = navigationKey;
+      publish(navigationWindow);
+      return;
+    }
     if (previousScope.current !== scope) {
       previousScope.current = scope;
       request.current?.controller.abort();
       request.current = null;
+      prefetchAttempt.current = null;
       cache.current = savedOnEntry.current.state?.window ?? null;
       setWindow(cache.current);
       setLoading(false);
@@ -265,6 +323,18 @@ export function useSessionHistory(
       refreshAttempt.current = null;
       setReset((value) => value + 1);
       if (!cache.current) latest.current.callbacks.onAnchorChange?.(null);
+    }
+    const pending = request.current;
+    if (
+      pending &&
+      !pending.consuming &&
+      selected &&
+      !compatible(pending.source, selected)
+    ) {
+      // An unseen page has no reading anchor to revalidate. Discard it without
+      // changing the displayed window or requesting every sliding live tail.
+      pending.controller.abort();
+      request.current = null;
     }
     let current = cache.current;
     if (!current || !selected) return;
@@ -289,7 +359,16 @@ export function useSessionHistory(
       publish(current);
     }
     if (request.current?.page) applyPage(request.current);
-  }, [scope, selected, clear, refresh, publish, applyPage]);
+  }, [
+    scope,
+    selected,
+    clear,
+    refresh,
+    publish,
+    applyPage,
+    navigationWindow,
+    navigationKey,
+  ]);
 
   useLayoutEffect(() => {
     const current = cache.current;
@@ -307,6 +386,7 @@ export function useSessionHistory(
     return () => {
       request.current?.controller.abort();
       request.current = null;
+      prefetchAttempt.current = null;
       latest.current.callbacks.onAnchorChange?.(null);
     };
   }, [scope, savedReaders]);
@@ -323,8 +403,81 @@ export function useSessionHistory(
     return cache.current;
   }, [publish]);
 
-  const loadOlder = async () => {
-    if (request.current) return;
+  const readPage = useCallback(
+    (current: ReadingWindow, consuming: boolean) => {
+      const session = latest.current.selected;
+      if (!session || request.current) return;
+      const before = current.session.history?.beforeEntryId;
+      if (!before) return;
+      const pending: PageRequest = {
+        controller: new AbortController(),
+        scope: scopeFor(session),
+        before,
+        source: current,
+        consuming,
+        anchor: {
+          sessionId: session.id,
+          sessionPath: session.path,
+          entryId: current.anchor,
+        },
+      };
+      request.current = pending;
+      if (consuming) {
+        setLoading(true);
+        setError(null);
+      }
+      pending.done = (async () => {
+        try {
+          const page = await client.sessionHistory(
+            pending.anchor,
+            before,
+            pending.controller.signal,
+          );
+          if (
+            request.current !== pending ||
+            pending.controller.signal.aborted ||
+            pending.scope !== scopeFor(latest.current.selected)
+          )
+            return;
+          if (
+            page.id !== session.id ||
+            page.path !== session.path ||
+            page.anchorEntryId !== pending.anchor.entryId ||
+            page.requestedBeforeEntryId !== before ||
+            page.history?.anchorEntryId !== pending.anchor.entryId ||
+            page.history.anchorOnBranch !== true
+          )
+            throw new WebApiError(
+              "Session history identity changed",
+              409,
+              "SESSION_HISTORY_CHANGED",
+            );
+          pending.page = page;
+          if (pending.consuming) {
+            applyPage(pending);
+            if (request.current === pending) refresh();
+          }
+        } catch (reason) {
+          if (request.current !== pending || pending.controller.signal.aborted)
+            return;
+          request.current = null;
+          if (!pending.consuming) return;
+          setLoading(false);
+          if (
+            reason instanceof WebApiError &&
+            reason.code === "SESSION_HISTORY_CHANGED"
+          ) {
+            clear(true);
+            void latest.current.callbacks.onRefresh?.();
+          } else setError("historyUnavailable");
+        }
+      })();
+      return pending.done;
+    },
+    [applyPage, clear, client, refresh],
+  );
+
+  const loadOlder = useCallback(async () => {
     const session = latest.current.selected;
     if (!session?.history?.leafEntryId) return;
     let current = cache.current;
@@ -332,75 +485,71 @@ export function useSessionHistory(
       refresh(true);
       return;
     }
-    if (!current) {
-      current = retainReading();
-    }
+    if (!current) current = retainReading();
     if (!current) return;
-    const before = current.session.history?.beforeEntryId;
-    if (!before) return;
-    const pending: PageRequest = {
-      controller: new AbortController(),
-      scope: scopeFor(session),
-      before,
-      anchor: {
-        sessionId: session.id,
-        sessionPath: session.path,
-        entryId: current.anchor,
-      },
-    };
-    request.current = pending;
-    setLoading(true);
-    setError(null);
-    try {
-      const page = await client.sessionHistory(
-        pending.anchor,
-        before,
-        pending.controller.signal,
-      );
+    const pending = request.current;
+    if (pending) {
       if (
-        request.current !== pending ||
-        pending.controller.signal.aborted ||
-        pending.scope !== scopeFor(latest.current.selected)
-      )
-        return;
-      if (
-        page.id !== session.id ||
-        page.path !== session.path ||
-        page.anchorEntryId !== pending.anchor.entryId ||
-        page.requestedBeforeEntryId !== before ||
-        page.history?.anchorEntryId !== pending.anchor.entryId ||
-        page.history.anchorOnBranch !== true
-      )
-        throw new WebApiError(
-          "Session history identity changed",
-          409,
-          "SESSION_HISTORY_CHANGED",
-        );
-      pending.page = page;
-      applyPage(pending);
-      if (request.current === pending) refresh();
-    } catch (reason) {
-      if (request.current !== pending || pending.controller.signal.aborted)
-        return;
-      request.current = null;
-      setLoading(false);
-      if (
-        reason instanceof WebApiError &&
-        reason.code === "SESSION_HISTORY_CHANGED"
+        pending.scope === scopeFor(session) &&
+        pending.before === current.session.history?.beforeEntryId &&
+        compatible(pending.source, session)
       ) {
-        clear(true);
-        void latest.current.callbacks.onRefresh?.();
-      } else setError("historyUnavailable");
+        pending.consuming = true;
+        setLoading(true);
+        setError(null);
+        if (pending.page) applyPage(pending);
+        return pending.done;
+      }
+      pending.controller.abort();
+      request.current = null;
     }
-  };
+    return readPage(current, true);
+  }, [applyPage, readPage, refresh, retainReading]);
+
+  useEffect(() => {
+    if (!callbacks.preload) {
+      const pending = request.current;
+      if (pending && !pending.consuming) {
+        pending.controller.abort();
+        request.current = null;
+        prefetchAttempt.current = null;
+      }
+      return;
+    }
+    if (error || request.current || !selected || window !== cache.current)
+      return;
+    const current = window;
+    if (current && !compatible(current, selected)) return;
+    const source =
+      current ??
+      (selected.history?.leafEntryId
+        ? {
+            session: selected,
+            anchor: selected.history.leafEntryId,
+            validatedLeaf: selected.history.leafEntryId,
+          }
+        : null);
+    if (!source?.session.history?.beforeEntryId) return;
+    // A fresh Session gets one page, not a new request for every live snapshot.
+    // Consuming a page advances this boundary and permits one adjacent prefetch.
+    const key = JSON.stringify([
+      scope,
+      current ? source.anchor : "initial",
+      current ? source.session.history.beforeEntryId : null,
+    ]);
+    if (prefetchAttempt.current === key) return;
+    prefetchAttempt.current = key;
+    void readPage(source, false);
+  }, [callbacks.preload, error, scope, selected, window, readPage]);
   const storedWindow =
     window && scopeFor(window.session) === scope ? window : null;
   // Project a verified append before committing the cache update. Otherwise a
   // single stale render hides live messages and remounts their DOM on recovery.
   const visible =
-    storedWindow && selected && compatible(storedWindow, selected)
+    navigationWindow ??
+    (storedWindow && selected && compatible(storedWindow, selected)
       ? extendVerifiedWindow(storedWindow, selected)
-      : storedWindow;
+      : storedWindow);
   const resetToLatest = useCallback(() => clear(), [clear]);
   const verifying = Boolean(
     visible && selected && !compatible(visible, selected),

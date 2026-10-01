@@ -27,6 +27,7 @@ import {
   WEB_MAX_GIT_REVIEW_FILES,
   WEB_MAX_SNAPSHOT_BYTES,
   type WebGitReviewFile,
+  type WebGitReviewBranches,
   type WebGitReviewFileStatus,
   type WebGitReviewResult,
   type WebGitReviewSnapshot,
@@ -74,6 +75,7 @@ export interface GitReviewReadOptions {
   source?: WebGitReviewSource;
   filePath?: string;
   summary?: boolean;
+  baseRef?: string;
 }
 
 interface GitReviewBaselineLimits {
@@ -173,25 +175,50 @@ async function refExists(root: string, revision: string) {
   }
 }
 
-async function baseBranch(root: string, current: string | null) {
+function branchLabel(ref: string) {
+  return ref.replace(/^refs\/(?:heads|remotes)\//u, "");
+}
+
+async function branchExists(root: string, ref: string) {
+  if (ref.length > 1024 || !/^refs\/(?:heads|remotes)\/.+/u.test(ref) || /[\u0000-\u0020\u007f]/u.test(ref)) return false;
+  try {
+    await git(root, ["show-ref", "--verify", "--quiet", ref]);
+    // Symbolic aliases are not concrete comparison choices.
+    return !(await git(root, ["symbolic-ref", "--quiet", ref]).catch(() => ""));
+  } catch { return false; }
+}
+
+async function reviewBranches(root: string, currentBranch: string | null, selected?: string) {
+  const output = await git(root, ["for-each-ref", "--count=201", "--format=%(refname)%00%(symref)", "refs/heads/", "refs/remotes/"]);
+  const lines = output.split("\n").filter(Boolean);
+  const options = lines.flatMap(line => {
+    const [ref, symbolic] = line.split("\0");
+    return ref && !symbolic && ref.length <= 1024 ? [{ ref, label: branchLabel(ref) }] : [];
+  }).slice(0, 200);
+  if (selected && !options.some(option => option.ref === selected)) {
+    if (options.length === 200) options.pop();
+    options.push({ ref: selected, label: branchLabel(selected) });
+  }
+  return { currentBranch, options, truncated: lines.length > 200 || lines.some(line => line.split("\0")[0]!.length > 1024) };
+}
+
+async function baseBranch(root: string) {
   const remoteHead = cleanLine(
     await git(root, [
       "symbolic-ref",
       "--quiet",
-      "--short",
       "refs/remotes/origin/HEAD",
     ]).catch(() => ""),
   );
   const candidates = [
     remoteHead,
-    "origin/main",
-    "origin/master",
-    "main",
-    "master",
+    "refs/remotes/origin/main",
+    "refs/remotes/origin/master",
+    "refs/heads/main",
+    "refs/heads/master",
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
-    if (candidate === current) continue;
-    if (await refExists(root, candidate)) return candidate;
+    if (await branchExists(root, candidate)) return candidate;
   }
   return null;
 }
@@ -480,9 +507,9 @@ async function untrackedChanges(
   return { files, diffBytes, truncated };
 }
 
-function boundSnapshot(snapshot: WebGitReviewSnapshot) {
+function boundSnapshot(snapshot: WebGitReviewSnapshot, branches?: WebGitReviewBranches) {
   while (
-    jsonByteLength({ ok: true, snapshot }) > WEB_MAX_SNAPSHOT_BYTES &&
+    jsonByteLength({ ok: true, snapshot, branches }) > WEB_MAX_SNAPSHOT_BYTES &&
     snapshot.files.some((file) => file.diff)
   ) {
     let file: WebGitReviewFile | undefined;
@@ -498,7 +525,7 @@ function boundSnapshot(snapshot: WebGitReviewSnapshot) {
     snapshot.truncated = true;
   }
   while (
-    jsonByteLength({ ok: true, snapshot }) > WEB_MAX_SNAPSHOT_BYTES &&
+    jsonByteLength({ ok: true, snapshot, branches }) > WEB_MAX_SNAPSHOT_BYTES &&
     snapshot.files.length > 0
   ) {
     snapshot.files.pop();
@@ -525,20 +552,23 @@ export async function readGitReview(
     };
   } & GitReviewReadOptions,
 ): Promise<WebGitReviewResult> {
+  let branches: WebGitReviewBranches | undefined;
   try {
+    if (options?.baseRef !== undefined && (options.baseline || (options.source ?? "branch") !== "branch")) return { ok: false, reason: "git_failed" };
     if (options?.filePath && options.expectedRevision) {
-      const { filePath, expectedRevision, ...comparison } = options;
-      const summaryOptions = { ...comparison, summary: true, offset: 0, expectedRevision };
-      // Detail revisions differ from summary revisions. Verify the selected
-      // comparison on both sides of the read before assigning its identity.
+      // A lazy detail must belong to the summary the operator pinned. Git has
+      // external writers: compare bounded native observations before/after,
+      // rather than claiming an atomic snapshot or caching a second diff store.
+      const summaryOptions = { ...options, filePath: undefined, expectedRevision: undefined, summary: true, offset: 0 };
       const before = await readGitReview(cwd, summaryOptions);
       if (!before.ok) return before;
-      const detail = await readGitReview(cwd, { ...comparison, filePath });
+      if (before.snapshot.revision !== options.expectedRevision) return { ok: false, reason: "revision_changed", ...(before.branches ? { branches: before.branches } : {}) };
+      const detail = await readGitReview(cwd, { ...options, expectedRevision: undefined });
       if (!detail.ok) return detail;
       const after = await readGitReview(cwd, summaryOptions);
       if (!after.ok) return after;
-      detail.snapshot.revision = expectedRevision;
-      return detail;
+      if (after.snapshot.revision !== options.expectedRevision) return { ok: false, reason: "revision_changed", ...(after.branches ? { branches: after.branches } : {}) };
+      return { ...detail, summaryRevision: options.expectedRevision };
     }
     if (options?.offset !== undefined && (!options.summary || !Number.isSafeInteger(options.offset) || options.offset < 0 || options.offset >= GIT_REVIEW_MAX_SUMMARY_FILES || options.filePath)) return { ok: false, reason: "git_failed" };
     const root = cleanLine(
@@ -567,10 +597,16 @@ export async function readGitReview(
             .join(delimiter),
         }
       : undefined;
-    const base =
-      source === "branch" && head
-        ? await baseBranch(root, currentBranch)
-        : null;
+    let base: string | null = null;
+    if (source === "branch") {
+      if (!head) return { ok: false, reason: "unborn_repository", branches: await reviewBranches(root, currentBranch) };
+      if (options?.baseRef !== undefined) {
+        if (!(await branchExists(root, options.baseRef))) return { ok: false, reason: "invalid_base_branch", branches: await reviewBranches(root, currentBranch) };
+        base = options.baseRef;
+      } else base = await baseBranch(root);
+      branches = await reviewBranches(root, currentBranch, base ?? undefined);
+      if (!base) return { ok: false, reason: "base_branch_unavailable", branches };
+    }
     const mergeBase =
       base && !options?.baseline
         ? cleanLine(await git(root, ["merge-base", base, "HEAD"]))
@@ -617,7 +653,7 @@ export async function readGitReview(
         complete: !incomplete && allFiles.every((file) => !file.statsUnavailable),
       } } : {}),
       ...(paged ? { listComplete: !incomplete, ...(!incomplete ? { totalFiles: allFiles.length } : {}) } : {}),
-    });
+    }, branches);
     const fileIdentities: string[][] = [];
     if (options?.summary && source !== "staged") {
       const identityFiles = paged ? allFiles : snapshot.files;
@@ -640,6 +676,8 @@ export async function readGitReview(
           fileIdentities,
           currentBranch,
           base,
+          head,
+          mergeBase,
           totals: snapshot.totals,
           files: (paged ? allFiles : snapshot.files).map(
             ({ path, previousPath, status, diff, diffTruncated, additions, deletions }) => ({
@@ -664,6 +702,7 @@ export async function readGitReview(
     return {
       ok: true,
       snapshot,
+      ...(branches ? { branches } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -671,7 +710,7 @@ export async function readGitReview(
       return { ok: false, reason: "not_git_repository" };
     if (/bad revision|unknown revision|ambiguous argument 'HEAD'/iu.test(message))
       return { ok: false, reason: "unborn_repository" };
-    return { ok: false, reason: "git_failed" };
+    return { ok: false, reason: "git_failed", ...(branches ? { branches } : {}) };
   }
 }
 

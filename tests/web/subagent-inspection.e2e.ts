@@ -162,7 +162,7 @@ for (const width of [1280, 390]) {
     await expect(overviewTrigger).toBeFocused();
     await page
       .getByRole("button", {
-        name: "子代理：1 运行中 · 6 条记录",
+        name: "子代理：1 运行中 · 4 已完成 · 1 其他记录",
         exact: true,
       })
       .click();
@@ -223,7 +223,7 @@ for (const width of [1280, 390]) {
     await expect(page.locator(".conversation-shell")).toBeVisible();
     await page
       .getByRole("button", {
-        name: "子代理：1 运行中 · 6 条记录",
+        name: "子代理：1 运行中 · 4 已完成 · 1 其他记录",
         exact: true,
       })
       .click();
@@ -235,7 +235,7 @@ for (const width of [1280, 390]) {
       await dialog.getByRole("button", { name: /Readonly task 6/ }).click();
       await page
         .getByRole("button", {
-          name: "子代理：1 运行中 · 6 条记录",
+          name: "子代理：1 运行中 · 4 已完成 · 1 其他记录",
           exact: true,
         })
         .click();

@@ -1,17 +1,18 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   jsonByteLength,
   type WebSessionHistoryPage,
   type WebSessionProjection,
 } from "../../web/protocol/types.ts";
-import { useSessionHistory } from "../../web/ui/src/features/transcript/use-session-history.ts";
 import {
   rememberSessionReading,
-  sessionReadingScope,
   type SessionReadingCache,
+  sessionReadingScope,
 } from "../../web/ui/src/features/transcript/session-reading-state.ts";
+import { useSessionHistory } from "../../web/ui/src/features/transcript/use-session-history.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 
 afterEach(() => {
@@ -248,6 +249,190 @@ it("does not fetch or retain sliding snapshots until the reader asks for history
   expect(result.current.engaged).toBe(false);
   expect(read).not.toHaveBeenCalled();
   expect(onAnchorChange).not.toHaveBeenCalled();
+});
+
+it("preloads only one adjacent page without installing or acknowledging unseen entries", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue(page(4, 5, "e7", "e6"));
+  const selected = session(6, 7);
+  const { result, rerender, beforePrepend, onAnchorChange } = setup(selected, {
+    preload: true,
+  });
+  await act(async () => {});
+  expect(read).toHaveBeenCalledOnce();
+  expect(result.current.session).toBe(selected);
+  expect(result.current.engaged).toBe(false);
+  expect(result.current.loading).toBe(false);
+  expect(beforePrepend).not.toHaveBeenCalled();
+  expect(onAnchorChange).not.toHaveBeenCalled();
+  for (let index = 10; index < 100; index++)
+    rerender({ selected: session(index, index + 1) });
+  expect(read).toHaveBeenCalledOnce();
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  expect(result.current.engaged).toBe(false);
+});
+
+it("consumes the buffered page and preloads exactly one new page at the new cursor", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValueOnce(page(4, 5, "e7", "e6"))
+    .mockResolvedValueOnce(page(2, 3, "e7", "e4"))
+    .mockResolvedValueOnce(page(0, 1, "e7", "e2"));
+  const { result, beforePrepend, onAnchorChange } = setup(session(6, 7), {
+    preload: true,
+  });
+  await act(async () => {});
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls.map(([, before]) => before)).toEqual(["e6", "e4"]);
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+  ]);
+  expect(beforePrepend).toHaveBeenCalledOnce();
+  expect(onAnchorChange).toHaveBeenLastCalledWith({
+    sessionId: "s",
+    sessionPath: "/sessions/s.jsonl",
+    entryId: "e7",
+  });
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(result.current.session?.entries[0]?.id).toBe("e2");
+  expect(result.current.hasMore).toBe(true);
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(result.current.hasMore).toBe(false);
+});
+
+it("keeps buffered entries unseen when the reader leaves bottom before asking for the previous page", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue(page());
+  const { result, rerender, beforePrepend } = setup(session(), {
+    preload: true,
+  });
+  await act(async () => {});
+  act(() => {
+    result.current.retainReading();
+  });
+  rerender({ selected: session() });
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e2",
+    "e3",
+  ]);
+  expect(beforePrepend).not.toHaveBeenCalled();
+  expect(read).toHaveBeenCalledOnce();
+});
+
+it("promotes an in-flight prefetch instead of requesting the same cursor again", async () => {
+  let finish!: (value: WebSessionHistoryPage) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+  const { result, beforePrepend } = setup(session(), { preload: true });
+  act(() => {
+    void result.current.loadOlder();
+    void result.current.loadOlder();
+  });
+  expect(read).toHaveBeenCalledOnce();
+  expect(result.current.loading).toBe(true);
+  await act(async () => finish(page()));
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(result.current.loading).toBe(false);
+  expect(beforePrepend).toHaveBeenCalledOnce();
+});
+
+it("never installs a late preload from a copied Session path", async () => {
+  const pending: ((value: WebSessionHistoryPage) => void)[] = [];
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+  const { result, rerender, beforePrepend } = setup(session(), {
+    preload: true,
+  });
+  const replacement = session(20, 21, { path: "/sessions/copy.jsonl" });
+  rerender({ selected: replacement });
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  expect(read).toHaveBeenCalledTimes(2);
+  await act(async () => pending[0]!(page()));
+  expect(result.current.session).toBe(replacement);
+  expect(result.current.engaged).toBe(false);
+  expect(beforePrepend).not.toHaveBeenCalled();
+});
+
+it("does not spin on failed preloads and retries on a reader's explicit request", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValueOnce(page());
+  const { result, rerender, beforePrepend } = setup(session(), {
+    preload: true,
+  });
+  await act(async () => {});
+  rerender({ selected: session() });
+  expect(read).toHaveBeenCalledOnce();
+  expect(result.current.error).toBeNull();
+  expect(result.current.engaged).toBe(false);
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(beforePrepend).toHaveBeenCalledOnce();
+});
+
+it("aborts unseen preloads while the transcript is hidden or disconnected", () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(() => new Promise(() => {}));
+  const callbacks = { preload: true };
+  const { result, rerender } = setup(session(), callbacks);
+  expect(read).toHaveBeenCalledOnce();
+  callbacks.preload = false;
+  rerender({ selected: session() });
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  expect(result.current.engaged).toBe(false);
+  rerender({ selected: session() });
+  expect(read).toHaveBeenCalledOnce();
+  callbacks.preload = true;
+  rerender({ selected: session() });
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls[1]![2].aborted).toBe(false);
+});
+
+it("restarts the one adjacent preload after StrictMode replays effect cleanup", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue(page());
+  const selected = session();
+  const beforePrepend = vi.fn();
+  const { result } = renderHook(
+    () => useSessionHistory(selected, { beforePrepend, preload: true }),
+    { wrapper: StrictMode },
+  );
+  await act(async () => {});
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  expect(read.mock.calls[1]![2].aborted).toBe(false);
+  expect(result.current.session).toBe(selected);
+  expect(result.current.engaged).toBe(false);
+  expect(beforePrepend).not.toHaveBeenCalled();
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(beforePrepend).toHaveBeenCalledOnce();
 });
 
 it("loads native older entries before the current page and reaches the start", async () => {

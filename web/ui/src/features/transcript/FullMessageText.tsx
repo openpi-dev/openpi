@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Markdown } from "../../components/Markdown.tsx";
 import { WebClient } from "../../protocol/client.ts";
+import { UserMessageContent } from "./UserMessageContent.tsx";
 
 export function FullMessageText({
   preview,
@@ -87,7 +88,10 @@ export function FullMessageText({
         {markdown ? (
           <Markdown>{text}</Markdown>
         ) : (
-          <div className="message-body">{text}</div>
+          <UserMessageContent
+            content={text}
+            incomplete={fullText === undefined && nextCursor !== null}
+          />
         )}
       </div>
       {fullText === undefined && nextCursor !== null && (

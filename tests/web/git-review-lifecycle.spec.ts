@@ -16,6 +16,113 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("binds a chosen base to the exact Session and cancels an earlier comparison", async () => {
+  vi.useFakeTimers();
+  let finish!: (value: WebGitReviewResult) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "gitReview")
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValue({
+      ...oldResult,
+      snapshot: {
+        ...oldResult.snapshot,
+        comparison: "branch",
+        baseBranch: "refs/heads/main",
+        revision: "new",
+      },
+    });
+  const selected = session("same-id");
+  const { result, rerender } = renderHook(
+    ({ selected }) =>
+      useGitReview(selected, 1, {
+        initialSource: "branch",
+        initialBaseRef: "refs/heads/release",
+      }),
+    { initialProps: { selected } },
+  );
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  expect(read.mock.calls[0]?.[3]).toEqual({
+    source: "branch",
+    offset: "0",
+    baseRef: "refs/heads/release",
+  });
+  act(() => result.current.setBaseRef("refs/heads/main"));
+  expect(read.mock.calls[0]?.[2]?.aborted).toBe(true);
+  await act(async () => finish(oldResult));
+  expect(result.current.result).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  expect(read.mock.calls[1]?.[3]?.baseRef).toBe("refs/heads/main");
+  rerender({ selected: { ...selected, path: "/sessions/copied.jsonl" } });
+  expect(result.current.baseRef).toBe("refs/heads/release");
+  expect(result.current.result).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  expect(read.mock.calls.at(-1)?.[1]).toBe("/sessions/copied.jsonl");
+  expect(read.mock.calls.at(-1)?.[3]?.baseRef).toBe("refs/heads/release");
+});
+
+it("passes the pinned summary revision to a lazy detail and refreshes on drift or an unconfirmed response", async () => {
+  vi.useFakeTimers();
+  const latest = {
+    ...oldResult,
+    snapshot: { ...oldResult.snapshot, revision: "latest" },
+  };
+  const read = vi
+    .spyOn(WebClient.prototype, "gitReview")
+    .mockResolvedValueOnce(oldResult)
+    .mockResolvedValueOnce({ ok: false, reason: "revision_changed" })
+    .mockResolvedValueOnce(latest);
+  const { result } = renderHook(() =>
+    useGitReview(session("a"), 1, {
+      initialSource: "branch",
+      initialBaseRef: "refs/heads/release",
+    }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  await act(async () => {
+    await expect(
+      result.current.readFile(
+        "old-session.txt",
+        new AbortController().signal,
+        "old",
+      ),
+    ).rejects.toThrow(i18n.t("gitReviewChanged"));
+  });
+  expect(read.mock.calls[1]?.[3]).toEqual({
+    source: "branch",
+    baseRef: "refs/heads/release",
+    file: "old-session.txt",
+    revision: "old",
+  });
+  expect(result.current.result).toEqual(latest);
+  read
+    .mockResolvedValueOnce({ ...latest, summaryRevision: "another-summary" })
+    .mockResolvedValueOnce(latest);
+  await act(async () => {
+    await expect(
+      result.current.readFile(
+        "old-session.txt",
+        new AbortController().signal,
+        "latest",
+      ),
+    ).rejects.toThrow(i18n.t("gitReviewChanged"));
+  });
+  read.mockResolvedValueOnce({ ...latest, summaryRevision: "latest" });
+  await act(async () => {
+    expect(
+      await result.current.readFile(
+        "old-session.txt",
+        new AbortController().signal,
+        "latest",
+      ),
+    ).toEqual(latest.snapshot.files[0]);
+  });
+});
+
 it("requests a versioned next page and rejects changed or late session pages", async () => {
   vi.useFakeTimers();
   const first = {

@@ -8,8 +8,8 @@ import {
   FilePenLine,
   FileText,
   Folder,
+  GitBranch,
   Globe,
-  Image as ImageIcon,
   Lightbulb,
   Pencil,
   RotateCcw,
@@ -22,6 +22,7 @@ import {
 import {
   Fragment,
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -51,10 +52,10 @@ import {
   compactSummary,
   formatElapsedMs,
   formatTurnTime,
-  turnTitle,
 } from "../../lib/format.ts";
 import { isControlledSession } from "../../lib/session-control.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
+import { CompactionStatus } from "./CompactionStatus.tsx";
 import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
 import {
@@ -65,8 +66,17 @@ import {
 import { ToolEvidence } from "./ToolEvidence.tsx";
 import { type OpenTurnReview, TurnChangesCard } from "./TurnChangesCard.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
-import { CompactionStatus } from "./CompactionStatus.tsx";
+import { TurnNavigation, type TurnNavigationItem } from "./TurnNavigation.tsx";
+import { UserImageAttachments } from "./UserImageAttachments.tsx";
+import { UserMessageContent } from "./UserMessageContent.tsx";
 import { useSessionHistory } from "./use-session-history.ts";
+import { usePromptNavigation } from "./use-prompt-navigation.ts";
+import {
+  setupDisplayMessage,
+  isSetupPromptEcho,
+} from "../../../../protocol/prompt-navigation.ts";
+import "./provider-outcomes.css";
+import "./conversation-navigation.css";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -82,6 +92,14 @@ interface DisplayEntry {
   optimistic?: LiveEntry["optimistic"];
 }
 
+export interface CompletedResultExposure {
+  sessionId: string;
+  sessionPath: string;
+  commandId: string;
+  finishedAt: number;
+  resultEntryId: string;
+}
+
 interface TranscriptProps {
   activityObserved?: boolean;
   snapshot: WebSnapshot;
@@ -93,50 +111,28 @@ interface TranscriptProps {
   thinkingDurations: Record<string, number>;
   scrollToBottom: number;
   readingCache?: SessionReadingCache;
+  historyNavigation?:
+    | (WebHistoryAnchor & { revision: number; session: WebSessionProjection })
+    | null;
   onResend: (content: string) => Promise<boolean>;
+  onFork?: (anchor: WebHistoryAnchor) => Promise<boolean>;
+  forkAvailable?: boolean;
+  forkPending?: boolean;
+  resultExposureEnabled?: boolean;
+  onCompletedResultSeen?: (completion: CompletedResultExposure) => void;
   onInspectSubagent?: (id: string) => void;
   onReviewTurn?: OpenTurnReview;
   onHistoryAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
   onRefreshHistory?: () => Promise<boolean>;
+  onNavigateToMessage?: (
+    anchor: WebHistoryAnchor,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
   onPromptProjection?: (
     sessionId: string,
     sessionPath: string,
     pairs: { key: string; entryId: string }[],
   ) => void;
-}
-
-function UserImageAttachments({ message }: { message: WebLiveMessage }) {
-  const { t } = useTranslation();
-  const images =
-    message.parts?.filter(
-      (part): part is Extract<WebMessagePart, { type: "image" }> =>
-        part.type === "image",
-    ) ?? [];
-  if (images.length === 0) return null;
-  const occurrences = new Map<string, number>();
-  const keyedImages = images.map((image) => {
-    const identity = `${image.mimeType}:${image.name ?? ""}:${image.previewUrl ?? ""}`;
-    const occurrence = occurrences.get(identity) ?? 0;
-    occurrences.set(identity, occurrence + 1);
-    return { image, key: `${identity}:${occurrence}` };
-  });
-  return (
-    <section className="message-attachments" aria-label={t("imageAttachments")}>
-      {keyedImages.map(({ image, key }) => (
-        <div className="message-attachment" key={key}>
-          {image.previewUrl ? (
-            <img
-              src={image.previewUrl}
-              alt={image.name ?? t("attachedImage")}
-            />
-          ) : (
-            <ImageIcon aria-hidden="true" />
-          )}
-          <span>{image.name ?? t("attachedImage")}</span>
-        </div>
-      ))}
-    </section>
-  );
 }
 
 type Status = "running" | "done" | "error" | "warn" | "unknown";
@@ -149,10 +145,12 @@ interface RenderRow {
   processPreview?: string;
   processStatus?: Status;
   error?: boolean;
-  outcome?: "failed" | "interrupted";
+  outcome?: "completed" | "failed" | "interrupted";
   pendingPrompt?: boolean;
   promptCommandId?: string;
   promptEntryId?: string;
+  commandHandledInputId?: string;
+  commandHandledCommandId?: string;
   timing?: WebTurnTiming;
 }
 
@@ -262,6 +260,109 @@ function ProviderOutcome({
       )}
     </div>
   );
+}
+
+type ProviderAttemptState =
+  | "recovered"
+  | "retrying"
+  | "interrupted"
+  | "earlier";
+
+function ProviderAttempts({
+  attempts,
+  state,
+}: {
+  attempts: { entry: DisplayEntry; content?: RenderRow[] }[];
+  state: ProviderAttemptState;
+}) {
+  const { t } = useTranslation();
+  return (
+    <details className={`provider-outcome provider-attempts ${state}`}>
+      <summary>
+        <ChevronRight aria-hidden="true" />
+        {state !== "earlier" && (
+          <strong>
+            {t(
+              state === "recovered"
+                ? "modelRequestRecovered"
+                : state === "retrying"
+                  ? "modelRetrying"
+                  : "modelRequestStopped",
+            )}
+          </strong>
+        )}
+        <span>{t("modelFailedAttempts", { count: attempts.length })}</span>
+      </summary>
+      <ol>
+        {attempts.map(({ entry, content }) => (
+          <li key={entry.key} data-history-entry={entry.entryId ?? entry.key}>
+            <p>{entry.message.errorMessage || t("modelFailureUnknown")}</p>
+            {content?.map((row) => (
+              <Fragment key={row.key}>{row.content}</Fragment>
+            ))}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+/** A Pi run keeps failed attempts in history even after a later response. */
+function providerFailures(entries: DisplayEntry[], running: boolean) {
+  const finalErrors = new Set<number>();
+  const groups = new Map<
+    number,
+    {
+      attempts: DisplayEntry[];
+      state: ProviderAttemptState;
+    }
+  >();
+  let failures: number[] = [];
+  let lastAssistant = -1;
+  const finishRun = (timing?: WebTurnTiming, live = false) => {
+    if (failures.length > 0) {
+      const terminal = entries[lastAssistant]?.message.stopReason;
+      const interrupted =
+        timing?.outcome === "cancelled" || terminal === "aborted";
+      const finalError =
+        terminal === "error" && !interrupted && !(live && running);
+      if (finalError) finalErrors.add(lastAssistant);
+      const collapsed = finalError ? failures.slice(0, -1) : failures;
+      const groupIndex = collapsed.at(-1);
+      if (groupIndex !== undefined) {
+        groups.set(groupIndex, {
+          attempts: collapsed.map((index) => entries[index]!),
+          state: interrupted
+            ? "interrupted"
+            : terminal === "stop" ||
+                terminal === "length" ||
+                terminal === "toolUse"
+              ? "recovered"
+              : live && running
+                ? "retrying"
+                : "earlier",
+        });
+      }
+    }
+    failures = [];
+    lastAssistant = -1;
+  };
+  entries.forEach((entry, index) => {
+    if (entry.optimistic) return;
+    if (entry.timing) finishRun(entry.timing);
+    else if (
+      entry.message.role === "user" ||
+      (entry.message.role === "custom" &&
+        entry.message.customType === "openpi-setup-request")
+    )
+      finishRun();
+    else if (entry.message.role === "assistant") {
+      lastAssistant = index;
+      if (entry.message.stopReason === "error") failures.push(index);
+    }
+  });
+  finishRun(undefined, true);
+  return { finalErrors, groups };
 }
 
 function iconForTool(name: string) {
@@ -576,12 +677,18 @@ function MessageActions({
   copyRequiresFull = false,
   timestamp,
   onResend,
+  onFork,
+  canFork = false,
+  forkPending = false,
 }: {
   content: string;
   editable: boolean;
   copyRequiresFull?: boolean;
   timestamp?: string;
   onResend: (value: string) => Promise<boolean>;
+  onFork?: () => Promise<boolean>;
+  canFork?: boolean;
+  forkPending?: boolean;
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -600,6 +707,7 @@ function MessageActions({
   const [draft, setDraft] = useState(content);
   const [submitting, setSubmitting] = useState(false);
   const editInput = useRef<HTMLTextAreaElement>(null);
+  const editHintId = useId();
   useEffect(() => {
     if (editing) editInput.current?.focus();
   }, [editing]);
@@ -619,6 +727,7 @@ function MessageActions({
           ref={editInput}
           value={draft}
           aria-label={t("editMessage")}
+          aria-describedby={editHintId}
           readOnly={submitting}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -630,6 +739,9 @@ function MessageActions({
             }
           }}
         />
+        <p className="message-edit-hint" id={editHintId}>
+          {t("editMessageHint")}
+        </p>
         <div className="message-edit-actions">
           <button
             type="button"
@@ -654,6 +766,23 @@ function MessageActions({
   return (
     <div className={`message-actions${copyFailed ? " copy-failed" : ""}`}>
       {time && <time dateTime={timestamp}>{time}</time>}
+      {onFork && (
+        <button
+          type="button"
+          aria-label={t("forkMessage")}
+          title={t(
+            forkPending
+              ? "forkSessionPending"
+              : canFork
+                ? "forkMessageHint"
+                : "forkSessionUnavailable",
+          )}
+          disabled={!canFork || forkPending}
+          onClick={() => void onFork()}
+        >
+          <GitBranch aria-hidden="true" />
+        </button>
+      )}
       {editable && (
         <button
           type="button"
@@ -739,13 +868,47 @@ function CustomResult({ message }: { message: WebLiveMessage }) {
     );
   }
   if (message.customType === "subagent-result") {
+    const results = Array.isArray(details.results)
+      ? details.results.map(record)
+      : [details];
+    const statuses = results.map((result) =>
+      result.outcome === "interrupted"
+        ? "warn"
+        : canonicalStatus(result.status),
+    );
+    const status: Status = statuses.includes("error")
+      ? "error"
+      : statuses.includes("warn")
+        ? "warn"
+        : statuses.includes("running")
+          ? "running"
+          : statuses.length > 0 && statuses.every((value) => value === "done")
+            ? "done"
+            : "unknown";
     return (
       <ActivityCard
         family="subagent"
-        title={`Subagent ${String(details.id || "")} · ${String(details.title || "result")}`}
-        meta={[details.outcome, details.elapsed].filter(Boolean).join(" · ")}
-        body={message.content}
-        status={canonicalStatus(details.status)}
+        title={t("subagentBackgroundResult", { count: results.length })}
+        meta={results
+          .map((result) =>
+            [
+              String(result.title || result.id || ""),
+              result.outcome === "interrupted"
+                ? t("subagentState_interrupted")
+                : ["running", "done", "error"].includes(String(result.status))
+                  ? t(`subagentState_${result.status}`)
+                  : t("unknownState"),
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          )
+          .join(" / ")}
+        body={
+          typeof details.displayContent === "string"
+            ? details.displayContent
+            : message.content
+        }
+        status={status}
       />
     );
   }
@@ -791,27 +954,6 @@ function isEmptyToolOutput(content: string) {
   return ["", "[]", "{}", "null"].includes(content.trim());
 }
 
-function setupDisplayMessage(message: WebLiveMessage) {
-  if (
-    message.role !== "custom" ||
-    message.customType !== "openpi-setup-request" ||
-    message.truncation?.details
-  )
-    return message;
-  const details = record(message.details);
-  if (
-    (details.command !== "openpi-setup" && details.command !== "my-pi-setup") ||
-    typeof details.request !== "string"
-  )
-    return message;
-  return {
-    ...message,
-    role: "user",
-    content: `/${details.command}${details.request ? ` ${details.request}` : ""}`,
-    parts: undefined,
-  };
-}
-
 function messageIdentity(message: WebLiveMessage) {
   if (message.role === "toolResult" && message.toolCallId)
     return `tool-result-${message.toolCallId}`;
@@ -820,9 +962,50 @@ function messageIdentity(message: WebLiveMessage) {
   return undefined;
 }
 
-function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
+function buildEntries(
+  snapshot: WebSnapshot,
+  liveMessages: LiveEntry[],
+  nativeRowKeys: Map<string, string>,
+) {
   const persisted = snapshot.selectedSession?.entries ?? [];
   const nativeById = new Map(persisted.map((entry) => [entry.id, entry]));
+  for (const id of nativeRowKeys.keys())
+    if (!nativeById.has(id)) nativeRowKeys.delete(id);
+  // Native IDs own historic rows. A live disclosure can keep its existing DOM
+  // only when both sides contain exactly one complete, equal projected payload.
+  const exactNative = new Map<string, PersistedEntry[]>();
+  const exactLive = new Map<string, LiveEntry[]>();
+  const disclosureSignature = (message: WebLiveMessage) =>
+    ["assistant", "toolResult"].includes(message.role ?? "") &&
+    !message.truncation?.truncated
+      ? JSON.stringify(message)
+      : null;
+  for (const entry of persisted) {
+    const signature = entry.message && disclosureSignature(entry.message);
+    if (!signature) continue;
+    const group = exactNative.get(signature) ?? [];
+    group.push(entry);
+    exactNative.set(signature, group);
+  }
+  for (const live of liveMessages) {
+    if (live.optimistic) continue;
+    const signature = disclosureSignature(live.message);
+    if (!signature) continue;
+    const group = exactLive.get(signature) ?? [];
+    group.push(live);
+    exactLive.set(signature, group);
+  }
+  const aliasedKeys = new Set(nativeRowKeys.values());
+  for (const [signature, native] of exactNative) {
+    const live = exactLive.get(signature);
+    if (native.length !== 1 || live?.length !== 1) continue;
+    const id = native[0]!.id;
+    const key = live[0]!.key;
+    if (nativeRowKeys.has(id) || aliasedKeys.has(key) || nativeById.has(key))
+      continue;
+    nativeRowKeys.set(id, key);
+    aliasedKeys.add(key);
+  }
   const liveKeys = new Map(
     liveMessages.map((live) => [
       messageIdentity(live.message) ?? live.key,
@@ -863,17 +1046,12 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
       : undefined;
     // The exact native parent identifies this command episode. Do not collapse
     // separate setup requests merely because their text is the same.
-    if (
-      entry.message.customType === "openpi-setup-request" &&
-      message.role === "user" &&
-      parent?.customType === "openpi-web-command-input" &&
-      parent.commandId &&
-      parent.content === message.content
-    )
-      return [];
+    if (isSetupPromptEcho(entry.message, parent)) return [];
     return [
       {
-        key: messageIdentity(entry.message) ?? entry.id,
+        // Provider timestamps can repeat across distinct native messages. Live
+        // reconciliation and timing remain separate from persisted row identity.
+        key: nativeRowKeys.get(entry.id) ?? entry.id,
         entryId: entry.id,
         timingKey: liveKeys.get(messageIdentity(entry.message) ?? entry.id),
         timestamp: entry.timestamp,
@@ -1039,7 +1217,8 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
           !matchedMessages.has(index) &&
           (identity === undefined
             ? candidate.signature === legacy
-            : candidate.identity === identity),
+            : candidate.identity === identity &&
+              candidate.signature === legacySignature(message)),
       );
       if (match >= 0) {
         matchedMessages.add(match);
@@ -1047,7 +1226,7 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
       }
     }
     const next: DisplayEntry = {
-      key: messageIdentity(message) ?? live.key,
+      key: live.key,
       timingKey: live.key,
       timestamp: live.timestamp ?? new Date().toISOString(),
       message,
@@ -1070,7 +1249,27 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
     queueCounts.set(entry.message.content, count - 1);
     return false;
   });
-  return { entries: [...entries, ...visiblePending], projectedPrompts };
+  // The existing projection receipt also keeps the user row's presentation
+  // identity stable while its optimistic input becomes a native Session entry.
+  // Native entry IDs, order and action targets remain canonical.
+  const promptKeys = new Map(
+    liveMessages.flatMap((live) =>
+      live.optimistic?.projectedEntryId
+        ? [[live.optimistic.projectedEntryId, live.key] as const]
+        : [],
+    ),
+  );
+  for (const pair of projectedPrompts) promptKeys.set(pair.entryId, pair.key);
+  return {
+    entries: [
+      ...entries.map((entry) => {
+        const key = entry.entryId && promptKeys.get(entry.entryId);
+        return key ? { ...entry, key } : entry;
+      }),
+      ...visiblePending,
+    ],
+    projectedPrompts,
+  };
 }
 
 function ProcessSequence({
@@ -1300,16 +1499,27 @@ function ConversationTurn({
   onReviewTurn?: OpenTurnReview;
 }) {
   const { t } = useTranslation();
-  const failed = rows.some((row) => row.outcome === "failed");
-  const interrupted = rows.some((row) => row.outcome === "interrupted");
+  const lastOutcome = [...rows]
+    .reverse()
+    .find((row) => row.outcome || row.timing);
+  const outcome = lastOutcome?.timing?.outcome ?? lastOutcome?.outcome;
   const answered = rows.some((row) => row.kind === "response");
-  const status = failed
-    ? "failed"
-    : interrupted
-      ? "interrupted"
-      : active
-        ? "running"
-        : answered
+  const prompt = rows.find((row) => row.kind === "prompt");
+  const commandHandled = Boolean(
+    prompt?.promptEntryId &&
+      rows.some(
+        (row) =>
+          row.commandHandledInputId === prompt.promptEntryId &&
+          row.commandHandledCommandId === prompt.promptCommandId,
+      ),
+  );
+  const status = active
+    ? "running"
+    : outcome === "failed"
+      ? "failed"
+      : outcome === "interrupted" || outcome === "cancelled"
+        ? "interrupted"
+        : outcome === "completed" || answered || commandHandled
           ? "complete"
           : "waiting";
   const variant =
@@ -1459,11 +1669,34 @@ function captureReadingPosition(element: HTMLElement, pinned: boolean) {
   };
 }
 
+function upwardInputReachesConversation(event: Event, root: HTMLElement) {
+  for (const node of event.composedPath()) {
+    if (node === root) return true;
+    if (!(node instanceof HTMLElement)) continue;
+    const style = getComputedStyle(node);
+    if (!/^(auto|scroll|overlay)$/.test(style.overflowY)) continue;
+    if (
+      node.scrollTop > 0 ||
+      /^(contain|none)$/.test(style.overscrollBehaviorY)
+    )
+      return false;
+  }
+  return false;
+}
+
 export function Transcript(props: TranscriptProps) {
   const { t } = useTranslation();
   const viewport = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const lastScrollTop = useRef(0);
   const [readingHistory, setReadingHistory] = useState(false);
+  const reveal = useRef<AbortController | null>(null);
+  const navigationObserved =
+    props.activityObserved !== false && props.resultExposureEnabled !== false;
+  const cancelReveal = useCallback(() => {
+    reveal.current?.abort();
+    reveal.current = null;
+  }, []);
   const lastPath = useRef<string | undefined>(undefined);
   const lastScrollRequest = useRef(props.scrollToBottom);
   const prependAnchor = useRef<{
@@ -1476,11 +1709,26 @@ export function Transcript(props: TranscriptProps) {
     () => props.readingCache ?? new Map(),
     [props.readingCache],
   );
+  const navigation = props.historyNavigation;
+  const navigationKey = navigation
+    ? JSON.stringify([
+        navigation.sessionId,
+        navigation.sessionPath,
+        navigation.entryId,
+        navigation.revision,
+      ])
+    : null;
+  const lastNavigation = useRef<string | null>(null);
+  const [highlightedNavigation, setHighlightedNavigation] =
+    useState<WebHistoryAnchor | null>(null);
   const history = useSessionHistory(
     props.snapshot.selectedSession,
     {
       onAnchorChange: props.onHistoryAnchorChange,
       onRefresh: props.onRefreshHistory,
+      preload:
+        props.activityObserved !== false &&
+        props.resultExposureEnabled !== false,
       beforePrepend: () => {
         const element = viewport.current;
         if (!element) return;
@@ -1492,12 +1740,31 @@ export function Transcript(props: TranscriptProps) {
       },
     },
     readingCache,
+    navigation,
   );
   const selected = history.session;
   const selectedId = selected?.id;
   const selectedPath = selected?.path;
   const selectedCwd = selected?.cwd;
+  const highlightedEntry =
+    highlightedNavigation &&
+    highlightedNavigation.sessionId === selectedId &&
+    highlightedNavigation.sessionPath === selectedPath
+      ? highlightedNavigation.entryId
+      : undefined;
   const hydrationScope = JSON.stringify([selectedId, selectedPath]);
+  const promptScope = JSON.stringify([
+    props.snapshot.selectedSession?.id,
+    props.snapshot.selectedSession?.path,
+    props.snapshot.selectedSession?.history?.leafEntryId ??
+      props.snapshot.selectedSession?.entries.at(-1)?.id,
+  ]);
+  useLayoutEffect(() => {
+    void promptScope;
+    void navigationKey;
+    if (!navigationObserved) cancelReveal();
+    return cancelReveal;
+  }, [promptScope, navigationKey, navigationObserved, cancelReveal]);
   useLayoutEffect(() => {
     const element = viewport.current;
     if (!element || !selectedId || !selectedPath) return;
@@ -1539,6 +1806,12 @@ export function Transcript(props: TranscriptProps) {
     (selectedExecution
       ? selectedExecution.status === "running"
       : active && props.snapshot.runtime.status === "running");
+  const nativeRowKeys = useRef({
+    scope: hydrationScope,
+    keys: new Map<string, string>(),
+  });
+  if (nativeRowKeys.current.scope !== hydrationScope)
+    nativeRowKeys.current = { scope: hydrationScope, keys: new Map() };
   const { entries, projectedPrompts } = useMemo(
     () =>
       buildEntries(
@@ -1551,6 +1824,7 @@ export function Transcript(props: TranscriptProps) {
                   entry.optimistic.sessionPath === selected?.path
                 : active,
             ),
+        nativeRowKeys.current.keys,
       ),
     [props.snapshot, selected, active, historyPaused, props.liveMessages],
   );
@@ -1577,6 +1851,9 @@ export function Transcript(props: TranscriptProps) {
   }, []);
 
   const { rows, turns } = useMemo(() => {
+    const failures = providerFailures(entries, running && !historyPaused);
+    const lastFinalError = [...failures.finalErrors].at(-1);
+    const attemptContents = new Map<string, RenderRow[]>();
     const results = new Map<string, DisplayEntry>();
     const pairedToolIds = new Set<string>();
     const liveTools = historyPaused
@@ -1596,7 +1873,7 @@ export function Transcript(props: TranscriptProps) {
           pairedToolIds.add(part.id);
       });
     });
-    const turnItems: Array<{ id: number; title: string }> = [];
+    const turnItems: TurnNavigationItem[] = [];
     let turn = 0;
     let latestUserPrompt: string | undefined;
     let latestUserIndex = -1;
@@ -1650,6 +1927,31 @@ export function Transcript(props: TranscriptProps) {
           },
         ];
       if (message.role === "custom") {
+        if (message.customType === "openpi-web-command-handled") {
+          const details = message.details;
+          if (
+            details &&
+            typeof details === "object" &&
+            "inputEntryId" in details &&
+            typeof details.inputEntryId === "string"
+          ) {
+            return [
+              {
+                key: entry.key,
+                turn,
+                kind: "custom",
+                commandHandledInputId: details.inputEntryId,
+                commandHandledCommandId:
+                  "commandId" in details &&
+                  typeof details.commandId === "string"
+                    ? details.commandId
+                    : undefined,
+                content: null,
+              },
+            ];
+          }
+          return [];
+        }
         if (
           message.display === false ||
           ![
@@ -1665,7 +1967,6 @@ export function Transcript(props: TranscriptProps) {
           latestUserPrompt = undefined;
           latestUserIndex = -1;
           turn++;
-          turnItems.push({ id: turn, title: t("configureOpenPi") });
         }
         return [
           {
@@ -1676,6 +1977,7 @@ export function Transcript(props: TranscriptProps) {
               <article
                 className="message-row assistant detail-only"
                 data-history-entry={entry.entryId ?? entry.key}
+                tabIndex={-1}
               >
                 <div className="message-content">
                   <CustomResult message={message} />
@@ -1691,8 +1993,12 @@ export function Transcript(props: TranscriptProps) {
         latestUserIndex = index;
         turn++;
         turnItems.push({
-          id: turn,
-          title: turnTitle(message.content || t("attachedImage")),
+          entryId: entry.entryId ?? entry.key,
+          title: Array.from(
+            (message.content || t("attachedImage")).replace(/\s+/g, " ").trim(),
+          )
+            .slice(0, 240)
+            .join(""),
         });
         const hydrationKey = entry.entryId
           ? JSON.stringify([selectedId, selectedPath, entry.entryId])
@@ -1714,9 +2020,19 @@ export function Transcript(props: TranscriptProps) {
                 className="message-row user"
                 id={`turn-${turn}`}
                 data-history-entry={entry.entryId ?? entry.key}
+                data-history-highlighted={
+                  (highlightedEntry && entry.entryId === highlightedEntry) ||
+                  undefined
+                }
+                tabIndex={-1}
               >
                 <div className="message-content">
-                  <UserImageAttachments message={message} />
+                  <UserImageAttachments
+                    message={message}
+                    sessionId={selectedId}
+                    path={selectedPath}
+                    entryId={entry.entryId}
+                  />
                   {(message.content || message.truncation?.visibleText) &&
                     (entry.entryId &&
                     selectedId &&
@@ -1738,7 +2054,7 @@ export function Transcript(props: TranscriptProps) {
                         }
                       />
                     ) : (
-                      <div className="message-body">{message.content}</div>
+                      <UserMessageContent content={message.content} />
                     ))}
                 </div>
                 <MessageActions
@@ -1753,6 +2069,22 @@ export function Transcript(props: TranscriptProps) {
                   copyRequiresFull={awaitingFull}
                   timestamp={entry.timestamp}
                   onResend={props.onResend}
+                  onFork={
+                    entry.entryId &&
+                    selectedId &&
+                    selectedPath &&
+                    props.onFork &&
+                    !entry.optimistic
+                      ? () =>
+                          props.onFork!({
+                            sessionId: selectedId,
+                            sessionPath: selectedPath,
+                            entryId: entry.entryId!,
+                          })
+                      : undefined
+                  }
+                  canFork={active && !running && props.forkAvailable}
+                  forkPending={props.forkPending}
                 />
               </article>
             ),
@@ -1760,6 +2092,13 @@ export function Transcript(props: TranscriptProps) {
         ];
       }
       if (message.role === "assistant") {
+        const landmark = turnItems.at(-1);
+        if (landmark && message.content.trim())
+          landmark.reply = Array.from(
+            message.content.replace(/\s+/g, " ").trim(),
+          )
+            .slice(0, 240)
+            .join("");
         const detailRows: RenderRow[] = [];
         const parts = message.parts ?? [];
         const lastTextIndex = parts.reduce(
@@ -1790,6 +2129,12 @@ export function Transcript(props: TranscriptProps) {
             content: (
               <article
                 className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
+                data-history-message={entry.entryId ?? entry.key}
+                data-history-highlighted={
+                  (highlightedEntry && entry.entryId === highlightedEntry) ||
+                  undefined
+                }
+                tabIndex={-1}
                 data-history-entry={
                   entry.entryId
                     ? `${entry.entryId}-${key.slice(entry.key.length + 1)}`
@@ -1827,6 +2172,21 @@ export function Transcript(props: TranscriptProps) {
                     copyRequiresFull={awaitingFull}
                     timestamp={entry.timestamp}
                     onResend={props.onResend}
+                    onFork={
+                      entry.entryId &&
+                      selectedId &&
+                      selectedPath &&
+                      props.onFork
+                        ? () =>
+                            props.onFork!({
+                              sessionId: selectedId,
+                              sessionPath: selectedPath,
+                              entryId: entry.entryId!,
+                            })
+                        : undefined
+                    }
+                    canFork={active && !running && props.forkAvailable}
+                    forkPending={props.forkPending}
                   />
                 )}
               </article>
@@ -1848,7 +2208,9 @@ export function Transcript(props: TranscriptProps) {
               end > lastTextIndex,
             );
           }
-          if (part.type === "thinking") {
+          // Some providers return only an opaque reasoning signature. An
+          // empty part is not a visible reasoning note or disclosure body.
+          if (part.type === "thinking" && part.text.trim()) {
             const isLive =
               !historyPaused && running && index === entries.length - 1;
             detailRows.push({
@@ -1859,7 +2221,15 @@ export function Transcript(props: TranscriptProps) {
               processPreview: thinkingPreview(part.text),
               processStatus: isLive ? "running" : "done",
               content: (
-                <article className="message-row assistant detail-only">
+                <article
+                  className="message-row assistant detail-only"
+                  data-history-message={entry.entryId ?? entry.key}
+                  data-history-highlighted={
+                    (highlightedEntry && entry.entryId === highlightedEntry) ||
+                    undefined
+                  }
+                  tabIndex={-1}
+                >
                   <div className="message-content">
                     <ThinkingEvidence
                       body={part.text}
@@ -1937,7 +2307,18 @@ export function Transcript(props: TranscriptProps) {
               processStatus: status,
               error: Boolean(result?.isError),
               content: (
-                <article className="message-row assistant detail-only">
+                <article
+                  className="message-row assistant detail-only"
+                  data-history-message={entry.entryId ?? entry.key}
+                  data-history-result={persistedResultEntry?.entryId}
+                  data-history-highlighted={
+                    (highlightedEntry &&
+                      (entry.entryId === highlightedEntry ||
+                        persistedResultEntry?.entryId === highlightedEntry)) ||
+                    undefined
+                  }
+                  tabIndex={-1}
+                >
                   <div className="message-content">
                     {card || (
                       <EvidenceDetails
@@ -1971,12 +2352,42 @@ export function Transcript(props: TranscriptProps) {
         if (lastTextIndex < 0)
           appendText(message.content, `${entry.key}-answer`, true);
         if (
-          message.stopReason === "error" ||
+          message.stopReason === "error" &&
+          !failures.finalErrors.has(index)
+        ) {
+          attemptContents.set(entry.key, [...detailRows]);
+          detailRows.length = 0;
+        }
+        const attempts = failures.groups.get(index);
+        if (attempts) {
+          detailRows.push({
+            key: `${entry.key}-attempts`,
+            turn,
+            kind: "outcome",
+            outcome:
+              attempts.state === "interrupted" ? "interrupted" : undefined,
+            content: (
+              <article className="message-row assistant outcome-row">
+                <ProviderAttempts
+                  state={attempts.state}
+                  attempts={attempts.attempts.map((attempt) => ({
+                    entry: attempt,
+                    content: attemptContents.get(attempt.key),
+                  }))}
+                />
+              </article>
+            ),
+          });
+        }
+        if (
+          failures.finalErrors.has(index) ||
           message.stopReason === "aborted"
         ) {
           const failed = message.stopReason === "error";
           const retryPrompt =
-            latestUserIndex === lastUserIndex ? latestUserPrompt : undefined;
+            latestUserIndex === lastUserIndex && index === lastFinalError
+              ? latestUserPrompt
+              : undefined;
           detailRows.push({
             key: `${entry.key}-outcome`,
             turn,
@@ -1995,6 +2406,17 @@ export function Transcript(props: TranscriptProps) {
               </article>
             ),
           });
+        } else if (
+          message.stopReason === "stop" ||
+          message.stopReason === "length"
+        ) {
+          detailRows.push({
+            key: `${entry.key}-completed`,
+            turn,
+            kind: "outcome",
+            outcome: "completed",
+            content: null,
+          });
         }
         return detailRows;
       }
@@ -2008,7 +2430,15 @@ export function Transcript(props: TranscriptProps) {
               turn,
               kind: "response",
               content: (
-                <article className="message-row assistant detail-only">
+                <article
+                  className="message-row assistant detail-only"
+                  data-history-message={entry.entryId ?? entry.key}
+                  data-history-highlighted={
+                    (highlightedEntry && entry.entryId === highlightedEntry) ||
+                    undefined
+                  }
+                  tabIndex={-1}
+                >
                   <div className="message-content">
                     <PlanCard
                       result={message}
@@ -2074,7 +2504,15 @@ export function Transcript(props: TranscriptProps) {
             processStatus: status,
             error: status === "error",
             content: (
-              <article className="message-row assistant detail-only">
+              <article
+                className="message-row assistant detail-only"
+                data-history-message={entry.entryId ?? entry.key}
+                data-history-highlighted={
+                  (highlightedEntry && entry.entryId === highlightedEntry) ||
+                  undefined
+                }
+                tabIndex={-1}
+              >
                 <div className="message-content">{content}</div>
               </article>
             ),
@@ -2091,6 +2529,9 @@ export function Transcript(props: TranscriptProps) {
     historyPaused,
     entries,
     props.onResend,
+    props.onFork,
+    props.forkAvailable,
+    props.forkPending,
     props.onInspectSubagent,
     props.snapshot.runtime.capabilities.subagents,
     props.snapshot.preferences.expandThinking,
@@ -2101,8 +2542,70 @@ export function Transcript(props: TranscriptProps) {
     selectedPath,
     selectedCwd,
     hydratedMessages,
+    highlightedEntry,
     t,
   ]);
+
+  const promptNavigation = usePromptNavigation(
+    props.snapshot.selectedSession,
+    turns,
+    navigationObserved,
+  );
+  const navigateTurn = useCallback(
+    async (entryId: string, scrub = false) => {
+      cancelReveal();
+      if (!navigationObserved || !selectedId || !selectedPath) return false;
+      const element = viewport.current;
+      const target = Array.from(
+        element?.querySelectorAll<HTMLElement>("[data-history-entry]") ?? [],
+      ).find((item) => item.dataset.historyEntry === entryId);
+      if (element && target) {
+        pinned.current = false;
+        setReadingHistory(true);
+        setHighlightedNavigation({
+          sessionId: selectedId,
+          sessionPath: selectedPath,
+          entryId,
+        });
+        const top = Math.max(
+          0,
+          element.scrollTop +
+            target.getBoundingClientRect().top -
+            element.getBoundingClientRect().top -
+            16,
+        );
+        const reducedMotion = window.matchMedia?.(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+        element.scrollTo?.({
+          top,
+          behavior: scrub || reducedMotion ? "instant" : "smooth",
+        });
+        if (typeof element.scrollTo !== "function") element.scrollTop = top;
+        lastScrollTop.current = element.scrollTop;
+        target.focus({ preventScroll: true });
+        return true;
+      }
+      if (scrub) return;
+      if (!props.onNavigateToMessage) return false;
+      const controller = new AbortController();
+      reveal.current = controller;
+      const result = await props.onNavigateToMessage(
+        { sessionId: selectedId, sessionPath: selectedPath, entryId },
+        controller.signal,
+      );
+      if (controller.signal.aborted || reveal.current !== controller) return;
+      reveal.current = null;
+      return result;
+    },
+    [
+      cancelReveal,
+      navigationObserved,
+      selectedId,
+      selectedPath,
+      props.onNavigateToMessage,
+    ],
+  );
 
   useLayoutEffect(() => {
     // Streamed content can grow without changing message keys.
@@ -2116,6 +2619,17 @@ export function Transcript(props: TranscriptProps) {
     lastHistoryReset.current = history.reset;
     const requested = lastScrollRequest.current !== props.scrollToBottom;
     lastScrollRequest.current = props.scrollToBottom;
+    if (
+      navigation &&
+      navigationKey !== lastNavigation.current &&
+      navigation.sessionId === selected.id &&
+      navigation.sessionPath === selected.path
+    ) {
+      pinned.current = false;
+      prependAnchor.current = null;
+      lastPath.current = identity;
+      return;
+    }
     if (requested && history.engaged) {
       prependAnchor.current = null;
       history.resetToLatest();
@@ -2148,6 +2662,7 @@ export function Transcript(props: TranscriptProps) {
       if (typeof element.scrollTo === "function")
         element.scrollTo({ top, behavior: "instant" });
       else element.scrollTop = top;
+      lastScrollTop.current = element.scrollTop;
       pinned.current = false;
       setReadingHistory(true);
       lastPath.current = identity;
@@ -2161,6 +2676,7 @@ export function Transcript(props: TranscriptProps) {
       } else {
         element.scrollTop = element.scrollHeight;
       }
+      lastScrollTop.current = element.scrollTop;
     }
     lastPath.current = identity;
   }, [
@@ -2171,6 +2687,224 @@ export function Transcript(props: TranscriptProps) {
     history.resetToLatest,
     props.scrollToBottom,
     readingCache,
+    navigation,
+    navigationKey,
+  ]);
+
+  useLayoutEffect(() => {
+    const element = viewport.current;
+    if (
+      !element ||
+      !selected ||
+      !navigation ||
+      navigationKey === lastNavigation.current ||
+      navigation.sessionId !== selected.id ||
+      navigation.sessionPath !== selected.path
+    )
+      return;
+    const candidates = Array.from(
+      element.querySelectorAll<HTMLElement>(
+        "[data-history-entry], [data-history-message], [data-history-result]",
+      ),
+    );
+    const matches = candidates.filter(
+      (item) =>
+        item.dataset.historyEntry === navigation.entryId ||
+        item.dataset.historyMessage === navigation.entryId ||
+        item.dataset.historyResult === navigation.entryId,
+    );
+    const target =
+      matches.find((item) => item.classList.contains("response")) ?? matches[0];
+    if (!target) return;
+    // Native details retain their disclosure state; reveal only the ancestors
+    // needed to make this particular message reachable.
+    for (
+      let parent = target.parentElement;
+      parent && parent !== element;
+      parent = parent.parentElement
+    ) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+      if (parent.classList.contains("turn-process-body") && parent.hidden) {
+        const toggle = Array.from(
+          element.querySelectorAll<HTMLButtonElement>("button[aria-controls]"),
+        ).find((button) =>
+          button.getAttribute("aria-controls")?.split(" ").includes(parent!.id),
+        );
+        toggle?.click();
+      }
+    }
+    const locate = () => {
+      if (!element.contains(target)) return;
+      const top = Math.max(
+        0,
+        element.scrollTop +
+          target.getBoundingClientRect().top -
+          element.getBoundingClientRect().top -
+          24,
+      );
+      element.scrollTo?.({ top, behavior: "instant" });
+      if (typeof element.scrollTo !== "function") element.scrollTop = top;
+      lastScrollTop.current = element.scrollTop;
+      target.focus({ preventScroll: true });
+      pinned.current = false;
+      setReadingHistory(true);
+      setHighlightedNavigation(navigation);
+      lastNavigation.current = navigationKey;
+      rememberSessionReading(readingCache, sessionReadingScope(selected), {
+        position: captureReadingPosition(element, false),
+      });
+    };
+    // The message can render before the search promise closes its native modal.
+    // A modal makes the transcript inert, so wait for its close event before
+    // moving focus; its own opener restoration completes before the next frame.
+    const dialog = document.querySelector<HTMLDialogElement>("dialog[open]");
+    let frame: number | undefined;
+    const schedule = () => {
+      frame = requestAnimationFrame(locate);
+    };
+    if (dialog) dialog.addEventListener("close", schedule, { once: true });
+    else schedule();
+    return () => {
+      dialog?.removeEventListener("close", schedule);
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, [selected, navigation, navigationKey, readingCache]);
+
+  const reportedCompletion = useRef<string | null>(null);
+  useEffect(() => {
+    const element = viewport.current;
+    const turn = props.snapshot.sessions.find(
+      (session) =>
+        session.id === selected?.id && session.path === selected?.path,
+    )?.execution?.lastTurn;
+    if (
+      !element ||
+      !selected ||
+      !props.onCompletedResultSeen ||
+      props.resultExposureEnabled === false ||
+      props.activityObserved === false ||
+      historyPaused ||
+      turn?.outcome !== "completed" ||
+      !turn.resultEntryId
+    )
+      return;
+    const resultIndex = selected.entries.findIndex(
+      (entry) => entry.id === turn.resultEntryId,
+    );
+    const result = selected.entries[resultIndex]?.message;
+    const timingIndex = selected.entries.findIndex(
+      (entry) =>
+        entry.turnTiming?.sessionId === selected.id &&
+        entry.turnTiming.commandId === turn.commandId &&
+        entry.turnTiming.finishedAt === turn.finishedAt &&
+        entry.turnTiming.outcome === "completed" &&
+        (!entry.turnTiming.resultEntryId ||
+          entry.turnTiming.resultEntryId === turn.resultEntryId),
+    );
+    if (
+      resultIndex < 0 ||
+      timingIndex <= resultIndex ||
+      result?.role !== "assistant" ||
+      !["stop", "length"].includes(result.stopReason ?? "")
+    )
+      return;
+    const exposure: CompletedResultExposure = {
+      sessionId: selected.id,
+      sessionPath: selected.path,
+      commandId: turn.commandId,
+      finishedAt: turn.finishedAt,
+      resultEntryId: turn.resultEntryId,
+    };
+    const key = JSON.stringify(exposure);
+    let frame: number | undefined;
+    const check = () => {
+      frame = undefined;
+      if (
+        reportedCompletion.current === key ||
+        document.visibilityState !== "visible" ||
+        !element.isConnected ||
+        element.closest("[hidden], [inert], [aria-hidden='true']") ||
+        document.querySelector("dialog[open]")
+      )
+        return;
+      const bounds = element.getBoundingClientRect();
+      const top = Math.max(0, bounds.top);
+      const bottom = Math.min(window.innerHeight, bounds.bottom);
+      const left = Math.max(0, bounds.left);
+      const right = Math.min(window.innerWidth, bounds.right);
+      if (
+        bottom <= top ||
+        right <= left ||
+        element.checkVisibility?.() === false
+      )
+        return;
+      const exposed = Array.from(
+        element.querySelectorAll<HTMLElement>(
+          ".message-row.assistant.response[data-history-message]",
+        ),
+      ).some((article) => {
+        if (
+          article.dataset.historyMessage !== exposure.resultEntryId ||
+          article.closest(
+            "details:not([open]), [hidden], [inert], [aria-hidden='true']",
+          )
+        )
+          return false;
+        const content = article.querySelector<HTMLElement>(".message-content");
+        if (!content || !content.textContent?.trim()) return false;
+        const style = getComputedStyle(content);
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          article.checkVisibility?.() === false
+        )
+          return false;
+        const resultBounds = content.getBoundingClientRect();
+        return (
+          resultBounds.height > 0 &&
+          resultBounds.width > 0 &&
+          resultBounds.bottom > top &&
+          resultBounds.top < bottom &&
+          resultBounds.right > left &&
+          resultBounds.left < right
+        );
+      });
+      if (!exposed) return;
+      reportedCompletion.current = key;
+      props.onCompletedResultSeen?.(exposure);
+    };
+    const schedule = () => {
+      if (frame === undefined) frame = requestAnimationFrame(check);
+    };
+    schedule();
+    element.addEventListener("scroll", schedule);
+    document.addEventListener("visibilitychange", schedule);
+    document.addEventListener("close", schedule, true);
+    window.addEventListener("resize", schedule);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(schedule);
+    observer?.observe(element);
+    for (const content of element.querySelectorAll<HTMLElement>(
+      ".message-content",
+    ))
+      observer?.observe(content);
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      observer?.disconnect();
+      element.removeEventListener("scroll", schedule);
+      document.removeEventListener("visibilitychange", schedule);
+      document.removeEventListener("close", schedule, true);
+      window.removeEventListener("resize", schedule);
+    };
+  }, [
+    selected,
+    props.snapshot.sessions,
+    props.onCompletedResultSeen,
+    props.resultExposureEnabled,
+    props.activityObserved,
+    historyPaused,
   ]);
 
   const runningLabel = !active
@@ -2203,6 +2937,18 @@ export function Transcript(props: TranscriptProps) {
       ? activeTurn
       : undefined;
 
+  const readEarlierNearTop = (element: HTMLElement) => {
+    if (
+      history.hasMore &&
+      !history.error &&
+      !history.verifying &&
+      props.activityObserved !== false &&
+      props.resultExposureEnabled !== false &&
+      element.scrollTop <= Math.max(element.clientHeight, 160)
+    )
+      void history.loadOlder();
+  };
+
   return (
     <>
       <div
@@ -2210,50 +2956,75 @@ export function Transcript(props: TranscriptProps) {
         className="conversation"
         role="log"
         aria-label="Conversation"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: The scrollport needs keyboard reading with automatic pagination.
+        tabIndex={0}
         onScroll={(event) => {
           const element = event.currentTarget;
+          const upward = element.scrollTop < lastScrollTop.current;
+          lastScrollTop.current = element.scrollTop;
           pinned.current =
             element.scrollTop + element.clientHeight >=
             element.scrollHeight - 48;
           if (!pinned.current) history.retainReading();
           setReadingHistory(!pinned.current);
+          if (upward) readEarlierNearTop(element);
+        }}
+        onWheel={(event) => {
+          if (
+            !event.defaultPrevented &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            event.deltaY < 0 &&
+            upwardInputReachesConversation(
+              event.nativeEvent,
+              event.currentTarget,
+            )
+          )
+            readEarlierNearTop(event.currentTarget);
+        }}
+        onKeyDown={(event) => {
+          const target = event.target;
+          if (
+            !event.defaultPrevented &&
+            !event.altKey &&
+            !event.metaKey &&
+            (!event.ctrlKey || event.key === "Home") &&
+            (["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+              (event.key === " " && event.shiftKey)) &&
+            target instanceof HTMLElement &&
+            !target.isContentEditable &&
+            !target.closest("input, textarea, select, button, summary") &&
+            upwardInputReachesConversation(
+              event.nativeEvent,
+              event.currentTarget,
+            )
+          )
+            readEarlierNearTop(event.currentTarget);
         }}
       >
         {(history.hasMore || history.error || history.verifying) && (
           <div className="conversation-history">
             {history.error && <p role="alert">{t(history.error)}</p>}
-            {history.error &&
-              history.error !== "historyChanged" &&
-              !history.hasMore && (
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => void history.loadOlder()}
-                >
-                  {t("retryAdmissionCheck")}
-                </button>
-              )}
-            {history.verifying && !history.error && (
+            {history.error && history.error !== "historyChanged" && (
+              <button
+                type="button"
+                className="secondary"
+                disabled={history.loading}
+                onClick={() => void history.loadOlder()}
+              >
+                {t("retryAdmissionCheck")}
+              </button>
+            )}
+            {history.loading && <p role="status">{t("historyLoading")}</p>}
+            {history.verifying && !history.error && !history.loading && (
               <p role="status">{t("historyVerifying")}</p>
             )}
             {history.hasMore && (
-              <>
-                <span>
-                  {t("historyOmitted", {
-                    count: selected?.truncation.entriesOmitted ?? 0,
-                  })}
-                </span>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={
-                    history.loading || (history.verifying && !history.error)
-                  }
-                  onClick={() => void history.loadOlder()}
-                >
-                  {t(history.loading ? "historyLoading" : "historyLoadOlder")}
-                </button>
-              </>
+              <span>
+                {t("historyOmitted", {
+                  count: selected?.truncation.entriesOmitted ?? 0,
+                })}
+              </span>
             )}
           </div>
         )}
@@ -2320,6 +3091,7 @@ export function Transcript(props: TranscriptProps) {
             if (!element) return;
             pinned.current = true;
             setReadingHistory(false);
+            setHighlightedNavigation(null);
             history.resetToLatest();
             element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
           }}
@@ -2327,26 +3099,16 @@ export function Transcript(props: TranscriptProps) {
           <ArrowDown aria-hidden="true" /> {t("jumpToLatest")}
         </button>
       )}
-      {turns.length > 1 && (
-        <nav className="turn-rail" aria-label={t("conversationTurns")}>
-          {turns.map((item) => (
-            <button
-              key={item.id}
-              className="turn-tick"
-              type="button"
-              title={item.title}
-              onClick={() =>
-                document
-                  .getElementById(`turn-${item.id}`)
-                  ?.scrollIntoView({ block: "start", behavior: "smooth" })
-              }
-            >
-              <span className="turn-tick-mark" />
-              <span className="turn-tick-label">{item.title}</span>
-            </button>
-          ))}
-        </nav>
-      )}
+      <TurnNavigation
+        key={promptScope}
+        items={promptNavigation.items}
+        viewport={viewport}
+        enabled={navigationObserved}
+        onHidden={cancelReveal}
+        onRequestPreview={promptNavigation.requestPreview}
+        readingHistory={readingHistory || history.hasNewer}
+        onNavigate={navigateTurn}
+      />
     </>
   );
 }

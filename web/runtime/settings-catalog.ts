@@ -205,6 +205,8 @@ export function projectWebSetupConfig(
     ui: {
       webTheme: config.ui.webTheme,
       webChatWidth: config.ui.webChatWidth,
+      webSidebarWidth: config.ui.webSidebarWidth,
+      webAuxiliaryWidth: config.ui.webAuxiliaryWidth,
       webChatFontSize: config.ui.webChatFontSize,
       webExpandThinking: config.ui.webExpandThinking,
       webPinnedSort: config.ui.webPinnedSort,

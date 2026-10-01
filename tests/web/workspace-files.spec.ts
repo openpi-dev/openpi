@@ -163,15 +163,25 @@ it("retains loaded search pages across hiding and restores a readable root after
   };
   list.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
   fireEvent.change(search, { target: { value: "txt" } });
-  await screen.findByRole("button", { name: /first\.txt/u });
+  await waitFor(() =>
+    expect(
+      view.container.querySelector('[data-file-row="first.txt"]'),
+    ).not.toBeNull(),
+  );
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("filesLoadMore") }),
   );
-  await screen.findByRole("button", { name: /second\.txt/u });
+  await waitFor(() =>
+    expect(
+      view.container.querySelector('[data-file-row="second.txt"]'),
+    ).not.toBeNull(),
+  );
   view.rerender(node("/session/a", false));
   list.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
   view.rerender(node());
-  expect(screen.getByRole("button", { name: /second\.txt/u })).toBeTruthy();
+  expect(
+    view.container.querySelector('[data-file-row="second.txt"]'),
+  ).not.toBeNull();
   await waitFor(() => expect(list).toHaveBeenCalledTimes(5));
   await waitFor(() =>
     expect(

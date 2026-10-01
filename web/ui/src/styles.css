@@ -594,17 +594,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .message-edit-actions { @apply mt-2 flex justify-end gap-2; }
 .message-edit-actions button { height: 30px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: 15px; background: var(--page); font-size: 12.5px; }
 .message-edit-actions .confirm { border-color: var(--text); background: var(--text); color: var(--page); }
-.turn-rail { @apply absolute z-10 flex flex-col gap-0.5 overflow-y-auto; top: 50%; right: 24px; width: 16px; max-height: 70%; padding: 4px 2px; border: 1px solid transparent; border-radius: 8px; transform: translateY(-50%); transition: width 160ms ease, background-color 160ms ease, border-color 160ms ease; }
-.turn-rail:hover, .turn-rail:focus-within { width: 240px; padding: 6px; border-color: var(--border); background: oklch(99% .004 249 / 92%); box-shadow: 0 12px 28px oklch(26% .02 249 / 14%); backdrop-filter: blur(8px); }
-.turn-tick { @apply flex w-full items-center gap-2 border-0 bg-transparent; padding: 3px 4px; border-radius: 6px; }
-.turn-tick:hover { background: oklch(95% .008 249); }
-.turn-tick-mark { width: 8px; height: 2px; flex: 0 0 auto; border-radius: 1px; background: var(--subtle); }
-.turn-tick-label { @apply hidden min-w-0 overflow-hidden text-left text-ellipsis whitespace-nowrap; color: var(--muted); font-size: 12px; }
-.turn-rail:hover .turn-tick-label, .turn-rail:focus-within .turn-tick-label { display: block; }
-
-@container conversation-shell (max-width: 960px) {
-  .turn-rail { display: none; }
-}
 
 .composer-dock { @apply flex flex-col items-center gap-2; padding: 12px 24px 22px; }
 .composer-queue { max-height: min(220px, 30dvh); margin: 0 -13px 10px; padding: 3px 12px 7px; overflow-x: hidden; overflow-y: auto; border-bottom: 1px solid var(--border); color: var(--text); font-size: 12px; }
@@ -690,6 +679,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .send-button svg { width: 17px; height: 17px; }
 .composer-hint { display: none; }
 .notice { @apply absolute bottom-4 left-1/2 z-40 flex max-w-xl -translate-x-1/2 items-center gap-3; padding: 9px 10px 9px 14px; border: 1px solid oklch(70% .11 28); border-radius: 6px; background: var(--page); box-shadow: 0 12px 32px oklch(26% .02 249 / 18%); color: var(--error); font-size: 12px; }
+.notice-success { border-color: var(--healthy); color: var(--healthy); }
 .notice button { @apply grid size-6 place-items-center border-0 bg-transparent; }
 .notice svg { width: 14px; height: 14px; }
 .mobile-header { display: none; }
@@ -877,8 +867,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 :root:is([data-theme="dark"], [data-theme="pine"]) .conversation-shell:not(.landing) { background-image: none; background-color: var(--page); }
 :root:is([data-theme="dark"], [data-theme="pine"]) .details-body { color: var(--muted); }
 :root:is([data-theme="dark"], [data-theme="pine"]) :is(.markdown blockquote, .markdown code, .markdown-code-block, .markdown th, .tool-evidence, .process-sequence, .activity-card, .activity-chip, .mobile-header > button) { background: var(--sidebar); color: var(--text); border-color: var(--border); }
-:root:is([data-theme="dark"], [data-theme="pine"]) :is(.new-session-button:hover, .message-details summary:hover, .process-sequence > summary:hover, .message-actions button:hover, .turn-tick:hover) { background: var(--sidebar-hover); border-color: var(--border); }
-:root:is([data-theme="dark"], [data-theme="pine"]) :is(.turn-rail:hover, .turn-rail:focus-within) { background: var(--page); }
+:root:is([data-theme="dark"], [data-theme="pine"]) :is(.new-session-button:hover, .message-details summary:hover, .process-sequence > summary:hover, .message-actions button:hover) { background: var(--sidebar-hover); border-color: var(--border); }
 :root:is([data-theme="dark"], [data-theme="pine"]) .model-picker:hover, :root:is([data-theme="dark"], [data-theme="pine"]) .model-picker[aria-expanded="true"], :root:is([data-theme="dark"], [data-theme="pine"]) .model-selector > div > button:hover, :root:is([data-theme="dark"], [data-theme="pine"]) .model-selector > div > button[aria-expanded="true"] { background: var(--sidebar-hover) !important; }
 :root:is([data-theme="dark"], [data-theme="pine"]) .slash-command-icon { background: var(--sidebar-hover); }
 

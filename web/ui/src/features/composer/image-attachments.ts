@@ -40,7 +40,10 @@ function bytesToBase64(bytes: Uint8Array) {
 export async function stagePromptImage(file: File) {
   if (file.size <= 0 || file.size > WEB_PROMPT_IMAGE_MAX_BYTES)
     throw new Error("image-size");
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  const buffer = await file.arrayBuffer().catch(() => {
+    throw new Error("image-read");
+  });
+  const bytes = new Uint8Array(buffer);
   const mimeType = sniffPromptImageMime(bytes);
   if (!mimeType) throw new Error("image-type");
   const data = bytesToBase64(bytes);

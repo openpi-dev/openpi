@@ -23,6 +23,10 @@ import type { WebInteractiveTerminalEvent } from "../../web/protocol/types.ts";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { InteractiveTerminal } from "../../web/ui/src/features/workbar/InteractiveTerminal.tsx";
 import { WorkbarPanel } from "../../web/ui/src/features/workbar/WorkbarPanel.tsx";
+import {
+  WorkbarReadingContext,
+  type WorkbarReadingState,
+} from "../../web/ui/src/features/workbar/workbar-reading-state.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 
@@ -33,6 +37,9 @@ type TerminalRecord = {
   resets: number;
   disposed: boolean;
   send: (data: string) => void;
+  buffer: { active: { baseY: number } };
+  scroll: (viewport: number) => void;
+  scrolls: number[];
 };
 
 const terminals = vi.hoisted(() => ({ instances: [] as TerminalRecord[] }));
@@ -88,6 +95,9 @@ vi.mock("@xterm/xterm", () => ({
     resets = 0;
     disposed = false;
     send = (_data: string) => {};
+    buffer = { active: { baseY: 50 } };
+    scroll = (_viewport: number) => {};
+    scrolls: number[] = [];
     constructor() {
       terminals.instances.push(this);
     }
@@ -110,8 +120,9 @@ vi.mock("@xterm/xterm", () => ({
     reset() {
       this.resets++;
     }
-    write(data: string) {
+    write(data: string, callback?: () => void) {
       this.writes.push(data);
+      callback?.();
     }
     onData(callback: (data: string) => void) {
       this.send = callback;
@@ -119,6 +130,17 @@ vi.mock("@xterm/xterm", () => ({
     }
     onResize() {
       return { dispose() {} };
+    }
+    onScroll(callback: (viewport: number) => void) {
+      this.scroll = callback;
+      return { dispose() {} };
+    }
+    scrollToLine(viewport: number) {
+      this.scrolls.push(viewport);
+      this.scroll(viewport);
+    }
+    scrollToBottom() {
+      this.scrollToLine(this.buffer.active.baseY);
     }
   },
 }));
@@ -212,6 +234,58 @@ function tree(sessionId = "a", cwd = "/workspace") {
     ),
   );
 }
+
+it.each([12, 50])(
+  "detaches a terminal stream and reattaches its identity and viewport %s without restarting it",
+  async (viewport) => {
+    const client = fixture();
+    const reading: WorkbarReadingState = {};
+    const node = () =>
+      createElement(WorkbarReadingContext.Provider, { value: reading }, tree());
+    const first = render(node());
+    await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+    const signal = client.attempts[0]!.signal;
+    expect(reading.terminal?.id).toBe("terminal-a");
+    act(() => terminals.instances[0]!.scroll(viewport));
+    expect(reading.terminal).toEqual({
+      id: "terminal-a",
+      viewport,
+      atBottom: viewport === 50,
+    });
+    first.unmount();
+    expect(signal.aborted).toBe(true);
+    expect(client.close).not.toHaveBeenCalled();
+    const second = render(node());
+    await waitFor(() => expect(client.stream).toHaveBeenCalledTimes(2));
+    expect(client.create).toHaveBeenCalledOnce();
+    expect(client.read).toHaveBeenCalledExactlyOnceWith(
+      "a",
+      "terminal-a",
+      expect.any(AbortSignal),
+    );
+    const terminal = terminals.instances[1]!;
+    terminal.buffer.active.baseY = 75;
+    act(() =>
+      client.attempts[1]!.onEvent({
+        type: "output",
+        reset: true,
+        data: "replayed output\r\n",
+        offset: 100,
+      }),
+    );
+    expect(terminal.scrolls).toEqual([viewport === 50 ? 75 : 12]);
+    act(() =>
+      client.attempts[1]!.onEvent({
+        type: "output",
+        data: "next output\r\n",
+        offset: 120,
+      }),
+    );
+    expect(terminal.scrolls).toHaveLength(1);
+    second.unmount();
+    expect(client.close).not.toHaveBeenCalled();
+  },
+);
 
 async function openRestart() {
   const opener = screen.getByRole("button", {

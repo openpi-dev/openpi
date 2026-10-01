@@ -7,10 +7,14 @@ import {
   type WebHistoryAnchor,
   type WebLiveMessage,
   type WebModelSummary,
+  type WebPromptDelivery,
   type WebPromptImage,
+  type WebSessionProjection,
+  type WebSettingsPreferencesPatch,
   type WebSnapshot,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
+import type { WebSessionForkRequest } from "../../../runtime/types.ts";
 import { i18n } from "../i18n.ts";
 import { isControlledSession } from "../lib/session-control.ts";
 import { WebApiError, WebClient } from "../protocol/client.ts";
@@ -143,6 +147,7 @@ export interface PromptAdmissionRecovery {
   images?: readonly WebPromptImage[];
   retryable?: boolean;
   planRevision?: string;
+  delivery?: WebPromptDelivery;
   phase: "checking" | "verification-failed" | "ready" | "submitting";
 }
 
@@ -194,12 +199,17 @@ export interface WebStoreState {
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
+  pendingSteeringReceipt: number | null;
   draftModel: WebModelSummary | null;
   createdSession: SessionTarget | null;
   modelSelectionPending: boolean;
   modelSearch: ModelSearchState;
   snapshot: WebSnapshot | null;
   historyAnchor: WebHistoryAnchor | null;
+  historyNavigation:
+    | (WebHistoryAnchor & { revision: number; session: WebSessionProjection })
+    | null;
+  sessionForkPending: boolean;
   cursor: number | null;
   selectedPath: string | null;
   selectedWorkspace: string | null;
@@ -213,7 +223,7 @@ export interface WebStoreState {
   query: string;
   searchOpen: boolean;
   connection: "connected" | "connecting" | "reconnecting" | "unavailable";
-  notice: string | null;
+  notice: string | { kind: "success"; message: string } | null;
   liveMessages: LiveEntry[];
   liveRunning: boolean;
   livePhase: "idle" | "preparing" | "running";
@@ -233,6 +243,12 @@ export interface WebStoreState {
 
 export interface WebStoreActions {
   setHistoryAnchor: (anchor: WebHistoryAnchor | null) => void;
+  navigateToMessage: (
+    anchor: WebHistoryAnchor,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
+  forkMessage: (anchor: WebHistoryAnchor) => Promise<boolean>;
+  savePreferences: (patch: WebSettingsPreferencesPatch) => Promise<void>;
   rememberPromptProjection: (
     sessionId: string,
     sessionPath: string,
@@ -272,6 +288,8 @@ export interface WebStoreActions {
     content: string,
     images?: readonly WebPromptImage[],
     approval?: PlanImplementationApproval,
+    delivery?: WebPromptDelivery,
+    expectedTarget?: SessionTarget,
   ) => Promise<boolean>;
   checkPromptAdmissionRecovery: () => Promise<void>;
   retryPromptAdmission: () => Promise<boolean>;
@@ -279,6 +297,8 @@ export interface WebStoreActions {
     content: string,
     images?: readonly WebPromptImage[],
     approval?: PlanImplementationApproval,
+    delivery?: WebPromptDelivery,
+    expectedTarget?: SessionTarget,
   ) => Promise<boolean>;
   abandonPromptAdmission: () => void;
   acknowledgePromptAdmissionResolution: (commandId: string) => void;
@@ -324,7 +344,10 @@ export function createWebStore(
 ) {
   const consumeEvents = dependencies.consumeEvents ?? consumeEventStream;
   let sessionEpoch = 0;
+  let navigationSequence = 0;
+  let forkRequest: WebSessionForkRequest | null = null;
   let snapshotGeneration = 0;
+  let snapshotFailureNotice: string | null = null;
   let promptAdmissionSequence = 0;
   let promptAdmissionToken: number | null = null;
   let promptAdmission: {
@@ -338,6 +361,7 @@ export function createWebStore(
     afterEntryId: string | null;
     timestamp: string;
     planRevision?: string;
+    delivery?: WebPromptDelivery;
   } | null = null;
   let sessionActivation: SessionActivation | null = null;
   let creationRetry: { workspacePath: string; commandId: string } | null = null;
@@ -383,6 +407,7 @@ export function createWebStore(
       turnCancellationPending: false,
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: null,
+      pendingSteeringReceipt: null,
       liveMessages: [] as LiveEntry[],
       liveRunning: false,
       livePhase: "idle" as const,
@@ -431,6 +456,7 @@ export function createWebStore(
 
   const store = createStore<WebStoreState>((set, get) => {
     const showError = (error: unknown) => {
+      snapshotFailureNotice = null;
       set({
         notice: error instanceof Error ? error.message : String(error),
       });
@@ -913,6 +939,9 @@ export function createWebStore(
           pendingFollowUpsReceipt: Number.isInteger(detail.pendingFollowUps)
             ? Number(detail.pendingFollowUps)
             : current.pendingFollowUpsReceipt,
+          pendingSteeringReceipt: Number.isInteger(detail.pendingSteering)
+            ? Number(detail.pendingSteering)
+            : current.pendingSteeringReceipt,
         });
       } else if (event.type === "turn_started") {
         set({
@@ -955,6 +984,7 @@ export function createWebStore(
       } else if (event.type === "agent_settled") {
         set({
           pendingFollowUpsReceipt: null,
+          pendingSteeringReceipt: null,
           ...(!current.activeTurn
             ? {
                 liveRunning: false,
@@ -1035,6 +1065,11 @@ export function createWebStore(
             maxAttempts: Number(detail.maxAttempts) || 0,
           },
         });
+      }
+      if (event.type === "auto_retry_end") {
+        // A recovered request can continue into tools or another model step.
+        // Only Pi's settled event ends the run.
+        set({ liveRetry: null });
       }
       if (event.type === "thinking_level_changed") {
         const thinking = get().snapshot?.thinking;
@@ -1278,7 +1313,12 @@ export function createWebStore(
             resetThinking();
             clearThinkingGate();
           }
+          const recoveredSnapshotNotice =
+            snapshotFailureNotice !== null &&
+            get().notice === snapshotFailureNotice;
+          snapshotFailureNotice = null;
           set({
+            ...(recoveredSnapshotNotice ? { notice: null } : {}),
             ...(shouldReset || controllerChanged || selectionChanged
               ? {
                   ...resetLivePatch(),
@@ -1327,6 +1367,8 @@ export function createWebStore(
             return false;
           set({ connection: "unavailable" });
           showError(error);
+          const notice = get().notice;
+          snapshotFailureNotice = typeof notice === "string" ? notice : null;
           return false;
         }
       },
@@ -1618,6 +1660,191 @@ export function createWebStore(
         } finally {
           if (pendingSessionSelection?.promise === selection)
             pendingSessionSelection = null;
+        }
+      },
+      async navigateToMessage(anchor, signal) {
+        const request = ++navigationSequence;
+        try {
+          if (signal?.aborted) return false;
+          await actions.selectSession(anchor.sessionPath);
+          const epoch = sessionEpoch;
+          const selected = get().snapshot?.selectedSession;
+          if (
+            signal?.aborted ||
+            request !== navigationSequence ||
+            get().sessionSwitching ||
+            selected?.id !== anchor.sessionId ||
+            selected.path !== anchor.sessionPath
+          )
+            return false;
+          const window = await client.sessionMessageWindow(anchor, signal);
+          if (
+            signal?.aborted ||
+            request !== navigationSequence ||
+            epoch !== sessionEpoch
+          )
+            return false;
+          const confirmed = get().snapshot?.selectedSession;
+          if (
+            confirmed?.id !== anchor.sessionId ||
+            confirmed.path !== anchor.sessionPath ||
+            window.id !== anchor.sessionId ||
+            window.path !== anchor.sessionPath ||
+            window.history?.anchorEntryId !== anchor.entryId ||
+            window.history.anchorOnBranch !== true ||
+            !window.entries.some((entry) => entry.id === anchor.entryId)
+          )
+            return false;
+          set({
+            historyNavigation: {
+              ...anchor,
+              session: window,
+              revision: (get().historyNavigation?.revision ?? 0) + 1,
+            },
+          });
+          return true;
+        } catch {
+          // A failed read never replaces a verified reading window. The caller
+          // owns feedback for its current request; an obsolete failure is inert.
+          return false;
+        }
+      },
+      async forkMessage(anchor) {
+        const initial = get();
+        const selected = initial.snapshot?.selectedSession;
+        if (initial.sessionForkPending) return false;
+        if (
+          !selected ||
+          initial.workspaceDraft ||
+          initial.sessionSwitching ||
+          initial.promptAdmissionPending ||
+          initial.promptAdmissionRecovery ||
+          initial.liveRunning ||
+          initial.activeTurn ||
+          initial.snapshot?.runtime.status !== "idle" ||
+          initial.modelSelectionPending ||
+          !isControlledSession(initial.snapshot) ||
+          selected.id !== anchor.sessionId ||
+          selected.path !== anchor.sessionPath ||
+          initial.selectedPath !== anchor.sessionPath ||
+          selected.path.startsWith("current:")
+        ) {
+          set({ notice: i18n.t("forkSessionUnavailable") });
+          return false;
+        }
+        const request =
+          forkRequest?.sessionId === anchor.sessionId &&
+          forkRequest.sessionPath === anchor.sessionPath &&
+          forkRequest.entryId === anchor.entryId
+            ? forkRequest
+            : {
+                ...anchor,
+                commandId:
+                  globalThis.crypto?.randomUUID?.() ??
+                  `web-fork-${Date.now()}-${++navigationSequence}`,
+              };
+        forkRequest = request;
+        const epoch = sessionEpoch;
+        let ownedEpoch = epoch;
+        set({ sessionForkPending: true, notice: null });
+        try {
+          const result = await client.forkSession(request);
+          if (
+            epoch !== sessionEpoch ||
+            get().selectedPath !== anchor.sessionPath
+          )
+            return false;
+          if (
+            result.commandId !== request.commandId ||
+            result.source.sessionId !== anchor.sessionId ||
+            result.source.sessionPath !== anchor.sessionPath ||
+            result.source.entryId !== anchor.entryId
+          )
+            throw new Error(i18n.t("forkSessionUncertain"));
+          if (result.state !== "forked") {
+            set({
+              notice: i18n.t(
+                result.state === "cancelled"
+                  ? "forkSessionCancelled"
+                  : "forkSessionUncertain",
+              ),
+            });
+            if (result.state === "cancelled") forkRequest = null;
+            else await actions.refreshSnapshot({ epoch });
+            return false;
+          }
+          if (
+            !result.sessionId ||
+            !result.sessionPath ||
+            result.sessionId === anchor.sessionId ||
+            result.sessionPath === anchor.sessionPath
+          )
+            throw new Error(i18n.t("forkSessionUncertain"));
+          const nextEpoch = ++sessionEpoch;
+          ownedEpoch = nextEpoch;
+          promptAdmission = null;
+          promptAdmissionToken = null;
+          resetThinking();
+          clearCommandDiscovery();
+          set({
+            ...resetLivePatch(),
+            ...resetModelSearch(),
+            selectedPath: result.sessionPath,
+            historyAnchor: null,
+            historyNavigation: null,
+            createdSession: null,
+            draftModel: null,
+            sessionSwitching: true,
+          });
+          const confirmed = await actions.refreshSnapshot({ epoch: nextEpoch });
+          if (nextEpoch !== sessionEpoch) return false;
+          const current = get().snapshot;
+          if (
+            !confirmed ||
+            current?.selectedSession?.id !== result.sessionId ||
+            current.selectedSession.path !== result.sessionPath ||
+            !isControlledSession(current)
+          ) {
+            set({ notice: i18n.t("forkSessionUncertain") });
+            return false;
+          }
+          forkRequest = null;
+          set({
+            notice: { kind: "success", message: i18n.t("forkSessionCreated") },
+          });
+          return true;
+        } catch (error) {
+          if (ownedEpoch === sessionEpoch) {
+            if (
+              error instanceof WebApiError &&
+              [
+                "SESSION_CONFLICT",
+                "SESSION_FORK_UNAVAILABLE",
+                "SESSION_FORK_CAPACITY",
+              ].includes(error.code ?? "")
+            ) {
+              forkRequest = null;
+              set({ notice: i18n.t("forkSessionUnavailable") });
+            } else set({ notice: i18n.t("forkSessionUncertain") });
+          }
+          return false;
+        } finally {
+          set({ sessionForkPending: false });
+          if (
+            sessionEpoch === ownedEpoch &&
+            get().selectedPath !== anchor.sessionPath &&
+            get().sessionSwitching
+          )
+            set({ sessionSwitching: false });
+        }
+      },
+      async savePreferences(patch) {
+        try {
+          await client.savePreferences(patch);
+          await actions.refreshSnapshot();
+        } catch (error) {
+          showError(error);
+          throw error;
         }
       },
       async renameSession(path, name) {
@@ -1949,7 +2176,14 @@ export function createWebStore(
           if (epoch === sessionEpoch) set({ turnCancellationPending: false });
         }
       },
-      async sendPrompt(rawContent, promptImages = [], planApproval) {
+      async sendPrompt(
+        rawContent,
+        promptImages = [],
+        planApproval,
+        delivery,
+        expectedTarget,
+      ) {
+        if (get().sessionForkPending) return false;
         if (get().planSelectionPending) return false;
         const content = rawContent.trim();
         if (content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
@@ -1961,7 +2195,11 @@ export function createWebStore(
           });
           return false;
         }
-        const images = promptImages.map((image) => ({ ...image }));
+        const images = promptImages.map(({ data, mimeType, name }) => ({
+          data,
+          mimeType,
+          ...(name === undefined ? {} : { name }),
+        }));
         const imageSignature = JSON.stringify(
           images.map(({ data, mimeType, name }) => [
             mimeType,
@@ -1970,8 +2208,29 @@ export function createWebStore(
           ]),
         );
         const initial = get();
+        if (
+          expectedTarget &&
+          (expectedTarget.epoch !== sessionEpoch ||
+            !targetMatchesSnapshot(expectedTarget) ||
+            initial.workspaceDraft)
+        )
+          return false;
         const recovery = initial.promptAdmissionRecovery;
         const replacement = recovery?.phase === "submitting" ? recovery : null;
+        const steerTarget =
+          initial.activeTurn ?? initial.snapshot?.runtime.activeTurn;
+        if (
+          delivery?.streamingBehavior === "steer" &&
+          !replacement &&
+          (planApproval ||
+            initial.turnCancellationPending ||
+            !steerTarget ||
+            steerTarget.commandId !== delivery.expectedTurnCommandId ||
+            initial.workspaceDraft)
+        ) {
+          set({ notice: i18n.t("steerStaleTurn") });
+          return false;
+        }
         const workspace = initial.selectedWorkspace;
         if (
           !workspace ||
@@ -2052,7 +2311,11 @@ export function createWebStore(
           promptAdmission.sessionPath === sessionPath &&
           promptAdmission.content === content &&
           promptAdmission.imageSignature === imageSignature &&
-          promptAdmission.planRevision === planApproval?.planRevision;
+          promptAdmission.planRevision === planApproval?.planRevision &&
+          (promptAdmission.delivery?.streamingBehavior ?? "followUp") ===
+            (delivery?.streamingBehavior ?? "followUp") &&
+          promptAdmission.delivery?.expectedTurnCommandId ===
+            delivery?.expectedTurnCommandId;
         const commandId = retrying
           ? promptAdmission!.commandId
           : (globalThis.crypto?.randomUUID?.() ??
@@ -2079,6 +2342,7 @@ export function createWebStore(
           timestamp,
           afterEntryId,
           ...(planApproval ? { planRevision: planApproval.planRevision } : {}),
+          ...(delivery ? { delivery } : {}),
         };
         promptAdmissionToken = admission;
         set({
@@ -2114,12 +2378,13 @@ export function createWebStore(
               ]),
           notice: null,
           pendingFollowUpsReceipt: null,
+          pendingSteeringReceipt: null,
           turnTerminalStatus: null,
           promptAdmissionPending: true,
           scrollToBottom: get().scrollToBottom + 1,
         });
         try {
-          const receipt = planApproval
+          const receipt = delivery
             ? await client.prompt(
                 sessionId,
                 content,
@@ -2127,16 +2392,27 @@ export function createWebStore(
                 sessionPath,
                 retrying,
                 images,
-                planApproval.planRevision,
+                planApproval?.planRevision,
+                delivery,
               )
-            : await client.prompt(
-                sessionId,
-                content,
-                commandId,
-                sessionPath,
-                retrying,
-                images,
-              );
+            : planApproval
+              ? await client.prompt(
+                  sessionId,
+                  content,
+                  commandId,
+                  sessionPath,
+                  retrying,
+                  images,
+                  planApproval.planRevision,
+                )
+              : await client.prompt(
+                  sessionId,
+                  content,
+                  commandId,
+                  sessionPath,
+                  retrying,
+                  images,
+                );
           if (
             epoch !== sessionEpoch ||
             sessionPath !== get().selectedPath ||
@@ -2161,6 +2437,9 @@ export function createWebStore(
               : {}),
             pendingFollowUpsReceipt: isControlledSession(get().snapshot)
               ? (receipt.pendingFollowUps ?? null)
+              : null,
+            pendingSteeringReceipt: isControlledSession(get().snapshot)
+              ? (receipt.pendingSteering ?? null)
               : null,
             ...(replacement &&
             get().promptAdmissionRecovery?.commandId === replacement.commandId
@@ -2201,6 +2480,7 @@ export function createWebStore(
               [
                 "WORKSPACE_REQUIRED",
                 "SESSION_CONFLICT",
+                "TURN_CONFLICT",
                 "PROMPT_REJECTED",
                 "COMMAND_CONFLICT",
                 "PROMPT_ADMISSION_CAPACITY",
@@ -2388,6 +2668,7 @@ export function createWebStore(
                   planRevision: recovery.planRevision,
                 }
               : undefined,
+            recovery.delivery,
           );
         } finally {
           const currentRecovery = get().promptAdmissionRecovery;
@@ -2401,7 +2682,13 @@ export function createWebStore(
           }
         }
       },
-      async sendPromptAsNew(rawContent, promptImages, planApproval) {
+      async sendPromptAsNew(
+        rawContent,
+        promptImages,
+        planApproval,
+        _delivery,
+        expectedTarget,
+      ) {
         const recovery = get().promptAdmissionRecovery;
         if (
           !recovery ||
@@ -2430,8 +2717,20 @@ export function createWebStore(
               }
             : planApproval;
           admitted = approval
-            ? await actions.sendPrompt(content, images, approval)
-            : await actions.sendPrompt(content, images);
+            ? await actions.sendPrompt(
+                content,
+                images,
+                approval,
+                undefined,
+                expectedTarget,
+              )
+            : await actions.sendPrompt(
+                content,
+                images,
+                undefined,
+                undefined,
+                expectedTarget,
+              );
           return admitted;
         } finally {
           const currentRecovery = get().promptAdmissionRecovery;
@@ -2586,8 +2885,11 @@ export function createWebStore(
       turnCancellationPending: false,
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: null,
+      pendingSteeringReceipt: null,
       snapshot: null,
       historyAnchor: null,
+      historyNavigation: null,
+      sessionForkPending: false,
       cursor: null,
       selectedPath: null,
       selectedWorkspace: null,

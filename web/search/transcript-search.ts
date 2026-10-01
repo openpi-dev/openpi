@@ -34,6 +34,7 @@ export type WebTranscriptSearchPartialReason =
 
 export interface WebTranscriptSearchSession {
   id: string;
+  name?: string;
   path: string;
   cwd: string;
   modified: string;
@@ -53,6 +54,7 @@ export interface WebTranscriptSearchLimits {
 
 export interface WebTranscriptSearchMatch {
   sessionId: string;
+  sessionName?: string;
   sessionPath: string;
   workspace: string;
   sessionSource: WebTranscriptSearchSource;
@@ -450,6 +452,7 @@ async function scanSessionFile(
               sessionPath: canonicalPath,
               workspace: authorizedWorkspace,
               sessionSource: session.source,
+              ...(session.name ? { sessionName: session.name.slice(0, 160) } : {}),
               messageId: entry.id,
               ...(turnId ? { turnId } : {}),
               ...(parentId ? { parentId } : {}),
@@ -550,7 +553,7 @@ export async function searchWebTranscripts(
   const sessionRoots = await Promise.all(
     requestedSessionRoots.map((root) => realpath(root)),
   );
-  const workspaces = new Set(await Promise.all(options.allowedWorkspaces.map((path) => realpath(path))));
+  const workspaces = new Set((await Promise.all(options.allowedWorkspaces.map((path) => realpath(path).catch(() => undefined)))).filter((path): path is string => path !== undefined));
   if (options.sessions.length > limits.maxFiles) reasons.add("file-limit");
   const sessions = options.sessions
     .slice(0, limits.maxFiles)

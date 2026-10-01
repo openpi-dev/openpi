@@ -1,0 +1,50 @@
+.provider-attempts > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.provider-attempts > summary::-webkit-details-marker {
+  display: none;
+}
+
+.provider-attempts > summary > svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  transition: transform 160ms ease;
+}
+
+.provider-attempts[open] > summary > svg {
+  transform: rotate(90deg);
+}
+
+.provider-attempts ol {
+  margin: 7px 0 0;
+  padding-left: 20px;
+}
+
+.provider-attempts li + li {
+  margin-top: 7px;
+}
+
+.provider-attempts > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.message-edit-hint {
+  margin: 7px 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-attempts > summary > svg {
+    transition: none;
+  }
+}

@@ -602,7 +602,7 @@ it("opens the child list without duplicating child records in the activity bar",
   );
   fireEvent.click(
     screen.getByRole("button", {
-      name: i18n.t("subagentList", { count: 2, running: 2 }),
+      name: i18n.t("subagentProgress", { completed: 0, running: 2 }),
     }),
   );
   expect(inspect).toHaveBeenLastCalledWith();
@@ -644,7 +644,11 @@ it("distinguishes interrupted activity and record count from active concurrency"
   );
   expect(
     screen.getByRole("button", {
-      name: i18n.t("subagentList", { count: 2, running: 0 }),
+      name: [
+        i18n.t("subagentProgress", { completed: 0, running: 0 }),
+        i18n.t("subagentSummaryOther", { count: 1 }),
+        i18n.t("subagentSummaryUnknown", { count: 1 }),
+      ].join(" · "),
     }),
   ).toBeTruthy();
   expect(
@@ -758,7 +762,10 @@ it("keeps the overview entry reachable for saved children after the live manager
   );
   fireEvent.click(
     screen.getByRole("button", {
-      name: i18n.t("subagentList", { count: 1, running: 0 }),
+      name: [
+        i18n.t("subagentProgress", { completed: 0, running: 0 }),
+        i18n.t("subagentSummaryUnknown", { count: 1 }),
+      ].join(" · "),
     }),
   );
   expect(inspect).toHaveBeenCalledWith();

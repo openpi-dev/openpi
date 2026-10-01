@@ -88,6 +88,7 @@ export function seedAgentDirectory(
                 id: MODEL_ID,
                 name: MODEL_NAME,
                 reasoning: true,
+                input: ["text", "image"],
                 thinkingLevelMap: {
                   minimal: null,
                   medium: null,

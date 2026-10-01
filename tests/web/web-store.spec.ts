@@ -126,6 +126,98 @@ function activeSnapshot(
   return next;
 }
 
+it("binds explicit steering to its active turn and preserves queue receipt as admission evidence", async () => {
+  const client = new FakeClient();
+  const current = snapshot();
+  current.runtime.status = "running";
+  current.runtime.activeTurn = {
+    sessionId: "session-1",
+    commandId: "running-turn",
+    epoch: 4,
+  };
+  client.snapshots.push(Promise.resolve(current));
+  const prompt = vi
+    .spyOn(client, "prompt")
+    .mockImplementation(async (_session, _content, id) => ({
+      id,
+      accepted: true,
+      pendingFollowUps: 0,
+      pendingSteering: 1,
+      delivery: "steer",
+    }));
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  const delivery = {
+    streamingBehavior: "steer" as const,
+    expectedTurnCommandId: "running-turn",
+  };
+  expect(
+    await store
+      .getState()
+      .actions.sendPrompt("use this tool", [], undefined, delivery),
+  ).toBe(true);
+  expect(prompt).toHaveBeenCalledExactlyOnceWith(
+    "session-1",
+    "use this tool",
+    expect.any(String),
+    "/tmp/ws/session.jsonl",
+    false,
+    [],
+    undefined,
+    delivery,
+  );
+  expect(store.getState().activeTurn?.commandId).toBe("running-turn");
+  expect(store.getState().pendingSteeringReceipt).toBe(1);
+  expect(store.getState().pendingFollowUpsReceipt).toBe(0);
+});
+
+it("rejects a stale steering choice locally and does not silently send it as the next turn", async () => {
+  const client = new FakeClient();
+  client.snapshots.push(Promise.resolve(snapshot()));
+  const prompt = vi.spyOn(client, "prompt");
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  expect(
+    await store
+      .getState()
+      .actions.sendPrompt("retained instruction", [], undefined, {
+        streamingBehavior: "steer",
+        expectedTurnCommandId: "ended-turn",
+      }),
+  ).toBe(false);
+  expect(prompt).not.toHaveBeenCalled();
+  expect(store.getState().liveMessages).toEqual([]);
+  expect(store.getState().notice).toContain("Your draft is kept");
+});
+
+it("treats a runtime steering conflict as a known rejection with no optimistic admission or fallback", async () => {
+  const client = new FakeClient();
+  const current = snapshot();
+  current.runtime.status = "running";
+  current.runtime.activeTurn = {
+    sessionId: "session-1",
+    commandId: "running-turn",
+    epoch: 4,
+  };
+  client.snapshots.push(Promise.resolve(current));
+  const prompt = vi
+    .spyOn(client, "prompt")
+    .mockRejectedValue(new WebApiError("target ended", 409, "TURN_CONFLICT"));
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  expect(
+    await store
+      .getState()
+      .actions.sendPrompt("retained instruction", [], undefined, {
+        streamingBehavior: "steer",
+        expectedTurnCommandId: "running-turn",
+      }),
+  ).toBe(false);
+  expect(prompt).toHaveBeenCalledTimes(1);
+  expect(store.getState().promptAdmissionRecovery).toBeNull();
+  expect(store.getState().liveMessages).toEqual([]);
+});
+
 function unboundSnapshot(workspaces: WebSnapshot["workspaces"] = []) {
   const next = snapshot();
   delete next.currentSessionId;
@@ -556,6 +648,131 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe("search message navigation", () => {
+  it("does not install a late window after its caller cancels for a loaded local navigation", async () => {
+    const client = new FakeClient();
+    const pending = deferred<ReturnType<typeof windowFor>>();
+    const read = vi
+      .spyOn(client, "sessionMessageWindow")
+      .mockReturnValue(pending.promise);
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: snapshot(),
+      selectedPath: "/tmp/ws/session.jsonl",
+      workspaceDraft: false,
+    });
+    const controller = new AbortController();
+    const anchor = {
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+      entryId: "old",
+    };
+    const request = store
+      .getState()
+      .actions.navigateToMessage(anchor, controller.signal);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    expect(read).toHaveBeenCalledWith(anchor, controller.signal);
+    controller.abort();
+    pending.resolve(windowFor("old"));
+    expect(await request).toBe(false);
+    expect(store.getState().historyNavigation).toBeNull();
+  });
+  function windowFor(entryId: string) {
+    const selected = snapshot().selectedSession!;
+    return {
+      ...selected,
+      entries: [
+        {
+          id: entryId,
+          type: "message" as const,
+          timestamp: "2026-09-30T00:00:00Z",
+          message: { role: "assistant", content: entryId },
+        },
+      ],
+      history: {
+        leafEntryId: "native-leaf",
+        beforeEntryId: null,
+        anchorEntryId: entryId,
+        anchorOnBranch: true,
+      },
+    };
+  }
+
+  it.each(["success", "failure"] as const)(
+    "ignores an older same-Session navigation that finishes with %s after the newer result",
+    async (outcome) => {
+      const client = new FakeClient();
+      const first = deferred<ReturnType<typeof windowFor>>();
+      const second = deferred<ReturnType<typeof windowFor>>();
+      const read = vi
+        .spyOn(client, "sessionMessageWindow")
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise);
+      const store = createWebStore(client);
+      store.setState({
+        snapshot: snapshot(),
+        selectedPath: "/tmp/ws/session.jsonl",
+        workspaceDraft: false,
+      });
+      const anchor = {
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+      };
+      const older = store
+        .getState()
+        .actions.navigateToMessage({ ...anchor, entryId: "older" });
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+      const newer = store
+        .getState()
+        .actions.navigateToMessage({ ...anchor, entryId: "newer" });
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+      second.resolve(windowFor("newer"));
+      expect(await newer).toBe(true);
+      const accepted = store.getState().historyNavigation;
+      expect(accepted).toMatchObject({
+        ...anchor,
+        entryId: "newer",
+        revision: 1,
+      });
+      if (outcome === "success") first.resolve(windowFor("older"));
+      else first.reject(new Error("obsolete navigation failed"));
+      expect(await older).toBe(false);
+      expect(store.getState().historyNavigation).toBe(accepted);
+      expect(store.getState().notice).toBeNull();
+      expect(store.getState().selectedPath).toBe(anchor.sessionPath);
+    },
+  );
+
+  it("returns a current navigation read failure without preventing the next successful navigation", async () => {
+    const client = new FakeClient();
+    vi.spyOn(client, "sessionMessageWindow")
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(windowFor("found"));
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: snapshot(),
+      selectedPath: "/tmp/ws/session.jsonl",
+      workspaceDraft: false,
+    });
+    const anchor = {
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+    };
+    expect(
+      await store
+        .getState()
+        .actions.navigateToMessage({ ...anchor, entryId: "unavailable" }),
+    ).toBe(false);
+    expect(store.getState().historyNavigation).toBeNull();
+    expect(
+      await store
+        .getState()
+        .actions.navigateToMessage({ ...anchor, entryId: "found" }),
+    ).toBe(true);
+    expect(store.getState().historyNavigation?.entryId).toBe("found");
+  });
 });
 
 describe("sidebar Session navigation", () => {
@@ -1323,6 +1540,44 @@ describe("OpenPI Web store", () => {
     expect(store.getState().snapshot?.sessions[0]?.name).toBe("Newer");
     expect(store.getState().notice).toBeNull();
     expect(store.getState().connection).not.toBe("unavailable");
+  });
+
+  it("clears the failed snapshot notice once a valid snapshot recovers", async () => {
+    const client = new FakeClient();
+    const store = createWebStore(client);
+    client.snapshots.push(Promise.reject(new TypeError("Failed to fetch")));
+    expect(await store.getState().actions.refreshSnapshot()).toBe(false);
+    expect(store.getState().notice).toBe("Failed to fetch");
+    client.snapshots.push(Promise.resolve(snapshot()));
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it("preserves a failed write even when it has the same text as the recovered read", async () => {
+    const client = new FakeClient();
+    const store = createWebStore(client);
+    client.snapshots.push(Promise.reject(new TypeError("Failed to fetch")));
+    await store.getState().actions.refreshSnapshot();
+    vi.spyOn(client, "savePreferences").mockRejectedValue(
+      new TypeError("Failed to fetch"),
+    );
+    await expect(
+      store.getState().actions.savePreferences({ theme: "dark" }),
+    ).rejects.toThrow("Failed to fetch");
+    client.snapshots.push(Promise.resolve(snapshot()));
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(store.getState().notice).toBe("Failed to fetch");
+  });
+
+  it("preserves another notice that replaced the failed snapshot notice", async () => {
+    const client = new FakeClient();
+    const store = createWebStore(client);
+    client.snapshots.push(Promise.reject(new TypeError("Failed to fetch")));
+    await store.getState().actions.refreshSnapshot();
+    store.setState({ notice: "The created Session is no longer active." });
+    client.snapshots.push(Promise.resolve(snapshot()));
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(store.getState().notice).toContain("no longer active");
   });
 
   it("keeps only the newest model search result when responses settle out of order", async () => {
@@ -3789,6 +4044,45 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  it.each([true, false])(
+    "clears retry presentation on native retry end (success %s), keeping execution until settled",
+    async (success) => {
+      const client = new FakeClient();
+      client.snapshots.push(Promise.resolve(snapshot()));
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      store.getState().actions.start();
+      const turn = { sessionId: "session-1", commandId: "retrying", epoch: 1 };
+      stream.emit(runtimeEvent(5, "turn_started", turn));
+      stream.emit(
+        runtimeEvent(6, "auto_retry_start", { attempt: 1, maxAttempts: 3 }),
+      );
+      expect(store.getState().liveRetry).toEqual({
+        attempt: 1,
+        maxAttempts: 3,
+      });
+      stream.emit(runtimeEvent(7, "auto_retry_end", { attempt: 1, success }));
+      expect(store.getState().liveRetry).toBeNull();
+      expect(store.getState().liveRunning).toBe(true);
+      expect(store.getState().activeTurn).toEqual(turn);
+      expect(store.getState().turnTerminalStatus).toBeNull();
+      stream.emit(
+        runtimeEvent(8, "turn_settled", {
+          ...turn,
+          outcome: success ? "completed" : "cancelled",
+        }),
+      );
+      expect(store.getState().liveRunning).toBe(false);
+      expect(store.getState().turnTerminalStatus).toBe(
+        success ? "completed" : "cancelled",
+      );
+      store.getState().actions.stop();
+    },
+  );
+
   it("starts a new admission identity only after a definite rejection", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));
@@ -3948,6 +4242,36 @@ describe("draft model selection", () => {
     const { client, store } = draftHarness();
     expect(await store.getState().actions.prepareSession()).toBeNull();
     expect(client.creations).toHaveLength(0);
+    expect(client.prompts).toHaveLength(0);
+  });
+
+  it("rejects files prepared for an older Session selection, including a same-ID switch", async () => {
+    const client = new FakeClient();
+    const store = createWebStore(client);
+    const initial = snapshot();
+    store.setState({
+      snapshot: initial,
+      selectedPath: initial.selectedSession!.path,
+      selectedWorkspace: "/tmp/ws",
+    });
+    const target = await store.getState().actions.prepareSession();
+    expect(target).not.toBeNull();
+    const switched = activeSnapshot("session-1", "/tmp/ws/other.jsonl");
+    store.setState({
+      snapshot: switched,
+      selectedPath: switched.selectedSession!.path,
+    });
+    expect(
+      await store
+        .getState()
+        .actions.sendPrompt(
+          "User-provided files: old/path.txt",
+          [],
+          undefined,
+          undefined,
+          target!,
+        ),
+    ).toBe(false);
     expect(client.prompts).toHaveLength(0);
   });
 

@@ -410,7 +410,7 @@ it("uses the complete native text for copy and edit only after recovery finishes
     }).disabled,
   ).toBe(true);
   expect(
-    within(question).queryByRole("button", { name: "Edit message" }),
+    within(question).queryByRole("button", { name: "Revise and resend" }),
   ).toBeNull();
   await act(async () =>
     fireEvent.click(
@@ -430,11 +430,11 @@ it("uses the complete native text for copy and edit only after recovery finishes
   );
   expect(copyText).toHaveBeenCalledWith("The complete question after recovery");
   fireEvent.click(
-    within(question).getByRole("button", { name: "Edit message" }),
+    within(question).getByRole("button", { name: "Revise and resend" }),
   );
   expect(
     within(question).getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Edit message",
+      name: "Revise and resend",
     }).value,
   ).toBe("The complete question after recovery");
 
@@ -455,7 +455,7 @@ it("uses the complete native text for copy and edit only after recovery finishes
   );
   expect(
     within(question).getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Edit message",
+      name: "Revise and resend",
     }).value,
   ).toBe("The complete question after recovery");
 });

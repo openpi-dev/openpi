@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createTurnChangeRecorder } from "./turn-changes.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -31,6 +32,8 @@ import {
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
   type WebSessionCreationResult,
+  type WebSessionForkRequest,
+  type WebSessionForkResult,
   type WebSessionExecution,
   type WebThinkingProjection,
   type WebThinkingSelectionOptions,
@@ -58,7 +61,7 @@ import {
   registerCommandDiscoveryBridge,
   submittedExtensionCommand,
 } from "./command-discovery.ts";
-import { WEB_COMMAND_INPUT, publishWebCommandFeedback } from "../../extensions/shared/web-command-feedback.ts";
+import { WEB_COMMAND_INPUT, WEB_COMMAND_HANDLED, publishWebCommandFeedback } from "../../extensions/shared/web-command-feedback.ts";
 import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
@@ -99,6 +102,7 @@ type PromptTrace = {
   userMessageObserved: boolean;
   epoch?: number;
   outcome?: "completed" | "cancelled" | "failed" | "uncertain";
+  resultMessage?: Extract<AgentSessionEvent, { type: "message_end" }>["message"];
 };
 
 type TurnSettlement = WebActiveTurn & {
@@ -106,6 +110,13 @@ type TurnSettlement = WebActiveTurn & {
 };
 
 function observePromptOutcome(trace: PromptTrace, event: AgentSessionEvent) {
+  // Cancelling Pi's retry backoff emits no aborted assistant message. This
+  // native terminal event is the cancellation evidence retained at settlement.
+  if (event.type === "auto_retry_end" && !event.success && event.finalError === "Retry cancelled") {
+    trace.outcome = "cancelled";
+    trace.resultMessage = undefined;
+    return;
+  }
   if (event.type !== "message_end" || event.message.role !== "assistant") return;
   const outcome = event.message.stopReason === "aborted" ? "cancelled"
     : event.message.stopReason === "error" ? "failed"
@@ -113,6 +124,7 @@ function observePromptOutcome(trace: PromptTrace, event: AgentSessionEvent) {
   // A later continuation cannot erase native cancellation evidence. Only
   // agent_settled publishes a terminal outcome for the whole Pi run.
   if (outcome && trace.outcome !== "cancelled") trace.outcome = outcome;
+  trace.resultMessage = outcome === "completed" && trace.outcome !== "cancelled" ? event.message : undefined;
 }
 
 function executingTools(session: AgentSession) {
@@ -235,6 +247,11 @@ export class PiWebRuntime implements WebRuntimeController {
   private disposed = false;
   private disposePromise?: Promise<void>;
   private hasSelectedWorkspace: boolean;
+  private historyForkPending = false;
+  private readonly historyForkReceipts = new Map<string, {
+    request: WebSessionForkRequest;
+    result: Promise<WebSessionForkResult>;
+  }>();
 
   private constructor(
     runtime: AgentSessionRuntime,
@@ -355,19 +372,29 @@ export class PiWebRuntime implements WebRuntimeController {
     }
     const session = owner.session;
     const followUps = session.getFollowUpMessages();
+    const steering = session.getSteeringMessages?.();
     const held = this.compactionQueues?.get(owner);
     const queued = [...followUps, ...(held?.items.map((item) => item.content) ?? [])];
     const trace = owner === this.runtime ? this.activePromptTrace : this.suspendedPromptTraces?.get(session)?.active;
     const activeTurn = this.activeTurnFromTrace(trace);
     const compaction = this.getCompaction(session);
-    const terminalEntry = session.sessionManager.getBranch().slice().reverse().find((entry) => entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY);
+    const branch = session.sessionManager.getBranch();
+    const terminalEntry = branch.slice().reverse().find((entry) => entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY);
     const timing = terminalEntry?.type === "custom" ? readTurnTiming(terminalEntry.data) : undefined;
+    // Legacy timing has no result id. Its nearest preceding native message is
+    // proof only when it is a terminal assistant on this exact current branch.
+    const preceding = terminalEntry ? branch.slice(0, branch.indexOf(terminalEntry)).reverse().find((entry) => entry.type === "message" || entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY) : undefined;
+    const resultEntryId = timing?.outcome === "completed" && preceding?.type === "message" && preceding.message.role === "assistant" && ["stop", "length"].includes(preceding.message.stopReason) && (!timing.resultEntryId || timing.resultEntryId === preceding.id) ? preceding.id : undefined;
     return {
       sessionId, sessionPath,
-      ...(timing?.sessionId === sessionId ? { lastTurn: { commandId: timing.commandId, finishedAt: timing.finishedAt, outcome: timing.outcome } } : {}),
+      ...(timing?.sessionId === sessionId ? { lastTurn: { commandId: timing.commandId, finishedAt: timing.finishedAt, outcome: timing.outcome, ...(resultEntryId ? { resultEntryId } : {}) } } : {}),
       status: session.isIdle ? "idle" : "running",
       pendingFollowUps: queued.length,
       queuedMessages: queued.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
+      ...(steering ? {
+        pendingSteering: steering.length,
+        steeringMessages: steering.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
+      } : {}),
       ...(held?.blocked ? { promptQueueBlocked: true } : {}),
       ...executingTools(session),
       ...(activeTurn ? { activeTurn } : {}),
@@ -1158,6 +1185,7 @@ export class PiWebRuntime implements WebRuntimeController {
   async sendPrompt(content: string, options?: WebPromptOptions) {
     this.assertActive();
     this.assertWorkspaceSelected();
+    this.assertNoHistoryFork();
     const owner = this.runtime;
     if (!matchesSessionIdentity(owner.session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
@@ -1166,11 +1194,32 @@ export class PiWebRuntime implements WebRuntimeController {
         409,
       );
     }
+    this.assertSteeringTarget(owner.session, options);
     const sessionId = owner.session.sessionManager.getSessionId();
     const exact = { ...options, expectedSessionId: sessionId, expectedSessionPath: owner.session.sessionManager.getSessionFile() ?? `current:${sessionId}` };
-    if (owner.session.isCompacting || this.manualCompactionOwner === owner || this.compactionQueues?.has(owner))
+    if (options?.streamingBehavior !== "steer" && (owner.session.isCompacting || this.manualCompactionOwner === owner || this.compactionQueues?.has(owner)))
       return this.holdCompactionPrompt(owner, content, exact);
     return this.dispatchPrompt(owner, content, exact);
+  }
+
+  private assertSteeringTarget(session: AgentSession, options?: WebPromptOptions) {
+    if (options?.streamingBehavior !== "steer") return;
+    const turn = this.getActiveTurn();
+    if (
+      options.planRevision !== undefined ||
+      !session.isStreaming ||
+      session.isCompacting ||
+      this.manualCompactionOwner?.session === session ||
+      !turn ||
+      turn.sessionId !== session.sessionManager.getSessionId() ||
+      turn.commandId !== options.expectedTurnCommandId ||
+      this.turnAbortOperations?.has(this.turnKey(turn))
+    )
+      throw new WebRuntimeRequestError(
+        "The targeted turn has ended or is stopping. Keep your draft and choose how to send it.",
+        "TURN_CONFLICT",
+        409,
+      );
   }
 
   private async dispatchPrompt(agentRuntime: AgentSessionRuntime, content: string, options?: WebPromptOptions, fromCompactionQueue = false) {
@@ -1208,11 +1257,13 @@ export class PiWebRuntime implements WebRuntimeController {
       let planApprovalAuthorized = false;
       let agentLifecycleStarted = false;
       let queuedForAgent = false;
+      let commandInputEntryId: string | undefined;
       let unsubscribePromptLifecycle: (() => void) | undefined;
       try {
         await previousAdmission;
         this.assertActive();
         this.assertWorkspaceSelected();
+        this.assertNoHistoryFork();
         if (
           (agentRuntime !== this.runtime && !(fromCompactionQueue && this.retainedRuntimes.has(agentRuntime))) ||
           session !== agentRuntime.session ||
@@ -1227,6 +1278,7 @@ export class PiWebRuntime implements WebRuntimeController {
             409,
           );
         }
+        this.assertSteeringTarget(session, options);
         assertWebCommandSupported(agentRuntime.services, content);
         if (agentRuntime !== this.runtime && submittedExtensionCommand(agentRuntime.services, content)) {
           throw new WebRuntimeRequestError("Return to this Session to retry its queued command.", "SESSION_CONFLICT", 409);
@@ -1260,18 +1312,22 @@ export class PiWebRuntime implements WebRuntimeController {
           });
         }
         let followUpMessages = session.getFollowUpMessages().length;
+        let steeringMessages = session.getSteeringMessages?.().length ?? 0;
         unsubscribePromptLifecycle = session.subscribe((event) => {
           if (event.type === "agent_start") agentLifecycleStarted = true;
           if (event.type === "queue_update") {
-            if (event.followUp.length > followUpMessages) {
+            if (event.followUp.length > followUpMessages || event.steering.length > steeringMessages) {
               queuedForAgent = true;
               if (promptTrace) promptTrace.queued = true;
             }
             followUpMessages = event.followUp.length;
+            steeringMessages = event.steering.length;
           }
         });
         this.promptOrigins ??= new AsyncLocalStorage<PromptTrace | undefined>();
         const extensionCommand = submittedExtensionCommand(agentRuntime.services, content);
+        if (options?.streamingBehavior === "steer" && extensionCommand)
+          throw new WebRuntimeRequestError("Extension commands cannot steer a running turn.", "PROMPT_REJECTED", 422);
         if (options?.planRevision !== undefined && extensionCommand)
           throw new WebRuntimeRequestError(
             "A Plan approval must be submitted as a prompt, not an extension command",
@@ -1285,7 +1341,7 @@ export class PiWebRuntime implements WebRuntimeController {
           if (projected?.support === "setup" && projectPlanControl(session.sessionManager.getBranch()).status !== "inactive") {
             throw new WebRuntimeRequestError("Exit Plan mode before changing OpenPI settings, then retry /openpi-setup.", "PLAN_CONFLICT", 409);
           }
-          session.sessionManager.appendCustomEntry(WEB_COMMAND_INPUT, { text: content, commandId: options?.commandId });
+          commandInputEntryId = session.sessionManager.appendCustomEntry(WEB_COMMAND_INPUT, { text: content, commandId: options?.commandId });
           this.emit("command_submitted", { sessionId });
           if (projected?.availability !== "available") publishWebCommandFeedback(session.sessionManager,
             "This extension has not been adapted for Web. Pi will handle the command, but dialogs or results may require the TUI.", "warning");
@@ -1314,22 +1370,16 @@ export class PiWebRuntime implements WebRuntimeController {
             content,
           );
         }
-        await this.promptOrigins.run(promptTrace, () => session.prompt(content, {
-          ...(options?.images?.length
-            ? {
-                images: options.images.map(({ data, mimeType, name }) => ({
+        const promptImages = options?.images?.length
+          ? options.images.map(({ data, mimeType, name }) => ({
                   type: "image" as const,
                   data,
                   mimeType,
                   ...(name ? { name } : {}),
-                })),
-              }
-            : {}),
-          ...(session.isStreaming
-            ? { streamingBehavior: "followUp" as const }
-            : {}),
-          source: "rpc",
-          preflightResult: (accepted) => {
+                }))
+          : undefined;
+        const delivery = options?.streamingBehavior === "steer" ? "steer" : session.isStreaming && !extensionCommand ? "followUp" : "prompt";
+        const preflightResult = (accepted: boolean) => {
             preflightObserved = true;
             if (options?.planRevision !== undefined) {
               if (accepted) {
@@ -1364,6 +1414,10 @@ export class PiWebRuntime implements WebRuntimeController {
             if (accepted) {
               resolveRequest({
                 pendingFollowUps: session.getFollowUpMessages().length,
+                ...(options?.streamingBehavior || (session.getSteeringMessages?.().length ?? 0) > 0 ? {
+                  pendingSteering: session.getSteeringMessages?.().length ?? 0,
+                  delivery,
+                } : {}),
               });
             } else {
               rejectRequest(
@@ -1374,8 +1428,21 @@ export class PiWebRuntime implements WebRuntimeController {
                 ),
               );
             }
-          },
-        }));
+          };
+        if (options?.streamingBehavior === "steer") {
+          // Pi's prompt() awaits input hooks before checking streaming state.
+          // Its native steer primitive queues synchronously, so a cancelled
+          // target cannot silently become a new prompt during that preflight.
+          await this.promptOrigins.run(promptTrace, () => session.steer(content, promptImages));
+          preflightResult(true);
+        } else {
+          await this.promptOrigins.run(promptTrace, () => session.prompt(content, {
+            ...(promptImages ? { images: promptImages } : {}),
+            ...(session.isStreaming ? { streamingBehavior: "followUp" as const } : {}),
+            source: "rpc",
+            preflightResult,
+          }));
+        }
         unsubscribePromptLifecycle();
         unsubscribePromptLifecycle = undefined;
         if (!preflightObserved || !admitted) {
@@ -1403,6 +1470,14 @@ export class PiWebRuntime implements WebRuntimeController {
           !queuedForAgent &&
           session.isIdle
         ) {
+          if (commandInputEntryId) {
+            // Persist the same handler-return fact as prompt_settled. Feedback
+            // can be progress, and is never evidence that a handler returned.
+            session.sessionManager.appendCustomEntry(WEB_COMMAND_HANDLED, {
+              inputEntryId: commandInputEntryId,
+              commandId: options.commandId,
+            });
+          }
           this.emit("prompt_settled", {
             commandId: options.commandId,
             sessionId,
@@ -1481,6 +1556,61 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   private sessionCreationReceipts?: Map<string, { workspacePath: string; result: WebSessionCreationResult }>;
+
+  forkSession(request: WebSessionForkRequest) {
+    if (!request.commandId || request.commandId.length > 128 || /[\u0000-\u001f\u007f]/u.test(request.commandId))
+      return Promise.reject(new WebRuntimeRequestError("A bounded fork command is required", "SESSION_FORK_UNAVAILABLE", 400));
+    const receipts = this.historyForkReceipts;
+    const previous = receipts.get(request.commandId);
+    if (previous) {
+      const original = previous.request;
+      if (original.sessionId !== request.sessionId || original.sessionPath !== request.sessionPath || original.entryId !== request.entryId)
+        return Promise.reject(new WebRuntimeRequestError("Fork command belongs to another message", "SESSION_CONFLICT", 409));
+      return previous.result.then((result) => ({ ...result, replayed: true }));
+    }
+    if (receipts.size >= 1024)
+      return Promise.reject(new WebRuntimeRequestError("Fork receipt capacity reached", "SESSION_FORK_CAPACITY", 409));
+    if (this.historyForkPending)
+      return Promise.reject(new WebRuntimeRequestError("Another Session fork is in progress", "SESSION_CONFLICT", 409));
+    const exact = { ...request };
+    const source = { sessionId: exact.sessionId, sessionPath: exact.sessionPath, entryId: exact.entryId };
+    const result = this.serializeControllerMutation(async () => {
+      this.assertActive();
+      this.assertWorkspaceSelected();
+      const owner = this.runtime;
+      const session = owner.session;
+      const manager = session.sessionManager;
+      if (!matchesSessionIdentity(manager, { expectedSessionId: exact.sessionId, expectedSessionPath: exact.sessionPath }))
+        throw new WebRuntimeRequestError("Only the active Web Session can fork", "SESSION_CONFLICT", 409);
+      const entry = manager.getBranch().find((entry) => entry.id === exact.entryId);
+      if (!entry || entry.type !== "message" || !manager.isPersisted() || !existsSync(exact.sessionPath) || dirname(resolve(exact.sessionPath)) !== resolve(this.webSessionDirectory))
+        throw new WebRuntimeRequestError("A saved message on the current Web branch is required", "SESSION_FORK_UNAVAILABLE", 409);
+      if (!session.isIdle || session.isStreaming || session.isCompacting || session.pendingMessageCount || session.getFollowUpMessages().length || session.getSteeringMessages().length || this.inFlightRuntimes.has(owner) || this.activePromptTrace || this.pendingPromptTraces.length || this.compactionQueues?.has(owner) || this.manualCompactionOwner === owner)
+        throw new WebRuntimeRequestError("Wait for current work and queued messages before forking", "SESSION_FORK_UNAVAILABLE", 409);
+      try {
+        const fork = await owner.fork(exact.entryId, { position: "at" });
+        this.assertActiveRuntime(owner);
+        if (fork.cancelled) return { state: "cancelled", commandId: exact.commandId, source } satisfies WebSessionForkResult;
+        const child = owner.session.sessionManager;
+        const sessionId = child.getSessionId();
+        const sessionPath = child.getSessionFile();
+        if (!sessionPath || sessionId === exact.sessionId || sessionPath === exact.sessionPath || child.getHeader()?.parentSession !== exact.sessionPath || !child.getBranch().some((entry) => entry.id === exact.entryId))
+          throw new Error("Native fork identity was not confirmed");
+        this.emit("session_switched", { sessionId, sessionPath, commandId: exact.commandId });
+        return { state: "forked", commandId: exact.commandId, source, sessionId, sessionPath } satisfies WebSessionForkResult;
+      } catch {
+        // Native fork can persist its new file before replacement fails. Keep
+        // this command terminal and never repeat that irreversible creation.
+        this.hasSelectedWorkspace = false;
+        this.emit("runtime_changed", { forkState: "uncertain", commandId: exact.commandId });
+        return { state: "uncertain", commandId: exact.commandId, source } satisfies WebSessionForkResult;
+      }
+    }, true);
+    this.historyForkPending = true;
+    const settled = result.finally(() => { this.historyForkPending = false; });
+    receipts.set(exact.commandId, { request: exact, result: settled });
+    return settled;
+  }
 
   newSession(workspacePath: string, options?: WebSessionCreationOptions) {
     return this.serializeControllerMutation(async () => {
@@ -1884,6 +2014,12 @@ export class PiWebRuntime implements WebRuntimeController {
           delayMs: event.delayMs,
         });
         break;
+      case "auto_retry_end":
+        this.emit(event.type, {
+          attempt: event.attempt,
+          success: event.success,
+        });
+        break;
       case "message_start":
         this.liveMessageKey = `live-${++this.liveMessageSequence}`;
         this.emit(event.type, {
@@ -1969,10 +2105,12 @@ export class PiWebRuntime implements WebRuntimeController {
         elapsedMs: activeTurn.elapsedMs,
         outcome: settlement.outcome,
       };
+      const result = settlement.outcome === "completed" && trace.resultMessage ? sessionManager.getBranch().find((entry) => entry.type === "message" && entry.message === trace.resultMessage) : undefined;
+      if (result) timing.resultEntryId = result.id;
       const receipts = this.completedSessionTurns ??= new Map();
       const identity = JSON.stringify([trace.sessionPath, trace.sessionId]);
       receipts.delete(identity);
-      receipts.set(identity, { commandId: timing.commandId, finishedAt: timing.finishedAt, outcome: timing.outcome });
+      receipts.set(identity, { commandId: timing.commandId, finishedAt: timing.finishedAt, outcome: timing.outcome, ...(timing.resultEntryId ? { resultEntryId: timing.resultEntryId } : {}) });
       while (receipts.size > 500) receipts.delete(receipts.keys().next().value!);
       try {
         sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, timing);
@@ -2038,7 +2176,9 @@ export class PiWebRuntime implements WebRuntimeController {
     return operation;
   }
 
-  private serializeControllerMutation<T>(operation: () => Promise<T>) {
+  private serializeControllerMutation<T>(operation: () => Promise<T>, historyFork = false) {
+    if (!historyFork && this.historyForkPending)
+      return Promise.reject(new WebRuntimeRequestError("Session fork is in progress. Keep your draft.", "SESSION_CONFLICT", 409));
     const result = (this.controllerMutation ?? Promise.resolve()).then(() => {
       this.assertActive();
       return operation();
@@ -2179,6 +2319,11 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private assertActive() {
     if (this.disposed) throw new Error("Web runtime is stopped");
+  }
+
+  private assertNoHistoryFork() {
+    if (this.historyForkPending)
+      throw new WebRuntimeRequestError("Session fork is in progress. Keep your draft.", "SESSION_CONFLICT", 409);
   }
 
   private assertWorkspaceSelected() {

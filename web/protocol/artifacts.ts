@@ -33,6 +33,18 @@ export interface WorkspaceFileListing {
   nextCursor?: string;
 }
 
+export type WorkspaceFileMutation =
+  | { kind: "create-file" | "create-directory"; directory: string; name: string }
+  | { kind: "import-file"; directory: string; name: string; data: string };
+
+export interface WorkspaceFileMutationResult {
+  sessionId: string;
+  sessionPath: string;
+  path: string;
+  kind: "file" | "directory";
+  bytes?: number;
+}
+
 /** Keep the original reference; URL resolution belongs to the Host. */
 export function isLocalArtifactLink(value: string) {
   return Boolean(value.trim()) && !value.startsWith("#") && !value.startsWith("//") &&

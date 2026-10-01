@@ -12,6 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { WebInteractiveTerminalEvent } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
+import { useWorkbarReadingState } from "./workbar-reading-state.ts";
 
 type TerminalStatus =
   | "connecting"
@@ -60,13 +61,14 @@ export function InteractiveTerminal({
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
+  const reading = useWorkbarReadingState();
   const container = useRef<HTMLDivElement>(null);
   const restartFocusIntent = useRef<{
     sessionId: string;
     cwd: string;
     generation: number;
   } | null>(null);
-  const terminalId = useRef<string | null>(null);
+  const terminalId = useRef<string | null>(reading?.terminal?.id ?? null);
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -80,6 +82,7 @@ export function InteractiveTerminal({
   useEffect(() => {
     const host = container.current;
     if (!host) return;
+    terminalId.current ??= reading?.terminal?.id ?? null;
     let disposed = false;
     let exited = false;
     let connected = false;
@@ -107,6 +110,9 @@ export function InteractiveTerminal({
       disableStdin: true,
       theme: terminalTheme(),
     });
+    let restoreViewport = reading?.terminal
+      ? { ...reading.terminal }
+      : undefined;
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
@@ -205,7 +211,12 @@ export function InteractiveTerminal({
       if (event.type === "output") {
         if (event.reset) terminal.reset();
         else if (offset !== undefined && event.offset <= offset) return;
-        terminal.write(event.data);
+        terminal.write(event.data, () => {
+          if (disposed || !restoreViewport) return;
+          if (restoreViewport.atBottom) terminal.scrollToBottom();
+          else terminal.scrollToLine(restoreViewport.viewport);
+          restoreViewport = undefined;
+        });
         offset = event.offset;
         return;
       }
@@ -217,6 +228,15 @@ export function InteractiveTerminal({
       setStatus("exited");
     };
     const onData = terminal.onData(writeInput);
+    const onScroll = terminal.onScroll((viewport) => {
+      const id = terminalId.current;
+      if (reading && id && !restoreViewport)
+        reading.terminal = {
+          id,
+          viewport,
+          atBottom: viewport >= terminal.buffer.active.baseY,
+        };
+    });
     const onResize = terminal.onResize(({ cols, rows }) => resize(cols, rows));
     const observer =
       typeof ResizeObserver === "undefined"
@@ -255,6 +275,13 @@ export function InteractiveTerminal({
           throw new Error(t("inspectionChanged"));
         opening = false;
         terminalId.current = info.id;
+        if (reading)
+          reading.terminal = {
+            viewport: 0,
+            atBottom: true,
+            ...reading.terminal,
+            id: info.id,
+          };
         exited = info.exited;
         connected = !info.exited;
         inputStopped = info.exited;
@@ -296,12 +323,13 @@ export function InteractiveTerminal({
       if (restartInFlight.current === scope) restartInFlight.current = null;
       observer?.disconnect();
       onData.dispose();
+      onScroll.dispose();
       onResize.dispose();
       void pendingInput.catch(() => undefined);
       terminal.dispose();
       terminalId.current = null;
     };
-  }, [client, cwd, generation, sessionId, t]);
+  }, [client, cwd, generation, sessionId, t, reading]);
 
   const restart = async (returnFocus: boolean) => {
     const scope = connection.current;
@@ -317,6 +345,7 @@ export function InteractiveTerminal({
       if (id) await client.closeInteractiveTerminal(sessionId, id);
       if (connection.current !== scope) return;
       terminalId.current = null;
+      if (reading) reading.terminal = undefined;
       if (returnFocus)
         restartFocusIntent.current = {
           sessionId,

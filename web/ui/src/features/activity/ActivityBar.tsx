@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { formatElapsedMs } from "../../lib/format.ts";
 import { recordedSubagents } from "../subagents/recorded-subagents.ts";
+import { subagentOverview } from "../subagents/subagent-overview.ts";
 
 type Status = "running" | "done" | "error" | "interrupted" | "warn" | "unknown";
 
@@ -81,9 +82,37 @@ export function ActivityBar({
     knownSubagentCount,
     (liveSubagents?.items.length ?? 0) + (liveSubagents?.omitted ?? 0),
   );
-  const activeSubagentCount = (liveSubagents?.items ?? []).filter(
-    (item) => item.status === "running",
+  const subagents = subagentOverview(liveSubagents?.items ?? [], saved);
+  const activeSubagentCount = subagents.filter(
+    (item) => item.state === "running",
   ).length;
+  const completedSubagentCount = subagents.filter(
+    (item) => item.state === "done",
+  ).length;
+  const otherSubagentCount = subagents.filter(
+    (item) => item.state === "error" || item.state === "interrupted",
+  ).length;
+  const unknownSubagentCount = Math.max(
+    0,
+    subagentCount -
+      activeSubagentCount -
+      completedSubagentCount -
+      otherSubagentCount,
+  );
+  const subagentLabel = [
+    t("subagentProgress", {
+      running: activeSubagentCount,
+      completed: completedSubagentCount,
+    }),
+    otherSubagentCount
+      ? t("subagentSummaryOther", { count: otherSubagentCount })
+      : "",
+    unknownSubagentCount
+      ? t("subagentSummaryUnknown", { count: unknownSubagentCount })
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const admission = liveSubagents?.childExecutionAdmission;
   const running = [
     ...(capabilities?.workflows?.items ?? []),
@@ -159,10 +188,7 @@ export function ActivityBar({
           type="button"
           onClick={() => onInspectSubagent()}
         >
-          {t("subagentList", {
-            count: subagentCount,
-            running: activeSubagentCount,
-          })}
+          {subagentLabel}
         </button>
       )}
       {admission?.enabled && admission.limit !== undefined && (

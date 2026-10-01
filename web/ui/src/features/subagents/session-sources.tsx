@@ -6,7 +6,12 @@ import type {
   WebSessionSource,
   WebSessionSources,
 } from "../../../../protocol/session-sources.ts";
+import {
+  WEB_PROMPT_IMAGE_MAX_BASE64_CHARS,
+  WEB_PROMPT_IMAGE_MAX_BYTES,
+} from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
+import "./session-sources.css";
 
 export function useSessionSources(
   sessionId: string,
@@ -97,20 +102,45 @@ export function SourceImage({
   path,
   source,
   thumbnail = false,
+  active = true,
 }: {
   sessionId: string;
   path: string;
   source: WebSessionSource;
   thumbnail?: boolean;
+  active?: boolean;
 }) {
   const { t } = useTranslation();
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const frame = useRef<HTMLSpanElement>(null);
+  const [visible, setVisible] = useState(false);
+  const identity = JSON.stringify([
+    sessionId,
+    path,
+    source.entryId,
+    source.partIndex,
+  ]);
+  const [image, setImage] = useState<{
+    identity: string;
+    url?: string;
+    failed?: boolean;
+  } | null>(null);
   useEffect(() => {
+    if (!thumbnail) return;
+    if (!frame.current || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) =>
+      setVisible(Boolean(entry?.isIntersecting)),
+    );
+    observer.observe(frame.current);
+    return () => observer.disconnect();
+  }, [thumbnail]);
+  useEffect(() => {
+    if (!active || (thumbnail && !visible)) {
+      setImage(null);
+      return;
+    }
     const controller = new AbortController();
     let objectUrl: string | undefined;
-    setUrl(null);
-    setFailed(false);
+    setImage({ identity });
     void new WebClient()
       .sourceImage(
         sessionId,
@@ -125,37 +155,62 @@ export function SourceImage({
           !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
             image.mimeType,
           ) ||
-          image.data.length > 12 * 1024 * 1024
+          image.data.length > WEB_PROMPT_IMAGE_MAX_BASE64_CHARS
         )
           throw new Error("Invalid image");
-        const bytes = Uint8Array.from(atob(image.data), (char) =>
-          char.charCodeAt(0),
-        );
+        const decoded = atob(image.data);
+        if (
+          decoded.length > WEB_PROMPT_IMAGE_MAX_BYTES ||
+          btoa(decoded) !== image.data
+        )
+          throw new Error("Invalid image");
+        const bytes = Uint8Array.from(decoded, (char) => char.charCodeAt(0));
         objectUrl = URL.createObjectURL(
           new Blob([bytes], { type: image.mimeType }),
         );
-        setUrl(objectUrl);
+        setImage({ identity, url: objectUrl });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setFailed(true);
+        if (!controller.signal.aborted) setImage({ identity, failed: true });
       });
     return () => {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [sessionId, path, source.entryId, source.partIndex]);
-  return url && !failed ? (
-    <img
-      src={url}
-      alt={thumbnail ? "" : source.name || t("attachedImage")}
-      onError={() => setFailed(true)}
-    />
-  ) : thumbnail ? (
-    <ImageIcon aria-hidden="true" />
-  ) : (
-    <p role={failed ? "alert" : "status"}>
-      {t(failed ? "imagePreviewFailed" : "readingFile")}
-    </p>
+  }, [
+    sessionId,
+    path,
+    source.entryId,
+    source.partIndex,
+    identity,
+    active,
+    thumbnail,
+    visible,
+  ]);
+  const current =
+    active && (!thumbnail || visible) && image?.identity === identity
+      ? image
+      : null;
+  return (
+    <span
+      ref={frame}
+      className="session-source-image"
+      data-thumbnail={thumbnail || undefined}
+    >
+      {current?.url && !current.failed ? (
+        <img
+          src={current.url}
+          alt={thumbnail ? "" : source.name || t("attachedImage")}
+          onError={() => setImage({ identity, failed: true })}
+        />
+      ) : thumbnail ? (
+        <ImageIcon aria-hidden="true" />
+      ) : (
+        <p role={current?.failed ? "alert" : "status"}>
+          {t(current?.failed ? "imagePreviewFailed" : "readingFile")}
+        </p>
+      )}
+    </span>
   );
 }
 
@@ -214,16 +269,18 @@ export function SourcesDialog({
   path: string;
   open: boolean;
   source: WebSessionSource | null;
-  data: ReturnType<typeof useSessionSources>;
+  data?: ReturnType<typeof useSessionSources>;
   onSelect: (source: WebSessionSource | null) => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   const [original, setOriginal] = useState(false);
   useEffect(() => {
+    void sessionId;
+    void path;
     void source?.id;
     setOriginal(false);
-  }, [source?.id]);
+  }, [sessionId, path, source?.id]);
   return (
     <Dialog
       isOpen={open}
@@ -236,7 +293,7 @@ export function SourcesDialog({
     >
       <div className="session-sources-dialog draft-image-preview">
         <header>
-          {source && (
+          {source && data && (
             <button
               type="button"
               aria-label={t("sourcesBack")}
@@ -274,18 +331,19 @@ export function SourcesDialog({
             tabIndex={original ? 0 : undefined}
           >
             <SourceImage
-              key={source.id}
+              key={JSON.stringify([sessionId, path, source.id])}
               sessionId={sessionId}
               path={path}
               source={source}
+              active={open}
             />
           </section>
         ) : (
           <div className="session-sources-list">
-            {!data.loading && !data.error && !data.page?.sources.length && (
+            {!data?.loading && !data?.error && !data?.page?.sources.length && (
               <p>{t("sourcesEmpty")}</p>
             )}
-            {data.page?.sources.map((item) => (
+            {data?.page?.sources.map((item) => (
               <SourceRow
                 key={item.id}
                 source={item}
@@ -295,7 +353,7 @@ export function SourcesDialog({
                 thumbnail={false}
               />
             ))}
-            {data.error && (
+            {data?.error && (
               <p role="alert">
                 {t("sourcesFailed")}{" "}
                 <button type="button" onClick={data.refresh}>
@@ -303,8 +361,8 @@ export function SourcesDialog({
                 </button>
               </p>
             )}
-            {data.loading && <p role="status">{t("readingFile")}</p>}
-            {data.page?.nextOffset !== undefined && (
+            {data?.loading && <p role="status">{t("readingFile")}</p>}
+            {data?.page?.nextOffset !== undefined && (
               <button
                 className="sources-load-more"
                 type="button"
@@ -314,7 +372,7 @@ export function SourcesDialog({
                 {t("sourcesLoadMore")}
               </button>
             )}
-            {data.page?.truncated && <p>{t("sourcesPartial")}</p>}
+            {data?.page?.truncated && <p>{t("sourcesPartial")}</p>}
           </div>
         )}
       </div>

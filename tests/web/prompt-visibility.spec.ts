@@ -1,14 +1,142 @@
 // @vitest-environment jsdom
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { projectMessage, type WebSnapshot } from "../../web/protocol/types.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import type { LiveEntry } from "../../web/ui/src/store/web-store.ts";
+import { formatSourceReference } from "../../web/protocol/session-sources.ts";
 
 afterEach(cleanup);
+
+it("preserves a file disclosure through the admitted optimistic input's exact native projection", () => {
+  const value = snapshot();
+  value.runtime.status = "idle";
+  value.selectedSession!.entries = [];
+  const content = formatSourceReference("/tmp/中文文件.txt");
+  const pending: LiveEntry = {
+    key: "optimistic-file",
+    message: { role: "user", content },
+    optimistic: {
+      sessionId: "s",
+      sessionPath: "/session.jsonl",
+      commandId: "file",
+      afterEntryId: null,
+      admitted: true,
+    },
+  };
+  const remember = vi.fn();
+  const view = render(node(value, [pending], remember));
+  const button = view.getByRole("button", {
+    name: `${i18n.t("artifactFileDetails")} 中文文件.txt`,
+  });
+  fireEvent.click(button);
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  value.selectedSession!.entries.push({
+    id: "native-file-input",
+    type: "message",
+    timestamp: "2026-10-01T00:00:00Z",
+    message: projectMessage({
+      role: "user",
+      timestamp: 1790812800000,
+      content,
+    }),
+  });
+  view.rerender(node(structuredClone(value), [pending], remember));
+  expect(
+    view.getByRole("button", { name: button.getAttribute("aria-label")! }),
+  ).toBe(button);
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  expect(
+    button.closest(".message-row")?.getAttribute("data-history-entry"),
+  ).toBe("native-file-input");
+  expect(remember).toHaveBeenCalledWith("s", "/session.jsonl", [
+    { key: "optimistic-file", entryId: "native-file-input" },
+  ]);
+  view.rerender(
+    node(
+      structuredClone(value),
+      [
+        {
+          ...pending,
+          message: { role: "user", content: "" },
+          optimistic: {
+            ...pending.optimistic!,
+            projectedEntryId: "native-file-input",
+          },
+        },
+      ],
+      remember,
+    ),
+  );
+  expect(
+    view.getByRole("button", { name: button.getAttribute("aria-label")! }),
+  ).toBe(button);
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(button);
+  expect(button.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("reconciles a named image prompt after native persistence without creating another waiting turn", () => {
+  const value = snapshot();
+  value.runtime.status = "idle";
+  value.selectedSession!.entries = [
+    {
+      id: "image-input",
+      type: "message",
+      timestamp: "2026-10-01T00:00:00Z",
+      message: projectMessage({
+        role: "user",
+        content: [
+          { type: "text", text: "请看图片" },
+          {
+            type: "image",
+            mimeType: "image/png",
+            name: "截屏 100%.png",
+            data: "native-bytes",
+          },
+        ],
+      }),
+    },
+    {
+      id: "image-answer",
+      type: "message",
+      timestamp: "2026-10-01T00:00:01Z",
+      message: { role: "assistant", content: "已收到图片", stopReason: "stop" },
+    },
+  ];
+  const pending: LiveEntry = {
+    key: "optimistic-image",
+    message: {
+      role: "user",
+      content: "请看图片",
+      parts: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          name: "截屏 100%.png",
+          previewUrl: "data:image/png;base64,aGk=",
+        },
+      ],
+    },
+    optimistic: {
+      sessionId: "s",
+      sessionPath: "/session.jsonl",
+      commandId: "image",
+      afterEntryId: null,
+      admitted: true,
+    },
+  };
+  const remember = vi.fn();
+  const view = render(node(value, [pending], remember));
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(1);
+  expect(view.container.querySelector(".turn-state.waiting")).toBeNull();
+  expect(remember).toHaveBeenCalledWith("s", "/session.jsonl", [
+    { key: "optimistic-image", entryId: "image-input" },
+  ]);
+});
 
 it("keeps an unaccepted prompt even when another native input matches its text", () => {
   const value = snapshot();

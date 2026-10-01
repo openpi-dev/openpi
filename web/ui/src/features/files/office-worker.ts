@@ -1,5 +1,6 @@
 import { XMLParser } from "fast-xml-parser";
-import { strFromU8, unzipSync } from "fflate";
+import { strFromU8 } from "fflate";
+import { readOfficeArchive } from "./office-archive.ts";
 import type { OfficePreview, PreviewTable } from "./preview-data.ts";
 
 const object = (value: unknown): Record<string, unknown> =>
@@ -21,22 +22,7 @@ async function preview(
   data: ArrayBuffer,
   extension: string,
 ): Promise<OfficePreview> {
-  let count = 0;
-  let total = 0;
-  // Inspect declared expansion sizes before allocation. The worker also has
-  // a wall-clock limit and is terminated when the file/view changes.
-  const zip = unzipSync(new Uint8Array(data), {
-    filter: (entry) => {
-      total += entry.originalSize;
-      if (
-        ++count > 2_000 ||
-        total > 40 * 1024 * 1024 ||
-        entry.originalSize > 10 * 1024 * 1024
-      )
-        throw new Error("Office preview exceeds the expansion limit.");
-      return extension === "pptx";
-    },
-  });
+  const zip = readOfficeArchive(data, () => extension === "pptx");
   if (extension === "docx") {
     const mammoth = await import("mammoth");
     const result = await mammoth.default.convertToHtml(

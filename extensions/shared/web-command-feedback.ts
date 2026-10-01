@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const WEB_COMMAND_FEEDBACK = "openpi-web-command-feedback";
 export const WEB_COMMAND_INPUT = "openpi-web-command-input";
+export const WEB_COMMAND_HANDLED = "openpi-web-command-handled";
 type Feedback = (text: string, level: "info" | "warning" | "error") => void;
 const key = Symbol.for("@tt-a1i/openpi/web-command-feedback/v1");
 const existing: unknown = Reflect.get(globalThis, key);

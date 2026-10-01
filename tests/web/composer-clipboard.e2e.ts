@@ -76,6 +76,8 @@ test("native Chromium image paste preserves accompanying text, caret, undo and i
   await expect.poll(() => admission).toBeTruthy();
   expect(admission?.content).toBe("before caption after");
   expect(admission?.images).toHaveLength(2);
+  for (const image of admission?.images ?? [])
+    expect(Object.keys(image).sort()).toEqual(["data", "mimeType", "name"]);
   expect(
     admission?.images?.every(
       (image) =>

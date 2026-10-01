@@ -123,7 +123,8 @@ it("uses one monotonic ticker, reconciles without going backward, and cleans up 
     }),
   );
   expect(screen.getByRole("timer").textContent).toContain("1m42s");
-  expect(vi.getTimerCount()).toBe(1);
+  expect(intervals).toHaveBeenCalledOnce();
+  expect(clearedIntervals).not.toHaveBeenCalled();
   view.rerender(
     node({
       ...value,
@@ -141,7 +142,7 @@ it("uses one monotonic ticker, reconciles without going backward, and cleans up 
   // It is not the elapsed interval; flush only that immediate DOM task.
   act(() => vi.advanceTimersByTime(0));
   expect(intervals).toHaveBeenCalledOnce();
-  expect(vi.getTimerCount()).toBe(0);
+  expect(clearedIntervals).toHaveBeenCalledOnce();
 });
 
 it("recovers the elapsed value on refresh and resets only for a different turn identity", () => {

@@ -16,6 +16,8 @@ import type { GitReviewService } from "../../web/host/git-review.ts";
 import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
 import type { WebHostOptions } from "../../web/host/web-host.ts";
 import {
+  WEB_PROMPT_IMAGE_MAX_BYTES,
+  WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebInteractiveTerminalEvent,
 } from "../../web/protocol/types.ts";
@@ -94,6 +96,12 @@ test("appearance writes preserve package config, reject extra authority, and nev
       { chatWidth: 819 },
       { chatWidth: 2001 },
       { chatWidth: "1040" },
+      { sidebarWidth: 219 },
+      { sidebarWidth: 421 },
+      { auxiliaryWidth: 359 },
+      { auxiliaryWidth: 721 },
+      { sidebarWidth: "320" },
+      { auxiliaryWidth: 520.5 },
       { chatFontSize: 12.5 },
       { expandThinking: "true" },
       { pinnedSort: "unknown" },
@@ -103,6 +111,8 @@ test("appearance writes preserve package config, reject extra authority, and nev
     const saved = await post({
       theme: "dark",
       chatWidth: 1040,
+      sidebarWidth: 320,
+      auxiliaryWidth: 600,
       chatFontSize: 16,
       expandThinking: true,
       pinnedSort: "updated",
@@ -116,6 +126,8 @@ test("appearance writes preserve package config, reject extra authority, and nev
         ...before.ui,
         webTheme: "dark",
         webChatWidth: 1040,
+        webSidebarWidth: 320,
+        webAuxiliaryWidth: 600,
         webChatFontSize: 16,
         webExpandThinking: true,
         webPinnedSort: "updated",
@@ -135,7 +147,10 @@ test("appearance writes preserve package config, reject extra authority, and nev
     const snapshot = await fetch(`${launched.origin}/api/snapshot`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    assert.equal((await snapshot.json()).preferences.chatWidth, 1200);
+    const preferences = (await snapshot.json()).preferences;
+    assert.equal(preferences.chatWidth, 1200);
+    assert.equal(preferences.sidebarWidth, 320);
+    assert.equal(preferences.auxiliaryWidth, 600);
     await writeFile(path, "{invalid-private-config");
     const blocked = await post({ theme: "light" });
     assert.equal(blocked.status, 422);
@@ -2127,6 +2142,228 @@ test("stop waits for an in-flight thinking selection before disposal", async () 
   }
 });
 
+test("message search is authenticated, query-only, and opens only an exact native branch window", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-search-api-"));
+  const manager = SessionManager.create(cwd, cwd);
+  const target = manager.appendMessage({
+    role: "user",
+    content: "search API-MARKER",
+    timestamp: 1,
+  });
+  manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "Confirmed API-MARKER" }],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 2,
+  });
+  const { host, launched, headers } = await startTestHost({
+    ...testRuntime(cwd),
+    sessionManager: manager,
+  });
+  try {
+    const get = (query: string, authenticated = true) =>
+      fetch(`${launched.origin}/api/sessions/search?${query}`, {
+        headers: authenticated ? headers : {},
+      });
+    assert.equal((await get("q=API-MARKER", false)).status, 401);
+    for (const query of [
+      "q=",
+      "q=a&q=b",
+      "q=API-MARKER&path=/etc/passwd",
+      "q=a&includeArchived=0",
+      `q=${"a".repeat(201)}`,
+    ])
+      assert.equal((await get(query)).status, 400);
+    const found = await get("q=API-MARKER");
+    assert.equal(found.status, 200);
+    assert.equal((await found.json()).matches.length, 2);
+    const params = new URLSearchParams({
+      sessionId: manager.getSessionId(),
+      path: manager.getSessionFile()!,
+      entryId: target,
+    });
+    const located = await fetch(
+      `${launched.origin}/api/session/message-window?${params}`,
+      { headers },
+    );
+    assert.equal(located.status, 200);
+    const window = (await located.json()).session;
+    assert.equal(window.history.anchorEntryId, target);
+    assert.ok(
+      window.entries.some((entry: { id: string }) => entry.id === target),
+    );
+    assert.equal(window.entries.at(-1).message.content, "Confirmed API-MARKER");
+    params.set("sessionId", "copied-id");
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/session/message-window?${params}`, {
+          headers,
+        })
+      ).status,
+      409,
+    );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("prompt navigation is authenticated read-only and rejects ambiguous native boundaries", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-index-"));
+  const runtime = testRuntime(cwd);
+  const manager = runtime.sessionManager;
+  const prompt = manager.appendMessage({
+    role: "user",
+    content: "Visible prompt",
+    timestamp: 1,
+  });
+  const anchor = manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "Visible reply" }],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 2,
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const identity = {
+    sessionId: manager.getSessionId(),
+    path: mutationSessionPath(manager),
+    anchorEntryId: anchor,
+  };
+  const original = JSON.stringify(manager.getEntries());
+  try {
+    for (const route of ["prompt-history", "prompt-preview"]) {
+      const params = new URLSearchParams({
+        ...identity,
+        ...(route === "prompt-preview" ? { entryId: prompt } : {}),
+      });
+      const get = (query = params.toString(), requestHeaders = headers) =>
+        fetch(`${launched.origin}/api/session/${route}?${query}`, {
+          headers: requestHeaders,
+        });
+      assert.equal(
+        (await get(params.toString(), {} as typeof headers)).status,
+        401,
+      );
+      assert.equal(
+        (
+          await fetch(`${launched.origin}/api/session/${route}?${params}`, {
+            headers: { ...headers, Origin: "https://foreign.example" },
+          })
+        ).status,
+        403,
+      );
+      assert.equal(
+        (
+          await fetch(`${launched.origin}/api/session/${route}?${params}`, {
+            headers,
+            method: "POST",
+          })
+        ).status,
+        405,
+      );
+      const valid = await get();
+      assert.equal(valid.status, 200);
+      const result = await valid.json();
+      assert.equal(result.sessionId, identity.sessionId);
+      assert.equal(result.sessionPath, identity.path);
+      assert.equal(result.anchorEntryId, anchor);
+      if (route === "prompt-history") {
+        assert.deepEqual(result.entryIds, [prompt]);
+        assert.equal(result.nextBeforeEntryId, null);
+        assert.equal(result.requestedBeforeEntryId, null);
+        assert.equal(result.prompt, undefined);
+      } else {
+        assert.equal(result.entryId, prompt);
+        assert.equal(result.prompt, "Visible prompt");
+        assert.equal(result.response, "Visible reply");
+      }
+      for (const suffix of [
+        "&sessionId=duplicate",
+        "&anchorEntryId=",
+        "&extra=body",
+        "&path=duplicate",
+        "&anchorEntryId=" + "a".repeat(129),
+        "&anchorEntryId=%20native",
+        "&anchorEntryId=%00native",
+      ]) {
+        assert.equal((await get(params.toString() + suffix)).status, 400);
+      }
+      const missing = new URLSearchParams(params);
+      missing.delete("anchorEntryId");
+      assert.equal((await get(missing.toString())).status, 400);
+      const wrongIdentity = new URLSearchParams(params);
+      wrongIdentity.set("sessionId", "other");
+      assert.equal((await get(wrongIdentity.toString())).status, 409);
+      const unknown = new URLSearchParams(params);
+      unknown.set("path", join(cwd, "unknown.jsonl"));
+      assert.equal((await get(unknown.toString())).status, 404);
+      if (route === "prompt-history") {
+        assert.equal((await get(params + "&beforeEntryId=")).status, 400);
+        assert.equal(
+          (await get(params + "&beforeEntryId=" + anchor)).status,
+          409,
+        );
+        const beforeFirst = await get(params + "&beforeEntryId=" + prompt);
+        assert.equal(beforeFirst.status, 200);
+        assert.deepEqual((await beforeFirst.json()).entryIds, []);
+      } else {
+        const assistantTarget = new URLSearchParams(params);
+        assistantTarget.set("entryId", anchor);
+        assert.equal((await get(assistantTarget.toString())).status, 409);
+        assert.equal(
+          (await get(params + "&beforeEntryId=" + prompt)).status,
+          400,
+        );
+      }
+    }
+    assert.equal(
+      JSON.stringify(manager.getEntries()),
+      original,
+      "index/preview GET cannot acknowledge or append a prompt",
+    );
+    manager.branch(prompt);
+    for (const route of ["prompt-history", "prompt-preview"]) {
+      const params = new URLSearchParams({
+        ...identity,
+        ...(route === "prompt-preview" ? { entryId: prompt } : {}),
+      });
+      assert.equal(
+        (
+          await fetch(`${launched.origin}/api/session/${route}?${params}`, {
+            headers,
+          })
+        ).status,
+        409,
+      );
+    }
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 function testRuntime(
   cwd: string,
   sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
@@ -2997,6 +3234,141 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
   }
 });
 
+test("prompt delivery binds steering to one turn and replays only the same admission", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-steer-host-"));
+  const calls: Parameters<WebRuntimeController["sendPrompt"]>[1][] = [];
+  const runtime = testRuntime(cwd, async (_content, options) => {
+    calls.push(options);
+    return { pendingFollowUps: 1, pendingSteering: 2, delivery: "steer" };
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const prompt = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: mutationSessionPath(runtime.sessionManager),
+    content: "Use the corrected constraint",
+    commandId: "steer-admission",
+    streamingBehavior: "steer",
+    expectedTurnCommandId: "running-turn",
+  };
+  const post = (body: unknown) =>
+    fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    for (const invalid of [
+      { ...prompt, streamingBehavior: "unknown" },
+      { ...prompt, expectedTurnCommandId: undefined },
+      { ...prompt, expectedTurnCommandId: "x".repeat(129) },
+      { ...prompt, expectedTurnCommandId: "bad\u0000turn" },
+      { ...prompt, planRevision: "ready-plan" },
+      { ...prompt, streamingBehavior: "followUp" },
+    ]) {
+      const response = await post(invalid);
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).code, "INVALID_PROMPT_DELIVERY");
+    }
+    assert.equal(calls.length, 0);
+    const admitted = await post(prompt);
+    assert.equal(admitted.status, 202);
+    const receipt = await admitted.json();
+    assert.equal(receipt.pendingSteering, 2);
+    assert.equal(receipt.delivery, "steer");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.streamingBehavior, "steer");
+    assert.equal(calls[0]?.expectedTurnCommandId, "running-turn");
+    const replay = await post({ ...prompt, retry: true });
+    assert.deepEqual(await replay.json(), receipt);
+    for (const conflict of [
+      { ...prompt, expectedTurnCommandId: "another-turn", retry: true },
+      {
+        ...prompt,
+        streamingBehavior: "followUp",
+        expectedTurnCommandId: undefined,
+        retry: true,
+      },
+    ]) {
+      const response = await post(conflict);
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).code, "COMMAND_CONFLICT");
+    }
+    assert.equal(calls.length, 1);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("fork endpoint authenticates an exact Web-owned source and rejects extra authority", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-fork-host-"));
+  const runtime = testRuntime(cwd);
+  const entryId = runtime.sessionManager.appendMessage({
+    role: "user",
+    content: "Saved fork target",
+    timestamp: Date.now(),
+  });
+  const calls: unknown[] = [];
+  runtime.forkSession = async (request) => {
+    calls.push(request);
+    return {
+      state: "cancelled",
+      commandId: request.commandId,
+      source: {
+        sessionId: request.sessionId,
+        sessionPath: request.sessionPath,
+        entryId: request.entryId,
+      },
+    };
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const request = {
+    commandId: "fork-command",
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: mutationSessionPath(runtime.sessionManager),
+    entryId,
+  };
+  const post = (body: unknown, authenticated = true) =>
+    fetch(`${launched.origin}/api/session/fork`, {
+      method: "POST",
+      headers: {
+        ...(authenticated ? headers : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await post(request, false)).status, 401);
+    for (const invalid of [
+      { ...request, position: "before" },
+      { ...request, prompt: "must never dispatch" },
+      { ...request, commandId: "" },
+      { ...request, entryId: "x".repeat(129) },
+      { ...request, sessionId: "control\u0000id" },
+    ])
+      assert.equal((await post(invalid)).status, 400);
+    assert.equal(
+      (await post({ ...request, sessionId: "copied-session-id" })).status,
+      409,
+    );
+    assert.equal(
+      (await post({ ...request, sessionPath: join(cwd, "outside.jsonl") }))
+        .status,
+      409,
+    );
+    assert.equal(calls.length, 0);
+    const response = await post(request);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).state, "cancelled");
+    assert.deepEqual(calls, [request]);
+    delete runtime.forkSession;
+    assert.equal((await post(request)).status, 501);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("rejects invalid prompt text with a typed admission error before runtime dispatch", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-limit-"));
   const contents: string[] = [];
@@ -3036,6 +3408,63 @@ test("rejects invalid prompt text with a typed admission error before runtime di
     });
     assert.equal(accepted.status, 202);
     assert.deepEqual(contents, ["x".repeat(WEB_PROMPT_MAX_TEXT_LENGTH)]);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("admits the advertised image byte limits through the HTTP body boundary", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-image-body-"));
+  const sizes: number[][] = [];
+  const runtime = testRuntime(cwd, async (_content, options) => {
+    sizes.push(
+      (options?.images ?? []).map(
+        (image) => Buffer.from(image.data, "base64").length,
+      ),
+    );
+    return { pendingFollowUps: 0 };
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const image = (size: number) => {
+    const bytes = Buffer.alloc(size);
+    bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
+    return { mimeType: "image/png", data: bytes.toString("base64") };
+  };
+  const post = (images: unknown[]) =>
+    fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
+        content: "Image body boundary fixture; no provider call.",
+        images,
+      }),
+    });
+  try {
+    const remaining =
+      WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES - WEB_PROMPT_IMAGE_MAX_BYTES * 3;
+    const response = await post([
+      image(WEB_PROMPT_IMAGE_MAX_BYTES),
+      image(WEB_PROMPT_IMAGE_MAX_BYTES),
+      image(WEB_PROMPT_IMAGE_MAX_BYTES),
+      image(remaining),
+    ]);
+    assert.equal(response.status, 202, JSON.stringify(await response.json()));
+    assert.deepEqual(sizes, [
+      [
+        WEB_PROMPT_IMAGE_MAX_BYTES,
+        WEB_PROMPT_IMAGE_MAX_BYTES,
+        WEB_PROMPT_IMAGE_MAX_BYTES,
+        remaining,
+      ],
+    ]);
+    assert.equal(
+      (await post([image(WEB_PROMPT_IMAGE_MAX_BYTES + 1)])).status,
+      400,
+    );
+    assert.equal(sizes.length, 1);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

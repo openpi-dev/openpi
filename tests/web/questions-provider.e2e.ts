@@ -119,6 +119,14 @@ for (const theme of ["light", "dark"] as const) {
     const workspace = await mkdtemp(join(tmpdir(), "openpi-questions-e2e-"));
     try {
       await page.emulateMedia({ colorScheme: theme });
+      expect(
+        (
+          await page.request.post("/api/settings/preferences", {
+            headers,
+            data: { theme },
+          })
+        ).status(),
+      ).toBe(200);
       if (theme === "dark")
         await page.setViewportSize({ width: 390, height: 844 });
       const sessionId = await startQuestions(page, workspace);

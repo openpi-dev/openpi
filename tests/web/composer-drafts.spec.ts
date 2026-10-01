@@ -10,15 +10,54 @@ import {
 } from "@testing-library/react";
 import { type ComponentProps, createElement } from "react";
 import { I18nextProvider } from "react-i18next";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
-import { createComposerDraftMemory } from "../../web/ui/src/features/composer/composer-drafts.ts";
+import {
+  type ComposerDraft,
+  type ComposerDraftStorage,
+  createComposerDraftMemory,
+} from "../../web/ui/src/features/composer/composer-drafts.ts";
+import * as draftStorageModule from "../../web/ui/src/features/composer/composer-draft-storage.ts";
 import type { StagedPromptImage } from "../../web/ui/src/features/composer/image-attachments.ts";
+import type { StagedPromptFile } from "../../web/ui/src/features/composer/file-attachments.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { createWebStore } from "../../web/ui/src/store/web-store.ts";
 
 type Props = ComponentProps<typeof Composer>;
+let savedDrafts: Map<string, unknown>;
+let storageReadFailure = false;
+let storageWriteFailure = false;
+const storage: ComposerDraftStorage = {
+  async read() {
+    if (storageReadFailure) throw new Error("unavailable");
+    return Array.from(savedDrafts, ([key, draft]) => ({ key, draft }));
+  },
+  async write(changes) {
+    if (storageWriteFailure) throw new Error("quota");
+    for (const { key, draft } of changes) {
+      if (draft) savedDrafts.set(key, structuredClone(draft));
+      else savedDrafts.delete(key);
+    }
+  },
+};
+beforeEach(() => {
+  savedDrafts = new Map();
+  storageReadFailure = false;
+  storageWriteFailure = false;
+  vi.spyOn(
+    draftStorageModule,
+    "createBrowserComposerDraftStorage",
+  ).mockReturnValue(storage);
+});
 const dialogMethods = new Map(
   ["showModal", "close"].map((name) => [
     name,
@@ -151,6 +190,7 @@ function setup(overrides: Partial<Props> = {}) {
     sendPrompt,
     sendPromptAsNew,
     acknowledge,
+    unmount: view.unmount,
     update(patch: Partial<Props>) {
       props = { ...props, ...patch };
       view.rerender(node());
@@ -168,6 +208,166 @@ function setup(overrides: Partial<Props> = {}) {
     },
   };
 }
+
+it("chooses native current-turn steering explicitly and clears only an accepted draft", async () => {
+  const current = snapshot();
+  current.runtime = { ...current.runtime, status: "running" };
+  const turn = {
+    sessionId: current.currentSessionId!,
+    commandId: "running-turn",
+    epoch: 3,
+  };
+  const sendPrompt = vi.fn(async () => false);
+  const view = setup({
+    snapshot: current,
+    activeTurn: turn,
+    liveRunning: true,
+    actions: { ...createWebStore().getState().actions, sendPrompt },
+  });
+  fireEvent.change(view.input, { target: { value: "change the approach" } });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("sendNextTurn") }));
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: i18n.t("steerCurrentTurn") }),
+  );
+  fireEvent.keyDown(view.input, { key: "Enter" });
+  await waitFor(() =>
+    expect(sendPrompt).toHaveBeenCalledExactlyOnceWith(
+      "change the approach",
+      [],
+      undefined,
+      {
+        streamingBehavior: "steer",
+        expectedTurnCommandId: "running-turn",
+      },
+    ),
+  );
+  expect(view.input.value).toBe("change the approach");
+  sendPrompt.mockResolvedValueOnce(true);
+  fireEvent.keyDown(view.input, { key: "Enter" });
+  await waitFor(() => expect(view.input.value).toBe(""));
+});
+
+it("keeps a steering draft when its selected turn ends, and requires choosing the next turn", async () => {
+  const current = snapshot();
+  current.runtime = { ...current.runtime, status: "running" };
+  const view = setup({
+    snapshot: current,
+    activeTurn: {
+      sessionId: current.currentSessionId!,
+      commandId: "running-turn",
+      epoch: 3,
+    },
+    liveRunning: true,
+  });
+  fireEvent.change(view.input, { target: { value: "keep this instruction" } });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("sendNextTurn") }));
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: i18n.t("steerCurrentTurn") }),
+  );
+  view.update({ activeTurn: null, snapshot: snapshot(), liveRunning: false });
+  fireEvent.keyDown(view.input, { key: "Enter" });
+  expect(view.sendPrompt).not.toHaveBeenCalled();
+  expect(view.input.value).toBe("keep this instruction");
+  expect(screen.getByRole("alert").textContent).toContain(
+    i18n.t("steerStaleTurn"),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("steerCurrentTurn") }),
+  );
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: i18n.t("sendNextTurn") }),
+  );
+  fireEvent.keyDown(view.input, { key: "Enter" });
+  await waitFor(() =>
+    expect(view.sendPrompt).toHaveBeenCalledExactlyOnceWith(
+      "keep this instruction",
+    ),
+  );
+});
+
+it("shows steering and next-turn queues from exact Session execution facts", () => {
+  const current = snapshot();
+  current.runtime = { ...current.runtime, status: "running" };
+  current.selectedExecution = {
+    sessionId: current.selectedSession!.id,
+    sessionPath: current.selectedSession!.path,
+    status: "running",
+    pendingFollowUps: 1,
+    queuedMessages: ["next task"],
+    pendingSteering: 2,
+    steeringMessages: ["use this tool", "inspect the result"],
+    liveTools: [],
+    liveToolsOmitted: 0,
+  };
+  setup({
+    snapshot: current,
+    pendingSteeringReceipt: 9,
+    pendingFollowUpsReceipt: 8,
+  });
+  expect(
+    screen.getByRole("region", { name: i18n.t("steeringMessagesTitle") })
+      .textContent,
+  ).toContain(i18n.t("pendingSteeringHint", { count: 2 }));
+  expect(
+    screen.getByRole("button", {
+      name: `${i18n.t("queuedMessageExpand")}: use this tool`,
+    }),
+  ).toBeDefined();
+  expect(
+    screen.getByRole("button", {
+      name: `${i18n.t("queuedMessageExpand")}: next task`,
+    }),
+  ).toBeDefined();
+});
+
+it("appends exact old-line feedback to the existing draft and focuses it, without opening source tools or sending", () => {
+  const view = setup();
+  fireEvent.change(view.input, { target: { value: "Please check this" } });
+  const feedback = {
+    filePath: "src/example.ts",
+    side: "old" as const,
+    line: 11,
+    code: "  return oldValue;",
+  };
+  view.update({
+    addSourcesRequest: {
+      sessionId: "A",
+      path: "/workspace/a.jsonl",
+      revision: 1,
+      feedback,
+    },
+  });
+  expect(view.input.value).toBe(
+    `Please check this\n\n[example.ts](<src/example.ts>) — ${i18n.t("sourceFeedbackOld", { path: "src/example.ts", line: 11 })}\n>   return oldValue;`,
+  );
+  expect(document.activeElement).not.toBe(view.input);
+  return waitFor(() => {
+    expect(document.activeElement).toBe(view.input);
+    expect(view.input.selectionStart).toBe(view.input.value.length);
+    expect(view.sendPrompt).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+it("does not put stale copied-Session feedback into another draft", () => {
+  const view = setup();
+  fireEvent.change(view.input, { target: { value: "my draft" } });
+  view.update({
+    addSourcesRequest: {
+      sessionId: "A",
+      path: "/workspace/copied-a.jsonl",
+      revision: 1,
+      feedback: {
+        filePath: "example.ts",
+        side: "new",
+        line: 2,
+        code: "newValue",
+      },
+    },
+  });
+  expect(view.input.value).toBe("my draft");
+  expect(view.sendPrompt).not.toHaveBeenCalled();
+});
 
 function image(name = "draft.png") {
   const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]).buffer;
@@ -681,7 +881,11 @@ it("bounds image bytes across owners and never replaces a destination during han
     data: "",
     previewUrl: "",
   };
-  for (let index = 0; index < 4; index++)
+  for (
+    let index = 0;
+    index < draftStorageModule.COMPOSER_DRAFT_LIMITS.imageBytes / picture.size;
+    index++
+  )
     expect(
       memory.edit(`S${index}`, memory.read(`S${index}`), { images: [picture] }),
     ).not.toBeNull();
@@ -712,4 +916,250 @@ it("treats caret changes as position, but retyping payload creates a new revisio
   expect(retyped.revision).toBeGreaterThan(original.revision);
   expect(memory.clear("A", original.revision)).toBeNull();
   expect(memory.read("A")).toBe(retyped);
+});
+
+it("keeps file-only drafts across native Session changes and validates persisted file bytes", async () => {
+  const file: StagedPromptFile = {
+    id: "file-1",
+    name: "notes.txt",
+    mimeType: "text/plain",
+    size: 3,
+    data: btoa("abc"),
+    text: "abc",
+    extraction: "text",
+  };
+  const owner = JSON.stringify(["session", "A", "/workspace/a.jsonl"]);
+  const other = JSON.stringify(["session", "B", "/workspace/b.jsonl"]);
+  const memory = createComposerDraftMemory(storage);
+  await memory.ready;
+  const staged = memory.edit(owner, memory.read(owner), { files: [file] });
+  expect(staged?.prompt).toBe("");
+  expect(memory.hasContent()).toBe(true);
+  await waitFor(() => expect(savedDrafts.has(owner)).toBe(true));
+  const restored = createComposerDraftMemory(storage);
+  await restored.ready;
+  expect(restored.read(owner).files).toEqual([file]);
+  expect(restored.read(other).files).toBeUndefined();
+  const unavailable = draftStorageModule.parseStoredComposerDraft(owner, {
+    prompt: "keep original",
+    caret: 0,
+    images: [],
+    files: [
+      {
+        ...file,
+        text: undefined,
+        extraction: "unavailable",
+        extractionError: "encoding",
+      },
+    ],
+  });
+  expect(unavailable?.invalid).toBe(false);
+  expect(unavailable?.draft.files?.[0]).toMatchObject({
+    data: file.data,
+    extraction: "unavailable",
+    extractionError: "encoding",
+  });
+  const corrupted = draftStorageModule.parseStoredComposerDraft(owner, {
+    prompt: "keep caption",
+    caret: 0,
+    images: [],
+    files: [{ ...file, data: "bad base64" }],
+  });
+  expect(corrupted?.invalid).toBe(true);
+  expect(corrupted?.draft.prompt).toBe("keep caption");
+  expect(corrupted?.draft.files).toBeUndefined();
+  const edited = restored.edit(owner, restored.read(owner), {
+    files: [{ ...file, id: "file-2" }],
+  })!;
+  expect(restored.clear(owner, staged!.revision)).toBeNull();
+  expect(restored.read(owner)).toBe(edited);
+});
+
+const owner = (id: string, path = `/workspace/${id.toLowerCase()}.jsonl`) =>
+  JSON.stringify(["session", id, path]);
+
+it("restores text, source references, images and caret after a browser remount without submitting", async () => {
+  const first = setup();
+  const text = "Check @src/example.ts#L12 and this image";
+  fireEvent.change(first.input, { target: { value: text, selectionStart: 7 } });
+  await paste(image("restore.png"));
+  first.select("B");
+  fireEvent.change(first.input, { target: { value: "other draft" } });
+  await waitFor(() => expect(savedDrafts.size).toBe(2));
+  first.unmount();
+  const reopened = setup();
+  await waitFor(() => expect(reopened.input.value).toBe(text));
+  expect(reopened.input.selectionStart).toBe(7);
+  expect(screen.getByText("restore.png")).toBeTruthy();
+  expect(reopened.sendPrompt).not.toHaveBeenCalled();
+  reopened.select("B");
+  expect(reopened.input.value).toBe("other draft");
+  reopened.select("A", "/workspace/copy.jsonl");
+  expect(reopened.input.value).toBe("");
+});
+
+it("merges hydration without replacing a new edit or an explicitly cleared owner", async () => {
+  const read = deferred<readonly unknown[]>();
+  const memory = createComposerDraftMemory({
+    ...storage,
+    read: () => read.promise,
+  });
+  const key = owner("A");
+  const edited = memory.edit(key, memory.read(key), {
+    prompt: "new intent",
+    caret: 3,
+  })!;
+  const clearedKey = owner("B");
+  const cleared = memory.edit(clearedKey, memory.read(clearedKey), {
+    prompt: "delete",
+  })!;
+  memory.clear(clearedKey, cleared.revision);
+  read.resolve([
+    { key, draft: { prompt: "old draft", images: [], caret: 2 } },
+    { key: clearedKey, draft: { prompt: "old B", images: [], caret: 1 } },
+    { key: owner("C"), draft: { prompt: "restore C", images: [], caret: 4 } },
+  ]);
+  await memory.ready;
+  expect(memory.read(key)).toBe(edited);
+  expect(memory.read(clearedKey).prompt).toBe("");
+  expect(memory.read(owner("C")).prompt).toBe("restore C");
+});
+
+it("keeps usable text and reports invalid attachments instead of restoring broken image chips", async () => {
+  savedDrafts.set(owner("A"), {
+    prompt: "important text",
+    caret: 4,
+    images: [
+      {
+        name: "lost.png",
+        size: 8,
+        mimeType: "image/png",
+        data: "not-an-image",
+        previewUrl: "blob:expired",
+      },
+    ],
+  });
+  const view = setup();
+  await waitFor(() => expect(view.input.value).toBe("important text"));
+  expect(screen.queryByText("lost.png")).toBeNull();
+  expect(screen.getByText(i18n.t("draftStorageInvalid"))).toBeTruthy();
+  expect(view.input.selectionStart).toBe(4);
+});
+
+it("ignores malformed owners and oversized hydration records while preserving valid bounded drafts", async () => {
+  const records: unknown[] = [
+    null,
+    {
+      key: "other-host-layout",
+      draft: { prompt: "foreign", images: [], caret: 0 },
+    },
+    {
+      key: owner("huge"),
+      draft: { prompt: "x".repeat(512 * 1024 + 1), images: [], caret: 0 },
+    },
+  ];
+  for (let index = 0; index < 33; index++)
+    records.push({
+      key: owner(`S${index}`),
+      draft: { prompt: `draft ${index}`, images: [], caret: 0 },
+    });
+  const memory = createComposerDraftMemory({
+    ...storage,
+    read: async () => records,
+  });
+  await memory.ready;
+  expect(memory.storageState().invalid).toBe(true);
+  expect(memory.read("other-host-layout").prompt).toBe("");
+  expect(memory.read(owner("huge")).prompt).toBe("");
+  expect(memory.read(owner("S31")).prompt).toBe("draft 31");
+  expect(memory.read(owner("S32")).prompt).toBe("");
+});
+
+it("warns and protects current content when persistence fails, then recovers on an explicit retry", async () => {
+  storageWriteFailure = true;
+  const view = setup();
+  fireEvent.change(view.input, { target: { value: "unsaved content" } });
+  await screen.findByText(i18n.t("draftStorageUnavailable"));
+  expect(view.input.value).toBe("unsaved content");
+  const leave = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(leave);
+  expect(leave.defaultPrevented).toBe(true);
+  storageWriteFailure = false;
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("draftStorageRetry") }),
+  );
+  await waitFor(() => expect(savedDrafts.has(owner("A"))).toBe(true));
+  await waitFor(() =>
+    expect(screen.queryByText(i18n.t("draftStorageUnavailable"))).toBeNull(),
+  );
+  const savedLeave = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(savedLeave);
+  expect(savedLeave.defaultPrevented).toBe(false);
+});
+
+it("protects a failed accepted-send deletion, so reloading cannot silently resurrect its saved draft", async () => {
+  const view = setup();
+  fireEvent.change(view.input, { target: { value: "send once" } });
+  await waitFor(() => expect(savedDrafts.has(owner("A"))).toBe(true));
+  storageWriteFailure = true;
+  await act(async () =>
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("send") })),
+  );
+  expect(view.input.value).toBe("");
+  await screen.findByText(i18n.t("draftStorageUnavailable"));
+  const leave = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(leave);
+  expect(leave.defaultPrevented).toBe(true);
+  storageWriteFailure = false;
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("draftStorageRetry") }),
+  );
+  await waitFor(() => expect(savedDrafts.has(owner("A"))).toBe(false));
+  view.unmount();
+  const reopened = setup();
+  await act(async () => {});
+  expect(reopened.input.value).toBe("");
+  expect(reopened.sendPrompt).not.toHaveBeenCalled();
+});
+
+it("retains a newer persisted revision when an older send receipt arrives", async () => {
+  const receipt = deferred<boolean>();
+  const view = setup({
+    actions: {
+      ...createWebStore().getState().actions,
+      sendPrompt: () => receipt.promise,
+    },
+  });
+  fireEvent.change(view.input, { target: { value: "original" } });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("send") }));
+  fireEvent.change(view.input, { target: { value: "new unsent intent" } });
+  await act(async () => receipt.resolve(true));
+  await waitFor(() =>
+    expect((savedDrafts.get(owner("A")) as ComposerDraft)?.prompt).toBe(
+      "new unsent intent",
+    ),
+  );
+  view.unmount();
+  const reopened = setup();
+  await waitFor(() => expect(reopened.input.value).toBe("new unsent intent"));
+});
+
+it("does not write over unread storage after an initial read failure, and hydrates other owners on retry", async () => {
+  savedDrafts.set(owner("B"), {
+    prompt: "B from before",
+    images: [],
+    caret: 5,
+  });
+  storageReadFailure = true;
+  const view = setup();
+  fireEvent.change(view.input, { target: { value: "A newly typed" } });
+  await screen.findByText(i18n.t("draftStorageUnavailable"));
+  expect(savedDrafts.has(owner("A"))).toBe(false);
+  storageReadFailure = false;
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("draftStorageRetry") }),
+  );
+  await waitFor(() => expect(savedDrafts.has(owner("A"))).toBe(true));
+  view.select("B");
+  expect(view.input.value).toBe("B from before");
 });

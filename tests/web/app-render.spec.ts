@@ -45,6 +45,38 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("presents fork success as status and a subsequent ordinary error as an alert", () => {
+  const initial = webStore.getState();
+  const start = vi.spyOn(initial.actions, "start").mockImplementation(() => {});
+  const stop = vi.spyOn(initial.actions, "stop").mockImplementation(() => {});
+  webStore.setState({
+    snapshot: null,
+    notice: { kind: "success", message: i18n.t("forkSessionCreated") },
+  });
+  const view = renderWithI18n(createElement(App));
+  try {
+    const success = screen
+      .getByText(i18n.t("forkSessionCreated"))
+      .closest(".notice");
+    expect(success?.classList.contains("notice-success")).toBe(true);
+    expect(success?.getAttribute("role")).toBe("status");
+    expect(screen.queryByRole("alert")).toBeNull();
+    act(() => webStore.setState({ notice: "Unable to select the model" }));
+    const error = screen.getByRole("alert");
+    expect(error.textContent).toContain("Unable to select the model");
+    expect(error.classList.contains("notice-success")).toBe(false);
+    fireEvent.click(
+      within(error).getByRole("button", { name: i18n.t("close") }),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    webStore.setState(initial, true);
+  }
+});
+
 it("Plan controls preserve drafts without sending prompts, and the placeholder follows confirmed planning messages", async () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.plan = "inactive";
@@ -1907,15 +1939,11 @@ it("keeps the reader mounted across an external controller change and revokes in
   const unsubscribe = store.subscribe((next) => webStore.setState(next, true));
   const view = renderWithI18n(createElement(App));
   try {
-    await act(async () =>
-      fireEvent.click(
-        screen.getByRole("button", { name: i18n.t("historyLoadOlder") }),
-      ),
-    );
-    expect(screen.getByText("Earlier answer")).toBeTruthy();
     const viewport = view.container.querySelector<HTMLElement>(
       '.conversation[role="log"]',
     )!;
+    await act(async () => fireEvent.wheel(viewport, { deltaY: -100 }));
+    expect(screen.getByText("Earlier answer")).toBeTruthy();
     Object.defineProperty(viewport, "scrollHeight", {
       configurable: true,
       value: 1000,

@@ -1,28 +1,31 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { Type } from "typebox";
 import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
 import {
+  type AgentSessionRuntime,
+  type CreateAgentSessionRuntimeFactory,
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
   SettingsManager,
-  type AgentSessionRuntime,
-  type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
-import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
+import { Type } from "typebox";
 import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
+import {
+  readTurnTiming,
+  WEB_TURN_TIMING_ENTRY,
+} from "../../web/protocol/turn-timing.ts";
+import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import type { WebRuntimeEvent } from "../../web/runtime/types.ts";
-import { WEB_TURN_TIMING_ENTRY } from "../../web/protocol/turn-timing.ts";
 
 function gate() {
   let enter!: () => void;
@@ -382,6 +385,22 @@ test("background settlement records timing in the owning Pi Session, never the c
         entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY,
     );
   assert.equal(timing.length, 1);
+  const finalAssistant = a.session.sessionManager
+    .getBranch()
+    .filter(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        entry.message.stopReason === "stop",
+    )
+    .at(-1);
+  assert.equal(
+    timing[0]!.type === "custom"
+      ? readTurnTiming(timing[0]!.data)?.resultEntryId
+      : undefined,
+    finalAssistant?.id,
+  );
+  assert.ok(finalAssistant);
   assert.equal(
     b.session.sessionManager
       .getEntries()
@@ -410,6 +429,7 @@ test("background settlement records timing in the owning Pi Session, never the c
   assert.equal(receipt?.status, "unknown", "release does not prove idle");
   assert.equal(receipt?.lastTurn?.commandId, "run-a");
   assert.equal(receipt?.lastTurn?.outcome, "completed");
+  assert.equal(receipt?.lastTurn?.resultEntryId, finalAssistant.id);
   assert.equal(
     web.getSessionExecution(
       a.session.sessionManager.getSessionId(),

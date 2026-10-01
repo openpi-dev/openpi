@@ -153,6 +153,35 @@ export function SessionOverview({
                 </span>
               )}
             </button>
+            <div className="session-overview-section">
+              <p>{t("subagentDetails")}</p>
+              <button
+                type="button"
+                className="session-overview-row session-overview-agents"
+                onClick={() => activate(onSubagents)}
+                aria-label={`${t("subagentDetails")}: ${summary}`}
+              >
+                {preview.length > 0 && (
+                  <span className="subagent-avatar-stack">
+                    {preview.map((agent) => (
+                      <SubagentAvatar
+                        key={agent.id}
+                        identity={`${sessionId}:${agent.id}`}
+                      />
+                    ))}
+                  </span>
+                )}
+                <span className="session-overview-agent-counts">
+                  {summary.split(" · ").map((part) => (
+                    <span key={part}>{part}</span>
+                  ))}
+                </span>
+                <ChevronRight aria-hidden="true" />
+              </button>
+              {omitted > 0 && (
+                <small>{t("subagentListTruncated", { count: omitted })}</small>
+              )}
+            </div>
             {sessionPath && (
               <div className="session-overview-section">
                 <div className="session-overview-section-heading">
@@ -206,35 +235,6 @@ export function SessionOverview({
                 )}
               </div>
             )}
-            <div className="session-overview-section">
-              <p>{t("subagentDetails")}</p>
-              <button
-                type="button"
-                className="session-overview-row session-overview-agents"
-                onClick={() => activate(onSubagents)}
-                aria-label={`${t("subagentDetails")}: ${summary}`}
-              >
-                {preview.length > 0 && (
-                  <span className="subagent-avatar-stack">
-                    {preview.map((agent) => (
-                      <SubagentAvatar
-                        key={agent.id}
-                        identity={`${sessionId}:${agent.id}`}
-                      />
-                    ))}
-                  </span>
-                )}
-                <span className="session-overview-agent-counts">
-                  {summary.split(" · ").map((part) => (
-                    <span key={part}>{part}</span>
-                  ))}
-                </span>
-                <ChevronRight aria-hidden="true" />
-              </button>
-              {omitted > 0 && (
-                <small>{t("subagentListTruncated", { count: omitted })}</small>
-              )}
-            </div>
           </div>
         }
       >

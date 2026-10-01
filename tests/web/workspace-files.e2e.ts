@@ -180,7 +180,10 @@ test("workspace files stay beside previews, support rich documents and remain us
       await page
         .getByRole("textbox", { name: /筛选文件|Filter files/u })
         .fill(name);
-      await tree.getByRole("button", { name, exact: false }).click();
+      await tree
+        .locator("button[data-file-row]")
+        .filter({ hasText: name })
+        .click();
     };
     await open("README.md");
     await expect(page.locator(".artifact-panel-embedded h1")).toHaveText(

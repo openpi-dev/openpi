@@ -31,6 +31,7 @@ import { sniffPromptImageMime } from "../composer/image-attachments.ts";
 import { FileContent, hasVisualFilePreview } from "../files/FileContent.tsx";
 import { useFileEditor } from "../files/use-file-editor.ts";
 import { ArtifactContext } from "./context.ts";
+import { useWorkbarReadingState } from "../workbar/workbar-reading-state.ts";
 import "../files/files.css";
 
 export interface ArtifactProviderHandle {
@@ -153,16 +154,26 @@ export const ArtifactProvider = forwardRef<
 ) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
+  const reading = useWorkbarReadingState();
+  const savedReading = embedded ? reading?.artifact : undefined;
   const [request, setRequest] = useState<{
     sessionId?: string;
     sessionPath?: string;
     reference: string;
     parent?: string;
     external?: boolean;
-  } | null>(null);
+  } | null>(() =>
+    savedReading
+      ? {
+          sessionId,
+          sessionPath,
+          reference: savedReading.reference,
+        }
+      : null,
+  );
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
-  const [source, setSource] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const [source, setSource] = useState(savedReading?.source ?? false);
+  const [editing, setEditing] = useState(savedReading?.editing ?? false);
   const [error, setError] = useState<string | null>(null);
   const [accessDenied, setAccessDenied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -177,7 +188,22 @@ export const ArtifactProvider = forwardRef<
   const closeButton = useRef<HTMLButtonElement>(null);
   const editorInput = useRef<HTMLTextAreaElement>(null);
   const previewBody = useRef<HTMLDivElement>(null);
-  const previewScroll = useRef(0);
+  const previewScroll = useRef(savedReading?.scroll ?? 0);
+  const restoringScroll = useRef(Boolean(savedReading));
+  useLayoutEffect(() => {
+    if (!embedded || !reading) return;
+    reading.artifact = request
+      ? {
+          reference: preview?.artifact.path
+            ? encodeURI(preview.artifact.path)
+            : request.reference,
+          source,
+          editing,
+          scroll: previewScroll.current,
+          document: reading.artifact?.document,
+        }
+      : undefined;
+  }, [embedded, reading, request, preview?.artifact.path, source, editing]);
   const downloadAbort = useRef<AbortController | null>(null);
   const blobUrls = useRef(new Set<string>());
   const nextParent = useRef<string | undefined>(undefined);
@@ -219,6 +245,7 @@ export const ArtifactProvider = forwardRef<
       setSource(false);
       setEditing(false);
       previewScroll.current = 0;
+      restoringScroll.current = false;
       setError(null);
       setAccessDenied(false);
       setCopyStatus(null);
@@ -271,6 +298,12 @@ export const ArtifactProvider = forwardRef<
     else if (previewBody.current)
       previewBody.current.scrollTop = previewScroll.current;
   }, [editing]);
+  useLayoutEffect(() => {
+    if (!active || !preview || !restoringScroll.current || !previewBody.current)
+      return;
+    previewBody.current.scrollTop = previewScroll.current;
+    restoringScroll.current = false;
+  }, [active, preview]);
   useEffect(() => {
     if (!request || requestInScope) return;
     copyGeneration.current++;
@@ -687,7 +720,16 @@ export const ArtifactProvider = forwardRef<
               </button>
             </div>
           </header>
-          <div className="artifact-panel-body" ref={previewBody}>
+          <div
+            className="artifact-panel-body"
+            ref={previewBody}
+            onScroll={(event) => {
+              if (restoringScroll.current) return;
+              previewScroll.current = event.currentTarget.scrollTop;
+              if (embedded && reading?.artifact)
+                reading.artifact.scroll = previewScroll.current;
+            }}
+          >
             {!embedded && (
               <div className="artifact-source">
                 <code title={path}>{path}</code>

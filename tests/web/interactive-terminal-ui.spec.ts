@@ -109,6 +109,9 @@ vi.mock("@xterm/xterm", () => ({
     onResize() {
       return { dispose() {} };
     }
+    onScroll() {
+      return { dispose() {} };
+    }
   },
 }));
 vi.mock("@xterm/addon-fit", () => ({

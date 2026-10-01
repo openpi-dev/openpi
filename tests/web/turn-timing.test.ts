@@ -1,19 +1,28 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import test from "node:test";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { projectEntry } from "../../web/protocol/types.ts";
 import {
   readTurnTiming,
   WEB_TURN_TIMING_ENTRY,
 } from "../../web/protocol/turn-timing.ts";
+import { projectEntry } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import type { WebRuntimeEvent } from "../../web/runtime/types.ts";
 
 function harness(sessionManager = SessionManager.inMemory(process.cwd())) {
-  const session = { sessionManager };
+  const session = {
+    sessionManager,
+    isIdle: true,
+    isCompacting: false,
+    messages: [],
+    state: { pendingToolCalls: new Map() },
+    getFollowUpMessages: () => [],
+    getSteeringMessages: () => [],
+  };
   const events: WebRuntimeEvent[] = [];
   const runtime = Object.create(PiWebRuntime.prototype) as {
     runtime: { session: typeof session };
@@ -32,10 +41,13 @@ function harness(sessionManager = SessionManager.inMemory(process.cwd())) {
     turnSettlementWaiters: Map<string, Set<unknown>>;
     turnAbortOperations: Map<string, Promise<unknown>>;
     getActiveTurn: PiWebRuntime["getActiveTurn"];
+    getSessionExecution: PiWebRuntime["getSessionExecution"];
     projectEvent: (session: object, event: object) => void;
   };
   Object.assign(runtime, {
     runtime: { session },
+    hasSelectedWorkspace: true,
+    retainedRuntimes: new Set(),
     pendingPromptTraces: [],
     listeners: new Set([(event: WebRuntimeEvent) => events.push(event)]),
     nextTurnEpoch: 0,
@@ -201,7 +213,85 @@ test("unrecognized custom entries and malformed timing do not become duration ev
   };
   assert.equal(readTurnTiming({ ...timing, elapsedMs: -1 }), undefined);
   assert.equal(readTurnTiming({ ...timing, outcome: "looks-done" }), undefined);
+  assert.equal(readTurnTiming({ ...timing, resultEntryId: "" }), undefined);
+  assert.equal(
+    readTurnTiming({ ...timing, resultEntryId: "x".repeat(501) }),
+    undefined,
+  );
+  assert.equal(readTurnTiming({ ...timing, resultEntryId: "\n" }), undefined);
+  assert.equal(
+    readTurnTiming({ ...timing, resultEntryId: "native-result" })
+      ?.resultEntryId,
+    "native-result",
+  );
   const session = SessionManager.inMemory(process.cwd());
   session.appendCustomEntry("unrelated", timing);
   assert.equal("turnTiming" in projectEntry(session.getEntries()[0]!), false);
+});
+
+test("legacy completion resolves only its exact preceding terminal assistant on the current native branch", () => {
+  const { runtime, sessionManager } = harness();
+  const sessionId = sessionManager.getSessionId();
+  const sessionPath = `current:${sessionId}`;
+  sessionManager.appendMessage({
+    role: "user",
+    content: "Question",
+    timestamp: 1,
+  });
+  const resultEntryId = sessionManager.appendMessage(
+    fauxAssistantMessage("Result"),
+  );
+  const timing = {
+    version: 1,
+    sessionId,
+    commandId: "first",
+    epoch: 1,
+    startedAt: 1,
+    finishedAt: 2,
+    elapsedMs: 1,
+    outcome: "completed",
+  };
+  sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, timing);
+  assert.equal(
+    runtime.getSessionExecution(sessionId, sessionPath).lastTurn?.resultEntryId,
+    resultEntryId,
+  );
+  sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
+    ...timing,
+    commandId: "no-result",
+    finishedAt: 3,
+  });
+  assert.equal(
+    runtime.getSessionExecution(sessionId, sessionPath).lastTurn?.resultEntryId,
+    undefined,
+    "a receipt cannot cross another turn's timing to borrow its result",
+  );
+  sessionManager.branch(resultEntryId);
+  sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
+    ...timing,
+    resultEntryId: "wrong-result",
+  });
+  assert.equal(
+    runtime.getSessionExecution(sessionId, sessionPath).lastTurn?.resultEntryId,
+    undefined,
+  );
+  sessionManager.branch(resultEntryId);
+  sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
+    ...timing,
+    resultEntryId,
+  });
+  assert.equal(
+    runtime.getSessionExecution(sessionId, sessionPath).lastTurn?.resultEntryId,
+    resultEntryId,
+  );
+  sessionManager.branch(resultEntryId);
+  sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
+    ...timing,
+    sessionId: "copied-session",
+    resultEntryId,
+  });
+  assert.equal(
+    runtime.getSessionExecution(sessionId, sessionPath).lastTurn,
+    undefined,
+  );
 });

@@ -3,20 +3,20 @@ import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
 import { Agent } from "@earendil-works/pi-agent-core";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type {
   AgentSessionServices,
   ExtensionAPI,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { fileURLToPath } from "node:url";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
+import { jsonByteLength } from "../../web/protocol/types.ts";
 import {
   createCommandDiscoveryBridge,
   registerCommandDiscoveryBridge,
 } from "../../web/runtime/command-discovery.ts";
-import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
-import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import { matchesSessionIdentity } from "../../web/runtime/session-identity.ts";
 import {
@@ -182,6 +182,8 @@ function promptSession(sessionId: string) {
     }) => void
   >();
   let followUpMessages: string[] = [];
+  let steeringMessages: string[] = [];
+  const steeringCalls: Array<{ content: string; images?: unknown[] }> = [];
   return {
     isStreaming: false,
     isCompacting: false,
@@ -209,14 +211,32 @@ function promptSession(sessionId: string) {
       return () => listeners.delete(listener);
     },
     getFollowUpMessages: () => followUpMessages,
+    getSteeringMessages: () => steeringMessages,
+    async steer(content: string, images?: unknown[]) {
+      steeringCalls.push({ content, images });
+      steeringMessages.push(content);
+      for (const listener of listeners) {
+        listener({
+          type: "queue_update",
+          steering: steeringMessages,
+          followUp: followUpMessages,
+        });
+      }
+    },
     clearQueue() {
+      const steering = steeringMessages;
       followUpMessages = [];
-      return { steering: [], followUp: [] };
+      steeringMessages = [];
+      return { steering, followUp: [] };
     },
     emitFollowUpQueue(messages: string[]) {
       followUpMessages = messages;
       for (const listener of listeners) {
-        listener({ type: "queue_update", steering: [], followUp: messages });
+        listener({
+          type: "queue_update",
+          steering: steeringMessages,
+          followUp: messages,
+        });
       }
     },
     prompt(content: string, options: PromptOptions) {
@@ -225,6 +245,7 @@ function promptSession(sessionId: string) {
       return run.promise;
     },
     calls,
+    steeringCalls,
   };
 }
 
@@ -437,6 +458,159 @@ function finishCompaction(
     }
   ).observeCompaction(session, { type: "compaction_end", ...detail });
 }
+
+test("native steering is admitted to the exact active turn and projects its actual queue", async () => {
+  const session = promptSession("steering");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "running",
+    sessionId: "steering",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 4,
+  };
+  const image = {
+    data: "aGVsbG8=",
+    mimeType: "image/png" as const,
+    name: "instruction.png",
+  };
+  const receipt = await runtime.sendPrompt("use this approach", {
+    commandId: "instruction",
+    streamingBehavior: "steer",
+    expectedTurnCommandId: "running",
+    expectedSessionId: "steering",
+    expectedSessionPath: "current:steering",
+    images: [image],
+  });
+  assert.deepEqual(receipt, {
+    pendingFollowUps: 0,
+    pendingSteering: 1,
+    delivery: "steer",
+  });
+  assert.equal(session.calls.length, 0);
+  assert.deepEqual(session.steeringCalls, [
+    { content: "use this approach", images: [{ type: "image", ...image }] },
+  ]);
+  const execution = (runtime as unknown as PiWebRuntime).getSessionExecution(
+    "steering",
+    "current:steering",
+  );
+  assert.equal(execution.activeTurn?.commandId, "running");
+  assert.equal(execution.pendingFollowUps, 0);
+  assert.deepEqual(execution.steeringMessages, ["use this approach"]);
+  assert.equal(execution.pendingSteering, 1);
+  await Promise.all(runtime.promptOperations);
+});
+
+test("stale, compacting and cancelling steering targets reject without turning the draft into a prompt", async () => {
+  for (const reason of [
+    "stale",
+    "compacting",
+    "cancelling",
+    "finished",
+    "plan",
+  ] as const) {
+    const session = promptSession("steering");
+    session.isStreaming = reason !== "finished";
+    session.isCompacting = reason === "compacting";
+    const runtime = promptHarness(session);
+    runtime.activePromptTrace = {
+      commandId: "running",
+      sessionId: "steering",
+      startedAt: 1,
+      started: true,
+      queued: false,
+      epoch: 4,
+    };
+    if (reason === "cancelling")
+      runtime.turnAbortOperations.set(
+        "steering\u0000running\u00004",
+        Promise.resolve(),
+      );
+    await assert.rejects(
+      runtime.sendPrompt("keep this draft", {
+        commandId: "instruction",
+        streamingBehavior: "steer",
+        expectedTurnCommandId: reason === "stale" ? "previous" : "running",
+        ...(reason === "plan" ? { planRevision: "plan-revision" } : {}),
+      }),
+      (error) =>
+        error instanceof WebRuntimeRequestError &&
+        error.code === "TURN_CONFLICT",
+    );
+    assert.equal(session.calls.length, 0, reason);
+    assert.equal(session.steeringCalls.length, 0, reason);
+  }
+});
+
+test("steering rechecks its target after waiting for an earlier prompt admission", async () => {
+  const session = promptSession("steering");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "running",
+    sessionId: "steering",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 4,
+  };
+  const earlier = deferred();
+  runtime.promptAdmission = earlier.promise;
+  const admission = runtime.sendPrompt("do not start a new turn", {
+    commandId: "instruction",
+    streamingBehavior: "steer",
+    expectedTurnCommandId: "running",
+  });
+  session.isStreaming = false;
+  runtime.activePromptTrace = undefined;
+  earlier.resolve();
+  await assert.rejects(
+    admission,
+    (error) =>
+      error instanceof WebRuntimeRequestError && error.code === "TURN_CONFLICT",
+  );
+  assert.equal(session.calls.length, 0);
+  assert.equal(session.steeringCalls.length, 0);
+  await Promise.all(runtime.promptOperations);
+});
+
+test("a retained compaction follow-up queue does not convert current-turn steering into another follow-up", async () => {
+  const session = promptSession("steering");
+  session.isCompacting = true;
+  const runtime = promptHarness(session);
+  await runtime.sendPrompt("the next task", { commandId: "follow-up" });
+  session.isCompacting = false;
+  session.isStreaming = true;
+  runtime.activePromptTrace = {
+    commandId: "running",
+    sessionId: "steering",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 4,
+  };
+  const receipt = await runtime.sendPrompt("current instruction", {
+    commandId: "instruction",
+    streamingBehavior: "steer",
+    expectedTurnCommandId: "running",
+  });
+  assert.deepEqual(receipt, {
+    pendingFollowUps: 0,
+    pendingSteering: 1,
+    delivery: "steer",
+  });
+  const execution = (runtime as unknown as PiWebRuntime).getSessionExecution(
+    "steering",
+    "current:steering",
+  );
+  assert.deepEqual(execution.queuedMessages, ["the next task"]);
+  assert.deepEqual(execution.steeringMessages, ["current instruction"]);
+  assert.equal(session.calls.length, 0);
+  await Promise.all(runtime.promptOperations);
+});
 
 test("compaction-held messages preserve order and images through native admission", async () => {
   const session = promptSession("queue");
@@ -1656,6 +1830,56 @@ test("copied Session rejects a queued model selection before writing", async (t)
   assert.deepEqual(copied.getEntries(), []);
 });
 
+test("extension handler settlement is persisted only after the native handler returns", async (t) => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  registerCommandDiscoveryBridge(services, {
+    extension: () => undefined,
+    read: () => [
+      {
+        name: "plan",
+        source: "extension",
+        sourceInfo: {
+          path: fileURLToPath(
+            new URL("../../extensions/plan-mode/index.ts", import.meta.url),
+          ),
+          source: "fixture",
+          scope: "user",
+          origin: "package",
+        },
+      },
+    ],
+  });
+  const entries: { type: string; data: unknown }[] = [];
+  t.mock.method(
+    session.sessionManager,
+    "appendCustomEntry",
+    (type: string, data: unknown) => {
+      entries.push({ type, data });
+      return `entry-${entries.length}`;
+    },
+  );
+  const admission = runtime.sendPrompt("/plan off", {
+    commandId: "native-command",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  session.calls[0].options.preflightResult?.(true);
+  await admission;
+  assert.deepEqual(
+    entries.map((entry) => entry.type),
+    ["openpi-web-command-input"],
+  );
+  session.calls[0].run.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(entries.at(-1), {
+    type: "openpi-web-command-handled",
+    data: { inputEntryId: "entry-1", commandId: "native-command" },
+  });
+});
+
 test("handled prompt emits a correlated settlement without agent events", async () => {
   const session = promptSession("session-a");
   const runtime = promptHarness(session);
@@ -2555,6 +2779,93 @@ test("toolUse message_end without a terminal result settles as uncertain", (t) =
       },
     ],
   );
+});
+
+test("native retry completion preserves success, exhaustion and backoff cancellation at settlement", () => {
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(this: RuntimeHarness, session: object, event: object): void;
+    }
+  ).projectEvent;
+  for (const outcome of ["completed", "failed", "cancelled"] as const) {
+    const timings: unknown[] = [];
+    const session = {
+      sessionManager: {
+        getSessionId: () => "session",
+        appendCustomEntry: (_type: string, data: unknown) => timings.push(data),
+        getBranch: () => [],
+      },
+    };
+    const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
+    harness.runtime = { session };
+    harness.pendingPromptTraces = [];
+    harness.liveMessageSequence = 0;
+    harness.listeners = new Set();
+    harness.nextTurnEpoch = 0;
+    harness.terminalTurnKeys = new Set();
+    harness.turnSettlementWaiters = new Map();
+    harness.turnAbortOperations = new Map();
+    harness.activePromptTrace = {
+      commandId: outcome,
+      sessionId: "session",
+      startedAt: 1,
+      started: false,
+      queued: false,
+    };
+    const events: WebRuntimeEvent[] = [];
+    harness.listeners.add((event) => events.push(event));
+    projectEvent.call(harness, session, { type: "agent_start" });
+    projectEvent.call(harness, session, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "502",
+      },
+    });
+    projectEvent.call(harness, session, {
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 1,
+      errorMessage: "502",
+    });
+    projectEvent.call(harness, session, {
+      type: "auto_retry_end",
+      attempt: 1,
+      success: outcome === "completed",
+      ...(outcome === "cancelled"
+        ? { finalError: "Retry cancelled" }
+        : outcome === "failed"
+          ? { finalError: "502 exhausted" }
+          : {}),
+    });
+    if (outcome === "completed") {
+      projectEvent.call(harness, session, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Recovered" }],
+          stopReason: "stop",
+        },
+      });
+    }
+    assert.equal(
+      events.some((event) => event.type === "turn_settled"),
+      false,
+    );
+    projectEvent.call(harness, session, { type: "agent_settled" });
+    assert.equal(
+      events.find((event) => event.type === "turn_settled")?.detail?.outcome,
+      outcome,
+    );
+    assert.equal((timings[0] as { outcome: string }).outcome, outcome);
+    assert.deepEqual(
+      events.find((event) => event.type === "auto_retry_end")?.detail,
+      { attempt: 1, success: outcome === "completed" },
+    );
+  }
 });
 
 type ThinkingHarness = {

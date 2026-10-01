@@ -1,7 +1,7 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { readTurnTiming, WEB_TURN_TIMING_ENTRY } from "./turn-timing.ts";
 import { readTurnChangesDetail, summarizeTurnChanges, WEB_TURN_CHANGES_ENTRY, type WebTurnChanges } from "./turn-changes.ts";
-import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
+import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK, WEB_COMMAND_HANDLED } from "../../extensions/shared/web-command-feedback.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
@@ -14,6 +14,8 @@ export const WEB_PROMPT_MAX_TEXT_LENGTH = 12_000;
 export const WEB_MAX_SESSION_PREVIEW = 500;
 const WEB_MAX_METADATA_TEXT = 500;
 export const WEB_MAX_ENTRIES = 250;
+export const WEB_MAX_PROMPT_HISTORY_PAGE = 100;
+export const WEB_MAX_PROMPT_PREVIEW_CHARS = 240;
 export const WEB_MAX_MESSAGE_PARTS = 64;
 export const WEB_MAX_SESSIONS = 500;
 export const WEB_MAX_WORKSPACES = 250;
@@ -29,9 +31,14 @@ export const WEB_MAX_COMMANDS = 250;
 export const WEB_MAX_COMMAND_BYTES = 64 * 1024;
 export const WEB_MAX_COMMAND_NAME = 160;
 export const WEB_MAX_COMMAND_DESCRIPTION = 500;
-export const WEB_PROMPT_IMAGE_MAX_COUNT = 4;
-export const WEB_PROMPT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
-export const WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+export const WEB_PROMPT_IMAGE_MAX_COUNT = 8;
+export const WEB_PROMPT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const WEB_PROMPT_IMAGE_MAX_BASE64_CHARS = 4 * Math.ceil(WEB_PROMPT_IMAGE_MAX_BYTES / 3);
+export const WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
+
+export type WebPromptDelivery =
+  | { streamingBehavior: "followUp"; expectedTurnCommandId?: never }
+  | { streamingBehavior: "steer"; expectedTurnCommandId: string };
 export const WEB_MAX_GIT_REVIEW_FILES = 200;
 export const WEB_MAX_GIT_REVIEW_DIFF_BYTES = 3 * 1024 * 1024;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
@@ -70,9 +77,10 @@ export interface WebSessionSummary {
   execution?: {
     status: "running" | "idle" | "unknown";
     pendingFollowUps?: number;
+    pendingSteering?: number;
     waitingForInput?: boolean;
     compacting?: boolean;
-    lastTurn?: { commandId: string; finishedAt: number; outcome: "completed" | "cancelled" | "failed" | "uncertain" };
+    lastTurn?: { commandId: string; finishedAt: number; outcome: "completed" | "cancelled" | "failed" | "uncertain"; resultEntryId?: string };
   };
 }
 
@@ -204,6 +212,8 @@ export interface WebOpenPiSetupProjection {
   ui: {
     webTheme: WebThemePreference;
     webChatWidth: number;
+    webSidebarWidth?: number;
+    webAuxiliaryWidth?: number;
     webChatFontSize: number;
     webExpandThinking: boolean;
     webPinnedSort?: "manual" | "updated";
@@ -235,6 +245,8 @@ export interface WebSettingsPreferencesPatch {
   pinnedSort?: "manual" | "updated";
   theme?: WebThemePreference;
   chatWidth?: number;
+  sidebarWidth?: number;
+  auxiliaryWidth?: number;
   chatFontSize?: number;
   expandThinking?: boolean;
 }
@@ -271,6 +283,24 @@ export interface WebHistoryAnchor {
 export interface WebSessionHistoryPage extends WebSessionProjection {
   anchorEntryId: string;
   requestedBeforeEntryId: string;
+}
+
+export interface WebSessionPromptHistoryPage {
+  sessionId: string;
+  sessionPath: string;
+  anchorEntryId: string;
+  requestedBeforeEntryId: string | null;
+  entryIds: string[];
+  nextBeforeEntryId: string | null;
+}
+
+export interface WebSessionPromptPreview {
+  sessionId: string;
+  sessionPath: string;
+  anchorEntryId: string;
+  entryId: string;
+  prompt: string;
+  response: string;
 }
 
 export interface WebSessionUsage {
@@ -340,6 +370,7 @@ export type WebMessagePart =
       mimeType: string;
       name?: string;
       previewUrl?: string;
+      sourcePartIndex?: number;
     }
   | { type: "thinking"; text: string }
   | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
@@ -386,6 +417,12 @@ export interface WebGitReviewFile {
 
 export type WebGitReviewSource = "unstaged" | "staged" | "branch" | "session";
 
+export interface WebGitReviewBranches {
+  currentBranch: string | null;
+  options: { ref: string; label: string }[];
+  truncated: boolean;
+}
+
 export interface WebGitReviewSnapshot {
   /** Text-line totals across the entire enumerated comparison, not this page. */
   totals?: { additions: number; deletions: number; complete: boolean };
@@ -406,7 +443,7 @@ export interface WebGitReviewSnapshot {
 }
 
 export type WebGitReviewResult =
-  | { ok: true; snapshot: WebGitReviewSnapshot }
+  | { ok: true; snapshot: WebGitReviewSnapshot; branches?: WebGitReviewBranches; summaryRevision?: string }
   | {
       ok: false;
       reason:
@@ -414,7 +451,10 @@ export type WebGitReviewResult =
         | "not_git_repository"
         | "unborn_repository"
         | "baseline_unavailable"
-        | "git_failed";
+        | "git_failed"
+        | "base_branch_unavailable"
+        | "invalid_base_branch";
+      branches?: WebGitReviewBranches;
     };
 
 /**
@@ -443,6 +483,8 @@ export interface WebSnapshot {
     theme: WebThemePreference;
     /** Optional for compatibility with snapshots emitted before Web display preferences existed. */
     chatWidth?: number;
+    sidebarWidth?: number;
+    auxiliaryWidth?: number;
     chatFontSize?: number;
     expandThinking?: boolean;
     pinnedSort?: "manual" | "updated";
@@ -675,7 +717,12 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       typed.type === "image" &&
       typeof typed.mimeType === "string"
     ) {
-      projected = { type: "image", mimeType: typed.mimeType };
+      projected = {
+        type: "image",
+        mimeType: typed.mimeType,
+        sourcePartIndex: index,
+        ...(typeof typed.name === "string" ? { name: typed.name.slice(0, 255) } : {}),
+      };
     } else if (
       typed.type === "thinking" &&
       typeof typed.thinking === "string"
@@ -843,6 +890,27 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
     const detail = readTurnChangesDetail(entry.data);
     if (detail) return { type: entry.type, ...metadata, turnChanges: summarizeTurnChanges(detail) };
   }
+  if (entry.type === "custom" && entry.customType === "subagent-result") {
+    // Pi persists the user-facing receipt separately from its hidden model
+    // follow-up. Project the display receipt, never the transport instruction.
+    const data = entry.data;
+    const content = data && typeof data === "object"
+      ? Object.getOwnPropertyDescriptor(data, "content")?.value
+      : undefined;
+    if (typeof content === "string") {
+      return {
+        type: "message",
+        ...metadata,
+        message: projectMessage({
+          role: "custom",
+          customType: entry.customType,
+          content,
+          details: Object.getOwnPropertyDescriptor(data, "details")?.value,
+          display: true,
+        }, resolvePath),
+      };
+    }
+  }
   if (entry.type === "custom_message") {
     return {
       type: "message" as const,
@@ -858,6 +926,19 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
         resolvePath,
       ),
     };
+  }
+  if (entry.type === "custom" && entry.customType === WEB_COMMAND_HANDLED) {
+    const data: unknown = entry.data;
+    if (data && typeof data === "object" && "inputEntryId" in data &&
+      typeof data.inputEntryId === "string" && data.inputEntryId.length > 0 &&
+      data.inputEntryId.length <= 128 && !/[\s\u0000-\u001f]/u.test(data.inputEntryId) &&
+      "commandId" in data && typeof data.commandId === "string" &&
+      data.commandId.length > 0 && data.commandId.length <= 200) {
+      return { type: "message", ...metadata, message: {
+        role: "custom", customType: WEB_COMMAND_HANDLED, content: "",
+        details: { inputEntryId: data.inputEntryId, commandId: data.commandId },
+      } satisfies WebLiveMessage };
+    }
   }
   if (entry.type === "custom" && (entry.customType === WEB_COMMAND_INPUT || entry.customType === WEB_COMMAND_FEEDBACK)) {
     const data: unknown = entry.data;

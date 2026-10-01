@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isUtf8 } from "node:buffer";
-import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, renameSync } from "node:fs";
+import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, renameSync } from "node:fs";
 import { lstat, open, opendir, realpath, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
-import { ARTIFACT_EDIT_BYTES, ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata, type WorkspaceFileEntry } from "../protocol/artifacts.ts";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { ARTIFACT_EDIT_BYTES, ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata, type WorkspaceFileEntry, type WorkspaceFileMutation, type WorkspaceFileMutationResult } from "../protocol/artifacts.ts";
+import { WEB_PROMPT_FILE_MAX_BYTES } from "../protocol/prompt-files.ts";
 
 const MAX_HANDLES = 64;
 const MAX_READS = 4;
@@ -39,6 +41,7 @@ export class ArtifactReader {
   private readonly handles = new Map<string, Grant>();
   private readonly listings = new Map<string, { key: string; scan: AsyncGenerator<WorkspaceFileEntry | null>; checks: Map<string, import("node:fs").BigIntStats>; next: IteratorResult<WorkspaceFileEntry | null>; timer: ReturnType<typeof setTimeout> }>();
   private scopeKey = "";
+  private revocation = 0;
   private reads = 0;
   private readonly saving = new Set<string>();
   private disposed = false;
@@ -291,46 +294,111 @@ export class ArtifactReader {
     this.saving.add(grant.path);
     let temporary: string | undefined;
     try {
-      const before = await this.read(handle, sessionId, revision);
-      if (!before.preview.artifact.editable) throw denied();
-      const info = await lstat(grant.path, { bigint: true });
-      if (metadataIdentity(info) !== before.preview.identity) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
-      const directory = dirname(grant.path);
-      const directoryInfo = await lstat(directory, { bigint: true });
-      temporary = resolve(directory, `.openpi-save-${randomUUID()}`);
-      const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), Number(info.mode & 0o777n));
-      try { await file.chmod(Number(info.mode & 0o777n)); await file.writeFile(bytes); await file.sync(); }
-      finally { await file.close(); }
-      const current = await this.canonical(grant.scope, grant.requested);
-      // No await between the final identity/content checks and atomic replacement:
-      // another HTTP save or Session transition cannot interleave this commit.
-      this.assertScope(grant.scope);
-      if (this.handles.get(handle) !== grant || current.path !== grant.path) throw denied();
-      const parent = lstatSync(directory, { bigint: true });
-      const latest = lstatSync(grant.path, { bigint: true });
-      if (parent.dev !== directoryInfo.dev || parent.ino !== directoryInfo.ino || !latest.isFile() || metadataIdentity(latest) !== before.preview.identity)
-        throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
-      const descriptor = openSync(grant.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-      try {
-        const snapshot = fstatSync(descriptor, { bigint: true });
-        if (!snapshot.isFile() || metadataIdentity(snapshot) !== before.preview.identity) throw denied();
-        const content = Buffer.alloc(Number(snapshot.size) + 1);
-        let length = 0;
-        while (length < content.length) {
-          const count = readSync(descriptor, content, length, content.length - length, length);
-          if (!count) break;
-          length += count;
-        }
-        if (metadataIdentity(fstatSync(descriptor, { bigint: true })) !== before.preview.identity || createHash("sha256").update(content.subarray(0, length)).digest("hex") !== revision)
+      return await withFileMutationQueue(grant.path, async () => {
+        this.assertScope(grant.scope);
+        if (this.handles.get(handle) !== grant) throw denied();
+        const before = await this.read(handle, sessionId, revision);
+        if (!before.preview.artifact.editable) throw denied();
+        const info = await lstat(grant.path, { bigint: true });
+        if (metadataIdentity(info) !== before.preview.identity) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
+        const directory = dirname(grant.path);
+        const directoryInfo = await lstat(directory, { bigint: true });
+        temporary = resolve(directory, `.openpi-save-${randomUUID()}`);
+        const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), Number(info.mode & 0o777n));
+        try { await file.chmod(Number(info.mode & 0o777n)); await file.writeFile(bytes); await file.sync(); }
+        finally { await file.close(); }
+        const current = await this.canonical(grant.scope, grant.requested);
+        // No await between the final identity/content checks and atomic replacement:
+        // another HTTP save or Session transition cannot interleave this commit.
+        this.assertScope(grant.scope);
+        if (this.handles.get(handle) !== grant || current.path !== grant.path) throw denied();
+        const parent = lstatSync(directory, { bigint: true });
+        const latest = lstatSync(grant.path, { bigint: true });
+        if (parent.dev !== directoryInfo.dev || parent.ino !== directoryInfo.ino || !latest.isFile() || metadataIdentity(latest) !== before.preview.identity)
           throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
-      } finally { closeSync(descriptor); }
-      // Windows cannot replace the destination while its read handle is open.
-      // Keep closure and replacement synchronous with the final checks above.
-      renameSync(temporary, grant.path);
-      temporary = undefined;
-      return { revision: createHash("sha256").update(bytes).digest("hex") };
-    } catch (error) { throw this.classify(error); }
+        const descriptor = openSync(grant.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+        try {
+          const snapshot = fstatSync(descriptor, { bigint: true });
+          if (!snapshot.isFile() || metadataIdentity(snapshot) !== before.preview.identity) throw denied();
+          const content = Buffer.alloc(Number(snapshot.size) + 1);
+          let length = 0;
+          while (length < content.length) {
+            const count = readSync(descriptor, content, length, content.length - length, length);
+            if (!count) break;
+            length += count;
+          }
+          if (metadataIdentity(fstatSync(descriptor, { bigint: true })) !== before.preview.identity || createHash("sha256").update(content.subarray(0, length)).digest("hex") !== revision)
+            throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
+        } finally { closeSync(descriptor); }
+        // Windows cannot replace the destination while its read handle is open.
+        // Keep closure and replacement synchronous with the final checks above.
+        renameSync(temporary, grant.path);
+        temporary = undefined;
+        return { revision: createHash("sha256").update(bytes).digest("hex") };
+      });
+    } catch (error) { throw this.classify(error, true); }
     finally { if (temporary) await unlink(temporary).catch(() => undefined); this.saving.delete(grant.path); }
+  }
+
+  /** Explicit operator writes share Pi's native mutation lane; they never widen a read grant. */
+  async mutateFile(sessionId: string, sessionPath: string, mutation: WorkspaceFileMutation) {
+    const scope = this.scope();
+    const revocation = this.revocation;
+    if (sessionId !== scope.sessionId || sessionPath !== scope.sessionPath) throw denied();
+    if (!mutation.name || Buffer.byteLength(mutation.name, "utf8") > 255 || Buffer.from(mutation.name, "utf8").toString("utf8") !== mutation.name || mutation.name === "." || mutation.name === ".." || /[\x00-\x1f\x7f/\\:]/u.test(mutation.name))
+      throw new ArtifactError("ARTIFACT_INVALID_NAME", 400, "Choose a single file or directory name without path separators.");
+    let bytes = Buffer.alloc(0);
+    if (mutation.kind === "import-file") {
+      if (mutation.data.length > Math.ceil(WEB_PROMPT_FILE_MAX_BYTES / 3) * 4)
+        throw new ArtifactError("ARTIFACT_TOO_LARGE", 413, "Workspace file imports are limited to 50 MiB per file.");
+      bytes = Buffer.from(mutation.data, "base64");
+      if (bytes.toString("base64") !== mutation.data)
+        throw new ArtifactError("ARTIFACT_INVALID_DATA", 400, "File bytes must use canonical base64.");
+      if (bytes.length > WEB_PROMPT_FILE_MAX_BYTES)
+        throw new ArtifactError("ARTIFACT_TOO_LARGE", 413, "Workspace file imports are limited to 50 MiB per file.");
+    }
+    let temporary: string | undefined;
+    try {
+      const root = await realpath(scope.cwd);
+      const requested = resolve(root, this.decodeReference(mutation.directory));
+      const directory = await this.canonical(scope, requested, scope.cwd, true);
+      const originalParent = await lstat(directory.path, { bigint: true });
+      if (!originalParent.isDirectory()) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Choose an existing directory.");
+      this.assertScope(scope);
+      if (this.revocation !== revocation) throw denied();
+      const target = resolve(directory.path, mutation.name);
+      return await withFileMutationQueue(target, async () => {
+        const current = await this.canonical(scope, requested, scope.cwd, true);
+        this.assertScope(scope);
+        if (this.revocation !== revocation) throw denied();
+        const queuedParent = lstatSync(directory.path, { bigint: true });
+        if (current.path !== directory.path || queuedParent.dev !== originalParent.dev || queuedParent.ino !== originalParent.ino)
+          throw new ArtifactError("ARTIFACT_CHANGED", 409, "The destination directory changed. Nothing was created.");
+        if (mutation.kind !== "create-directory") {
+          temporary = resolve(directory.path, `.openpi-create-${randomUUID()}`);
+          const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+          try { await file.writeFile(bytes); await file.chmod(0o666 & ~process.umask()); await file.sync(); }
+          finally { await file.close(); }
+        }
+        const final = await this.canonical(scope, requested, scope.cwd, true);
+        // Session/revocation and parent checks cannot interleave with this no-clobber commit.
+        this.assertScope(scope);
+        if (this.revocation !== revocation) throw denied();
+        const parent = lstatSync(directory.path, { bigint: true });
+        if (final.path !== directory.path || parent.dev !== originalParent.dev || parent.ino !== originalParent.ino)
+          throw new ArtifactError("ARTIFACT_CHANGED", 409, "The destination directory changed. Nothing was created.");
+        if (mutation.kind === "create-directory") mkdirSync(target);
+        else linkSync(temporary!, target);
+        for (const cursor of this.listings.keys()) this.releaseListing(cursor);
+        const result: WorkspaceFileMutationResult = {
+          sessionId, sessionPath, path: relative(root, target).split(sep).join("/"),
+          kind: mutation.kind === "create-directory" ? "directory" : "file",
+          ...(mutation.kind !== "create-directory" ? { bytes: bytes.length } : {}),
+        };
+        return result;
+      });
+    } catch (error) { throw this.classify(error, true); }
+    finally { if (temporary) await unlink(temporary).catch(() => undefined); }
   }
 
   release(handle: string, sessionId: string) {
@@ -338,14 +406,15 @@ export class ArtifactReader {
     this.handles.delete(handle);
   }
 
-  private classify(error: unknown) {
+  private classify(error: unknown, write = false) {
     if (error instanceof ArtifactError) return error;
     const code = (error as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT" || code === "ENOTDIR") return new ArtifactError("ARTIFACT_MISSING", 404, "File no longer exists.");
     if (["EACCES", "EPERM", "ELOOP"].includes(code ?? "")) return denied();
-    return new ArtifactError("ARTIFACT_READ_ERROR", 500, "Unable to read this file.");
+    if (code === "EEXIST") return new ArtifactError("ARTIFACT_EXISTS", 409, "That name already exists. Choose another name; the original was not changed.");
+    return new ArtifactError(write ? "ARTIFACT_WRITE_ERROR" : "ARTIFACT_READ_ERROR", 500, write ? "Unable to write this file or directory." : "Unable to read this file.");
   }
 
   dispose() { this.disposed = true; this.revoke(); }
-  revoke() { this.handles.clear(); for (const cursor of this.listings.keys()) this.releaseListing(cursor); }
+  revoke() { this.revocation++; this.handles.clear(); for (const cursor of this.listings.keys()) this.releaseListing(cursor); }
 }

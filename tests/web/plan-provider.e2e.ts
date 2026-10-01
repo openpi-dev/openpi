@@ -734,6 +734,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
       .getByRole("button", { name: "准备实施提示", exact: true })
       .click();
     await expect(input).toHaveValue(/approved plan/);
+    const preparedDraft = await input.inputValue();
     await page.reload();
     await expect(page.getByRole("region", { name: "开发计划" })).toBeVisible();
     const refreshedPreviewSnapshot = await (
@@ -742,7 +743,7 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     expect(refreshedPreviewSnapshot.currentSessionId).toBe(session.sessionId);
     expect(refreshedPreviewSnapshot.runtime.plan).toBe("ready");
     expect(refreshedPreviewSnapshot.runtime.planRevision).toBe(readyRevision);
-    await expect(input).toHaveValue("");
+    await expect(input).toHaveValue(preparedDraft);
     expect(provider.requests).toHaveLength(3);
     await input.fill("Please try writing before I approve again.");
     await input.press("Enter");

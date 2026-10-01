@@ -6,6 +6,10 @@ Research records preserve sourced investigation and distinguish observations, in
 
 - [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection ([#446](https://github.com/openpi-dev/openpi/issues/446)).
 
+## Draft investigations
+
+- [`WEB_INTERACTION_COMPARISON_2026-09-30.md`](WEB_INTERACTION_COMPARISON_2026-09-30.md) — PR #598 竞品截图对照与后续 Web 迭代：基础交互、普通附件、原始子代理结果、第三栏、真实 Luna 文件读取；追加现场演示、工具菜单焦点、Codex / Maka 历史分页与导航、两小时阅读连续性及发布整合，保留独立冻结、失败、消融和未验证边界（[#639](https://github.com/openpi-dev/openpi/issues/639)、[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
 ## Validated investigations
 
 - [`WEB_DSH_COMPOSER_2026-09-29.md`](WEB_DSH_COMPOSER_2026-09-29.md) — DSH 输入区参考、原生目标入口和压缩消息保留/投递边界（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。

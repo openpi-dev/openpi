@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ArtifactMetadata } from "../../../../protocol/artifacts.ts";
 import type { WebClient } from "../../protocol/client.ts";
+import { useWorkbarReadingState } from "../workbar/workbar-reading-state.ts";
 import type { OfficePreview, PreviewTable } from "./preview-data.ts";
 import { sandboxDocument } from "./preview-data.ts";
 
@@ -71,15 +72,20 @@ function OfficeDocument({
   data,
   extension,
   name,
+  initialPage,
+  onReadingChange,
 }: {
   data: ArrayBuffer;
   extension: string;
   name: string;
+  initialPage?: number;
+  onReadingChange: (page: number, scale?: number) => void;
 }) {
   const { t } = useTranslation();
   const [result, setResult] = useState<OfficePreview | null>(null);
   const [error, setError] = useState("");
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(initialPage ?? 0);
+  useEffect(() => onReadingChange(page), [onReadingChange, page]);
   useEffect(() => {
     const worker = new Worker(new URL("./office-worker.ts", import.meta.url), {
       type: "module",
@@ -176,13 +182,24 @@ function OfficeDocument({
   );
 }
 
-function PdfDocument({ data }: { data: ArrayBuffer }) {
+function PdfDocument({
+  data,
+  initialPage,
+  initialScale,
+  onReadingChange,
+}: {
+  data: ArrayBuffer;
+  initialPage?: number;
+  initialScale?: number;
+  onReadingChange: (page: number, scale?: number) => void;
+}) {
   const { t } = useTranslation();
   const [pdf, setPdf] = useState<import("pdfjs-dist").PDFDocumentProxy | null>(
     null,
   );
-  const [page, setPage] = useState(1);
-  const [scale, setScale] = useState(1);
+  const [page, setPage] = useState(initialPage ?? 1);
+  const [scale, setScale] = useState(initialScale ?? 1);
+  useEffect(() => onReadingChange(page, scale), [onReadingChange, page, scale]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(true);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -330,6 +347,21 @@ export default function DocumentPreview({
   client: WebClient;
 }) {
   const { t } = useTranslation();
+  const reading = useWorkbarReadingState();
+  const saved = reading?.artifact?.document;
+  const savedDocument =
+    saved?.path === artifact.path && saved.revision === artifact.revision
+      ? saved
+      : undefined;
+  const onReadingChange = (page: number, scale?: number) => {
+    if (reading?.artifact?.reference === encodeURI(artifact.path))
+      reading.artifact.document = {
+        path: artifact.path,
+        revision: artifact.revision,
+        page,
+        scale,
+      };
+  };
   const [data, setData] = useState<ArrayBuffer | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -357,8 +389,19 @@ export default function DocumentPreview({
   if (!data) return <p role="status">{t("readingFile")}</p>;
   const extension = artifact.name.split(".").at(-1)?.toLowerCase() ?? "";
   return extension === "pdf" ? (
-    <PdfDocument data={data} />
+    <PdfDocument
+      data={data}
+      initialPage={savedDocument?.page}
+      initialScale={savedDocument?.scale}
+      onReadingChange={onReadingChange}
+    />
   ) : (
-    <OfficeDocument data={data} extension={extension} name={artifact.name} />
+    <OfficeDocument
+      data={data}
+      extension={extension}
+      name={artifact.name}
+      initialPage={savedDocument?.page}
+      onReadingChange={onReadingChange}
+    />
   );
 }

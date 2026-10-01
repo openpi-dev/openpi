@@ -307,7 +307,7 @@ it("shows only running, unread completion and attention; stopped and unknown rem
   expect(document.querySelector(".session-state-running")).toBeNull();
 });
 
-it("acknowledges only the visible selected completion and keeps a new turn unread", () => {
+it("acknowledges only an exact exposed result and keeps a new turn unread", () => {
   vi.useFakeTimers();
   try {
     const completed = session(
@@ -317,7 +317,12 @@ it("acknowledges only the visible selected completion and keeps a new turn unrea
     );
     completed.execution = {
       status: "unknown",
-      lastTurn: { commandId: "first", finishedAt: 1, outcome: "completed" },
+      lastTurn: {
+        commandId: "first",
+        finishedAt: 1,
+        outcome: "completed",
+        resultEntryId: "first-result",
+      },
     };
     const data = snapshot([completed]);
     data.selectedSession = {
@@ -335,18 +340,34 @@ it("acknowledges only the visible selected completion and keeps a new turn unrea
       },
     };
     const view = mount(data, { selectedPath: completed.path, connected: true });
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    fireEvent(document, new Event("visibilitychange"));
+    // Selection and elapsed time cannot prove that even an empty view was read.
     act(() => vi.advanceTimersByTime(5000));
     expect(document.querySelector(".session-state-completed")).toBeTruthy();
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    fireEvent(document, new Event("visibilitychange"));
-    act(() => vi.advanceTimersByTime(4000));
+    view.rerender({
+      completedResultSeen: {
+        sessionId: completed.id,
+        sessionPath: completed.path,
+        commandId: "first",
+        finishedAt: 1,
+        resultEntryId: "wrong-result",
+      },
+    });
+    expect(document.querySelector(".session-state-completed")).toBeTruthy();
+    view.rerender({
+      completedResultSeen: {
+        sessionId: completed.id,
+        sessionPath: completed.path,
+        commandId: "first",
+        finishedAt: 1,
+        resultEntryId: "first-result",
+      },
+    });
     expect(document.querySelector(".session-state-completed")).toBeNull();
     completed.execution.lastTurn = {
       commandId: "second",
       finishedAt: 2,
       outcome: "completed",
+      resultEntryId: "second-result",
     };
     view.rerender({ snapshot: { ...data } });
     expect(document.querySelector(".session-state-completed")).toBeTruthy();

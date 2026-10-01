@@ -13,6 +13,8 @@ import {
   type CapabilityDiscoveryMode,
   DEFAULT_WEB_CHAT_FONT_SIZE,
   DEFAULT_WEB_CHAT_WIDTH,
+  DEFAULT_WEB_SIDEBAR_WIDTH,
+  DEFAULT_WEB_AUXILIARY_WIDTH,
   DETAIL_DISPLAYS,
   FOOTER_ITEMS,
   FOOTER_LAYOUT_ITEMS,
@@ -26,11 +28,15 @@ import {
   inspectSetupConfig,
   MAX_WEB_CHAT_FONT_SIZE,
   MAX_WEB_CHAT_WIDTH,
+  MAX_WEB_SIDEBAR_WIDTH,
+  MAX_WEB_AUXILIARY_WIDTH,
   MAX_SESSION_CHILD_EXECUTION_LIMIT,
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
   MIN_WEB_CHAT_FONT_SIZE,
   MIN_WEB_CHAT_WIDTH,
+  MIN_WEB_SIDEBAR_WIDTH,
+  MIN_WEB_AUXILIARY_WIDTH,
   type MyPiSetupConfig,
   POST_EDIT_COMMAND_MAX_CHARS,
   REASONING_LEVELS,
@@ -164,6 +170,8 @@ export function buildInteractiveSetupPrompt(options: {
     '- "only use OpenPI capabilities when I ask" → capability_discovery=explicit',
     '- "use dark theme in OpenPI Web" → ui_web_theme=dark',
     '- "set OpenPI Web chat width to 960px" → ui_web_chat_width=960',
+    `- Web sidebar width defaults to ${DEFAULT_WEB_SIDEBAR_WIDTH}px (${MIN_WEB_SIDEBAR_WIDTH}-${MAX_WEB_SIDEBAR_WIDTH}); tool pane width defaults to ${DEFAULT_WEB_AUXILIARY_WIDTH}px (${MIN_WEB_AUXILIARY_WIDTH}-${MAX_WEB_AUXILIARY_WIDTH}). Dragging a pane saves the same canonical preferences; small viewports temporarily clamp the visible width.`,
+    '- "use a 320px sidebar and 600px tool pane" → ui_web_sidebar_width=320, ui_web_auxiliary_width=600',
     '- "use 16px chat text and expand thinking by default" → ui_web_chat_font_size=16, ui_web_expand_thinking=true',
     '- "switch footer to powerline" → ui_footer_preset=powerline',
     '- "use mono powerline" → ui_footer_preset=powerline-mono',
@@ -454,6 +462,20 @@ export default function openPiSetup(pi: ExtensionAPI) {
           description: `OpenPI Web chat font size in pixels (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}, default ${DEFAULT_WEB_CHAT_FONT_SIZE}). Omit to preserve the current value.`,
         }),
       ),
+      ui_web_sidebar_width: Type.Optional(
+        Type.Integer({
+          minimum: MIN_WEB_SIDEBAR_WIDTH,
+          maximum: MAX_WEB_SIDEBAR_WIDTH,
+          description: `OpenPI Web sidebar width in pixels (default ${DEFAULT_WEB_SIDEBAR_WIDTH}). Omit to preserve the current value.`,
+        }),
+      ),
+      ui_web_auxiliary_width: Type.Optional(
+        Type.Integer({
+          minimum: MIN_WEB_AUXILIARY_WIDTH,
+          maximum: MAX_WEB_AUXILIARY_WIDTH,
+          description: `OpenPI Web tool pane width in pixels (default ${DEFAULT_WEB_AUXILIARY_WIDTH}). Omit to preserve the current value.`,
+        }),
+      ),
       ui_web_expand_thinking: Type.Optional(
         Type.Boolean({
           description:
@@ -622,6 +644,10 @@ export default function openPiSetup(pi: ExtensionAPI) {
               (params.ui_web_theme as WebTheme | undefined) ??
               current.ui.webTheme,
             webChatWidth: params.ui_web_chat_width ?? current.ui.webChatWidth,
+            webSidebarWidth:
+              params.ui_web_sidebar_width ?? current.ui.webSidebarWidth,
+            webAuxiliaryWidth:
+              params.ui_web_auxiliary_width ?? current.ui.webAuxiliaryWidth,
             webChatFontSize:
               params.ui_web_chat_font_size ?? current.ui.webChatFontSize,
             webExpandThinking:

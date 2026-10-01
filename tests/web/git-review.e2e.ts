@@ -12,6 +12,211 @@ import type { WebRuntimeController } from "../../web/runtime/types.ts";
 
 const exec = promisify(execFile);
 
+test("explicit review bases recover missing/deleted refs and lazy detail drift uses the latest gate", async ({
+  browser,
+}, testInfo) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-review-base-browser-"));
+  const git = (...args: string[]) => exec("git", ["-C", root, ...args]);
+  await git("init", "-b", "release");
+  await git("config", "user.name", "OpenPI Fixture");
+  await git("config", "user.email", "fixture@example.invalid");
+  await writeFile(join(root, "base.txt"), "base\n");
+  await git("add", ".");
+  await git("commit", "-m", "base");
+  const initial = (await git("rev-parse", "HEAD")).stdout.trim();
+  await writeFile(join(root, "release-only.txt"), "release only\n");
+  await git("add", ".");
+  await git("commit", "-m", "release");
+  await git("checkout", "-b", "feature");
+  await writeFile(join(root, "feature.txt"), "old feature\n");
+  await git("add", ".");
+  await git("commit", "-m", "feature");
+  const manager = SessionManager.inMemory(root);
+  let modelCalls = 0;
+  const runtime: WebRuntimeController = {
+    cwd: root,
+    workspaceSelected: true,
+    sessionDirectory: join(root, ".git", "sessions"),
+    sessionManager: manager,
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
+    isIdle: () => true,
+    getActiveTurn: () => undefined,
+    listModels: () => [],
+    setModel: async () => {
+      throw new Error("unused");
+    },
+    newSession: async () => ({
+      cancelled: true,
+      sessionId: manager.getSessionId(),
+    }),
+    switchSession: async () => ({ cancelled: true }),
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
+    subscribe: () => () => {},
+    dispose: async () => {},
+    sendPrompt: async () => {
+      modelCalls++;
+      throw new Error("Review must not call a model");
+    },
+  };
+  const host = new WebHost({ runtime });
+  const context = await browser.newContext({
+    viewport: { width: 1600, height: 1000 },
+    locale: "zh-CN",
+  });
+  const page = await context.newPage();
+  let releaseDetail = () => {};
+  try {
+    await host.start();
+    await page.goto(host.origin);
+    await page.getByRole("button", { name: "打开工具", exact: true }).click();
+    await page
+      .locator(".workbar-launcher")
+      .getByRole("button", { name: /^变更/u })
+      .click();
+    const review = page.locator(".review-panel");
+    await review
+      .getByRole("combobox", { name: "变更范围" })
+      .selectOption("branch");
+    await expect(review.getByRole("alert")).toContainText(
+      "没有可用的默认对比分支",
+    );
+    await expect(review.locator("[data-review-file]")).toHaveCount(0);
+    const chooseBase = async (query: string, refLabel: string) => {
+      await review
+        .getByRole("button", { name: "对比分支", exact: true })
+        .click();
+      const search = page.getByRole("searchbox", {
+        name: "搜索分支",
+        exact: true,
+      });
+      await expect(search).toBeFocused();
+      await search.fill(query);
+      const option = page.getByRole("option", {
+        name: new RegExp(`^${refLabel}`),
+      });
+      await expect(option).toBeEnabled();
+      await search.press("ArrowDown");
+      await expect(option).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(
+        review.getByRole("button", { name: "对比分支", exact: true }),
+      ).toBeFocused();
+    };
+    await page.screenshot({
+      path: testInfo.outputPath("review-no-base-explicit-feedback.png"),
+    });
+    await chooseBase("release", "release");
+    await expect(
+      review.locator('[data-review-file="feature.txt"]'),
+    ).toBeVisible();
+    await expect(
+      review.locator('[data-review-file="release-only.txt"]'),
+    ).toHaveCount(0);
+    const featureViewed = review.getByRole("checkbox", {
+      name: "标记 feature.txt 为已查看",
+      exact: true,
+    });
+    await expect(featureViewed).not.toBeChecked();
+    await featureViewed.focus();
+    await page.keyboard.press("Space");
+    await expect(featureViewed).toBeChecked();
+    await expect(review.getByRole("figure")).toHaveCount(0);
+    await expect(review).toContainText("已查看 1 / 已加载 1 个文件");
+    await page.screenshot({
+      path: testInfo.outputPath("review-explicit-release.png"),
+    });
+    await git("branch", "main", initial);
+    await review.getByRole("button", { name: "刷新变更", exact: true }).click();
+    await chooseBase("main", "main");
+    await expect(
+      review.locator('[data-review-file="release-only.txt"]'),
+    ).toBeVisible();
+    await expect(featureViewed).not.toBeChecked();
+    await chooseBase("release", "release");
+    await expect(
+      review.locator('[data-review-file="release-only.txt"]'),
+    ).toHaveCount(0);
+    await expect(featureViewed).not.toBeChecked();
+    await featureViewed.check();
+    const detailGate = new Promise<void>((resolve) => {
+      releaseDetail = resolve;
+    });
+    let detailReached = () => {};
+    const reached = new Promise<void>((resolve) => {
+      detailReached = resolve;
+    });
+    let paused = false;
+    await page.route("**/api/git-review?*", async (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      if (!paused && query.get("file") === "feature.txt") {
+        paused = true;
+        expect(query.get("baseRef")).toBe("refs/heads/release");
+        expect(query.get("revision")).toMatch(/^[a-f0-9]{64}$/u);
+        detailReached();
+        await detailGate;
+      }
+      await route.continue();
+    });
+    await review.locator('[data-review-file="feature.txt"]').click();
+    await reached;
+    await writeFile(
+      join(root, "feature.txt"),
+      "NEW AFTER SUMMARY\nsecond line\nthird line\n",
+    );
+    releaseDetail();
+    await expect(
+      review.getByRole("button", { name: "查看最新差异", exact: true }),
+    ).toBeVisible();
+    await expect(review.getByRole("figure")).toHaveCount(0);
+    const currentFeatureViewed = review.getByRole("checkbox", {
+      name: "标记当前文件 feature.txt 为已查看",
+      exact: true,
+    });
+    await expect(currentFeatureViewed).toBeChecked();
+    await page.screenshot({
+      path: testInfo.outputPath("review-detail-drift-rejected.png"),
+    });
+    await review
+      .getByRole("button", { name: "查看最新差异", exact: true })
+      .click();
+    await expect(review.getByRole("figure")).toContainText("NEW AFTER SUMMARY");
+    await expect(currentFeatureViewed).not.toBeChecked();
+    await page.screenshot({
+      path: testInfo.outputPath("review-detail-latest-confirmed.png"),
+    });
+    await page.unroute("**/api/git-review?*");
+    await git("branch", "-D", "release");
+    await review.getByRole("button", { name: "刷新变更", exact: true }).click();
+    await expect(review.getByRole("alert")).toContainText(
+      "所选对比分支已不可用",
+    );
+    await chooseBase("main", "main");
+    await expect(review.getByRole("alert")).toHaveCount(0);
+    await expect(
+      review.locator('[data-review-file="release-only.txt"]'),
+    ).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await review.getByRole("button", { name: "对比分支", exact: true }).click();
+    await expect(
+      page.getByRole("searchbox", { name: "搜索分支" }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath("review-branch-picker-mobile.png"),
+    });
+    expect(modelCalls).toBe(0);
+  } finally {
+    releaseDetail();
+    await context.close();
+    await host.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("real Git rename details and index-only edits refresh the open browser diff", async ({
   browser,
 }, testInfo) => {

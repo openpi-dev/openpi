@@ -21,6 +21,9 @@ export function ReviewFileTree({
   searching,
   onToggle,
   onSelect,
+  viewed,
+  onViewedChange,
+  viewedLimitReached = false,
 }: {
   files: WebGitReviewFile[];
   selectedPath: string | null;
@@ -28,6 +31,9 @@ export function ReviewFileTree({
   searching: boolean;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
+  viewed?: ReadonlySet<string>;
+  onViewedChange?: (path: string, checked: boolean) => void;
+  viewedLimitReached?: boolean;
 }) {
   const { t } = useTranslation();
   const root = useMemo(() => {
@@ -86,7 +92,7 @@ export function ReviewFileTree({
             ? FileText
             : FileCode2;
         return (
-          <li key={file.path}>
+          <li key={file.path} className="review-tree-file-row">
             <button
               className="session-review-file review-tree-file"
               type="button"
@@ -112,6 +118,22 @@ export function ReviewFileTree({
                 )}
               </span>
             </button>
+            {onViewedChange && (
+              <label
+                className="review-viewed-control"
+                title={t("gitReviewMarkViewed", { path: file.path })}
+              >
+                <input
+                  type="checkbox"
+                  aria-label={t("gitReviewMarkViewed", { path: file.path })}
+                  checked={viewed?.has(file.path) ?? false}
+                  disabled={viewedLimitReached && !viewed?.has(file.path)}
+                  onChange={(event) =>
+                    onViewedChange(file.path, event.currentTarget.checked)
+                  }
+                />
+              </label>
+            )}
           </li>
         );
       })}

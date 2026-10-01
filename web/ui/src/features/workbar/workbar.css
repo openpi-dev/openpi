@@ -8,6 +8,7 @@
 
 .app-shell.with-workbar-panel.center-collapsed {
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
 .app-shell.with-workbar-panel.center-collapsed.sidebar-collapsed {
@@ -15,8 +16,68 @@
 }
 
 .app-shell.with-workbar-panel.center-collapsed > .conversation-shell {
+  display: flex;
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.app-shell.with-workbar-panel.center-collapsed > .session-sidebar,
+.app-shell.with-workbar-panel.center-collapsed > .sidebar-expand {
+  grid-row: 1 / -1;
+}
+
+.app-shell.with-workbar-panel.center-collapsed > .workbar-panel {
+  grid-column: 2;
+  grid-row: 1;
+  height: 100%;
+}
+
+.app-shell.with-workbar-panel.center-collapsed > .conversation-shell > :not(.composer-dock):not(.notice):not(.workbar-chat-context) {
   display: none;
 }
+
+.app-shell.with-workbar-panel.center-collapsed > .conversation-shell .composer-dock {
+  position: static;
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.workbar-back-to-chat {
+  display: none;
+  min-height: 32px;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workbar-back-to-chat:hover { background: var(--sidebar-hover); color: var(--text); }
+.workbar-back-to-chat > svg { width: 14px; height: 14px; }
+.app-shell.with-workbar-panel.center-collapsed .workbar-back-to-chat { display: flex; }
+
+.workbar-chat-context {
+  display: none;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workbar-chat-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbar-chat-status { flex: none; }
+.workbar-chat-context > button { flex: none; border: 0; border-radius: 4px; padding: 2px 4px; color: var(--accent); background: transparent; font-size: inherit; cursor: pointer; }
+.workbar-chat-context > button:hover { background: var(--sidebar-hover); }
+.app-shell.with-workbar-panel.center-collapsed .workbar-chat-context:not([hidden]) { display: flex; }
 
 .workbar-panel {
   display: flex;
@@ -719,9 +780,9 @@
   .app-shell.with-workbar-panel,
   .app-shell.with-workbar-panel.sidebar-collapsed {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .with-workbar-panel > .conversation-shell,
   .with-workbar-panel > .session-sidebar,
   .with-workbar-panel > .sidebar-expand {
     display: none;
@@ -729,7 +790,42 @@
 
   .workbar-panel {
     grid-column: 1 / -1;
+    grid-row: 1;
+    height: 100%;
     border-left: 0;
+  }
+
+  .app-shell.with-workbar-panel > .conversation-shell {
+    display: flex;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    flex-direction: column;
+  }
+
+  .app-shell.with-workbar-panel > .conversation-shell > :not(.composer-dock):not(.notice):not(.workbar-chat-context) {
+    display: none;
+  }
+
+  .app-shell.with-workbar-panel > .conversation-shell .composer-dock {
+    position: static;
+    padding: 8px 12px max(10px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+  }
+
+  .with-workbar-panel .composer {
+    min-height: 88px;
+    padding: 9px 12px 8px;
+  }
+
+  .with-workbar-panel .composer textarea {
+    min-height: 36px;
+    max-height: min(140px, 25dvh);
+  }
+
+  .with-workbar-panel .workbar-chat-context:not([hidden]) { display: flex; padding-inline: 12px; }
+
+  .workbar-back-to-chat {
+    display: flex;
   }
 }
 

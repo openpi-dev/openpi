@@ -42,6 +42,7 @@ import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   WEB_MAX_SNAPSHOT_BYTES,
   WEB_PROMPT_IMAGE_MAX_BYTES,
+  WEB_PROMPT_IMAGE_MAX_BASE64_CHARS,
   WEB_PROMPT_IMAGE_MAX_COUNT,
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
   WEB_PROMPT_MAX_TEXT_LENGTH,
@@ -59,6 +60,7 @@ import { elapsed, traceWeb } from "../trace.ts";
 import { reduceLiveTools } from "../protocol/live-tools.ts";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import { ArtifactError, ArtifactReader } from "./artifacts.ts";
+import { WEB_PROMPT_FILE_MAX_BYTES } from "../protocol/prompt-files.ts";
 import {
   GitReviewBaselineStore,
   type GitReviewService,
@@ -71,11 +73,15 @@ import {
 import { registerWebQuestionBridge } from "../../extensions/ask-user/web-bridge.ts";
 import { isWebControllerId, WEB_QUESTION_BODY_BYTES } from "../protocol/questions.ts";
 import { WebQuestionBroker } from "./questions.ts";
+import { WEB_TRANSCRIPT_SEARCH_MAX_QUERY_CHARACTERS } from "../search/transcript-search.ts";
+import { persistPromptFiles, PromptFileError, WEB_PROMPT_FILES_BODY_BYTES } from "./prompt-files.ts";
 
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../dist/", import.meta.url);
 const MAX_COMMAND_BYTES = 16 * 1024;
-const MAX_PROMPT_REQUEST_BYTES = 12 * 1024 * 1024;
+const MAX_PROMPT_REQUEST_BYTES =
+  Math.ceil(WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES / 3) * 4 +
+  WEB_PROMPT_MAX_TEXT_LENGTH * 6 + 64 * 1024;
 const MAX_SSE_CLIENTS = 8;
 const MAX_TERMINAL_STREAMS = 8;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
@@ -141,9 +147,6 @@ function parsePromptImages(value: unknown) {
       !promptImageMimeTypes.has(mimeType as WebPromptImage["mimeType"]) ||
       typeof data !== "string" ||
       data.length === 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
-        data,
-      ) ||
       (name !== undefined &&
         (typeof name !== "string" || name.length === 0 || name.length > 255)) ||
       Object.keys(item).some(
@@ -152,7 +155,11 @@ function parsePromptImages(value: unknown) {
     ) {
       return { ok: false as const, error: "prompt image metadata is invalid" };
     }
+    if (data.length > Math.ceil(WEB_PROMPT_IMAGE_MAX_BYTES / 3) * 4)
+      return { ok: false as const, error: "prompt image data is invalid or too large" };
     const bytes = Buffer.from(data, "base64");
+    if (bytes.toString("base64") !== data)
+      return { ok: false as const, error: "prompt image metadata is invalid" };
     if (
       bytes.length === 0 ||
       bytes.length > WEB_PROMPT_IMAGE_MAX_BYTES ||
@@ -216,6 +223,8 @@ type PromptAdmission = {
   readonly imageSignature: string;
   readonly planRevision?: string;
   readonly controllerId?: string;
+  readonly streamingBehavior: "followUp" | "steer";
+  readonly expectedTurnCommandId?: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
 };
@@ -300,6 +309,7 @@ export class WebHost {
   private readonly questions: WebQuestionBroker;
   private questionSession?: object;
   private unregisterQuestions?: () => void;
+  private promptFileUploads = 0;
 
   constructor(options: WebHostOptions) {
     this.runtime = options.runtime;
@@ -554,6 +564,7 @@ export class WebHost {
       await this.handle(request, response);
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
+      if (error instanceof PromptFileError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
       if (error instanceof ArtifactError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
       if (error instanceof WebRequestError) {
         return this.json(response, error.statusCode, {
@@ -574,8 +585,11 @@ export class WebHost {
     if (request.method === "GET" || request.method === "HEAD") return false;
     const pathname = new URL(request.url ?? "/", `http://${HOST}`).pathname;
     if (pathname === "/api/prompt") return false;
+    if (pathname === "/api/prompt-files") return true;
+    if (pathname === "/api/artifacts/save" || pathname === "/api/files/mutate") return true;
     if (pathname === "/api/turns/cancel") return true;
     if (pathname === "/api/questions/answer") return true;
+    if (pathname === "/api/session/fork") return true;
     if (pathname.startsWith("/api/plan")) return true;
     if (pathname === "/api/compact" || pathname === "/api/prompt-queue") return true;
     return pathname.startsWith("/api/workspaces") ||
@@ -794,9 +808,26 @@ export class WebHost {
             error: "the interactive terminal expired or closed",
           });
     }
-    if (url.pathname.startsWith("/api/artifacts/")) {
+    if (url.pathname.startsWith("/api/artifacts/") || url.pathname === "/api/files/mutate") {
       try { await this.adapter.requireWorkspace(this.runtime.cwd); }
       catch { throw new ArtifactError("ARTIFACT_DENIED", 403, "File access requires an available Session workspace."); }
+    }
+    if (url.pathname === "/api/files/mutate") {
+      if (request.method !== "POST") return this.json(response, 405, { error: "Workspace file changes require POST" });
+      const body = await this.readJson(request, Math.ceil(WEB_PROMPT_FILE_MAX_BYTES / 3) * 4 + 64 * 1024);
+      const imported = body.kind === "import-file";
+      if (body.access !== "write-workspace-file" || typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 ||
+        typeof body.sessionPath !== "string" || !body.sessionPath || body.sessionPath.length > 4096 ||
+        typeof body.directory !== "string" || typeof body.name !== "string" ||
+        !["create-file", "create-directory", "import-file"].includes(String(body.kind)) ||
+        Object.keys(body).some((key) => !["access", "sessionId", "sessionPath", "kind", "directory", "name", ...(imported ? ["data"] : [])].includes(key)) ||
+        (imported && typeof body.data !== "string"))
+        return this.json(response, 400, { error: "An explicit exact-Session workspace-file change is required" });
+      const common = { directory: body.directory, name: body.name };
+      const result = await this.artifacts.mutateFile(body.sessionId, body.sessionPath,
+        body.kind === "import-file" && typeof body.data === "string" ? { ...common, kind: "import-file", data: body.data } :
+        { ...common, kind: body.kind === "create-directory" ? "create-directory" : "create-file" });
+      return this.json(response, 201, result);
     }
     if (url.pathname === "/api/artifacts/resolve") {
       if (request.method !== "POST") return this.json(response, 405, { error: "File access requires POST" });
@@ -1070,13 +1101,15 @@ export class WebHost {
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
-      const { theme, chatWidth, chatFontSize, expandThinking, pinnedSort } = body;
+      const { theme, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, pinnedSort } = body;
       // Browser appearance is package-wide and independent of agent execution.
       // Keep this surface restricted to presentation fields, including on Plan turns.
-      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "chatFontSize", "expandThinking", "pinnedSort"].includes(key)) ||
+      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "pinnedSort"].includes(key)) ||
         (pinnedSort !== undefined && pinnedSort !== "manual" && pinnedSort !== "updated") ||
         (theme !== undefined && !isWebTheme(theme)) ||
         (chatWidth !== undefined && (typeof chatWidth !== "number" || !Number.isInteger(chatWidth) || chatWidth < 820 || chatWidth > 2000)) ||
+        (sidebarWidth !== undefined && (typeof sidebarWidth !== "number" || !Number.isInteger(sidebarWidth) || sidebarWidth < 220 || sidebarWidth > 420)) ||
+        (auxiliaryWidth !== undefined && (typeof auxiliaryWidth !== "number" || !Number.isInteger(auxiliaryWidth) || auxiliaryWidth < 360 || auxiliaryWidth > 720)) ||
         (chatFontSize !== undefined && (typeof chatFontSize !== "number" || !Number.isInteger(chatFontSize) || chatFontSize < 12 || chatFontSize > 24)) ||
         (expandThinking !== undefined && typeof expandThinking !== "boolean")) {
         return this.json(response, 400, { error: "Invalid Web appearance preferences" });
@@ -1088,6 +1121,8 @@ export class WebHost {
             ...current.ui,
             ...(theme !== undefined ? { webTheme: theme } : {}),
             ...(chatWidth !== undefined ? { webChatWidth: chatWidth } : {}),
+            ...(sidebarWidth !== undefined ? { webSidebarWidth: sidebarWidth } : {}),
+            ...(auxiliaryWidth !== undefined ? { webAuxiliaryWidth: auxiliaryWidth } : {}),
             ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
             ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
             ...(pinnedSort !== undefined ? { webPinnedSort: pinnedSort } : {}),
@@ -1142,6 +1177,19 @@ export class WebHost {
         });
       }
     }
+    if (url.pathname === "/api/prompt-files") {
+      if (request.method !== "POST") return this.json(response, 405, { error: "File uploads require POST." });
+      // Reserve capacity before reading/parsing any large attachment payload.
+      if (this.promptFileUploads >= 2) {
+        request.resume();
+        return this.json(response, 429, { code: "PROMPT_FILES_BUSY", error: "Two file uploads are already in progress. Try again shortly." });
+      }
+      this.promptFileUploads++;
+      try {
+        const body = await this.readJson(request, WEB_PROMPT_FILES_BODY_BYTES);
+        return this.json(response, 200, await persistPromptFiles(this.runtime, body));
+      } finally { this.promptFileUploads--; }
+    }
     if (url.pathname === "/api/prompt" && request.method === "POST") {
       const requestStarted = performance.now();
       const body = await this.readJson(request, MAX_PROMPT_REQUEST_BYTES);
@@ -1194,6 +1242,17 @@ export class WebHost {
       if (body.controllerId !== undefined && !isWebControllerId(body.controllerId)) {
         return this.json(response, 400, { code: "INVALID_CONTROLLER", error: "a valid browser controller id is required" });
       }
+      if (body.streamingBehavior !== undefined && body.streamingBehavior !== "followUp" && body.streamingBehavior !== "steer") {
+        return this.json(response, 400, { code: "INVALID_PROMPT_DELIVERY", error: "streamingBehavior must be followUp or steer" });
+      }
+      const streamingBehavior = body.streamingBehavior === "steer" ? "steer" : "followUp";
+      if (streamingBehavior === "steer") {
+        if (typeof body.expectedTurnCommandId !== "string" || body.expectedTurnCommandId.length === 0 || body.expectedTurnCommandId.length > 128 || /[\u0000-\u001f]/u.test(body.expectedTurnCommandId) || body.planRevision !== undefined) {
+          return this.json(response, 400, { code: "INVALID_PROMPT_DELIVERY", error: "steering requires an exact active turn and cannot approve a plan" });
+        }
+      } else if (body.expectedTurnCommandId !== undefined) {
+        return this.json(response, 400, { code: "INVALID_PROMPT_DELIVERY", error: "expectedTurnCommandId applies only to steering" });
+      }
       const existing = this.promptAdmissions.get(commandId);
       if (existing) {
         if (
@@ -1202,7 +1261,9 @@ export class WebHost {
           existing.content !== content ||
           existing.imageSignature !== imageSignature ||
           existing.planRevision !== body.planRevision ||
-          existing.controllerId !== body.controllerId
+          existing.controllerId !== body.controllerId ||
+          existing.streamingBehavior !== streamingBehavior ||
+          existing.expectedTurnCommandId !== body.expectedTurnCommandId
         ) {
           return this.json(response, 409, {
             code: "COMMAND_CONFLICT",
@@ -1253,6 +1314,9 @@ export class WebHost {
         imageSignature,
         body.planRevision,
         body.controllerId,
+        streamingBehavior,
+        body.expectedTurnCommandId,
+        body.streamingBehavior !== undefined,
       );
       const result = await admission.completion;
       return this.json(response, result.status, result.body);
@@ -1381,6 +1445,30 @@ export class WebHost {
         return this.json(response, 200, { sessionId: body.sessionId, ...plan });
       } catch (error) {
         const failure = this.runtimeRequestFailure(error, "PLAN_SELECTION_FAILED", "Plan mode could not be changed");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
+    }
+    if (url.pathname === "/api/session/fork" && request.method === "POST") {
+      const body = await this.readJson(request, 8192);
+      const keys = Object.keys(body);
+      if (keys.length !== 4 || !keys.every((key) => ["commandId", "sessionId", "sessionPath", "entryId"].includes(key)) ||
+          ![body.commandId, body.sessionId, body.entryId].every((value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/u.test(value)) ||
+          !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096 ||
+          typeof body.commandId !== "string" || typeof body.sessionId !== "string" || typeof body.entryId !== "string") {
+        return this.json(response, 400, { code: "INVALID_SESSION_FORK", error: "An exact Session, saved message, and command identity are required" });
+      }
+      if (!this.runtime.forkSession) return this.json(response, 501, { code: "SESSION_FORK_UNAVAILABLE", error: "Native Session forking is unavailable" });
+      try {
+        const source = await this.adapter.requireSession(body.sessionPath).catch(() => undefined);
+        if (!source || source.id !== body.sessionId) throw new WebRuntimeRequestError("The exact source Session is unavailable", "SESSION_CONFLICT", 409);
+        if (source.source !== "web-session") throw new WebRuntimeRequestError("Only a Web-owned Session can fork", "SESSION_FORK_UNAVAILABLE", 409);
+        const result = await this.runtime.forkSession({ commandId: body.commandId, sessionId: body.sessionId, sessionPath: body.sessionPath, entryId: body.entryId });
+        if (result.state === "forked" && result.sessionPath && result.sessionId) {
+          this.publish("session_forked", { ...result });
+        }
+        return this.json(response, 200, result);
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "SESSION_FORK_FAILED", "The Session fork could not be completed");
         return this.json(response, failure.status, { code: failure.code, error: failure.error });
       }
     }
@@ -1656,7 +1744,7 @@ export class WebHost {
         : await this.adapter.getSessionSources(sessionId, path, Number(offset), revision);
       if (!result) return this.json(response, 404, { error: "Session source unavailable" });
       if ("changed" in result) return this.json(response, 409, { error: "Session sources changed; refresh the list" });
-      return this.json(response, 200, result);
+      return this.json(response, 200, result, image ? WEB_PROMPT_IMAGE_MAX_BASE64_CHARS + 256 : WEB_MAX_SNAPSHOT_BYTES);
     }
     if (url.pathname === "/api/git-review") {
       const sessionId = url.searchParams.get("sessionId");
@@ -1665,11 +1753,14 @@ export class WebHost {
       const filePath = url.searchParams.get("file");
       const offset = url.searchParams.get("offset");
       const expectedRevision = url.searchParams.get("revision");
+      const baseRef = url.searchParams.get("baseRef");
       if (
         !["unstaged", "staged", "branch", "session"].includes(source) ||
         (offset !== null && (!/^\d{1,4}$/u.test(offset) || filePath !== null)) ||
         (offset !== null && Number(offset) > 0 && !expectedRevision) ||
         (expectedRevision !== null && (!/^[a-f0-9]{64}$/u.test(expectedRevision) || (offset === null && filePath === null))) ||
+        (baseRef !== null && (source !== "branch" || baseRef.length > 1024 || !/^refs\/(?:heads|remotes)\/.+/u.test(baseRef) || /[\u0000-\u0020\u007f]/u.test(baseRef))) ||
+        url.searchParams.getAll("baseRef").length > 1 ||
         url.searchParams.getAll("offset").length > 1 ||
         url.searchParams.getAll("revision").length > 1 ||
         (filePath !== null && (!filePath || filePath.length > 4096 || filePath.includes("\0"))) ||
@@ -1681,7 +1772,7 @@ export class WebHost {
         url.searchParams.getAll("sessionId").length !== 1 ||
         url.searchParams.getAll("path").length !== 1 ||
         [...url.searchParams.keys()].some(
-          (key) => !["sessionId", "path", "source", "file", "offset", "revision"].includes(key),
+          (key) => !["sessionId", "path", "source", "file", "offset", "revision", "baseRef"].includes(key),
         )
       ) {
         return this.json(response, 400, {
@@ -1705,6 +1796,7 @@ export class WebHost {
           ...(offset === null ? {} : { offset: Number(offset) }),
           ...(expectedRevision === null ? {} : { expectedRevision }),
           ...(filePath === null ? {} : { filePath }),
+          ...(baseRef === null ? {} : { baseRef }),
         }),
       );
     }
@@ -1773,6 +1865,27 @@ export class WebHost {
           });
         }
         throw error;
+      } finally {
+        request.off("aborted", abort);
+        response.off("close", abort);
+      }
+    }
+    if (url.pathname === "/api/sessions/search" && request.method === "GET") {
+      const query = url.searchParams.get("q") ?? "";
+      const archived = url.searchParams.get("includeArchived");
+      if (!query.trim() || query.length > WEB_TRANSCRIPT_SEARCH_MAX_QUERY_CHARACTERS ||
+        /[\u0000-\u001f\u007f]/u.test(query) ||
+        (archived !== null && archived !== "1") ||
+        [...url.searchParams.keys()].some((key) => !["q", "includeArchived"].includes(key)) ||
+        url.searchParams.getAll("q").length !== 1 || url.searchParams.getAll("includeArchived").length > 1) {
+        return this.json(response, 400, { code: "INVALID_TRANSCRIPT_QUERY", error: "A bounded message query is required" });
+      }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      try {
+        return this.json(response, 200, await this.adapter.searchTranscripts(query, { includeArchived: archived === "1", signal: controller.signal }));
       } finally {
         request.off("aborted", abort);
         response.off("close", abort);
@@ -1978,6 +2091,8 @@ export class WebHost {
         preferences: {
           theme: setup.ui.webTheme,
           chatWidth: setup.ui.webChatWidth,
+          sidebarWidth: setup.ui.webSidebarWidth,
+          auxiliaryWidth: setup.ui.webAuxiliaryWidth,
           chatFontSize: setup.ui.webChatFontSize,
           expandThinking: setup.ui.webExpandThinking,
           pinnedSort: setup.ui.webPinnedSort,
@@ -2011,6 +2126,42 @@ export class WebHost {
         finalBytes = jsonByteLength(snapshot);
       }
       return this.json(response, 200, snapshot);
+    }
+    if (url.pathname === "/api/session/prompt-history" || url.pathname === "/api/session/prompt-preview") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
+      const preview = url.pathname === "/api/session/prompt-preview";
+      const keys = ["sessionId", "path", "anchorEntryId", preview ? "entryId" : "beforeEntryId"];
+      const required = preview ? keys : keys.slice(0, 3);
+      if ([...url.searchParams.keys()].some((key) => !keys.includes(key)) ||
+        required.some((key) => !url.searchParams.has(key)) ||
+        keys.some((key) => {
+          if (!url.searchParams.has(key)) return false;
+          const value = url.searchParams.get(key);
+          return url.searchParams.getAll(key).length !== 1 || !value ||
+            value.length > (key === "path" ? 4096 : 128) ||
+            (key === "path" ? /[\u0000-\u001f]/u : /[\s\u0000-\u001f]/u).test(value);
+        })) return this.json(response, 400, { code: "INVALID_HISTORY_REQUEST", error: "An exact Session and native prompt boundaries are required" });
+      const sessionId = url.searchParams.get("sessionId")!;
+      const path = url.searchParams.get("path")!;
+      const anchorEntryId = url.searchParams.get("anchorEntryId")!;
+      const result = preview
+        ? await this.adapter.getSessionPromptPreview(sessionId, path, anchorEntryId, url.searchParams.get("entryId")!)
+        : await this.adapter.getSessionPromptHistory(sessionId, path, anchorEntryId, url.searchParams.get("beforeEntryId"));
+      if (result.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is unavailable" });
+      if (result.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "The prompt boundaries are not on the current Session branch" });
+      return this.json(response, 200, "preview" in result ? result.preview : result.page);
+    }
+    if (url.pathname === "/api/session/message-window") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
+      const keys = ["sessionId", "path", "entryId"] as const;
+      const values = keys.map((key) => url.searchParams.get(key));
+      if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
+        keys.some((key, index) => url.searchParams.getAll(key).length !== 1 || !values[index] || values[index]!.length > (key === "path" ? 4096 : 128) || /[\u0000-\u001f]/u.test(values[index]!)))
+        return this.json(response, 400, { code: "INVALID_HISTORY_REQUEST", error: "An exact Session and message are required" });
+      const window = await this.adapter.getSessionMessageWindow(values[0]!, values[1]!, values[2]!);
+      if (window.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is unavailable" });
+      if (window.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "The message is not on the current Session branch" });
+      return this.json(response, 200, { session: window.session });
     }
     if (url.pathname === "/api/session/history") {
       if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
@@ -2144,6 +2295,9 @@ export class WebHost {
     imageSignature: string,
     planRevision?: string,
     controllerId?: string,
+    streamingBehavior: "followUp" | "steer" = "followUp",
+    expectedTurnCommandId?: string,
+    explicitDelivery = false,
   ) {
     let settle!: (result: PromptAdmissionResponse) => void;
     const admission: PromptAdmission = {
@@ -2153,6 +2307,8 @@ export class WebHost {
       imageSignature,
       ...(planRevision !== undefined ? { planRevision } : {}),
       controllerId,
+      streamingBehavior,
+      expectedTurnCommandId,
       completion: new Promise<PromptAdmissionResponse>((resolve) => {
         settle = resolve;
       }),
@@ -2175,6 +2331,8 @@ export class WebHost {
           expectedSessionPath: sessionPath,
           ...(images.length > 0 ? { images } : {}),
           ...(planRevision !== undefined ? { planRevision } : {}),
+          ...(explicitDelivery || streamingBehavior === "steer" ? { streamingBehavior } : {}),
+          ...(expectedTurnCommandId !== undefined ? { expectedTurnCommandId } : {}),
         }),
       )
       .then(
@@ -2186,6 +2344,8 @@ export class WebHost {
               accepted: true,
               state: "accepted",
               pendingFollowUps: receipt.pendingFollowUps,
+              ...(receipt.pendingSteering !== undefined ? { pendingSteering: receipt.pendingSteering } : {}),
+              ...(receipt.delivery !== undefined ? { delivery: receipt.delivery } : {}),
               cursor: this.sequence,
             },
           };
@@ -2194,6 +2354,8 @@ export class WebHost {
               commandId,
               sessionId,
               pendingFollowUps: receipt.pendingFollowUps,
+              ...(receipt.pendingSteering !== undefined ? { pendingSteering: receipt.pendingSteering } : {}),
+              ...(receipt.delivery !== undefined ? { delivery: receipt.delivery } : {}),
             });
             result.body.cursor = this.sequence;
           } catch {}
@@ -2614,14 +2776,14 @@ export class WebHost {
     };
   }
 
-  private json(response: ServerResponse, status: number, value: unknown) {
+  private json(response: ServerResponse, status: number, value: unknown, maxBytes = WEB_MAX_SNAPSHOT_BYTES) {
     let body = JSON.stringify(value);
-    if (Buffer.byteLength(body) > WEB_MAX_SNAPSHOT_BYTES) {
+    if (Buffer.byteLength(body) > maxBytes) {
       status = 500;
       body = JSON.stringify({
         code: "RESPONSE_TOO_LARGE",
         error: "response exceeded the Web protocol byte limit",
-        maxBytes: WEB_MAX_SNAPSHOT_BYTES,
+        maxBytes,
       });
     }
     response.writeHead(status, {

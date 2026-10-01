@@ -19,6 +19,7 @@ import { WebHost } from "../../web/host/web-host.ts";
 import {
   WEB_MAX_SESSIONS,
   WEB_MAX_SNAPSHOT_BYTES,
+  WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
 } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
@@ -84,6 +85,82 @@ function persistSession(
     timestamp,
   });
 }
+
+test("content search uses Pi's visible catalog and locates older messages in a bounded native window", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-search-window-"));
+  const directory = join(root, "sessions");
+  try {
+    const manager = SessionManager.create(root, directory);
+    persistSession(manager, "older BODY-NEEDLE", 1);
+    const promptId = manager
+      .getBranch()
+      .find(
+        (entry) => entry.type === "message" && entry.message.role === "user",
+      )!.id;
+    manager.appendSessionInfo("Searchable title");
+    for (let index = 0; index < 340; index++)
+      persistSession(manager, `later turn ${index}`, index + 2);
+    const path = manager.getSessionFile()!;
+    const runtime = runtimeFor(root, directory, manager);
+    const adapter = new PiWebAdapter(runtime);
+    const recent = await adapter.getSession(path);
+    assert.ok(!recent!.entries.some((entry) => entry.id === promptId));
+    const found = await adapter.searchTranscripts("BODY-NEEDLE");
+    assert.equal(found.matches.length, 1);
+    assert.equal(found.matches[0]!.sessionName, "Searchable title");
+    assert.equal(found.matches[0]!.messageId, promptId);
+    const window = await adapter.getSessionMessageWindow(
+      manager.getSessionId(),
+      path,
+      promptId,
+    );
+    assert.equal(window.status, "ok");
+    if (window.status === "ok") {
+      assert.equal(window.session.history!.anchorOnBranch, true);
+      assert.ok(window.session.entries.some((entry) => entry.id === promptId));
+      assert.ok(
+        Buffer.byteLength(JSON.stringify({ session: window.session })) <=
+          WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
+      );
+    }
+    assert.equal(
+      (await adapter.getSessionMessageWindow("copied-id", path, promptId))
+        .status,
+      "changed",
+    );
+    assert.equal(
+      (
+        await adapter.getSessionMessageWindow(
+          manager.getSessionId(),
+          path,
+          "missing",
+        )
+      ).status,
+      "changed",
+    );
+    await adapter.archiveSession(path);
+    assert.equal(
+      (await adapter.searchTranscripts("BODY-NEEDLE")).matches.length,
+      0,
+    );
+    assert.equal(
+      (
+        await adapter.searchTranscripts("BODY-NEEDLE", {
+          includeArchived: true,
+        })
+      ).matches.length,
+      1,
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      adapter.searchTranscripts("BODY-NEEDLE", { signal: controller.signal }),
+      /abort/i,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("pins preserve identity and manual order across reload, archive and workspace changes", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-pins-"));

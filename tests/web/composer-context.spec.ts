@@ -12,6 +12,7 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { WEB_PROMPT_FILE_MAX_COUNT } from "../../web/protocol/prompt-files.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { FileReferenceDialog } from "../../web/ui/src/features/composer/FileReferenceDialog.tsx";
@@ -716,12 +717,15 @@ it("retains rapid image pastes in order while an earlier image is still reading"
   ]);
 });
 
-it("keeps valid images from a paste even when another file is unsupported", async () => {
+it("keeps valid images from a paste even when another image is invalid", async () => {
   const { sendPrompt } = setup();
   const first = pendingImage("good.png");
   const last = pendingImage("last.png");
-  const invalid = new File(["not an image"], "notes.txt", {
-    type: "text/plain",
+  const invalid = new File(["not an image"], "invalid.png", {
+    type: "image/png",
+  });
+  Object.defineProperty(invalid, "arrayBuffer", {
+    value: async () => new TextEncoder().encode("not an image").buffer,
   });
   const input = screen.getByRole("textbox");
   pasteImages(input, [first.file, invalid, last.file]);
@@ -729,7 +733,7 @@ it("keeps valid images from a paste even when another file is unsupported", asyn
     first.finish();
     last.finish();
   });
-  expect(screen.getByRole("alert").textContent).toContain("notes.txt");
+  expect(screen.getByRole("alert").textContent).toContain("invalid.png");
   expect(screen.getByText("good.png")).toBeTruthy();
   expect(screen.getByText("last.png")).toBeTruthy();
   fireEvent.keyDown(input, { key: "Enter" });
@@ -739,24 +743,62 @@ it("keeps valid images from a paste even when another file is unsupported", asyn
   ]);
 });
 
-it("counts pending pastes toward the image limit and reports a rejected paste", async () => {
+it.each(["read", "format"])(
+  "reports an image %s failure without losing the caption or another valid attachment",
+  async (failure) => {
+    const { sendPrompt } = setup();
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+    fireEvent.change(input, { target: { value: "Keep this caption" } });
+    const bad = new File(["not readable image bytes"], "bad.png", {
+      type: "image/png",
+    });
+    Object.defineProperty(bad, "arrayBuffer", {
+      value: async () => {
+        if (failure === "read")
+          throw new DOMException(
+            "The file could not be read.",
+            "NotReadableError",
+          );
+        return new TextEncoder().encode("not an image").buffer;
+      },
+    });
+    const good = pendingImage("good.png");
+    pasteImages(input, [bad, good.file]);
+    await act(async () => good.finish());
+    expect(screen.getByRole("alert").textContent).toBe(
+      `bad.png: ${i18n.t(failure === "read" ? "imageAttachmentReadFailed" : "imageAttachmentUnsupported")}`,
+    );
+    expect(input.value).toBe("Keep this caption");
+    expect(
+      screen.queryByRole("button", { name: "Remove attachment bad.png" }),
+    ).toBeNull();
+    expect(screen.getByText("good.png")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(sendPrompt).toHaveBeenCalledWith("Keep this caption", [
+      expect.objectContaining({ name: "good.png" }),
+    ]);
+  },
+);
+
+it("counts pending pastes toward the attachment limit and reports a rejected paste", async () => {
   setup();
   const input = screen.getByRole("textbox");
-  const accepted = Array.from({ length: 4 }, (_, index) =>
-    pendingImage(`${index}.png`),
+  const accepted = Array.from(
+    { length: WEB_PROMPT_FILE_MAX_COUNT },
+    (_, index) => pendingImage(`${index}.png`),
   );
-  const rejected = pendingImage("fifth.png");
+  const rejected = pendingImage("over-limit.png");
   for (const image of accepted) pasteImages(input, [image.file]);
   pasteImages(input, [rejected.file]);
   expect(screen.getByRole("alert").textContent).toBe(
-    i18n.t("imageAttachmentCount", { count: 4 }),
+    i18n.t("fileAttachmentCount", { count: WEB_PROMPT_FILE_MAX_COUNT }),
   );
   await act(async () => {
     for (const image of accepted) image.finish();
   });
   expect(
     screen.getAllByRole("button", { name: /^Remove attachment/u }),
-  ).toHaveLength(4);
+  ).toHaveLength(WEB_PROMPT_FILE_MAX_COUNT);
   expect(rejected.read).not.toHaveBeenCalled();
 });
 

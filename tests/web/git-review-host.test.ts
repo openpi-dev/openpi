@@ -129,19 +129,89 @@ test("Git review HTTP access authenticates and binds the exact Session", async (
     query.delete("offset");
     query.set("file", "review.txt");
     query.set("revision", summary.snapshot.revision);
-    const detailResponse = await fetch(
+    const sessionDetailResponse = await fetch(
       `${host.origin}/api/git-review?${query}`,
+      { headers },
+    );
+    assert.equal(sessionDetailResponse.status, 200);
+    const sessionDetail =
+      (await sessionDetailResponse.json()) as WebGitReviewResult;
+    assert.ok(sessionDetail.ok);
+    assert.equal(sessionDetail.summaryRevision, summary.snapshot.revision);
+    await writeFile(join(cwd, "review.txt"), "newer session change\n", "utf8");
+    const staleSession = await (
+      await fetch(`${host.origin}/api/git-review?${query}`, { headers })
+    ).json();
+    assert.deepEqual(staleSession, { ok: false, reason: "revision_changed" });
+
+    const listingQuery = new URLSearchParams({
+      sessionId: session.id,
+      path: session.path,
+      source: "unstaged",
+      offset: "0",
+    });
+    const listing = (await (
+      await fetch(`${host.origin}/api/git-review?${listingQuery}`, { headers })
+    ).json()) as WebGitReviewResult;
+    assert.equal(listing.ok, true);
+    if (!listing.ok) return;
+    const detailQuery = new URLSearchParams({
+      sessionId: session.id,
+      path: session.path,
+      source: "unstaged",
+      file: "review.txt",
+      revision: listing.snapshot.revision,
+    });
+    const detailResponse = await fetch(
+      `${host.origin}/api/git-review?${detailQuery}`,
       { headers },
     );
     assert.equal(detailResponse.status, 200);
     const detail = (await detailResponse.json()) as WebGitReviewResult;
-    assert.ok(detail.ok);
-    assert.equal(detail.snapshot.revision, summary.snapshot.revision);
-    await writeFile(join(cwd, "review.txt"), "newer session change\n", "utf8");
-    const stale = await (
-      await fetch(`${host.origin}/api/git-review?${query}`, { headers })
-    ).json();
+    assert.equal(detail.ok, true);
+    if (detail.ok)
+      assert.equal(detail.summaryRevision, listing.snapshot.revision);
+    await writeFile(join(cwd, "review.txt"), "changed after listing\n");
+    const stale = (await (
+      await fetch(`${host.origin}/api/git-review?${detailQuery}`, { headers })
+    ).json()) as WebGitReviewResult;
     assert.deepEqual(stale, { ok: false, reason: "revision_changed" });
+    for (const extra of [
+      "baseRef=main",
+      "baseRef=refs%2Ftags%2Fmain",
+      "baseRef=refs%2Fheads%2Fmain",
+      "revision=invalid",
+    ]) {
+      assert.equal(
+        (
+          await fetch(
+            `${host.origin}/api/git-review?${listingQuery}&${extra}`,
+            { headers },
+          )
+        ).status,
+        400,
+      );
+    }
+    const branchQuery = new URLSearchParams({
+      sessionId: session.id,
+      path: session.path,
+      source: "branch",
+      baseRef: "refs/heads/missing",
+    });
+    const noHead = await fetch(`${host.origin}/api/git-review?${branchQuery}`, {
+      headers,
+    });
+    assert.equal(noHead.status, 200);
+    assert.equal((await noHead.json()).reason, "unborn_repository");
+    assert.equal(
+      (
+        await fetch(
+          `${host.origin}/api/git-review?${branchQuery}&baseRef=refs%2Fheads%2Fmain`,
+          { headers },
+        )
+      ).status,
+      400,
+    );
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

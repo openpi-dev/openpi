@@ -74,7 +74,7 @@ test("Git review combines branch, staged, unstaged, and untracked changes", asyn
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.snapshot.currentBranch, "feature/review");
-  assert.equal(result.snapshot.baseBranch, "main");
+  assert.equal(result.snapshot.baseBranch, "refs/heads/main");
   assert.equal(result.snapshot.comparison, "branch");
   assert.deepEqual(result.snapshot.files.map((file) => file.path).sort(), [
     "base.txt",
@@ -84,6 +84,231 @@ test("Git review combines branch, staged, unstaged, and untracked changes", asyn
   ]);
   assert.ok(result.snapshot.additions >= 4);
   assert.equal(result.snapshot.truncated, false);
+});
+
+test("branch review requires a concrete base and selects qualified local/remote refs", async () => {
+  const root = await repository();
+  const initial = (await git(root, "rev-parse", "HEAD")).trim();
+  await git(root, "branch", "-m", "release");
+  await writeFile(join(root, "release-only.txt"), "release-only\n");
+  await git(root, "add", ".");
+  await git(root, "commit", "-m", "release");
+  await git(root, "checkout", "-b", "feature/review");
+  await writeFile(join(root, "feature.txt"), "feature\n");
+  await git(root, "add", ".");
+  await git(root, "commit", "-m", "feature");
+  const missing = await readGitReview(root, {
+    source: "branch",
+    summary: true,
+    offset: 0,
+  });
+  assert.equal(missing.ok, false);
+  if (missing.ok) return;
+  assert.equal(missing.reason, "base_branch_unavailable");
+  assert.deepEqual(
+    missing.branches?.options.map((option) => option.ref),
+    ["refs/heads/feature/review", "refs/heads/release"],
+  );
+  await git(root, "branch", "main", initial);
+  // Same-name tags must never alter an explicitly chosen branch identity.
+  await git(root, "tag", "release", initial);
+  await git(root, "update-ref", "refs/remotes/origin/release", initial);
+  const chosen = await readGitReview(root, {
+    source: "branch",
+    baseRef: "refs/heads/release",
+    summary: true,
+    offset: 0,
+  });
+  assert.equal(chosen.ok, true);
+  if (!chosen.ok) return;
+  assert.equal(chosen.snapshot.baseBranch, "refs/heads/release");
+  assert.deepEqual(
+    chosen.snapshot.files.map((file) => file.path),
+    ["feature.txt"],
+  );
+  const remote = await readGitReview(root, {
+    source: "branch",
+    baseRef: "refs/remotes/origin/release",
+    summary: true,
+    offset: 0,
+  });
+  assert.equal(remote.ok, true);
+  if (!remote.ok) return;
+  assert.deepEqual(
+    remote.snapshot.files.map((file) => file.path),
+    ["feature.txt", "release-only.txt"],
+  );
+  assert.notEqual(remote.snapshot.revision, chosen.snapshot.revision);
+  for (const baseRef of [
+    "release",
+    "refs/tags/release",
+    "refs/heads/release^{commit}",
+    "refs/heads/missing",
+    "refs/heads/release\0",
+  ]) {
+    const invalid = await readGitReview(root, { source: "branch", baseRef });
+    assert.equal(invalid.ok, false);
+    if (!invalid.ok) assert.equal(invalid.reason, "invalid_base_branch");
+  }
+  await git(root, "branch", "-D", "release");
+  const deleted = await readGitReview(root, {
+    source: "branch",
+    baseRef: "refs/heads/release",
+  });
+  assert.equal(deleted.ok, false);
+  if (!deleted.ok) {
+    assert.equal(deleted.reason, "invalid_base_branch");
+    assert.ok(
+      deleted.branches?.options.some(
+        (option) => option.ref === "refs/heads/main",
+      ),
+    );
+  }
+});
+
+test("lazy detail refuses a changed pinned summary and confirms the unchanged summary identity", async () => {
+  const root = await repository();
+  await writeFile(join(root, "base.txt"), "one\n");
+  const summary = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.equal(summary.ok, true);
+  if (!summary.ok) return;
+  const detail = await readGitReview(root, {
+    source: "unstaged",
+    filePath: "base.txt",
+    expectedRevision: summary.snapshot.revision,
+  });
+  assert.equal(detail.ok, true);
+  if (!detail.ok) return;
+  assert.equal(detail.summaryRevision, summary.snapshot.revision);
+  assert.match(detail.snapshot.files[0]!.diff, /\+one/u);
+  await writeFile(join(root, "base.txt"), "new after summary\nsecond\nthird\n");
+  const changed = await readGitReview(root, {
+    source: "unstaged",
+    filePath: "base.txt",
+    expectedRevision: summary.snapshot.revision,
+  });
+  assert.deepEqual(changed, { ok: false, reason: "revision_changed" });
+  const staged = await readGitReview(root, {
+    source: "staged",
+    summary: true,
+    offset: 0,
+  });
+  assert.equal(staged.ok, true);
+  if (!staged.ok) return;
+  await git(root, "add", "base.txt");
+  const changedIndex = await readGitReview(root, {
+    source: "staged",
+    filePath: "base.txt",
+    expectedRevision: staged.snapshot.revision,
+  });
+  assert.deepEqual(changedIndex, { ok: false, reason: "revision_changed" });
+});
+
+test("lazy detail rejects an external write during the actual Git patch invocation", async () => {
+  const root = await repository();
+  await writeFile(join(root, "base.txt"), "old pinned content\n");
+  const summary = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.equal(summary.ok, true);
+  if (!summary.ok) return;
+  const bin = join(root, ".git", "probe-bin");
+  await mkdir(bin);
+  const ready = join(bin, "ready");
+  const resume = join(bin, "resume");
+  await writeFile(
+    join(bin, "git"),
+    '#!/bin/sh\ncase " $* " in\n  *" --patch "*)\n    : > "$OPENPI_REVIEW_DETAIL_READY"\n    while [ ! -f "$OPENPI_REVIEW_DETAIL_RESUME" ]; do /bin/sleep 0.02; done\n    ;;\nesac\nexec /usr/bin/git "$@"\n',
+    { mode: 0o700 },
+  );
+  const reader = new URL("../../web/host/git-review.ts", import.meta.url).href;
+  const probe = join(bin, "detail.mjs");
+  await writeFile(
+    probe,
+    `import { readGitReview } from ${JSON.stringify(reader)};\nprocess.stdout.write(JSON.stringify(await readGitReview(process.argv[2], { source: "unstaged", filePath: "base.txt", expectedRevision: process.argv[3] })));\n`,
+  );
+  const child = execFileAsync(
+    process.execPath,
+    ["--experimental-strip-types", probe, root, summary.snapshot.revision],
+    {
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        OPENPI_REVIEW_DETAIL_READY: ready,
+        OPENPI_REVIEW_DETAIL_RESUME: resume,
+      },
+    },
+  ).then(
+    (result) => ({ ok: true as const, result }),
+    (error) => ({ ok: false as const, error }),
+  );
+  try {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (
+        await lstat(ready).then(
+          () => true,
+          () => false,
+        )
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(
+      await lstat(ready).then(
+        () => true,
+        () => false,
+      ),
+      "actual Git patch invocation reached the bounded barrier",
+    );
+    await writeFile(
+      join(root, "base.txt"),
+      "new content during detail\nsecond line\n",
+    );
+  } finally {
+    await writeFile(resume, "resume\n");
+  }
+  const outcome = await child;
+  if (!outcome.ok) throw outcome.error;
+  assert.deepEqual(JSON.parse(outcome.result.stdout), {
+    ok: false,
+    reason: "revision_changed",
+  });
+});
+
+test("branch choices stay bounded and a chosen base outside the first page remains visible", async () => {
+  const root = await repository();
+  const head = (await git(root, "rev-parse", "HEAD")).trim();
+  const refs =
+    Array.from(
+      { length: 205 },
+      (_, index) =>
+        `update refs/heads/base-${String(index).padStart(3, "0")} ${head}`,
+    ).join("\n") + "\n";
+  execFileSync("git", ["-C", root, "update-ref", "--stdin"], { input: refs });
+  const result = await readGitReview(root, {
+    source: "branch",
+    baseRef: "refs/heads/base-204",
+    summary: true,
+    offset: 0,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.branches?.options.length, 200);
+  assert.equal(result.branches?.truncated, true);
+  assert.ok(
+    result.branches?.options.some(
+      (option) => option.ref === "refs/heads/base-204",
+    ),
+  );
+  assert.ok(jsonByteLength(result) <= WEB_MAX_SNAPSHOT_BYTES);
 });
 
 test("summary pages include files past 200, have exact totals and refuse a changed listing", async () => {
@@ -545,7 +770,7 @@ test("file details retain the selected summary identity and reject worktree or i
     expectedRevision: summary.snapshot.revision,
   });
   assert.ok(detail.ok);
-  assert.equal(detail.snapshot.revision, summary.snapshot.revision);
+  assert.equal(detail.summaryRevision, summary.snapshot.revision);
   assert.match(detail.snapshot.files[0]!.diff, /worktree-a/);
   await writeFile(join(root, "base.txt"), "worktree-b\n");
   assert.deepEqual(

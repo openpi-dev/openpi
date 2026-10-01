@@ -11,6 +11,7 @@ import type {
   WebSettingsResourceCatalog,
   WebSessionUsage,
   WebPromptImage,
+  WebHistoryAnchor,
 } from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
 
@@ -96,6 +97,9 @@ export type WebRuntimeRequestErrorCode =
   | "MODEL_NOT_AVAILABLE"
   | "MODEL_CONFIGURATION_CONFLICT"
   | "SESSION_CONFLICT"
+  | "SESSION_FORK_UNAVAILABLE"
+  | "SESSION_FORK_CAPACITY"
+  | "TURN_CONFLICT"
   | "PROMPT_REJECTED"
   | "WORKSPACE_REQUIRED"
   | "THINKING_LEVEL_NOT_AVAILABLE";
@@ -122,10 +126,14 @@ export interface WebPromptOptions {
   expectedSessionPath?: string;
   images?: readonly WebPromptImage[];
   planRevision?: string;
+  streamingBehavior?: "followUp" | "steer";
+  expectedTurnCommandId?: string;
 }
 
 export interface WebPromptAdmissionReceipt {
   pendingFollowUps: number;
+  pendingSteering?: number;
+  delivery?: "prompt" | "followUp" | "steer";
 }
 
 export interface WebActiveTurn {
@@ -142,13 +150,16 @@ export interface WebActiveTurn {
 /** Read-only facts for the selected Session, independent of input ownership. */
 export interface WebSessionExecution {
   promptQueueBlocked?: boolean;
-  lastTurn?: { commandId: string; finishedAt: number; outcome: "completed" | "cancelled" | "failed" | "uncertain" };
+  lastTurn?: { commandId: string; finishedAt: number; outcome: "completed" | "cancelled" | "failed" | "uncertain"; resultEntryId?: string };
   sessionId: string;
   sessionPath: string;
   status: "running" | "idle" | "unknown";
   pendingFollowUps?: number;
+  pendingSteering?: number;
   /** Bounded FIFO preview of Pi's native follow-up queue. */
   queuedMessages?: readonly string[];
+  /** Pending Pi steering messages; receipt never implies execution. */
+  steeringMessages?: readonly string[];
   liveTools: LiveToolEvidence[];
   liveToolsOmitted: number;
   activeTurn?: WebActiveTurn;
@@ -202,6 +213,19 @@ export interface WebSessionCreationResult {
   sessionPath?: string;
 }
 
+export interface WebSessionForkRequest extends WebHistoryAnchor {
+  commandId: string;
+}
+
+export interface WebSessionForkResult {
+  state: "forked" | "cancelled" | "uncertain";
+  commandId: string;
+  source: WebHistoryAnchor;
+  replayed?: boolean;
+  sessionId?: string;
+  sessionPath?: string;
+}
+
 export interface WebRuntimeController {
   readonly cwd: string;
   /** Runtime authority: false until a real Web workspace and Session are active. */
@@ -226,6 +250,7 @@ export interface WebRuntimeController {
     options?: WebSessionCreationOptions,
   ): Promise<WebSessionCreationResult>;
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
+  forkSession?(request: WebSessionForkRequest): Promise<WebSessionForkResult>;
   listModels(): WebModelSummary[];
   searchModels(query: string, limit?: number): WebModelSearchResult;
   listCommands?(): WebCommandDiscoveryResult;
