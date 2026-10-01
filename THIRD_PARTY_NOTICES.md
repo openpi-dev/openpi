@@ -2,6 +2,25 @@
 
 ## Project origins and acknowledgments
 
+The Web model settings page adapts the provider cards, inline editors and model
+selection interactions of `@deepseek-ai/dsh-client-ui-settings-models` version
+`0.1.7-rc.2`, from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+The styles are adapted to OpenPI's existing settings shell and theme tokens;
+configuration and authentication remain owned by Pi. The applicable MIT notice
+is reproduced in [`web/ui/src/features/settings/LICENSE.dsh`](web/ui/src/features/settings/LICENSE.dsh).
+
+The workspace Files explorer and preview interactions were informed by
+[DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar), revision
+`9b5834f74ad197534c821c35b8357edac1ad3919`. OpenPI uses its own Session-bound
+file service and inline workbar layout; no DSH source is embedded.
+
+File preview bundles additionally include Mermaid, PDF.js, Mammoth, ExcelJS,
+fflate, fast-xml-parser, highlight.js, DOMPurify and rehype-raw. Their licenses
+and bundled dependency notices are reproduced in
+[`web/THIRD_PARTY_LICENSES.txt`](web/THIRD_PARTY_LICENSES.txt), included in the
+package alongside the Web assets. JSZip is used under its MIT option;
+DOMPurify is used under its Apache-2.0 option.
+
 OpenPI originated from [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) and is maintained as an independent distribution. Thanks to the original author for the starting point.
 
 Web workbench contributions include:
@@ -19,6 +38,15 @@ viewport interactions were informed by [`apache/maka`](https://github.com/apache
 revision `ebeb961` (Apache License 2.0). OpenPI uses its own Web host protocol
 and headless Chromium/CDP implementation; it does not embed either project or
 copy Maka's Electron-only `WebContentsView`.
+
+The follow-up Git, file-preview and settings investigation also consulted
+`agegr/pi-web` revision `1eb5e66a37c468aca7f0d338edb23de4fd84433e` (MIT),
+`jmfederico/pi-web` revision `60a29acbfc710908e73b0df9857cb63b53b672d3` (MIT),
+and `apache/maka` revision `0dc1142aa90000e45627017e846b6d57d1e165e0`
+(Apache License 2.0). These are architectural references, not embedded packages.
+The screencast sizing approach was informed by Chromium DevTools'
+[`ScreencastView.ts`](https://github.com/ChromeDevTools/devtools-frontend/blob/main/front_end/panels/screencast/ScreencastView.ts)
+(BSD-3-Clause). OpenPI retains its own bounded transport and Session authority.
 
 ## OAuth model providers
 

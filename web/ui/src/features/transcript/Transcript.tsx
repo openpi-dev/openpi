@@ -3,6 +3,7 @@ import {
   ArrowDown,
   Bot,
   Check,
+  ChevronRight,
   Clipboard,
   FilePenLine,
   FileText,
@@ -22,6 +23,7 @@ import {
   Fragment,
   type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -29,10 +31,18 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSubagentActivity } from "../../../../../extensions/shared/web-observer-registry.ts";
-import { evidenceText, isEvidenceTool } from "../../../../protocol/evidence.ts";
+import {
+  type EvidenceState,
+  evidenceText,
+  isEvidenceTool,
+} from "../../../../protocol/evidence.ts";
+import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
+import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
 import type {
+  WebHistoryAnchor,
   WebLiveMessage,
   WebMessagePart,
+  WebSessionProjection,
   WebSnapshot,
 } from "../../../../protocol/types.ts";
 import { Markdown } from "../../components/Markdown.tsx";
@@ -43,21 +53,37 @@ import {
   formatTurnTime,
   turnTitle,
 } from "../../lib/format.ts";
+import { isControlledSession } from "../../lib/session-control.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
-import { ToolEvidence } from "./ToolEvidence.tsx";
+import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
+import {
+  rememberSessionReading,
+  type SessionReadingCache,
+  sessionReadingScope,
+} from "./session-reading-state.ts";
+import { ToolEvidence } from "./ToolEvidence.tsx";
+import { type OpenTurnReview, TurnChangesCard } from "./TurnChangesCard.tsx";
+import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
+import { CompactionStatus } from "./CompactionStatus.tsx";
+import { useSessionHistory } from "./use-session-history.ts";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
 >["entries"][number];
 interface DisplayEntry {
+  compaction?: true;
   key: string;
+  entryId?: string;
   timingKey?: string;
   timestamp?: string;
   message: WebLiveMessage;
+  timing?: WebTurnTiming;
+  optimistic?: LiveEntry["optimistic"];
 }
 
 interface TranscriptProps {
+  activityObserved?: boolean;
   snapshot: WebSnapshot;
   liveMessages: LiveEntry[];
   liveRunning: boolean;
@@ -66,8 +92,17 @@ interface TranscriptProps {
   thinkingStarts: Record<string, number>;
   thinkingDurations: Record<string, number>;
   scrollToBottom: number;
+  readingCache?: SessionReadingCache;
   onResend: (content: string) => Promise<boolean>;
   onInspectSubagent?: (id: string) => void;
+  onReviewTurn?: OpenTurnReview;
+  onHistoryAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
+  onRefreshHistory?: () => Promise<boolean>;
+  onPromptProjection?: (
+    sessionId: string,
+    sessionPath: string,
+    pairs: { key: string; entryId: string }[],
+  ) => void;
 }
 
 function UserImageAttachments({ message }: { message: WebLiveMessage }) {
@@ -115,7 +150,13 @@ interface RenderRow {
   processStatus?: Status;
   error?: boolean;
   outcome?: "failed" | "interrupted";
+  pendingPrompt?: boolean;
+  promptCommandId?: string;
+  promptEntryId?: string;
+  timing?: WebTurnTiming;
 }
+
+type ActiveTurn = NonNullable<WebSnapshot["runtime"]["activeTurn"]>;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object"
@@ -145,8 +186,13 @@ function canonicalStatus(value: unknown): Status {
   return "unknown";
 }
 
-function resultStatus(message?: WebLiveMessage): Status {
-  if (!message) return "running";
+function resultStatus(
+  message?: WebLiveMessage,
+  liveState?: EvidenceState,
+): Status {
+  if (liveState === "running") return "running";
+  if (liveState === "unknown") return "unknown";
+  if (!message) return "unknown";
   if (message.isError) return "error";
   const status = canonicalStatus(record(message.details).status);
   if (status !== "unknown") return status;
@@ -270,6 +316,7 @@ function EvidenceDetails({
   name,
   status,
   summary,
+  output,
   thinking = false,
   defaultOpen = false,
 }: {
@@ -278,9 +325,11 @@ function EvidenceDetails({
   name: string;
   status: Status;
   summary?: string;
+  output?: string;
   thinking?: boolean;
   defaultOpen?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <details
       className={`message-details tool-line ${status} ${thinking ? "thinking-line" : ""}`}
@@ -297,9 +346,24 @@ function EvidenceDetails({
         </span>
         <StatusMark status={status} />
       </summary>
-      <pre className="details-body tool-evidence">
-        {evidenceText(body).text}
-      </pre>
+      {output === undefined ? (
+        <pre className="details-body tool-evidence">
+          {evidenceText(body).text}
+        </pre>
+      ) : (
+        <>
+          <figure aria-label={t("toolCallArguments")} style={{ margin: 0 }}>
+            <pre className="details-body tool-evidence">
+              {evidenceText(body).text}
+            </pre>
+          </figure>
+          <figure aria-label={t("toolCallOutput")} style={{ margin: 0 }}>
+            <pre className="details-body tool-evidence">
+              {evidenceText(output).text || t("noOutput")}
+            </pre>
+          </figure>
+        </>
+      )}
     </details>
   );
 }
@@ -340,11 +404,12 @@ function familyCard(
   result?: WebLiveMessage,
   subagents: readonly WebSubagentActivity[] = [],
   onInspectSubagent?: (id: string) => void,
+  liveState?: EvidenceState,
 ) {
   const name = part.name || "";
   const args = parseArguments(part.arguments);
   const details = record(result?.details);
-  const status = resultStatus(result);
+  const status = resultStatus(result, liveState);
   if (name === "subagent_spawn") {
     const meta = [args.agent_type, details.model || args.model]
       .filter(Boolean)
@@ -470,34 +535,21 @@ function SubagentCard({
   );
 }
 
-function useElapsed(start: number | undefined, active: boolean) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(interval);
-  }, [active]);
-  return start ? formatElapsedMs(start, active ? now : Date.now()) : "";
-}
-
 function ThinkingEvidence({
   body,
-  start,
   duration,
   active,
   level,
   defaultOpen,
 }: {
   body: string;
-  start?: number;
   duration?: number;
   active: boolean;
   level?: string;
   defaultOpen: boolean;
 }) {
   const { t } = useTranslation();
-  const elapsed = useElapsed(start, active);
-  const settled = duration ? formatElapsedMs(0, duration) : elapsed;
+  const settled = duration !== undefined ? formatElapsedMs(0, duration) : "";
   const preview = thinkingPreview(body);
   return (
     <EvidenceDetails
@@ -521,11 +573,13 @@ function ThinkingEvidence({
 function MessageActions({
   content,
   editable,
+  copyRequiresFull = false,
   timestamp,
   onResend,
 }: {
   content: string;
   editable: boolean;
+  copyRequiresFull?: boolean;
   timestamp?: string;
   onResend: (value: string) => Promise<boolean>;
 }) {
@@ -616,8 +670,14 @@ function MessageActions({
       <button
         type="button"
         aria-label={copied ? t("copiedMessage") : t("copyMessage")}
-        title={copied ? t("copiedMessage") : t("copyMessage")}
-        disabled={copying}
+        title={
+          copyRequiresFull
+            ? t("messageCopyRequiresFull")
+            : copied
+              ? t("copiedMessage")
+              : t("copyMessage")
+        }
+        disabled={copying || copyRequiresFull}
         onClick={() => {
           const generation = ++copyGeneration.current;
           window.clearTimeout(copyTimer.current);
@@ -660,6 +720,24 @@ function CustomResult({ message }: { message: WebLiveMessage }) {
       </div>
     );
   const details = record(message.details);
+  if (
+    message.customType === "openpi-setup-request" ||
+    message.customType === "openpi-setup-closed"
+  ) {
+    return (
+      <EvidenceDetails
+        body={message.content}
+        icon={<Wrench />}
+        name={t("configureOpenPi")}
+        summary={
+          message.customType === "openpi-setup-closed"
+            ? compactSummary(message.content)
+            : undefined
+        }
+        status="unknown"
+      />
+    );
+  }
   if (message.customType === "subagent-result") {
     return (
       <ActivityCard
@@ -713,6 +791,27 @@ function isEmptyToolOutput(content: string) {
   return ["", "[]", "{}", "null"].includes(content.trim());
 }
 
+function setupDisplayMessage(message: WebLiveMessage) {
+  if (
+    message.role !== "custom" ||
+    message.customType !== "openpi-setup-request" ||
+    message.truncation?.details
+  )
+    return message;
+  const details = record(message.details);
+  if (
+    (details.command !== "openpi-setup" && details.command !== "my-pi-setup") ||
+    typeof details.request !== "string"
+  )
+    return message;
+  return {
+    ...message,
+    role: "user",
+    content: `/${details.command}${details.request ? ` ${details.request}` : ""}`,
+    parts: undefined,
+  };
+}
+
 function messageIdentity(message: WebLiveMessage) {
   if (message.role === "toolResult" && message.toolCallId)
     return `tool-result-${message.toolCallId}`;
@@ -721,74 +820,257 @@ function messageIdentity(message: WebLiveMessage) {
   return undefined;
 }
 
-function buildEntries(
-  snapshot: WebSnapshot,
-  liveMessages: LiveEntry[],
-): DisplayEntry[] {
+function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
   const persisted = snapshot.selectedSession?.entries ?? [];
+  const nativeById = new Map(persisted.map((entry) => [entry.id, entry]));
   const liveKeys = new Map(
     liveMessages.map((live) => [
       messageIdentity(live.message) ?? live.key,
       live.key,
     ]),
   );
-  const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] =>
-    entry.type === "message" && entry.message
-      ? [
-          {
-            key: messageIdentity(entry.message) ?? entry.id,
-            timingKey: liveKeys.get(messageIdentity(entry.message) ?? entry.id),
-            timestamp: entry.timestamp,
-            message: entry.message,
+  const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] => {
+    if (entry.type === "compaction")
+      return [
+        {
+          key: entry.id,
+          entryId: entry.id,
+          timestamp: entry.timestamp,
+          compaction: true,
+          message: {
+            role: "custom",
+            content: "",
           },
-        ]
+        },
+      ];
+    if (
+      "turnTiming" in entry &&
+      entry.turnTiming &&
+      entry.turnTiming.sessionId === snapshot.selectedSession?.id
+    )
+      return [
+        {
+          key: entry.id,
+          timestamp: entry.timestamp,
+          timing: entry.turnTiming,
+          message: { role: "custom", content: "" },
+        },
+      ];
+    if (entry.type !== "message" || !entry.message) return [];
+    const message = setupDisplayMessage(entry.message);
+    const parent = entry.parentId
+      ? nativeById.get(entry.parentId)?.message
+      : undefined;
+    // The exact native parent identifies this command episode. Do not collapse
+    // separate setup requests merely because their text is the same.
+    if (
+      entry.message.customType === "openpi-setup-request" &&
+      message.role === "user" &&
+      parent?.customType === "openpi-web-command-input" &&
+      parent.commandId &&
+      parent.content === message.content
+    )
+      return [];
+    return [
+      {
+        key: messageIdentity(entry.message) ?? entry.id,
+        entryId: entry.id,
+        timingKey: liveKeys.get(messageIdentity(entry.message) ?? entry.id),
+        timestamp: entry.timestamp,
+        message,
+      },
+    ];
+  });
+  const signature = (message: WebLiveMessage) =>
+    JSON.stringify([
+      message.role,
+      message.content,
+      (message.parts ?? [])
+        .filter((part) => message.role !== "user" || part.type !== "text")
+        .map((part) =>
+          part.type === "image"
+            ? [part.type, part.mimeType, part.name]
+            : part.type,
+        ),
+      message.stopReason,
+      message.errorMessage,
+      message.toolCallId,
+    ]);
+  const legacySignature = (message: WebLiveMessage) =>
+    message.role === "user"
+      ? signature(message)
+      : JSON.stringify({ ...message, timestamp: undefined });
+  // Pi persists custom messages without their live timestamp. Reconcile the
+  // complete native payload before turning setup instructions into user text,
+  // including setup echoes whose native parent already renders the command.
+  const customMessages = persisted.flatMap((entry) =>
+    entry.message?.role === "custom" && !entry.message.truncation?.truncated
+      ? [legacySignature(entry.message)]
       : [],
   );
-  // Empty body text is common for thinking/tool-only messages. Reconcile by
-  // native identity; legacy projections must match all parts, once per entry.
-  const signatures = new Map<string, number>();
-  for (const entry of entries) {
-    const signature =
-      messageIdentity(entry.message) ?? JSON.stringify(entry.message);
-    signatures.set(signature, (signatures.get(signature) ?? 0) + 1);
-  }
-  const submittedCommands = new Set(
+  const matchedCustomMessages = new Set<number>();
+  // Preserve the mainline native-identity reconciliation of thinking/tool-only
+  // messages. Legacy matching consumes one full message, rather than a Set.
+  const nativeMessages = entries.map((entry) => ({
+    identity: messageIdentity(entry.message),
+    signature: legacySignature(entry.message),
+  }));
+  const matchedMessages = new Set<number>();
+  const persistedPositions = new Map(
+    persisted.map((entry, index) => [entry.id, index]),
+  );
+  const promptCandidates = entries
+    .filter((entry) => entry.message.role === "user")
+    .map((entry) => ({
+      key: entry.entryId ?? entry.key,
+      position: persistedPositions.get(entry.entryId ?? entry.key),
+      parentId: nativeById.get(entry.entryId ?? entry.key)?.parentId,
+      signature: signature(entry.message),
+    }));
+  const commandInputs = new Map(
     entries.flatMap((entry) =>
-      entry.message.commandId ? [`optimistic-${entry.message.commandId}`] : [],
+      entry.message.role === "user" &&
+      entry.message.customType === "openpi-web-command-input" &&
+      entry.message.commandId
+        ? [[entry.message.commandId, entry.entryId ?? entry.key] as const]
+        : [],
     ),
   );
+  const acknowledgedPrompts = new Set(
+    liveMessages.flatMap((entry) =>
+      entry.optimistic?.projectedEntryId
+        ? [entry.optimistic.projectedEntryId]
+        : [],
+    ),
+  );
+  const projectedPrompts: { key: string; entryId: string }[] = [];
+  const pendingPrompts: DisplayEntry[] = [];
+  const execution =
+    snapshot.selectedExecution?.sessionId === snapshot.selectedSession?.id &&
+    snapshot.selectedExecution?.sessionPath === snapshot.selectedSession?.path
+      ? snapshot.selectedExecution
+      : undefined;
+  const queued = execution?.pendingFollowUps ?? 0;
+  const mergeLimit = Math.max(
+    0,
+    liveMessages.filter(
+      (entry) =>
+        entry.optimistic?.admitted &&
+        !entry.optimistic.projectedEntryId &&
+        !commandInputs.has(entry.optimistic.commandId),
+    ).length - queued,
+  );
+  let mergedRegularPrompts = 0;
+  const suppressedLiveUsers = new Set<string>();
   for (const live of liveMessages) {
-    if (submittedCommands.has(live.key)) continue;
-    const identity = messageIdentity(live.message);
-    const signature = identity ?? JSON.stringify(live.message);
-    const matches = signatures.get(signature) ?? 0;
-    if (matches > 0) {
-      signatures.set(signature, matches - 1);
+    if (live.optimistic?.projectedEntryId) continue;
+    if (live.message.role === "custom" && !live.message.truncation?.truncated) {
+      const match = customMessages.findIndex(
+        (signature, index) =>
+          !matchedCustomMessages.has(index) &&
+          signature === legacySignature(live.message),
+      );
+      if (match >= 0) {
+        matchedCustomMessages.add(match);
+        continue;
+      }
+    }
+    const commandId =
+      live.optimistic?.commandId ??
+      (live.key.startsWith("optimistic-")
+        ? live.key.slice("optimistic-".length)
+        : undefined);
+    const commandEntry = commandId ? commandInputs.get(commandId) : undefined;
+    if (commandEntry) {
+      if (live.optimistic)
+        projectedPrompts.push({ key: live.key, entryId: commandEntry });
       continue;
     }
-    entries.push({
-      key: identity ?? live.key,
+    const message = setupDisplayMessage(live.message);
+    if (message.role === "user" && live.optimistic) {
+      // This only merges duplicate presentation; it is not a delivery receipt.
+      const after =
+        live.optimistic.afterEntryId === null
+          ? -1
+          : persistedPositions.get(live.optimistic.afterEntryId);
+      const acknowledgement =
+        !live.optimistic.admitted || mergedRegularPrompts >= mergeLimit
+          ? undefined
+          : promptCandidates.find(
+              (entry) =>
+                entry.position !== undefined &&
+                (after !== undefined
+                  ? entry.position > after
+                  : entry.parentId === live.optimistic?.afterEntryId) &&
+                !acknowledgedPrompts.has(entry.key) &&
+                entry.signature === signature(message),
+            );
+      if (acknowledgement) {
+        acknowledgedPrompts.add(acknowledgement.key);
+        projectedPrompts.push({ key: live.key, entryId: acknowledgement.key });
+        mergedRegularPrompts++;
+        continue;
+      }
+    } else {
+      const admission =
+        message.role === "user"
+          ? liveMessages.find(
+              (pending) =>
+                pending.optimistic?.admitted &&
+                !pending.optimistic.projectedEntryId &&
+                !suppressedLiveUsers.has(pending.key) &&
+                !projectedPrompts.some((pair) => pair.key === pending.key) &&
+                pending.optimistic.sessionId === snapshot.selectedSession?.id &&
+                pending.optimistic.sessionPath ===
+                  snapshot.selectedSession?.path &&
+                signature(setupDisplayMessage(pending.message)) ===
+                  signature(message),
+            )
+          : undefined;
+      if (admission) {
+        suppressedLiveUsers.add(admission.key);
+        continue;
+      }
+      const identity = messageIdentity(message);
+      const legacy =
+        identity === undefined ? legacySignature(message) : undefined;
+      const match = nativeMessages.findIndex(
+        (candidate, index) =>
+          !matchedMessages.has(index) &&
+          (identity === undefined
+            ? candidate.signature === legacy
+            : candidate.identity === identity),
+      );
+      if (match >= 0) {
+        matchedMessages.add(match);
+        continue;
+      }
+    }
+    const next: DisplayEntry = {
+      key: messageIdentity(message) ?? live.key,
       timingKey: live.key,
-      timestamp: new Date().toISOString(),
-      message: live.message,
-    });
+      timestamp: live.timestamp ?? new Date().toISOString(),
+      message,
+      optimistic: live.optimistic,
+    };
+    if (message.role === "user" && live.optimistic) pendingPrompts.push(next);
+    else entries.push(next);
   }
-  let setupEpisode = false;
-  const visible: DisplayEntry[] = [];
-  for (const entry of entries) {
-    const { message } = entry;
-    if (message.customType === "openpi-setup-request") {
-      // The native marker identifies the episode. Hide its Web command echo
-      // too, otherwise the hidden replies leave a permanently waiting turn.
-      if (visible.at(-1)?.message.customType === "openpi-web-command-input")
-        visible.pop();
-      setupEpisode = true;
-      continue;
-    }
-    if (message.role === "user") setupEpisode = false;
-    if (!setupEpisode) visible.push(entry);
-  }
-  return visible;
+  const queueCounts = new Map<string, number>();
+  for (const message of execution?.queuedMessages ?? [])
+    queueCounts.set(message, (queueCounts.get(message) ?? 0) + 1);
+  const visiblePending = pendingPrompts.filter((entry) => {
+    if (
+      !entry.optimistic?.admitted ||
+      entry.optimistic.commandId === execution?.activeTurn?.commandId
+    )
+      return true;
+    const count = queueCounts.get(entry.message.content) ?? 0;
+    if (!count) return true;
+    queueCounts.set(entry.message.content, count - 1);
+    return false;
+  });
+  return { entries: [...entries, ...visiblePending], projectedPrompts };
 }
 
 function ProcessSequence({
@@ -821,14 +1103,23 @@ function ProcessSequence({
     activities ? t("processActivityCount", { count: activities }) : "",
   ].filter(Boolean);
   const preview = rows.find((row) => row.processPreview)?.processPreview;
-  const failed = rows.some((row) => row.error);
-  const status: Status = active ? "running" : failed ? "error" : "done";
+  const failed = rows.some((row) => row.error || row.processStatus === "error");
+  const status: Status = active
+    ? "running"
+    : failed
+      ? "error"
+      : rows.some((row) => row.processStatus === "warn")
+        ? "warn"
+        : rows.every((row) => row.processStatus === "done")
+          ? "done"
+          : "unknown";
   return (
     <details
       className={`process-sequence ${status}`}
       open={open}
       data-status={status}
       data-running={active ? "true" : undefined}
+      data-history-entry={rows[0]?.key}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
@@ -857,7 +1148,12 @@ function ProcessSequence({
   );
 }
 
-function groupRows(rows: RenderRow[], active: boolean, defaultOpen: boolean) {
+function groupRows(
+  rows: RenderRow[],
+  active: boolean,
+  defaultOpen: boolean,
+  disclosure?: { open: boolean; id: string },
+) {
   const blocks: Array<{ process: boolean; rows: RenderRow[] }> = [];
   for (const row of rows) {
     const last = blocks.at(-1);
@@ -875,6 +1171,25 @@ function groupRows(rows: RenderRow[], active: boolean, defaultOpen: boolean) {
         <Fragment key={row.key}>{row.content}</Fragment>
       ));
     }
+    if (disclosure)
+      return (
+        <div
+          key={blockKey}
+          className="turn-process-body"
+          hidden={!disclosure.open}
+          id={`${disclosure.id}-${index}`}
+        >
+          {block.rows.map((row) => (
+            <div
+              key={row.key}
+              className={`process-step ${row.processStatus ?? "unknown"}`}
+              data-status={row.processStatus ?? "unknown"}
+            >
+              {row.content}
+            </div>
+          ))}
+        </div>
+      );
     return (
       <ProcessSequence
         key={blockKey}
@@ -886,16 +1201,103 @@ function groupRows(rows: RenderRow[], active: boolean, defaultOpen: boolean) {
   });
 }
 
+/** One native run, bounded by its settled timing record, within a user turn. */
+function TurnRun({
+  rows,
+  timing,
+  active,
+  expandProcesses,
+  timedTurn,
+}: {
+  rows: RenderRow[];
+  timing?: WebTurnTiming;
+  active: boolean;
+  expandProcesses: boolean;
+  timedTurn?: ActiveTurn;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const [open, setOpen] = useState(active || expandProcesses);
+  useEffect(
+    () => setOpen(active || expandProcesses),
+    [active, expandProcesses],
+  );
+  const processIds: string[] = [];
+  let blockIndex = -1;
+  rows.forEach((row, index) => {
+    if (row.kind !== "process" || rows[index - 1]?.kind !== "process") {
+      blockIndex++;
+      if (row.kind === "process") processIds.push(`${id}-${blockIndex}`);
+    }
+  });
+  const hasTiming = Boolean(timing || timedTurn);
+  const elapsed = timing ? (
+    <SettledTurnElapsed timing={timing} />
+  ) : timedTurn ? (
+    <RunningTurnElapsed
+      key={JSON.stringify([
+        timedTurn.sessionId,
+        timedTurn.sessionPath,
+        timedTurn.commandId,
+        timedTurn.epoch,
+        timedTurn.startedAt,
+      ])}
+      elapsedMs={timedTurn.elapsedMs!}
+    />
+  ) : null;
+  return (
+    <>
+      {hasTiming && (
+        <header className="turn-duration" data-outcome={timing?.outcome}>
+          {processIds.length > 0 ? (
+            <button
+              type="button"
+              className="turn-duration-toggle"
+              aria-expanded={open}
+              aria-controls={processIds.join(" ")}
+              onClick={() => setOpen((value) => !value)}
+            >
+              {elapsed}
+              <ChevronRight aria-hidden="true" />
+            </button>
+          ) : (
+            elapsed
+          )}
+          {timing && timing.outcome !== "completed" && (
+            <span className="turn-duration-outcome">
+              {t(`turnElapsedOutcome_${timing.outcome}`)}
+            </span>
+          )}
+        </header>
+      )}
+      {groupRows(
+        rows,
+        active,
+        expandProcesses,
+        hasTiming ? { open, id } : undefined,
+      )}
+    </>
+  );
+}
+
 function ConversationTurn({
   id,
   rows,
   active,
   expandProcesses,
+  changes,
+  session,
+  timedTurn,
+  onReviewTurn,
 }: {
   id: number;
   rows: RenderRow[];
   active: boolean;
   expandProcesses: boolean;
+  changes?: WebTurnChanges;
+  session?: WebSessionProjection;
+  timedTurn?: ActiveTurn;
+  onReviewTurn?: OpenTurnReview;
 }) {
   const { t } = useTranslation();
   const failed = rows.some((row) => row.outcome === "failed");
@@ -921,12 +1323,46 @@ function ConversationTurn({
             ? "success"
             : "neutral";
   const statusLabel = t(`turnState_${status}`);
+  // A settled snapshot can arrive before the run-status notification.
+  const currentTimedTurn = rows.some(
+    (row) =>
+      row.timing &&
+      row.timing.commandId === timedTurn?.commandId &&
+      row.timing.epoch === timedTurn?.epoch,
+  )
+    ? undefined
+    : timedTurn;
+  const content: ReactNode[] = [];
+  let runRows: RenderRow[] = [];
+  let runIndex = 0;
+  const appendRun = (timing?: WebTurnTiming, current = false) => {
+    content.push(
+      <TurnRun
+        key={`run-${runIndex++}`}
+        rows={runRows}
+        timing={timing}
+        active={active && current}
+        expandProcesses={expandProcesses}
+        timedTurn={current ? currentTimedTurn : undefined}
+      />,
+    );
+    runRows = [];
+  };
+  for (const row of rows) {
+    if (row.kind === "prompt") {
+      if (runRows.length) appendRun();
+      content.push(<Fragment key={row.key}>{row.content}</Fragment>);
+    } else if (row.timing) appendRun(row.timing);
+    else runRows.push(row);
+  }
+  if (runRows.length || currentTimedTurn) appendRun(undefined, true);
+  const hasTiming = Boolean(timedTurn || rows.some((row) => row.timing));
   return (
     <section
       className={`conversation-turn${id === 0 ? " prelude" : ""}`}
       data-turn={id}
     >
-      {id > 0 && status !== "complete" && (
+      {id > 0 && status !== "complete" && !hasTiming && (
         <header className="turn-heading">
           <span className="sr-only">{t("turnLabel", { number: id })}</span>
           <span className={`turn-state ${status}`}>
@@ -944,7 +1380,14 @@ function ConversationTurn({
           </span>
         </header>
       )}
-      {groupRows(rows, active, expandProcesses)}
+      {content}
+      {changes && session && (
+        <TurnChangesCard
+          key={`${session.id}:${session.path}:${changes.promptEntryId}`}
+          changes={changes}
+          onReview={onReviewTurn}
+        />
+      )}
     </section>
   );
 }
@@ -953,6 +1396,11 @@ function renderTurns(
   rows: RenderRow[],
   running: boolean,
   expandProcesses: boolean,
+  activeCommandId?: string,
+  changesByPrompt?: Map<string, WebTurnChanges>,
+  session?: WebSessionProjection,
+  timedTurn?: ActiveTurn,
+  onReviewTurn?: OpenTurnReview,
 ) {
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
@@ -960,16 +1408,55 @@ function renderTurns(
     if (current?.id === row.turn) current.rows.push(row);
     else turns.push({ id: row.turn, rows: [row] });
   }
-  const lastTurn = turns.at(-1)?.id;
+  if (turns.length === 0 && running) turns.push({ id: 0, rows: [] });
+  const confirmedTurn = activeCommandId
+    ? turns.find((turn) =>
+        turn.rows.some((row) => row.promptCommandId === activeCommandId),
+      )
+    : undefined;
+  let nativeTurnIndex = turns.length - 1;
+  while (
+    nativeTurnIndex >= 0 &&
+    turns[nativeTurnIndex]!.id !== 0 &&
+    !turns[nativeTurnIndex]!.rows.some(
+      (row) => row.kind === "prompt" && !row.pendingPrompt,
+    )
+  ) {
+    nativeTurnIndex--;
+  }
+  const activeTurn = confirmedTurn?.id ?? turns[nativeTurnIndex]?.id;
   return turns.map((turn) => (
     <ConversationTurn
       id={turn.id}
       rows={turn.rows}
-      active={running && turn.id === lastTurn}
+      active={running && turn.id === activeTurn}
       expandProcesses={expandProcesses}
-      key={`turn-group-${turn.id}-${turn.rows[0]?.key}`}
+      changes={changesByPrompt?.get(
+        turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
+          ?.promptEntryId ?? "",
+      )}
+      session={session}
+      timedTurn={running && turn.id === activeTurn ? timedTurn : undefined}
+      onReviewTurn={onReviewTurn}
+      key={`turn-group-${turn.rows[0]?.key}`}
     />
   ));
+}
+
+function captureReadingPosition(element: HTMLElement, pinned: boolean) {
+  const top = element.getBoundingClientRect().top;
+  const anchor = Array.from(
+    element.querySelectorAll<HTMLElement>("[data-history-entry]"),
+  ).find((item) => {
+    const bounds = item.getBoundingClientRect();
+    return bounds.height > 0 && bounds.bottom > top;
+  });
+  return {
+    key: anchor?.dataset.historyEntry,
+    offset: (anchor?.getBoundingClientRect().top ?? top) - top,
+    scrollTop: element.scrollTop,
+    pinned,
+  };
 }
 
 export function Transcript(props: TranscriptProps) {
@@ -979,12 +1466,98 @@ export function Transcript(props: TranscriptProps) {
   const [readingHistory, setReadingHistory] = useState(false);
   const lastPath = useRef<string | undefined>(undefined);
   const lastScrollRequest = useRef(props.scrollToBottom);
-  const entries = useMemo(
-    () => buildEntries(props.snapshot, props.liveMessages),
-    [props.snapshot, props.liveMessages],
+  const prependAnchor = useRef<{
+    key?: string;
+    offset: number;
+    scrollTop: number;
+    scrollHeight: number;
+  } | null>(null);
+  const readingCache = useMemo<SessionReadingCache>(
+    () => props.readingCache ?? new Map(),
+    [props.readingCache],
   );
-  const selected = props.snapshot.selectedSession;
-  const active = selected?.id === props.snapshot.currentSessionId;
+  const history = useSessionHistory(
+    props.snapshot.selectedSession,
+    {
+      onAnchorChange: props.onHistoryAnchorChange,
+      onRefresh: props.onRefreshHistory,
+      beforePrepend: () => {
+        const element = viewport.current;
+        if (!element) return;
+        prependAnchor.current = {
+          ...captureReadingPosition(element, false),
+          scrollHeight: element.scrollHeight,
+        };
+        pinned.current = false;
+      },
+    },
+    readingCache,
+  );
+  const selected = history.session;
+  const selectedId = selected?.id;
+  const selectedPath = selected?.path;
+  const selectedCwd = selected?.cwd;
+  const hydrationScope = JSON.stringify([selectedId, selectedPath]);
+  useLayoutEffect(() => {
+    const element = viewport.current;
+    if (!element || !selectedId || !selectedPath) return;
+    return () =>
+      rememberSessionReading(readingCache, hydrationScope, {
+        position: captureReadingPosition(element, pinned.current),
+      });
+  }, [hydrationScope, readingCache, selectedId, selectedPath]);
+  const previousHydrationScope = useRef(hydrationScope);
+  const [hydratedMessages, setHydratedMessages] = useState<
+    Record<string, string>
+  >({});
+  useLayoutEffect(() => {
+    if (previousHydrationScope.current === hydrationScope) return;
+    previousHydrationScope.current = hydrationScope;
+    setHydratedMessages({});
+  }, [hydrationScope]);
+  const changesByPrompt = useMemo(
+    () =>
+      new Map(
+        (selected?.entries ?? []).flatMap((entry) =>
+          entry.turnChanges && entry.turnChanges.sessionId === selected?.id
+            ? [[entry.turnChanges.promptEntryId, entry.turnChanges] as const]
+            : [],
+        ),
+      ),
+    [selected?.entries, selected?.id],
+  );
+  const lastHistoryReset = useRef(history.reset);
+  const historyPaused = history.hasNewer || history.verifying;
+  const active = isControlledSession(props.snapshot, selected);
+  const selectedExecution =
+    props.snapshot.selectedExecution?.sessionId === selected?.id &&
+    props.snapshot.selectedExecution?.sessionPath === selected?.path
+      ? props.snapshot.selectedExecution
+      : undefined;
+  const running =
+    (active && props.liveRunning) ||
+    (selectedExecution
+      ? selectedExecution.status === "running"
+      : active && props.snapshot.runtime.status === "running");
+  const { entries, projectedPrompts } = useMemo(
+    () =>
+      buildEntries(
+        { ...props.snapshot, selectedSession: selected },
+        historyPaused
+          ? []
+          : props.liveMessages.filter((entry) =>
+              entry.optimistic
+                ? entry.optimistic.sessionId === selected?.id &&
+                  entry.optimistic.sessionPath === selected?.path
+                : active,
+            ),
+      ),
+    [props.snapshot, selected, active, historyPaused, props.liveMessages],
+  );
+  useEffect(() => {
+    if (selected && projectedPrompts.length > 0)
+      props.onPromptProjection?.(selected.id, selected.path, projectedPrompts);
+  }, [selected, projectedPrompts, props.onPromptProjection]);
 
   useEffect(() => {
     const element = viewport.current;
@@ -1004,39 +1577,25 @@ export function Transcript(props: TranscriptProps) {
   }, []);
 
   const { rows, turns } = useMemo(() => {
-    const results = new Map<string, WebLiveMessage>();
-    const familyIds = new Set<string>();
-    const specializedIds = new Set<string>();
-    const liveTools = props.snapshot.runtime.liveTools ?? [];
-    entries.forEach(({ message }) => {
+    const results = new Map<string, DisplayEntry>();
+    const pairedToolIds = new Set<string>();
+    const liveTools = historyPaused
+      ? []
+      : (selectedExecution?.liveTools ??
+        (active ? (props.snapshot.runtime.liveTools ?? []) : []));
+    entries.forEach((entry) => {
+      const { message } = entry;
       if (message.role === "toolResult" && message.toolCallId)
-        results.set(message.toolCallId, message);
+        results.set(message.toolCallId, entry);
       message.parts?.forEach((part) => {
-        if (part.type === "toolCall" && part.id && isEvidenceTool(part.name))
-          specializedIds.add(part.id);
         if (
           part.type === "toolCall" &&
           part.id &&
-          /^(subagent|workflow)/u.test(part.name)
+          !["ask_user", "human_handoff"].includes(part.name)
         )
-          familyIds.add(part.id);
+          pairedToolIds.add(part.id);
       });
     });
-    const planIds = new Set(
-      entries.flatMap(({ message }) =>
-        (message.parts ?? []).flatMap((part) =>
-          part.type === "toolCall" &&
-          part.name === "plan_ready" &&
-          part.id &&
-          planPresentation(
-            results.get(part.id) ??
-              liveTools.find((item) => item.call.id === part.id)?.result,
-          )
-            ? [part.id]
-            : [],
-        ),
-      ),
-    );
     const turnItems: Array<{ id: number; title: string }> = [];
     let turn = 0;
     let latestUserPrompt: string | undefined;
@@ -1047,11 +1606,20 @@ export function Transcript(props: TranscriptProps) {
         lastUserIndex = index;
         break;
       }
+      if (
+        entries[index]?.message.role === "custom" &&
+        entries[index]?.message.customType === "openpi-setup-request"
+      )
+        break;
     }
     const lastAssistantByTurn = new Set<number>();
     let assistantCandidate = -1;
     entries.forEach(({ message }, index) => {
-      if (message.role === "user") {
+      if (
+        message.role === "user" ||
+        (message.role === "custom" &&
+          message.customType === "openpi-setup-request")
+      ) {
         if (assistantCandidate >= 0)
           lastAssistantByTurn.add(assistantCandidate);
         assistantCandidate = -1;
@@ -1062,25 +1630,53 @@ export function Transcript(props: TranscriptProps) {
 
     const rendered = entries.flatMap((entry, index): RenderRow[] => {
       const message = entry.message;
+      if (entry.timing)
+        return [
+          {
+            key: entry.key,
+            turn,
+            kind: "custom",
+            timing: entry.timing,
+            content: null,
+          },
+        ];
+      if (entry.compaction)
+        return [
+          {
+            key: entry.key,
+            turn,
+            kind: "custom",
+            content: <CompactionStatus compaction={{ state: "completed" }} />,
+          },
+        ];
       if (message.role === "custom") {
-        // CustomResult has no presentation for other extension messages.
-        // Empty articles still occupy space and disrupt adjacent tool groups.
         if (
           message.display === false ||
           ![
             "openpi-web-command-feedback",
+            "openpi-setup-request",
+            "openpi-setup-closed",
             "subagent-result",
             "workflow-result",
           ].includes(message.customType ?? "")
         )
           return [];
+        if (message.customType === "openpi-setup-request") {
+          latestUserPrompt = undefined;
+          latestUserIndex = -1;
+          turn++;
+          turnItems.push({ id: turn, title: t("configureOpenPi") });
+        }
         return [
           {
             key: entry.key,
             turn,
             kind: "custom",
             content: (
-              <article className="message-row assistant detail-only">
+              <article
+                className="message-row assistant detail-only"
+                data-history-entry={entry.entryId ?? entry.key}
+              >
                 <div className="message-content">
                   <CustomResult message={message} />
                 </div>
@@ -1098,22 +1694,63 @@ export function Transcript(props: TranscriptProps) {
           id: turn,
           title: turnTitle(message.content || t("attachedImage")),
         });
+        const hydrationKey = entry.entryId
+          ? JSON.stringify([selectedId, selectedPath, entry.entryId])
+          : "";
+        const hydrated = hydratedMessages[hydrationKey];
+        const awaitingFull = Boolean(
+          message.truncation?.visibleText && hydrated === undefined,
+        );
         return [
           {
             key: entry.key,
             turn,
             kind: "prompt",
+            pendingPrompt: Boolean(entry.optimistic),
+            promptCommandId: entry.optimistic?.commandId ?? message.commandId,
+            promptEntryId: entry.entryId,
             content: (
-              <article className="message-row user" id={`turn-${turn}`}>
+              <article
+                className="message-row user"
+                id={`turn-${turn}`}
+                data-history-entry={entry.entryId ?? entry.key}
+              >
                 <div className="message-content">
                   <UserImageAttachments message={message} />
-                  {message.content && (
-                    <div className="message-body">{message.content}</div>
-                  )}
+                  {(message.content || message.truncation?.visibleText) &&
+                    (entry.entryId &&
+                    selectedId &&
+                    selectedPath &&
+                    message.truncation?.visibleText ? (
+                      <FullMessageText
+                        key={`${selectedId}:${selectedPath}:${entry.entryId}`}
+                        preview={message.content}
+                        sessionId={selectedId}
+                        sessionPath={selectedPath}
+                        entryId={entry.entryId}
+                        markdown={false}
+                        fullText={hydrated}
+                        onComplete={(text) =>
+                          setHydratedMessages((current) => ({
+                            ...current,
+                            [hydrationKey]: text,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <div className="message-body">{message.content}</div>
+                    ))}
                 </div>
                 <MessageActions
-                  content={message.content}
-                  editable={active && index === lastUserIndex && !hasImages}
+                  content={hydrated ?? message.content}
+                  editable={
+                    active &&
+                    !historyPaused &&
+                    index === lastUserIndex &&
+                    !hasImages &&
+                    !awaitingFull
+                  }
+                  copyRequiresFull={awaitingFull}
                   timestamp={entry.timestamp}
                   onResend={props.onResend}
                 />
@@ -1129,8 +1766,23 @@ export function Transcript(props: TranscriptProps) {
           (last, part, partIndex) => (part.type === "text" ? partIndex : last),
           -1,
         );
+        const recoverable = Boolean(
+          entry.entryId &&
+            selectedId &&
+            selectedPath &&
+            message.truncation?.visibleText,
+        );
+        const fullPreview = message.content;
+        const hydrationKey = entry.entryId
+          ? JSON.stringify([selectedId, selectedPath, entry.entryId])
+          : "";
+        const hydrated = hydratedMessages[hydrationKey];
+        const awaitingFull = Boolean(
+          message.truncation?.visibleText && hydrated === undefined,
+        );
         const appendText = (text: string, key: string, actions: boolean) => {
-          if (!text.trim()) return;
+          if (recoverable && !actions) return;
+          if (!recoverable && !text.trim()) return;
           detailRows.push({
             key,
             turn,
@@ -1138,14 +1790,41 @@ export function Transcript(props: TranscriptProps) {
             content: (
               <article
                 className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
+                data-history-entry={
+                  entry.entryId
+                    ? `${entry.entryId}-${key.slice(entry.key.length + 1)}`
+                    : key
+                }
               >
                 <div className="message-content">
-                  <Markdown>{text}</Markdown>
+                  {recoverable &&
+                  selectedId &&
+                  selectedPath &&
+                  entry.entryId ? (
+                    <FullMessageText
+                      key={`${selectedId}:${selectedPath}:${entry.entryId}`}
+                      preview={fullPreview}
+                      sessionId={selectedId}
+                      sessionPath={selectedPath}
+                      entryId={entry.entryId}
+                      markdown
+                      fullText={hydrated}
+                      onComplete={(text) =>
+                        setHydratedMessages((current) => ({
+                          ...current,
+                          [hydrationKey]: text,
+                        }))
+                      }
+                    />
+                  ) : (
+                    <Markdown>{text}</Markdown>
+                  )}
                 </div>
                 {actions && lastAssistantByTurn.has(index) && (
                   <MessageActions
-                    content={message.content}
+                    content={hydrated ?? message.content}
                     editable={false}
+                    copyRequiresFull={awaitingFull}
                     timestamp={entry.timestamp}
                     onResend={props.onResend}
                   />
@@ -1171,7 +1850,7 @@ export function Transcript(props: TranscriptProps) {
           }
           if (part.type === "thinking") {
             const isLive =
-              active && props.liveRunning && index === entries.length - 1;
+              !historyPaused && running && index === entries.length - 1;
             detailRows.push({
               key: `${entry.key}-thinking-${partIndex}`,
               turn,
@@ -1188,7 +1867,6 @@ export function Transcript(props: TranscriptProps) {
                       level={
                         isLive ? props.snapshot.thinking?.level : undefined
                       }
-                      start={props.thinkingStarts[entry.timingKey ?? entry.key]}
                       duration={
                         props.thinkingDurations[entry.timingKey ?? entry.key]
                       }
@@ -1205,7 +1883,10 @@ export function Transcript(props: TranscriptProps) {
             const live = part.id
               ? liveTools.find((item) => item.call.id === part.id)
               : undefined;
-            const persistedResult = part.id ? results.get(part.id) : undefined;
+            const persistedResultEntry = part.id
+              ? results.get(part.id)
+              : undefined;
+            const persistedResult = persistedResultEntry?.message;
             const result = persistedResult ?? live?.result;
             const card =
               part.name === "plan_ready" &&
@@ -1214,6 +1895,9 @@ export function Transcript(props: TranscriptProps) {
                 <PlanCard
                   key={`${entry.key}-${part.id || partIndex}-plan`}
                   result={result}
+                  sessionId={selectedId}
+                  sessionPath={selectedPath}
+                  entryId={persistedResultEntry?.entryId}
                 />
               ) : isEvidenceTool(part.name) ? (
                 <ToolEvidence
@@ -1221,7 +1905,7 @@ export function Transcript(props: TranscriptProps) {
                   call={part}
                   result={result}
                   liveState={persistedResult ? undefined : live?.state}
-                  cwd={selected?.cwd}
+                  cwd={selectedCwd}
                 />
               ) : (
                 familyCard(
@@ -1231,11 +1915,15 @@ export function Transcript(props: TranscriptProps) {
                     ? props.snapshot.runtime.capabilities.subagents?.items
                     : undefined,
                   props.onInspectSubagent,
+                  persistedResult ? undefined : live?.state,
                 )
               );
             const args = parseArguments(part.arguments);
             const toolIcon = iconForTool(part.name);
-            const status = resultStatus(result);
+            const status = resultStatus(
+              result,
+              persistedResult ? undefined : live?.state,
+            );
             detailRows.push({
               key: `${entry.key}-tool-${part.id || partIndex}`,
               turn,
@@ -1261,7 +1949,16 @@ export function Transcript(props: TranscriptProps) {
                         }
                         icon={toolIcon}
                         name={part.name || "tool"}
-                        summary={toolSummary(part.name, args)}
+                        summary={
+                          result && part.id && pairedToolIds.has(part.id)
+                            ? compactSummary(result.content)
+                            : toolSummary(part.name, args)
+                        }
+                        output={
+                          part.id && pairedToolIds.has(part.id)
+                            ? result?.content
+                            : undefined
+                        }
                         status={status}
                       />
                     )}
@@ -1292,11 +1989,7 @@ export function Transcript(props: TranscriptProps) {
                   failed={failed}
                   error={message.errorMessage}
                   retryPrompt={retryPrompt}
-                  canRetry={
-                    active &&
-                    !props.liveRunning &&
-                    props.snapshot.runtime.status !== "running"
-                  }
+                  canRetry={active && !historyPaused && !running}
                   onRetry={props.onResend}
                 />
               </article>
@@ -1306,7 +1999,8 @@ export function Transcript(props: TranscriptProps) {
         return detailRows;
       }
       if (message.role === "toolResult") {
-        if (message.toolCallId && planIds.has(message.toolCallId)) return [];
+        if (message.toolCallId && pairedToolIds.has(message.toolCallId))
+          return [];
         if (planPresentation(message))
           return [
             {
@@ -1316,15 +2010,17 @@ export function Transcript(props: TranscriptProps) {
               content: (
                 <article className="message-row assistant detail-only">
                   <div className="message-content">
-                    <PlanCard result={message} />
+                    <PlanCard
+                      result={message}
+                      sessionId={selectedId}
+                      sessionPath={selectedPath}
+                      entryId={entry.entryId}
+                    />
                   </div>
                 </article>
               ),
             },
           ];
-        if (message.toolCallId && specializedIds.has(message.toolCallId))
-          return [];
-        if (message.toolCallId && familyIds.has(message.toolCallId)) return [];
         const family = message.toolName?.startsWith("subagent")
           ? "subagent"
           : message.toolName?.startsWith("workflow")
@@ -1390,18 +2086,21 @@ export function Transcript(props: TranscriptProps) {
     return { rows: rendered, turns: turnItems };
   }, [
     active,
+    running,
+    selectedExecution,
+    historyPaused,
     entries,
-    props.liveRunning,
     props.onResend,
     props.onInspectSubagent,
     props.snapshot.runtime.capabilities.subagents,
     props.snapshot.preferences.expandThinking,
-    props.snapshot.runtime.status,
     props.snapshot.thinking?.level,
     props.thinkingDurations,
-    props.thinkingStarts,
     props.snapshot.runtime.liveTools,
-    selected?.cwd,
+    selectedId,
+    selectedPath,
+    selectedCwd,
+    hydratedMessages,
     t,
   ]);
 
@@ -1410,9 +2109,50 @@ export function Transcript(props: TranscriptProps) {
     void entries;
     const element = viewport.current;
     if (!element || !selected) return;
-    const changed = lastPath.current !== selected.path;
+    const identity = sessionReadingScope(selected);
+    const identityChanged = lastPath.current !== identity;
+    const historyChanged = lastHistoryReset.current !== history.reset;
+    const changed = identityChanged || historyChanged;
+    lastHistoryReset.current = history.reset;
     const requested = lastScrollRequest.current !== props.scrollToBottom;
     lastScrollRequest.current = props.scrollToBottom;
+    if (requested && history.engaged) {
+      prependAnchor.current = null;
+      history.resetToLatest();
+      return;
+    }
+    const restored =
+      identityChanged && !historyChanged && !requested
+        ? readingCache.get(identity)?.position
+        : undefined;
+    const saved =
+      prependAnchor.current ??
+      (restored && !restored.pinned
+        ? { ...restored, scrollHeight: element.scrollHeight }
+        : null);
+    prependAnchor.current = null;
+    if (saved && (!changed || restored) && !requested) {
+      const anchor = Array.from(
+        element.querySelectorAll<HTMLElement>("[data-history-entry]"),
+      ).find(
+        (item) =>
+          item.dataset.historyEntry === saved.key &&
+          item.getBoundingClientRect().height > 0,
+      );
+      const top = anchor
+        ? element.scrollTop +
+          anchor.getBoundingClientRect().top -
+          element.getBoundingClientRect().top -
+          saved.offset
+        : saved.scrollTop + element.scrollHeight - saved.scrollHeight;
+      if (typeof element.scrollTo === "function")
+        element.scrollTo({ top, behavior: "instant" });
+      else element.scrollTop = top;
+      pinned.current = false;
+      setReadingHistory(true);
+      lastPath.current = identity;
+      return;
+    }
     if (changed || requested || pinned.current) {
       pinned.current = true;
       setReadingHistory(false);
@@ -1422,17 +2162,46 @@ export function Transcript(props: TranscriptProps) {
         element.scrollTop = element.scrollHeight;
       }
     }
-    lastPath.current = selected.path;
-  }, [selected, entries, props.scrollToBottom]);
+    lastPath.current = identity;
+  }, [
+    selected,
+    entries,
+    history.reset,
+    history.engaged,
+    history.resetToLatest,
+    props.scrollToBottom,
+    readingCache,
+  ]);
 
-  const running =
-    active &&
-    (props.snapshot.runtime.status === "running" || props.liveRunning);
-  const runningLabel = props.liveRetry
-    ? `${t("modelRetrying")} (${props.liveRetry.attempt}/${props.liveRetry.maxAttempts})`
-    : props.livePhase === "preparing"
-      ? t("modelPreparing")
-      : t("modelRunning");
+  const runningLabel = !active
+    ? t("backgroundSessionRunning")
+    : props.liveRetry
+      ? `${t("modelRetrying")} (${props.liveRetry.attempt}/${props.liveRetry.maxAttempts})`
+      : props.livePhase === "preparing"
+        ? t("modelPreparing")
+        : t("modelRunning");
+  const observedRunningTools = !active
+    ? (selectedExecution?.liveTools.filter((tool) => tool.state === "running")
+        .length ?? 0)
+    : 0;
+  const activeTurn = selectedExecution
+    ? selectedExecution.activeTurn
+    : active
+      ? props.snapshot.runtime.activeTurn
+      : undefined;
+  const timedTurn =
+    running &&
+    activeTurn &&
+    selected &&
+    activeTurn.sessionId === selected.id &&
+    activeTurn.sessionPath === selected?.path &&
+    typeof activeTurn.startedAt === "number" &&
+    Number.isFinite(activeTurn.startedAt) &&
+    typeof activeTurn.elapsedMs === "number" &&
+    Number.isFinite(activeTurn.elapsedMs) &&
+    activeTurn.elapsedMs >= 0
+      ? activeTurn
+      : undefined;
 
   return (
     <>
@@ -1446,15 +2215,78 @@ export function Transcript(props: TranscriptProps) {
           pinned.current =
             element.scrollTop + element.clientHeight >=
             element.scrollHeight - 48;
+          if (!pinned.current) history.retainReading();
           setReadingHistory(!pinned.current);
         }}
       >
+        {(history.hasMore || history.error || history.verifying) && (
+          <div className="conversation-history">
+            {history.error && <p role="alert">{t(history.error)}</p>}
+            {history.error &&
+              history.error !== "historyChanged" &&
+              !history.hasMore && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void history.loadOlder()}
+                >
+                  {t("retryAdmissionCheck")}
+                </button>
+              )}
+            {history.verifying && !history.error && (
+              <p role="status">{t("historyVerifying")}</p>
+            )}
+            {history.hasMore && (
+              <>
+                <span>
+                  {t("historyOmitted", {
+                    count: selected?.truncation.entriesOmitted ?? 0,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={
+                    history.loading || (history.verifying && !history.error)
+                  }
+                  onClick={() => void history.loadOlder()}
+                >
+                  {t(history.loading ? "historyLoading" : "historyLoadOlder")}
+                </button>
+              </>
+            )}
+          </div>
+        )}
         {renderTurns(
           rows,
-          running,
+          running &&
+            !historyPaused &&
+            selectedExecution?.compaction?.state !== "running",
           props.snapshot.preferences.expandThinking === true,
+          activeTurn?.commandId,
+          changesByPrompt,
+          selected,
+          props.activityObserved !== false && !historyPaused
+            ? timedTurn
+            : undefined,
+          props.onReviewTurn,
         )}
-        {running && (
+        {selectedExecution?.compaction &&
+          selectedExecution.compaction.state !== "completed" && (
+            <CompactionStatus
+              key={JSON.stringify([
+                selected?.id,
+                selected?.path,
+                selectedExecution.compaction.startedAt,
+              ])}
+              compaction={selectedExecution.compaction}
+              observed={
+                props.activityObserved !== false &&
+                selectedExecution.status !== "unknown"
+              }
+            />
+          )}
+        {running && selectedExecution?.compaction?.state !== "running" && (
           <div
             className="conversation-running"
             role="status"
@@ -1462,18 +2294,33 @@ export function Transcript(props: TranscriptProps) {
           >
             <span className="conversation-running-dot" />
             <span>{runningLabel}</span>
+            {observedRunningTools > 0 && (
+              <span>
+                {t("observedSessionTools", { count: observedRunningTools })}
+              </span>
+            )}
+            {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
+              <span>
+                {t("pendingFollowUpsHint", {
+                  count: selectedExecution!.pendingFollowUps,
+                })}
+              </span>
+            )}
           </div>
         )}
       </div>
-      {readingHistory && rows.length > 0 && (
+      {(readingHistory || history.hasNewer) && rows.length > 0 && (
         <button
           className="jump-to-latest"
           type="button"
+          aria-label={t("jumpToLatest")}
+          title={t("jumpToLatest")}
           onClick={() => {
             const element = viewport.current;
             if (!element) return;
             pinned.current = true;
             setReadingHistory(false);
+            history.resetToLatest();
             element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
           }}
         >

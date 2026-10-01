@@ -13,6 +13,7 @@
       "scripts/**/*.ts",
       "web/ui/src/**/*.ts",
       "web/ui/src/**/*.tsx",
+      "web/browser-extension/**/*.js",
       "web/ui/*.json",
       "**/*.json",
       "!extensions/**/docs/**",

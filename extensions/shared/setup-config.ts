@@ -177,6 +177,7 @@ export interface MyPiSetupConfig {
     readonly webChatWidth: number;
     readonly webChatFontSize: number;
     readonly webExpandThinking: boolean;
+    readonly webPinnedSort: "manual" | "updated";
     readonly showHeader: boolean;
     readonly customFooter: boolean;
     readonly footerStyle: FooterStyle;
@@ -212,6 +213,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
     webChatFontSize: DEFAULT_WEB_CHAT_FONT_SIZE,
     webExpandThinking: false,
+    webPinnedSort: "manual",
     showHeader: false,
     customFooter: true,
     footerStyle: DEFAULT_FOOTER_STYLE,
@@ -260,7 +262,7 @@ const isCapabilityDiscoveryMode = (
   typeof value === "string" &&
   CAPABILITY_DISCOVERY_MODES.includes(value as CapabilityDiscoveryMode);
 
-const isWebTheme = (value: unknown): value is WebTheme =>
+export const isWebTheme = (value: unknown): value is WebTheme =>
   typeof value === "string" && WEB_THEMES.includes(value as WebTheme);
 
 export function flattenFooterItems(lines: FooterLines): readonly FooterItem[] {
@@ -558,6 +560,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
+      webPinnedSort: ui.webPinnedSort === "updated" ? "updated" : "manual",
       webChatWidth: boundedIntegerRange(
         ui.webChatWidth,
         DEFAULT_WEB_CHAT_WIDTH,
@@ -656,6 +659,7 @@ const setupShape: ConfigShape = {
       MAX_WEB_CHAT_FONT_SIZE,
     ),
     webExpandThinking: booleanValue,
+    webPinnedSort: (value) => value === "manual" || value === "updated",
     showHeader: booleanValue,
     customFooter: booleanValue,
     footerStyle: isFooterStyle,
@@ -1379,7 +1383,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"
       : `Session child executions: ${config.childExecutions.maxActive} active slots shared by Workflow, Direct Subagent, and BTW`,
-    `UI: Web theme ${config.ui.webTheme} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
+    `UI: Web theme ${config.ui.webTheme} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · pinned ${config.ui.webPinnedSort} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,

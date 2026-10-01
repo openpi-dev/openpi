@@ -1,4 +1,5 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import type {
   PlanControlResult,
   projectPlanControl,
@@ -29,6 +30,9 @@ export interface WebProviderAuthSummary {
   readonly source?: WebProviderAuthSource;
   readonly subscription: boolean;
   readonly nameTruncated: boolean;
+  readonly custom?: boolean;
+  readonly baseUrl?: string;
+  readonly api?: WebModelConfiguration["api"];
 }
 
 export interface WebProviderAuthProjection {
@@ -41,6 +45,45 @@ export interface WebProviderAuthProjection {
   };
 }
 
+export interface WebModelConfiguration {
+  provider: string;
+  id: string;
+  name: string;
+  baseUrl: string;
+  api: "openai-responses" | "openai-completions" | "anthropic-messages";
+  reasoning: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  input?: ("text" | "image")[];
+}
+
+export interface WebModelConfigurations {
+  revision: string;
+  models: WebModelConfiguration[];
+  providers?: WebProviderConfigurationSummary[];
+}
+
+export interface WebProviderConfigurationSummary {
+  provider: string;
+  name: string;
+  baseUrl: string;
+  api: WebModelConfiguration["api"] | "";
+  /** False when the native file contains models this editor cannot project. */
+  editable: boolean;
+}
+
+export interface WebProviderConfiguration {
+  provider: string;
+  name: string;
+  baseUrl: string;
+  api: WebModelConfiguration["api"];
+  models: WebModelConfiguration[];
+}
+
+export type WebProviderConfigurationChange =
+  | { action: "save"; configuration: WebProviderConfiguration }
+  | { action: "remove"; provider: string };
+
 export interface WebRuntimeEvent {
   type: string;
   detail?: Record<string, unknown>;
@@ -51,6 +94,7 @@ export type WebRuntimeRequestErrorCode =
   | "PLAN_CONFLICT"
   | "PLAN_CONTROL_UNAVAILABLE"
   | "MODEL_NOT_AVAILABLE"
+  | "MODEL_CONFIGURATION_CONFLICT"
   | "SESSION_CONFLICT"
   | "PROMPT_REJECTED"
   | "WORKSPACE_REQUIRED"
@@ -88,6 +132,32 @@ export interface WebActiveTurn {
   sessionId: string;
   commandId: string;
   epoch: number;
+  /** Actual execution start; admission/queue waiting is excluded. */
+  startedAt?: number;
+  /** Monotonic elapsed time captured with this projection. */
+  elapsedMs?: number;
+  sessionPath?: string;
+}
+
+/** Read-only facts for the selected Session, independent of input ownership. */
+export interface WebSessionExecution {
+  promptQueueBlocked?: boolean;
+  lastTurn?: { commandId: string; finishedAt: number; outcome: "completed" | "cancelled" | "failed" | "uncertain" };
+  sessionId: string;
+  sessionPath: string;
+  status: "running" | "idle" | "unknown";
+  pendingFollowUps?: number;
+  /** Bounded FIFO preview of Pi's native follow-up queue. */
+  queuedMessages?: readonly string[];
+  liveTools: LiveToolEvidence[];
+  liveToolsOmitted: number;
+  activeTurn?: WebActiveTurn;
+  /** Native compaction observation; completion history remains in Pi entries. */
+  compaction?: {
+    state: "running" | "completed" | "failed" | "cancelled" | "unchanged";
+    startedAt?: number;
+    elapsedMs?: number;
+  };
 }
 
 export interface WebTurnCancellationOptions extends WebActiveTurn {}
@@ -141,6 +211,9 @@ export interface WebRuntimeController {
   getProjectTrustStatus?(): WebProjectTrustStatus;
   isIdle(): boolean;
   getActiveTurn(): WebActiveTurn | undefined;
+  getSessionExecution?(sessionId: string, sessionPath: string): WebSessionExecution;
+  /** Internal read seam; never activates a Session or grants input authority. */
+  getSessionManagerForRead?(sessionId: string, sessionPath: string): SessionManager | undefined;
   sendPrompt(
     content: string,
     options?: WebPromptOptions,
@@ -158,11 +231,18 @@ export interface WebRuntimeController {
   listCommands?(): WebCommandDiscoveryResult;
   listSettingsResources?(): WebSettingsResourceCatalog;
   listProviderAuth?(): WebProviderAuthProjection;
+  saveProviderKey?(sessionId: string, provider: string, apiKey: string): Promise<void>;
+  readModelConfigurations?(): Promise<WebModelConfigurations>;
+  saveModelConfiguration?(sessionId: string, revision: string, model: WebModelConfiguration): Promise<void>;
+  saveModelConfigurations?(sessionId: string, revision: string, models: WebModelConfiguration[]): Promise<void>;
+  changeProviderConfiguration?(sessionId: string, revision: string, change: WebProviderConfigurationChange): Promise<void>;
+  discoverProviderModels?(sessionId: string, request: import("./provider-model-discovery.ts").ProviderModelDiscovery, signal: AbortSignal): Promise<{ models: import("./provider-model-discovery.ts").DiscoveredProviderModel[]; truncated: boolean }>;
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
   setPlanMode?(
     request: {
       sessionId: string;
+      sessionPath: string;
       enabled: boolean;
       expectedRevision: string | null;
     },
@@ -172,6 +252,8 @@ export interface WebRuntimeController {
     sessionPath: string;
     expectedRevision: string | null;
   }): Promise<PlanControlResult & { prompt: string }>;
+  updatePromptQueue?(request: { sessionId: string; sessionPath: string; action: "retry" | "clear" }): void;
+  compactSession?(request: { sessionId: string; sessionPath: string }): Promise<void>;
   setThinkingLevel?(
     level: string,
     options?: WebThinkingSelectionOptions,

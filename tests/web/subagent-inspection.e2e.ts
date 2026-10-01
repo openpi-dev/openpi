@@ -141,6 +141,25 @@ for (const width of [1280, 390]) {
       });
     });
     await page.goto("/");
+    const overviewTrigger = page.getByRole("button", {
+      name: "会话概览",
+      exact: true,
+    });
+    await overviewTrigger.click();
+    const overview = page.getByRole("dialog", { name: "会话概览" });
+    await expect(overview).toBeVisible();
+    const overviewBox = await overview.boundingBox();
+    expect(overviewBox!.x).toBeGreaterThanOrEqual(0);
+    expect(overviewBox!.x + overviewBox!.width).toBeLessThanOrEqual(width);
+    await overview
+      .getByRole("button", { name: "子代理: 1 运行中 · 4 完成 · 1 其他记录" })
+      .click();
+    await expect(overview).toBeHidden();
+    await page
+      .locator(".subagent-panel")
+      .getByRole("button", { name: "关闭", exact: true })
+      .click();
+    await expect(overviewTrigger).toBeFocused();
     await page
       .getByRole("button", {
         name: "子代理：1 运行中 · 6 条记录",

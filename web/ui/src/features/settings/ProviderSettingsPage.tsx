@@ -1,25 +1,18 @@
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog } from "@astryxdesign/core/Dialog";
-import {
-  Bot,
-  Check,
-  Cpu,
-  KeyRound,
-  Layers3,
-  Plug,
-  SlidersHorizontal,
-  X,
-} from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Cpu, Layers3, Plug, SlidersHorizontal, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type {
   WebModelSummary,
   WebSettingsPreferencesPatch,
-  WebThemePreference,
   WebSnapshot,
+  WebThemePreference,
 } from "../../../../protocol/types.ts";
-import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
+import { WebClient } from "../../protocol/client.ts";
+import { ProviderModelsSection } from "./ProviderModelsSection.tsx";
 import {
   GeneralSettingsPanel,
   PluginsSettingsPanel,
@@ -43,25 +36,21 @@ const settingsSections = [
   { id: "plugins", label: "pluginsSettings", Icon: Plug },
 ] as const;
 
-function modelKey(model: WebModelSummary) {
-  return `${model.provider}/${model.id}`;
-}
-
 export function ProviderSettingsPage({
   sessionId,
   cwd,
+  entry = "general",
   models,
   currentModel,
   thinkingLevel,
   theme,
   capabilities,
-  setupBusy,
+  setupBusy: sessionBusy,
+  setupBlockedReason,
   plan,
   planSelectionPending = false,
   onExitPlan,
   setupOutcome,
-  modelSelectionPending,
-  onSelectModel,
   onConfigureOpenPi,
   interaction,
   onPreferencesChanged,
@@ -70,12 +59,14 @@ export function ProviderSettingsPage({
 }: {
   sessionId: string;
   cwd: string;
+  entry?: "general" | "credentials";
   models: WebModelSummary[];
   currentModel?: WebModelSummary;
   thinkingLevel: string;
   theme: WebThemePreference;
   capabilities?: WebCapabilitySnapshot;
   setupBusy: boolean;
+  setupBlockedReason?: string;
   plan?: WebSnapshot["runtime"]["plan"];
   planSelectionPending?: boolean;
   onExitPlan?: () => Promise<void>;
@@ -89,15 +80,27 @@ export function ProviderSettingsPage({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const setupBusy = sessionBusy || Boolean(setupBlockedReason);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const [section, setSection] = useState<SettingsSection>("general");
+  const tabs = useRef<HTMLDivElement>(null);
+  const [section, setSection] = useState<SettingsSection>(
+    entry === "credentials" ? "models" : "general",
+  );
+  const [modelsVisited, setModelsVisited] = useState(entry === "credentials");
   const [setupPending, setSetupPending] = useState(false);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
   const setupRefreshPending = useRef(false);
   const setupObservedBusy = useRef(false);
   const setupRefreshTimer = useRef(0);
   const [preferencePending, setPreferencePending] = useState(false);
+  const [preferencesSaved, setPreferencesSaved] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [modelDraftDirty, setModelDraftDirty] = useState(false);
+  const [modelSaving, setModelSaving] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<{
+    kind: "close" | "runtime";
+  } | null>(null);
+  const saving = modelSaving;
   const setupBaseline = useRef<string | undefined>(undefined);
   const planBlocked = plan !== undefined && plan !== "inactive";
   const setupDisabled =
@@ -110,42 +113,25 @@ export function ProviderSettingsPage({
     catalog,
     error: catalogError,
     refresh,
+    updateSetup,
   } = useSettingsCatalog(sessionId);
-  const [selectedModelKey, setSelectedModelKey] = useState(
-    currentModel
-      ? modelKey(currentModel)
-      : models[0]
-        ? modelKey(models[0])
-        : "",
-  );
-
-  const groupedModels = useMemo(() => {
-    const groups = new Map<string, WebModelSummary[]>();
-    for (const model of models) {
-      const group = groups.get(model.provider) ?? [];
-      group.push(model);
-      groups.set(model.provider, group);
-    }
-    return [...groups.entries()];
-  }, [models]);
-  const selectedModel =
-    models.find((model) => modelKey(model) === selectedModelKey) ??
-    currentModel ??
-    models[0];
-
   useEffect(() => {
     closeButton.current?.focus();
   }, []);
   useEffect(() => {
-    if (!models.length) {
-      setSelectedModelKey("");
+    if (!setupSubmitted) return;
+    if (
+      currentOutcome &&
+      currentOutcome.status !== "pending" &&
+      setupRefreshPending.current
+    ) {
+      setupRefreshPending.current = false;
+      setupObservedBusy.current = false;
+      window.clearTimeout(setupRefreshTimer.current);
+      void refresh();
+      void onPreferencesChanged();
       return;
     }
-    if (models.some((model) => modelKey(model) === selectedModelKey)) return;
-    setSelectedModelKey(modelKey(currentModel ?? models[0]!));
-  }, [currentModel, models, selectedModelKey]);
-  useEffect(() => {
-    if (!setupSubmitted) return;
     if (setupBusy) {
       setupObservedBusy.current = true;
       return;
@@ -156,10 +142,17 @@ export function ProviderSettingsPage({
     window.clearTimeout(setupRefreshTimer.current);
     void refresh();
     void onPreferencesChanged();
-  }, [onPreferencesChanged, refresh, setupBusy, setupSubmitted]);
+  }, [
+    onPreferencesChanged,
+    refresh,
+    setupBusy,
+    setupSubmitted,
+    currentOutcome,
+  ]);
   useEffect(() => () => window.clearTimeout(setupRefreshTimer.current), []);
 
   const configureOpenPi = async (request: string) => {
+    setPreferencesSaved(false);
     if (setupDisabled) return false;
     setupBaseline.current = setupOutcome?.requestId;
     setSetupPending(true);
@@ -195,36 +188,42 @@ export function ProviderSettingsPage({
     }
   };
 
-  const preferenceRequest = (patch: WebSettingsPreferencesPatch) => {
-    if (patch.theme !== undefined)
-      return t("setupRequestSetTheme", { value: patch.theme });
-    if (patch.chatWidth !== undefined)
-      return t("setupRequestSetChatWidth", { value: patch.chatWidth });
-    if (patch.chatFontSize !== undefined)
-      return t("setupRequestSetChatFontSize", { value: patch.chatFontSize });
-    if (patch.expandThinking !== undefined)
-      return t(
-        patch.expandThinking
-          ? "setupRequestEnableExpandedThinking"
-          : "setupRequestDisableExpandedThinking",
-      );
-    return t("setupRequestReviewAll");
-  };
-
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
-    if (preferencePending) return false;
+    if (preferencePending || !catalog) return false;
     setPreferencePending(true);
+    setPreferencesSaved(false);
     setSetupError(null);
     try {
-      return await configureOpenPi(preferenceRequest(patch));
-    } catch (reason) {
-      setSetupError(
-        reason instanceof Error ? reason.message : t("settingsUpdateFailed"),
-      );
+      const result = await new WebClient().savePreferences(patch);
+      updateSetup(result.setup);
+      setPreferencesSaved(true);
+      void onPreferencesChanged();
+      return true;
+    } catch {
+      setSetupError(t("settingsPreferencesSaveFailed"));
       return false;
     } finally {
       setPreferencePending(false);
     }
+  };
+
+  const selectSection = (next: SettingsSection) => {
+    setSection(next);
+    if (next === "models") setModelsVisited(true);
+    setSetupError(null);
+  };
+  const navigate = (
+    target: NonNullable<typeof pendingNavigation>,
+    discard = false,
+  ) => {
+    if (saving) return;
+    if (modelDraftDirty && !discard) {
+      setPendingNavigation(target);
+      return;
+    }
+    setPendingNavigation(null);
+    if (target.kind === "runtime") onOpenRuntimeStatus();
+    else onClose();
   };
 
   return (
@@ -236,28 +235,73 @@ export function ProviderSettingsPage({
       maxHeight="calc(100dvh - 16px)"
       className="provider-settings-dialog"
       aria-label={t("settings")}
-      onOpenChange={(open: boolean) => !open && onClose()}
+      onOpenChange={(open: boolean) => {
+        if (!open && !pendingNavigation) navigate({ kind: "close" });
+      }}
     >
       <section className="provider-settings-surface">
         <header className="provider-settings-header">
           <strong className="provider-settings-title">{t("settings")}</strong>
+          <select
+            className="provider-settings-mobile-picker"
+            aria-label={t("settingsNavigation")}
+            value={section}
+            onChange={(event) => {
+              const next = settingsSections.find(
+                ({ id }) => id === event.target.value,
+              );
+              if (next) selectSection(next.id);
+            }}
+          >
+            {settingsSections.map(({ id, label }) => (
+              <option key={id} value={id}>
+                {t(label)}
+              </option>
+            ))}
+          </select>
           <div
             className="provider-settings-navigation"
+            ref={tabs}
             aria-label={t("settingsNavigation")}
             role="tablist"
           >
-            {settingsSections.map(({ id, label, Icon }) => (
+            {settingsSections.map(({ id, label, Icon }, index) => (
               <button
                 key={id}
                 type="button"
                 role="tab"
+                id={`settings-tab-${id}`}
+                tabIndex={section === id ? 0 : -1}
                 aria-selected={section === id}
                 aria-controls={`settings-panel-${id}`}
                 className="provider-settings-tab"
                 title={t(label)}
-                onClick={() => {
-                  setSection(id);
-                  setSetupError(null);
+                onClick={() => selectSection(id)}
+                onKeyDown={(event) => {
+                  if (
+                    event.altKey ||
+                    event.ctrlKey ||
+                    event.metaKey ||
+                    event.nativeEvent.isComposing
+                  )
+                    return;
+                  const next =
+                    event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? settingsSections.length - 1
+                        : event.key === "ArrowRight"
+                          ? (index + 1) % settingsSections.length
+                          : event.key === "ArrowLeft"
+                            ? (index + settingsSections.length - 1) %
+                              settingsSections.length
+                            : undefined;
+                  if (next === undefined) return;
+                  event.preventDefault();
+                  selectSection(settingsSections[next]!.id);
+                  tabs.current
+                    ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+                    [next]?.focus();
                 }}
               >
                 <Icon aria-hidden="true" />
@@ -270,7 +314,9 @@ export function ProviderSettingsPage({
             type="button"
             className="icon-button provider-settings-close"
             aria-label={t("close")}
-            onClick={onClose}
+            disabled={saving}
+            title={saving ? t("savingSettings") : t("close")}
+            onClick={() => navigate({ kind: "close" })}
           >
             <X />
           </button>
@@ -291,6 +337,7 @@ export function ProviderSettingsPage({
         <div className="provider-settings-main">
           <div
             id="settings-panel-general"
+            aria-labelledby="settings-tab-general"
             role="tabpanel"
             hidden={section !== "general"}
           >
@@ -302,119 +349,42 @@ export function ProviderSettingsPage({
               cwd={cwd}
               theme={theme}
               setupPending={setupPending || setupBusy}
+              preferencePending={preferencePending || !catalog}
+              setupBusy={setupBusy}
+              setupBlockedReason={setupBlockedReason}
               setupBlocked={planBlocked || planSelectionPending}
-              preferencePending={preferencePending}
               onConfigure={configureOpenPi}
               onUpdatePreferences={updateWebPreferences}
-              onOpenRuntimeStatus={onOpenRuntimeStatus}
+              onOpenRuntimeStatus={() => navigate({ kind: "runtime" })}
               onRefresh={refresh}
             />
           </div>
 
           <section
             id="settings-panel-models"
+            aria-labelledby="settings-tab-models"
             className="settings-models"
             role="tabpanel"
             hidden={section !== "models"}
           >
-            <aside className="settings-model-sidebar">
-              <div className="settings-model-list">
-                {groupedModels.map(([provider, providerModels]) => (
-                  <section className="settings-model-group" key={provider}>
-                    <h2>
-                      <Cpu aria-hidden="true" />
-                      <span>{provider}</span>
-                      <small>{providerModels.length}</small>
-                    </h2>
-                    {providerModels.map((model) => {
-                      const key = modelKey(model);
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          aria-current={
-                            key === selectedModelKey ? "page" : undefined
-                          }
-                          className="settings-model-item"
-                          onClick={() => setSelectedModelKey(key)}
-                        >
-                          <span>
-                            <strong>{model.name || model.id}</strong>
-                            {model.name !== model.id && (
-                              <small>{model.id}</small>
-                            )}
-                          </span>
-                          {model.current && (
-                            <Check aria-label={t("currentModel")} />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </section>
-                ))}
-                {!models.length && (
-                  <p className="settings-model-empty">{t("noModels")}</p>
-                )}
-              </div>
-              <div className="settings-model-provider-link">
-                <KeyRound aria-hidden="true" /> {t("providerReadOnly")}
-              </div>
-            </aside>
-            <div className="settings-model-detail">
-              {selectedModel ? (
-                <>
-                  <header className="settings-model-detail-heading">
-                    <div>
-                      <span>{t("model")}</span>
-                      <h1>{selectedModel.name || selectedModel.id}</h1>
-                      <code>{modelKey(selectedModel)}</code>
-                    </div>
-                    <Button
-                      label={
-                        selectedModel.current
-                          ? t("currentModel")
-                          : t("useThisModel")
-                      }
-                      variant={selectedModel.current ? "secondary" : "primary"}
-                      size="sm"
-                      icon={
-                        selectedModel.current ? (
-                          <Check aria-hidden="true" />
-                        ) : undefined
-                      }
-                      isDisabled={
-                        selectedModel.current || modelSelectionPending
-                      }
-                      isLoading={modelSelectionPending}
-                      onClick={() => onSelectModel(modelKey(selectedModel))}
-                    />
-                  </header>
-                  <dl className="settings-model-metadata">
-                    <div>
-                      <dt>{t("provider")}</dt>
-                      <dd>{selectedModel.provider}</dd>
-                    </div>
-                    <div>
-                      <dt>{t("modelId")}</dt>
-                      <dd>{selectedModel.id}</dd>
-                    </div>
-                  </dl>
-                  <ProviderStatusSection
-                    sessionId={sessionId}
-                    providerId={selectedModel.provider}
-                    active={section === "models"}
-                  />
-                </>
-              ) : (
-                <div className="provider-settings-state">
-                  <strong>{t("noModels")}</strong>
-                </div>
-              )}
-            </div>
+            {modelsVisited && (
+              <ProviderModelsSection
+                key={sessionId}
+                sessionId={sessionId}
+                models={models}
+                currentModel={currentModel}
+                busy={setupBusy}
+                focusCredentials={entry === "credentials"}
+                onSaved={onPreferencesChanged}
+                onDraftChange={setModelDraftDirty}
+                onSavingChange={setModelSaving}
+              />
+            )}
           </section>
 
           <div
             id="settings-panel-skills"
+            aria-labelledby="settings-tab-skills"
             role="tabpanel"
             hidden={section !== "skills"}
           >
@@ -422,11 +392,14 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
+              setupPending={setupPending || setupBusy}
+              onConfigure={configureOpenPi}
             />
           </div>
 
           <div
             id="settings-panel-subagents"
+            aria-labelledby="settings-tab-subagents"
             role="tabpanel"
             hidden={section !== "subagents"}
           >
@@ -434,6 +407,7 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               currentModel={currentModel}
+              models={models}
               activity={capabilities?.subagents}
               setupPending={setupPending || setupBusy}
               setupBlocked={planBlocked || planSelectionPending}
@@ -444,6 +418,7 @@ export function ProviderSettingsPage({
 
           <div
             id="settings-panel-plugins"
+            aria-labelledby="settings-tab-plugins"
             role="tabpanel"
             hidden={section !== "plugins"}
           >
@@ -451,6 +426,8 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
+              setupPending={setupPending || setupBusy}
+              onConfigure={configureOpenPi}
             />
           </div>
         </div>
@@ -460,22 +437,45 @@ export function ProviderSettingsPage({
             {setupError}
           </div>
         )}
-        {(setupSubmitted || currentOutcome) && !setupError && (
-          <div
-            className={
-              currentOutcome?.status === "failed"
-                ? "settings-global-error"
-                : "settings-global-status"
-            }
-            role={currentOutcome?.status === "failed" ? "alert" : "status"}
-          >
-            {currentOutcome
-              ? t(`setupOutcome_${currentOutcome.status}`)
-              : t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
-            {currentOutcome?.error && <p>{currentOutcome.error}</p>}
+        {(preferencePending || preferencesSaved) && !setupError && (
+          <div className="settings-global-status" role="status">
+            {t(
+              preferencePending ? "savingSettings" : "settingsPreferencesSaved",
+            )}
           </div>
         )}
+        {!preferencePending &&
+          !preferencesSaved &&
+          (setupSubmitted || currentOutcome) &&
+          !setupError && (
+            <div
+              className={
+                currentOutcome?.status === "failed"
+                  ? "settings-global-error"
+                  : "settings-global-status"
+              }
+              role={currentOutcome?.status === "failed" ? "alert" : "status"}
+            >
+              {currentOutcome
+                ? t(`setupOutcome_${currentOutcome.status}`)
+                : t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
+              {currentOutcome?.error && <p>{currentOutcome.error}</p>}
+            </div>
+          )}
       </section>
+      {pendingNavigation && (
+        <AlertDialog
+          isOpen
+          onOpenChange={(open: boolean) => {
+            if (!open) setPendingNavigation(null);
+          }}
+          title={t("unsavedSettingsTitle")}
+          description={t("unsavedSettingsDetail")}
+          cancelLabel={t("keepEditing")}
+          actionLabel={t("discardAndContinue")}
+          onAction={() => navigate(pendingNavigation, true)}
+        />
+      )}
     </Dialog>
   );
 }

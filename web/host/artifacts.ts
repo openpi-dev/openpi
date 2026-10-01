@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, open, realpath, stat } from "node:fs/promises";
+import { isUtf8 } from "node:buffer";
+import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, renameSync } from "node:fs";
+import { lstat, open, opendir, realpath, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
-import { ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata } from "../protocol/artifacts.ts";
+import { ARTIFACT_EDIT_BYTES, ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata, type WorkspaceFileEntry } from "../protocol/artifacts.ts";
 
 const MAX_HANDLES = 64;
 const MAX_READS = 4;
-const TEXT_EXTENSIONS = /\.(?:txt|md|markdown|json|csv|tsv|log|html?|css|[cm]?[jt]sx?|py|rs|go|java|c|h|cpp|yaml|yml|toml|xml|svg|sh|sql|diff|patch)$/iu;
 
 export class ArtifactError extends Error {
   readonly code: string;
@@ -25,19 +25,22 @@ function inside(root: string, path: string) {
   return part !== "" && part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part);
 }
 
-interface Scope { sessionId: string; cwd: string }
-interface Grant { scope: Scope; path: string; requested: string; touched: number }
+interface Scope { sessionId: string; cwd: string; sessionPath?: string }
+interface Grant { scope: Scope; path: string; requested: string; readRoot: string; external: boolean; touched: number }
 
 function metadataIdentity(info: import("node:fs").BigIntStats) {
   return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(":");
 }
 
-/** An explicit authenticated file-open request grants one read-only file.
- * No directory grants, persistence, background reads, or model-facing tools. */
+/** Authenticated reads grant one file or one scoped directory cursor.
+ * Saving is a separate explicit, revision-checked workspace-only operation.
+ * No persistence, background filesystem reads, or model-facing tools. */
 export class ArtifactReader {
   private readonly handles = new Map<string, Grant>();
+  private readonly listings = new Map<string, { key: string; scan: AsyncGenerator<WorkspaceFileEntry | null>; checks: Map<string, import("node:fs").BigIntStats>; next: IteratorResult<WorkspaceFileEntry | null>; timer: ReturnType<typeof setTimeout> }>();
   private scopeKey = "";
   private reads = 0;
+  private readonly saving = new Set<string>();
   private disposed = false;
   private readonly currentScope: () => Scope | undefined;
   constructor(currentScope: () => Scope | undefined) { this.currentScope = currentScope; }
@@ -45,19 +48,22 @@ export class ArtifactReader {
   private scope() {
     const scope = this.currentScope();
     if (this.disposed || !scope) throw denied();
-    const key = `${scope.sessionId}\0${scope.cwd}`;
-    if (key !== this.scopeKey) { this.handles.clear(); this.scopeKey = key; }
+    const key = `${scope.sessionId}\0${scope.cwd}\0${scope.sessionPath ?? ""}`;
+    if (key !== this.scopeKey) { this.revoke(); this.scopeKey = key; }
     for (const [handle, grant] of this.handles) if (Date.now() - grant.touched > 120_000) this.handles.delete(handle);
     return scope;
   }
 
-  private async canonical(scope: Scope, reference: string, base?: string) {
+  private decodeReference(reference: string) {
     if (!reference || reference.length > 4096 || /[\x00-\x1f\x7f]/u.test(reference) || /^(?:\\\\|\/\/)/u.test(reference)) throw denied();
     let decoded: string;
     try { decoded = decodeURIComponent(reference); } catch { throw denied(); }
     if (/[\x00-\x1f\x7f]/u.test(decoded) || /^(?:\\\\|\/\/)/u.test(decoded) || /:/u.test(decoded.replace(/^[a-z]:[\\/]/iu, ""))) throw denied();
-    const root = await realpath(scope.cwd);
-    const requested = resolve(base ?? root, decoded);
+    return decoded;
+  }
+
+  private async canonical(scope: Scope, requested: string, readRoot = scope.cwd, allowRoot = false) {
+    const root = await realpath(readRoot);
     // Find the actual workspace boundary, including Windows short-name aliases
     // in any ancestor. Never follow a link below that boundary.
     const volumeRoot = parse(requested).root;
@@ -75,7 +81,7 @@ export class ArtifactReader {
           // pointing at the root is not an additional grant. Compare identity,
           // so alternate 8.3 spellings of the selected junction still work.
           if (info.isSymbolicLink()) {
-            const selected = await lstat(scope.cwd, { bigint: true });
+            const selected = await lstat(readRoot, { bigint: true });
             if (!selected.isSymbolicLink() || selected.dev !== info.dev || selected.ino !== info.ino) throw denied();
           }
           reachedRoot = true;
@@ -89,25 +95,125 @@ export class ArtifactReader {
         throw error;
       }
     }
-    if (!reachedRoot || !inside(root, path)) throw denied();
+    if (!reachedRoot || (!inside(root, path) && !(allowRoot && relative(root, path) === ""))) throw denied();
     return { path, requested };
   }
 
   private assertScope(scope: Scope) {
     const current = this.scope();
-    if (current.sessionId !== scope.sessionId || current.cwd !== scope.cwd) throw denied();
+    if (current.sessionId !== scope.sessionId || current.cwd !== scope.cwd || current.sessionPath !== scope.sessionPath) throw denied();
+  }
+
+  /** Paged reads retain one bounded cursor, never an unbounded recursive snapshot. */
+  async listFiles(sessionId: string, reference = ".", query = "", sessionPath?: string, cursor?: string) {
+    const scope = this.scope();
+    if (sessionId !== scope.sessionId || (sessionPath !== undefined && sessionPath !== scope.sessionPath)) throw denied();
+    if (query.length > 200 || /[\x00-\x1f\x7f]/u.test(query)) throw denied();
+    if (this.reads >= MAX_READS) throw new ArtifactError("ARTIFACT_BUSY", 429, "File reads are busy. Try again shortly.");
+    this.reads++;
+    let scan: AsyncGenerator<WorkspaceFileEntry | null> | undefined;
+    try {
+      const root = await realpath(scope.cwd);
+      const base = await this.canonical(scope, resolve(root, this.decodeReference(reference)), scope.cwd, true);
+      const path = relative(root, base.path).split(sep).join("/") || ".";
+      const key = JSON.stringify([scope, path, query]);
+      const saved = cursor ? this.listings.get(cursor) : undefined;
+      if (cursor && (!saved || saved.key !== key)) throw new ArtifactError("ARTIFACT_EXPIRED", 410, "File list expired. Refresh the directory.");
+      if (saved && cursor) { clearTimeout(saved.timer); this.listings.delete(cursor); }
+      if (!saved && this.listings.size >= 16) throw new ArtifactError("ARTIFACT_LIMIT", 429, "Too many open file lists. Collapse a directory before continuing.");
+      const checks = saved?.checks ?? new Map<string, import("node:fs").BigIntStats>();
+      scan = saved?.scan ?? this.scanFiles(scope, root, base.path, query.trim().toLocaleLowerCase(), checks);
+      const entries: WorkspaceFileEntry[] = [];
+      let item = saved?.next ?? await scan.next();
+      let visited = 0;
+      while (!item.done && entries.length < 250 && visited++ < 2_000) {
+        if (item.value) entries.push(item.value);
+        item = await scan.next();
+      }
+      // Verify every directory touched by this page before exposing any names.
+      for (const [directory, before] of checks) {
+        const after = await this.canonical(scope, directory, scope.cwd, true);
+        const info = await lstat(after.path, { bigint: true });
+        if (info.dev !== before.dev || info.ino !== before.ino || info.mtimeNs !== before.mtimeNs || after.path !== directory) throw new ArtifactError("ARTIFACT_CHANGED", 409, "Directory changed. Refresh to read its current entries.");
+      }
+      checks.clear();
+      this.assertScope(scope);
+      let nextCursor: string | undefined;
+      if (!item.done) {
+        nextCursor = randomUUID();
+        const token = nextCursor;
+        const timer = setTimeout(() => this.releaseListing(token), 300_000);
+        timer.unref();
+        this.listings.set(token, { key, scan, checks, next: item, timer });
+      }
+      entries.sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+      return { path, entries, truncated: false, ...(nextCursor ? { nextCursor } : {}) };
+    } catch (error) { await scan?.return(undefined); throw this.classify(error); }
+    finally { this.reads--; }
+  }
+
+  private async *scanFiles(scope: Scope, root: string, base: string, needle: string, checks: Map<string, import("node:fs").BigIntStats>): AsyncGenerator<WorkspaceFileEntry | null> {
+    const queue = [base];
+    while (queue.length) {
+      const directory = queue.shift()!;
+      const current = await this.canonical(scope, directory, scope.cwd, true);
+      const before = await lstat(current.path, { bigint: true });
+      if (!before.isDirectory()) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Choose a directory.");
+      const stream = await opendir(current.path);
+      try {
+        // Explicit read/close supports pausing across HTTP pages without the
+        // async iterator closing the directory at each page boundary.
+        for (;;) {
+          checks.set(current.path, before);
+          const entry = await stream.read();
+          if (!entry) break;
+          const path = relative(root, resolve(current.path, entry.name)).split(sep).join("/");
+          const kind = entry.isSymbolicLink() ? "symlink" : entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other";
+          if (needle && kind === "directory" && ![".git", "node_modules"].includes(entry.name)) {
+            if (queue.length >= 10_000) throw new ArtifactError("ARTIFACT_LIMIT", 413, "Search is too broad. Search within a smaller directory.");
+            queue.push(resolve(current.path, entry.name));
+          }
+          this.assertScope(scope);
+          yield !needle || entry.name.toLocaleLowerCase().includes(needle) ? { name: entry.name, path, kind } : null;
+        }
+      } finally { await stream.close(); }
+      if (!needle) break;
+    }
+  }
+
+  releaseListing(cursor: string) {
+    const saved = this.listings.get(cursor);
+    if (!saved) return;
+    this.listings.delete(cursor);
+    clearTimeout(saved.timer);
+    void saved.scan.return(undefined).catch(() => undefined);
   }
 
   async resolveFile(sessionId: string, reference: string, parent?: string) {
+    return this.issueGrant(sessionId, reference, parent, false);
+  }
+
+  /** Explicit operator consent grants this file only, never its directory. */
+  async authorizeFile(sessionId: string, reference: string) {
+    return this.issueGrant(sessionId, reference, undefined, true);
+  }
+
+  private async issueGrant(sessionId: string, reference: string, parent: string | undefined, external: boolean) {
     const scope = this.scope();
     if (sessionId !== scope.sessionId) throw denied();
     const base = parent ? this.requireGrant(parent, sessionId).path : undefined;
     try {
-      const { path, requested } = await this.canonical(scope, reference, base ? dirname(base) : undefined);
+      const decoded = this.decodeReference(reference);
+      if (external && !isAbsolute(decoded)) throw denied();
+      const requested = resolve(base ? dirname(base) : await realpath(scope.cwd), decoded);
+      const readRoot = external ? dirname(requested) : scope.cwd;
+      const { path } = await this.canonical(scope, requested, readRoot);
+      const info = await lstat(path);
+      if (external && !info.isFile()) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Only regular files can be opened.");
       this.assertScope(scope);
       if (this.handles.size >= MAX_HANDLES) throw new ArtifactError("ARTIFACT_LIMIT", 429, "Too many open files. Close a preview before opening another.");
       const handle = randomUUID();
-      this.handles.set(handle, { scope, path, requested, touched: Date.now() });
+      this.handles.set(handle, { scope, path, requested, readRoot, external, touched: Date.now() });
       return handle;
     } catch (error) { throw this.classify(error); }
   }
@@ -123,7 +229,7 @@ export class ArtifactReader {
   async metadata(handle: string, sessionId: string) {
     const grant = this.requireGrant(handle, sessionId);
     try {
-      const current = await this.canonical(grant.scope, grant.requested);
+      const current = await this.canonical(grant.scope, grant.requested, grant.readRoot);
       if (current.path !== grant.path) throw denied();
       const info = await lstat(current.path, { bigint: true });
       if (!info.isFile()) throw denied();
@@ -132,12 +238,13 @@ export class ArtifactReader {
     } catch (error) { throw this.classify(error); }
   }
 
-  async read(handle: string, sessionId: string, expectedRevision?: string) {
+  async read(handle: string, sessionId: string, expectedRevision?: string, offset = 0) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > ARTIFACT_MAX_BYTES || (offset > 0 && !expectedRevision)) throw denied();
     const grant = this.requireGrant(handle, sessionId);
     if (this.reads >= MAX_READS) throw new ArtifactError("ARTIFACT_BUSY", 429, "File reads are busy. Try again shortly.");
     this.reads++;
     try {
-      const canonical = await this.canonical(grant.scope, grant.requested);
+      const canonical = await this.canonical(grant.scope, grant.requested, grant.readRoot);
       if (canonical.path !== grant.path) throw denied();
       const beforePath = await stat(grant.path, { bigint: true });
       if (!beforePath.isFile()) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Only regular files can be opened.");
@@ -154,21 +261,76 @@ export class ArtifactReader {
           length += bytesRead;
         }
         const after = await file.stat({ bigint: true });
-        const current = await this.canonical(grant.scope, grant.requested);
+        const current = await this.canonical(grant.scope, grant.requested, grant.readRoot);
         const afterPath = await stat(current.path, { bigint: true });
         this.assertScope(grant.scope);
         if (before.size !== BigInt(length) || after.size !== before.size || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs || afterPath.ino !== before.ino || afterPath.dev !== before.dev || current.path !== grant.path) throw new ArtifactError("ARTIFACT_CHANGED", 409, "File changed while being read. Refresh to load a stable version.");
         const bytes = buffer.subarray(0, length);
         const revision = createHash("sha256").update(bytes).digest("hex");
         if (expectedRevision && revision !== expectedRevision) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file has a newer version. Refresh before downloading.");
-        const textual = (TEXT_EXTENSIONS.test(grant.path) || !basename(grant.path).includes(".")) && !bytes.subarray(0, ARTIFACT_PREVIEW_BYTES).includes(0);
-        const artifact: ArtifactMetadata = { handle, sessionId, path: grant.path, name: basename(grant.path), revision, bytes: length, preview: textual ? "text" : "unsupported" };
-        const lines = textual ? new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(0, ARTIFACT_PREVIEW_BYTES), { stream: length > ARTIFACT_PREVIEW_BYTES }).split("\n") : undefined;
+        const textual = !/\.(?:pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|zip)$/iu.test(grant.path) && !bytes.includes(0) && isUtf8(bytes);
+        const artifact: ArtifactMetadata = { handle, sessionId, path: grant.path, name: basename(grant.path), revision, bytes: length, preview: textual ? "text" : "unsupported", editable: textual && length <= ARTIFACT_EDIT_BYTES && !grant.external };
+        const lines = textual ? new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(offset, offset + ARTIFACT_PREVIEW_BYTES), { stream: length > offset + ARTIFACT_PREVIEW_BYTES }).split("\n") : undefined;
         const text = lines?.slice(0, ARTIFACT_PREVIEW_LINES).join("\n");
-        return { bytes, preview: { artifact, identity: metadataIdentity(after), text, truncated: textual && (length > ARTIFACT_PREVIEW_BYTES || (lines?.length ?? 0) > ARTIFACT_PREVIEW_LINES) } };
+        const nextOffset = offset + Buffer.byteLength(text ?? "");
+        const truncated = textual && nextOffset < length;
+        return { bytes, preview: { artifact, identity: metadataIdentity(after), text, truncated, ...(truncated ? { nextOffset } : {}) } };
       } finally { await file.close(); }
     } catch (error) { throw this.classify(error); }
     finally { this.reads--; }
+  }
+
+  async save(handle: string, sessionId: string, revision: string, text: string) {
+    const grant = this.requireGrant(handle, sessionId);
+    if (grant.external) throw denied();
+    if (!/^[a-f0-9]{64}$/u.test(revision)) throw denied();
+    const bytes = Buffer.from(text, "utf8");
+    if (bytes.length > ARTIFACT_EDIT_BYTES) throw new ArtifactError("ARTIFACT_TOO_LARGE", 413, "Editing is limited to 1 MiB of UTF-8 text.");
+    if (bytes.includes(0) || bytes.toString("utf8") !== text) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Only UTF-8 text can be saved.");
+    if (this.saving.has(grant.path)) throw new ArtifactError("ARTIFACT_BUSY", 409, "This file is already being saved.");
+    this.saving.add(grant.path);
+    let temporary: string | undefined;
+    try {
+      const before = await this.read(handle, sessionId, revision);
+      if (!before.preview.artifact.editable) throw denied();
+      const info = await lstat(grant.path, { bigint: true });
+      if (metadataIdentity(info) !== before.preview.identity) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
+      const directory = dirname(grant.path);
+      const directoryInfo = await lstat(directory, { bigint: true });
+      temporary = resolve(directory, `.openpi-save-${randomUUID()}`);
+      const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), Number(info.mode & 0o777n));
+      try { await file.chmod(Number(info.mode & 0o777n)); await file.writeFile(bytes); await file.sync(); }
+      finally { await file.close(); }
+      const current = await this.canonical(grant.scope, grant.requested);
+      // No await between the final identity/content checks and atomic replacement:
+      // another HTTP save or Session transition cannot interleave this commit.
+      this.assertScope(grant.scope);
+      if (this.handles.get(handle) !== grant || current.path !== grant.path) throw denied();
+      const parent = lstatSync(directory, { bigint: true });
+      const latest = lstatSync(grant.path, { bigint: true });
+      if (parent.dev !== directoryInfo.dev || parent.ino !== directoryInfo.ino || !latest.isFile() || metadataIdentity(latest) !== before.preview.identity)
+        throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
+      const descriptor = openSync(grant.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      try {
+        const snapshot = fstatSync(descriptor, { bigint: true });
+        if (!snapshot.isFile() || metadataIdentity(snapshot) !== before.preview.identity) throw denied();
+        const content = Buffer.alloc(Number(snapshot.size) + 1);
+        let length = 0;
+        while (length < content.length) {
+          const count = readSync(descriptor, content, length, content.length - length, length);
+          if (!count) break;
+          length += count;
+        }
+        if (metadataIdentity(fstatSync(descriptor, { bigint: true })) !== before.preview.identity || createHash("sha256").update(content.subarray(0, length)).digest("hex") !== revision)
+          throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Your draft has not been saved.");
+      } finally { closeSync(descriptor); }
+      // Windows cannot replace the destination while its read handle is open.
+      // Keep closure and replacement synchronous with the final checks above.
+      renameSync(temporary, grant.path);
+      temporary = undefined;
+      return { revision: createHash("sha256").update(bytes).digest("hex") };
+    } catch (error) { throw this.classify(error); }
+    finally { if (temporary) await unlink(temporary).catch(() => undefined); this.saving.delete(grant.path); }
   }
 
   release(handle: string, sessionId: string) {
@@ -184,6 +346,6 @@ export class ArtifactReader {
     return new ArtifactError("ARTIFACT_READ_ERROR", 500, "Unable to read this file.");
   }
 
-  dispose() { this.disposed = true; this.handles.clear(); }
-  revoke() { this.handles.clear(); }
+  dispose() { this.disposed = true; this.revoke(); }
+  revoke() { this.handles.clear(); for (const cursor of this.listings.keys()) this.releaseListing(cursor); }
 }

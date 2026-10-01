@@ -28,5 +28,7 @@ export function useSettingsCatalog(sessionId: string) {
     catalog,
     error,
     refresh,
+    updateSetup: (setup: WebSettingsCatalog["setup"]) =>
+      setCatalog((current) => (current ? { ...current, setup } : current)),
   };
 }

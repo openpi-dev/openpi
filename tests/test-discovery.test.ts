@@ -24,6 +24,11 @@ test("recursive discovery includes nested Node and Vitest suites", () => {
       resolve(testsRoot, "extensions", "file-search", "index.spec.ts"),
     ),
   );
+  for (const name of ["full-message-ui", "turn-changes-ui"]) {
+    assert.ok(
+      discovered.includes(resolve(testsRoot, "web", `${name}.spec.ts`)),
+    );
+  }
 });
 
 test("test support stays outside the production extension tree", () => {

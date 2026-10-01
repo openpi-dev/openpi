@@ -424,7 +424,7 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 | Worktree 清理    | 未知即保留；Git、Handoff 或超时状态不确定时绝不删除                       |
 | 终端输出         | 控制字符、方向格式符与超长内容在 ingress / render 边界清洗、限长          |
 | Shutdown         | Terminal、Subagent、Workflow 都有有界取消、清理与唯一终态                 |
-| 用户配置         | 单一受限 typed tool 写入；不散落扩展私有配置入口                          |
+| 用户配置         | 共享校验与存储；自然语言使用受限工具，Web 显示控件直接保存                 |
 | 模型消费         | Suggestion 默认关闭；adaptive 仅在显式开启后允许模型自主加载能力           |
 
 独立的 [pi-intercom](https://github.com/nicobailon/pi-intercom) package 只适合顶层 Pi Session。它使用进程级身份，而 OpenPI Child 是同一进程内的并发 Session；Child Resource Loader 会从 npm、Git 和 local package source 中精确移除 pi-intercom 扩展与 Skill，避免身份串线，同时保留普通同名项目资源。Replay 也不会复用其调用。
@@ -433,7 +433,9 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 ## 配置与参考
 
-### 一个配置入口
+### 自然语言配置与页面设置
+
+`/openpi-setup` 是自然语言配置入口。Web 的主题、聊天宽度、字号、默认展开思考块和置顶排序控件直接保存，不调用模型、不产生聊天消息，模型运行或 Plan 模式下也可调整。这些展示偏好仍使用同一份 `my-pi-setup.json` 和共享配置锁、校验、未知字段保留及原子写入；以保存接口成功回执更新界面。其他 OpenPI 自有配置继续通过 setup 回合修改。
 
 个人配置 `my-pi-setup.json` 使用 `configVersion: 1`。无参数 `/openpi-setup` 展示配置来源、版本、字段诊断与是否允许写入。缺文件时仅使用默认值；旧格式仅在明确保存时迁移；JSON 损坏、读取失败、不支持的版本及非法已知字段会阻止覆盖，并保留原文件。未知字段会警告并保留；会丢失未知字段的修改被拒绝。有 UI 的 Session 启动或扩展重载时，加载错误会主动提示正在使用安全默认值且写入已阻止；旧格式或未知字段会给出简短警告，引导到 `/openpi-setup` 查看详情，不触发模型调用或自动改写文件。缺文件和合法的当前版本配置不告警。当前 Session 应用失败时尝试恢复旧文件和配置；若文件已被外部修改或恢复失败，则报告恢复不完整。诊断不展示字段原值或 post-edit 命令。修复文件或明确移除文件后才能恢复配置写入，入口仍为 `/openpi-setup`。
 
@@ -446,7 +448,13 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 Plan 模式下需先退出规划，再通过 `/openpi-setup` 修改配置。Web 设置页会禁用相关修改入口，并在会话空闲时提供退出按钮；退出仅切换状态，不调用模型或开始实施。Setup 在接收命令和投递排队请求时都检查当前 Session 的 Plan 状态。设置页依据实际工具回执反馈保存、设置未变化、失败或取消；回合结束或模型声称成功都不能替代保存回执。
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+Web 侧栏支持独立置顶会话分区。行内图钉可置顶或取消，置顶区菜单切换最近更新和手动排序；手动模式支持拖动以及会话菜单上移/下移。`ui.webPinnedSort` 默认为 `manual`，可选 `updated`，由 `/openpi-setup` 或置顶区菜单保存。置顶顺序保存在当前 Web 会话目录的工作区元数据中；归档暂时隐藏置顶，恢复后保留顺序。
+
+会话行右侧只保留三种提示：执行中的转圈、已完成未读的小圆点、需要处理的提示。等待输入和失败共用需要处理标记，悬停或打开会话可查看具体原因；停止和未知结果恢复普通行。断线时收起执行动画，由页面连接状态统一提示，绝不当作完成。打开会话并在可见页面停留四秒后，完成圆点在当前浏览器标签页内记为已读；后台完成回执在当前 Host 生命周期内保留，不将已释放运行实例误报为空闲。
+
+Web 模型配置先填写提供商连接，再选择“获取可用模型”。列表支持搜索、勾选当前结果和批量添加，已有配置不会重复添加；搜索保留其他结果的勾选。查询仅请求提供商模型目录，不调用模型。可使用同一已保存端点的 Pi 凭据，或输入仅用于本次查询的临时密钥；临时密钥不会保存。新增模型沿用表单里的能力默认值，可在高级参数中逐项调整。提供商不支持目录接口时仍可手动添加。
+
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
@@ -483,6 +491,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Web 主题                    | `system`；另有 `light` / `dark` / `mist` / `rose` / `pine` |
 | Web 聊天宽度 / 聊天字号     | 820px / 14px；范围 820-2000px / 12-24px        |
 | Web 思考块                  | 默认折叠                                       |
+| Web 置顶排序                | `manual` 手动排序；可选 `updated` 最近更新      |
 | 大型 Header                  | 关闭                                           |
 | Dashboard Footer             | 开启；单行 `plain`                           |
 | Subagent / Bash / Write/Edit | `compact` / `compact` / `compact`             |
@@ -573,7 +582,7 @@ pi install npm:pi-intercom
 
 ### 独立 Web 工作台
 
-Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的 Pi `AgentSessionRuntime`、独立 `~/.pi/agent/web-sessions` 持久化目录和生命周期；浏览器发送消息、新建 Session 或切换工作区，不会写入或切换任何已经运行的终端 Pi Session，Web Session 也不会出现在终端的默认 Session 列表中。在侧栏选择 Session 会把它激活为 Web 进程的当前 Pi Session；Prompt 只会投递到请求时仍匹配的活动 Web Session。独立的只读历史浏览不属于首版范围。
+Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的 Pi `AgentSessionRuntime`、独立 `~/.pi/agent/web-sessions` 持久化目录和生命周期；浏览器发送消息、新建 Session 或切换工作区，不会写入或切换任何已经运行的终端 Pi Session，Web Session 也不会出现在终端的默认 Session 列表中。在侧栏选择 Session 会把它激活为 Web 进程的当前 Pi Session；Prompt 只会投递到请求时仍匹配的活动 Web Session。其他页面切换活动会话时，本页保留正在看的会话及其后台进度；需要继续对话或使用交互工具时，点击“切换到此会话”。读取与刷新不会自动抢占活动会话。
 
 同一 Pi agent 目录一次只允许一个 Web Host 持有该 Session/元数据目录。第二个 `openpi web` 会明确拒绝启动；正常关停会先排空共享目录变更再释放租约，进程崩溃后仅在确认原 owner 的 PID 与进程启动身份不再匹配时恢复。一个 Host 可在侧栏管理多个工作区，因此不需要为每个仓库启动一个进程。
 
@@ -594,6 +603,25 @@ openpi web /path/to/repo      # 指定初始工作区
 
 Web 可以在选择工作区之前预选可用模型。选择仅保留在当前页面，创建会话后确认模型生效再发送第一条消息；模型不可用时会提示并阻止发送，不会自动换成默认模型。打开已有会话时使用该会话的模型。
 
+Web 设置页可以添加或编辑自定义模型、保存服务商 API Key。模型写入 Pi 原生 `models.json`，密钥通过 Pi 登录接口写入原生凭据存储，已有密钥不会回显或进入模型对话。写入要求活动会话空闲；外部配置发生变化时需刷新后重试。OAuth 和需要额外认证字段的服务商仍使用 Pi 原生登录。Web 显示偏好直接保存；技能、插件、子代理及其他 OpenPI 自有配置表单提交到 `/openpi-setup`，进度与确认留在会话中；setup 提交回执不代表配置已保存。
+
+设置中的模型树直接选择编辑对象，同一会话的未保存模型草稿会保留。窄屏设置使用带文字的分类选择器；聊天宽度和字号支持直接恢复默认值。自然语言配置请求在对话中显示原始操作及后续结果，运行期间暂停再次提交 setup，成功与否以原生配置结果为准。
+
+输入 `/` 可查看原生发现的命令及不可用原因。`/openpi-setup` 使用原生配置回合；无参数的 `/ps`、`/lg`、`/subagents`、`/btw` 打开对应 Web 面板，不发送模型请求。这些面板快捷命令不接收参数或图片，带参时保留输入并提示。`/usage` 使用原生命令，在聊天中显示查询结果。运行中的回合显示“已处理”时间，结束后显示“用时”；时间从 Pi 实际开始执行计算，并随原生 Session 保存。没有可靠耗时记录的旧回合不推算补值。
+
+输入框支持直接粘贴受支持的图片和混合文字，读取期间保留发送等待状态。「文件」直接浏览工作区：右侧文件树、左侧原位预览，不为每个文件另开窗口。目录和文件名搜索可点击「加载更多」，长文本可按同一内容版本「继续读取」；展开位置、搜索词和阅读位置在面板内保留。文件树重新打开、窗口重新获得焦点或点击刷新时更新；文本有新版本时先提示，手动刷新后替换内容。
+
+文件顶部提供「预览 / 编辑」切换、保存按钮与 Cmd/Ctrl+S。工作区内不超过 1 MiB 的 UTF-8 文本在完整读取后可编辑；文件保存核对内容版本，检测到外部修改时保留草稿，刷新后可查看磁盘版本并手动核对。当前浏览器窗口最多保留 16 份内存草稿，切换文件或会话后重新打开文件可继续，刷新页面不保留。工作区外的授权文件仍只读。Markdown 右上角的章节目录可展开、跳转到标题，并标记当前章节；窄面板中正文和文件树仍是独立列，可手动收起文件树扩大阅读区域。
+
+文件预览支持 Markdown（含 Mermaid 放大、表格和安全的内嵌 HTML）、代码语法高亮、CSV／TSV、PNG／JPEG／GIF／WebP、SVG／HTML 沙箱、PDF 分页，以及 DOCX 内容、XLSX 工作表、PPTX 文字与图片。Office 是内容预览，不保证与原软件的分页、主题、图表和动画一致；旧版二进制 Office 格式可下载后打开。文件读取和下载上限为 20 MiB，Office 解压、表格单元格与渲染时间另有资源上限。HTML／SVG 不执行脚本或加载外部资源；文件树显示但不跟随符号链接。Git、文件和子代理面板隐藏时会减少自动读取，重新打开时恢复更新。
+
+长会话可向上加载更早的消息，通常按最多 20 个用户回合取页，同时保留 250 条/2 MiB 上限；单个过大的回合仍可分段找回。阅读窗口上限为 1000 条/8 MiB。加载和流式追加保持阅读位置；发送新消息或点击“跳至最新”返回当前尾部。单条超长用户或助手正文可按原生条目 ID 显式加载完整内容，每次最多读取 32,000 个字符；工具输出仍保持有界预览。运行中有草稿时同时提供发送和停止按钮，排队数来自 Pi；已接收不表示已经执行完成。
+
+变更面板默认展示 Git 未暂存变更，也可切换到暂存、分支或会话基线；输入框不再显示整个工作区的累计变更文件。新 Web 回合在对话中展示该轮期间的文件变化，审阅读取随 Pi Session 保存的有界 diff，不会用当前工作树冒充历史结果。此比较不能区分同一时间其他进程的改动；非 Git 工作区、过大的初始变更或超出记录上限时会标明无法验证或部分结果，旧回合不回填。手动变更面板的列表与逐文件 diff 分开加载，大型未跟踪文件不会阻止读取整个工作区；达到显示限额会标注截断。会话基线仍是有容量限制的附加视图，不能替代 Git。原生编辑记录保留在对话的工具证据中；读取工作区外的文件需点击“只读打开此文件”，仅授权该文件，不放宽整个目录。
+
+内嵌浏览器采用 React + TypeScript 工具栏和原生 iframe，输入、滚动和选中文字由用户浏览器直接处理，不启动额外 Chromium 或传输视频。支持最多 8 个页内标签页。未安装扩展时只记录手动地址历史，跨站实际地址无法读取，网页弹窗由外部浏览器打开。
+
+可选安装 [OpenPI Browser Bridge](web/browser-extension/README.md)（Chrome/Edge 145+）：安装后在本机工作台默认启用，同步实际地址/标题、刷新当前页面，并把普通新窗口链接转为内部标签页。扩展仅在连接的 OpenPI 标签页中移除外部子框架的 `X-Frame-Options`，保留完整 CSP；仍不保证所有网站可嵌入，跨站历史及部分登录弹窗需外部浏览器。扩展由浏览器原生安装/权限流程管理，不自动安装，不增加 Pi 配置。浏览器标签页随当前会话/工具的关闭而释放，面板暂时隐藏时保留。路线切换与已放弃的视频试验见 [浏览器试用记录](docs/research/WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md)。
 在 Plan／Setup 原有工具范围内，模型调用 `ask_user` 时，发起任务的 Web 标签页会显示结构化问题卡片：选择选项、添加补充说明或填写自己的答案，复核后才提交给正在等待的工具调用。关闭卡片不会提交草稿；留空的自定义答案表示要求澄清问题。刷新同一标签可恢复尚未过期的提问（未提交草稿不持久化），其他标签不能代答。提问最多等待 15 分钟，停止运行、切换 Session 或关闭 Host 会取消等待；它不替代原生权限审批，也不意味着任意终端自定义界面已支持 Web。
 
 OpenPI 的 `/plan` 调研通过 `plan_ready` 成功提交计划后，Web 会在聊天区展示可收起、可复制的 Markdown 计划卡片，刷新后仍可查看。卡片展示的是工具返回的计划，不代表批准或开始实施；超出 Web 传输上限的结果会标明为预览。输入框上方的开关由现有 Plan 扩展切换当前 Session 的规划状态，不调用模型、不发送命令气泡，也不清空草稿；发送任务后才开始规划。首次发送后，输入框占位提示会说明“本次对话使用 Plan 模式”，刷新后保留，退出后恢复。任务运行期间不能切换模式，退出不代表批准或开始实施。Plan Ready 时，用户可选择“准备实施提示”；确认替换现有草稿后，Web 会把扩展生成的实施提示词放入输入框，但此时计划仍为 Ready、写入门禁仍关闭，也不会自动发送。用户检查、编辑并提交提示词后，只有 Pi 接受该 prompt，当前 Session 才会退出 Plan 并开放写入；模型、认证或其他预检拒绝时，计划保持 Ready。准备实施前刷新或切换 Session 不会清除 Pi 中保存的计划；准备后的未提交提示词遵循 Web 编辑框的草稿生命周期。`/plan off` 仍可随时退出；新建实施 Session 仍需使用 TUI。

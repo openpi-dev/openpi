@@ -1,6 +1,7 @@
 export const ARTIFACT_MAX_BYTES = 20 * 1024 * 1024;
 export const ARTIFACT_PREVIEW_BYTES = 256 * 1024;
 export const ARTIFACT_PREVIEW_LINES = 5_000;
+export const ARTIFACT_EDIT_BYTES = 1024 * 1024;
 export interface ArtifactMetadata {
   handle: string;
   sessionId: string;
@@ -9,12 +10,27 @@ export interface ArtifactMetadata {
   revision: string;
   bytes: number;
   preview: "text" | "unsupported";
+  editable?: boolean;
 }
 export interface ArtifactPreview {
   identity?: string;
   artifact: ArtifactMetadata;
   text?: string;
   truncated: boolean;
+  nextOffset?: number;
+}
+
+export interface WorkspaceFileEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file" | "symlink" | "other";
+}
+
+export interface WorkspaceFileListing {
+  path: string;
+  entries: WorkspaceFileEntry[];
+  truncated: boolean;
+  nextCursor?: string;
 }
 
 /** Keep the original reference; URL resolution belongs to the Host. */

@@ -1,6 +1,5 @@
 import { List, ListItem } from "@astryxdesign/core/List";
-import { StatusDot } from "@astryxdesign/core/StatusDot";
-import { ArrowLeft, Bot, ChevronRight, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, Bot, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -12,6 +11,8 @@ import { Markdown } from "../../components/Markdown.tsx";
 import { formatElapsedMs } from "../../lib/format.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
 import type { RecordedSubagent } from "./recorded-subagents.ts";
+import { SubagentAvatar } from "./SubagentAvatar.tsx";
+import { subagentOverview } from "./subagent-overview.ts";
 
 // Bounded transcript projections have no message IDs and drop older entries.
 // Content + duplicate occurrence keeps disclosures on their own message as
@@ -75,6 +76,8 @@ export function SubagentDetailView({
   liveAvailable,
   fullView,
   readOnlyNote = true,
+  active = true,
+  refreshRevision = 0,
 }: {
   sessionId: string;
   id: string;
@@ -84,6 +87,8 @@ export function SubagentDetailView({
   liveAvailable: boolean;
   fullView: boolean;
   readOnlyNote?: boolean;
+  active?: boolean;
+  refreshRevision?: number;
 }) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<WebSubagentDetail | null>(null);
@@ -94,8 +99,9 @@ export function SubagentDetailView({
   const viewport = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly requests a fresh detail projection.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revisions explicitly request a fresh detail projection.
   useEffect(() => {
+    if (!active) return;
     if (!liveAvailable) {
       setLoading(false);
       setError(t("subagentUnavailable"));
@@ -162,7 +168,17 @@ export function SubagentDetailView({
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", resume);
     };
-  }, [client, sessionId, id, activity?.status, revision, liveAvailable, t]);
+  }, [
+    active,
+    client,
+    sessionId,
+    id,
+    activity?.status,
+    revision,
+    refreshRevision,
+    liveAvailable,
+    t,
+  ]);
 
   useLayoutEffect(() => {
     void detail;
@@ -196,7 +212,11 @@ export function SubagentDetailView({
   );
   const SectionHeading = fullView ? "h2" : "h3";
   return (
-    <section className="subagent-detail" aria-label={t("subagentDetails")}>
+    <section
+      className="subagent-detail"
+      aria-label={t("subagentDetails")}
+      hidden={!active}
+    >
       <header className="subagent-detail-heading">
         <div>
           <span className={`subagent-state ${state ?? "unknown"}`}>
@@ -421,8 +441,22 @@ export function SubagentPanel({
   liveAvailable?: boolean;
   onClose: () => void;
 }) {
-  const { t } = useTranslation();
-  const [selectedId, select] = useState<string | null>(initialId ?? null);
+  const { t, i18n } = useTranslation();
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  const listViewport = useRef<HTMLElement>(null);
+  const listScroll = useRef(0);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialId ?? null,
+  );
+  const [detailId, setDetailId] = useState<string | null>(initialId ?? null);
+  useLayoutEffect(() => {
+    if (!selectedId && listViewport.current)
+      listViewport.current.scrollTop = listScroll.current;
+  }, [selectedId]);
+  const select = (id: string | null) => {
+    if (id) setDetailId(id);
+    setSelectedId(id);
+  };
   const [fullView, setFullView] = useState(
     () => window.matchMedia?.("(max-width: 1100px)").matches ?? false,
   );
@@ -435,7 +469,7 @@ export function SubagentPanel({
     return () => media.removeEventListener("change", update);
   }, []);
   const client = useMemo(() => new WebClient(), []);
-  const items = activity?.items ?? [];
+  const items = liveAvailable ? (activity?.items ?? []) : [];
   const selected = items.find((item) => item.id === selectedId);
   const saved = records.find((item) => item.id === selectedId);
   const navigationButton = useRef<HTMLButtonElement>(null);
@@ -458,24 +492,43 @@ export function SubagentPanel({
     },
     [],
   );
-  const allTasks = [
-    ...items.map((item) => ({
-      id: item.id,
-      title: item.title,
-      state: item.outcome === "interrupted" ? "interrupted" : item.status,
-      elapsed: formatElapsedMs(item.createdAt, item.settledAt),
-      saved: false,
-    })),
-    ...records
-      .filter((record) => !items.some((item) => item.id === record.id))
-      .map((record) => ({
-        id: record.id,
-        title: record.title,
-        state: record.state,
-        elapsed: "",
-        saved: true,
-      })),
+  const allTasks = subagentOverview(items, records);
+  const groups = [
+    {
+      key: "active",
+      label: "subagentActiveGroup",
+      items: allTasks.filter((item) => item.state === "running"),
+      empty: "subagentNoneRunning",
+    },
+    {
+      key: "done",
+      label: "subagentFinishedGroup",
+      items: allTasks.filter((item) => item.state === "done"),
+      empty: "subagentNoneFinished",
+    },
+    {
+      key: "attention",
+      label: "subagentOtherGroup",
+      items: allTasks.filter(
+        (item) => item.state === "error" || item.state === "interrupted",
+      ),
+    },
+    {
+      key: "saved",
+      label: "subagentSaved",
+      items: allTasks.filter((item) => !item.state),
+    },
   ];
+  const relativeTime = (timestamp: number) => {
+    const elapsed = Math.max(0, Date.now() - timestamp);
+    const unit =
+      elapsed < 3_600_000 ? "minute" : elapsed < 86_400_000 ? "hour" : "day";
+    const divisor =
+      unit === "minute" ? 60_000 : unit === "hour" ? 3_600_000 : 86_400_000;
+    return new Intl.RelativeTimeFormat(i18n.language, {
+      numeric: "auto",
+    }).format(-Math.floor(elapsed / divisor), unit);
+  };
   const Surface = fullView ? "main" : "aside";
   const Heading = fullView ? "h1" : "h2";
   const GroupHeading = fullView ? "h2" : "h3";
@@ -508,7 +561,11 @@ export function SubagentPanel({
               <ArrowLeft />
             </button>
           )}
-          <Bot aria-hidden="true" />
+          {selectedId ? (
+            <SubagentAvatar identity={`${sessionId}:${selectedId}`} />
+          ) : (
+            <Bot aria-hidden="true" />
+          )}
           <Heading>
             {selectedId
               ? selected?.title || saved?.title || selectedId
@@ -525,76 +582,109 @@ export function SubagentPanel({
           <X />
         </button>
       </header>
-      {selectedId ? (
+      {detailId && (
         <SubagentDetailView
-          key={`${sessionId}:${selectedId}`}
+          key={`${sessionId}:${detailId}`}
           sessionId={sessionId}
-          id={selectedId}
-          activity={selected}
+          id={detailId}
+          activity={items.find((item) => item.id === detailId)}
           client={client}
-          saved={saved}
+          saved={records.find((record) => record.id === detailId)}
           liveAvailable={liveAvailable}
           fullView={fullView}
+          active={Boolean(selectedId)}
         />
-      ) : (
-        <nav className="subagent-list" aria-label={t("subagentTasks")}>
-          {[true, false].map((running) => {
-            const group = allTasks.filter(
-              (item) => (item.state === "running" && !item.saved) === running,
-            );
+      )}
+      {!selectedId && (
+        <nav
+          className="subagent-list"
+          aria-label={t("subagentTasks")}
+          ref={listViewport}
+          onScroll={(event) => {
+            listScroll.current = event.currentTarget.scrollTop;
+          }}
+        >
+          {groups.map((group) => {
+            if (!group.items.length && !group.empty) return null;
+            const visible =
+              expandedGroups.includes(group.key) || group.key === "active"
+                ? group.items
+                : group.items.slice(0, 10);
             return (
-              <section key={String(running)} className="subagent-list-group">
+              <section key={group.key} className="subagent-list-group">
                 <GroupHeading>
-                  {t(running ? "subagentActiveGroup" : "subagentFinishedGroup")}
-                  <span>{group.length}</span>
+                  {t(group.label)}
+                  <span aria-hidden="true">·</span>
+                  <span>{group.items.length}</span>
                 </GroupHeading>
-                {!group.length && (
-                  <p>
-                    {t(
-                      running ? "subagentNoneRunning" : "subagentNoneFinished",
-                    )}
-                  </p>
-                )}
+                {!group.items.length && group.empty && <p>{t(group.empty)}</p>}
                 <List density="compact">
-                  {group.map((item) => (
+                  {visible.map((item) => (
                     <ListItem
                       key={item.id}
                       className="subagent-task-row"
                       onClick={() => select(item.id)}
-                      label={item.title || item.id}
+                      label={
+                        <>
+                          {item.title || item.id}
+                          <span className="sr-only">
+                            {item.state
+                              ? ` · ${t(`subagentState_${item.state}`)}`
+                              : ""}
+                          </span>
+                        </>
+                      }
                       description={
                         item.saved
                           ? t("subagentSaved")
-                          : t(`subagentState_${item.state}`)
+                          : item.state === "error" ||
+                              item.state === "interrupted"
+                            ? t(`subagentState_${item.state}`)
+                            : undefined
                       }
                       startContent={
-                        <StatusDot
-                          label={
-                            item.saved
-                              ? t("subagentSaved")
-                              : t(`subagentState_${item.state}`)
-                          }
-                          variant={
-                            item.saved
-                              ? "neutral"
-                              : item.state === "running"
-                                ? "accent"
-                                : item.state === "done"
-                                  ? "success"
-                                  : "error"
-                          }
-                          isPulsing={!item.saved && item.state === "running"}
-                        />
+                        <SubagentAvatar identity={`${sessionId}:${item.id}`} />
                       }
                       endContent={
                         <span className="subagent-task-end">
-                          <span>{item.elapsed}</span>
-                          <ChevronRight aria-hidden="true" />
+                          {item.state === "running" ? (
+                            <>
+                              <LoaderCircle
+                                className="subagent-running-icon"
+                                aria-hidden="true"
+                              />
+                              <span className="sr-only">
+                                {t("subagentState_running")}
+                              </span>
+                            </>
+                          ) : item.timestamp ? (
+                            <time
+                              dateTime={new Date(item.timestamp).toISOString()}
+                              title={new Date(item.timestamp).toLocaleString(
+                                i18n.language,
+                              )}
+                            >
+                              {relativeTime(item.timestamp)}
+                            </time>
+                          ) : null}
                         </span>
                       }
                     />
                   ))}
                 </List>
+                {visible.length < group.items.length && (
+                  <button
+                    type="button"
+                    className="subagent-show-more"
+                    onClick={() =>
+                      setExpandedGroups((current) => [...current, group.key])
+                    }
+                  >
+                    {t("subagentShowMore", {
+                      count: group.items.length - visible.length,
+                    })}
+                  </button>
+                )}
               </section>
             );
           })}

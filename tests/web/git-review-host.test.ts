@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { GitReviewBaselineStore } from "../../web/host/git-review.ts";
 import { WebHost } from "../../web/host/web-host.ts";
+import type { WebGitReviewResult } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
 
@@ -62,6 +63,7 @@ test("Git review HTTP access authenticates and binds the exact Session", async (
     const query = new URLSearchParams({
       sessionId: session.id,
       path: session.path,
+      source: "session",
     });
 
     assert.equal(
@@ -119,6 +121,27 @@ test("Git review HTTP access authenticates and binds the exact Session", async (
       changed.snapshot?.files.map((file) => file.path),
       ["review.txt"],
     );
+    query.set("offset", "0");
+    const summary = (await (
+      await fetch(`${host.origin}/api/git-review?${query}`, { headers })
+    ).json()) as WebGitReviewResult;
+    assert.ok(summary.ok);
+    query.delete("offset");
+    query.set("file", "review.txt");
+    query.set("revision", summary.snapshot.revision);
+    const detailResponse = await fetch(
+      `${host.origin}/api/git-review?${query}`,
+      { headers },
+    );
+    assert.equal(detailResponse.status, 200);
+    const detail = (await detailResponse.json()) as WebGitReviewResult;
+    assert.ok(detail.ok);
+    assert.equal(detail.snapshot.revision, summary.snapshot.revision);
+    await writeFile(join(cwd, "review.txt"), "newer session change\n", "utf8");
+    const stale = await (
+      await fetch(`${host.origin}/api/git-review?${query}`, { headers })
+    ).json();
+    assert.deepEqual(stale, { ok: false, reason: "revision_changed" });
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

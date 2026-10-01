@@ -1,0 +1,17 @@
+.message-load-full {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  margin: 5px 0;
+  padding: 4px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--page);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+.message-load-full:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--sidebar-hover); }
+.message-load-full:disabled,
+.message-load-full[aria-disabled="true"] { opacity: .6; cursor: default; }
+.message-full-text:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }

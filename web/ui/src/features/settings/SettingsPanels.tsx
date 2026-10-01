@@ -17,6 +17,7 @@ import {
   Moon,
   Plug,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Sun,
   TreePine,
@@ -28,8 +29,8 @@ import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web
 import type {
   WebModelSummary,
   WebSettingsCatalog,
-  WebSettingsPreferencesPatch,
   WebSettingsPluginSummary,
+  WebSettingsPreferencesPatch,
   WebSettingsSkillSummary,
   WebThemePreference,
 } from "../../../../protocol/types.ts";
@@ -102,6 +103,44 @@ function SetupAction({
   );
 }
 
+function SetupRequestForm({
+  pending,
+  onConfigure,
+  placeholder,
+}: {
+  pending: boolean;
+  onConfigure: (request: string) => Promise<boolean>;
+  placeholder: string;
+}) {
+  const { t } = useTranslation();
+  const [request, setRequest] = useState("");
+  return (
+    <form
+      className="settings-edit-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!pending && request.trim()) void onConfigure(request.trim());
+      }}
+    >
+      <label className="settings-form-field">
+        {t("setupConfigurationRequest")}
+        <textarea
+          required
+          maxLength={2000}
+          value={request}
+          disabled={pending}
+          placeholder={placeholder}
+          onChange={(event) => setRequest(event.target.value)}
+        />
+      </label>
+      <button type="submit" disabled={pending || !request.trim()}>
+        {t("configureViaSetup")}
+      </button>
+      <small>{t("setupFormDetail")}</small>
+    </form>
+  );
+}
+
 export function GeneralSettingsPanel({
   catalog,
   error,
@@ -112,6 +151,8 @@ export function GeneralSettingsPanel({
   setupPending,
   setupBlocked = false,
   preferencePending,
+  setupBusy,
+  setupBlockedReason,
   onConfigure,
   onUpdatePreferences,
   onOpenRuntimeStatus,
@@ -126,6 +167,8 @@ export function GeneralSettingsPanel({
   setupPending: boolean;
   setupBlocked?: boolean;
   preferencePending: boolean;
+  setupBusy: boolean;
+  setupBlockedReason?: string;
   onConfigure: (request: string) => Promise<boolean>;
   onUpdatePreferences: (patch: WebSettingsPreferencesPatch) => Promise<boolean>;
   onOpenRuntimeStatus: () => void;
@@ -160,6 +203,12 @@ export function GeneralSettingsPanel({
         />
       </div>
 
+      {setupBusy && (
+        <p className="settings-pending-hint" role="status">
+          {setupBlockedReason || t("settingsSetupBusyHint")}
+        </p>
+      )}
+
       <section className="settings-section-block">
         <h2>{t("appearance")}</h2>
         <div
@@ -178,7 +227,7 @@ export function GeneralSettingsPanel({
                 name="openpi-web-theme"
                 value={id}
                 checked={selectedTheme === id}
-                disabled={preferencePending || setupPending || setupBlocked}
+                disabled={preferencePending}
                 onChange={() => {
                   void onUpdatePreferences({ theme: id });
                 }}
@@ -200,23 +249,45 @@ export function GeneralSettingsPanel({
             width="100%"
             labelPosition="start"
             labelSpacing="spread"
-            isDisabled={preferencePending || setupPending || setupBlocked}
+            isDisabled={preferencePending}
             isLoading={preferencePending}
             onChange={(checked: boolean) => {
               void onUpdatePreferences({ expandThinking: checked });
             }}
           />
           <div className="settings-slider-control">
+            <div className="settings-slider-heading">
+              <span>{t("chatContentWidth")}</span>
+              <output>{chatWidth}px</output>
+              <button
+                type="button"
+                className="settings-reset-button"
+                aria-label={t("resetChatContentWidth")}
+                title={t("resetChatContentWidth")}
+                disabled={preferencePending || chatWidth === 820}
+                onClick={() => {
+                  setChatWidth(820);
+                  void onUpdatePreferences({ chatWidth: 820 }).then(
+                    (accepted) => {
+                      if (!accepted) setChatWidth(setup.ui.webChatWidth);
+                    },
+                  );
+                }}
+              >
+                <RotateCcw aria-hidden="true" />
+              </button>
+            </div>
             <Slider
               label={t("chatContentWidth")}
+              isLabelHidden
               value={chatWidth}
               min={820}
               max={2000}
               step={10}
               width="100%"
-              valueDisplay="text"
+              valueDisplay="none"
               formatValue={(value: number) => `${value}px`}
-              isDisabled={preferencePending || setupPending || setupBlocked}
+              isDisabled={preferencePending}
               onChange={(value: number) => setChatWidth(value)}
               onChangeEnd={(value: number) => {
                 if (value !== setup.ui.webChatWidth) {
@@ -230,16 +301,38 @@ export function GeneralSettingsPanel({
             />
           </div>
           <div className="settings-slider-control">
+            <div className="settings-slider-heading">
+              <span>{t("chatFontSize")}</span>
+              <output>{chatFontSize}px</output>
+              <button
+                type="button"
+                className="settings-reset-button"
+                aria-label={t("resetChatFontSize")}
+                title={t("resetChatFontSize")}
+                disabled={preferencePending || chatFontSize === 14}
+                onClick={() => {
+                  setChatFontSize(14);
+                  void onUpdatePreferences({ chatFontSize: 14 }).then(
+                    (accepted) => {
+                      if (!accepted) setChatFontSize(setup.ui.webChatFontSize);
+                    },
+                  );
+                }}
+              >
+                <RotateCcw aria-hidden="true" />
+              </button>
+            </div>
             <Slider
               label={t("chatFontSize")}
+              isLabelHidden
               value={chatFontSize}
               min={12}
               max={24}
               step={1}
               width="100%"
-              valueDisplay="text"
+              valueDisplay="none"
               formatValue={(value: number) => `${value}px`}
-              isDisabled={preferencePending || setupPending || setupBlocked}
+              isDisabled={preferencePending}
               onChange={(value: number) => setChatFontSize(value)}
               onChangeEnd={(value: number) => {
                 if (value !== setup.ui.webChatFontSize) {
@@ -371,10 +464,14 @@ export function SkillsSettingsPanel({
   catalog,
   error,
   onRefresh,
+  setupPending,
+  onConfigure,
 }: {
   catalog: WebSettingsCatalog | null;
   error: string | null;
   onRefresh: () => void;
+  setupPending: boolean;
+  onConfigure: (request: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const skills = catalog?.resources.skills ?? [];
@@ -458,6 +555,11 @@ export function SkillsSettingsPanel({
         </div>
       </aside>
       <div className="settings-resource-detail">
+        <SetupRequestForm
+          pending={setupPending}
+          onConfigure={onConfigure}
+          placeholder={t("setupSkillsPlaceholder")}
+        />
         {error ? (
           <SettingsLoadState
             catalog={catalog}
@@ -517,6 +619,19 @@ export function SkillsSettingsPanel({
                 <code>{selected.filePath}</code>
               </div>
             </section>
+            <SetupAction
+              isPending={setupPending}
+              onConfigure={onConfigure}
+              label={t(
+                selected.disableModelInvocation
+                  ? "enableSkillInvocation"
+                  : "disableSkillInvocation",
+              )}
+              request={t("setupSkillInvocationRequest", {
+                path: selected.filePath,
+                disabled: !selected.disableModelInvocation,
+              })}
+            />
             {copyStatus === "failed" && (
               <p className="inspection-warning">{t("copyFailed")}</p>
             )}
@@ -536,6 +651,7 @@ export function SubagentsSettingsPanel({
   catalog,
   error,
   currentModel,
+  models,
   activity,
   setupPending,
   setupBlocked = false,
@@ -545,6 +661,7 @@ export function SubagentsSettingsPanel({
   catalog: WebSettingsCatalog | null;
   error: string | null;
   currentModel?: WebModelSummary;
+  models: WebModelSummary[];
   activity?: WebCapabilitySnapshot["subagents"];
   setupPending: boolean;
   setupBlocked?: boolean;
@@ -555,6 +672,15 @@ export function SubagentsSettingsPanel({
   const [selectedRole, setSelectedRole] =
     useState<(typeof roles)[number]>("explorer");
   const assignment = catalog?.setup.subagents.roleModels[selectedRole];
+  const [roleModel, setRoleModel] = useState("");
+  const [concurrency, setConcurrency] = useState(1);
+  useEffect(() => {
+    const assignment = catalog?.setup.subagents.roleModels[selectedRole];
+    setRoleModel(
+      assignment ? `${assignment.provider}/${assignment.model}` : "",
+    );
+    setConcurrency(catalog?.setup.workflows.concurrency ?? 1);
+  }, [selectedRole, catalog]);
   const active =
     activity?.items.filter((item) => item.status === "running").length ?? 0;
   const completed =
@@ -652,6 +778,62 @@ export function SubagentsSettingsPanel({
                 </div>
               </dl>
               <section className="settings-role-principles">
+                <form
+                  className="settings-edit-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (setupPending) return;
+                    void onConfigure(
+                      t("setupRoleFormRequest", {
+                        role: selectedRole,
+                        model: roleModel || t("inheritParentModel"),
+                        concurrency,
+                      }),
+                    );
+                  }}
+                >
+                  <label className="settings-form-field">
+                    {t("modelAssignment")}
+                    <select
+                      value={roleModel}
+                      disabled={setupPending}
+                      onChange={(event) => setRoleModel(event.target.value)}
+                    >
+                      <option value="">{t("inheritParentModel")}</option>
+                      {roleModel &&
+                        !models.some(
+                          (model) =>
+                            `${model.provider}/${model.id}` === roleModel,
+                        ) && <option value={roleModel}>{roleModel}</option>}
+                      {models.map((model) => (
+                        <option
+                          key={`${model.provider}/${model.id}`}
+                          value={`${model.provider}/${model.id}`}
+                        >
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="settings-form-field">
+                    {t("workflowConcurrencyLabel")}
+                    <input
+                      type="number"
+                      min={1}
+                      max={64}
+                      required
+                      value={concurrency}
+                      disabled={setupPending}
+                      onChange={(event) =>
+                        setConcurrency(Number(event.target.value))
+                      }
+                    />
+                  </label>
+                  <button type="submit" disabled={setupPending}>
+                    {t("configureViaSetup")}
+                  </button>
+                  <small>{t("setupFormDetail")}</small>
+                </form>
                 <h2>{t("runtimeBoundaries")}</h2>
                 <div>
                   <KeyRound aria-hidden="true" />
@@ -683,10 +865,14 @@ export function PluginsSettingsPanel({
   catalog,
   error,
   onRefresh,
+  setupPending,
+  onConfigure,
 }: {
   catalog: WebSettingsCatalog | null;
   error: string | null;
   onRefresh: () => void;
+  setupPending: boolean;
+  onConfigure: (request: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const plugins = catalog?.resources.plugins ?? [];
@@ -748,6 +934,11 @@ export function PluginsSettingsPanel({
         </div>
       </aside>
       <div className="settings-resource-detail">
+        <SetupRequestForm
+          pending={setupPending}
+          onConfigure={onConfigure}
+          placeholder={t("setupPluginsPlaceholder")}
+        />
         {error ? (
           <SettingsLoadState
             catalog={catalog}

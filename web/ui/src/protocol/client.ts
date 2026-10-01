@@ -4,34 +4,44 @@ import type {
   WebSubagentDetail,
 } from "../../../../extensions/shared/web-observer-registry.ts";
 import {
-  type WebQuestionRequest,
-  type WebQuestionAnswers,
-  type WebQuestionReceipt,
-} from "../../../protocol/questions.ts";
-import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
   type ArtifactPreview,
+  type WorkspaceFileListing,
 } from "../../../protocol/artifacts.ts";
+import {
+  type WebQuestionAnswers,
+  type WebQuestionReceipt,
+  type WebQuestionRequest,
+} from "../../../protocol/questions.ts";
+import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
+import type { WebSessionSources } from "../../../protocol/session-sources.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebCommandDiscoveryResult,
-  type WebEmbeddedBrowserAction,
-  type WebEmbeddedBrowserState,
   type WebGitReviewResult,
+  type WebHistoryAnchor,
   type WebInteractiveTerminal,
   type WebInteractiveTerminalEvent,
   type WebModelSearchResult,
   type WebModelSummary,
   type WebPromptImage,
+  type WebSessionHistoryPage,
+  type WebSessionSummary,
   type WebSettingsCatalog,
+  type WebSettingsPreferencesPatch,
   type WebSnapshot,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
-import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
+import type {
+  WebModelConfiguration,
+  WebModelConfigurations,
+  WebProviderAuthProjection,
+} from "../../../runtime/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
+
 import { controllerIdentity } from "./controller.ts";
 
 export class WebApiError extends Error {
@@ -79,6 +89,21 @@ export interface SessionMutationResult {
   cancelled?: boolean;
   path?: string;
   sessionPath?: string;
+}
+
+export interface ArchivedSessionPage {
+  sessions: Omit<
+    WebSessionSummary,
+    "source" | "origin" | "controller" | "readOnly"
+  >[];
+  nextCursor?: string;
+  truncation: {
+    truncated: boolean;
+    matchesOmitted: number;
+    recordsUnscanned: number;
+    maxPageSize: number;
+    maxScanned: number;
+  };
 }
 
 export interface SessionCreationResult {
@@ -151,15 +176,100 @@ export class WebClient {
     }
   }
 
-  snapshot(path?: string | null) {
-    const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
+  snapshot(path?: string | null, historyAnchor?: WebHistoryAnchor) {
+    const query = new URLSearchParams();
+    if (path) query.set("path", path);
+    if (historyAnchor && historyAnchor.sessionPath === path) {
+      query.set("historyAnchor", historyAnchor.entryId);
+      query.set("historySessionId", historyAnchor.sessionId);
+    }
+    const suffix = query.size ? `?${query}` : "";
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
   }
 
-  gitReview(sessionId: string, path: string, signal?: AbortSignal) {
+  async sessionHistory(
+    anchor: WebHistoryAnchor,
+    beforeEntryId: string,
+    signal: AbortSignal,
+  ) {
+    const result = await this.request<{ session: WebSessionHistoryPage }>(
+      `/api/session/history?${new URLSearchParams({ sessionId: anchor.sessionId, path: anchor.sessionPath, anchorEntryId: anchor.entryId, beforeEntryId })}`,
+      { signal, timeoutMessage: "History request timed out. Please retry." },
+    );
+    return result.session;
+  }
+
+  sessionItem(
+    sessionId: string,
+    sessionPath: string,
+    entryId: string,
+    cursor: number,
+    signal: AbortSignal,
+    purpose?: "plan",
+  ) {
+    return this.request<{
+      entryId: string;
+      text: string;
+      nextCursor: number | null;
+      totalChars: number;
+      planStatus?: "ready";
+    }>(
+      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor), ...(purpose ? { purpose } : {}) })}`,
+      { signal, timeoutMessage: "Message request timed out. Please retry." },
+    );
+  }
+
+  turnChanges(
+    sessionId: string,
+    sessionPath: string,
+    promptEntryId: string,
+    signal: AbortSignal,
+    filePath?: string,
+  ) {
+    return this.request<WebTurnChangesResult>(
+      `/api/turn-changes?${new URLSearchParams({ sessionId, sessionPath, promptEntryId, ...(filePath ? { filePath } : {}) })}`,
+      {
+        signal,
+        timeoutMessage: "Turn changes request timed out. Please retry.",
+      },
+    );
+  }
+
+  gitReview(
+    sessionId: string,
+    path: string,
+    signal?: AbortSignal,
+    options?: {
+      source: import("../../../protocol/types.ts").WebGitReviewSource;
+      file?: string;
+      offset?: string;
+      revision?: string;
+    },
+  ) {
     return this.request<WebGitReviewResult>(
-      `/api/git-review?${new URLSearchParams({ sessionId, path })}`,
+      `/api/git-review?${new URLSearchParams({ sessionId, path, ...options })}`,
       { signal, timeoutMessage: "Git review timed out. Please retry." },
+    );
+  }
+
+  workspaceFiles(
+    sessionId: string,
+    sessionPath: string,
+    path: string,
+    query: string,
+    signal: AbortSignal,
+    cursor?: string,
+  ) {
+    return this.request<WorkspaceFileListing>(
+      `/api/artifacts/files?${new URLSearchParams({ sessionId, sessionPath, path: encodeURI(path), query, ...(cursor ? { cursor } : {}) })}`,
+      { signal },
+    );
+  }
+
+  releaseFileListing(cursor: string) {
+    return this.request(
+      `/api/artifacts/files?${new URLSearchParams({ cursor })}`,
+      { method: "DELETE" },
     );
   }
 
@@ -188,11 +298,32 @@ export class WebClient {
     );
   }
 
-  artifactPreview(sessionId: string, handle: string, signal?: AbortSignal) {
+  artifactPreview(
+    sessionId: string,
+    handle: string,
+    signal?: AbortSignal,
+    page?: { offset: number; revision: string },
+  ) {
     return this.request<ArtifactPreview>(
-      `/api/artifacts/content?${new URLSearchParams({ sessionId, handle })}`,
+      `/api/artifacts/content?${new URLSearchParams({ sessionId, handle, ...(page ? { offset: String(page.offset), revision: page.revision } : {}) })}`,
       { signal },
     );
+  }
+
+  authorizeArtifact(
+    sessionId: string,
+    reference: string,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ handle: string }>("/api/artifacts/authorize-file", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId,
+        reference,
+        access: "read-external-file",
+      }),
+      signal,
+    });
   }
 
   releaseArtifact(sessionId: string, handle: string) {
@@ -202,7 +333,23 @@ export class WebClient {
     );
   }
 
-  async downloadArtifact(artifact: ArtifactMetadata, signal: AbortSignal) {
+  saveArtifact(artifact: ArtifactMetadata, revision: string, text: string) {
+    return this.request<{ revision: string }>("/api/artifacts/save", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: artifact.sessionId,
+        handle: artifact.handle,
+        revision,
+        text,
+        access: "write-workspace-file",
+      }),
+    });
+  }
+
+  async downloadArtifact(
+    artifact: Pick<ArtifactMetadata, "sessionId" | "handle" | "revision">,
+    signal: AbortSignal,
+  ) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal.addEventListener("abort", abort, { once: true });
@@ -251,56 +398,6 @@ export class WebClient {
     return this.request<WorkspaceSelectionResult>("/api/workspaces/select", {
       method: "POST",
     });
-  }
-
-  openBrowser(
-    sessionId: string,
-    url: string,
-    viewport: { width: number; height: number },
-    signal?: AbortSignal,
-  ) {
-    return this.request<WebEmbeddedBrowserState>("/api/browser/open", {
-      method: "POST",
-      body: JSON.stringify({ sessionId, url, ...viewport }),
-      signal,
-    });
-  }
-
-  browserState(sessionId: string, signal?: AbortSignal) {
-    return this.request<WebEmbeddedBrowserState>(
-      `/api/browser/state?${new URLSearchParams({ sessionId })}`,
-      { signal },
-    );
-  }
-
-  browserAction(
-    sessionId: string,
-    action: WebEmbeddedBrowserAction,
-    signal?: AbortSignal,
-  ) {
-    const { type, ...detail } = action;
-    return this.request<WebEmbeddedBrowserState>("/api/browser/action", {
-      method: "POST",
-      body: JSON.stringify({ sessionId, action: type, ...detail }),
-      signal,
-    });
-  }
-
-  async browserFrame(sessionId: string, signal?: AbortSignal) {
-    const response = await fetch(
-      `/api/browser/frame?${new URLSearchParams({ sessionId })}`,
-      { headers: await this.headers(), signal },
-    );
-    if (response.status === 404) return null;
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string; code?: string };
-      throw new WebApiError(
-        body.error || `Request failed (${response.status})`,
-        response.status,
-        body.code,
-      );
-    }
-    return response.blob();
   }
 
   createInteractiveTerminal(
@@ -437,6 +534,18 @@ export class WebClient {
     });
   }
 
+  setSessionPin(
+    path: string,
+    id: string,
+    pinned: boolean,
+    before?: { path: string; id: string } | null,
+  ) {
+    return this.request<{ saved: true }>("/api/sessions/pin", {
+      method: "POST",
+      body: JSON.stringify({ path, id, pinned, before }),
+    });
+  }
+
   archiveSession(path: string) {
     return this.request<{ path: string; archived: true }>(
       `/api/sessions/archive?path=${encodeURIComponent(path)}`,
@@ -448,6 +557,20 @@ export class WebClient {
     return this.request<{ path: string; archived: false }>(
       `/api/sessions/unarchive?path=${encodeURIComponent(path)}`,
       { method: "POST" },
+    );
+  }
+
+  listArchivedSessions(
+    options: { query?: string; cursor?: string; limit?: number } = {},
+    signal?: AbortSignal,
+  ) {
+    const query = new URLSearchParams();
+    if (options.query !== undefined) query.set("q", options.query);
+    if (options.cursor !== undefined) query.set("cursor", options.cursor);
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    return this.request<ArchivedSessionPage>(
+      `/api/sessions/archived?${query}`,
+      { signal },
     );
   }
 
@@ -470,12 +593,37 @@ export class WebClient {
 
   setPlanMode(
     sessionId: string,
+    sessionPath: string,
     enabled: boolean,
     expectedRevision: string | null,
   ) {
     return this.request<{ sessionId: string }>("/api/plan", {
       method: "POST",
-      body: JSON.stringify({ sessionId, enabled, expectedRevision }),
+      body: JSON.stringify({
+        sessionId,
+        sessionPath,
+        enabled,
+        expectedRevision,
+      }),
+    });
+  }
+
+  compactSession(sessionId: string, sessionPath: string) {
+    return this.request<{ sessionId: string }>("/api/compact", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath }),
+      timeoutMs: 300_000,
+    });
+  }
+
+  updatePromptQueue(
+    sessionId: string,
+    sessionPath: string,
+    action: "retry" | "clear",
+  ) {
+    return this.request<{ sessionId: string }>("/api/prompt-queue", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath, action }),
     });
   }
 
@@ -510,6 +658,52 @@ export class WebClient {
     );
   }
 
+  saveProviderKey(
+    sessionId: string,
+    provider: string,
+    apiKey: string,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/providers/api-key", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, provider, apiKey }),
+      signal,
+    });
+  }
+
+  modelConfigurations(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebModelConfigurations>(
+      `/api/models/configuration?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  saveModelConfiguration(
+    sessionId: string,
+    revision: string,
+    model: WebModelConfiguration,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/models/configuration", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, revision, model }),
+      signal,
+    });
+  }
+
+  changeProviderConfiguration(
+    sessionId: string,
+    revision: string,
+    change: import("../../../runtime/types.ts").WebProviderConfigurationChange,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/providers/configuration", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, revision, change }),
+      signal,
+    });
+  }
+
   commands(sessionId: string, signal?: AbortSignal) {
     return this.request<WebCommandDiscoveryResult>(
       `/api/commands?sessionId=${encodeURIComponent(sessionId)}`,
@@ -522,6 +716,44 @@ export class WebClient {
       `/api/settings/catalog?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
+  }
+
+  savePreferences(patch: WebSettingsPreferencesPatch) {
+    return this.request<{ saved: true; setup: WebSettingsCatalog["setup"] }>(
+      "/api/settings/preferences",
+      {
+        method: "POST",
+        body: JSON.stringify(patch),
+      },
+    );
+  }
+
+  discoverProviderModels(
+    sessionId: string,
+    connection: import("../../../runtime/provider-model-discovery.ts").ProviderModelDiscovery,
+    signal: AbortSignal,
+  ) {
+    return this.request<{
+      models: import("../../../runtime/provider-model-discovery.ts").DiscoveredProviderModel[];
+      truncated: boolean;
+    }>("/api/models/discover", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, connection }),
+      signal,
+    });
+  }
+
+  saveModelConfigurations(
+    sessionId: string,
+    revision: string,
+    models: import("../../../runtime/types.ts").WebModelConfiguration[],
+    signal: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/models/configurations", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, revision, models }),
+      signal,
+    });
   }
 
   terminalDetail(sessionId: string, id: string, signal: AbortSignal) {
@@ -584,7 +816,11 @@ export class WebClient {
       "/api/turns/cancel",
       {
         method: "POST",
-        body: JSON.stringify(turn),
+        body: JSON.stringify({
+          sessionId: turn.sessionId,
+          commandId: turn.commandId,
+          epoch: turn.epoch,
+        }),
       },
     );
   }
@@ -617,6 +853,43 @@ export class WebClient {
         return { state: "stale" } as const;
       throw error;
     }
+  }
+
+  async sessionSources(
+    sessionId: string,
+    path: string,
+    signal: AbortSignal,
+    offset = 0,
+    revision?: string,
+  ) {
+    const query = new URLSearchParams({
+      sessionId,
+      path,
+      offset: String(offset),
+      ...(revision ? { revision } : {}),
+    });
+    return this.request<WebSessionSources>(`/api/session-sources?${query}`, {
+      signal,
+    });
+  }
+
+  async sourceImage(
+    sessionId: string,
+    path: string,
+    entryId: string,
+    part: number,
+    signal: AbortSignal,
+  ) {
+    const query = new URLSearchParams({
+      sessionId,
+      path,
+      entryId,
+      part: String(part),
+    });
+    return this.request<{ data: string; mimeType: string }>(
+      `/api/session-sources/image?${query}`,
+      { signal },
+    );
   }
 
   async prompt(

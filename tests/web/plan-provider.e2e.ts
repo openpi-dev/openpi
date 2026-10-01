@@ -1,5 +1,5 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,11 @@ import {
 const plan =
   '# 导出会话记录\n\n## 目标\n\n首版提供 **Markdown** 导出，方便阅读与分享，沿用 Pi 的会话记录。\n\n## 实现步骤\n\n1. 从当前分支读取用户消息、助手回复及工具结果。\n2. 保留消息顺序，使用明确标题区分内容类型。\n3. 导出前选择目标位置，避免覆盖已有文件。\n\n## 验证\n\n- [ ] 中文、代码块和长消息可读。\n- [ ] 空会话、取消与写入失败有明确反馈。\n\n```ts\nconst format = "markdown";\n```\n\n本次仅提交开发计划。';
 const headers = { Authorization: `Bearer ${process.env.OPENPI_WEB_E2E_TOKEN}` };
+
+async function togglePlan(page: Page) {
+  await page.getByRole("button", { name: "添加上下文", exact: true }).click();
+  await page.getByRole("menuitem", { name: "计划 plan", exact: true }).click();
+}
 
 test("Plan switch changes only owner state; first message gets planning context and a persistent placeholder", async ({
   page,
@@ -101,24 +106,20 @@ test("Plan switch changes only owner state; first message gets planning context 
     const before = await (
       await page.request.get("/api/snapshot", { headers })
     ).json();
-    await page.getByRole("button", { name: "进入规划", exact: true }).click();
-    await expect(
-      page.getByRole("button", { name: "退出规划", exact: true }),
-    ).toBeEnabled();
+    await togglePlan(page);
+    await expect(page.locator(".composer-plan-chip")).toHaveText(
+      "规划中 · 禁止写入",
+    );
     await expect(input).toHaveValue("规划导出功能，先调查，不实施。");
     await expect(input).not.toHaveAttribute("placeholder", placeholder);
     expect(provider.requests).toHaveLength(0);
     await expect(page.locator(".message-row.user")).toHaveCount(0);
     await page.getByRole("button", { name: "设置", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "设置" });
+    // Theme is a direct UI preference; model-driven setup remains blocked.
     await expect(
       settings.getByRole("radio", { name: "深色", exact: true }),
-    ).toBeDisabled();
-    await expect(
-      settings.getByText(
-        "请先退出 Plan 模式，再修改 OpenPI 设置。退出不会开始实施计划。",
-      ),
-    ).toBeVisible();
+    ).toBeEnabled();
     const blocked = await page.request.post("/api/prompt", {
       headers,
       data: {
@@ -136,15 +137,16 @@ test("Plan switch changes only owner state; first message gets planning context 
       headers,
       data: {
         sessionId,
+        sessionPath,
         enabled: false,
         expectedRevision: before.runtime.planRevision,
       },
     });
     expect(stale.status()).toBe(409);
     await page.reload();
-    await expect(
-      page.getByRole("button", { name: "退出规划", exact: true }),
-    ).toBeEnabled();
+    await expect(page.locator(".composer-plan-chip")).toHaveText(
+      "规划中 · 禁止写入",
+    );
     expect(provider.requests).toHaveLength(0);
     await input.fill("规划导出功能，先调查，不实施。");
     await input.press("Enter");
@@ -152,9 +154,9 @@ test("Plan switch changes only owner state; first message gets planning context 
     await expect(
       page.getByText("继续讨论方案，不实施。", { exact: true }),
     ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "退出规划", exact: true }),
-    ).toBeEnabled();
+    await expect(page.locator(".composer-plan-chip")).toHaveText(
+      "规划中 · 禁止写入",
+    );
     expect(provider.requests).toHaveLength(2);
     expect(JSON.stringify(provider.requests[0]?.body)).toContain(
       "Plan mode is active",
@@ -166,10 +168,8 @@ test("Plan switch changes only owner state; first message gets planning context 
     await page.reload();
     await expect(input).toHaveAttribute("placeholder", placeholder);
     await input.fill("下一条草稿");
-    await page.getByRole("button", { name: "退出规划", exact: true }).click();
-    await expect(
-      page.getByRole("button", { name: "进入规划", exact: true }),
-    ).toBeEnabled();
+    await togglePlan(page);
+    await expect(page.locator(".composer-plan-chip")).toHaveCount(0);
     await expect(input).not.toHaveAttribute("placeholder", placeholder);
     await expect(input).toHaveValue("下一条草稿");
     expect(provider.requests).toHaveLength(2);
@@ -182,24 +182,17 @@ test("Plan switch changes only owner state; first message gets planning context 
       .filter({ hasText: "深色" })
       .click();
     await expect(
-      settings.getByText(
-        /OpenPI 配置已保存并应用。|配置已保存，实际设置没有变化。/,
-      ),
+      settings.getByText("显示设置已保存。", { exact: true }),
     ).toBeVisible();
     await expect(
       settings.getByRole("radio", { name: "深色", exact: true }),
     ).toBeChecked();
-    expect(provider.requests).toHaveLength(4);
-    expect(JSON.stringify(provider.requests[2]?.body)).toContain(
-      "Plan mode is inactive",
-    );
+    expect(provider.requests).toHaveLength(2);
     await page.reload();
     await page.getByRole("button", { name: "设置", exact: true }).click();
     await expect(
-      page
-        .getByRole("dialog", { name: "设置" })
-        .getByText(/OpenPI 配置已保存并应用。|配置已保存，实际设置没有变化。/),
-    ).toBeVisible();
+      settings.getByRole("radio", { name: "深色", exact: true }),
+    ).toBeChecked();
   } finally {
     await provider.close();
     deferPlanWorkspaceCleanup(workspace);
@@ -399,10 +392,7 @@ for (const theme of ["light", "dark"] as const) {
       expect(model.status()).toBe(200);
       await page.goto("/");
       const input = page.getByRole("textbox", { name: "描述任务" });
-      if (theme === "light")
-        await page
-          .getByRole("button", { name: "进入规划", exact: true })
-          .click();
+      if (theme === "light") await togglePlan(page);
       const prompt = `${theme === "dark" ? "/plan " : ""}规划会话导出，先询问 Markdown 或 JSON，不修改代码。`;
       await input.fill(prompt);
       await input.press("Enter");
@@ -425,7 +415,7 @@ for (const theme of ["light", "dark"] as const) {
         page.locator(".tool-name").filter({ hasText: "plan_ready" }),
       ).toBeVisible();
       await expect(answer).toHaveAttribute("data-stream-check", "stable");
-      const evidence = page.locator(".message-details").filter({
+      const evidence = page.locator(".message-details.tool-line").filter({
         has: page.locator(".tool-summary", { hasText: "User answered:" }),
       });
       await expect(evidence).toHaveCount(1);
@@ -443,7 +433,7 @@ for (const theme of ["light", "dark"] as const) {
         frame = requestAnimationFrame(sample);
         return { samples, stop: () => cancelAnimationFrame(frame) };
       });
-      const planEvidence = page.locator(".message-details").filter({
+      const planEvidence = page.locator(".message-details.tool-line").filter({
         has: page.locator(".tool-name", { hasText: "plan_ready" }),
       });
       for (const step of streamSteps) {
@@ -834,7 +824,8 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
             .currentSessionId,
       )
       .toBe(preparedPromptSession.sessionId);
-    await expect(input).toHaveValue("");
+    await expect(input).toHaveValue(/approved plan/);
+    await expect(input).toBeDisabled();
     const switchedWithPreparedSnapshot = await (
       await page.request.get("/api/snapshot", { headers })
     ).json();
@@ -862,8 +853,12 @@ test("Plan Ready stays gated through browser preview and unsupported fresh hando
     ).json();
     expect(readyAfterSwitchBack.runtime.plan).toBe("ready");
     expect(readyAfterSwitchBack.runtime.planRevision).toBe(readyRevision);
-    await expect(input).toHaveValue("");
+    // Returning to a Session restores its draft; approval itself stays scoped
+    // to the active visit and must be prepared again before implementation.
+    await expect(input).toBeEnabled();
+    await expect(input).toHaveValue(/approved plan/);
     expect(provider.requests).toHaveLength(5);
+    await input.fill("");
 
     await page
       .getByRole("button", { name: "准备实施提示", exact: true })

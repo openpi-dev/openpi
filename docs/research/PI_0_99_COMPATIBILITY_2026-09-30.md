@@ -1,7 +1,8 @@
 # Pi 0.99.1 compatibility
 
 - Status: validated at the source, automated-test, and local CLI smoke boundary
-- Created / verified: 2026-09-30
+- Created: 2026-09-30
+- Last verified: 2026-10-01
 - Source baseline: OpenPI `1c4d3318ae9cfd207255820246f7041821fb36da` (0.9.0)
 - Host boundary: `@earendil-works/pi-ai`, `pi-coding-agent`, and `pi-tui` 0.99.1, with the lockfile's native Pi transitive packages
 - Fix boundary: the compatibility changes linked from the Issue below
@@ -37,8 +38,9 @@ Pi owns section replacement, removal, and tool deltas. Existing provider tests
 still verify the resulting prompt, tools, and conversation boundaries.
 
 Web admission uses Pi's explicit disposition. `queued` retains the command trace
-even if the queue length does not increase. Only `handled` input without a native
-agent start settles immediately. Handled input preserves a ready Plan's approval;
+even if the queue length does not increase. Immediate settlement of `handled` input
+also requires Pi to report an idle Session with no observed native agent start.
+Handled input preserves a ready Plan's approval;
 rejected preflight cancels its transient authorization. Queue size remains a UI
 projection, rather than evidence that a specific command was queued or completed.
 
@@ -49,7 +51,7 @@ allowlist fail, and a permission-blocked read fails through Pi's tool-call hook.
 Both codemode and deferred exposure are covered. This requires no additional
 OpenPI executor or authority mechanism.
 
-## Validation and limitations
+## Original validation and limitations (2026-09-30)
 
 - On macOS, Node 24.20.0 and Bun 1.3.14, `bun run check` passed, including Web
   production build, configuration/documentation checks, formatting, lint, and types.
@@ -80,3 +82,31 @@ OpenPI executor or authority mechanism.
 - Real Cursor/Antigravity OAuth requests, remote provider compatibility, visual
   interactive TUI acceptance, and externally configured MCP servers are unverified.
   This is a compatibility investigation, not a Benchmark or architectural Decision.
+
+## Review follow-up (2026-10-01)
+
+The review of PR #636 at `8a62f6d7a970cade16f9da85d3a542554769e2d0`
+reproduced two lifecycle gaps with Pi's native faux provider and real Sessions:
+handled extension input can queue a user follow-up while the enclosing prompt
+returns `handled`, and a prompt submitted during asynchronous `agent_settled`
+handlers can return before its admission callback, then execute later.
+
+Integration uses main `657eff9` and preserves its idle-only handled settlement,
+Session ownership, compaction queue, and retained-runtime observation. New sends
+observe Pi's `agent_end` / `agent_settled` boundary for their exact Session before
+dispatching during the idle-but-settling interval. Observation starts before
+extension binding, including runs started by startup hooks, and remains owned
+by the native Session until disposal. Admission still comes from
+Pi's callback or a real prompt rejection. No queue-length ownership inference
+or SDK-private state is added.
+
+`tests/web/pi-runtime-native.test.ts` verifies queued handled input, sends during
+the settlement of a Web-origin run, and sends during the settlement of an
+extension-origin or startup-origin run. The native queued request executes once, and the admitted
+request keeps its command identity through `turn_started` and `turn_settled`.
+
+The simplification check removed the idle settlement guard and reproduced the
+premature completion. Replacing Session lifecycle observation with only the
+active Web trace passed the Web-origin case but failed the extension-origin
+case with the original 422. Both checks therefore remain necessary; the
+queue-growth heuristic remains removed.

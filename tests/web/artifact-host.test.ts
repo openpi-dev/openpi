@@ -92,7 +92,47 @@ test("artifact HTTP access authenticates, binds a Session, serves exact revision
     assert.equal(file.headers.get("cache-control"), "no-store");
     await writeFile(join(cwd, "report space.md"), "version two");
     assert.equal((await fetch(download, { headers })).status, 409);
+    const current = (await (
+      await fetch(`${host.origin}/api/artifacts/content?${params}`, { headers })
+    ).json()) as { artifact: { revision: string } };
+    const saveBody = JSON.stringify({
+      sessionId: sessionManager.getSessionId(),
+      handle,
+      revision: current.artifact.revision,
+      text: "saved from browser",
+      access: "write-workspace-file",
+    });
+    const saveUrl = `${host.origin}/api/artifacts/save`;
+    assert.equal(
+      (await fetch(saveUrl, { method: "POST", body: saveBody })).status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(saveUrl, {
+          method: "POST",
+          headers: { ...headers, Origin: "https://evil.example" },
+          body: saveBody,
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (await fetch(saveUrl, { method: "POST", headers, body: saveBody }))
+        .status,
+      200,
+    );
+    assert.equal(
+      (await fetch(saveUrl, { method: "POST", headers, body: saveBody }))
+        .status,
+      409,
+    );
     host.publish("session_switched");
+    assert.equal(
+      (await fetch(saveUrl, { method: "POST", headers, body: saveBody }))
+        .status,
+      410,
+    );
     assert.equal(
       (
         await fetch(`${host.origin}/api/artifacts/content?${params}`, {

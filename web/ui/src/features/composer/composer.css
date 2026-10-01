@@ -1,45 +1,16 @@
 .composer.composer-m02 {
   min-width: 0;
-  border-radius: 8px;
+  border-radius: 20px;
+  border-color: color-mix(in oklch, var(--border) 65%, transparent);
+  box-shadow: 0 3px 14px #00000006;
 }
+
+.composer-toolbar[hidden] { display: none; }
 
 .composer.composer-m02.is-dragging {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 20%, transparent);
 }
-
-.composer-m02 .composer-target {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.composer-m02 .composer-target svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-
-.composer-m02 .composer-target svg:nth-of-type(2) {
-  width: 11px;
-  height: 11px;
-  color: var(--subtle);
-}
-
-.composer-m02 .composer-target span,
-.composer-m02 .composer-target strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-m02 .composer-target span { flex: 0 1 auto; }
-.composer-m02 .composer-target strong { flex: 0 1 auto; color: var(--text); font-weight: 600; }
 
 .composer-attachments {
   display: flex;
@@ -79,7 +50,7 @@
   white-space: nowrap;
 }
 
-.composer-attachment > button {
+.composer-attachment-remove {
   display: grid;
   width: 22px;
   height: 22px;
@@ -92,8 +63,76 @@
   cursor: pointer;
 }
 
-.composer-attachment > button:hover { background: var(--sidebar-hover); color: var(--text); }
-.composer-attachment > button svg { width: 13px; height: 13px; }
+.composer-attachment-remove:hover { background: var(--sidebar-hover); color: var(--text); }
+.composer-attachment-remove svg { width: 13px; height: 13px; }
+
+.composer-attachment-preview {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.composer-attachment-preview:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.draft-image-preview { min-width: 0; min-height: 0; }
+.draft-image-preview header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.draft-image-preview header strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.draft-image-preview header button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.draft-image-preview header button:hover { background: var(--sidebar-hover); color: var(--text); }
+.draft-image-preview header button svg { width: 17px; height: 17px; }
+.draft-image-preview-modes { display: flex; flex: none; min-width: 0; gap: 2px; margin: 0; padding: 2px; border: 1px solid var(--border); border-radius: 5px; }
+.draft-image-preview-modes button[aria-pressed="true"] { background: var(--sidebar-hover); color: var(--text); }
+.draft-image-preview-modes button:disabled { opacity: .5; cursor: default; }
+.draft-image-preview-body {
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  height: min(64dvh, 640px);
+  place-items: center;
+  padding: 12px;
+  overflow: hidden;
+  background: var(--sidebar);
+}
+.draft-image-preview-body img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.draft-image-preview-body[data-mode="original"] { display: block; overflow: auto; overscroll-behavior: contain; }
+.draft-image-preview-body[data-mode="original"] img { max-width: none; max-height: none; }
+.draft-image-preview-body:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.draft-image-preview-body .composer-attachment-error { margin: 0; }
 
 .composer-attachment-error {
   margin: 0 2px 8px;
@@ -124,10 +163,10 @@
   justify-content: space-between;
   gap: 8px;
   padding-top: 7px;
-  border-top: 1px solid var(--border);
+  border-top: 0;
 }
 
-.composer-m02 .composer-toolbar-context { flex: none; width: 34px; height: 34px; }
+.composer-m02 .composer-toolbar-context { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .composer-m02 .composer-context-placeholder { display: block; width: 34px; height: 34px; }
 .composer-m02 .composer-context-trigger { width: 34px; height: 34px; padding: 0; color: var(--muted); }
 .composer-m02 .composer-context-trigger svg { width: 17px; height: 17px; }
@@ -165,10 +204,115 @@
   color: var(--muted);
 }
 
-.file-reference-heading p { margin-top: 3px; }
+.file-reference-heading p { margin-top: 3px; color: var(--text); }
 .file-reference-error { color: var(--error) !important; }
 
 @media (max-width: 520px) {
   .composer-m02 .composer-toolbar-controls { gap: 3px; }
   .composer-m02 .model-picker-wrap { flex: 1 1 90px; min-width: 0; max-width: 100%; }
+}
+.model-search-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.model-search-options {
+  overflow-y: auto;
+}
+.model-provider-heading { padding: 10px 9px 3px; color: var(--muted); font-size: 11px; line-height: 16px; letter-spacing: .01em; }
+.model-search-option .model-menu-item-label { font-size: 13px; }
+.astryx-complex-selector-popup:has(.thinking-controls) { width: min(280px, calc(100vw - 24px)); border: 1px solid var(--border) !important; border-radius: 20px !important; background: var(--page) !important; padding: 0 !important; color: var(--text); box-shadow: 0 8px 30px #00000012 !important; }
+.astryx-complex-selector-popup:has(.thinking-controls) > div { padding: 0; }
+.thinking-controls { position: relative; display: grid; padding: 14px 16px 16px; }
+.thinking-strength { grid-row: 1; }
+.thinking-model-link { grid-row: 2; }
+.thinking-slider { grid-row: 3; }
+.thinking-control-notice { grid-row: 4; }
+.model-thinking-label { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.model-picker-thinking { flex: none; color: var(--muted); font-weight: 400; }
+.model-thinking-back { display: flex; align-items: center; gap: 6px; border: 0; border-radius: 6px; background: none; color: var(--muted); padding: 6px 8px; margin-bottom: 4px; font: inherit; cursor: pointer; }
+.model-thinking-back svg { width: 14px; height: 14px; }
+.model-thinking-back:hover { background: var(--sidebar-hover); color: var(--text); }
+.thinking-preparing { padding: 16px; color: var(--muted); font-size: 12px; }
+.thinking-strength { text-align: center; color: light-dark(#1267b3, #7dbbff); font-size: 18px; line-height: 26px; font-weight: 500; }
+.thinking-model-link { display: flex; align-items: center; justify-content: center; gap: 3px; max-width: calc(100% - 32px); margin: 1px auto 0; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; font-size: 13px; line-height: 18px; cursor: pointer; }
+.thinking-model-link > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.thinking-model-link svg { flex: none; width: 12px; height: 12px; }
+.thinking-reset { position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
+.thinking-reset svg { width: 18px; height: 18px; }
+.thinking-reset:disabled, .thinking-model-link:disabled { opacity: .4; cursor: default; }
+.thinking-model-link:hover:not(:disabled), .thinking-reset:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text); }
+.thinking-model-link:focus-visible, .thinking-reset:focus-visible { outline: 2px solid #3399ff; outline-offset: 2px; }
+.thinking-slider { position: relative; height: 26px; margin-top: 16px; border-radius: 99px; background: linear-gradient(to right, #3399ff var(--thinking-progress), var(--sidebar-hover) var(--thinking-progress)); box-shadow: inset 0 0 0 1px #80808020; }
+.thinking-slider-dots { position: absolute; inset: 0 14px; display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
+.thinking-slider-dots > span { width: 4px; height: 4px; border-radius: 50%; background: var(--muted); opacity: .45; }
+.thinking-slider-dots > span[data-filled="true"] { background: white; }
+.thinking-slider input { position: relative; display: block; appearance: none; width: 100%; height: 26px; margin: 0; padding: 0; border: 0; border-radius: 99px; background: transparent; cursor: pointer; }
+.thinking-slider input::-webkit-slider-runnable-track { height: 26px; background: transparent; }
+.thinking-slider input::-webkit-slider-thumb { appearance: none; width: 28px; height: 28px; margin-top: -1px; border: 1px solid #e1e1e1; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #00000018; }
+.thinking-slider input::-moz-range-thumb { width: 28px; height: 28px; border: 1px solid #e1e1e1; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #00000018; }
+.thinking-slider input:focus-visible { outline: 2px solid #3399ff; outline-offset: 4px; }
+.thinking-control-notice { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 16px; }
+
+.model-search-input,
+.model-search-truncation,
+.model-search-status,
+.model-settings-command {
+  flex-shrink: 0;
+}
+
+.model-settings-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.model-settings-command:hover,
+.model-settings-command:focus-visible {
+  background: var(--sidebar-hover);
+}
+
+.model-settings-command svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.composer-workspace-label { display: flex; align-items: center; gap: 5px; max-width: 140px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 12px; }
+.composer-workspace-label svg { width: 14px; height: 14px; flex: none; }
+.composer-plan-chip { color: var(--accent); font-size: 11px; white-space: nowrap; }
+.composer-m02 .model-picker-wrap { max-width: 360px; min-width: 0; }
+.composer-m02 .model-picker-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+.composer-m02 .send-button { border-radius: 50%; }
+.composer-action-menu { position: absolute; z-index: 45; bottom: calc(100% + 6px); left: 0; right: 0; box-sizing: border-box; padding: 6px; overflow-y: auto; border: 1px solid var(--border); border-radius: 20px; background: var(--page); box-shadow: 0 6px 22px #0000000d; }
+.composer-action-menu[data-placement="below"] { bottom: auto; top: calc(100% + 6px); }
+.composer-action-section { padding: 5px 10px; color: var(--muted); font-size: 11px; }
+.composer-action-menu button { display: flex; width: 100%; align-items: center; gap: 7px; min-height: 40px; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.composer-action-menu button:hover, .composer-action-menu button:focus-visible { background: var(--sidebar-hover); outline: none; }
+.composer-action-menu button:disabled { opacity: .45; cursor: default; }
+.composer-action-menu button > svg { flex: none; width: 15px; height: 15px; color: var(--muted); }
+.composer-action-menu small { color: var(--muted); font-size: 12px; }
+.composer-action-description { flex: 1; min-width: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.composer-dock > .composer-queue { width: min(840px, calc(100% - 32px)); margin: 0 auto 10px; padding: 0; border: 0; max-height: min(220px, 25dvh); }
+.composer-dock > .composer-queue ul { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.composer-dock > .composer-queue li { max-width: 85%; }
+.composer-dock > .composer-queue .composer-queue-row { padding: 10px 14px; border-radius: 16px; background: var(--sidebar); color: var(--text); }
+.composer-queue-status { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; padding: 5px; color: var(--muted); font-size: 11px; }
+.composer-queue-status button { padding: 4px 6px; border: 0; border-radius: 6px; background: var(--sidebar); cursor: pointer; }
+@media (max-width: 560px) {
+  .composer-action-menu button { min-height: 44px; }
+  .composer-action-description { white-space: normal; font-size: 11px; }
+  .composer-workspace-label { max-width: 75px; }
+  .composer-m02 .composer-toolbar-context { gap: 4px; }
+  .composer-m02 .model-picker-wrap { max-width: 42vw; }
 }

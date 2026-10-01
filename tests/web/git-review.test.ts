@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -74,6 +84,80 @@ test("Git review combines branch, staged, unstaged, and untracked changes", asyn
   ]);
   assert.ok(result.snapshot.additions >= 4);
   assert.equal(result.snapshot.truncated, false);
+});
+
+test("summary pages include files past 200, have exact totals and refuse a changed listing", async () => {
+  const root = await repository();
+  await Promise.all(
+    Array.from({ length: 205 }, (_, i) =>
+      writeFile(join(root, `${i + 1}.stp`), `ISO-10303-21;\n${i}\n`),
+    ),
+  );
+  const first = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(first.ok);
+  if (!first.ok) return;
+  assert.equal(first.snapshot.totalFiles, 205);
+  assert.deepEqual(first.snapshot.totals, {
+    additions: 410,
+    deletions: 0,
+    complete: true,
+  });
+  assert.equal(first.snapshot.files.length, 200);
+  assert.equal(first.snapshot.listComplete, true);
+  assert.equal(first.snapshot.truncated, false);
+  assert.deepEqual(
+    first.snapshot.files.slice(0, 3).map((f) => f.path),
+    ["1.stp", "2.stp", "3.stp"],
+  );
+  const second = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: first.snapshot.nextOffset!,
+    expectedRevision: first.snapshot.revision,
+  });
+  assert.ok(second.ok);
+  if (!second.ok) return;
+  assert.equal(second.snapshot.files.length, 5);
+  assert.deepEqual(second.snapshot.totals, first.snapshot.totals);
+  assert.equal(second.snapshot.nextOffset, undefined);
+  assert.equal(second.snapshot.revision, first.snapshot.revision);
+  assert.equal(
+    new Set(
+      [...first.snapshot.files, ...second.snapshot.files].map((f) => f.path),
+    ).size,
+    205,
+  );
+  await writeFile(join(root, "205.stp"), "changed text\n");
+  assert.deepEqual(
+    await readGitReview(root, {
+      source: "unstaged",
+      summary: true,
+      offset: 200,
+      expectedRevision: first.snapshot.revision,
+    }),
+    { ok: false, reason: "revision_changed" },
+  );
+});
+
+test("binary detection uses contents rather than the STEP extension", async () => {
+  const root = await repository();
+  await writeFile(join(root, "text.stp"), "ISO-10303-21;\nDATA;\n");
+  await writeFile(join(root, "image.dat"), Buffer.from([1, 0, 2, 3]));
+  const result = await readGitReview(root, { source: "unstaged" });
+  assert.ok(result.ok);
+  if (!result.ok) return;
+  assert.equal(
+    result.snapshot.files.find((f) => f.path === "text.stp")?.binary,
+    false,
+  );
+  assert.equal(
+    result.snapshot.files.find((f) => f.path === "image.dat")?.binary,
+    true,
+  );
 });
 
 test("Git review baseline reports only changes made after a Session starts", async () => {
@@ -156,7 +240,7 @@ test("Git review bounds repeated Session baselines with large dirty files", asyn
   assert.equal((await store.read(firstSession, root)).ok, true);
   assert.deepEqual(await store.read(secondSession, root), {
     ok: false,
-    reason: "git_failed",
+    reason: "baseline_unavailable",
   });
 });
 
@@ -190,6 +274,223 @@ test("Git review reports a non-repository instead of an empty snapshot", async (
     ok: false,
     reason: "not_git_repository",
   });
+});
+
+test("summary counts stay partial for symlinks and do not read their targets", async () => {
+  const root = await repository();
+  await writeFile(join(root, "small.txt"), "one\ntwo");
+  await symlink("base.txt", join(root, "linked.txt"));
+  const result = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(result.ok);
+  if (!result.ok) return;
+  assert.deepEqual(result.snapshot.totals, {
+    additions: 2,
+    deletions: 0,
+    complete: false,
+  });
+  assert.equal(
+    result.snapshot.files.find((file) => file.path === "linked.txt")
+      ?.statsUnavailable,
+    "content_limit",
+  );
+});
+
+test("native Git views remain usable with an oversized untracked file and load diffs on demand", async () => {
+  const root = await repository();
+  await writeFile(join(root, "large.bin"), Buffer.alloc(8 * 1024 * 1024));
+  await writeFile(join(root, "small.txt"), "small change\n");
+  const overview = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+  });
+  assert.equal(overview.ok, true);
+  if (!overview.ok) return;
+  assert.equal(overview.snapshot.comparison, "unstaged");
+  assert.deepEqual(overview.snapshot.totals, {
+    additions: 1,
+    deletions: 0,
+    complete: false,
+  });
+  assert.equal(
+    overview.snapshot.files.find((file) => file.path === "large.bin")
+      ?.diffLoaded,
+    false,
+  );
+  assert.ok(overview.snapshot.files.every((file) => file.diff === ""));
+  const detail = await readGitReview(root, {
+    source: "unstaged",
+    filePath: "small.txt",
+  });
+  assert.equal(detail.ok, true);
+  if (!detail.ok) return;
+  assert.deepEqual(
+    detail.snapshot.files.map((file) => file.path),
+    ["small.txt"],
+  );
+  assert.match(detail.snapshot.files[0]!.diff, /small change/u);
+  const large = await readGitReview(root, {
+    source: "unstaged",
+    filePath: "large.bin",
+  });
+  assert.equal(large.ok, true);
+  if (large.ok) assert.equal(large.snapshot.files[0]?.diffTruncated, true);
+  const staged = await readGitReview(root, { source: "staged", summary: true });
+  assert.equal(staged.ok, true);
+  if (staged.ok) assert.equal(staged.snapshot.files.length, 0);
+  await git(root, "add", "small.txt");
+  const stagedFile = await readGitReview(root, {
+    source: "staged",
+    filePath: "small.txt",
+  });
+  assert.equal(stagedFile.ok, true);
+  if (stagedFile.ok)
+    assert.match(stagedFile.snapshot.files[0]!.diff, /small change/u);
+});
+
+for (const changed of [false, true]) {
+  test(`staged rename detail retains both literal paths (edited: ${changed})`, async () => {
+    const root = await repository();
+    const oldPath = "old [1].txt";
+    const newPath = "new [1].txt";
+    const original =
+      Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n") +
+      "\n";
+    await writeFile(join(root, oldPath), original);
+    await git(root, "add", "--", oldPath);
+    await git(root, "commit", "-m", "rename source");
+    await git(root, "mv", "--", oldPath, newPath);
+    if (changed)
+      await writeFile(
+        join(root, newPath),
+        original.replace("line 10\n", "edited line\n"),
+      );
+    await writeFile(
+      join(root, "new 1.txt"),
+      "must not enter selected detail\n",
+    );
+    await git(root, "add", "-A");
+    const summary = await readGitReview(root, {
+      source: "staged",
+      summary: true,
+    });
+    assert.ok(summary.ok);
+    const metadata = summary.snapshot.files.find(
+      (file) => file.path === newPath,
+    )!;
+    assert.equal(metadata.status, "renamed");
+    const detail = await readGitReview(root, {
+      source: "staged",
+      filePath: newPath,
+    });
+    assert.ok(detail.ok);
+    assert.equal(detail.snapshot.files.length, 1);
+    const file = detail.snapshot.files[0]!;
+    assert.equal(file.status, "renamed");
+    assert.equal(file.previousPath, oldPath);
+    assert.equal(file.path, newPath);
+    assert.equal(file.additions, changed ? 1 : 0);
+    assert.equal(file.deletions, changed ? 1 : 0);
+    assert.match(file.diff, /rename from/u);
+    assert.match(file.diff, /rename to/u);
+    assert.doesNotMatch(
+      file.diff,
+      /\/dev\/null|must not enter selected detail/u,
+    );
+  });
+}
+
+test("branch rename detail retains the source from the merge base", async () => {
+  const root = await repository();
+  await git(root, "checkout", "-b", "feature/rename");
+  await git(root, "mv", "base.txt", "renamed.txt");
+  await git(root, "commit", "-m", "rename");
+  const detail = await readGitReview(root, {
+    source: "branch",
+    filePath: "renamed.txt",
+  });
+  assert.ok(detail.ok);
+  assert.equal(detail.snapshot.files[0]?.status, "renamed");
+  assert.equal(detail.snapshot.files[0]?.previousPath, "base.txt");
+  assert.match(detail.snapshot.files[0]!.diff, /rename from base.txt/u);
+});
+
+function indexBlob(root: string, content: string) {
+  return execFileSync("git", ["-C", root, "hash-object", "-w", "--stdin"], {
+    input: content,
+    encoding: "utf8",
+  }).trim();
+}
+
+for (const source of ["staged", "unstaged"] as const) {
+  test(`${source} summary revision tracks index-only blob changes with identical statistics`, async () => {
+    const root = await repository();
+    const path = join(root, "base.txt");
+    await writeFile(path, "worktree\n");
+    await git(
+      root,
+      "update-index",
+      "--cacheinfo",
+      "100644",
+      indexBlob(root, "staged-a\n"),
+      "base.txt",
+    );
+    const beforeFile = await lstat(path, { bigint: true });
+    const before = await readGitReview(root, { source, summary: true });
+    const beforeDetail = await readGitReview(root, {
+      source,
+      filePath: "base.txt",
+    });
+    assert.ok(before.ok && beforeDetail.ok);
+    await git(
+      root,
+      "update-index",
+      "--cacheinfo",
+      "100644",
+      indexBlob(root, "staged-b\n"),
+      "base.txt",
+    );
+    const after = await readGitReview(root, { source, summary: true });
+    const afterDetail = await readGitReview(root, {
+      source,
+      filePath: "base.txt",
+    });
+    assert.ok(after.ok && afterDetail.ok);
+    const afterFile = await lstat(path, { bigint: true });
+    assert.deepEqual(
+      [afterFile.size, afterFile.mtimeNs, afterFile.ctimeNs],
+      [beforeFile.size, beforeFile.mtimeNs, beforeFile.ctimeNs],
+    );
+    assert.equal(await readFile(path, "utf8"), "worktree\n");
+    assert.deepEqual(after.snapshot.files, before.snapshot.files);
+    assert.match(beforeDetail.snapshot.files[0]!.diff, /staged-a/u);
+    assert.match(afterDetail.snapshot.files[0]!.diff, /staged-b/u);
+    assert.notEqual(after.snapshot.revision, before.snapshot.revision);
+    const unchanged = await readGitReview(root, { source, summary: true });
+    assert.ok(unchanged.ok);
+    assert.equal(unchanged.snapshot.revision, after.snapshot.revision);
+  });
+}
+
+test("staged summary revision also tracks a changed HEAD blob without touching the index or worktree", async () => {
+  const root = await repository();
+  const firstHead = (await git(root, "rev-parse", "HEAD")).trim();
+  await writeFile(join(root, "base.txt"), "next-base\n");
+  await git(root, "add", "base.txt");
+  await git(root, "commit", "-m", "next base");
+  const secondHead = (await git(root, "rev-parse", "HEAD")).trim();
+  await writeFile(join(root, "base.txt"), "staged\n");
+  await git(root, "add", "base.txt");
+  await git(root, "update-ref", "HEAD", firstHead);
+  const before = await readGitReview(root, { source: "staged", summary: true });
+  await git(root, "update-ref", "HEAD", secondHead);
+  const after = await readGitReview(root, { source: "staged", summary: true });
+  assert.ok(before.ok && after.ok);
+  assert.deepEqual(after.snapshot.files, before.snapshot.files);
+  assert.notEqual(after.snapshot.revision, before.snapshot.revision);
 });
 
 test("Git diff counts ignore metadata outside hunks", () => {
@@ -227,4 +528,49 @@ test("Git review keeps file metadata when an encoded diff exceeds the response b
   assert.equal(large.diffTruncated, true);
   assert.equal(result.snapshot.truncated, true);
   assert.ok(jsonByteLength(result) <= WEB_MAX_SNAPSHOT_BYTES);
+});
+
+test("file details retain the selected summary identity and reject worktree or index changes", async () => {
+  const root = await repository();
+  await writeFile(join(root, "base.txt"), "worktree-a\n");
+  const summary = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(summary.ok);
+  const detail = await readGitReview(root, {
+    source: "unstaged",
+    filePath: "base.txt",
+    expectedRevision: summary.snapshot.revision,
+  });
+  assert.ok(detail.ok);
+  assert.equal(detail.snapshot.revision, summary.snapshot.revision);
+  assert.match(detail.snapshot.files[0]!.diff, /worktree-a/);
+  await writeFile(join(root, "base.txt"), "worktree-b\n");
+  assert.deepEqual(
+    await readGitReview(root, {
+      source: "unstaged",
+      filePath: "base.txt",
+      expectedRevision: summary.snapshot.revision,
+    }),
+    { ok: false, reason: "revision_changed" },
+  );
+  await git(root, "add", "base.txt");
+  const staged = await readGitReview(root, {
+    source: "staged",
+    summary: true,
+    offset: 0,
+  });
+  assert.ok(staged.ok);
+  await writeFile(join(root, "base.txt"), "worktree-c\n");
+  await git(root, "add", "base.txt");
+  assert.deepEqual(
+    await readGitReview(root, {
+      source: "staged",
+      filePath: "base.txt",
+      expectedRevision: staged.snapshot.revision,
+    }),
+    { ok: false, reason: "revision_changed" },
+  );
 });

@@ -207,6 +207,7 @@ export function projectWebSetupConfig(
       webChatWidth: config.ui.webChatWidth,
       webChatFontSize: config.ui.webChatFontSize,
       webExpandThinking: config.ui.webExpandThinking,
+      webPinnedSort: config.ui.webPinnedSort,
       showHeader: config.ui.showHeader,
       customFooter: config.ui.customFooter,
       footerStyle: config.ui.footerStyle,

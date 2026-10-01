@@ -108,6 +108,8 @@ export const Trajectory = memo(function Trajectory({
             {selected && (
               <section
                 className="trajectory-inspector"
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable execution details need keyboard access when their content has no controls.
+                tabIndex={0}
                 aria-label={t("trajectoryDetails")}
               >
                 <h3>{selected.title}</h3>

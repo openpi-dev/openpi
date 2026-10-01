@@ -8,6 +8,52 @@ import {
 } from "../../web/host/interactive-terminal.ts";
 import type { WebInteractiveTerminalEvent } from "../../web/protocol/types.ts";
 
+for (const boundary of [
+  "dispose",
+  "switch-session",
+  "switch-workspace",
+] as const) {
+  for (const started of [false, true]) {
+    test(`cancels ${started ? "loading" : "queued"} terminal creation on ${boundary}`, async () => {
+      let spawned = 0;
+      const manager = new InteractiveTerminalManager({
+        spawn: () => {
+          spawned++;
+          return new FakePty();
+        },
+      });
+      try {
+        const pending = manager.create({
+          sessionId: "a",
+          cwd: ".",
+          cols: 80,
+          rows: 24,
+        });
+        const rejected = assert.rejects(pending, /cancelled/u);
+        if (started) await Promise.resolve();
+        if (boundary === "dispose") manager.dispose();
+        else
+          manager.retain(
+            boundary === "switch-session" ? "b" : "a",
+            boundary === "switch-workspace" ? ".." : ".",
+          );
+        await rejected;
+        assert.equal(spawned, 0);
+        const next = await manager.create({
+          sessionId: "b",
+          cwd: ".",
+          cols: 80,
+          rows: 24,
+        });
+        assert.equal(next.sessionId, "b");
+        assert.equal(spawned, 1);
+      } finally {
+        manager.dispose();
+      }
+    });
+  }
+}
+
 class FakePty implements IPty {
   readonly pid = 42;
   cols = 80;

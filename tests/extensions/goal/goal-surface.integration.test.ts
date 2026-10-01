@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { createGoalSnapshot } from "../../../extensions/goal/state.ts";
+import { registerWebCommandFeedback } from "../../../extensions/shared/web-command-feedback.ts";
 
 const CAPABILITIES_EXTENSION = fileURLToPath(
   new URL("../../../extensions/capabilities/index.ts", import.meta.url),
@@ -37,130 +38,139 @@ interface CapturedSnapshot {
   }>;
 }
 
-test("real Pi fixture: /goal <objective> loads capability and exposes get_goal/update_goal to continuation", {
-  timeout: 30_000,
-}, async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "openpi-goal-surface-"));
-  const cwd = path.join(root, "workspace");
-  const agentDir = path.join(root, "agent");
-  await mkdir(cwd, { recursive: true });
-  await mkdir(agentDir, { recursive: true });
+for (const mode of ["rpc", "web"] as const) {
+  test(`real Pi fixture (${mode}): /goal <objective> loads capability and exposes get_goal/update_goal to continuation`, {
+    timeout: 30_000,
+  }, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "openpi-goal-surface-"));
+    const cwd = path.join(root, "workspace");
+    const agentDir = path.join(root, "agent");
+    await mkdir(cwd, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
 
-  const snapshots: CapturedSnapshot[] = [];
-  const provider = fauxProvider({
-    api: "openpi-goal-surface-test",
-    provider: `goal-surface-${path.basename(cwd)}`,
-    models: [{ id: "fixture", name: "Fixture", reasoning: false }],
-  });
-
-  const capture = (context: TranscriptContext) => {
-    snapshots.push({
-      tools: getCurrentTools(context.messages).map(({ name }) => ({ name })),
-      messages: structuredClone(context.messages),
+    const snapshots: CapturedSnapshot[] = [];
+    const provider = fauxProvider({
+      api: "openpi-goal-surface-test",
+      provider: `goal-surface-${path.basename(cwd)}`,
+      models: [{ id: "fixture", name: "Fixture", reasoning: false }],
     });
-  };
 
-  // Response 1: model executes on first continuation, then calls update_goal({ status: "complete" })
-  provider.setResponses([
-    (context) => {
-      capture(context);
-      return fauxAssistantMessage(
-        [
-          fauxToolCall(
-            "update_goal",
-            { status: "complete" },
-            { id: "finish-1" },
-          ),
-        ],
-        { stopReason: "toolUse" },
+    const capture = (context: TranscriptContext) => {
+      snapshots.push({
+        tools: getCurrentTools(context.messages).map(({ name }) => ({ name })),
+        messages: structuredClone(context.messages),
+      });
+    };
+
+    // Response 1: model executes on first continuation, then calls update_goal({ status: "complete" })
+    provider.setResponses([
+      (context) => {
+        capture(context);
+        return fauxAssistantMessage(
+          [
+            fauxToolCall(
+              "update_goal",
+              { status: "complete" },
+              { id: "finish-1" },
+            ),
+          ],
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        capture(context);
+        return fauxAssistantMessage("Goal complete and verified.");
+      },
+    ]);
+
+    const settingsManager = SettingsManager.inMemory(
+      { retry: { enabled: false }, compaction: { enabled: false } },
+      { projectTrusted: false },
+    );
+    const modelRuntime = await ModelRuntime.create({
+      authPath: path.join(agentDir, "auth.json"),
+      modelsPath: path.join(agentDir, "models.json"),
+    });
+    modelRuntime.registerNativeProvider(provider.provider);
+    await modelRuntime.setRuntimeApiKey(provider.provider.id, "fixture-key");
+
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager,
+      additionalExtensionPaths: [CAPABILITIES_EXTENSION, GOAL_EXTENSION],
+      noSkills: true,
+      noPromptTemplates: true,
+    });
+    await loader.reload();
+
+    const sessionManager = SessionManager.create(
+      cwd,
+      path.join(cwd, "sessions"),
+    );
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      model: provider.getModel(),
+      modelRuntime,
+      settingsManager,
+      resourceLoader: loader,
+      sessionManager,
+    });
+
+    let detachWeb: (() => void) | undefined;
+    try {
+      await session.bindExtensions({ mode: mode === "web" ? "print" : "rpc" });
+      if (mode === "web")
+        detachWeb = registerWebCommandFeedback(sessionManager, () => {});
+
+      // 1. Clean session invariant: no resident OpenPI model tools
+      const initialTools = session.getActiveToolNames();
+      assert.equal(initialTools.includes("create_goal"), false);
+      assert.equal(initialTools.includes("get_goal"), false);
+      assert.equal(initialTools.includes("update_goal"), false);
+      assert.equal(initialTools.includes("openpi_load_tools"), false);
+
+      // 2. User runs /goal <objective> with an objective containing NO capability keywords
+      await session.prompt("/goal 修复 README 的一个拼写错误");
+      await session.waitForIdle();
+
+      // 3. Active tools now include get_goal and update_goal
+      const activeToolsAfterGoal = session.getActiveToolNames();
+      assert.ok(
+        activeToolsAfterGoal.includes("get_goal"),
+        "get_goal must be active",
       );
-    },
-    (context) => {
-      capture(context);
-      return fauxAssistantMessage("Goal complete and verified.");
-    },
-  ]);
+      assert.ok(
+        activeToolsAfterGoal.includes("update_goal"),
+        "update_goal must be active",
+      );
+      assert.ok(
+        activeToolsAfterGoal.includes("create_goal"),
+        "create_goal must be active",
+      );
 
-  const settingsManager = SettingsManager.inMemory(
-    { retry: { enabled: false }, compaction: { enabled: false } },
-    { projectTrusted: false },
-  );
-  const modelRuntime = await ModelRuntime.create({
-    authPath: path.join(agentDir, "auth.json"),
-    modelsPath: path.join(agentDir, "models.json"),
+      // 4. First continuation turn ran: verify provider snapshot contains get_goal and update_goal
+      assert.ok(snapshots.length >= 1, "at least one turn must have run");
+      const firstTurnTools = snapshots[0]?.tools?.map((t) => t.name) ?? [];
+      assert.ok(
+        firstTurnTools.includes("get_goal"),
+        "provider snapshot must include get_goal",
+      );
+      assert.ok(
+        firstTurnTools.includes("update_goal"),
+        "provider snapshot must include update_goal",
+      );
+
+      // 5. Model called update_goal complete -> session settles, no extra continuations dispatched
+      assert.equal(snapshots.length, 2); // turn 1 tool call, turn 2 final response
+    } finally {
+      detachWeb?.();
+      session.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
   });
-  modelRuntime.registerNativeProvider(provider.provider);
-  await modelRuntime.setRuntimeApiKey(provider.provider.id, "fixture-key");
-
-  const loader = new DefaultResourceLoader({
-    cwd,
-    agentDir,
-    settingsManager,
-    additionalExtensionPaths: [CAPABILITIES_EXTENSION, GOAL_EXTENSION],
-    noSkills: true,
-    noPromptTemplates: true,
-  });
-  await loader.reload();
-
-  const sessionManager = SessionManager.create(cwd, path.join(cwd, "sessions"));
-  const { session } = await createAgentSession({
-    cwd,
-    agentDir,
-    model: provider.getModel(),
-    modelRuntime,
-    settingsManager,
-    resourceLoader: loader,
-    sessionManager,
-  });
-
-  try {
-    await session.bindExtensions({ mode: "rpc" });
-
-    // 1. Clean session invariant: no resident OpenPI model tools
-    const initialTools = session.getActiveToolNames();
-    assert.equal(initialTools.includes("create_goal"), false);
-    assert.equal(initialTools.includes("get_goal"), false);
-    assert.equal(initialTools.includes("update_goal"), false);
-    assert.equal(initialTools.includes("openpi_load_tools"), false);
-
-    // 2. User runs /goal <objective> with an objective containing NO capability keywords
-    await session.prompt("/goal 修复 README 的一个拼写错误");
-    await session.waitForIdle();
-
-    // 3. Active tools now include get_goal and update_goal
-    const activeToolsAfterGoal = session.getActiveToolNames();
-    assert.ok(
-      activeToolsAfterGoal.includes("get_goal"),
-      "get_goal must be active",
-    );
-    assert.ok(
-      activeToolsAfterGoal.includes("update_goal"),
-      "update_goal must be active",
-    );
-    assert.ok(
-      activeToolsAfterGoal.includes("create_goal"),
-      "create_goal must be active",
-    );
-
-    // 4. First continuation turn ran: verify provider snapshot contains get_goal and update_goal
-    assert.ok(snapshots.length >= 1, "at least one turn must have run");
-    const firstTurnTools = snapshots[0]?.tools?.map((t) => t.name) ?? [];
-    assert.ok(
-      firstTurnTools.includes("get_goal"),
-      "provider snapshot must include get_goal",
-    );
-    assert.ok(
-      firstTurnTools.includes("update_goal"),
-      "provider snapshot must include update_goal",
-    );
-
-    // 5. Model called update_goal complete -> session settles, no extra continuations dispatched
-    assert.equal(snapshots.length, 2); // turn 1 tool call, turn 2 final response
-  } finally {
-    session.dispose();
-    await rm(root, { recursive: true, force: true });
-  }
-});
+}
 
 test("real Pi fixture: reload restores get_goal/update_goal for active goal", {
   timeout: 30_000,
