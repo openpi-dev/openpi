@@ -570,6 +570,8 @@ test("provider failures remain visible after refresh without discarding partial 
   await expect(page.getByText("Partial answer")).toBeVisible();
   await expect(page.getByText("模型请求已停止")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
+  // Drain snapshot handlers before the per-test request context is disposed.
+  await page.unrouteAll({ behavior: "wait" });
 });
 
 async function openWorkbench(page: Page) {

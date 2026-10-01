@@ -41,7 +41,9 @@ export default defineConfig({
     "tests/web/subagent-inspection.e2e.ts",
   ],
   outputDir: outputDirectory,
-  fullyParallel: false,
+  // Shard individual cases, including the large workbench file. Each runner
+  // still uses one worker so tests cannot mutate its shared server concurrently.
+  fullyParallel: true,
   workers: 1,
   timeout: 30_000,
   reporter: "list",

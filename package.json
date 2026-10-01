@@ -140,6 +140,8 @@
     "test:web:e2e:provider": "bun run build:web && playwright test --config tests/web/playwright.provider.config.ts",
     "benchmark:workflow-child-startup": "node --experimental-strip-types scripts/benchmark-workflow-child-startup.mjs",
     "test": "node scripts/run-tests.mjs",
+    "test:node": "node scripts/run-tests.mjs node",
+    "test:ui": "node scripts/run-tests.mjs ui",
     "provenance": "node scripts/provenance.mjs",
     "check:docs-contract": "node scripts/check-docs-contract.mjs"
   },

@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 import { discoverTestFiles } from "./discover-tests.mjs";
 import { partitionNodeTestsByPlatform } from "./node-test-groups.mjs";
 
+const suite = process.argv[2] ?? "all";
+if (process.argv.length > 3 || !["all", "node", "ui"].includes(suite)) {
+  throw new Error("Usage: node scripts/run-tests.mjs [all|node|ui]");
+}
+
 const files = discoverTestFiles(resolve("tests"));
 const nodeTests = files.filter((file) => file.endsWith(".test.ts"));
 const vitestTests = files.filter((file) => file.endsWith(".spec.ts"));
@@ -23,20 +28,24 @@ function runNodeTests(files, options = []) {
   return result.status ?? 1;
 }
 
-const nodeTestGroups = partitionNodeTestsByPlatform(nodeTests);
-const parallelNodeResult = runNodeTests(nodeTestGroups.parallel);
-if (parallelNodeResult !== 0) {
-  process.exit(parallelNodeResult);
+if (suite !== "ui") {
+  const nodeTestGroups = partitionNodeTestsByPlatform(nodeTests);
+  const parallelNodeResult = runNodeTests(nodeTestGroups.parallel);
+  if (parallelNodeResult !== 0) {
+    process.exit(parallelNodeResult);
+  }
+
+  // Windows process-tree tests must not overlap unrelated Node test files.
+  // Keep the rest of the suite on Node's default file-level concurrency.
+  const serialNodeResult = runNodeTests(nodeTestGroups.serial, [
+    "--test-concurrency=1",
+  ]);
+  if (serialNodeResult !== 0) {
+    process.exit(serialNodeResult);
+  }
 }
 
-// Windows process-tree tests must not overlap unrelated Node test files.
-// Keep the rest of the suite on Node's default file-level concurrency.
-const serialNodeResult = runNodeTests(nodeTestGroups.serial, [
-  "--test-concurrency=1",
-]);
-if (serialNodeResult !== 0) {
-  process.exit(serialNodeResult);
-}
+if (suite === "node") process.exit(0);
 
 // Invoke the CLI module through Node instead of the package-manager shim.
 // Windows installs expose the shim as `vitest.cmd`, which cannot be launched
