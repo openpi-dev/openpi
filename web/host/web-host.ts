@@ -22,7 +22,7 @@ import {
   webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
-import { isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
+import { isDetailDisplay, isFooterStyle, isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
 import { validModelConfiguration, validProviderConfigurationChange } from "../runtime/model-configuration.ts";
 import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
@@ -690,10 +690,13 @@ export class WebHost {
       if (request.method === "POST") {
         const body = await this.readJson(request);
         if (
-          Object.keys(body).length !== 3 ||
+          Object.keys(body).some((key) => !["sessionId", "cols", "rows", "createKey"].includes(key)) ||
           typeof body.sessionId !== "string" ||
           !isBoundedInteger(body.cols, 2, 1_000) ||
-          !isBoundedInteger(body.rows, 2, 1_000)
+          !isBoundedInteger(body.rows, 2, 1_000) ||
+          (body.createKey !== undefined &&
+            (typeof body.createKey !== "string" ||
+              !/^[a-zA-Z0-9:_-]{1,160}$/u.test(body.createKey)))
         ) {
           return this.json(response, 400, {
             code: "INVALID_TERMINAL_CREATE_REQUEST",
@@ -711,6 +714,7 @@ export class WebHost {
           cwd,
           cols: body.cols,
           rows: body.rows,
+          ...(typeof body.createKey === "string" ? { createKey: body.createKey } : {}),
         });
         return this.json(response, terminal.reused ? 200 : 201, terminal);
       }
@@ -816,18 +820,33 @@ export class WebHost {
       if (request.method !== "POST") return this.json(response, 405, { error: "Workspace file changes require POST" });
       const body = await this.readJson(request, Math.ceil(WEB_PROMPT_FILE_MAX_BYTES / 3) * 4 + 64 * 1024);
       const imported = body.kind === "import-file";
+      const move = body.kind === "move";
+      const trash = body.kind === "trash";
+      const restore = body.kind === "restore";
       if (body.access !== "write-workspace-file" || typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 ||
         typeof body.sessionPath !== "string" || !body.sessionPath || body.sessionPath.length > 4096 ||
-        typeof body.directory !== "string" || typeof body.name !== "string" ||
-        !["create-file", "create-directory", "import-file"].includes(String(body.kind)) ||
-        Object.keys(body).some((key) => !["access", "sessionId", "sessionPath", "kind", "directory", "name", ...(imported ? ["data"] : [])].includes(key)) ||
-        (imported && typeof body.data !== "string"))
+        (!trash && !restore && (typeof body.directory !== "string" || typeof body.name !== "string")) ||
+        !["create-file", "create-directory", "import-file", "move", "trash", "restore"].includes(String(body.kind)) ||
+        Object.keys(body).some((key) => !["access", "sessionId", "sessionPath", "kind", ...(restore ? ["id", "identity"] : trash ? ["path", "identity"] : ["directory", "name", ...(move ? ["path", "identity"] : []), ...(imported ? ["data", "createParents"] : [])])].includes(key)) ||
+        (imported && (typeof body.data !== "string" || (body.createParents !== undefined && typeof body.createParents !== "boolean"))) ||
+        ((move || trash) && (typeof body.path !== "string" || typeof body.identity !== "string")) ||
+        (restore && (typeof body.id !== "string" || typeof body.identity !== "string")))
         return this.json(response, 400, { error: "An explicit exact-Session workspace-file change is required" });
-      const common = { directory: body.directory, name: body.name };
-      const result = await this.artifacts.mutateFile(body.sessionId, body.sessionPath,
-        body.kind === "import-file" && typeof body.data === "string" ? { ...common, kind: "import-file", data: body.data } :
-        { ...common, kind: body.kind === "create-directory" ? "create-directory" : "create-file" });
+      let mutation: import("../protocol/artifacts.ts").WorkspaceFileMutation;
+      if (restore && typeof body.id === "string" && typeof body.identity === "string") mutation = { kind: "restore", id: body.id, identity: body.identity };
+      else if (trash && typeof body.path === "string" && typeof body.identity === "string") mutation = { kind: "trash", path: body.path, identity: body.identity };
+      else if (typeof body.directory === "string" && typeof body.name === "string") {
+        const common = { directory: body.directory, name: body.name };
+        if (move && typeof body.path === "string" && typeof body.identity === "string") mutation = { ...common, kind: "move", path: body.path, identity: body.identity };
+        else if (imported && typeof body.data === "string") mutation = { ...common, kind: "import-file", data: body.data, ...(body.createParents === true ? { createParents: true } : {}) };
+        else mutation = { ...common, kind: body.kind === "create-directory" ? "create-directory" : "create-file" };
+      } else return this.json(response, 400, { error: "Invalid workspace file operation" });
+      const result = await this.artifacts.mutateFile(body.sessionId, body.sessionPath, mutation);
       return this.json(response, 201, result);
+    }
+    if (url.pathname === "/api/artifacts/trash") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "Workspace trash listing requires GET" });
+      return this.json(response, 200, await this.artifacts.listTrash(url.searchParams.get("sessionId") ?? "", url.searchParams.get("sessionPath") ?? "", url.searchParams.get("cursor") ?? undefined));
     }
     if (url.pathname === "/api/artifacts/resolve") {
       if (request.method !== "POST") return this.json(response, 405, { error: "File access requires POST" });
@@ -1101,10 +1120,15 @@ export class WebHost {
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
-      const { theme, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, pinnedSort } = body;
+      const { theme, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, pinnedSort, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
       // Browser appearance is package-wide and independent of agent execution.
       // Keep this surface restricted to presentation fields, including on Plan turns.
-      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "pinnedSort"].includes(key)) ||
+      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "pinnedSort", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
+        (subagentResultDisplay !== undefined && !isDetailDisplay(subagentResultDisplay)) ||
+        (bashToolDisplay !== undefined && !isDetailDisplay(bashToolDisplay)) ||
+        (fileMutationDisplay !== undefined && !isDetailDisplay(fileMutationDisplay)) ||
+        (customFooter !== undefined && typeof customFooter !== "boolean") ||
+        (footerStyle !== undefined && !isFooterStyle(footerStyle)) ||
         (pinnedSort !== undefined && pinnedSort !== "manual" && pinnedSort !== "updated") ||
         (theme !== undefined && !isWebTheme(theme)) ||
         (chatWidth !== undefined && (typeof chatWidth !== "number" || !Number.isInteger(chatWidth) || chatWidth < 820 || chatWidth > 2000)) ||
@@ -1126,6 +1150,11 @@ export class WebHost {
             ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
             ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
             ...(pinnedSort !== undefined ? { webPinnedSort: pinnedSort } : {}),
+            ...(isDetailDisplay(subagentResultDisplay) ? { subagentResultDisplay } : {}),
+            ...(isDetailDisplay(bashToolDisplay) ? { bashToolDisplay } : {}),
+            ...(isDetailDisplay(fileMutationDisplay) ? { fileMutationDisplay } : {}),
+            ...(typeof customFooter === "boolean" ? { customFooter } : {}),
+            ...(isFooterStyle(footerStyle) ? { footerStyle } : {}),
           },
         }));
         this.publish("settings_changed", {});
@@ -1449,9 +1478,14 @@ export class WebHost {
       }
     }
     if (url.pathname === "/api/session/fork" && request.method === "POST") {
-      const body = await this.readJson(request, 8192);
+      const body = await this.readJson(request, WEB_PROMPT_MAX_TEXT_LENGTH * 6 + 8192);
       const keys = Object.keys(body);
-      if (keys.length !== 4 || !keys.every((key) => ["commandId", "sessionId", "sessionPath", "entryId"].includes(key)) ||
+      const rerun = body.rerun;
+      const validRerun = rerun === undefined || isRecord(rerun) && (
+        rerun.mode === "regenerate" && Object.keys(rerun).length === 1 ||
+        rerun.mode === "edit" && Object.keys(rerun).length === 2 && typeof rerun.content === "string" && rerun.content.trim().length > 0 && rerun.content.length <= WEB_PROMPT_MAX_TEXT_LENGTH
+      );
+      if ((keys.length !== 4 && keys.length !== 5) || !keys.every((key) => ["commandId", "sessionId", "sessionPath", "entryId", "rerun"].includes(key)) || !validRerun ||
           ![body.commandId, body.sessionId, body.entryId].every((value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/u.test(value)) ||
           !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096 ||
           typeof body.commandId !== "string" || typeof body.sessionId !== "string" || typeof body.entryId !== "string") {
@@ -1462,11 +1496,16 @@ export class WebHost {
         const source = await this.adapter.requireSession(body.sessionPath).catch(() => undefined);
         if (!source || source.id !== body.sessionId) throw new WebRuntimeRequestError("The exact source Session is unavailable", "SESSION_CONFLICT", 409);
         if (source.source !== "web-session") throw new WebRuntimeRequestError("Only a Web-owned Session can fork", "SESSION_FORK_UNAVAILABLE", 409);
-        const result = await this.runtime.forkSession({ commandId: body.commandId, sessionId: body.sessionId, sessionPath: body.sessionPath, entryId: body.entryId });
+        const result = await this.runtime.forkSession({ commandId: body.commandId, sessionId: body.sessionId, sessionPath: body.sessionPath, entryId: body.entryId,
+          ...(isRecord(rerun) && rerun.mode === "edit" && typeof rerun.content === "string" ? { rerun: { mode: "edit" as const, content: rerun.content } } : rerun !== undefined ? { rerun: { mode: "regenerate" as const } } : {}),
+        });
         if (result.state === "forked" && result.sessionPath && result.sessionId) {
-          this.publish("session_forked", { ...result });
+          // Events carry identity only. Original image bytes stay in the
+          // authenticated response, never the host's broadcast replay buffer.
+          const { prompt: _prompt, ...eventResult } = result;
+          this.publish("session_forked", eventResult);
         }
-        return this.json(response, 200, result);
+        return this.json(response, 200, result, MAX_PROMPT_REQUEST_BYTES);
       } catch (error) {
         const failure = this.runtimeRequestFailure(error, "SESSION_FORK_FAILED", "The Session fork could not be completed");
         return this.json(response, failure.status, { code: failure.code, error: failure.error });
@@ -2096,6 +2135,9 @@ export class WebHost {
           chatFontSize: setup.ui.webChatFontSize,
           expandThinking: setup.ui.webExpandThinking,
           pinnedSort: setup.ui.webPinnedSort,
+          subagentResultDisplay: setup.ui.subagentResultDisplay,
+          bashToolDisplay: setup.ui.bashToolDisplay,
+          fileMutationDisplay: setup.ui.fileMutationDisplay,
         },
         ...projection,
         runtime: { ...projection.runtime, liveTools: this.liveTools, ...this.webPlanState(),

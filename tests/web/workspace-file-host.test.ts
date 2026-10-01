@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
-  readFile,
   readdir,
+  readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -15,8 +15,8 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { ArtifactReader } from "../../web/host/artifacts.ts";
 import { WebHost } from "../../web/host/web-host.ts";
-import type { WebRuntimeController } from "../../web/runtime/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
+import type { WebRuntimeController } from "../../web/runtime/types.ts";
 
 function barrier() {
   let release!: () => void;
@@ -209,6 +209,100 @@ test("a delayed workspace-file body cannot write to a copied native Session with
     });
     assert.equal(await response, 403);
     assert.deepEqual(await readdir(f.cwd), []);
+  } finally {
+    await f.close();
+  }
+});
+
+test("organization HTTP requests require exact identity, reject extra authority and expose only authenticated workspace trash", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(join(f.cwd, "original.txt"), "original bytes");
+    const listing = await fetch(
+      `${f.host.origin}/api/artifacts/files?${new URLSearchParams({ sessionId: f.body.sessionId, sessionPath: f.body.sessionPath, path: ".", query: "" })}`,
+      { headers: f.headers },
+    );
+    assert.equal(listing.status, 200);
+    const { entries } = (await listing.json()) as {
+      entries: { path: string; identity: string }[];
+    };
+    const identity = entries.find(
+      (entry) => entry.path === "original.txt",
+    )?.identity;
+    assert.ok(identity);
+    const common = {
+      sessionId: f.body.sessionId,
+      sessionPath: f.body.sessionPath,
+      access: f.body.access,
+    };
+    const move = {
+      ...common,
+      kind: "move",
+      path: "original.txt",
+      identity,
+      directory: ".",
+      name: "renamed.txt",
+    };
+    assert.equal((await f.post({ ...move, identity: undefined })).status, 400);
+    assert.equal((await f.post({ ...move, overwrite: true })).status, 400);
+    assert.equal(
+      (await f.post({ ...move, sessionPath: "/sessions/copied" })).status,
+      403,
+    );
+    assert.equal((await f.post(move)).status, 201);
+    const next = await fetch(
+      `${f.host.origin}/api/artifacts/files?${new URLSearchParams({ sessionId: f.body.sessionId, sessionPath: f.body.sessionPath, path: ".", query: "" })}`,
+      { headers: f.headers },
+    );
+    const nextListing = (await next.json()) as {
+      entries: { path: string; identity: string }[];
+    };
+    const removed = await f.post({
+      ...common,
+      kind: "trash",
+      path: "renamed.txt",
+      identity: nextListing.entries.find(
+        (entry) => entry.path === "renamed.txt",
+      )?.identity,
+    });
+    assert.equal(removed.status, 201);
+    const { trashed } = (await removed.json()) as {
+      trashed: { id: string; identity: string };
+    };
+    const url = `${f.host.origin}/api/artifacts/trash?${new URLSearchParams({ sessionId: f.body.sessionId, sessionPath: f.body.sessionPath })}`;
+    assert.equal((await fetch(url)).status, 401);
+    const trash = await fetch(url, { headers: f.headers });
+    assert.equal(trash.status, 200);
+    assert.equal(
+      ((await trash.json()) as { entries: unknown[] }).entries.length,
+      1,
+    );
+    assert.equal(
+      (
+        await f.post({
+          ...common,
+          kind: "restore",
+          ...trashed,
+          arbitraryPath: "../escape",
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await f.post({
+          ...common,
+          kind: "restore",
+          id: trashed.id,
+          identity: trashed.identity,
+        })
+      ).status,
+      201,
+    );
+    assert.equal(
+      await readFile(join(f.cwd, "renamed.txt"), "utf8"),
+      "original bytes",
+    );
   } finally {
     await f.close();
   }

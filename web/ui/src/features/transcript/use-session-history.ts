@@ -196,6 +196,7 @@ export function useSessionHistory(
         scopeFor(cache.current?.session ?? latest.current.selected),
       );
       cache.current = null;
+      savedReaders.persist?.();
       setWindow(null);
       setLoading(false);
       setError(changed ? "historyChanged" : null);

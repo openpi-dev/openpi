@@ -21,8 +21,19 @@
 .file-tree-item { display:flex; align-items:center; min-width:0; }
 .file-tree-item .file-tree-row { flex:1; min-width:0; }
 .file-tree-item .file-path-actions { flex:none; width:24px; min-width:24px; height:28px; padding:4px; color:var(--muted); }
+.file-tree-item .file-path-actions { opacity:0; }
+.file-tree-item:hover .file-path-actions,.file-tree-item:focus-within .file-path-actions { opacity:1; }
+.file-tree-check { flex:none; margin:0 3px; }
+.file-organization-bar { display:flex; gap:5px; flex-wrap:wrap; align-items:center; padding:6px 8px; border-bottom:1px solid var(--border); font-size:11px; }
+.file-organization-bar button,.file-trash-list button { padding:4px 6px; border:1px solid var(--border); border-radius:4px; background:var(--page); color:var(--text); font-size:11px; }
+.file-trash-list { padding:8px; border-bottom:1px solid var(--border); max-height:35%; overflow:auto; font-size:11px; }
+.file-trash-list p { color:var(--muted); margin:0 0 6px; }
+.file-trash-list ul { list-style:none; padding:0; margin:0; }
+.file-trash-list li { display:flex; align-items:center; gap:5px; padding:5px 0; }
+.file-trash-list li span { flex:1; min-width:0; overflow-wrap:anywhere; }
+@media (hover:none) { .file-tree-item .file-path-actions { opacity:1; } }
 .file-create-toolbar { padding:0 8px 6px; border-bottom:1px solid var(--border); }
-.file-write-actions { display:flex; align-items:center; gap:4px; border:0; padding:0; margin:0; min-width:0; }
+.file-write-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; border:0; padding:0; margin:0; min-width:0; }
 .file-write-actions button { width:28px; height:28px; padding:5px; }
 .file-write-directory { display:flex; align-items:center; gap:5px; margin:4px 0 0; color:var(--muted); font-size:10px; min-width:0; }
 .file-write-directory span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

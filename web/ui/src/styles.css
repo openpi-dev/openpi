@@ -743,8 +743,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 }
 
 @media (any-pointer: coarse) {
-  .session-row > .astryx-menu-trigger { opacity: 1; pointer-events: auto; }
-  .session-row .session-time { visibility: hidden; }
   .message-actions { opacity: 1; }
 }
 

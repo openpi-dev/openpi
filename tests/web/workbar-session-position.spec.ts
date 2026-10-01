@@ -144,9 +144,18 @@ async function select(path: string, id = "session-a") {
 }
 
 async function open(tool: "files" | "browser" | "review") {
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
+  const workbar = document.querySelector<HTMLElement>(".workbar-panel");
   fireEvent.click(
-    within(document.querySelector<HTMLElement>(".workbar-panel")!).getByRole(
+    workbar && !workbar.hidden
+      ? within(workbar).getByRole("button", {
+          name: i18n.t("openTools"),
+        })
+      : screen.getAllByRole("button", {
+          name: i18n.t("openTools"),
+        })[0]!,
+  );
+  fireEvent.click(
+    within(screen.getByRole("region", { name: i18n.t("openTools") })).getByRole(
       "button",
       {
         name: new RegExp(
@@ -597,4 +606,58 @@ it("keeps a resized width when save completes with a stale refreshed snapshot", 
   expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
   expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+});
+
+it("keeps the latest operator width when later snapshots contain an older saved choice", async () => {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 1600,
+  });
+  const current = snapshot();
+  current.preferences = {
+    theme: "system",
+    sidebarWidth: 280,
+    auxiliaryWidth: 520,
+  };
+  webStore.setState({ snapshot: current });
+  const save = vi
+    .spyOn(original.actions, "savePreferences")
+    .mockImplementation(async (patch) => {
+      webStore.setState({
+        snapshot: {
+          ...current,
+          preferences: { ...current.preferences, ...patch },
+        },
+      });
+    });
+  const view = render(createElement(Providers, null, createElement(App)));
+  const shell = view.container.querySelector<HTMLElement>(".app-shell")!;
+  const handle = screen.getByRole("separator", {
+    name: i18n.t("resizeSidebar"),
+  });
+  fireEvent.keyDown(handle, { key: "ArrowRight" });
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledExactlyOnceWith({
+      sidebarWidth: 296,
+      auxiliaryWidth: 520,
+    }),
+  );
+  fireEvent.keyDown(handle, { key: "Enter" });
+  await waitFor(() =>
+    expect(save).toHaveBeenLastCalledWith({
+      sidebarWidth: 280,
+      auxiliaryWidth: 520,
+    }),
+  );
+  await act(async () => {
+    webStore.setState({
+      snapshot: {
+        ...current,
+        cursor: 3,
+        preferences: { ...current.preferences, sidebarWidth: 296 },
+      },
+    });
+  });
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+  expect(save).toHaveBeenCalledTimes(2);
 });

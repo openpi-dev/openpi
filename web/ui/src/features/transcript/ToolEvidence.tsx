@@ -30,12 +30,14 @@ export function ToolEvidence({
   liveState,
   cwd,
   summaryMeta,
+  defaultOpen = false,
 }: {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
   result?: WebLiveMessage;
   liveState?: EvidenceState;
   cwd?: string;
   summaryMeta?: ReactNode;
+  defaultOpen?: boolean;
 }) {
   const artifacts = useContext(ArtifactContext);
   const view = projectToolEvidence(call, result, liveState);
@@ -50,6 +52,7 @@ export function ToolEvidence({
     <details
       className={`tool-evidence-card evidence-${view.kind}`}
       data-state={view.state}
+      open={defaultOpen || undefined}
     >
       <summary>
         <strong className="tool-name">{call.name}</strong>

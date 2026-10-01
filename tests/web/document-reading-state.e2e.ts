@@ -55,11 +55,17 @@ test("real document parsers preserve PDF page and zoom and the selected workshee
     };
     const switchAwayAndBack = async () => {
       await workbar.locator(".workbar-add-tab").click();
-      await page.getByRole("menuitem", { name: /^(浏览器|Browser)/u }).click();
+      await workbar
+        .locator(".workbar-launcher")
+        .getByRole("button", { name: /^(浏览器|Browser)/u })
+        .click();
       await expect(workbar.locator('[data-tool="browser"]')).toBeVisible();
       await expect(filesPanel).toBeHidden();
       await workbar.locator(".workbar-add-tab").click();
-      await page.getByRole("menuitem", { name: /^(文件|Files)/u }).click();
+      await workbar
+        .locator(".workbar-launcher")
+        .getByRole("button", { name: /^(文件|Files)/u })
+        .click();
       await expect(filesPanel).toBeVisible();
       await expect(workbar.locator(".workbar-tab")).toHaveCount(2);
       await expect(

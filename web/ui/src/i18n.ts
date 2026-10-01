@@ -272,6 +272,8 @@ const resources = {
       workbarChangesDescription:
         "Inspect the current Git branch and working tree.",
       terminal: "Terminal",
+      renameTerminal: "Rename terminal",
+      terminalName: "Terminal name",
       workbarTerminalDescription:
         "Open an interactive shell for the current workspace.",
       backgroundTerminalActivity: "Agent command activity",
@@ -353,6 +355,31 @@ const resources = {
       filesNewFile: "New file",
       filesNewDirectory: "New folder",
       filesImport: "Import files",
+      filesImportFolder: "Import folder",
+      filesImportFolderChoose: "Choose a folder to import",
+      filesImportFolderLimit:
+        "Import up to 2,000 files and folders at a time, with at most 64 nested levels.",
+      filesSelectMultiple: "Select multiple files",
+      filesSelectItem: "Select {{name}}",
+      filesSelectedCount: "{{count}} selected",
+      filesRename: "Rename",
+      filesNewName: "New name",
+      filesMove: "Move",
+      filesMoveDestination: "Destination folder (workspace relative path)",
+      filesTrashAction: "Move to trash",
+      filesTrash: "Workspace trash",
+      filesTrashDetail:
+        "Removed files stay in this workspace and can be restored. Existing names are preserved.",
+      filesTrashEmpty: "No removed files",
+      filesTrashUnavailable:
+        "{{count}} entries could not be verified. Their contents remain in .openpi-trash; automatic restore is unavailable.",
+      filesRestore: "Restore",
+      filesRestoreItem: "Restore {{name}}",
+      filesUndoTrash: "Undo removal",
+      filesOrganizationResults: "File operation results",
+      filesOperationDone: "Done",
+      filesRefreshBeforeOrganizing:
+        "Refresh the file tree before organizing this item.",
       filesImportChoose: "Choose files to import",
       filesTargetDirectory: "Destination",
       filesWorkspaceRoot: "Workspace root",
@@ -724,6 +751,21 @@ const resources = {
       capabilityDiscovery_explicit: "Explicit",
       capabilityDiscovery_adaptive: "Adaptive",
       workflowLimits: "Workflow limits",
+      workflowConcurrency: "Workflow concurrency",
+      workflowCalls: "Total calls",
+      agentSettingsSetupHint:
+        "Agent changes are applied through /openpi-setup in the current session.",
+      setupRequestDiscovery:
+        "Set capability discovery to {{mode}}. Preserve other settings.",
+      setupRequestLimits:
+        "Set workflow concurrency to {{concurrency}} and total agent calls to {{calls}}. Preserve other settings.",
+      setupRequestEnableSuggestions:
+        "Enable next-action suggestions. Help me choose a model if required; preserve other settings.",
+      setupRequestDisableSuggestions:
+        "Disable next-action suggestions. Preserve other settings.",
+      setupRequestPostEdit:
+        "Help me configure or disable the post-edit command. Show the current configuration and ask which command to use.",
+      configurePostEdit: "Configure post-edit command",
       workflowLimitsValue: "{{concurrency}} concurrent · {{calls}} total calls",
       nextActionSuggestions: "Next-action suggestions",
       enabled: "Enabled",
@@ -735,6 +777,10 @@ const resources = {
       bashOperations: "Bash operations",
       fileMutations: "Write / Edit operations",
       footer: "Footer",
+      terminalFooter: "Pi terminal footer",
+      terminalFooterStyle: "Terminal footer style",
+      terminalFooterHint:
+        "Applies to Pi's command-line interface. An already open Pi interface updates when restarted or when setup is applied.",
       detailDisplay_full: "Full",
       detailDisplay_compact: "Compact",
       sessionSettings: "Session",
@@ -1105,9 +1151,16 @@ const resources = {
       close: "Close",
       closeSearch: "Close search",
       collapseSidebar: "Collapse sidebar",
-      confirmEdit: "Send revised message",
+      confirmEdit: "Save and rerun",
       editMessageHint:
-        "The original stays in history. Your revision is sent as a new message.",
+        "Rerun from here in a new branch. Keep the original conversation, images and file references. Existing workspace changes are kept.",
+      regenerateMessage: "Regenerate response",
+      regenerateMessageHint:
+        "Rerun this question in a new branch, keeping its original attachments and conversation.",
+      messageRerunStarted:
+        "Rerun admitted in a new branch. The original conversation is kept.",
+      openOriginalConversation: "View original conversation",
+      messageRerunWorkspaceHint: "Existing workspace changes are kept.",
       modelRequestRecovered: "Request recovered",
       modelFailedAttempts: "Failed attempts ({{count}})",
       draftStorageUnavailable:
@@ -1189,7 +1242,7 @@ const resources = {
       codeBlock: "Code block",
       deleteWorkspace: "Delete workspace",
       describeTask: "Describe a task",
-      editMessage: "Revise and resend",
+      editMessage: "Edit and rerun from here",
       enterHint: "Enter to send, Shift+Enter for a new line.",
       expandSidebar: "Expand sidebar",
       importWorkspace: "Import workspace",
@@ -1529,6 +1582,8 @@ const resources = {
       workbarChangesDescription:
         "查看当前目录的未暂存、已暂存、分支或会话变更。",
       terminal: "终端",
+      renameTerminal: "重命名终端",
+      terminalName: "终端名称",
       workbarTerminalDescription: "打开当前工作区的交互式终端。",
       backgroundTerminalActivity: "Agent 命令活动",
       restartTerminal: "重新启动终端",
@@ -1603,6 +1658,30 @@ const resources = {
       filesNewFile: "新建文件",
       filesNewDirectory: "新建文件夹",
       filesImport: "导入文件",
+      filesImportFolder: "导入文件夹",
+      filesImportFolderChoose: "选择要导入的文件夹",
+      filesImportFolderLimit:
+        "每次最多导入 2,000 个文件和文件夹，目录层级最多 64 层。",
+      filesSelectMultiple: "多选文件",
+      filesSelectItem: "选择 {{name}}",
+      filesSelectedCount: "已选 {{count}} 项",
+      filesRename: "重命名",
+      filesNewName: "新名称",
+      filesMove: "移动",
+      filesMoveDestination: "目标文件夹（工作区内相对路径）",
+      filesTrashAction: "移入回收站",
+      filesTrash: "工作区回收站",
+      filesTrashDetail:
+        "移除的文件保留在当前工作区，可恢复；不会覆盖同名文件。",
+      filesTrashEmpty: "暂无已移除文件",
+      filesTrashUnavailable:
+        "{{count}} 项记录无法核验，内容仍保留在 .openpi-trash 中，暂不能自动恢复。",
+      filesRestore: "恢复",
+      filesRestoreItem: "恢复 {{name}}",
+      filesUndoTrash: "撤销移除",
+      filesOrganizationResults: "文件操作结果",
+      filesOperationDone: "完成",
+      filesRefreshBeforeOrganizing: "请先刷新文件树，再整理这项文件。",
       filesImportChoose: "选择要导入的文件",
       filesTargetDirectory: "目标目录",
       filesWorkspaceRoot: "工作区根目录",
@@ -1939,6 +2018,18 @@ const resources = {
       capabilityDiscovery_explicit: "明确请求",
       capabilityDiscovery_adaptive: "自适应",
       workflowLimits: "工作流上限",
+      workflowConcurrency: "工作流并行上限",
+      workflowCalls: "总调用次数",
+      agentSettingsSetupHint: "Agent 设置通过当前会话中的 /openpi-setup 生效。",
+      setupRequestDiscovery: "将能力发现设置为 {{mode}}，保留其他配置。",
+      setupRequestLimits:
+        "将工作流并行上限设置为 {{concurrency}}，总子代理调用上限设置为 {{calls}}，保留其他配置。",
+      setupRequestEnableSuggestions:
+        "启用下一步建议。如需模型配置，请帮助我选择模型，保留其他配置。",
+      setupRequestDisableSuggestions: "关闭下一步建议，保留其他配置。",
+      setupRequestPostEdit:
+        "帮我配置或关闭编辑后命令。先展示当前配置，再询问要使用的命令。",
+      configurePostEdit: "配置编辑后命令",
       workflowLimitsValue: "并行 {{concurrency}} · 总调用 {{calls}}",
       nextActionSuggestions: "下一步建议",
       enabled: "已启用",
@@ -1950,6 +2041,10 @@ const resources = {
       bashOperations: "Bash 操作",
       fileMutations: "Write / Edit 操作",
       footer: "页脚",
+      terminalFooter: "Pi 终端页脚",
+      terminalFooterStyle: "终端页脚样式",
+      terminalFooterHint:
+        "影响 Pi 命令行界面的页脚；已打开的 Pi 界面在下次启动或配置应用后更新。",
       detailDisplay_full: "完整",
       detailDisplay_compact: "紧凑",
       sessionSettings: "会话",
@@ -2285,8 +2380,14 @@ const resources = {
       close: "关闭",
       closeSearch: "关闭搜索",
       collapseSidebar: "收起侧边栏",
-      confirmEdit: "发送修改后的消息",
-      editMessageHint: "原消息会保留，修改后的内容将作为新消息发送。",
+      confirmEdit: "保存并重新运行",
+      editMessageHint:
+        "从这里创建新分支并重新运行；保留原对话、图片和文件引用。已有工作区改动会保留。",
+      regenerateMessage: "重新生成回答",
+      regenerateMessageHint: "在新分支重新运行这条问题，保留原附件和原对话。",
+      messageRerunStarted: "已在新分支接收重跑消息，原对话已保留。",
+      openOriginalConversation: "查看原对话",
+      messageRerunWorkspaceHint: "已有工作区改动会保留。",
       modelRequestRecovered: "请求已恢复",
       modelFailedAttempts: "失败尝试（{{count}} 次）",
       draftStorageUnavailable:
@@ -2358,7 +2459,7 @@ const resources = {
       codeBlock: "代码块",
       deleteWorkspace: "删除工作区",
       describeTask: "描述任务",
-      editMessage: "修改并重发",
+      editMessage: "修改并从这里重跑",
       enterHint: "按 Enter 发送，Shift+Enter 换行。",
       expandSidebar: "展开侧边栏",
       importWorkspace: "导入工作区",

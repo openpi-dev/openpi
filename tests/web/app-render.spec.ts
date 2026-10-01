@@ -2095,17 +2095,24 @@ it("groups transcript turns with state and confirmed file change receipts", () =
   expect(container.querySelectorAll(".turn-heading")).toHaveLength(0);
 });
 
-function renderEditableTranscript(onResend = vi.fn(async () => false)) {
+function renderEditableTranscript(
+  onResend: (content: string) => Promise<boolean> = vi.fn(async () => false),
+) {
   const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.selectedSession!.entries = [
+    projectEntry({
+      type: "message",
+      id: "saved-edit",
+      parentId: null,
+      timestamp: "2026-10-02T00:00:00Z",
+      message: { role: "user", content: "Original message", timestamp: 1 },
+    }),
+  ];
   return renderWithI18n(
     createElement(Transcript, {
       snapshot,
-      liveMessages: [
-        {
-          key: "user-edit",
-          message: { role: "user", content: "Original message" },
-        },
-      ],
+      liveMessages: [],
       liveRunning: false,
       livePhase: "idle",
       liveRetry: null,
@@ -2113,6 +2120,8 @@ function renderEditableTranscript(onResend = vi.fn(async () => false)) {
       thinkingDurations: {},
       scrollToBottom: 0,
       onResend,
+      onEdit: (_anchor, content) => onResend(content),
+      forkAvailable: true,
     }),
   );
 }
@@ -2371,6 +2380,7 @@ it("restores the same native entry offset after leaving a Session, without shari
     expect(saved.window?.anchor).toBe("e3");
     expect(saved.position).toMatchObject({
       key: "e2",
+      entryId: "e2",
       offset: -5,
       scrollTop: 150,
       pinned: false,

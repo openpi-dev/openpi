@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+/// <reference types="vitest/jsdom" />
 
 import {
   act,
@@ -18,6 +19,7 @@ import type {
 } from "../../web/protocol/types.ts";
 import { App } from "../../web/ui/src/app/App.tsx";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
+import { WORKBAR_POSITION_STORAGE_KEY } from "../../web/ui/src/features/workbar/workbar-position-storage.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
@@ -83,6 +85,8 @@ function snapshot(path = pathA): WebSnapshot {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("localStorage", jsdom.window.localStorage);
+  window.localStorage.removeItem(WORKBAR_POSITION_STORAGE_KEY);
   requests = [];
   vi.spyOn(original.actions, "start").mockImplementation(() => {});
   vi.spyOn(original.actions, "stop").mockImplementation(() => {});
@@ -111,6 +115,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.removeItem(WORKBAR_POSITION_STORAGE_KEY);
   webStore.setState(original, true);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();

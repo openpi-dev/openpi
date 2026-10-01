@@ -63,6 +63,8 @@ export type FooterLines = readonly (readonly FooterLayoutItem[])[];
 
 export const DETAIL_DISPLAYS = ["full", "compact"] as const;
 export type DetailDisplay = (typeof DETAIL_DISPLAYS)[number];
+export const isDetailDisplay = (value: unknown): value is DetailDisplay =>
+  value === "full" || value === "compact";
 
 export const WEB_THEMES = [
   "light",
@@ -260,7 +262,7 @@ const isFooterLayoutItem = (value: unknown): value is FooterLayoutItem =>
   typeof value === "string" &&
   FOOTER_LAYOUT_ITEMS.includes(value as FooterLayoutItem);
 
-const isFooterStyle = (value: unknown): value is FooterStyle =>
+export const isFooterStyle = (value: unknown): value is FooterStyle =>
   typeof value === "string" && FOOTER_STYLES.includes(value as FooterStyle);
 
 const isFooterPreset = (value: unknown): value is FooterPreset =>
@@ -1422,7 +1424,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
   ].join("\n");
 }
 
-export { isFooterItem, isFooterLayoutItem, isFooterPreset, isFooterStyle };
+export { isFooterItem, isFooterLayoutItem, isFooterPreset };
 
 /**
  * Read-modify-write against the document as it is on disk right now, so a

@@ -233,6 +233,7 @@ export interface WebStoreState {
   promptAdmissionPending: boolean;
   promptAdmissionRecovery: PromptAdmissionRecovery | null;
   promptAdmissionResolution: PromptAdmissionResolution | null;
+  restoredPromptDraft: PromptAdmissionResolution | null;
   sessionSwitching: boolean;
   scrollToBottom: number;
   // Optimistic display only; the confirmed value lives in snapshot.thinking.
@@ -247,7 +248,13 @@ export interface WebStoreActions {
     anchor: WebHistoryAnchor,
     signal?: AbortSignal,
   ) => Promise<boolean>;
-  forkMessage: (anchor: WebHistoryAnchor) => Promise<boolean>;
+  forkMessage: (
+    anchor: WebHistoryAnchor,
+    rerun?: WebSessionForkRequest["rerun"],
+  ) => Promise<boolean>;
+  editMessage: (anchor: WebHistoryAnchor, content: string) => Promise<boolean>;
+  regenerateMessage: (anchor: WebHistoryAnchor) => Promise<boolean>;
+  acknowledgeRestoredPromptDraft: (commandId: string) => void;
   savePreferences: (patch: WebSettingsPreferencesPatch) => Promise<void>;
   rememberPromptProjection: (
     sessionId: string,
@@ -1709,7 +1716,23 @@ export function createWebStore(
           return false;
         }
       },
-      async forkMessage(anchor) {
+      async editMessage(anchor, content) {
+        return actions.forkMessage(anchor, { mode: "edit", content });
+      },
+      async regenerateMessage(anchor) {
+        return actions.forkMessage(anchor, { mode: "regenerate" });
+      },
+      acknowledgeRestoredPromptDraft(commandId) {
+        if (get().restoredPromptDraft?.commandId === commandId)
+          set({ restoredPromptDraft: null });
+      },
+      async forkMessage(anchor, rerun) {
+        if (
+          rerun?.mode === "edit" &&
+          (!rerun.content.trim() ||
+            rerun.content.length > WEB_PROMPT_MAX_TEXT_LENGTH)
+        )
+          return false;
         const initial = get();
         const selected = initial.snapshot?.selectedSession;
         if (initial.sessionForkPending) return false;
@@ -1735,10 +1758,12 @@ export function createWebStore(
         const request =
           forkRequest?.sessionId === anchor.sessionId &&
           forkRequest.sessionPath === anchor.sessionPath &&
-          forkRequest.entryId === anchor.entryId
+          forkRequest.entryId === anchor.entryId &&
+          JSON.stringify(forkRequest.rerun) === JSON.stringify(rerun)
             ? forkRequest
             : {
                 ...anchor,
+                ...(rerun ? { rerun } : {}),
                 commandId:
                   globalThis.crypto?.randomUUID?.() ??
                   `web-fork-${Date.now()}-${++navigationSequence}`,
@@ -1809,6 +1834,67 @@ export function createWebStore(
             return false;
           }
           forkRequest = null;
+          if (rerun) {
+            const prompt = result.prompt;
+            if (
+              !prompt ||
+              typeof prompt.content !== "string" ||
+              !Array.isArray(prompt.images)
+            )
+              throw new Error(i18n.t("forkSessionUncertain"));
+            // The native fork owns ancestry; the existing prompt admission path
+            // owns delivery, exact-target checks, retries and terminal events.
+            set({ sessionForkPending: false, sessionSwitching: false });
+            const sending = actions.sendPrompt(
+              prompt.content,
+              prompt.images,
+              undefined,
+              undefined,
+              {
+                epoch: nextEpoch,
+                sessionId: result.sessionId,
+                sessionPath: result.sessionPath,
+                workspacePath: current.selectedSession.cwd,
+              },
+            );
+            const submittedId =
+              [...get().liveMessages]
+                .reverse()
+                .find(
+                  (entry) =>
+                    entry.optimistic?.sessionId === result.sessionId &&
+                    entry.optimistic?.sessionPath === result.sessionPath,
+                )?.optimistic?.commandId ?? request.commandId;
+            const accepted = await sending;
+            if (
+              nextEpoch !== sessionEpoch ||
+              get().selectedPath !== result.sessionPath
+            )
+              return false;
+            if (!accepted) {
+              // An uncertain admission already retains its full recovery draft.
+              // A confirmed rejection needs the same text/images in the new
+              // composer's draft, without describing rejection as uncertainty.
+              if (!get().promptAdmissionRecovery)
+                set({
+                  restoredPromptDraft: {
+                    sessionId: result.sessionId,
+                    sessionPath: result.sessionPath,
+                    commandId: submittedId,
+                    content: prompt.content,
+                    images: prompt.images,
+                  },
+                });
+              return false;
+            }
+            set({
+              notice: {
+                kind: "success",
+                message: i18n.t("messageRerunStarted"),
+              },
+            });
+            return true;
+          }
           set({
             notice: { kind: "success", message: i18n.t("forkSessionCreated") },
           });
@@ -2921,6 +3007,7 @@ export function createWebStore(
       promptAdmissionPending: false,
       promptAdmissionRecovery: null,
       promptAdmissionResolution: null,
+      restoredPromptDraft: null,
       sessionSwitching: false,
       scrollToBottom: 0,
       thinkingPendingLevel: null,

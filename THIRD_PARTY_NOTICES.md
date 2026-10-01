@@ -44,6 +44,11 @@ The follow-up Git, file-preview and settings investigation also consulted
 `jmfederico/pi-web` revision `60a29acbfc710908e73b0df9857cb63b53b672d3` (MIT),
 and `apache/maka` revision `0dc1142aa90000e45627017e846b6d57d1e165e0`
 (Apache License 2.0). These are architectural references, not embedded packages.
+The General settings follow-up consulted `agegr/pi-web` revision
+`4a5081a3d9a993fa77553c62196cc0a2b48ed810` (MIT, Copyright (c) 2026 agegr)
+for inline switches, sliders, and immediate-save interactions. OpenPI keeps
+its existing canonical configuration fields and setup episode.
+
 The screencast sizing approach was informed by Chromium DevTools'
 [`ScreencastView.ts`](https://github.com/ChromeDevTools/devtools-frontend/blob/main/front_end/panels/screencast/ScreencastView.ts)
 (BSD-3-Clause). OpenPI retains its own bounded transport and Session authority.

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readMessageRerun } from "../protocol/message-rerun.ts";
 import {
   lstat,
   open,
@@ -26,6 +27,7 @@ import {
   projectEntries,
   projectEntry,
   WEB_MAX_MODELS,
+  WEB_MAX_ENTRIES,
   WEB_MAX_ARCHIVED_SESSION_PAGE,
   WEB_MAX_ARCHIVED_SESSION_CURSOR,
   WEB_MAX_ARCHIVED_SESSION_QUERY,
@@ -1368,6 +1370,7 @@ export class PiWebAdapter {
       path: summary.path,
       cwd: summary.cwd,
       ...projected,
+      rerun: readMessageRerun(branch, manager.getHeader()?.parentSession),
       history: {
         leafEntryId: manager.getLeafId(),
         beforeEntryId: projected.truncation.entriesOmitted > 0 ? projected.entries[0]?.id ?? null : null,
@@ -1487,9 +1490,14 @@ export class PiWebAdapter {
     const branch = manager.getBranch();
     const target = branch.findIndex((entry, index) => entry.id === entryId && (entry.type === "message" || isSessionPrompt(entry, branch[index - 1])));
     if (target < 0) return { status: "changed" as const };
+    // Keep bounded following context so an old reading anchor can occupy its
+    // original viewport offset. A prefix ending at the anchor clamps it to the
+    // bottom even though the native branch contains later messages.
     let end = target + 1;
-    if (isSessionPrompt(branch[target]!, branch[target - 1])) {
-      while (end < branch.length && !isSessionPrompt(branch[end]!, branch[end - 1])) end++;
+    let followingPrompts = 0;
+    while (end < branch.length && end <= target + Math.floor(WEB_MAX_ENTRIES / 2)) {
+      if (isSessionPrompt(branch[end]!, branch[end - 1]) && followingPrompts++ >= Math.floor(HISTORY_PAGE_TURNS / 2)) break;
+      end++;
     }
     let prefix = branch.slice(0, end);
     const budget = WEB_MAX_SELECTED_TRANSCRIPT_BYTES - jsonByteLength(summary) - 2048;
@@ -1501,8 +1509,10 @@ export class PiWebAdapter {
       projected.truncation = { ...projected.truncation, truncated: true };
     }
     if (!projected.entries.some((entry) => entry.id === entryId)) return { status: "changed" as const };
+    if (end < branch.length) projected.truncation = { ...projected.truncation, truncated: true };
     const session: WebSessionProjection = {
       id: summary.id, path: summary.path, cwd: summary.cwd, ...projected,
+      rerun: readMessageRerun(branch, manager.getHeader()?.parentSession),
       history: { leafEntryId: manager.getLeafId(), anchorEntryId: entryId, anchorOnBranch: true,
         beforeEntryId: projected.truncation.entriesOmitted > 0 ? projected.entries[0]?.id ?? null : null },
     };

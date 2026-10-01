@@ -235,6 +235,278 @@ function tree(sessionId = "a", cwd = "/workspace") {
   );
 }
 
+it("the plus opens the full launcher and each Terminal selection creates an independent tab", async () => {
+  const client = fixture();
+  client.create
+    .mockResolvedValueOnce(terminalInfo())
+    .mockResolvedValueOnce(terminalInfo("a", "terminal-b"));
+  const reading: WorkbarReadingState = {};
+  const view = render(
+    createElement(
+      Providers,
+      null,
+      createElement(WorkbarPanel, {
+        visible: true,
+        requestedTool: "terminal",
+        requestRevision: 0,
+        sessionId: "a",
+        sessionPath: "/workspace/a.jsonl",
+        cwd: "/workspace",
+        capabilities: {},
+        review: {
+          result: null,
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        conversationCollapsed: false,
+        onRestoreConversation: () => {},
+        onClose: () => {},
+        readingState: reading,
+      }),
+    ),
+  );
+  await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+  const first = terminals.instances[0]!;
+  act(() =>
+    client.attempts[0]!.onEvent({
+      type: "output",
+      data: "server stays running",
+      offset: 20,
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
+  const launcher = screen.getByRole("region", { name: i18n.t("openTools") });
+  expect(within(launcher).getAllByRole("button")).toHaveLength(5);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(client.attempts[0]!.signal.aborted).toBe(false);
+  fireEvent.click(
+    within(launcher).getByRole("button", {
+      name: new RegExp(`^${i18n.t("terminal")}`),
+    }),
+  );
+  await waitFor(() => expect(client.stream).toHaveBeenCalledTimes(2));
+  expect(client.create.mock.calls[0]?.[4]).toBe("terminal:0");
+  expect(client.create.mock.calls[1]?.[4]).toMatch(/^terminal:[a-f0-9-]+:0$/u);
+  expect(terminals.instances).toHaveLength(2);
+  const second = terminals.instances[1]!;
+  act(() =>
+    client.attempts[1]!.onEvent({
+      type: "output",
+      data: "test output",
+      offset: 11,
+    }),
+  );
+  await act(async () => second.send("test\r"));
+  expect(client.write).toHaveBeenLastCalledWith("a", "terminal-b", "test\r");
+  await act(async () => first.send("hidden-must-not-run\r"));
+  expect(client.write).toHaveBeenCalledOnce();
+  const toolbar = screen.getByRole("toolbar", { name: i18n.t("openTools") });
+  fireEvent.click(
+    within(toolbar).getByRole("button", {
+      name: i18n.t("terminal"),
+    }),
+  );
+  await act(async () => first.send("server\r"));
+  expect(client.write).toHaveBeenLastCalledWith("a", "terminal-a", "server\r");
+  expect(first.writes).toEqual(["server stays running"]);
+  expect(second.writes).toEqual(["test output"]);
+  expect(client.create).toHaveBeenCalledTimes(2);
+  expect(client.attempts.every((attempt) => !attempt.signal.aborted)).toBe(
+    true,
+  );
+  const close = within(toolbar).getByRole("button", {
+    name: `${i18n.t("close")} ${i18n.t("terminal")}`,
+  });
+  await waitFor(() => expect(close.hasAttribute("disabled")).toBe(false));
+  close.focus();
+  fireEvent.click(close);
+  await waitFor(() =>
+    expect(client.close).toHaveBeenCalledExactlyOnceWith("a", "terminal-a"),
+  );
+  await waitFor(() =>
+    expect(
+      view.container.querySelectorAll('[data-tool="terminal"]'),
+    ).toHaveLength(1),
+  );
+  expect(first.disposed).toBe(true);
+  expect(second.disposed).toBe(false);
+  expect(client.attempts[1]!.signal.aborted).toBe(false);
+  expect(client.create).toHaveBeenCalledTimes(2);
+  expect(
+    Object.values(reading.terminals ?? {}).map((terminal) => terminal.id),
+  ).toEqual(["terminal-b"]);
+});
+
+it("renames a terminal tab and retains its title while new output changes its viewport", async () => {
+  const client = fixture();
+  const reading: WorkbarReadingState = {};
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(WorkbarPanel, {
+        visible: true,
+        requestedTool: "terminal",
+        requestRevision: 0,
+        sessionId: "a",
+        sessionPath: "/workspace/a.jsonl",
+        cwd: "/workspace",
+        capabilities: {},
+        review: {
+          result: null,
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        conversationCollapsed: false,
+        onRestoreConversation: () => {},
+        onClose: () => {},
+        readingState: reading,
+      }),
+    ),
+  );
+  await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+  const tab = within(screen.getByRole("toolbar")).getByRole("button", {
+    name: i18n.t("terminal"),
+  });
+  fireEvent.doubleClick(tab);
+  const dialog = await screen.findByRole("dialog", {
+    name: i18n.t("renameTerminal"),
+  });
+  fireEvent.change(
+    within(dialog).getByRole("textbox", { name: i18n.t("terminalName") }),
+    { target: { value: "Dev server" } },
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: i18n.t("save") }));
+  expect(
+    within(screen.getByRole("toolbar")).getByRole("button", {
+      name: "Dev server",
+    }),
+  ).toBeTruthy();
+  act(() => terminals.instances[0]!.scroll(12));
+  expect(reading.terminals?.terminal).toEqual({
+    id: "terminal-a",
+    title: "Dev server",
+    viewport: 12,
+    atBottom: false,
+  });
+  expect(client.create).toHaveBeenCalledOnce();
+});
+
+it("failed terminal close keeps its tab and native ID available for an explicit retry", async () => {
+  const client = fixture();
+  client.close.mockRejectedValueOnce(new Error("Close was not confirmed"));
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(WorkbarPanel, {
+        visible: true,
+        requestedTool: "terminal",
+        requestRevision: 0,
+        sessionId: "a",
+        sessionPath: "/workspace/a.jsonl",
+        cwd: "/workspace",
+        capabilities: {},
+        review: {
+          result: null,
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        conversationCollapsed: false,
+        onRestoreConversation: () => {},
+        onClose: () => {},
+      }),
+    ),
+  );
+  await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+  const close = within(screen.getByRole("toolbar")).getByRole("button", {
+    name: `${i18n.t("close")} ${i18n.t("terminal")}`,
+  });
+  await waitFor(() => expect(close.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(close);
+  await screen.findByRole("alert");
+  expect(terminals.instances[0]!.disposed).toBe(false);
+  expect(client.attempts[0]!.signal.aborted).toBe(false);
+  expect(client.create).toHaveBeenCalledOnce();
+  fireEvent.click(close);
+  await waitFor(() => expect(client.close).toHaveBeenCalledTimes(2));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("region", { name: i18n.t("openTools") }),
+    ).toBeTruthy(),
+  );
+  expect(client.close.mock.calls).toEqual([
+    ["a", "terminal-a"],
+    ["a", "terminal-a"],
+  ]);
+  expect(terminals.instances[0]!.disposed).toBe(true);
+});
+
+it("restored terminal metadata in a viewed Session cannot start, attach or close native processes", async () => {
+  const client = fixture();
+  const reading: WorkbarReadingState = {
+    tabs: {
+      tabs: ["terminal"],
+      active: "terminal",
+      launcherOpen: false,
+      activationHistory: ["terminal"],
+    },
+    requestRevision: 0,
+    terminals: {
+      terminal: {
+        id: "native-from-earlier-session",
+        title: "Server",
+        viewport: 12,
+        atBottom: false,
+      },
+    },
+  };
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(WorkbarPanel, {
+        visible: true,
+        requestedTool: "terminal",
+        requestRevision: 0,
+        sessionId: "viewed",
+        sessionPath: "/workspace/copied.jsonl",
+        cwd: "/workspace",
+        capabilities: {},
+        canControl: false,
+        review: {
+          result: null,
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        conversationCollapsed: false,
+        onRestoreConversation: () => {},
+        onClose: () => {},
+        readingState: reading,
+      }),
+    ),
+  );
+  expect(screen.getByText(i18n.t("toolsRequireCurrentSession"))).toBeTruthy();
+  expect(terminals.instances).toHaveLength(0);
+  const close = within(screen.getByRole("toolbar")).getByRole("button", {
+    name: `${i18n.t("close")} Server`,
+  });
+  expect(close.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(close);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("region", { name: i18n.t("openTools") }),
+    ).toBeTruthy(),
+  );
+  expect(client.create).not.toHaveBeenCalled();
+  expect(client.read).not.toHaveBeenCalled();
+  expect(client.close).not.toHaveBeenCalled();
+});
+
 it.each([12, 50])(
   "detaches a terminal stream and reattaches its identity and viewport %s without restarting it",
   async (viewport) => {

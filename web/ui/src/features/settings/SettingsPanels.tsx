@@ -181,12 +181,22 @@ export function GeneralSettingsPanel({
   const [chatFontSize, setChatFontSize] = useState(
     setup?.ui.webChatFontSize ?? 14,
   );
+  const configuredConcurrency = setup?.workflows.concurrency ?? 0;
+  const configuredCalls = setup?.workflows.maxAgentCalls ?? 0;
+  const [concurrency, setConcurrency] = useState(configuredConcurrency);
+  const [maxCalls, setMaxCalls] = useState(configuredCalls);
 
   useEffect(() => {
     if (!setup) return;
     setChatWidth(setup.ui.webChatWidth);
     setChatFontSize(setup.ui.webChatFontSize);
   }, [setup]);
+
+  useEffect(
+    () => setConcurrency(configuredConcurrency),
+    [configuredConcurrency],
+  );
+  useEffect(() => setMaxCalls(configuredCalls), [configuredCalls]);
 
   return (
     <section className="settings-general-panel">
@@ -359,69 +369,187 @@ export function GeneralSettingsPanel({
         <>
           <section className="settings-section-block">
             <h2>{t("agentBehavior")}</h2>
-            <div className="settings-fact-grid">
-              <div>
+            <div className="settings-chat-controls">
+              <label className="settings-inline-control">
                 <Sparkles aria-hidden="true" />
                 <span>{t("capabilityDiscovery")}</span>
-                <strong>
-                  {t(`capabilityDiscovery_${setup.capabilities.discovery}`)}
-                </strong>
-              </div>
-              <div>
-                <Gauge aria-hidden="true" />
-                <span>{t("workflowLimits")}</span>
-                <strong>
+                <select
+                  value={setup.capabilities.discovery}
+                  disabled={setupPending || setupBlocked}
+                  onChange={(event) =>
+                    void onConfigure(
+                      t("setupRequestDiscovery", { mode: event.target.value }),
+                    )
+                  }
+                >
+                  {(["explicit", "adaptive"] as const).map((mode) => (
+                    <option key={mode} value={mode}>
+                      {t(`capabilityDiscovery_${mode}`)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <form
+                className="settings-limits-control"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!setupPending && !setupBlocked)
+                    void onConfigure(
+                      t("setupRequestLimits", { concurrency, calls: maxCalls }),
+                    );
+                }}
+              >
+                <span>
+                  <Gauge aria-hidden="true" />
+                  {t("workflowLimits")}
+                </span>
+                <small>
                   {t("workflowLimitsValue", {
                     concurrency: setup.workflows.concurrency,
                     calls: setup.workflows.maxAgentCalls,
                   })}
-                </strong>
-              </div>
-              <div>
-                <Bot aria-hidden="true" />
-                <span>{t("nextActionSuggestions")}</span>
-                <strong>
-                  {setup.suggestions.enabled
-                    ? setup.suggestions.model
-                      ? `${setup.suggestions.model.provider}/${setup.suggestions.model.model} · ${setup.suggestions.model.reasoning}`
-                      : t("enabled")
-                    : t("disabled")}
-                </strong>
-              </div>
-              <div>
+                </small>
+                <label>
+                  {t("workflowConcurrency")}
+                  <input
+                    type="number"
+                    min={1}
+                    value={concurrency}
+                    disabled={setupPending || setupBlocked}
+                    onChange={(event) =>
+                      setConcurrency(Number(event.target.value))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  {t("workflowCalls")}
+                  <input
+                    type="number"
+                    min={1}
+                    value={maxCalls}
+                    disabled={setupPending || setupBlocked}
+                    onChange={(event) =>
+                      setMaxCalls(Number(event.target.value))
+                    }
+                    required
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={
+                    setupPending ||
+                    setupBlocked ||
+                    (concurrency === setup.workflows.concurrency &&
+                      maxCalls === setup.workflows.maxAgentCalls)
+                  }
+                >
+                  {t("configureViaSetup")}
+                </button>
+              </form>
+              <Switch
+                label={t("nextActionSuggestions")}
+                value={setup.suggestions.enabled}
+                size="sm"
+                width="100%"
+                labelPosition="start"
+                labelSpacing="spread"
+                isDisabled={setupPending || setupBlocked}
+                isLoading={setupPending}
+                onChange={(checked: boolean) =>
+                  void onConfigure(
+                    t(
+                      checked
+                        ? "setupRequestEnableSuggestions"
+                        : "setupRequestDisableSuggestions",
+                    ),
+                  )
+                }
+              />
+              {setup.suggestions.model && (
+                <small>{`${setup.suggestions.model.provider}/${setup.suggestions.model.model} · ${setup.suggestions.model.reasoning}`}</small>
+              )}
+              <div className="settings-inline-control">
                 <Code2 aria-hidden="true" />
-                <span>{t("postEditCommand")}</span>
-                <strong>
+                <span>
+                  {t("postEditCommand")} ·{" "}
                   {t(setup.postEditConfigured ? "configured" : "disabled")}
-                </strong>
+                </span>
+                <SetupAction
+                  isPending={setupPending}
+                  isBlocked={setupBlocked}
+                  onConfigure={onConfigure}
+                  request={t("setupRequestPostEdit")}
+                  label={t("configurePostEdit")}
+                />
               </div>
+              <small>{t("agentSettingsSetupHint")}</small>
             </div>
           </section>
 
           <section className="settings-section-block">
             <h2>{t("resultDisplay")}</h2>
-            <dl className="settings-summary-list">
-              <div>
-                <dt>{t("subagentResults")}</dt>
-                <dd>{t(`detailDisplay_${setup.ui.subagentResultDisplay}`)}</dd>
-              </div>
-              <div>
-                <dt>{t("bashOperations")}</dt>
-                <dd>{t(`detailDisplay_${setup.ui.bashToolDisplay}`)}</dd>
-              </div>
-              <div>
-                <dt>{t("fileMutations")}</dt>
-                <dd>{t(`detailDisplay_${setup.ui.fileMutationDisplay}`)}</dd>
-              </div>
-              <div>
-                <dt>{t("footer")}</dt>
-                <dd>
-                  {setup.ui.customFooter
-                    ? `${t("enabled")} · ${setup.ui.footerStyle}`
-                    : t("disabled")}
-                </dd>
-              </div>
-            </dl>
+            <div className="settings-chat-controls">
+              {(
+                [
+                  ["subagentResultDisplay", "subagentResults"],
+                  ["bashToolDisplay", "bashOperations"],
+                  ["fileMutationDisplay", "fileMutations"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="settings-inline-control">
+                  <span>{t(label)}</span>
+                  <select
+                    value={setup.ui[key]}
+                    disabled={preferencePending}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === "full" || value === "compact")
+                        void onUpdatePreferences({ [key]: value });
+                    }}
+                  >
+                    <option value="compact">
+                      {t("detailDisplay_compact")}
+                    </option>
+                    <option value="full">{t("detailDisplay_full")}</option>
+                  </select>
+                </label>
+              ))}
+              <Switch
+                label={t("terminalFooter")}
+                value={setup.ui.customFooter}
+                size="sm"
+                width="100%"
+                labelPosition="start"
+                labelSpacing="spread"
+                isDisabled={preferencePending}
+                isLoading={preferencePending}
+                onChange={(checked: boolean) =>
+                  void onUpdatePreferences({ customFooter: checked })
+                }
+              />
+              <label className="settings-inline-control">
+                <span>{t("terminalFooterStyle")}</span>
+                <select
+                  value={setup.ui.footerStyle}
+                  disabled={preferencePending || !setup.ui.customFooter}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (
+                      value === "plain" ||
+                      value === "powerline" ||
+                      value === "powerline-mono"
+                    )
+                      void onUpdatePreferences({ footerStyle: value });
+                  }}
+                >
+                  <option value="plain">Plain</option>
+                  <option value="powerline">Powerline</option>
+                  <option value="powerline-mono">Powerline Mono</option>
+                </select>
+              </label>
+              <small>{t("terminalFooterHint")}</small>
+            </div>
           </section>
         </>
       )}

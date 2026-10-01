@@ -10,7 +10,10 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
-import type { WebSnapshot } from "../../web/protocol/types.ts";
+import type {
+  WebHistoryAnchor,
+  WebSnapshot,
+} from "../../web/protocol/types.ts";
 import { FullMessageText } from "../../web/ui/src/features/transcript/FullMessageText.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
@@ -337,6 +340,10 @@ it("offers recovery only for clipped visible text, not bounded tool evidence", (
 });
 
 it("uses the complete native text for copy and edit only after recovery finishes", async () => {
+  const edit = vi.fn(
+    async (_anchor: WebHistoryAnchor, _content: string) => true,
+  );
+  const append = vi.fn(async () => true);
   const read = vi.spyOn(WebClient.prototype, "sessionItem").mockResolvedValue({
     entryId: "prompt",
     text: "The complete question after recovery",
@@ -399,7 +406,9 @@ it("uses the complete native text for copy and edit only after recovery finishes
         thinkingStarts: {},
         thinkingDurations: {},
         scrollToBottom: 0,
-        onResend: async () => true,
+        onResend: append,
+        onEdit: edit,
+        forkAvailable: true,
       }),
     ),
   );
@@ -410,7 +419,7 @@ it("uses the complete native text for copy and edit only after recovery finishes
     }).disabled,
   ).toBe(true);
   expect(
-    within(question).queryByRole("button", { name: "Revise and resend" }),
+    within(question).queryByRole("button", { name: i18n.t("editMessage") }),
   ).toBeNull();
   await act(async () =>
     fireEvent.click(
@@ -430,11 +439,11 @@ it("uses the complete native text for copy and edit only after recovery finishes
   );
   expect(copyText).toHaveBeenCalledWith("The complete question after recovery");
   fireEvent.click(
-    within(question).getByRole("button", { name: "Revise and resend" }),
+    within(question).getByRole("button", { name: i18n.t("editMessage") }),
   );
   expect(
     within(question).getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Revise and resend",
+      name: i18n.t("editMessage"),
     }).value,
   ).toBe("The complete question after recovery");
 
@@ -449,13 +458,31 @@ it("uses the complete native text for copy and edit only after recovery finishes
         thinkingStarts: {},
         thinkingDurations: {},
         scrollToBottom: 0,
-        onResend: async () => true,
+        onResend: append,
+        onEdit: edit,
+        forkAvailable: true,
       }),
     ),
   );
   expect(
     within(question).getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Revise and resend",
+      name: i18n.t("editMessage"),
     }).value,
   ).toBe("The complete question after recovery");
+  await act(async () =>
+    fireEvent.click(
+      within(question).getByRole("button", { name: i18n.t("confirmEdit") }),
+    ),
+  );
+  expect(edit).toHaveBeenCalledExactlyOnceWith(
+    { sessionId: "session", sessionPath: "/tmp/session", entryId: "prompt" },
+    "The complete question after recovery",
+  );
+  expect(append).not.toHaveBeenCalled();
+  expect(
+    within(question).queryByRole("textbox", { name: i18n.t("editMessage") }),
+  ).toBeNull();
+  expect(snapshot.selectedSession?.entries[0]?.message?.content).toBe(
+    "Question preview",
+  );
 });

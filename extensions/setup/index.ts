@@ -526,19 +526,19 @@ export default function openPiSetup(pi: ExtensionAPI) {
       subagent_result_display: Type.Optional(
         StringEnum(DETAIL_DISPLAYS, {
           description:
-            "How completed Subagent results render by default: full shows complete output; compact shows only bounded status rows while app.tools.expand reveals the full child report. Omit to preserve the current value.",
+            "How completed Subagent results render by default in Pi and Web: full shows complete output; compact shows bounded status rows, with disclosure controls revealing the report. Omit to preserve the current value.",
         }),
       ),
       bash_tool_display: Type.Optional(
         StringEnum(DETAIL_DISPLAYS, {
           description:
-            "How Bash commands and output render by default: compact shows one semantic activity row with running/success/failure state; app.tools.expand restores Pi's native command, output, error, timing, and full-output metadata. Full keeps Pi's native rendering expanded by default. Omit to preserve the current value.",
+            "How Bash commands and output render by default in Pi and Web: compact shows a semantic activity row with execution state; disclosure controls reveal command, output and evidence. Full expands the evidence and enclosing Web execution group by default. Omit to preserve the current value.",
         }),
       ),
       file_mutation_display: Type.Optional(
         StringEnum(DETAIL_DISPLAYS, {
           description:
-            "How Write/Edit content and diffs render by default: compact shows one semantic activity row with path, status, and line/diff counts; app.tools.expand restores Pi's native preview, output, error, and diff. Full keeps Pi's native rendering expanded by default. Omit to preserve the current value.",
+            "How Write/Edit content and diffs render by default in Pi and Web: compact shows path, status and change counts; disclosure controls reveal native preview, output, error and diff. Full expands the evidence and enclosing Web execution group by default. Omit to preserve the current value.",
         }),
       ),
       subagent_role_models: Type.Optional(SUBAGENT_ROLE_MODELS_SCHEMA),

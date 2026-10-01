@@ -236,7 +236,7 @@ test("prompt preview bounds Unicode, excludes thinking/tools, and ends at the ne
   if (early.status === "ok") assert.equal(early.preview.response, "");
 });
 
-test("standalone native setup prompts have a preview and a target-retaining same-turn window", async (t) => {
+test("standalone native setup prompts have a preview and a target-retaining context window", async (t) => {
   const { manager, adapter } = await fixture(t);
   const setup = manager.appendCustomMessageEntry(
     "openpi-setup-request",
@@ -288,7 +288,7 @@ test("standalone native setup prompts have a preview and a target-retaining same
     assert.ok(
       window.session.entries.some((entry) => entry.id === setupResponse),
     );
-    assert.ok(!window.session.entries.some((entry) => entry.id === next));
+    assert.ok(window.session.entries.some((entry) => entry.id === next));
     assert.ok(
       jsonByteLength({ session: window.session }) <=
         WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
@@ -537,13 +537,64 @@ test("native command prompts remain navigable and only their exact setup echo is
   if (window.status === "ok") {
     assert.ok(window.session.entries.some((entry) => entry.id === command));
     assert.ok(window.session.entries.some((entry) => entry.id === reply));
-    assert.ok(
-      !window.session.entries.some((entry) => entry.id === independent),
-    );
+    assert.ok(window.session.entries.some((entry) => entry.id === independent));
   }
 });
 
-test("an oversized same-turn window falls back to its target without crossing the transcript budget", async (t) => {
+test("a native message window retains bounded following context and exact older omission counts without mutating the branch", async (t) => {
+  const { manager, adapter } = await fixture(t);
+  let target = "";
+  for (let index = 0; index < 120; index++) {
+    manager.appendMessage({
+      role: "user",
+      content: `Question ${index}`,
+      timestamp: index,
+    });
+    const answer = assistant(manager, `Answer ${index}`);
+    if (index === 35) target = answer;
+  }
+  const source = JSON.stringify(manager.getEntries());
+  const latest = (await adapter.getSnapshot()).selectedSession!;
+  const window = await adapter.getSessionMessageWindow(
+    latest.id,
+    latest.path,
+    target,
+  );
+  assert.equal(window.status, "ok");
+  if (window.status !== "ok") return;
+  const branch = manager.getBranch();
+  const targetIndex = window.session.entries.findIndex(
+    (entry) => entry.id === target,
+  );
+  assert.ok(targetIndex > 0);
+  assert.ok(targetIndex < window.session.entries.length - 1);
+  assert.ok(
+    window.session.entries.some(
+      (entry) => entry.message?.content === "Question 36",
+    ),
+  );
+  assert.ok(window.session.entries.length <= WEB_MAX_ENTRIES);
+  assert.equal(
+    window.session.truncation.entriesOmitted,
+    branch.findIndex((entry) => entry.id === window.session.entries[0]!.id),
+  );
+  assert.equal(window.session.history?.anchorEntryId, target);
+  assert.equal(window.session.history?.anchorOnBranch, true);
+  assert.equal(window.session.history?.leafEntryId, manager.getLeafId());
+  assert.ok(
+    jsonByteLength({ session: window.session }) <=
+      WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
+  );
+  assert.equal(JSON.stringify(manager.getEntries()), source);
+  manager.branch(branch[0]!.id);
+  assert.equal(
+    (await adapter.getSessionMessageWindow(latest.id, latest.path, target))
+      .status,
+    "changed",
+  );
+});
+
+test("an oversized same-turn window retains its target without crossing the transcript budget", async (t) => {
   const { manager, adapter } = await fixture(t);
   const target = manager.appendMessage({
     role: "user",

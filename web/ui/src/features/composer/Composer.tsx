@@ -109,6 +109,7 @@ interface ComposerProps {
   promptAdmissionPending: boolean;
   promptAdmissionRecovery?: WebStoreState["promptAdmissionRecovery"];
   promptAdmissionResolution?: WebStoreState["promptAdmissionResolution"];
+  restoredPromptDraft?: WebStoreState["restoredPromptDraft"];
   liveRunning: boolean;
   landing: boolean;
   actions: WebStoreActions;
@@ -709,7 +710,7 @@ export function Composer(props: ComposerProps) {
   }, [filteredCommands]);
 
   useEffect(() => {
-    const recovery = props.promptAdmissionRecovery;
+    const recovery = props.promptAdmissionRecovery ?? props.restoredPromptDraft;
     if (!recovery || restoredRecoveryCommandId.current === recovery.commandId)
       return;
     restoredRecoveryCommandId.current = recovery.commandId;
@@ -771,7 +772,15 @@ export function Composer(props: ComposerProps) {
       currentDraft.current = restored;
       setDraft(restored);
     }
-  }, [draftMemory, props.promptAdmissionRecovery, t]);
+    if (props.restoredPromptDraft?.commandId === recovery.commandId)
+      props.actions.acknowledgeRestoredPromptDraft(recovery.commandId);
+  }, [
+    draftMemory,
+    props.actions,
+    props.promptAdmissionRecovery,
+    props.restoredPromptDraft,
+    t,
+  ]);
 
   useEffect(() => {
     const resolution = props.promptAdmissionResolution;

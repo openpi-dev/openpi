@@ -1,8 +1,195 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import type {
   WebCommandDiscoveryResult,
   WebSnapshot,
 } from "../../web/protocol/types.ts";
+
+async function installSidebarActionsFixture(page: Page) {
+  let selected = "first";
+  const selections: string[] = [];
+  await page.route("**/events?**", (route) =>
+    route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }),
+  );
+  await page.route("**/api/sessions/select", async (route) => {
+    const path = route.request().postDataJSON().path;
+    expect(path).toMatch(/^\/preview\/sidebar-(first|second)\.jsonl$/u);
+    selected = path.includes("second") ? "second" : "first";
+    selections.push(path);
+    await route.fulfill({ json: { cancelled: false } });
+  });
+  await page.route("**/api/thinking**", (route) =>
+    route.fulfill({
+      json: {
+        sessionId: selected,
+        level: "unknown",
+        available: [],
+        supported: false,
+        revision: 1000,
+      },
+    }),
+  );
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = (await response.json()) as WebSnapshot;
+    const real = snapshot.sessions[0]!;
+    snapshot.preferences.theme = "light";
+    snapshot.sessions = ["first", "second"].map((id) => ({
+      ...real,
+      id,
+      path: `/preview/sidebar-${id}.jsonl`,
+      name: id === "first" ? "侧栏交互 A" : "侧栏交互 B",
+      execution: { status: "idle" },
+      pinOrder: undefined,
+    }));
+    const session = snapshot.sessions.find(({ id }) => id === selected)!;
+    snapshot.currentSessionId = session.id;
+    snapshot.currentSessionPath = session.path;
+    snapshot.selectedSession = {
+      ...snapshot.selectedSession!,
+      id: session.id,
+      path: session.path,
+      cwd: session.cwd,
+      entries: [],
+    };
+    snapshot.runtime = { status: "idle", capabilities: {} };
+    await route.fulfill({ response, json: snapshot });
+  });
+  return selections;
+}
+
+test("session actions stay quiet until hover or keyboard focus, and remain available while their menu is open", async ({
+  page,
+}, testInfo) => {
+  const selections = await installSidebarActionsFixture(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  const row = page.getByRole("listitem", { name: "侧栏交互 B", exact: true });
+  const pin = row.getByRole("button", { name: "置顶会话", exact: true });
+  const trigger = row.getByRole("button", { name: "会话选项", exact: true });
+  const actions = row.locator(":scope > .astryx-menu-trigger");
+  await page.mouse.move(1000, 80);
+  await expect(pin).toHaveCSS("opacity", "0");
+  await expect(actions).toHaveCSS("opacity", "0");
+  await expect(pin).toHaveCSS("pointer-events", "none");
+  await expect(actions).toHaveCSS("pointer-events", "none");
+  const selectedRow = page.getByRole("listitem", {
+    name: "侧栏交互 A",
+    exact: true,
+  });
+  await expect(selectedRow.locator(".session-pin-button")).toHaveCSS(
+    "opacity",
+    "0",
+  );
+  await expect(selectedRow.locator(":scope > .astryx-menu-trigger")).toHaveCSS(
+    "opacity",
+    "0",
+  );
+  await page.screenshot({
+    path: testInfo.outputPath("sidebar-actions-quiet.png"),
+    animations: "disabled",
+  });
+  await row.hover();
+  await expect(pin).toHaveCSS("opacity", "1");
+  await expect(actions).toHaveCSS("opacity", "1");
+  await page.screenshot({
+    path: testInfo.outputPath("sidebar-actions-hover.png"),
+    animations: "disabled",
+  });
+  await page.mouse.move(1000, 80);
+  await row.locator(".session").focus();
+  await page.keyboard.press("Tab");
+  await expect(pin).toBeFocused();
+  await expect(pin).toHaveCSS("opacity", "1");
+  await expect(actions).toHaveCSS("opacity", "1");
+  await page.keyboard.press("Tab");
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("menu", { name: "会话选项", exact: true });
+  await expect(menu).toBeVisible();
+  await expect(menu).toHaveCSS("opacity", "1");
+  await expect
+    .poll(() =>
+      menu.evaluate((element) => element.contains(document.activeElement)),
+    )
+    .toBe(true);
+  await page.mouse.move(1000, 80);
+  expect(
+    await row.evaluate((element) => element.matches(":focus-within")),
+  ).toBe(false);
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await expect(pin).toHaveCSS("opacity", "1");
+  await expect(actions).toHaveCSS("opacity", "1");
+  await page.screenshot({
+    path: testInfo.outputPath("sidebar-actions-open-menu.png"),
+    animations: "disabled",
+  });
+  await page.getByRole("menuitem", { name: "重命名会话", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "重命名会话", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  expect(selections).toEqual([]);
+});
+
+test.describe("touch sidebar actions", () => {
+  test.use({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+
+  test("ordinary rows hide actions while touch selection keeps the selected conversation menu reachable", async ({
+    page,
+  }, testInfo) => {
+    const selections = await installSidebarActionsFixture(page);
+    await page.goto("/");
+    expect(
+      await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
+    ).toBe(true);
+    await page.getByRole("button", { name: "打开侧边栏", exact: true }).tap();
+    const row = page.getByRole("listitem", { name: "侧栏交互 B", exact: true });
+    const pin = row.getByRole("button", { name: "置顶会话", exact: true });
+    const trigger = row.getByRole("button", { name: "会话选项", exact: true });
+    const actions = row.locator(":scope > .astryx-menu-trigger");
+    await expect(pin).toHaveCSS("opacity", "0");
+    await expect(actions).toHaveCSS("opacity", "0");
+    await row.locator(".session").tap();
+    await expect(page.locator(".app-shell")).not.toHaveClass(/sidebar-open/u);
+    await page.getByRole("button", { name: "打开侧边栏", exact: true }).tap();
+    await expect(row.locator(".session")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(actions).toHaveCSS("opacity", "1");
+    await expect(pin).toHaveCSS("opacity", "1");
+    const ordinaryRow = page.getByRole("listitem", {
+      name: "侧栏交互 A",
+      exact: true,
+    });
+    await expect(ordinaryRow.locator(".session-pin-button")).toHaveCSS(
+      "opacity",
+      "0",
+    );
+    await expect(
+      ordinaryRow.locator(":scope > .astryx-menu-trigger"),
+    ).toHaveCSS("opacity", "0");
+    expect((await trigger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await trigger.tap();
+    const menu = page.getByRole("menu", { name: "会话选项", exact: true });
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveCSS("opacity", "1");
+    await page.screenshot({
+      path: testInfo.outputPath("sidebar-actions-touch-menu.png"),
+      animations: "disabled",
+    });
+    await page.getByRole("menuitem", { name: "重命名会话", exact: true }).tap();
+    await expect(
+      page.getByRole("dialog", { name: "重命名会话", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "取消", exact: true }).tap();
+    expect(selections).toEqual(["/preview/sidebar-second.jsonl"]);
+  });
+});
 
 test("conversation pin persists through browser reload and unpin returns it to its workspace", async ({
   page,

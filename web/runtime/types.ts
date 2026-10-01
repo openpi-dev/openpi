@@ -215,6 +215,7 @@ export interface WebSessionCreationResult {
 
 export interface WebSessionForkRequest extends WebHistoryAnchor {
   commandId: string;
+  rerun?: { mode: "edit"; content: string } | { mode: "regenerate" };
 }
 
 export interface WebSessionForkResult {
@@ -224,6 +225,8 @@ export interface WebSessionForkResult {
   replayed?: boolean;
   sessionId?: string;
   sessionPath?: string;
+  /** Prepared from the complete native user message; admission still uses /api/prompt. */
+  prompt?: { content: string; images: WebPromptImage[] };
 }
 
 export interface WebRuntimeController {

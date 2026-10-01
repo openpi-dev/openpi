@@ -60,6 +60,7 @@ import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
 import {
   rememberSessionReading,
+  type ReadingPosition,
   type SessionReadingCache,
   sessionReadingScope,
 } from "./session-reading-state.ts";
@@ -77,6 +78,7 @@ import {
 } from "../../../../protocol/prompt-navigation.ts";
 import "./provider-outcomes.css";
 import "./conversation-navigation.css";
+import "./message-branch.css";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -111,10 +113,18 @@ interface TranscriptProps {
   thinkingDurations: Record<string, number>;
   scrollToBottom: number;
   readingCache?: SessionReadingCache;
+  readingRestorePending?: boolean;
   historyNavigation?:
-    | (WebHistoryAnchor & { revision: number; session: WebSessionProjection })
+    | (WebHistoryAnchor & {
+        revision: number;
+        session: WebSessionProjection;
+        restorePosition?: ReadingPosition;
+      })
     | null;
   onResend: (content: string) => Promise<boolean>;
+  onEdit?: (anchor: WebHistoryAnchor, content: string) => Promise<boolean>;
+  onRegenerate?: (anchor: WebHistoryAnchor) => Promise<boolean>;
+  onOpenOriginal?: (anchor: WebHistoryAnchor) => Promise<boolean>;
   onFork?: (anchor: WebHistoryAnchor) => Promise<boolean>;
   forkAvailable?: boolean;
   forkPending?: boolean;
@@ -144,6 +154,7 @@ interface RenderRow {
   processType?: "thinking" | "tool" | "activity";
   processPreview?: string;
   processStatus?: Status;
+  defaultOpen?: boolean;
   error?: boolean;
   outcome?: "completed" | "failed" | "interrupted";
   pendingPrompt?: boolean;
@@ -475,15 +486,20 @@ function ActivityCard({
   meta,
   status,
   title,
+  defaultOpen = false,
 }: {
   body: string;
   family: "subagent" | "workflow";
   meta?: string;
   status: Status;
   title: string;
+  defaultOpen?: boolean;
 }) {
   return (
-    <details className={`message-details activity-card ${family}`}>
+    <details
+      className={`message-details activity-card ${family}`}
+      open={defaultOpen || undefined}
+    >
       <summary>
         <span className="activity-icon" aria-hidden="true">
           {family === "subagent" ? <Bot /> : <Workflow />}
@@ -506,6 +522,7 @@ function familyCard(
   subagents: readonly WebSubagentActivity[] = [],
   onInspectSubagent?: (id: string) => void,
   liveState?: EvidenceState,
+  defaultOpen = false,
 ) {
   const name = part.name || "";
   const args = parseArguments(part.arguments);
@@ -523,6 +540,7 @@ function familyCard(
         body={result?.content || String(args.prompt || part.arguments)}
         activity={subagents.find((item) => item.id === details.id)}
         spawnFailed={result?.isError === true}
+        defaultOpen={defaultOpen}
         onInspect={onInspectSubagent}
       />
     );
@@ -532,6 +550,7 @@ function familyCard(
     return (
       <ActivityCard
         family="subagent"
+        defaultOpen={defaultOpen}
         title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} Subagent`}
         meta={String(args.id || "")}
         body={result?.content || part.arguments}
@@ -589,6 +608,7 @@ function SubagentCard({
   activity,
   spawnFailed,
   onInspect,
+  defaultOpen = false,
 }: {
   id?: string;
   title: string;
@@ -597,6 +617,7 @@ function SubagentCard({
   activity?: WebSubagentActivity;
   spawnFailed: boolean;
   onInspect?: (id: string) => void;
+  defaultOpen?: boolean;
 }) {
   const { t } = useTranslation();
   const state =
@@ -627,7 +648,7 @@ function SubagentCard({
         <span className={`subagent-state ${state ?? "unknown"}`}>{label}</span>
         <span aria-hidden="true">›</span>
       </button>
-      <details className="subagent-receipt">
+      <details className="subagent-receipt" open={defaultOpen || undefined}>
         <summary>{t("subagentSpawnReceipt")}</summary>
         <p>{t("subagentSpawnReceiptHint")}</p>
         <pre className="details-body tool-evidence">{body}</pre>
@@ -677,6 +698,7 @@ function MessageActions({
   copyRequiresFull = false,
   timestamp,
   onResend,
+  onRegenerate,
   onFork,
   canFork = false,
   forkPending = false,
@@ -686,6 +708,7 @@ function MessageActions({
   copyRequiresFull?: boolean;
   timestamp?: string;
   onResend: (value: string) => Promise<boolean>;
+  onRegenerate?: () => Promise<boolean>;
   onFork?: () => Promise<boolean>;
   canFork?: boolean;
   forkPending?: boolean;
@@ -796,6 +819,17 @@ function MessageActions({
           <Pencil />
         </button>
       )}
+      {onRegenerate && (
+        <button
+          type="button"
+          aria-label={t("regenerateMessage")}
+          title={t("regenerateMessageHint")}
+          disabled={!canFork || forkPending}
+          onClick={() => void onRegenerate()}
+        >
+          <RotateCcw aria-hidden="true" />
+        </button>
+      )}
       <button
         type="button"
         aria-label={copied ? t("copiedMessage") : t("copyMessage")}
@@ -837,7 +871,13 @@ function MessageActions({
   );
 }
 
-function CustomResult({ message }: { message: WebLiveMessage }) {
+function CustomResult({
+  message,
+  fullSubagent = false,
+}: {
+  message: WebLiveMessage;
+  fullSubagent?: boolean;
+}) {
   const { t } = useTranslation();
   if (message.customType === "openpi-web-command-feedback")
     return (
@@ -889,6 +929,7 @@ function CustomResult({ message }: { message: WebLiveMessage }) {
       <ActivityCard
         family="subagent"
         title={t("subagentBackgroundResult", { count: results.length })}
+        defaultOpen={fullSubagent}
         meta={results
           .map((result) =>
             [
@@ -904,7 +945,7 @@ function CustomResult({ message }: { message: WebLiveMessage }) {
           )
           .join(" / ")}
         body={
-          typeof details.displayContent === "string"
+          !fullSubagent && typeof details.displayContent === "string"
             ? details.displayContent
             : message.content
         }
@@ -1640,7 +1681,9 @@ function renderTurns(
       id={turn.id}
       rows={turn.rows}
       active={running && turn.id === activeTurn}
-      expandProcesses={expandProcesses}
+      expandProcesses={
+        expandProcesses || turn.rows.some((row) => row.defaultOpen)
+      }
       changes={changesByPrompt?.get(
         turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
           ?.promptEntryId ?? "",
@@ -1653,16 +1696,39 @@ function renderTurns(
   ));
 }
 
-function captureReadingPosition(element: HTMLElement, pinned: boolean) {
+function captureReadingPosition(
+  element: HTMLElement,
+  pinned: boolean,
+  session?: WebSessionProjection,
+) {
   const top = element.getBoundingClientRect().top;
   const anchor = Array.from(
-    element.querySelectorAll<HTMLElement>("[data-history-entry]"),
+    element.querySelectorAll<HTMLElement>(
+      "[data-history-entry], [data-history-message], [data-history-result]",
+    ),
   ).find((item) => {
     const bounds = item.getBoundingClientRect();
     return bounds.height > 0 && bounds.bottom > top;
   });
+  const key =
+    anchor?.dataset.historyEntry ??
+    anchor?.dataset.historyMessage ??
+    anchor?.dataset.historyResult;
+  const owner = anchor?.dataset.historyMessage ?? anchor?.dataset.historyResult;
+  let entryId = session?.entries.find(
+    (entry) => entry.id === owner || entry.id === key,
+  )?.id;
+  if (!entryId && key)
+    for (const entry of session?.entries ?? []) {
+      if (
+        key.startsWith(`${entry.id}-`) &&
+        (!entryId || entry.id.length > entryId.length)
+      )
+        entryId = entry.id;
+    }
   return {
-    key: anchor?.dataset.historyEntry,
+    key: entryId ? key : undefined,
+    entryId,
     offset: (anchor?.getBoundingClientRect().top ?? top) - top,
     scrollTop: element.scrollTop,
     pinned,
@@ -1689,6 +1755,9 @@ export function Transcript(props: TranscriptProps) {
   const viewport = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastScrollTop = useRef(0);
+  const savePositionTimer = useRef(0);
+  const restorePending = useRef(props.readingRestorePending);
+  restorePending.current = props.readingRestorePending;
   const [readingHistory, setReadingHistory] = useState(false);
   const reveal = useRef<AbortController | null>(null);
   const navigationObserved =
@@ -1733,7 +1802,7 @@ export function Transcript(props: TranscriptProps) {
         const element = viewport.current;
         if (!element) return;
         prependAnchor.current = {
-          ...captureReadingPosition(element, false),
+          ...captureReadingPosition(element, false, readingSession.current),
           scrollHeight: element.scrollHeight,
         };
         pinned.current = false;
@@ -1743,6 +1812,8 @@ export function Transcript(props: TranscriptProps) {
     navigation,
   );
   const selected = history.session;
+  const readingSession = useRef(selected);
+  readingSession.current = selected;
   const selectedId = selected?.id;
   const selectedPath = selected?.path;
   const selectedCwd = selected?.cwd;
@@ -1768,10 +1839,27 @@ export function Transcript(props: TranscriptProps) {
   useLayoutEffect(() => {
     const element = viewport.current;
     if (!element || !selectedId || !selectedPath) return;
-    return () =>
+    const save = () => {
+      if (restorePending.current) return;
       rememberSessionReading(readingCache, hydrationScope, {
-        position: captureReadingPosition(element, pinned.current),
+        position: captureReadingPosition(
+          element,
+          pinned.current,
+          readingSession.current,
+        ),
       });
+    };
+    window.addEventListener("pagehide", save);
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") save();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearTimeout(savePositionTimer.current);
+      window.removeEventListener("pagehide", save);
+      document.removeEventListener("visibilitychange", onVisibility);
+      save();
+    };
   }, [hydrationScope, readingCache, selectedId, selectedPath]);
   const previousHydrationScope = useRef(hydrationScope);
   const [hydratedMessages, setHydratedMessages] = useState<
@@ -1980,7 +2068,13 @@ export function Transcript(props: TranscriptProps) {
                 tabIndex={-1}
               >
                 <div className="message-content">
-                  <CustomResult message={message} />
+                  <CustomResult
+                    message={message}
+                    fullSubagent={
+                      props.snapshot.preferences.subagentResultDisplay ===
+                      "full"
+                    }
+                  />
                 </div>
               </article>
             ),
@@ -1988,7 +2082,6 @@ export function Transcript(props: TranscriptProps) {
         ];
       }
       if (message.role === "user") {
-        const hasImages = message.parts?.some((part) => part.type === "image");
         latestUserPrompt = message.content;
         latestUserIndex = index;
         turn++;
@@ -2061,14 +2154,31 @@ export function Transcript(props: TranscriptProps) {
                   content={hydrated ?? message.content}
                   editable={
                     active &&
-                    !historyPaused &&
-                    index === lastUserIndex &&
-                    !hasImages &&
+                    !running &&
+                    Boolean(
+                      props.forkAvailable &&
+                        props.onEdit &&
+                        entry.entryId &&
+                        selectedId &&
+                        selectedPath &&
+                        !entry.optimistic,
+                    ) &&
                     !awaitingFull
                   }
                   copyRequiresFull={awaitingFull}
                   timestamp={entry.timestamp}
-                  onResend={props.onResend}
+                  onResend={(content) =>
+                    props.onEdit && entry.entryId && selectedId && selectedPath
+                      ? props.onEdit(
+                          {
+                            sessionId: selectedId,
+                            sessionPath: selectedPath,
+                            entryId: entry.entryId,
+                          },
+                          content,
+                        )
+                      : Promise.resolve(false)
+                  }
                   onFork={
                     entry.entryId &&
                     selectedId &&
@@ -2172,6 +2282,23 @@ export function Transcript(props: TranscriptProps) {
                     copyRequiresFull={awaitingFull}
                     timestamp={entry.timestamp}
                     onResend={props.onResend}
+                    onRegenerate={
+                      landmark?.entryId &&
+                      selectedId &&
+                      selectedPath &&
+                      props.onRegenerate &&
+                      !entry.optimistic &&
+                      !message.isError &&
+                      (message.stopReason === "stop" ||
+                        message.stopReason === "length")
+                        ? () =>
+                            props.onRegenerate!({
+                              sessionId: selectedId,
+                              sessionPath: selectedPath,
+                              entryId: landmark.entryId,
+                            })
+                        : undefined
+                    }
                     onFork={
                       entry.entryId &&
                       selectedId &&
@@ -2250,6 +2377,13 @@ export function Transcript(props: TranscriptProps) {
             });
           }
           if (part.type === "toolCall") {
+            const defaultOpen = part.name.startsWith("subagent")
+              ? props.snapshot.preferences.subagentResultDisplay === "full"
+              : part.name === "bash"
+                ? props.snapshot.preferences.bashToolDisplay === "full"
+                : part.name === "write" || part.name === "edit"
+                  ? props.snapshot.preferences.fileMutationDisplay === "full"
+                  : false;
             const live = part.id
               ? liveTools.find((item) => item.call.id === part.id)
               : undefined;
@@ -2276,6 +2410,7 @@ export function Transcript(props: TranscriptProps) {
                   result={result}
                   liveState={persistedResult ? undefined : live?.state}
                   cwd={selectedCwd}
+                  defaultOpen={defaultOpen}
                 />
               ) : (
                 familyCard(
@@ -2286,6 +2421,7 @@ export function Transcript(props: TranscriptProps) {
                     : undefined,
                   props.onInspectSubagent,
                   persistedResult ? undefined : live?.state,
+                  defaultOpen,
                 )
               );
             const args = parseArguments(part.arguments);
@@ -2305,6 +2441,7 @@ export function Transcript(props: TranscriptProps) {
                 ? "activity"
                 : "tool",
               processStatus: status,
+              defaultOpen,
               error: Boolean(result?.isError),
               content: (
                 <article
@@ -2341,6 +2478,7 @@ export function Transcript(props: TranscriptProps) {
                             : undefined
                         }
                         status={status}
+                        defaultOpen={defaultOpen}
                       />
                     )}
                   </div>
@@ -2458,6 +2596,14 @@ export function Transcript(props: TranscriptProps) {
             : null;
         const status = resultStatus(message);
         const toolName = message.toolName || "tool";
+        const defaultOpen =
+          family === "subagent"
+            ? props.snapshot.preferences.subagentResultDisplay === "full"
+            : toolName === "bash"
+              ? props.snapshot.preferences.bashToolDisplay === "full"
+              : toolName === "write" || toolName === "edit"
+                ? props.snapshot.preferences.fileMutationDisplay === "full"
+                : false;
         const icon =
           family === "subagent" ? (
             <Bot key={`${entry.key}-icon`} />
@@ -2473,6 +2619,7 @@ export function Transcript(props: TranscriptProps) {
             title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content)}`}
             body={message.content}
             status={status}
+            defaultOpen={defaultOpen}
           />
         ) : isEmptyToolOutput(message.content) ? (
           <div className="tool-line-empty" key={`${entry.key}-empty`}>
@@ -2489,6 +2636,7 @@ export function Transcript(props: TranscriptProps) {
             name={toolName}
             summary={compactSummary(message.content)}
             status={status}
+            defaultOpen={defaultOpen}
           />
         );
         return [
@@ -2502,6 +2650,7 @@ export function Transcript(props: TranscriptProps) {
                 : "process",
             processType: family ? "activity" : "tool",
             processStatus: status,
+            defaultOpen,
             error: status === "error",
             content: (
               <article
@@ -2529,12 +2678,17 @@ export function Transcript(props: TranscriptProps) {
     historyPaused,
     entries,
     props.onResend,
+    props.onEdit,
+    props.onRegenerate,
     props.onFork,
     props.forkAvailable,
     props.forkPending,
     props.onInspectSubagent,
     props.snapshot.runtime.capabilities.subagents,
     props.snapshot.preferences.expandThinking,
+    props.snapshot.preferences.subagentResultDisplay,
+    props.snapshot.preferences.bashToolDisplay,
+    props.snapshot.preferences.fileMutationDisplay,
     props.snapshot.thinking?.level,
     props.thinkingDurations,
     props.snapshot.runtime.liveTools,
@@ -2639,9 +2793,23 @@ export function Transcript(props: TranscriptProps) {
       identityChanged && !historyChanged && !requested
         ? readingCache.get(identity)?.position
         : undefined;
+    const restoredInWindow =
+      restored?.key &&
+      Array.from(
+        element.querySelectorAll<HTMLElement>(
+          "[data-history-entry], [data-history-message], [data-history-result]",
+        ),
+      ).some(
+        (item) =>
+          item.dataset.historyEntry === restored.key ||
+          item.dataset.historyMessage === restored.key ||
+          item.dataset.historyResult === restored.key,
+      );
     const saved =
       prependAnchor.current ??
-      (restored && !restored.pinned
+      (restored &&
+      !restored.pinned &&
+      (!restorePending.current || restoredInWindow)
         ? { ...restored, scrollHeight: element.scrollHeight }
         : null);
     prependAnchor.current = null;
@@ -2713,8 +2881,18 @@ export function Transcript(props: TranscriptProps) {
         item.dataset.historyMessage === navigation.entryId ||
         item.dataset.historyResult === navigation.entryId,
     );
+    const restoredTarget = navigation.restorePosition?.key
+      ? candidates.find(
+          (item) =>
+            item.dataset.historyEntry === navigation.restorePosition!.key ||
+            item.dataset.historyMessage === navigation.restorePosition!.key ||
+            item.dataset.historyResult === navigation.restorePosition!.key,
+        )
+      : undefined;
     const target =
-      matches.find((item) => item.classList.contains("response")) ?? matches[0];
+      restoredTarget ??
+      matches.find((item) => item.classList.contains("response")) ??
+      matches[0];
     if (!target) return;
     // Native details retain their disclosure state; reveal only the ancestors
     // needed to make this particular message reachable.
@@ -2734,24 +2912,33 @@ export function Transcript(props: TranscriptProps) {
       }
     }
     const locate = () => {
-      if (!element.contains(target)) return;
+      if (
+        !element.contains(target) ||
+        (navigation.restorePosition && lastNavigation.current === navigationKey)
+      )
+        return;
       const top = Math.max(
         0,
         element.scrollTop +
           target.getBoundingClientRect().top -
           element.getBoundingClientRect().top -
-          24,
+          (navigation.restorePosition &&
+          (target.dataset.historyEntry === navigation.restorePosition.key ||
+            target.dataset.historyMessage === navigation.restorePosition.key ||
+            target.dataset.historyResult === navigation.restorePosition.key)
+            ? navigation.restorePosition.offset
+            : 24),
       );
       element.scrollTo?.({ top, behavior: "instant" });
       if (typeof element.scrollTo !== "function") element.scrollTop = top;
       lastScrollTop.current = element.scrollTop;
-      target.focus({ preventScroll: true });
+      if (!navigation.restorePosition) target.focus({ preventScroll: true });
       pinned.current = false;
       setReadingHistory(true);
-      setHighlightedNavigation(navigation);
+      if (!navigation.restorePosition) setHighlightedNavigation(navigation);
       lastNavigation.current = navigationKey;
       rememberSessionReading(readingCache, sessionReadingScope(selected), {
-        position: captureReadingPosition(element, false),
+        position: captureReadingPosition(element, false, selected),
       });
     };
     // The message can render before the search promise closes its native modal.
@@ -2958,6 +3145,14 @@ export function Transcript(props: TranscriptProps) {
         aria-label="Conversation"
         // biome-ignore lint/a11y/noNoninteractiveTabindex: The scrollport needs keyboard reading with automatic pagination.
         tabIndex={0}
+        onPointerDownCapture={() => {
+          if (navigation?.restorePosition)
+            lastNavigation.current = navigationKey;
+        }}
+        onTouchStartCapture={() => {
+          if (navigation?.restorePosition)
+            lastNavigation.current = navigationKey;
+        }}
         onScroll={(event) => {
           const element = event.currentTarget;
           const upward = element.scrollTop < lastScrollTop.current;
@@ -2971,9 +3166,27 @@ export function Transcript(props: TranscriptProps) {
               element.scrollHeight - 48;
           if (!pinned.current) history.retainReading();
           setReadingHistory(!pinned.current);
+          window.clearTimeout(savePositionTimer.current);
+          savePositionTimer.current = window.setTimeout(() => {
+            if (
+              !restorePending.current &&
+              selectedId &&
+              selectedPath &&
+              element.isConnected
+            )
+              rememberSessionReading(readingCache, hydrationScope, {
+                position: captureReadingPosition(
+                  element,
+                  pinned.current,
+                  readingSession.current,
+                ),
+              });
+          }, 200);
           if (upward) readEarlierNearTop(element);
         }}
         onWheel={(event) => {
+          if (navigation?.restorePosition)
+            lastNavigation.current = navigationKey;
           if (
             !event.defaultPrevented &&
             !event.ctrlKey &&
@@ -2987,6 +3200,19 @@ export function Transcript(props: TranscriptProps) {
             readEarlierNearTop(event.currentTarget);
         }}
         onKeyDown={(event) => {
+          if (
+            navigation?.restorePosition &&
+            [
+              "ArrowUp",
+              "ArrowDown",
+              "PageUp",
+              "PageDown",
+              "Home",
+              "End",
+              " ",
+            ].includes(event.key)
+          )
+            lastNavigation.current = navigationKey;
           const target = event.target;
           if (
             !event.defaultPrevented &&
@@ -3006,6 +3232,17 @@ export function Transcript(props: TranscriptProps) {
             readEarlierNearTop(event.currentTarget);
         }}
       >
+        {selected?.rerun && props.onOpenOriginal && (
+          <div className="message-branch-origin">
+            <button
+              type="button"
+              onClick={() => void props.onOpenOriginal!(selected.rerun!.source)}
+            >
+              <GitBranch aria-hidden="true" /> {t("openOriginalConversation")}
+            </button>
+            <span>{t("messageRerunWorkspaceHint")}</span>
+          </div>
+        )}
         {(history.hasMore || history.error || history.verifying) && (
           <div className="conversation-history">
             {history.error && <p role="alert">{t(history.error)}</p>}

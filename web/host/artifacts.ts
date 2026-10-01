@@ -1,14 +1,42 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isUtf8 } from "node:buffer";
-import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, renameSync } from "node:fs";
+import { constants, closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, renameSync, readdirSync, readFileSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
 import { lstat, open, opendir, realpath, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { ARTIFACT_EDIT_BYTES, ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata, type WorkspaceFileEntry, type WorkspaceFileMutation, type WorkspaceFileMutationResult } from "../protocol/artifacts.ts";
+import { ARTIFACT_EDIT_BYTES, ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata, type WorkspaceFileEntry, type WorkspaceFileMutation, type WorkspaceFileMutationResult, type WorkspaceTrashEntry } from "../protocol/artifacts.ts";
 import { WEB_PROMPT_FILE_MAX_BYTES } from "../protocol/prompt-files.ts";
 
 const MAX_HANDLES = 64;
 const MAX_READS = 4;
+const TRASH_DIRECTORY = ".openpi-trash";
+const TRASH_MARKER = "OpenPI workspace trash v1\n";
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
+
+function protectedPath(path: string) {
+  return path.split(/[\\/]/u).some((part) => [".git", ".pi", TRASH_DIRECTORY].includes(part.toLowerCase()));
+}
+
+function readPrivateText(path: string) {
+  const expected = lstatSync(path, { bigint: true });
+  if (!expected.isFile() || expected.isSymbolicLink() || (process.platform !== "win32" && (expected.mode & 0o077n) !== 0n)) throw denied();
+  const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const info = fstatSync(descriptor, { bigint: true });
+    if (!info.isFile() || info.size > 16_384n || info.dev !== expected.dev || info.ino !== expected.ino) throw denied();
+    const text = readFileSync(descriptor, "utf8");
+    if (metadataIdentity(fstatSync(descriptor, { bigint: true })) !== metadataIdentity(expected)) throw denied();
+    return text;
+  } finally { closeSync(descriptor); }
+}
+
+function readPrivateJson(path: string) { return JSON.parse(readPrivateText(path)) as unknown; }
+
+function writePrivateFile(path: string, content: string) {
+  const descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+  try { writeFileSync(descriptor, content); fsyncSync(descriptor); }
+  finally { closeSync(descriptor); }
+}
 
 export class ArtifactError extends Error {
   readonly code: string;
@@ -32,6 +60,12 @@ interface Grant { scope: Scope; path: string; requested: string; readRoot: strin
 
 function metadataIdentity(info: import("node:fs").BigIntStats) {
   return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(":");
+}
+
+function trashIdentity(info: import("node:fs").BigIntStats) {
+  // rename changes ctime; preserve inode, size and content modification identity
+  // so metadata can be committed before the reversible filesystem operation.
+  return [info.dev, info.ino, info.size, info.mtimeNs].join(":");
 }
 
 /** Authenticated reads grant one file or one scoped directory cursor.
@@ -170,14 +204,20 @@ export class ArtifactReader {
           checks.set(current.path, before);
           const entry = await stream.read();
           if (!entry) break;
+          if (entry.name === TRASH_DIRECTORY) continue;
           const path = relative(root, resolve(current.path, entry.name)).split(sep).join("/");
           const kind = entry.isSymbolicLink() ? "symlink" : entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other";
           if (needle && kind === "directory" && ![".git", "node_modules"].includes(entry.name)) {
             if (queue.length >= 10_000) throw new ArtifactError("ARTIFACT_LIMIT", 413, "Search is too broad. Search within a smaller directory.");
             queue.push(resolve(current.path, entry.name));
           }
+          let identity: string | undefined;
+          if (kind === "file" || kind === "directory") {
+            const info = await lstat(resolve(current.path, entry.name), { bigint: true });
+            if ((kind === "file" && info.isFile()) || (kind === "directory" && info.isDirectory())) identity = metadataIdentity(info);
+          }
           this.assertScope(scope);
-          yield !needle || entry.name.toLocaleLowerCase().includes(needle) ? { name: entry.name, path, kind } : null;
+          yield !needle || entry.name.toLocaleLowerCase().includes(needle) ? { name: entry.name, path, kind, ...(identity ? { identity } : {}) } : null;
         }
       } finally { await stream.close(); }
       if (!needle) break;
@@ -345,6 +385,8 @@ export class ArtifactReader {
     const scope = this.scope();
     const revocation = this.revocation;
     if (sessionId !== scope.sessionId || sessionPath !== scope.sessionPath) throw denied();
+    if (mutation.kind === "move" || mutation.kind === "trash" || mutation.kind === "restore")
+      return this.organizeFile(scope, revocation, sessionPath, mutation);
     if (!mutation.name || Buffer.byteLength(mutation.name, "utf8") > 255 || Buffer.from(mutation.name, "utf8").toString("utf8") !== mutation.name || mutation.name === "." || mutation.name === ".." || /[\x00-\x1f\x7f/\\:]/u.test(mutation.name))
       throw new ArtifactError("ARTIFACT_INVALID_NAME", 400, "Choose a single file or directory name without path separators.");
     let bytes = Buffer.alloc(0);
@@ -361,6 +403,22 @@ export class ArtifactReader {
     try {
       const root = await realpath(scope.cwd);
       const requested = resolve(root, this.decodeReference(mutation.directory));
+      if (mutation.kind === "import-file" && mutation.createParents) {
+        const parts = relative(root, requested).split(sep);
+        if ((!inside(root, requested) && requested !== root) || protectedPath(parts.join("/"))) throw denied();
+        let parent = root;
+        for (const part of parts.filter(Boolean)) {
+          const verified = await this.canonical(scope, parent, scope.cwd, true);
+          this.assertScope(scope);
+          if (this.revocation !== revocation) throw denied();
+          const path = resolve(verified.path, part);
+          try { await this.mutateFile(sessionId, sessionPath, { kind: "create-directory", directory: encodeURI(relative(root, verified.path).split(sep).join("/") || "."), name: part }); }
+          catch (error) { if (!(error instanceof ArtifactError) || error.code !== "ARTIFACT_EXISTS") throw error; }
+          parent = (await this.canonical(scope, path)).path;
+          if (!lstatSync(parent).isDirectory()) throw denied();
+        }
+      }
+      if (protectedPath(relative(root, requested)) || mutation.name === TRASH_DIRECTORY) throw denied();
       const directory = await this.canonical(scope, requested, scope.cwd, true);
       const originalParent = await lstat(directory.path, { bigint: true });
       if (!originalParent.isDirectory()) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Choose an existing directory.");
@@ -404,6 +462,170 @@ export class ArtifactReader {
   release(handle: string, sessionId: string) {
     this.requireGrant(handle, sessionId);
     this.handles.delete(handle);
+  }
+
+  /** Contents stay on the same filesystem and outside ordinary Git additions.
+   * This is a reversible file operation, not another Session store. */
+  private trashRoot(scope: Scope, root: string, create: boolean) {
+    this.assertScope(scope);
+    const path = resolve(root, TRASH_DIRECTORY);
+    let info: import("node:fs").Stats;
+    try { info = lstatSync(path); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (!create) return undefined;
+      mkdirSync(path, { mode: 0o700 });
+      // Complete private metadata before touching any operator file. Never
+      // rewrite an existing directory or a user-owned ignore file.
+      writePrivateFile(resolve(path, ".gitignore"), "*\n");
+      writePrivateFile(resolve(path, "owner.json"), JSON.stringify({ marker: TRASH_MARKER, root }));
+      info = lstatSync(path);
+    }
+    if (!info.isDirectory() || info.isSymbolicLink() || (process.platform !== "win32" && (info.mode & 0o077) !== 0)) throw denied();
+    const owner = readPrivateJson(resolve(path, "owner.json"));
+    if (!owner || typeof owner !== "object" || !("marker" in owner) || owner.marker !== TRASH_MARKER || !("root" in owner) || owner.root !== root) throw denied();
+    const ignore = resolve(path, ".gitignore");
+    if (readPrivateText(ignore) !== "*\n") throw denied();
+    return path;
+  }
+
+  private trashEntry(directory: string, id: string, root: string) {
+    if (!UUID.test(id)) throw denied();
+    const folder = resolve(directory, id);
+    const folderInfo = lstatSync(folder);
+    if (!folderInfo.isDirectory() || folderInfo.isSymbolicLink() || (process.platform !== "win32" && (folderInfo.mode & 0o077) !== 0)) throw denied();
+    const record = readPrivateJson(resolve(folder, "entry.json"));
+    if (!record || typeof record !== "object" || !("path" in record) || typeof record.path !== "string" || !("kind" in record) || !["file", "directory"].includes(String(record.kind)) || !("identity" in record) || typeof record.identity !== "string" || !("deletedAt" in record) || typeof record.deletedAt !== "number" || !Number.isSafeInteger(record.deletedAt)) throw denied();
+    const original = resolve(root, record.path);
+    if (!inside(root, original) || protectedPath(record.path) || relative(root, original).split(sep).join("/") !== record.path) throw denied();
+    const payload = resolve(folder, "contents");
+    const info = lstatSync(payload, { bigint: true });
+    if (info.isSymbolicLink() || (record.kind === "file" ? !info.isFile() : !info.isDirectory()) || trashIdentity(info) !== record.identity) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The removed file changed. Its contents were preserved in the workspace trash.");
+    const entry: WorkspaceTrashEntry = { id, path: record.path, kind: record.kind === "file" ? "file" : "directory", identity: record.identity, deletedAt: record.deletedAt };
+    return { entry, payload, folder, info };
+  }
+
+  async listTrash(sessionId: string, sessionPath: string, cursor?: string) {
+    const scope = this.scope();
+    if (sessionId !== scope.sessionId || sessionPath !== scope.sessionPath) throw denied();
+    if (cursor && !UUID.test(cursor)) throw denied();
+    try {
+      const root = await realpath(scope.cwd);
+      this.assertScope(scope);
+      const directory = this.trashRoot(scope, root, false);
+      const entries: WorkspaceTrashEntry[] = [];
+      let unavailable = 0;
+      let nextCursor: string | undefined;
+      if (directory) {
+        const ids = readdirSync(directory).filter((name) => UUID.test(name) && (!cursor || name > cursor)).sort();
+        for (const [index, id] of ids.slice(0, 250).entries()) {
+          try { entries.push(this.trashEntry(directory, id, root).entry); }
+          catch { unavailable++; /* Interrupted or changed entries remain recoverable on disk; do not delete them. */ }
+          if (index === 249 && ids.length > 250) nextCursor = id;
+        }
+      }
+      this.assertScope(scope);
+      return { sessionId, sessionPath, entries: entries.sort((a, b) => b.deletedAt - a.deletedAt), ...(unavailable ? { unavailable } : {}), ...(nextCursor ? { nextCursor } : {}) };
+    } catch (error) { throw this.classify(error); }
+  }
+
+  private async organizeFile(scope: Scope, revocation: number, sessionPath: string, mutation: Extract<WorkspaceFileMutation, { kind: "move" | "trash" | "restore" }>) {
+    try {
+      if (!mutation.identity || mutation.identity.length > 256) throw denied();
+      const root = await realpath(scope.cwd);
+      this.assertScope(scope);
+      if (this.revocation !== revocation) throw denied();
+      const trash = mutation.kind === "restore" ? this.trashRoot(scope, root, false) : undefined;
+      if (mutation.kind === "restore" && !trash) throw new ArtifactError("ARTIFACT_MISSING", 404, "The removed file is no longer available.");
+      const saved = mutation.kind === "restore" ? this.trashEntry(trash!, mutation.id, root) : undefined;
+      const source = saved?.payload ?? (await this.canonical(scope, resolve(root, this.decodeReference("path" in mutation ? mutation.path : "")))).path;
+      const original = saved?.entry.path ?? relative(root, source).split(sep).join("/");
+      if (protectedPath(original)) throw denied();
+      const before = await lstat(source, { bigint: true });
+      if ((!before.isFile() && !before.isDirectory()) || before.isSymbolicLink()) throw denied();
+      if ((saved ? trashIdentity(before) : metadataIdentity(before)) !== mutation.identity) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file changed. Refresh before organizing it.");
+      if (mutation.kind === "move" && (!mutation.name || Buffer.byteLength(mutation.name) > 255 || Buffer.from(mutation.name, "utf8").toString("utf8") !== mutation.name || mutation.name === "." || mutation.name === ".." || /[\x00-\x1f\x7f/\\:]/u.test(mutation.name))) throw new ArtifactError("ARTIFACT_INVALID_NAME", 400, "Choose a single file or directory name without path separators.");
+      const destinationReference = mutation.kind === "move" ? resolve(root, this.decodeReference(mutation.directory)) : mutation.kind === "restore" ? dirname(resolve(root, original)) : this.trashRoot(scope, root, true)!;
+      const destination = await this.canonical(scope, destinationReference, scope.cwd, true);
+      if (!lstatSync(destination.path).isDirectory()) throw denied();
+      const target = mutation.kind === "move" ? resolve(destination.path, mutation.name) : mutation.kind === "restore" ? resolve(root, original) : resolve(destination.path, randomUUID(), "contents");
+      if (mutation.kind !== "trash" && (protectedPath(relative(root, target)) || (before.isDirectory() && inside(source, target)))) throw denied();
+      if (source === target) throw new ArtifactError("ARTIFACT_EXISTS", 409, "Choose a different name or destination.");
+      let destinationAlias: string | undefined;
+      try { destinationAlias = await realpath(target); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      const sourceParent = await lstat(dirname(source), { bigint: true });
+      const destinationParent = await lstat(destination.path, { bigint: true });
+      // The existing object owns this mutation. Locking both names can deadlock
+      // when case-insensitive names or another canonical alias share one lane.
+      // Destination creation is no-clobber and has no awaited commit gap.
+      return await withFileMutationQueue(source, async () => {
+        const currentDestination = await this.canonical(scope, destinationReference, scope.cwd, true);
+        await this.canonical(scope, source);
+        if (saved) {
+          const privateRoot = this.trashRoot(scope, root, false);
+          if (privateRoot !== dirname(saved.folder)) throw denied();
+          this.trashEntry(privateRoot, saved.entry.id, root);
+        }
+        this.assertScope(scope);
+        if (this.revocation !== revocation || currentDestination.path !== destination.path) throw denied();
+        const parent = lstatSync(destination.path, { bigint: true });
+        const sourceParentNow = lstatSync(dirname(source), { bigint: true });
+        const latest = lstatSync(source, { bigint: true });
+        if (parent.dev !== destinationParent.dev || parent.ino !== destinationParent.ino || sourceParentNow.dev !== sourceParent.dev || sourceParentNow.ino !== sourceParent.ino || (saved ? trashIdentity(latest) : metadataIdentity(latest)) !== mutation.identity) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file or directory changed. Nothing was moved.");
+        let caseRename = false;
+        try {
+          const existing = lstatSync(target, { bigint: true });
+          caseRename = mutation.kind === "move" && destinationAlias === source && source.toLowerCase() === target.toLowerCase() && existing.dev === latest.dev && existing.ino === latest.ino && !existing.isSymbolicLink();
+          if (!caseRename) throw new ArtifactError("ARTIFACT_EXISTS", 409, "The destination already exists. Both files were preserved.");
+        }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        let trashed: WorkspaceTrashEntry | undefined;
+        if (mutation.kind === "trash") {
+          const folder = dirname(target);
+          mkdirSync(folder, { mode: 0o700 });
+          // Prepare metadata first. If preparation fails the source is untouched.
+          trashed = { id: basename(folder), path: original, kind: before.isDirectory() ? "directory" : "file", identity: trashIdentity(before), deletedAt: Date.now() };
+          writePrivateFile(resolve(folder, "entry.json"), JSON.stringify(trashed));
+          try { renameSync(source, target); }
+          catch (error) {
+            // Only our metadata was created; source contents have not moved.
+            try { unlinkSync(resolve(folder, "entry.json")); rmdirSync(folder); } catch { /* Preserve unknown evidence. */ }
+            throw error;
+          }
+        } else if (caseRename) renameSync(source, target);
+        else if (before.isFile()) {
+          // link is a no-clobber commit even if another process creates the name.
+          linkSync(source, target);
+          unlinkSync(source);
+        } else if (process.platform === "win32") {
+          // Windows does not replace an existing destination directory.
+          renameSync(source, target);
+        } else {
+          // POSIX rename would replace another process's empty directory.
+          // Claim the destination exclusively first; only our empty directory
+          // is replaceable. A concurrent creator now gets EEXIST.
+          mkdirSync(target, { mode: 0o700 });
+          const reservation = lstatSync(target, { bigint: true });
+          try { renameSync(source, target); }
+          catch (error) {
+            try {
+              const remaining = lstatSync(target, { bigint: true });
+              if (remaining.dev === reservation.dev && remaining.ino === reservation.ino && remaining.isDirectory() && !remaining.isSymbolicLink()) rmdirSync(target);
+            } catch { /* Preserve another process's replacement or contents. */ }
+            throw error;
+          }
+        }
+        if (saved) {
+          try { unlinkSync(resolve(saved.folder, "entry.json")); rmdirSync(saved.folder); }
+          catch { /* Restored contents are authoritative; preserve leftover metadata rather than misreporting a failed restore. */ }
+        }
+        for (const cursor of this.listings.keys()) this.releaseListing(cursor);
+        for (const [handle, grant] of this.handles) if (grant.path === source || inside(source, grant.path)) this.handles.delete(handle);
+        const result: WorkspaceFileMutationResult = { sessionId: scope.sessionId, sessionPath, path: mutation.kind === "trash" ? original : relative(root, target).split(sep).join("/"), kind: before.isDirectory() ? "directory" : "file", ...(before.isFile() ? { bytes: Number(before.size) } : {}), ...(trashed ? { trashed } : {}), ...(mutation.kind === "move" ? { moved: { from: source, to: target } } : {}) };
+        return result;
+      });
+    } catch (error) { throw this.classify(error, true); }
   }
 
   private classify(error: unknown, write = false) {

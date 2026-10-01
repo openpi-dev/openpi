@@ -55,20 +55,29 @@ function terminalTheme() {
 export function InteractiveTerminal({
   sessionId,
   cwd,
+  tabId,
+  active = true,
+  onConnectionChange,
 }: {
   sessionId: string;
   cwd: string;
+  tabId?: string;
+  active?: boolean;
+  onConnectionChange?: (state: { id: string | null; pending: boolean }) => void;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const reading = useWorkbarReadingState();
+  const saved = tabId ? reading?.terminals?.[tabId] : reading?.terminal;
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const container = useRef<HTMLDivElement>(null);
   const restartFocusIntent = useRef<{
     sessionId: string;
     cwd: string;
     generation: number;
   } | null>(null);
-  const terminalId = useRef<string | null>(reading?.terminal?.id ?? null);
+  const terminalId = useRef<string | null>(saved?.id ?? null);
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -78,11 +87,22 @@ export function InteractiveTerminal({
   const [restartOpen, setRestartOpen] = useState(false);
   const [restartPending, setRestartPending] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
+  const connectionChange = useRef(onConnectionChange);
+  connectionChange.current = onConnectionChange;
+  useEffect(() => {
+    connectionChange.current?.({
+      id: terminalId.current,
+      pending: ["connecting", "reconnecting", "restarting"].includes(status),
+    });
+  }, [status]);
 
   useEffect(() => {
     const host = container.current;
     if (!host) return;
-    terminalId.current ??= reading?.terminal?.id ?? null;
+    const savedTerminal = tabId
+      ? reading?.terminals?.[tabId]
+      : reading?.terminal;
+    terminalId.current ??= savedTerminal?.id ?? null;
     let disposed = false;
     let exited = false;
     let connected = false;
@@ -110,9 +130,7 @@ export function InteractiveTerminal({
       disableStdin: true,
       theme: terminalTheme(),
     });
-    let restoreViewport = reading?.terminal
-      ? { ...reading.terminal }
-      : undefined;
+    let restoreViewport = savedTerminal ? { ...savedTerminal } : undefined;
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
@@ -175,7 +193,8 @@ export function InteractiveTerminal({
     };
     const writeInput = (data: string) => {
       const id = terminalId.current;
-      if (!id || !connected || exited || inputStopped) return;
+      if (!id || !activeRef.current || !connected || exited || inputStopped)
+        return;
       for (const chunk of data.match(/[\s\S]{1,32768}/gu) ?? []) {
         if (
           bufferedInput &&
@@ -230,12 +249,16 @@ export function InteractiveTerminal({
     const onData = terminal.onData(writeInput);
     const onScroll = terminal.onScroll((viewport) => {
       const id = terminalId.current;
-      if (reading && id && !restoreViewport)
-        reading.terminal = {
+      if (reading && id && !restoreViewport) {
+        const value = {
+          ...(tabId ? reading.terminals?.[tabId] : reading.terminal),
           id,
           viewport,
           atBottom: viewport >= terminal.buffer.active.baseY,
         };
+        if (tabId) (reading.terminals ??= {})[tabId] = value;
+        else reading.terminal = value;
+      }
     });
     const onResize = terminal.onResize(({ cols, rows }) => resize(cols, rows));
     const observer =
@@ -264,6 +287,7 @@ export function InteractiveTerminal({
               terminal.cols,
               terminal.rows,
               controller.signal,
+              tabId ? `${tabId}:${generation}` : undefined,
             );
         if (!isCurrent(controller)) return;
         if (
@@ -275,13 +299,16 @@ export function InteractiveTerminal({
           throw new Error(t("inspectionChanged"));
         opening = false;
         terminalId.current = info.id;
-        if (reading)
-          reading.terminal = {
+        if (reading) {
+          const value = {
             viewport: 0,
             atBottom: true,
-            ...reading.terminal,
+            ...(tabId ? reading.terminals?.[tabId] : reading.terminal),
             id: info.id,
           };
+          if (tabId) (reading.terminals ??= {})[tabId] = value;
+          else reading.terminal = value;
+        }
         exited = info.exited;
         connected = !info.exited;
         inputStopped = info.exited;
@@ -329,7 +356,7 @@ export function InteractiveTerminal({
       terminal.dispose();
       terminalId.current = null;
     };
-  }, [client, cwd, generation, sessionId, t, reading]);
+  }, [client, cwd, generation, sessionId, t, reading, tabId]);
 
   const restart = async (returnFocus: boolean) => {
     const scope = connection.current;
@@ -345,7 +372,16 @@ export function InteractiveTerminal({
       if (id) await client.closeInteractiveTerminal(sessionId, id);
       if (connection.current !== scope) return;
       terminalId.current = null;
-      if (reading) reading.terminal = undefined;
+      if (reading) {
+        if (tabId) {
+          const title = reading.terminals?.[tabId]?.title;
+          (reading.terminals ??= {})[tabId] = {
+            viewport: 0,
+            atBottom: true,
+            title,
+          };
+        } else reading.terminal = undefined;
+      }
       if (returnFocus)
         restartFocusIntent.current = {
           sessionId,

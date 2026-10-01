@@ -8,13 +8,16 @@ import {
   FilePlus2,
   FileText,
   Folder,
+  FolderInput,
   FolderOpen,
   FolderPlus,
   Link,
+  ListChecks,
   MoreHorizontal,
   RefreshCw,
   Search,
   Sheet,
+  Trash2,
   Upload,
 } from "lucide-react";
 import {
@@ -34,15 +37,20 @@ import type {
   WorkspaceFileEntry,
   WorkspaceFileListing,
   WorkspaceFileMutationResult,
+  WorkspaceTrashEntry,
 } from "../../../../protocol/artifacts.ts";
 import { ARTIFACT_MAX_BYTES } from "../../../../protocol/artifacts.ts";
 import { WEB_PROMPT_FILE_MAX_BYTES } from "../../../../protocol/prompt-files.ts";
 import { copyText } from "../../lib/clipboard.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
-import { ArtifactProvider } from "../artifacts/Artifacts.tsx";
+import {
+  ArtifactProvider,
+  type ArtifactProviderHandle,
+} from "../artifacts/Artifacts.tsx";
 import { ArtifactContext } from "../artifacts/context.ts";
 import { useWorkbarReadingState } from "../workbar/workbar-reading-state.ts";
 import "./files.css";
+import { moveFileDrafts } from "./use-file-editor.ts";
 
 function fileBase64(file: File, signal: AbortSignal) {
   return new Promise<string>((resolve, reject) => {
@@ -70,7 +78,9 @@ interface ImportedFile {
   id: number;
   name: string;
   directory: string;
+  createParents?: boolean;
   file?: File;
+  kind?: "directory";
   state: "pending" | "running" | "done" | "error";
   message?: string;
 }
@@ -133,6 +143,7 @@ function FileTree({
   onSelect,
   dropTarget,
   onShowTree,
+  onRemoved,
 }: {
   sessionId: string;
   sessionPath: string;
@@ -143,6 +154,7 @@ function FileTree({
   onSelect: (path: string) => void;
   dropTarget: RefObject<HTMLDivElement | null>;
   onShowTree: (visible: boolean) => void;
+  onRemoved: (paths: string[]) => void;
 }) {
   const { t } = useTranslation();
   const artifacts = useContext(ArtifactContext);
@@ -170,10 +182,30 @@ function FileTree({
   const [operationError, setOperationError] = useState(false);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [imports, setImports] = useState<ImportedFile[]>([]);
+  const [selecting, setSelecting] = useState(false);
+  const [checked, setChecked] = useState<WorkspaceFileEntry[]>([]);
+  const [moving, setMoving] = useState<{
+    entries: WorkspaceFileEntry[];
+    rename: boolean;
+  } | null>(null);
+  const [moveDirectory, setMoveDirectory] = useState(".");
+  const [moveName, setMoveName] = useState("");
+  const [organizationResults, setOrganizationResults] = useState<
+    { path: string; error?: string }[]
+  >([]);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [trashEntries, setTrashEntries] = useState<WorkspaceTrashEntry[]>([]);
+  const [trashUnavailable, setTrashUnavailable] = useState(0);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [trashCursor, setTrashCursor] = useState<string | undefined>();
+  const trashGeneration = useRef(0);
+  const [recentTrash, setRecentTrash] = useState<WorkspaceTrashEntry[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [copyMessage, setCopyMessage] = useState("");
   const uploadInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
+  const moveInput = useRef<HTMLInputElement>(null);
   const createOpener = useRef<HTMLButtonElement | null>(null);
   const mutationBusyRef = useRef(false);
   const importId = useRef(0);
@@ -195,6 +227,47 @@ function FileTree({
       clearTimeout(copyTimer.current);
     };
   }, [scope]);
+  useEffect(() => {
+    folderInput.current?.setAttribute("webkitdirectory", "");
+  }, []);
+  useEffect(() => {
+    void refresh;
+    if (!trashOpen || !active) return;
+    trashGeneration.current++;
+    const controller = new AbortController();
+    setTrashLoading(true);
+    void client
+      .workspaceTrash(sessionId, sessionPath, controller.signal)
+      .then((result) => {
+        if (
+          !controller.signal.aborted &&
+          result.sessionId === sessionId &&
+          result.sessionPath === sessionPath
+        ) {
+          setTrashEntries(result.entries);
+          setTrashUnavailable(result.unavailable ?? 0);
+          setTrashCursor(result.nextCursor);
+        }
+      })
+      .catch((reason) => {
+        if (!controller.signal.aborted) {
+          setOperationError(true);
+          setOperationMessage(
+            reason instanceof Error ? reason.message : t("filesReadFailed"),
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setTrashLoading(false);
+      });
+    return () => controller.abort();
+  }, [client, sessionId, sessionPath, active, trashOpen, refresh, t]);
+  useEffect(() => {
+    if (moving) {
+      moveInput.current?.focus();
+      moveInput.current?.select();
+    }
+  }, [moving]);
   useEffect(() => {
     if (creating) nameInput.current?.focus();
   }, [creating]);
@@ -334,9 +407,39 @@ function FileTree({
           update(item, { state: "error", message: t("filesWriteUnavailable") });
           continue;
         }
-        if (!item.file) continue;
+        if (!item.file && item.kind !== "directory") continue;
         update(item, { state: "running", message: undefined });
         try {
+          if (item.kind === "directory") {
+            try {
+              await client.mutateWorkspaceFile(sessionId, sessionPath, {
+                kind: "create-directory",
+                directory: item.directory,
+                name: item.name,
+              });
+            } catch (reason) {
+              if (
+                !(reason instanceof WebApiError) ||
+                reason.code !== "ARTIFACT_EXISTS"
+              )
+                throw reason;
+              // Existing folders are reusable; a same-name file is not.
+              await client.workspaceFiles(
+                sessionId,
+                sessionPath,
+                [item.directory === "." ? "" : item.directory, item.name]
+                  .filter(Boolean)
+                  .join("/"),
+                "",
+                controller.signal,
+              );
+            }
+            if (mutationScope.current !== owner) return;
+            update(item, { state: "done", message: t("filesImported") });
+            setRefresh((value) => value + 1);
+            continue;
+          }
+          if (!item.file) continue;
           if (item.file.size > WEB_PROMPT_FILE_MAX_BYTES)
             throw new Error(t("filesImportTooLarge"));
           const data = await fileBase64(item.file, controller.signal);
@@ -356,6 +459,7 @@ function FileTree({
               directory: item.directory,
               name: item.name,
               data,
+              ...(item.createParents ? { createParents: true } : {}),
             },
           );
           if (
@@ -386,16 +490,54 @@ function FileTree({
       }
     }
   };
-  const stageImports = (files: File[], directories: string[] = []) => {
+  const stageImports = (
+    files: File[],
+    directories: string[] = [],
+    relativePaths = new Map<File, string>(),
+    folders: string[] = [],
+  ) => {
     if (!writable.current || mutationBusyRef.current) return;
+    if (files.length + folders.length > 2_000) {
+      setOperationError(true);
+      setOperationMessage(t("filesImportFolderLimit"));
+      return;
+    }
     onShowTree(true);
-    const pending = files.map((file) => ({
-      id: ++importId.current,
-      name: file.name,
-      directory,
-      file,
-      state: "pending" as const,
-    }));
+    const pending: ImportedFile[] = [
+      ...[...new Set(folders)]
+        .sort((a, b) => a.split("/").length - b.split("/").length)
+        .map((path) => ({
+          id: ++importId.current,
+          name: path.split("/").at(-1)!,
+          directory:
+            [
+              directory === "." ? "" : directory,
+              ...path.split("/").slice(0, -1),
+            ]
+              .filter(Boolean)
+              .join("/") || ".",
+          kind: "directory" as const,
+          state: "pending" as const,
+        })),
+      ...files.map((file) => {
+        const relative = relativePaths.get(file) ?? file.webkitRelativePath;
+        return {
+          id: ++importId.current,
+          name: file.name,
+          directory: relative
+            ? [
+                directory === "." ? "" : directory,
+                ...relative.split("/").slice(0, -1),
+              ]
+                .filter(Boolean)
+                .join("/") || "."
+            : directory,
+          createParents: Boolean(relative),
+          file,
+          state: "pending" as const,
+        };
+      }),
+    ];
     setImports((current) => [
       ...current,
       ...directories.map((name) => ({
@@ -408,6 +550,225 @@ function FileTree({
       ...pending,
     ]);
     void importItems(pending);
+  };
+
+  const organize = async (
+    kind: "move" | "trash",
+    entries: WorkspaceFileEntry[],
+  ) => {
+    if (!writable.current || mutationBusyRef.current) return;
+    const owner = scope;
+    // Selecting a folder already includes its descendants. Do not operate on
+    // the same contents twice when an expanded tree has both selected.
+    const targets = entries.filter(
+      (entry) =>
+        !entries.some(
+          (parent) =>
+            parent.kind === "directory" &&
+            entry.path.startsWith(`${parent.path}/`),
+        ),
+    );
+    mutationBusyRef.current = true;
+    setMutationBusy(true);
+    setOrganizationResults([]);
+    const removed: WorkspaceTrashEntry[] = [];
+    const completed = new Set<string>();
+    try {
+      for (const entry of targets) {
+        if (mutationScope.current !== owner || !writable.current) return;
+        try {
+          if (!entry.identity)
+            throw new Error(t("filesRefreshBeforeOrganizing"));
+          const result = await client.mutateWorkspaceFile(
+            sessionId,
+            sessionPath,
+            kind === "trash"
+              ? { kind, path: entry.path, identity: entry.identity }
+              : {
+                  kind,
+                  path: entry.path,
+                  identity: entry.identity,
+                  directory: moveDirectory,
+                  name: moving?.rename ? moveName : entry.name,
+                },
+          );
+          if (
+            mutationScope.current !== owner ||
+            result.sessionId !== sessionId ||
+            result.sessionPath !== sessionPath
+          )
+            return;
+          completed.add(entry.path);
+          if (result.trashed) removed.push(result.trashed);
+          if (result.moved)
+            moveFileDrafts(
+              sessionId,
+              sessionPath,
+              result.moved.from,
+              result.moved.to,
+            );
+          if (entry.kind === "directory") {
+            const contains = (path: string) =>
+              path === entry.path || path.startsWith(`${entry.path}/`);
+            setExpanded((current) =>
+              kind === "trash"
+                ? current.filter((path) => !contains(path))
+                : current.map((path) =>
+                    contains(path)
+                      ? `${result.path}${path.slice(entry.path.length)}`
+                      : path,
+                  ),
+            );
+            setDirectory((current) =>
+              !contains(current)
+                ? current
+                : kind === "move"
+                  ? `${result.path}${current.slice(entry.path.length)}`
+                  : entry.path.split("/").slice(0, -1).join("/") || ".",
+            );
+            if (kind === "move" && contains(selected)) {
+              const path = `${result.path}${selected.slice(entry.path.length)}`;
+              onSelect(path);
+              artifacts?.open(encodeURI(path));
+            }
+          }
+          if (kind === "move") reveal(result);
+          setOrganizationResults((current) => [
+            ...current,
+            { path: entry.path },
+          ]);
+        } catch (reason) {
+          if (mutationScope.current !== owner) return;
+          setOrganizationResults((current) => [
+            ...current,
+            { path: entry.path, error: mutationFailure(reason) },
+          ]);
+        }
+      }
+      setRecentTrash(removed);
+      if (kind === "trash") onRemoved([...completed]);
+      setChecked((current) =>
+        current.filter(
+          (entry) =>
+            ![...completed].some(
+              (path) =>
+                path === entry.path || entry.path.startsWith(`${path}/`),
+            ),
+        ),
+      );
+      setMoving(null);
+      setRefresh((value) => value + 1);
+    } finally {
+      if (mutationScope.current === owner) {
+        mutationBusyRef.current = false;
+        setMutationBusy(false);
+      }
+    }
+  };
+  const restore = async (entries: WorkspaceTrashEntry[]) => {
+    if (!writable.current || mutationBusyRef.current) return;
+    const owner = scope;
+    mutationBusyRef.current = true;
+    setMutationBusy(true);
+    setOrganizationResults([]);
+    try {
+      for (const entry of entries) {
+        if (mutationScope.current !== owner || !writable.current) return;
+        try {
+          const result = await client.mutateWorkspaceFile(
+            sessionId,
+            sessionPath,
+            { kind: "restore", id: entry.id, identity: entry.identity },
+          );
+          if (
+            mutationScope.current !== owner ||
+            result.sessionId !== sessionId ||
+            result.sessionPath !== sessionPath
+          )
+            return;
+          setRecentTrash((current) =>
+            current.filter((value) => value.id !== entry.id),
+          );
+          setTrashEntries((current) =>
+            current.filter((value) => value.id !== entry.id),
+          );
+          setOrganizationResults((current) => [
+            ...current,
+            { path: entry.path },
+          ]);
+          reveal(result);
+        } catch (reason) {
+          if (mutationScope.current !== owner) return;
+          setOrganizationResults((current) => [
+            ...current,
+            { path: entry.path, error: mutationFailure(reason) },
+          ]);
+        }
+      }
+      setRefresh((value) => value + 1);
+    } finally {
+      if (mutationScope.current === owner) {
+        mutationBusyRef.current = false;
+        setMutationBusy(false);
+      }
+    }
+  };
+  const moreTrash = async () => {
+    if (!trashCursor || trashLoading) return;
+    const generation = trashGeneration.current;
+    const owner = scope;
+    setTrashLoading(true);
+    try {
+      const result = await client.workspaceTrash(
+        sessionId,
+        sessionPath,
+        undefined,
+        trashCursor,
+      );
+      if (
+        generation !== trashGeneration.current ||
+        mutationScope.current !== owner ||
+        result.sessionId !== sessionId ||
+        result.sessionPath !== sessionPath
+      )
+        return;
+      setTrashEntries((current) => [
+        ...new Map(
+          [...current, ...result.entries].map((entry) => [entry.id, entry]),
+        ).values(),
+      ]);
+      setTrashUnavailable((current) => current + (result.unavailable ?? 0));
+      setTrashCursor(result.nextCursor);
+    } catch (reason) {
+      if (
+        generation === trashGeneration.current &&
+        mutationScope.current === owner
+      ) {
+        setOperationError(true);
+        setOperationMessage(mutationFailure(reason));
+      }
+    } finally {
+      if (
+        generation === trashGeneration.current &&
+        mutationScope.current === owner
+      )
+        setTrashLoading(false);
+    }
+  };
+  const selectEntry = (entry: WorkspaceFileEntry) =>
+    setChecked((current) =>
+      current.some((value) => value.path === entry.path)
+        ? current.filter((value) => value.path !== entry.path)
+        : [...current, entry],
+    );
+  const openMove = (entries: WorkspaceFileEntry[], rename = false) => {
+    setMoving({ entries, rename });
+    const path = entries[0]?.path ?? "";
+    setMoveDirectory(
+      rename ? path.split("/").slice(0, -1).join("/") || "." : directory,
+    );
+    setMoveName(entries[0]?.name ?? "");
+    setOperationMessage(null);
   };
   const importDrop = useRef(stageImports);
   importDrop.current = stageImports;
@@ -436,14 +797,72 @@ function FileTree({
       if (!writable.current || mutationBusyRef.current) return;
       const files: File[] = [];
       const directories: string[] = [];
+      const roots: FileSystemEntry[] = [];
       for (const item of transfer.items) {
         if (item.kind !== "file") continue;
         const entry = item.webkitGetAsEntry?.();
-        if (entry?.isDirectory) directories.push(entry.name);
+        if (entry?.isDirectory && "createReader" in entry) roots.push(entry);
+        else if (entry?.isDirectory) directories.push(entry.name);
         else {
           const file = item.getAsFile();
           if (file) files.push(file);
         }
+      }
+      if (roots.length) {
+        const owner = mutationScope.current;
+        const paths = new Map<File, string>();
+        const folders: string[] = [];
+        let count = 0;
+        const collect = async (entry: FileSystemEntry, prefix: string) => {
+          if (mutationScope.current !== owner || !writable.current)
+            throw new DOMException("Import cancelled", "AbortError");
+          if (++count > 2_000 || prefix.split("/").length > 64)
+            throw new Error(t("filesImportFolderLimit"));
+          const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+          if (entry.isDirectory) {
+            folders.push(path);
+            const reader = (entry as FileSystemDirectoryEntry).createReader();
+            for (;;) {
+              const children = await new Promise<FileSystemEntry[]>(
+                (resolve, reject) => reader.readEntries(resolve, reject),
+              );
+              if (!children.length) break;
+              for (const child of children) await collect(child, path);
+            }
+          } else if (entry.isFile) {
+            const file = await new Promise<File>((resolve, reject) =>
+              (entry as FileSystemFileEntry).file(resolve, reject),
+            );
+            paths.set(file, path);
+            files.push(file);
+          }
+        };
+        mutationBusyRef.current = true;
+        setMutationBusy(true);
+        void (async () => {
+          try {
+            for (const root of roots) await collect(root, "");
+            if (mutationScope.current !== owner || !writable.current) return;
+            mutationBusyRef.current = false;
+            setMutationBusy(false);
+            importDrop.current(files, directories, paths, folders);
+          } catch (reason) {
+            if (mutationScope.current === owner) {
+              setOperationError(true);
+              setOperationMessage(
+                reason instanceof Error
+                  ? reason.message
+                  : t("filesMutationFailed"),
+              );
+            }
+          } finally {
+            if (mutationScope.current === owner && !importRead.current) {
+              mutationBusyRef.current = false;
+              setMutationBusy(false);
+            }
+          }
+        })();
+        return;
       }
       importDrop.current(
         transfer.items.length ? files : [...transfer.files],
@@ -458,7 +877,7 @@ function FileTree({
       target.removeEventListener("dragleave", leave);
       target.removeEventListener("drop", drop);
     };
-  }, [dropTarget]);
+  }, [dropTarget, t]);
   const copyPath = async (path: string, absolute: boolean) => {
     const owner = scope;
     const separator = cwd.includes("\\") ? "\\" : "/";
@@ -697,9 +1116,28 @@ function FileTree({
     items.map((entry) => {
       const directory = entry.kind === "directory";
       const open = expanded.includes(entry.path);
+      const organizable =
+        canWrite &&
+        Boolean(entry.identity) &&
+        !entry.path
+          .split("/")
+          .some((part) =>
+            [".git", ".pi", ".openpi-trash"].includes(part.toLowerCase()),
+          ) &&
+        (directory || entry.kind === "file");
       return (
         <li key={entry.path}>
           <div className="file-tree-item">
+            {selecting && (
+              <input
+                type="checkbox"
+                className="file-tree-check"
+                aria-label={t("filesSelectItem", { name: entry.name })}
+                checked={checked.some((value) => value.path === entry.path)}
+                disabled={!organizable || mutationBusy}
+                onChange={() => selectEntry(entry)}
+              />
+            )}
             <button
               type="button"
               data-file-row={entry.path}
@@ -712,6 +1150,11 @@ function FileTree({
               disabled={entry.kind === "symlink" || entry.kind === "other"}
               title={entry.kind === "symlink" ? t("filesSymlink") : entry.path}
               onClick={(event) => {
+                if (organizable && (event.metaKey || event.ctrlKey)) {
+                  setSelecting(true);
+                  selectEntry(entry);
+                  return;
+                }
                 if (directory) {
                   setDirectory(entry.path);
                   if (searching) {
@@ -772,6 +1215,21 @@ function FileTree({
                 {
                   label: t("filesCopyAbsolutePath"),
                   onClick: () => void copyPath(entry.path, true),
+                },
+                {
+                  label: t("filesRename"),
+                  isDisabled: !organizable || mutationBusy,
+                  onClick: () => openMove([entry], true),
+                },
+                {
+                  label: t("filesMove"),
+                  isDisabled: !organizable || mutationBusy,
+                  onClick: () => openMove([entry]),
+                },
+                {
+                  label: t("filesTrashAction"),
+                  isDisabled: !organizable || mutationBusy,
+                  onClick: () => void organize("trash", [entry]),
                 },
               ]}
               menuWidth={200}
@@ -874,6 +1332,53 @@ function FileTree({
               event.currentTarget.value = "";
             }}
           />
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("filesImportFolder")}
+            title={
+              canWrite ? t("filesImportFolder") : t("filesWriteUnavailable")
+            }
+            disabled={!canWrite || mutationBusy}
+            onClick={() => folderInput.current?.click()}
+          >
+            <FolderInput aria-hidden="true" />
+          </button>
+          <input
+            ref={folderInput}
+            type="file"
+            multiple
+            hidden
+            aria-label={t("filesImportFolderChoose")}
+            onChange={(event) => {
+              stageImports([...(event.currentTarget.files ?? [])]);
+              event.currentTarget.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("filesSelectMultiple")}
+            title={t("filesSelectMultiple")}
+            aria-pressed={selecting}
+            disabled={!canWrite || mutationBusy}
+            onClick={() => {
+              setSelecting((value) => !value);
+              setChecked([]);
+            }}
+          >
+            <ListChecks aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("filesTrash")}
+            title={t("filesTrash")}
+            aria-pressed={trashOpen}
+            onClick={() => setTrashOpen((value) => !value)}
+          >
+            <Trash2 aria-hidden="true" />
+          </button>
         </fieldset>
         <p className="file-write-directory" title={directory}>
           <span>
@@ -887,6 +1392,127 @@ function FileTree({
           )}
         </p>
       </div>
+      {selecting && (
+        <div className="file-organization-bar">
+          <span>{t("filesSelectedCount", { count: checked.length })}</span>
+          <button
+            type="button"
+            disabled={!checked.length || mutationBusy || !canWrite}
+            onClick={() => openMove(checked)}
+          >
+            {t("filesMove")}
+          </button>
+          <button
+            type="button"
+            disabled={!checked.length || mutationBusy || !canWrite}
+            onClick={() => void organize("trash", checked)}
+          >
+            {t("filesTrashAction")}
+          </button>
+        </div>
+      )}
+      {moving && (
+        <form
+          className="file-create-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!moving.rename || moveName.trim())
+              void organize("move", moving.entries);
+          }}
+        >
+          <label>
+            {t(moving.rename ? "filesRename" : "filesMoveDestination")}
+            <input
+              ref={moveInput}
+              value={moving.rename ? moveName : moveDirectory}
+              aria-label={t(
+                moving.rename ? "filesNewName" : "filesMoveDestination",
+              )}
+              disabled={mutationBusy}
+              onChange={(event) =>
+                moving.rename
+                  ? setMoveName(event.currentTarget.value)
+                  : setMoveDirectory(event.currentTarget.value)
+              }
+            />
+          </label>
+          <div>
+            <button type="submit" disabled={mutationBusy || !canWrite}>
+              {t(moving.rename ? "filesRename" : "filesMove")}
+            </button>
+            <button
+              type="button"
+              disabled={mutationBusy}
+              onClick={() => setMoving(null)}
+            >
+              {t("cancel")}
+            </button>
+          </div>
+        </form>
+      )}
+      {organizationResults.length > 0 && (
+        <div className="file-import-results">
+          <ol aria-label={t("filesOrganizationResults")} aria-live="polite">
+            {organizationResults.map((result) => (
+              <li key={result.path}>
+                <span>{result.path}</span>
+                <small role={result.error ? "alert" : undefined}>
+                  {result.error ?? t("filesOperationDone")}
+                </small>
+              </li>
+            ))}
+          </ol>
+          {recentTrash.length > 0 && (
+            <button
+              type="button"
+              disabled={mutationBusy || !canWrite}
+              onClick={() => void restore(recentTrash)}
+            >
+              {t("filesUndoTrash")}
+            </button>
+          )}
+        </div>
+      )}
+      {trashOpen && (
+        <section className="file-trash-list" aria-label={t("filesTrash")}>
+          <p>{t("filesTrashDetail")}</p>
+          {trashUnavailable > 0 && (
+            <p role="alert">
+              {t("filesTrashUnavailable", { count: trashUnavailable })}
+            </p>
+          )}
+          {trashLoading && trashEntries.length === 0 ? (
+            <p>{t("loading")}</p>
+          ) : trashEntries.length === 0 ? (
+            <p>{t("filesTrashEmpty")}</p>
+          ) : (
+            <ul>
+              {trashEntries.map((entry) => (
+                <li key={entry.id}>
+                  <span title={entry.path}>{entry.path}</span>
+                  <button
+                    type="button"
+                    disabled={!canWrite || mutationBusy}
+                    aria-label={t("filesRestoreItem", { name: entry.path })}
+                    onClick={() => void restore([entry])}
+                  >
+                    {t("filesRestore")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {trashCursor && (
+            <button
+              type="button"
+              disabled={trashLoading}
+              onClick={() => void moreTrash()}
+            >
+              {t("filesLoadMore")}
+            </button>
+          )}
+        </section>
+      )}
       {creating && (
         <form
           className="file-create-form"
@@ -949,15 +1575,16 @@ function FileTree({
                         : "filesImportPending",
                     )}
                 </small>
-                {item.state === "error" && item.file && (
-                  <button
-                    type="button"
-                    disabled={!canWrite || mutationBusy}
-                    onClick={() => void importItems([item])}
-                  >
-                    {t("filesRetryImport")}
-                  </button>
-                )}
+                {item.state === "error" &&
+                  (item.file || item.kind === "directory") && (
+                    <button
+                      type="button"
+                      disabled={!canWrite || mutationBusy}
+                      onClick={() => void importItems([item])}
+                    >
+                      {t("filesRetryImport")}
+                    </button>
+                  )}
               </li>
             ))}
           </ol>
@@ -1038,6 +1665,7 @@ export function FilesPanel({
     reading?.files?.treeVisible ?? true,
   );
   const dropTarget = useRef<HTMLDivElement>(null);
+  const provider = useRef<ArtifactProviderHandle>(null);
   useLayoutEffect(() => {
     if (reading)
       reading.files = {
@@ -1057,6 +1685,7 @@ export function FilesPanel({
       data-preview-open={Boolean(selected)}
     >
       <ArtifactProvider
+        ref={provider}
         sessionId={sessionId}
         sessionPath={sessionPath}
         embedded
@@ -1105,6 +1734,15 @@ export function FilesPanel({
             onSelect={setSelected}
             dropTarget={dropTarget}
             onShowTree={setTreeVisible}
+            onRemoved={(paths) => {
+              if (
+                paths.some(
+                  (path) =>
+                    path === selected || selected.startsWith(`${path}/`),
+                )
+              )
+                provider.current?.close({ restoreFocus: false });
+            }}
           />
         </div>
       </ArtifactProvider>

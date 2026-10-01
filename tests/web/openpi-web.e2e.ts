@@ -240,8 +240,30 @@ for (const width of [1280, 390]) {
     );
     await page.route("**/api/snapshot**", async (route) => {
       const response = await route.fetch();
-      const snapshot = await response.json();
-      snapshot.selectedSession.entries = [
+      const snapshot = (await response.json()) as WebSnapshot;
+      const session = snapshot.selectedSession ?? {
+        id: "layout-source",
+        path: "/layout/source.jsonl",
+        cwd: "/layout",
+        entries: [],
+        bytes: 0,
+        truncation: {
+          truncated: false,
+          entriesOmitted: 0,
+          messagesTruncated: 0,
+          messagePartsOmitted: 0,
+          maxBytes: 2 * 1024 * 1024,
+        },
+        history: { leafEntryId: "layout-assistant", beforeEntryId: null },
+      };
+      snapshot.selectedSession = session;
+      session.id = "layout-source";
+      session.path = "/layout/source.jsonl";
+      snapshot.currentSessionId = session.id;
+      snapshot.runtime.status = "idle";
+      delete snapshot.runtime.activeTurn;
+      delete snapshot.selectedExecution;
+      session.entries = [
         {
           id: "layout-user",
           type: "message",
@@ -261,6 +283,11 @@ for (const width of [1280, 390]) {
           },
         },
       ];
+      session.history = {
+        leafEntryId: "layout-assistant",
+        beforeEntryId: null,
+      };
+      alignControlledSessionFixture(snapshot);
       await route.fulfill({ response, json: snapshot });
     });
     await openWorkbench(page);
@@ -292,9 +319,11 @@ for (const width of [1280, 390]) {
       .poll(() => conversation.evaluate((el) => el.scrollTop))
       .toBe(120);
     await input.fill("");
-    await page.getByRole("button", { name: "修改并重发", exact: true }).click();
+    await page
+      .getByRole("button", { name: "修改并从这里重跑", exact: true })
+      .click();
     const editor = page.getByRole("textbox", {
-      name: "修改并重发",
+      name: "修改并从这里重跑",
       exact: true,
     });
     await expect(editor).toBeVisible();
@@ -311,7 +340,9 @@ for (const width of [1280, 390]) {
     expect(dimensions.right).toBeLessThanOrEqual(dimensions.viewport);
     await editor.fill("Cancelled edit");
     await page.getByRole("button", { name: "取消", exact: true }).click();
-    await page.getByRole("button", { name: "修改并重发", exact: true }).click();
+    await page
+      .getByRole("button", { name: "修改并从这里重跑", exact: true })
+      .click();
     await expect(editor).toHaveValue("Original message ".repeat(30));
     // Finish active snapshot handlers before Playwright disposes their context.
     await page.unrouteAll({ behavior: "wait" });
@@ -991,19 +1022,108 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
   ).toEqual([]);
 });
 
-test("terminal tool runs a real workspace shell", async ({ page }) => {
+test("terminal launcher creates independent real workspace shells and closes only the selected tab", async ({
+  page,
+}, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openWorkbench(page);
   await openWorkbarTool(page, "终端");
-  const terminal = page.locator(".interactive-terminal");
+  const workbar = page.locator(".workbar-panel");
+  const terminal = workbar.locator(
+    '[data-tab="terminal"] .interactive-terminal',
+  );
   await expect(terminal.locator(".terminal-status-dot.ready")).toBeVisible();
   const input = terminal.locator(".xterm-helper-textarea");
   await input.focus();
-  await page.keyboard.type("printf 'OPENPI_WEB_TERMINAL_OK\\n'");
+  await page.keyboard.type(
+    "export OPENPI_TERMINAL_INSTANCE=first; printf 'OPENPI_WEB_TERMINAL_OK\\n'",
+  );
   await page.keyboard.press("Enter");
   await expect
     .poll(() => terminal.locator(".xterm-rows").textContent())
     .toContain("OPENPI_WEB_TERMINAL_OK");
+  await workbar.locator(".workbar-add-tab").click();
+  const launcher = workbar.getByRole("region", { name: "打开工具" });
+  await expect(launcher).toBeVisible();
+  await expect(launcher.getByRole("button")).toHaveCount(5);
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await page.screenshot({
+    path: testInfo.outputPath("multi-terminal-launcher.png"),
+  });
+  await launcher.getByRole("button", { name: /^终端/u }).click();
+  const second = workbar.locator(
+    '[data-tab^="terminal:"] .interactive-terminal',
+  );
+  await expect(second.locator(".terminal-status-dot.ready")).toBeVisible();
+  await expect(workbar.locator('[data-tool="terminal"]')).toHaveCount(2);
+  await second.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type(
+    "printf 'SECOND_SHELL_%s\\n' \"${OPENPI_TERMINAL_INSTANCE-unset}\"",
+  );
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => second.locator(".xterm-rows").textContent())
+    .toContain("SECOND_SHELL_unset");
+  const firstTab = workbar
+    .getByRole("toolbar")
+    .getByRole("button", { name: "终端", exact: true });
+  await firstTab.click();
+  await input.focus();
+  await page.keyboard.type(
+    "printf 'FIRST_SHELL_%s\\n' \"$OPENPI_TERMINAL_INSTANCE\"",
+  );
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => terminal.locator(".xterm-rows").textContent())
+    .toContain("FIRST_SHELL_first");
+  await firstTab.dblclick();
+  const rename = page.getByRole("dialog", { name: "重命名终端" });
+  await rename.getByRole("textbox", { name: "终端名称" }).fill("开发服务");
+  await rename.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(
+    workbar
+      .getByRole("toolbar")
+      .getByRole("button", { name: "开发服务", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(workbar.locator('[data-tool="terminal"]')).toHaveCount(2);
+  await expect(
+    workbar
+      .getByRole("toolbar")
+      .getByRole("button", { name: "开发服务", exact: true }),
+  ).toBeVisible();
+  await expect(terminal.locator(".terminal-status-dot.ready")).toBeVisible();
+  await input.focus();
+  await page.keyboard.type(
+    "printf 'RELOADED_FIRST_%s\\n' \"$OPENPI_TERMINAL_INSTANCE\"",
+  );
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => terminal.locator(".xterm-rows").textContent())
+    .toContain("RELOADED_FIRST_first");
+  await page.screenshot({
+    path: testInfo.outputPath("multi-terminal-refreshed.png"),
+  });
+  await workbar
+    .getByRole("toolbar")
+    .getByRole("button", { name: "关闭 开发服务", exact: true })
+    .click();
+  await expect(workbar.locator('[data-tool="terminal"]')).toHaveCount(1);
+  await expect(second).toBeVisible();
+  await expect(
+    workbar
+      .getByRole("toolbar")
+      .getByRole("button", { name: "终端 2", exact: true }),
+  ).toBeFocused();
+  await second.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type("printf 'SECOND_SURVIVED\\n'");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => second.locator(".xterm-rows").textContent())
+    .toContain("SECOND_SURVIVED");
+  await page.screenshot({
+    path: testInfo.outputPath("multi-terminal-native.png"),
+  });
 });
 
 test("model configuration drafts survive switching settings tabs", async ({
@@ -1133,7 +1253,10 @@ test("native iframe browser supports input, selection, scrolling and independent
     await workbar
       .getByRole("button", { name: "打开工具", exact: true })
       .click();
-    await page.getByRole("menuitem", { name: /^文件/u }).click();
+    await workbar
+      .locator(".workbar-launcher")
+      .getByRole("button", { name: /^文件/u })
+      .click();
     await expect(workbar.locator('div[data-tool="browser"]')).toHaveAttribute(
       "inert",
       "",

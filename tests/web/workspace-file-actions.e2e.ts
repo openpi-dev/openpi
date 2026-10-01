@@ -1,19 +1,31 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { AxeBuilder } from "@axe-core/playwright";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, test } from "@playwright/test";
 import { WebHost } from "../../web/host/web-host.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
+import {
+  WORKBAR_POSITION_STORAGE_KEY,
+  type WorkbarWorkspace,
+} from "../../web/ui/src/features/workbar/workbar-position-storage.ts";
 
 test("workspace actions create, import and copy paths through the real Host on desktop and mobile", async ({
   browser,
 }, testInfo) => {
   test.setTimeout(120_000);
   const cwd = await mkdtemp(join(tmpdir(), "openpi-files-actions-browser-"));
+  const importFolder = await mkdtemp(join(tmpdir(), "openpi-folder-import-"));
   const manager = SessionManager.inMemory(cwd);
   manager.appendMessage({
     role: "user",
@@ -162,19 +174,21 @@ test("workspace actions create, import and copy paths through the real Host on d
         response.url().endsWith("/api/files/mutate") &&
         response.request().postDataJSON().name === "existing.txt",
     );
-    await actions.locator('input[type="file"]').setInputFiles([
-      {
-        name: "existing.txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from("must not overwrite"),
-      },
-      {
-        name: "binary.dat",
-        mimeType: "application/octet-stream",
-        buffer: Buffer.from([0, 255, 42]),
-      },
-      { name: "empty.txt", mimeType: "text/plain", buffer: Buffer.alloc(0) },
-    ]);
+    await actions
+      .locator('input[type="file"]:not([webkitdirectory])')
+      .setInputFiles([
+        {
+          name: "existing.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("must not overwrite"),
+        },
+        {
+          name: "binary.dat",
+          mimeType: "application/octet-stream",
+          buffer: Buffer.from([0, 255, 42]),
+        },
+        { name: "empty.txt", mimeType: "text/plain", buffer: Buffer.alloc(0) },
+      ]);
     expect((await uploaded).status()).toBe(409);
     await expect(actions.locator('[data-import-state="done"]')).toHaveCount(2);
     await expect(actions.locator('[data-import-state="error"]')).toHaveCount(1);
@@ -200,11 +214,13 @@ test("workspace actions create, import and copy paths through the real Host on d
     await expect(page.locator(".files-tree-container")).toBeVisible();
 
     const large = Buffer.alloc(21 * 1024 * 1024, 0x33);
-    await actions.locator('input[type="file"]').setInputFiles({
-      name: "large.bin",
-      mimeType: "application/octet-stream",
-      buffer: large,
-    });
+    await actions
+      .locator('input[type="file"]:not([webkitdirectory])')
+      .setInputFiles({
+        name: "large.bin",
+        mimeType: "application/octet-stream",
+        buffer: large,
+      });
     await expect(
       actions.getByText(
         /已保存。预览上限为 20 MiB|Saved. Preview supports up to 20 MiB/u,
@@ -252,6 +268,134 @@ test("workspace actions create, import and copy paths through the real Host on d
       join(cwd, "existing.txt"),
     );
 
+    const rowMenu = async (path: string, label: RegExp) => {
+      const item = tree.locator(`[data-file-row="${path}"]`).locator("..");
+      await item.hover();
+      await item
+        .getByRole("button", { name: /的路径操作|Path actions for/u })
+        .click();
+      await page.getByRole("menuitem", { name: label }).click();
+    };
+    await rowMenu("existing.txt", /^(重命名|Rename)$/u);
+    const renameInput = actions.getByRole("textbox", {
+      name: /新名称|New name/u,
+    });
+    await expect(renameInput).toBeFocused();
+    await renameInput.fill("renamed.txt");
+    await renameInput.press("Enter");
+    await expect(tree.locator('[data-file-row="renamed.txt"]')).toBeVisible();
+    expect(await readFile(join(cwd, "renamed.txt"), "utf8")).toBe(
+      "preserve this original\n",
+    );
+    await rowMenu("renamed.txt", /^(移动|Move)$/u);
+    const moveInput = actions.getByRole("textbox", {
+      name: /目标文件夹|Destination folder/u,
+    });
+    await moveInput.fill("新目录");
+    await moveInput.press("Enter");
+    await expect(
+      tree.locator('[data-file-row="新目录/renamed.txt"]'),
+    ).toBeVisible();
+    expect(await readFile(join(cwd, "新目录", "renamed.txt"), "utf8")).toBe(
+      "preserve this original\n",
+    );
+
+    await actions
+      .getByRole("button", { name: /多选文件|Select multiple files/u })
+      .click();
+    await tree
+      .getByRole("checkbox", { name: /^(选择 新目录|Select 新目录)$/u })
+      .check();
+    await tree
+      .getByRole("checkbox", {
+        name: /^(选择 renamed.txt|Select renamed.txt)$/u,
+      })
+      .check();
+    await tree
+      .getByRole("checkbox", { name: /^(选择 empty.txt|Select empty.txt)$/u })
+      .check();
+    await actions
+      .getByRole("button", { name: /^(移入回收站|Move to trash)$/u })
+      .click();
+    await expect(
+      actions.getByRole("button", { name: /撤销移除|Undo removal/u }),
+    ).toBeVisible();
+    expect(await stat(join(cwd, ".openpi-trash"))).toBeTruthy();
+    await expect(tree.locator('[data-file-row="新目录"]')).toHaveCount(0);
+    await expect(
+      page.getByText("File no longer exists.", { exact: true }),
+    ).toHaveCount(0);
+    await page.screenshot({
+      path: testInfo.outputPath("files-trash-batch-desktop.png"),
+    });
+    await actions
+      .getByRole("button", { name: /撤销移除|Undo removal/u })
+      .click();
+    await expect(tree.locator('[data-file-row="新目录"]')).toBeVisible();
+    expect(await readFile(join(cwd, "新目录", "renamed.txt"), "utf8")).toBe(
+      "preserve this original\n",
+    );
+    await rowMenu("empty.txt", /^(移入回收站|Move to trash)$/u);
+    await expect(tree.locator('[data-file-row="empty.txt"]')).toHaveCount(0);
+    // Reload saves and restores the open tool. Wait for its actual view instead
+    // of racing initial rendering with a reopen fallback.
+    await page.reload();
+    await expect(actions).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          ({ storageKey, sessionId, sessionPath }) => {
+            const positions = JSON.parse(
+              localStorage.getItem(storageKey) ?? "[]",
+            ) as WorkbarWorkspace[];
+            const saved = positions.find(
+              (position) =>
+                position.sessionId === sessionId &&
+                position.sessionPath === sessionPath,
+            );
+            return {
+              open: saved?.open,
+              active: saved?.reading.tabs?.active,
+              launcherOpen: saved?.reading.tabs?.launcherOpen,
+            };
+          },
+          {
+            storageKey: WORKBAR_POSITION_STORAGE_KEY,
+            sessionId: manager.getSessionId(),
+            sessionPath: `current:${manager.getSessionId()}`,
+          },
+        ),
+      )
+      .toEqual({ open: true, active: "files", launcherOpen: false });
+    await actions
+      .getByRole("button", { name: /工作区回收站|Workspace trash/u })
+      .click();
+    await actions
+      .getByRole("button", { name: /^(恢复 empty.txt|Restore empty.txt)$/u })
+      .click();
+    await expect(tree.locator('[data-file-row="empty.txt"]')).toBeVisible();
+    expect((await stat(join(cwd, "empty.txt"))).size).toBe(0);
+    await actions
+      .getByRole("button", { name: /工作区回收站|Workspace trash/u })
+      .click();
+
+    await mkdir(join(importFolder, "nested"));
+    await writeFile(
+      join(importFolder, "nested", "中文.bin"),
+      Buffer.from([0, 255, 67]),
+    );
+    await actions.locator("input[webkitdirectory]").setInputFiles(importFolder);
+    await expect
+      .poll(() =>
+        readFile(join(cwd, basename(importFolder), "nested", "中文.bin")).catch(
+          () => undefined,
+        ),
+      )
+      .toEqual(Buffer.from([0, 255, 67]));
+    await page.screenshot({
+      path: testInfo.outputPath("files-organization-desktop.png"),
+    });
+
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(
       actions.getByRole("button", { name: /新建文件$|New file$/u }),
@@ -282,5 +426,6 @@ test("workspace actions create, import and copy paths through the real Host on d
     await context.close();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
+    await rm(importFolder, { recursive: true, force: true });
   }
 });

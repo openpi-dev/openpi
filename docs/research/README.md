@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Draft investigations
 
+- [`WEB_CONTINUOUS_USE_2026-10-02.md`](WEB_CONTINUOUS_USE_2026-10-02.md) — 旧消息原生重跑、刷新阅读恢复、文件整理、多终端与可操作常规设置的所有者、验证和平台边界（[#641](https://github.com/openpi-dev/openpi/issues/641)，后续于 [#639](https://github.com/openpi-dev/openpi/issues/639) 与已合并 [PR #640](https://github.com/openpi-dev/openpi/pull/640)）。
+
 - [`WEB_INTERACTION_COMPARISON_2026-09-30.md`](WEB_INTERACTION_COMPARISON_2026-09-30.md) — PR #598 竞品截图对照与后续 Web 迭代：基础交互、普通附件、原始子代理结果、第三栏、真实 Luna 文件读取；追加现场演示、工具菜单焦点、Codex / Maka 历史分页与导航、两小时阅读连续性、发布整合及浏览器输入/滚动边界/Windows 定位，保留独立冻结、失败、消融和未验证边界（[#639](https://github.com/openpi-dev/openpi/issues/639)、[PR #640](https://github.com/openpi-dev/openpi/pull/640)、[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 ## Validated investigations

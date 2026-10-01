@@ -131,6 +131,86 @@ function view(value: WebSnapshot, activityObserved = true) {
 
 afterEach(cleanup);
 
+it("expands Bash and file evidence from canonical display preferences without changing results or their state", () => {
+  for (const [name, preference] of [
+    ["bash", "bashToolDisplay"],
+    ["write", "fileMutationDisplay"],
+    ["edit", "fileMutationDisplay"],
+  ] as const) {
+    const value: WebSnapshot = snapshot({
+      tool: { ...call, name },
+      results: [
+        {
+          role: "toolResult",
+          toolName: name,
+          toolCallId: call.id,
+          content: "canonical output",
+          isError: false,
+        },
+      ],
+    });
+    const original = JSON.stringify(value.selectedSession?.entries);
+    const { container, rerender, unmount } = render(view(value));
+    const originalState = container
+      .querySelector(".tool-evidence-card")
+      ?.getAttribute("data-state");
+    expect(
+      container.querySelector<HTMLDetailsElement>(".tool-evidence-card")?.open,
+    ).toBe(false);
+    rerender(
+      view({
+        ...value,
+        preferences: { ...value.preferences, [preference]: "full" },
+      }),
+    );
+    expect(
+      container.querySelector<HTMLDetailsElement>(".tool-evidence-card")?.open,
+    ).toBe(true);
+    expect(
+      container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
+    ).toBe(true);
+    expect(
+      container
+        .querySelector(".tool-evidence-card")
+        ?.getAttribute("data-state"),
+    ).toBe(originalState);
+    expect(JSON.stringify(value.selectedSession?.entries)).toBe(original);
+    unmount();
+  }
+});
+
+it("uses the full subagent result only when requested while preserving the exact terminal state", () => {
+  const value: WebSnapshot = snapshot();
+  value.selectedSession!.entries.push({
+    id: "child-result",
+    type: "message",
+    timestamp: "2026-10-02T00:00:00Z",
+    message: {
+      role: "custom",
+      customType: "subagent-result",
+      content: "complete child report",
+      details: {
+        displayContent: "bounded summary",
+        results: [{ id: "child", status: "done" }],
+      },
+    },
+  });
+  const { container, rerender } = render(view(value));
+  expect(container.textContent).toContain("bounded summary");
+  expect(container.textContent).not.toContain("complete child report");
+  rerender(
+    view({
+      ...value,
+      preferences: { ...value.preferences, subagentResultDisplay: "full" },
+    }),
+  );
+  expect(
+    container.querySelector<HTMLDetailsElement>(".activity-card.subagent")
+      ?.open,
+  ).toBe(true);
+  expect(container.textContent).toContain("complete child report");
+});
+
 it("shows one compaction status before an agent turn, freezes on disconnect, and restores persisted completion", () => {
   const value: WebSnapshot = snapshot();
   value.selectedExecution = {

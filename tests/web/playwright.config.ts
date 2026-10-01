@@ -29,6 +29,7 @@ export default defineConfig({
     "tests/web/settings-parity.e2e.ts",
     "tests/web/conversation-reading.e2e.ts",
     "tests/web/workbench-polish.e2e.ts",
+    "tests/web/message-rerun.e2e.ts",
     "tests/web/session-history.e2e.ts",
     "tests/web/turn-changes-history.e2e.ts",
     "tests/web/session-sources.e2e.ts",

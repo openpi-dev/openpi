@@ -296,6 +296,103 @@ test("deduplicates concurrent creates and reserves capacity before loading the P
   manager.dispose();
 });
 
+test("separate terminal tabs own independent PTYs, output and close lifecycle", async () => {
+  const ptys: FakePty[] = [];
+  const manager = new InteractiveTerminalManager({
+    spawn: () => {
+      const pty = new FakePty();
+      ptys.push(pty);
+      return pty;
+    },
+    maxTerminals: 2,
+  });
+  try {
+    const options = { sessionId: "a", cwd: ".", cols: 80, rows: 24 };
+    const [first, second] = await Promise.all([
+      manager.create({ ...options, createKey: "terminal:first" }),
+      manager.create({ ...options, createKey: "terminal:second" }),
+    ]);
+    assert.notEqual(first.id, second.id);
+    assert.equal(ptys.length, 2);
+    assert.equal(
+      (await manager.create({ ...options, createKey: "terminal:first" })).id,
+      first.id,
+    );
+    await assert.rejects(
+      manager.create({ ...options, createKey: "terminal:third" }),
+      /capacity is full/u,
+    );
+    const firstOutput: WebInteractiveTerminalEvent[] = [];
+    const secondOutput: WebInteractiveTerminalEvent[] = [];
+    manager.subscribe("a", first.id, (event) => firstOutput.push(event));
+    manager.subscribe("a", second.id, (event) => secondOutput.push(event));
+    manager.write("a", first.id, "serve\r");
+    manager.write("a", second.id, "test\r");
+    assert.deepEqual(
+      ptys.map((pty) => pty.writes),
+      [["serve\r"], ["test\r"]],
+    );
+    ptys[0]!.emitData("server output");
+    ptys[1]!.emitData("test output");
+    assert.deepEqual(
+      firstOutput.map((event) =>
+        event.type === "output" ? event.data : event.type,
+      ),
+      ["server output"],
+    );
+    assert.deepEqual(
+      secondOutput.map((event) =>
+        event.type === "output" ? event.data : event.type,
+      ),
+      ["test output"],
+    );
+    assert.equal(manager.write("b", first.id, "cross-session\r"), false);
+    manager.close("a", first.id, true);
+    assert.equal(manager.get("a", first.id), undefined);
+    assert.equal(manager.get("a", second.id)?.exited, false);
+    assert.equal(ptys[1]!.kills.length, 0);
+    const replacement = await manager.create({
+      ...options,
+      createKey: "terminal:third",
+    });
+    assert.notEqual(replacement.id, second.id);
+    manager.retain("b", ".");
+    assert.equal(manager.get("a", second.id), undefined);
+    assert.equal(manager.get("a", replacement.id), undefined);
+    assert.equal(ptys[1]!.kills.length, 1);
+  } finally {
+    manager.dispose();
+  }
+});
+
+test("concurrent retries deduplicate only the same terminal tab key", async () => {
+  const ptys: FakePty[] = [];
+  const manager = new InteractiveTerminalManager({
+    spawn: () => {
+      const pty = new FakePty();
+      ptys.push(pty);
+      return pty;
+    },
+    maxTerminals: 1,
+  });
+  try {
+    const options = { sessionId: "a", cwd: ".", cols: 80, rows: 24 };
+    const first = manager.create({ ...options, createKey: "same-tab" });
+    const retry = manager.create({ ...options, createKey: "same-tab" });
+    const rejected = assert.rejects(
+      manager.create({ ...options, createKey: "another-tab" }),
+      /capacity is full/u,
+    );
+    const [created, replay] = await Promise.all([first, retry]);
+    await rejected;
+    assert.equal(created.id, replay.id);
+    assert.equal(replay.reused, true);
+    assert.equal(ptys.length, 1);
+  } finally {
+    manager.dispose();
+  }
+});
+
 test("cancels pending creates when the retained Session changes or the manager disposes", async () => {
   const scenarios = ["retain", "dispose"] as const;
   for (const scenario of scenarios) {

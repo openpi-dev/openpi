@@ -10,6 +10,13 @@ export interface BrowserPageReadingState {
 
 // Presentation memory only. Handles, file contents, streams and iframe DOM are
 // reacquired from their owners when the exact Session is opened again.
+export interface TerminalReadingState {
+  id?: string;
+  viewport: number;
+  atBottom: boolean;
+  title?: string;
+}
+
 export interface WorkbarReadingState {
   tabs?: WorkbarTabsState;
   requestRevision?: number;
@@ -54,6 +61,7 @@ export interface WorkbarReadingState {
     pages: Record<number, BrowserPageReadingState>;
   };
   terminal?: { id: string; viewport: number; atBottom: boolean };
+  terminals?: Record<string, TerminalReadingState>;
   sideConversation?: {
     selectedId: string | null;
     drafts: Record<string, string>;

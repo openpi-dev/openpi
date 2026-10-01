@@ -1,7 +1,6 @@
-import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
+import { Dialog } from "@astryxdesign/core/Dialog";
 import {
   ArrowLeft,
-  Check,
   ChevronRight,
   FileDiff,
   FolderOpen,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react";
 import {
   type FormEvent,
+  type KeyboardEvent,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -52,7 +52,8 @@ import {
   dismissWorkbarLauncher,
   initialWorkbarTabs,
   openWorkbarTool,
-  type WorkbarContentTool,
+  type WorkbarTabId,
+  workbarTabTool,
 } from "./workbar-tabs.ts";
 
 const launcherTools = [
@@ -95,7 +96,7 @@ function WorkbarLauncher({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="workbar-launcher">
+    <section className="workbar-launcher" aria-label={t("openTools")}>
       <div className="workbar-launcher-list">
         {launcherTools.map((tool) => {
           const Icon = tool.icon;
@@ -115,7 +116,7 @@ function WorkbarLauncher({
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -359,16 +360,28 @@ function TerminalPanel({
   sessionId,
   cwd,
   activity,
+  tabId,
+  active,
+  onConnectionChange,
 }: {
   sessionId: string;
   cwd: string;
   activity?: WebCapabilityProjection<WebBackgroundTerminalActivity>;
+  tabId: string;
+  active: boolean;
+  onConnectionChange: (state: { id: string | null; pending: boolean }) => void;
 }) {
   const { t } = useTranslation();
   const items = activity?.items ?? [];
   return (
     <div className="terminal-workspace">
-      <InteractiveTerminal sessionId={sessionId} cwd={cwd} />
+      <InteractiveTerminal
+        sessionId={sessionId}
+        cwd={cwd}
+        tabId={tabId}
+        active={active}
+        onConnectionChange={onConnectionChange}
+      />
       {items.length > 0 && (
         <details className="terminal-agent-activity">
           <summary>
@@ -443,6 +456,10 @@ export function WorkbarPanel({
   const { t } = useTranslation();
   const localReading = useRef<WorkbarReadingState>({});
   const readingState = cachedReading ?? localReading.current;
+  if (readingState.terminal && !readingState.terminals?.terminal) {
+    (readingState.terminals ??= {}).terminal = readingState.terminal;
+    readingState.terminal = undefined;
+  }
   const [tabs, setTabs] = useState(() =>
     readingState?.tabs
       ? readingState.requestRevision === requestRevision
@@ -451,13 +468,43 @@ export function WorkbarPanel({
       : initialWorkbarTabs(requestedTool),
   );
   const browserScope = JSON.stringify([sessionId, sessionPath]);
-  const tabButtons = useRef(new Map<WorkbarContentTool, HTMLButtonElement>());
+  const tabButtons = useRef(new Map<WorkbarTabId, HTMLButtonElement>());
   const openToolsButton = useRef<HTMLButtonElement>(null);
   const tabFocus = useRef<{
-    tool: WorkbarContentTool | null;
+    tool: WorkbarTabId | null;
     scope: string;
-    closing?: boolean;
   } | null>(null);
+  const client = useMemo(() => new WebClient(), []);
+  const [terminalConnections, setTerminalConnections] = useState<
+    Record<string, { id: string | null; pending: boolean }>
+  >({});
+  const [closingTerminals, setClosingTerminals] = useState<WorkbarTabId[]>([]);
+  const closeInFlight = useRef(new Set<WorkbarTabId>());
+  const closeGeneration = useRef(0);
+  useEffect(
+    () => () => {
+      closeGeneration.current++;
+    },
+    [],
+  );
+  const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [renamingTerminal, setRenamingTerminal] = useState<WorkbarTabId | null>(
+    null,
+  );
+  const [terminalName, setTerminalName] = useState("");
+  const [terminalTitles, setTerminalTitles] = useState<Record<string, string>>(
+    () =>
+      Object.fromEntries(
+        Object.entries(readingState.terminals ?? {}).flatMap(([id, value]) =>
+          value.title ? [[id, value.title]] : [],
+        ),
+      ),
+  );
+  const terminalLabel = (id: WorkbarTabId) =>
+    terminalTitles[id] ??
+    (id === "terminal"
+      ? t("terminal")
+      : `${t("terminal")} ${tabs.tabs.filter((tab) => workbarTabTool(tab) === "terminal").indexOf(id) + 1}`);
   useLayoutEffect(() => {
     const requested = tabFocus.current;
     tabFocus.current = null;
@@ -478,7 +525,6 @@ export function WorkbarPanel({
         : openToolsButton.current;
       if (!target?.isConnected || target.closest("[hidden], [inert]")) return;
       if (
-        requested.closing &&
         document.activeElement !== document.body &&
         !target.closest(".workbar-panel")?.contains(document.activeElement)
       )
@@ -517,7 +563,13 @@ export function WorkbarPanel({
   const handledRequest = useRef(requestRevision);
   useEffect(() => {
     onActiveToolChange?.(
-      visible ? (tabs.launcherOpen ? "launcher" : tabs.active) : null,
+      visible
+        ? tabs.launcherOpen
+          ? "launcher"
+          : tabs.active
+            ? workbarTabTool(tabs.active)
+            : null
+        : null,
     );
     return () => onActiveToolChange?.(null);
   }, [visible, tabs.launcherOpen, tabs.active, onActiveToolChange]);
@@ -528,37 +580,82 @@ export function WorkbarPanel({
   }, [requestRevision, requestedTool]);
 
   const select = (tool: WorkbarTool) => {
-    setTabs((current) => openWorkbarTool(current, tool));
-  };
-  const closeTab = (tool: WorkbarContentTool, focusOwner: HTMLElement) => {
-    const next = closeWorkbarTool(tabs, tool);
-    if (focusOwner.contains(document.activeElement))
-      tabFocus.current = {
-        tool: next.launcherOpen ? null : next.active,
-        scope: browserScope,
-        closing: true,
+    const tab =
+      tool === "terminal" &&
+      tabs.tabs.some((id) => workbarTabTool(id) === "terminal")
+        ? (`terminal:${crypto.randomUUID()}` as const)
+        : tool;
+    if (tab !== "launcher")
+      tabFocus.current = { tool: tab, scope: browserScope };
+    if (tab.startsWith("terminal:")) {
+      const number =
+        Math.max(
+          1,
+          ...Object.values(terminalTitles).map(
+            (title) => Number(title.match(/\s(\d+)$/u)?.[1]) || 0,
+          ),
+        ) + 1;
+      const title = `${t("terminal")} ${number}`;
+      setTerminalTitles((current) => ({ ...current, [tab]: title }));
+      (readingState.terminals ??= {})[tab] = {
+        viewport: 0,
+        atBottom: true,
+        title,
       };
-    setTabs(next);
+    }
+    setTabs((current) => openWorkbarTool(current, tab));
   };
-  const activeLabel = tabs.active
-    ? launcherTools.find((tool) => tool.kind === tabs.active)?.title
-    : "openTools";
-  const menuItems = launcherTools.map((tool) => {
-    const Icon = tool.icon;
-    return {
-      id: tool.kind,
-      label: t(tool.title),
-      description: t(tool.description),
-      icon: <Icon aria-hidden="true" />,
-      endContent: tabs.tabs.includes(tool.kind) ? (
-        <Check aria-hidden="true" />
-      ) : undefined,
-      onClick: () => {
-        tabFocus.current = { tool: tool.kind, scope: browserScope };
-        select(tool.kind);
-      },
-    };
-  });
+  const closeTab = async (tool: WorkbarTabId, focusOwner: HTMLElement) => {
+    const generation = closeGeneration.current;
+    const returnFocus = focusOwner.contains(document.activeElement);
+    if (workbarTabTool(tool) === "terminal" && canControl) {
+      if (closeInFlight.current.has(tool) || terminalConnections[tool]?.pending)
+        return;
+      const id =
+        terminalConnections[tool]?.id ?? readingState.terminals?.[tool]?.id;
+      if (id) {
+        closeInFlight.current.add(tool);
+        setClosingTerminals((current) => [...current, tool]);
+        setTerminalError(null);
+        try {
+          await client.closeInteractiveTerminal(sessionId, id);
+        } catch (error) {
+          if (generation === closeGeneration.current)
+            setTerminalError(
+              error instanceof Error ? error.message : t("terminalError"),
+            );
+          return;
+        } finally {
+          if (generation === closeGeneration.current) {
+            closeInFlight.current.delete(tool);
+            setClosingTerminals((current) =>
+              current.filter((id) => id !== tool),
+            );
+          }
+        }
+        if (generation !== closeGeneration.current) return;
+      }
+    }
+    if (workbarTabTool(tool) === "terminal" && readingState.terminals)
+      delete readingState.terminals[tool];
+    setTabs((current) => {
+      const next = closeWorkbarTool(current, tool);
+      if (
+        focusOwner.contains(document.activeElement) ||
+        (returnFocus && document.activeElement === document.body)
+      )
+        tabFocus.current = {
+          tool: next.launcherOpen ? null : next.active,
+          scope: browserScope,
+        };
+      return next;
+    });
+  };
+  const activeTool = tabs.active ? workbarTabTool(tabs.active) : null;
+  const activeLabel = tabs.launcherOpen
+    ? "openTools"
+    : (launcherTools.find((tool) => tool.kind === activeTool)?.title ??
+      "openTools");
 
   return (
     <WorkbarReadingContext.Provider value={readingState}>
@@ -576,6 +673,7 @@ export function WorkbarPanel({
           event.stopPropagation();
           if (tabs.launcherOpen && tabs.active) {
             event.preventDefault();
+            tabFocus.current = { tool: tabs.active, scope: browserScope };
             setTabs(dismissWorkbarLauncher);
             return;
           }
@@ -595,11 +693,19 @@ export function WorkbarPanel({
               </span>
             )}
             {tabs.tabs.map((tool) => {
+              const kind = workbarTabTool(tool);
               const definition = launcherTools.find(
-                (item) => item.kind === tool,
+                (item) => item.kind === kind,
               )!;
               const Icon = definition.icon;
               const active = !tabs.launcherOpen && tabs.active === tool;
+              const label =
+                kind === "terminal" ? terminalLabel(tool) : t(definition.title);
+              const renameTerminal = () => {
+                if (kind !== "terminal") return;
+                setTerminalName(label);
+                setRenamingTerminal(tool);
+              };
               return (
                 <div
                   className="workbar-tab"
@@ -613,20 +719,45 @@ export function WorkbarPanel({
                       else tabButtons.current.delete(tool);
                     }}
                     aria-pressed={active}
-                    title={t(definition.title)}
+                    title={
+                      kind === "terminal"
+                        ? `${label} · ${t("renameTerminal")}`
+                        : label
+                    }
+                    onDoubleClick={renameTerminal}
+                    onContextMenu={(event) => {
+                      if (kind === "terminal") {
+                        event.preventDefault();
+                        renameTerminal();
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (kind === "terminal" && event.key === "F2") {
+                        event.preventDefault();
+                        renameTerminal();
+                      }
+                    }}
                     onClick={() =>
                       setTabs((current) => activateWorkbarTool(current, tool))
                     }
                   >
                     <Icon aria-hidden="true" />
-                    <span>{t(definition.title)}</span>
+                    <span>{label}</span>
                   </button>
                   <button
                     type="button"
                     className="workbar-tab-close"
-                    aria-label={`${t("close")} ${t(definition.title)}`}
+                    aria-label={`${t("close")} ${label}`}
                     title={t("close")}
-                    onClick={(event) => closeTab(tool, event.currentTarget)}
+                    disabled={
+                      kind === "terminal" &&
+                      canControl &&
+                      (closingTerminals.includes(tool) ||
+                        terminalConnections[tool]?.pending !== false)
+                    }
+                    onClick={(event) =>
+                      void closeTab(tool, event.currentTarget)
+                    }
                   >
                     <X aria-hidden="true" />
                   </button>
@@ -678,22 +809,19 @@ export function WorkbarPanel({
                 <PanelLeftOpen aria-hidden="true" />
               </button>
             )}
-            <DropdownMenu
-              button={{
-                ref: openToolsButton,
-                label: t("openTools"),
-                icon: <Plus aria-hidden="true" />,
-                isIconOnly: true,
-                size: "sm",
-                variant: "ghost",
-                className: "workbar-add-tab",
-              }}
-              items={menuItems}
-              menuWidth={240}
-              placement="below"
-              alignment="end"
-              hasChevron={false}
-            />
+            <button
+              type="button"
+              ref={openToolsButton}
+              className="icon-button workbar-add-tab"
+              aria-label={t("openTools")}
+              title={t("openTools")}
+              aria-pressed={tabs.launcherOpen}
+              onClick={() =>
+                setTabs((current) => openWorkbarTool(current, "launcher"))
+              }
+            >
+              <Plus aria-hidden="true" />
+            </button>
             <button
               type="button"
               className="icon-button"
@@ -705,96 +833,163 @@ export function WorkbarPanel({
             </button>
           </div>
         </header>
+        {terminalError && (
+          <p className="error" role="alert">
+            {terminalError}
+          </p>
+        )}
         <div className="workbar-panels">
           <div className="workbar-tool-panel" hidden={!tabs.launcherOpen}>
             <WorkbarLauncher onSelect={select} />
           </div>
-          {tabs.tabs.map((tool) => (
-            <div
-              className="workbar-tool-panel"
-              data-tool={tool}
-              hidden={tabs.launcherOpen || tabs.active !== tool}
-              inert={tabs.launcherOpen || tabs.active !== tool || !visible}
-              key={tool}
-            >
-              {tool === "browser" &&
-              visible &&
-              canControl &&
-              (browserActive || retainedBrowser === browserScope) ? (
-                <BrowserPanel key={browserScope} />
-              ) : visible && !tabs.launcherOpen && tabs.active === tool ? (
-                !canControl &&
-                ["side-conversation", "terminal", "browser"].includes(tool) ? (
-                  <div className="workbar-empty">
-                    <p>{t("toolsRequireCurrentSession")}</p>
-                    {onActivateSession && (
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={onActivateSession}
-                      >
-                        {t("activateViewedSession")}
-                      </button>
-                    )}
-                  </div>
-                ) : tool === "side-conversation" ? (
-                  <SideConversationPanel
-                    sessionId={sessionId}
-                    activity={capabilities.subagents}
-                  />
-                ) : tool === "review" ? (
-                  <ReviewPanel
-                    key={
-                      reviewTurn
-                        ? `${reviewTurn.promptEntryId}:${reviewTurn.revision}`
-                        : (review.source ?? "workspace")
-                    }
-                    review={
-                      reviewTurn
-                        ? {
-                            ...savedReview,
-                            setSource: (source) => {
-                              review.setSource?.(source);
-                              onWorkspaceReview?.();
-                            },
-                          }
-                        : review
-                    }
-                    initialFilePath={
-                      reviewTurn?.filePath ?? reviewInitialFilePath
-                    }
-                    readingScope={
-                      reviewTurn
-                        ? `turn:${reviewTurn.promptEntryId}:${reviewTurn.revision}`
-                        : `workspace:${review.source ?? "unstaged"}`
-                    }
-                    onOpenFiles={() => select("files")}
-                    onReferenceLine={canControl ? onReferenceLine : undefined}
-                    onClose={() =>
-                      setTabs((current) => closeWorkbarTool(current, "review"))
-                    }
-                    embedded
-                  />
-                ) : tool === "terminal" ? (
+          {tabs.tabs.map((tool) => {
+            const kind = workbarTabTool(tool);
+            return (
+              <div
+                className="workbar-tool-panel"
+                data-tool={kind}
+                data-tab={tool}
+                hidden={tabs.launcherOpen || tabs.active !== tool}
+                inert={tabs.launcherOpen || tabs.active !== tool || !visible}
+                key={tool}
+              >
+                {kind === "terminal" && visible && canControl ? (
                   <TerminalPanel
                     sessionId={sessionId}
                     cwd={cwd}
+                    tabId={tool}
+                    active={!tabs.launcherOpen && tabs.active === tool}
+                    onConnectionChange={(state) =>
+                      setTerminalConnections((current) => ({
+                        ...current,
+                        [tool]: state,
+                      }))
+                    }
                     activity={capabilities["background-terminals"]}
                   />
-                ) : (
-                  <FilesPanel
-                    key={JSON.stringify([sessionId, sessionPath, cwd])}
-                    sessionId={sessionId}
-                    sessionPath={sessionPath}
-                    cwd={cwd}
-                    active
-                    canWrite={canControl}
-                  />
-                )
-              ) : null}
-            </div>
-          ))}
+                ) : kind === "browser" &&
+                  visible &&
+                  canControl &&
+                  (browserActive || retainedBrowser === browserScope) ? (
+                  <BrowserPanel key={browserScope} />
+                ) : visible && !tabs.launcherOpen && tabs.active === tool ? (
+                  !canControl &&
+                  ["side-conversation", "terminal", "browser"].includes(
+                    kind,
+                  ) ? (
+                    <div className="workbar-empty">
+                      <p>{t("toolsRequireCurrentSession")}</p>
+                      {onActivateSession && (
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={onActivateSession}
+                        >
+                          {t("activateViewedSession")}
+                        </button>
+                      )}
+                    </div>
+                  ) : kind === "side-conversation" ? (
+                    <SideConversationPanel
+                      sessionId={sessionId}
+                      activity={capabilities.subagents}
+                    />
+                  ) : kind === "review" ? (
+                    <ReviewPanel
+                      key={
+                        reviewTurn
+                          ? `${reviewTurn.promptEntryId}:${reviewTurn.revision}`
+                          : (review.source ?? "workspace")
+                      }
+                      review={
+                        reviewTurn
+                          ? {
+                              ...savedReview,
+                              setSource: (source) => {
+                                review.setSource?.(source);
+                                onWorkspaceReview?.();
+                              },
+                            }
+                          : review
+                      }
+                      initialFilePath={
+                        reviewTurn?.filePath ?? reviewInitialFilePath
+                      }
+                      readingScope={
+                        reviewTurn
+                          ? `turn:${reviewTurn.promptEntryId}:${reviewTurn.revision}`
+                          : `workspace:${review.source ?? "unstaged"}`
+                      }
+                      onOpenFiles={() => select("files")}
+                      onReferenceLine={canControl ? onReferenceLine : undefined}
+                      onClose={() =>
+                        setTabs((current) =>
+                          closeWorkbarTool(current, "review"),
+                        )
+                      }
+                      embedded
+                    />
+                  ) : (
+                    <FilesPanel
+                      key={JSON.stringify([sessionId, sessionPath, cwd])}
+                      sessionId={sessionId}
+                      sessionPath={sessionPath}
+                      cwd={cwd}
+                      active
+                      canWrite={canControl}
+                    />
+                  )
+                ) : null}
+              </div>
+            );
+          })}
         </div>
+        <Dialog
+          isOpen={renamingTerminal !== null}
+          purpose="form"
+          aria-label={t("renameTerminal")}
+          onKeyDown={(event: KeyboardEvent<HTMLDialogElement>) => {
+            if (event.key === "Escape") event.stopPropagation();
+          }}
+          onOpenChange={(open: boolean) => {
+            if (!open) setRenamingTerminal(null);
+          }}
+        >
+          <form
+            className="openpi-dialog"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const title = terminalName.trim();
+              if (!renamingTerminal || !title) return;
+              setTerminalTitles((current) => ({
+                ...current,
+                [renamingTerminal]: title,
+              }));
+              const saved = (readingState.terminals ??= {})[renamingTerminal];
+              readingState.terminals[renamingTerminal] = {
+                ...(saved ?? { viewport: 0, atBottom: true }),
+                title,
+              };
+              setRenamingTerminal(null);
+            }}
+          >
+            <strong>{t("renameTerminal")}</strong>
+            <input
+              aria-label={t("terminalName")}
+              value={terminalName}
+              maxLength={80}
+              onChange={(event) => setTerminalName(event.target.value)}
+            />
+            <div className="dialog-actions">
+              <button type="button" onClick={() => setRenamingTerminal(null)}>
+                {t("cancel")}
+              </button>
+              <button type="submit" disabled={!terminalName.trim()}>
+                {t("save")}
+              </button>
+            </div>
+          </form>
+        </Dialog>
       </aside>
     </WorkbarReadingContext.Provider>
   );

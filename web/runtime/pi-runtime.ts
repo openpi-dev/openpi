@@ -42,7 +42,9 @@ import {
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
-import { projectMessage, projectAssistantError, jsonByteLength, boundedText, WEB_MAX_TEXT } from "../protocol/types.ts";
+import { projectMessage, projectAssistantError, jsonByteLength, boundedText, WEB_MAX_TEXT, WEB_PROMPT_MAX_TEXT_LENGTH, WEB_PROMPT_IMAGE_MAX_BASE64_CHARS, WEB_PROMPT_IMAGE_MAX_BYTES, WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES, WEB_PROMPT_IMAGE_MAX_COUNT, type WebPromptImage } from "../protocol/types.ts";
+import { sourceReferenceTokens } from "../protocol/session-sources.ts";
+import { WEB_MESSAGE_RERUN } from "../protocol/message-rerun.ts";
 import { LIVE_TOOL_LIMIT, type LiveToolEvidence } from "../protocol/evidence.ts";
 import { elapsed, traceWeb } from "../trace.ts";
 import { WEB_TURN_TIMING_ENTRY, readTurnTiming, type WebTurnTiming } from "../protocol/turn-timing.ts";
@@ -252,6 +254,7 @@ export class PiWebRuntime implements WebRuntimeController {
   private disposePromise?: Promise<void>;
   private hasSelectedWorkspace: boolean;
   private historyForkPending = false;
+  private historyForkPromptBytes = 0;
   private readonly historyForkReceipts = new Map<string, {
     request: WebSessionForkRequest;
     result: Promise<WebSessionForkResult>;
@@ -1549,11 +1552,13 @@ export class PiWebRuntime implements WebRuntimeController {
   forkSession(request: WebSessionForkRequest) {
     if (!request.commandId || request.commandId.length > 128 || /[\u0000-\u001f\u007f]/u.test(request.commandId))
       return Promise.reject(new WebRuntimeRequestError("A bounded fork command is required", "SESSION_FORK_UNAVAILABLE", 400));
+    if (request.rerun && (request.rerun.mode !== "edit" && request.rerun.mode !== "regenerate" || request.rerun.mode === "edit" && (typeof request.rerun.content !== "string" || !request.rerun.content.trim() || request.rerun.content.length > WEB_PROMPT_MAX_TEXT_LENGTH)))
+      return Promise.reject(new WebRuntimeRequestError("A bounded edited prompt is required", "SESSION_FORK_UNAVAILABLE", 400));
     const receipts = this.historyForkReceipts;
     const previous = receipts.get(request.commandId);
     if (previous) {
       const original = previous.request;
-      if (original.sessionId !== request.sessionId || original.sessionPath !== request.sessionPath || original.entryId !== request.entryId)
+      if (original.sessionId !== request.sessionId || original.sessionPath !== request.sessionPath || original.entryId !== request.entryId || JSON.stringify(original.rerun) !== JSON.stringify(request.rerun))
         return Promise.reject(new WebRuntimeRequestError("Fork command belongs to another message", "SESSION_CONFLICT", 409));
       return previous.result.then((result) => ({ ...result, replayed: true }));
     }
@@ -1561,7 +1566,7 @@ export class PiWebRuntime implements WebRuntimeController {
       return Promise.reject(new WebRuntimeRequestError("Fork receipt capacity reached", "SESSION_FORK_CAPACITY", 409));
     if (this.historyForkPending)
       return Promise.reject(new WebRuntimeRequestError("Another Session fork is in progress", "SESSION_CONFLICT", 409));
-    const exact = { ...request };
+    const exact = { ...request, ...(request.rerun ? { rerun: { ...request.rerun } } : {}) };
     const source = { sessionId: exact.sessionId, sessionPath: exact.sessionPath, entryId: exact.entryId };
     const result = this.serializeControllerMutation(async () => {
       this.assertActive();
@@ -1574,19 +1579,57 @@ export class PiWebRuntime implements WebRuntimeController {
       const entry = manager.getBranch().find((entry) => entry.id === exact.entryId);
       if (!entry || entry.type !== "message" || !manager.isPersisted() || !existsSync(exact.sessionPath) || dirname(resolve(exact.sessionPath)) !== resolve(this.webSessionDirectory))
         throw new WebRuntimeRequestError("A saved message on the current Web branch is required", "SESSION_FORK_UNAVAILABLE", 409);
+      let prompt: WebSessionForkResult["prompt"];
+      if (exact.rerun) {
+        if (entry.message.role !== "user")
+          throw new WebRuntimeRequestError("Rerun must target the original user message", "SESSION_FORK_UNAVAILABLE", 409);
+        const parts = typeof entry.message.content === "string" ? [{ type: "text" as const, text: entry.message.content }] : entry.message.content;
+        const originalText = parts.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+        let content = exact.rerun.mode === "edit" ? exact.rerun.content.trim() : originalText;
+        // File attachments are ordinary Pi message references. Keep references
+        // removed while revising prose; never recreate files or copy a UI preview.
+        if (exact.rerun.mode === "edit") {
+          const retained = new Set(sourceReferenceTokens(content).map((token) => token.reference));
+          const missing = sourceReferenceTokens(originalText).filter((token) => !retained.has(token.reference)).map((token) => originalText.slice(token.start, token.end));
+          if (missing.length) content += `\n\n${missing.join("\n")}`;
+        }
+        const images: WebPromptImage[] = [];
+        let imageBytes = 0;
+        for (const part of parts) {
+          if (part.type !== "image") continue;
+          const mimeType = part.mimeType;
+          if ((mimeType !== "image/png" && mimeType !== "image/jpeg" && mimeType !== "image/gif" && mimeType !== "image/webp") || typeof part.data !== "string" || !part.data || part.data.length > WEB_PROMPT_IMAGE_MAX_BASE64_CHARS)
+            throw new WebRuntimeRequestError("An original image cannot be restored safely", "SESSION_FORK_UNAVAILABLE", 409);
+          const bytes = Buffer.from(part.data, "base64");
+          imageBytes += bytes.byteLength;
+          if (!bytes.byteLength || bytes.byteLength > WEB_PROMPT_IMAGE_MAX_BYTES || bytes.toString("base64") !== part.data || imageBytes > WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES || images.length >= WEB_PROMPT_IMAGE_MAX_COUNT)
+            throw new WebRuntimeRequestError("Original images exceed the Web prompt limits", "SESSION_FORK_UNAVAILABLE", 409);
+          const name = "name" in part && typeof part.name === "string" && part.name.length > 0 && part.name.length <= 255 ? part.name : undefined;
+          images.push({ mimeType, data: part.data, ...(name ? { name } : {}) });
+        }
+        if ((!content.trim() && !images.length) || content.length > WEB_PROMPT_MAX_TEXT_LENGTH)
+          throw new WebRuntimeRequestError("The complete prompt exceeds the Web prompt limit", "SESSION_FORK_UNAVAILABLE", 409);
+        prompt = { content, images };
+        // Replay receipts are never evicted. Bound their additional attachment
+        // memory before creating another irreversible native branch.
+        if (this.historyForkPromptBytes + jsonByteLength(prompt) > 128 * 1024 * 1024)
+          throw new WebRuntimeRequestError("Rerun receipt capacity reached", "SESSION_FORK_CAPACITY", 409);
+      }
       if (!session.isIdle || session.isStreaming || session.isCompacting || session.pendingMessageCount || session.getFollowUpMessages().length || session.getSteeringMessages().length || this.inFlightRuntimes.has(owner) || this.activePromptTrace || this.pendingPromptTraces.length || this.compactionQueues?.has(owner) || this.manualCompactionOwner === owner)
         throw new WebRuntimeRequestError("Wait for current work and queued messages before forking", "SESSION_FORK_UNAVAILABLE", 409);
       try {
-        const fork = await owner.fork(exact.entryId, { position: "at" });
+        const fork = await owner.fork(exact.entryId, { position: prompt ? "before" : "at" });
         this.assertActiveRuntime(owner);
         if (fork.cancelled) return { state: "cancelled", commandId: exact.commandId, source } satisfies WebSessionForkResult;
         const child = owner.session.sessionManager;
         const sessionId = child.getSessionId();
         const sessionPath = child.getSessionFile();
-        if (!sessionPath || sessionId === exact.sessionId || sessionPath === exact.sessionPath || child.getHeader()?.parentSession !== exact.sessionPath || !child.getBranch().some((entry) => entry.id === exact.entryId))
+        if (!sessionPath || sessionId === exact.sessionId || sessionPath === exact.sessionPath || child.getHeader()?.parentSession !== exact.sessionPath || child.getBranch().some((entry) => entry.id === exact.entryId) === Boolean(prompt))
           throw new Error("Native fork identity was not confirmed");
+        if (exact.rerun) child.appendCustomEntry(WEB_MESSAGE_RERUN, { source, mode: exact.rerun.mode });
+        if (prompt) this.historyForkPromptBytes += jsonByteLength(prompt);
         this.emit("session_switched", { sessionId, sessionPath, commandId: exact.commandId });
-        return { state: "forked", commandId: exact.commandId, source, sessionId, sessionPath } satisfies WebSessionForkResult;
+        return { state: "forked", commandId: exact.commandId, source, sessionId, sessionPath, ...(prompt ? { prompt } : {}) } satisfies WebSessionForkResult;
       } catch {
         // Native fork can persist its new file before replacement fails. Keep
         // this command terminal and never repeat that irreversible creation.

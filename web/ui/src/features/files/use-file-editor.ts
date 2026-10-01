@@ -7,6 +7,38 @@ import { WebApiError, type WebClient } from "../../protocol/client.ts";
 // Keys include the exact Session file, never just a displayed Session title.
 const drafts = new Map<string, { text: string; revision: string }>();
 
+/** A filesystem move changes the draft's address, not its contents or revision. */
+export function moveFileDrafts(
+  sessionId: string,
+  sessionPath: string,
+  from: string,
+  to: string,
+) {
+  for (const [key, draft] of drafts) {
+    const identity: unknown = JSON.parse(key);
+    if (
+      !Array.isArray(identity) ||
+      identity[0] !== sessionId ||
+      identity[1] !== sessionPath ||
+      typeof identity[2] !== "string"
+    )
+      continue;
+    const path = identity[2];
+    const separator = from.includes("\\") ? "\\" : "/";
+    if (path !== from && !path.startsWith(`${from}${separator}`)) continue;
+    const next = JSON.stringify([
+      sessionId,
+      sessionPath,
+      `${to}${path.slice(from.length)}`,
+    ]);
+    // A prior draft at the destination is user work too; do not replace it.
+    if (!drafts.has(next)) {
+      drafts.set(next, draft);
+      drafts.delete(key);
+    }
+  }
+}
+
 export function useFileEditor(
   preview: ArtifactPreview | null,
   sessionPath: string | undefined,

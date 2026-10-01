@@ -242,6 +242,11 @@ export interface WebSettingsCatalog {
 }
 
 export interface WebSettingsPreferencesPatch {
+  subagentResultDisplay?: "full" | "compact";
+  bashToolDisplay?: "full" | "compact";
+  fileMutationDisplay?: "full" | "compact";
+  customFooter?: boolean;
+  footerStyle?: "plain" | "powerline" | "powerline-mono";
   pinnedSort?: "manual" | "updated";
   theme?: WebThemePreference;
   chatWidth?: number;
@@ -266,6 +271,7 @@ export interface WebSessionProjection {
   entries: ReturnType<typeof projectEntry>[];
   bytes: number;
   truncation: WebProjectionTruncation;
+  rerun?: { source: WebHistoryAnchor; mode: "edit" | "regenerate" };
   history?: {
     leafEntryId: string | null;
     beforeEntryId: string | null;
@@ -487,6 +493,9 @@ export interface WebSnapshot {
     auxiliaryWidth?: number;
     chatFontSize?: number;
     expandThinking?: boolean;
+    subagentResultDisplay?: "full" | "compact";
+    bashToolDisplay?: "full" | "compact";
+    fileMutationDisplay?: "full" | "compact";
     pinnedSort?: "manual" | "updated";
   };
   /** Absent until the browser selects or creates a real Web Session. */

@@ -60,6 +60,38 @@ test("source tokens preserve exact spans and optional raw path labels without ch
   );
 });
 
+test("Windows source references retain encoded native paths without treating remote targets as drives", () => {
+  const path = String.raw`C:\Users\operator\workspace\中文 100% [1].txt`;
+  const reference = formatSourceReference(path);
+  assert.deepEqual(sourceReferences(reference), [
+    { name: "中文 100% [1].txt", reference: encodeURI(path) },
+  ]);
+  assert.equal(
+    reference.slice(
+      sourceReferenceTokens(reference)[0]!.start,
+      sourceReferenceTokens(reference)[0]!.end,
+    ),
+    reference,
+  );
+  assert.deepEqual(sourceReferences("[notes](<%23notes.md>)"), [
+    { name: "notes", reference: "%23notes.md" },
+  ]);
+  assert.deepEqual(
+    sourceReferences(
+      [
+        "https://example.com/file.txt",
+        String.raw`https:\example.com\file.txt`,
+        "javascript:alert(1)",
+        "//server/share/file.txt",
+        "C:drive-relative.txt",
+      ]
+        .map((target) => formatSourceReference(target, "remote"))
+        .join("\n"),
+    ),
+    [],
+  );
+});
+
 test("sources use native saved user attachments and explicit links, respecting branches", async () => {
   const directory = await mkdtemp(join(tmpdir(), "openpi-native-sources-"));
   try {

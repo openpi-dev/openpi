@@ -63,9 +63,10 @@ function tab(name: string) {
 
 async function menuItem(name: string) {
   fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
-  const menu = await screen.findByRole("menu");
-  await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
-  return within(menu).getByRole("menuitem", {
+  const launcher = await screen.findByRole("region", {
+    name: i18n.t("openTools"),
+  });
+  return within(launcher).getByRole("button", {
     name: new RegExp(`^${name}`),
   });
 }
@@ -184,7 +185,7 @@ it.each(["hidden", "scope", "unmount", "outside focus"])(
   },
 );
 
-it("reactivates an already opened inactive tool from the checked menu row without replacing its iframe", async () => {
+it("reactivates an already opened inactive tool from the full launcher without replacing its iframe", async () => {
   const view = render(panel());
   navigate();
   const frame = view.container.querySelector("iframe");
@@ -192,7 +193,7 @@ it("reactivates an already opened inactive tool from the checked menu row withou
   view.rerender(panel("files", 1));
   const row = await menuItem(i18n.t("browser"));
   expect(row.getAttribute("aria-disabled")).not.toBe("true");
-  expect(row.querySelector(".lucide-check")).not.toBeNull();
+  expect(row.querySelector(".lucide-chevron-right")).not.toBeNull();
   fireEvent.click(row);
 
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
@@ -205,7 +206,7 @@ it("reactivates an already opened inactive tool from the checked menu row withou
   await waitFor(() => expect(document.activeElement).toBe(browserTab));
 });
 
-it("lets the currently active checked tool close the menu and focus its existing tab repeatedly", async () => {
+it("lets the currently active tool dismiss the launcher and focus its existing tab repeatedly", async () => {
   const view = render(panel());
   navigate();
   const frame = view.container.querySelector("iframe");
@@ -213,11 +214,7 @@ it("lets the currently active checked tool close the menu and focus its existing
   for (let attempt = 0; attempt < 2; attempt++) {
     const row = await menuItem(i18n.t("browser"));
     expect(row.getAttribute("aria-disabled")).not.toBe("true");
-    if (attempt === 0) fireEvent.click(row);
-    else {
-      row.focus();
-      fireEvent.keyDown(row, { key: " " });
-    }
+    fireEvent.click(row);
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     expect(browserTab.getAttribute("aria-pressed")).toBe("true");
     expect(view.container.querySelector("iframe")).toBe(frame);
@@ -228,12 +225,12 @@ it("lets the currently active checked tool close the menu and focus its existing
   );
 });
 
-it("activates a newly opened tool with Enter and focuses the newly committed tab", async () => {
+it("activates a newly opened tool and focuses the newly committed tab", async () => {
   render(panel());
   const row = await menuItem(i18n.t("files"));
   expect(row.querySelector(".lucide-check")).toBeNull();
   row.focus();
-  fireEvent.keyDown(row, { key: "Enter" });
+  fireEvent.click(row);
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   const filesTab = tab(i18n.t("files"));
   expect(filesTab.getAttribute("aria-pressed")).toBe("true");
@@ -250,7 +247,7 @@ it("focuses the selected Review tab after its panel's initial reading focus", as
   await waitFor(() => expect(document.activeElement).toBe(reviewTab));
 });
 
-it("keeps Escape dismissal on the menu trigger without activating another tool", async () => {
+it("dismisses the full launcher with Escape and focuses the previously active tool", async () => {
   render(panel());
   const row = await menuItem(i18n.t("files"));
   row.focus();
@@ -258,12 +255,12 @@ it("keeps Escape dismissal on the menu trigger without activating another tool",
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   expect(tab(i18n.t("browser")).getAttribute("aria-pressed")).toBe("true");
   expect(screen.queryByText("Fixture files")).toBeNull();
-  expect(document.activeElement).toBe(
-    screen.getByRole("button", { name: i18n.t("openTools") }),
+  await waitFor(() =>
+    expect(document.activeElement).toBe(tab(i18n.t("browser"))),
   );
 });
 
-it.each(["hidden", "scope", "unmount"])(
+it.each(["hidden", "scope", "unmount", "outside focus"])(
   "cancels pending menu focus when the Workbar is %s",
   async (change) => {
     const view = render(panel());
@@ -281,7 +278,7 @@ it.each(["hidden", "scope", "unmount"])(
     fireEvent.click(row);
     expect(frames.size).toBeGreaterThan(0);
     if (change === "unmount") view.unmount();
-    else
+    else if (change !== "outside focus")
       view.rerender(
         panel("browser", 0, {
           visible: change !== "hidden",

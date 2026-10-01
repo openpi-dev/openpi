@@ -72,6 +72,8 @@ beforeEach(() => {
   );
   vi.spyOn(WebClient.prototype, "mutateWorkspaceFile").mockImplementation(
     async (sessionId, sessionPath, mutation) => {
+      if (!("directory" in mutation))
+        throw new Error("Unexpected organization request in create fixture");
       const path =
         mutation.directory === "."
           ? mutation.name
@@ -372,7 +374,9 @@ it("imports exact binary and empty file bytes, retains only the failed file for 
   expect(mutate).toHaveBeenCalledTimes(3);
   expect(mutate.mock.calls[2]?.[2]).toEqual(mutate.mock.calls[0]?.[2]);
   expect(
-    mutate.mock.calls.filter((call) => call[2].name === "empty.txt"),
+    mutate.mock.calls.filter(
+      (call) => "name" in call[2] && call[2].name === "empty.txt",
+    ),
   ).toHaveLength(1);
 });
 

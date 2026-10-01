@@ -139,6 +139,204 @@ async function historyFixture(turnCount?: number, setupTurn = false) {
   };
 }
 
+test("refresh restores a persisted native reading anchor outside the latest page and manual scrolling cancels a late restore", async ({
+  browser,
+}, testInfo) => {
+  const fixture = await historyFixture(120);
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    locale: "zh-CN",
+  });
+  const page = await context.newPage();
+  const storageKey = "openpi:reading-positions:v1";
+  let identity!: Pick<WebSessionProjection, "id" | "path">;
+  let scope: string;
+  type Bookmark = {
+    key: string;
+    entryId: string;
+    offset: number;
+    scrollTop: number;
+    pinned: boolean;
+  };
+  const bookmark = () =>
+    page.evaluate(
+      ({ storageKey, scope }) => {
+        const stored = JSON.parse(
+          localStorage.getItem(storageKey) ?? "[]",
+        ) as Array<[string, Bookmark]>;
+        return stored.find(([identity]) => identity === scope)?.[1];
+      },
+      { storageKey, scope },
+    );
+  const nativePrompt = fixture.manager
+    .getBranch()
+    .find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "user" &&
+        entry.message.content === "History question 20",
+    )!.id;
+  const row = (key: string) =>
+    page
+      .locator(".conversation")
+      .locator(
+        `[data-history-entry="${key}"], [data-history-message="${key}"], [data-history-result="${key}"]`,
+      )
+      .first();
+  const offset = async (key: string) =>
+    (await row(key).boundingBox())!.y -
+    (await page.locator(".conversation").boundingBox())!.y;
+  let release = () => {};
+  try {
+    const opening = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/snapshot",
+    );
+    await page.goto(fixture.host.origin);
+    const initial = (await (await opening).json()) as WebSnapshot;
+    identity = initial.selectedSession!;
+    scope = JSON.stringify([identity.id, identity.path]);
+    const conversation = page.locator(".conversation");
+    await expect(conversation).toBeVisible();
+    await page
+      .getByRole("navigation", { name: "会话轮次" })
+      .locator(`[data-turn-entry="${nativePrompt}"]`)
+      .click();
+    await expect(
+      conversation.getByText("History question 20", { exact: true }),
+    ).toHaveCount(1);
+    await conversation.hover();
+    const scrollTopBeforeWheel = await conversation.evaluate(
+      (element) => element.scrollTop,
+    );
+    await page.mouse.wheel(0, -360);
+    await expect
+      .poll(async () =>
+        Math.abs(
+          (await conversation.evaluate((element) => element.scrollTop)) -
+            Math.max(0, scrollTopBeforeWheel - 360),
+        ),
+      )
+      .toBeLessThanOrEqual(2);
+    await expect.poll(async () => (await bookmark())?.pinned).toBe(false);
+    await expect
+      .poll(async () => {
+        const saved = await bookmark();
+        return saved
+          ? Math.abs(
+              (await conversation.evaluate((element) => element.scrollTop)) -
+                saved.scrollTop,
+            )
+          : Infinity;
+      })
+      .toBeLessThanOrEqual(2);
+    const saved = (await bookmark())!;
+    expect(saved.entryId).toBeTruthy();
+    expect(
+      fixture.manager.getBranch().some((entry) => entry.id === saved.entryId),
+    ).toBe(true);
+    await expect
+      .poll(async () => Math.abs((await offset(saved.key)) - saved.offset))
+      .toBeLessThanOrEqual(2);
+    await page.screenshot({
+      path: testInfo.outputPath("native-reading-before-refresh.png"),
+    });
+
+    let reads = 0;
+    let loaded!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      loaded = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/session/message-window?**", async (route) => {
+      reads++;
+      const query = new URL(route.request().url()).searchParams;
+      expect(query.get("sessionId")).toBe(identity.id);
+      expect(query.get("path")).toBe(identity.path);
+      expect(query.get("entryId")).toBe(saved.entryId);
+      if (reads === 1) {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Temporary fixture failure" }),
+        });
+        return;
+      }
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      loaded();
+      await held;
+      await route.fulfill({ response }).catch(() => {});
+    });
+    await page.reload();
+    await ready;
+    expect(reads).toBe(2);
+    expect((await bookmark())?.entryId).toBe(saved.entryId);
+    await expect(row(saved.key)).toHaveCount(0);
+    release();
+    await expect(row(saved.key)).toBeVisible();
+    await expect
+      .poll(async () => Math.abs((await offset(saved.key)) - saved.offset))
+      .toBeLessThanOrEqual(2);
+    expect(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest(".message-row")),
+      ),
+    ).toBe(false);
+    await page.screenshot({
+      path: testInfo.outputPath("native-reading-after-refresh.png"),
+    });
+    await testInfo.attach("native-reading-refresh", {
+      body: JSON.stringify(
+        {
+          sessionId: identity.id,
+          sessionPath: identity.path,
+          saved,
+          restored: await bookmark(),
+          reads,
+        },
+        null,
+        2,
+      ),
+      contentType: "application/json",
+    });
+
+    await page.unroute("**/api/session/message-window?**");
+    let interruptedReady!: () => void;
+    const interrupted = new Promise<void>((resolve) => {
+      interruptedReady = resolve;
+    });
+    const late = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/session/message-window?**", async (route) => {
+      const response = await route.fetch();
+      interruptedReady();
+      await late;
+      await route.fulfill({ response }).catch(() => {});
+    });
+    await page.reload();
+    await interrupted;
+    await expect(row(saved.key)).toHaveCount(0);
+    await conversation.hover();
+    await page.mouse.wheel(0, -160);
+    await expect
+      .poll(async () => (await bookmark())?.entryId)
+      .not.toBe(saved.entryId);
+    const manual = (await bookmark())!;
+    release();
+    await expect(row(saved.key)).toHaveCount(0);
+    await expect
+      .poll(async () => Math.abs((await offset(manual.key)) - manual.offset))
+      .toBeLessThanOrEqual(2);
+  } finally {
+    release();
+    await context.close();
+    await fixture.close();
+  }
+});
+
 test("prefetched native history loads on upward reading without moving the visible anchor", async ({
   browser,
 }, testInfo) => {

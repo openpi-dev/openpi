@@ -76,7 +76,7 @@
 .session-sidebar .session-row:is(:hover, :focus-within, :has([aria-expanded="true"])):has(.session-pin-button) .session { padding-right: 64px; }
 
 @media (hover: none), (pointer: coarse), (max-width: 760px) {
-  .session-pin-button { opacity: 1; pointer-events: auto; width: 44px; height: 44px; right: 44px; top: 0; }
+  .session-pin-button { width: 44px; height: 44px; right: 44px; top: 0; }
   .session-sidebar .session-row:has(.session-pin-button) .session { padding-right: 92px; }
 }
 
@@ -393,14 +393,18 @@
 }
 
 @media (hover: none), (pointer: coarse) {
-  .session-sidebar .workspace-row-actions,
-  .session-sidebar .session-row > .astryx-menu-trigger {
+  .session-sidebar .session-row:has(.session[aria-current="page"]) :is(.session-pin-button, .astryx-menu-trigger) {
     opacity: 1;
     pointer-events: auto;
   }
 
-  .session-sidebar .session-time {
-    display: none;
+  .session-sidebar .session-row:has(.session[aria-current="page"]) .session-time {
+    visibility: hidden;
+  }
+
+  .session-sidebar .workspace-row-actions {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .session-sidebar .session {
@@ -409,8 +413,6 @@
 }
 
 @media (width <= 760px), (pointer: coarse) {
-  .session-sidebar .session-row > .astryx-menu-trigger { opacity: 1; pointer-events: auto; }
-  .session-sidebar .session-time { display: none; }
   .session-sidebar :is(.workspace-label, .session, .new-session-button, .sidebar-settings-button, .workspace-heading-label) {
     min-height: 44px;
   }

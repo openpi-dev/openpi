@@ -10,6 +10,7 @@ import {
   type WorkspaceFileListing,
   type WorkspaceFileMutation,
   type WorkspaceFileMutationResult,
+  type WorkspaceTrashListing,
 } from "../../../protocol/artifacts.ts";
 import {
   type WebQuestionAnswers,
@@ -359,11 +360,42 @@ export class WebClient {
         sessionPath,
         access: "write-workspace-file",
         kind: mutation.kind,
-        directory: encodeURI(mutation.directory),
-        name: mutation.name,
-        ...(mutation.kind === "import-file" ? { data: mutation.data } : {}),
+        ...(mutation.kind === "restore"
+          ? { id: mutation.id, identity: mutation.identity }
+          : mutation.kind === "trash"
+            ? { path: encodeURI(mutation.path), identity: mutation.identity }
+            : {
+                directory: encodeURI(mutation.directory),
+                name: mutation.name,
+                ...(mutation.kind === "move"
+                  ? {
+                      path: encodeURI(mutation.path),
+                      identity: mutation.identity,
+                    }
+                  : {}),
+                ...(mutation.kind === "import-file"
+                  ? {
+                      data: mutation.data,
+                      ...(mutation.createParents
+                        ? { createParents: true }
+                        : {}),
+                    }
+                  : {}),
+              }),
       }),
     });
+  }
+
+  workspaceTrash(
+    sessionId: string,
+    sessionPath: string,
+    signal?: AbortSignal,
+    cursor?: string,
+  ) {
+    return this.request<WorkspaceTrashListing>(
+      `/api/artifacts/trash?${new URLSearchParams({ sessionId, sessionPath, ...(cursor ? { cursor } : {}) })}`,
+      { signal },
+    );
   }
 
   resolveArtifact(
@@ -498,10 +530,16 @@ export class WebClient {
     cols: number,
     rows: number,
     signal?: AbortSignal,
+    createKey?: string,
   ) {
     return this.request<WebInteractiveTerminal>("/api/terminal", {
       method: "POST",
-      body: JSON.stringify({ sessionId, cols, rows }),
+      body: JSON.stringify({
+        sessionId,
+        cols,
+        rows,
+        ...(createKey ? { createKey } : {}),
+      }),
       signal,
     });
   }

@@ -1006,6 +1006,31 @@
   min-width: 0;
 }
 
+.settings-inline-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding-block: 8px;
+}
+.settings-inline-control > span { flex: 1; }
+.settings-inline-control > svg, .settings-limits-control > span > svg { width: 16px; height: 16px; color: var(--muted); flex-shrink: 0; }
+.settings-inline-control select, .settings-limits-control input, .settings-limits-control button {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+  color: inherit;
+  font: inherit;
+}
+.settings-limits-control { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; padding-block: 12px; }
+.settings-limits-control > span { display: flex; gap: 10px; width: 100%; align-items: center; }
+.settings-limits-control > small { width: 100%; color: var(--muted); }
+.settings-limits-control label { display: grid; gap: 6px; flex: 1; min-width: 100px; }
+.settings-limits-control input { width: 100%; min-width: 0; }
+.settings-limits-control button { min-height: 34px; }
+.settings-inline-control select { max-width: 55%; }
+
 .settings-form-field input,
 .settings-form-field select,
 .settings-form-field textarea {

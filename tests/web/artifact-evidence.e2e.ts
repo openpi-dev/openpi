@@ -330,7 +330,10 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
       .click();
     await workbar.locator(".workbar-add-tab").click();
-    await page.getByRole("menuitem", { name: /^(?:变更|Changes)/u }).click();
+    await workbar
+      .locator(".workbar-launcher")
+      .getByRole("button", { name: /^(?:变更|Changes)/u })
+      .click();
     const review = page.getByRole("complementary", {
       name: /变更|Changes/u,
     });
@@ -359,7 +362,10 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
       .click();
     await workbar.locator(".workbar-add-tab").click();
-    await page.getByRole("menuitem", { name: /^(?:变更|Changes)/u }).click();
+    await workbar
+      .locator(".workbar-launcher")
+      .getByRole("button", { name: /^(?:变更|Changes)/u })
+      .click();
     const mobileReview = page.getByRole("complementary", {
       name: /变更|Changes/u,
     });

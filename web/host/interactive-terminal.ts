@@ -18,6 +18,7 @@ interface TerminalRecord {
   readonly id: string;
   readonly sessionId: string;
   readonly cwd: string;
+  readonly createKey: string;
   readonly pty: IPty;
   readonly listeners: Set<TerminalListener>;
   backlog: string;
@@ -28,7 +29,6 @@ interface TerminalRecord {
 }
 
 interface PendingTerminalCreate {
-  readonly cwd: string;
   readonly generation: number;
   readonly completion: Promise<WebInteractiveTerminal & { reused: boolean }>;
 }
@@ -46,6 +46,7 @@ export interface InteractiveTerminalService {
     cwd: string;
     cols: number;
     rows: number;
+    createKey?: string;
   }): Promise<WebInteractiveTerminal & { reused: boolean }>;
   get(sessionId: string, id: string): WebInteractiveTerminal | undefined;
   write(sessionId: string, id: string, data: string): boolean;
@@ -83,7 +84,6 @@ export class InteractiveTerminalManager
   implements InteractiveTerminalService
 {
   private readonly records = new Map<string, TerminalRecord>();
-  private readonly sessionTerminals = new Map<string, string>();
   private readonly cleanupMs: number;
   private readonly maxTerminals: number;
   private readonly injectedSpawn?: PtySpawn;
@@ -103,66 +103,62 @@ export class InteractiveTerminalManager
     this.maxTerminals = options.maxTerminals ?? 8;
   }
 
-  async create({ sessionId, cwd, cols, rows }: {
+  async create({ sessionId, cwd, cols, rows, createKey = "default" }: {
     sessionId: string;
     cwd: string;
     cols: number;
     rows: number;
+    createKey?: string;
   }) {
     const canonicalCwd = resolve(cwd);
     const scope = this.scope(sessionId, canonicalCwd);
     this.retainedScope ??= scope;
     const generation = this.lifecycleGeneration;
-    const existingId = this.sessionTerminals.get(sessionId);
-    const existing = existingId ? this.records.get(existingId) : undefined;
-    if (existing && existing.cwd === canonicalCwd) {
+    const key = `${scope}\0${createKey}`;
+    const existing = [...this.records.values()].find((record) =>
+      record.sessionId === sessionId && record.cwd === canonicalCwd && record.createKey === createKey,
+    );
+    if (existing) {
       return { ...this.snapshot(existing), reused: true };
     }
 
-    const candidate = this.pendingCreates.get(sessionId);
+    const candidate = this.pendingCreates.get(key);
     const pending = candidate?.generation === generation ? candidate : undefined;
-    if (pending?.cwd === canonicalCwd) {
+    if (pending) {
       return pending.completion.then((terminal) => ({
         ...terminal,
         reused: true,
       }));
     }
-    const completion = (pending
-      ? pending.completion.catch(() => undefined)
-      : Promise.resolve()
-    ).then(() =>
+    const completion = Promise.resolve().then(() =>
       this.createTerminal({
         sessionId,
         cwd: canonicalCwd,
         cols,
         rows,
         generation,
+        createKey,
       }),
     );
-    const create = { cwd: canonicalCwd, generation, completion };
-    this.pendingCreates.set(sessionId, create);
+    const create = { generation, completion };
+    this.pendingCreates.set(key, create);
     const clearPending = () => {
-      if (this.pendingCreates.get(sessionId) === create)
-        this.pendingCreates.delete(sessionId);
+      if (this.pendingCreates.get(key) === create)
+        this.pendingCreates.delete(key);
     };
     void completion.then(clearPending, clearPending);
     return completion;
   }
 
-  private async createTerminal({ sessionId, cwd, cols, rows, generation }: {
+  private async createTerminal({ sessionId, cwd, cols, rows, generation, createKey }: {
     sessionId: string;
     cwd: string;
     cols: number;
     rows: number;
     generation: number;
+    createKey: string;
   }) {
     this.assertCurrentGeneration(generation);
-    const existingId = this.sessionTerminals.get(sessionId);
-    const existing = existingId ? this.records.get(existingId) : undefined;
-    if (existing && existing.cwd === cwd) {
-      return { ...this.snapshot(existing), reused: true };
-    }
-    if (existing) this.close(sessionId, existing.id, true);
     this.makeSpace();
     if (this.records.size + this.reservations.size >= this.maxTerminals) {
       throw new Error("Interactive terminal capacity is full");
@@ -189,6 +185,7 @@ export class InteractiveTerminalManager
         id: randomUUID(),
         sessionId,
         cwd,
+        createKey,
         pty,
         listeners: new Set(),
         backlog: "",
@@ -197,7 +194,6 @@ export class InteractiveTerminalManager
         exitCode: null,
       };
       this.records.set(record.id, record);
-      this.sessionTerminals.set(sessionId, record.id);
       this.scheduleCleanup(record);
       pty.onData((data) => {
         record.backlog = (record.backlog + data).slice(
@@ -378,8 +374,6 @@ export class InteractiveTerminalManager
     if (this.records.get(record.id) !== record) return;
     this.clearCleanup(record);
     this.records.delete(record.id);
-    if (this.sessionTerminals.get(record.sessionId) === record.id)
-      this.sessionTerminals.delete(record.sessionId);
     if (!record.exited) {
       // Windows node-pty terminates through ConPTY and rejects POSIX signals.
       const windows = process.platform === "win32";

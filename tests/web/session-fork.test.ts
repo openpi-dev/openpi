@@ -16,6 +16,8 @@ import {
   WebRuntimeRequestError,
   type WebSessionForkResult,
 } from "../../web/runtime/types.ts";
+import { readMessageRerun } from "../../web/protocol/message-rerun.ts";
+import { formatSourceReference } from "../../web/protocol/session-sources.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -142,6 +144,166 @@ async function fixture(t: TestContext) {
 function unavailable(error: unknown) {
   return error instanceof WebRuntimeRequestError && error.statusCode === 409;
 }
+
+test("editing an older native prompt excludes it and later messages, preserves complete images and file references, and leaves the source unchanged", async (t) => {
+  const { root, runtime, request } = await fixture(t);
+  const manager = runtime.sessionManager;
+  const reference = formatSourceReference(join(root, "attached file.txt"));
+  const windowsReference = formatSourceReference(
+    String.raw`C:\Users\operator\workspace\attached file.txt`,
+  );
+  const image = {
+    type: "image" as const,
+    mimeType: "image/png",
+    data: "iVBORw0KGgo=",
+    name: "original.png",
+  };
+  const entryId = manager.appendMessage({
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: `Original full question\n\n${reference}\n${windowsReference}`,
+      },
+      image,
+    ],
+    timestamp: 4,
+  });
+  const answer = manager
+    .getBranch()
+    .find(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    );
+  assert.ok(answer?.type === "message" && answer.message.role === "assistant");
+  manager.appendMessage(answer.message);
+  const later = manager.appendMessage({
+    role: "user",
+    content: "Must not enter the edited branch",
+    timestamp: 5,
+  });
+  const original = await readFile(request.sessionPath, "utf8");
+  const edit = {
+    ...request,
+    entryId,
+    rerun: { mode: "edit" as const, content: "Revised full question" },
+  };
+  const result = await runtime.forkSession(edit);
+  assert.equal(result.state, "forked");
+  assert.deepEqual(result.prompt, {
+    content: `Revised full question\n\n${reference}\n${windowsReference}`,
+    images: [{ mimeType: "image/png", data: image.data, name: image.name }],
+  });
+  assert.equal(
+    runtime.sessionManager
+      .getBranch()
+      .some((entry) => entry.id === entryId || entry.id === later),
+    false,
+  );
+  assert.equal(
+    runtime.sessionManager.getHeader()?.parentSession,
+    request.sessionPath,
+  );
+  assert.deepEqual(
+    readMessageRerun(
+      runtime.sessionManager.getBranch(),
+      runtime.sessionManager.getHeader()?.parentSession,
+    ),
+    {
+      source: {
+        sessionId: request.sessionId,
+        sessionPath: request.sessionPath,
+        entryId,
+      },
+      mode: "edit",
+    },
+  );
+  assert.equal(await readFile(request.sessionPath, "utf8"), original);
+  assert.equal(runtime.isIdle(), true);
+  assert.deepEqual(await runtime.forkSession(edit), {
+    ...result,
+    replayed: true,
+  });
+  await assert.rejects(
+    runtime.forkSession({
+      ...edit,
+      rerun: { mode: "edit", content: "Different revision" },
+    }),
+    unavailable,
+  );
+});
+
+test("regeneration uses the complete original user text and never retains its previous answer", async (t) => {
+  const { runtime, request } = await fixture(t);
+  const manager = runtime.sessionManager;
+  const originalPrompt = manager
+    .getBranch()
+    .find((entry) => entry.type === "message" && entry.message.role === "user");
+  assert.ok(originalPrompt);
+  const original = await readFile(request.sessionPath, "utf8");
+  const result = await runtime.forkSession({
+    ...request,
+    entryId: originalPrompt.id,
+    rerun: { mode: "regenerate" },
+  });
+  assert.equal(result.state, "forked");
+  assert.deepEqual(result.prompt, { content: "Original question", images: [] });
+  assert.equal(
+    runtime.sessionManager
+      .getBranch()
+      .some((entry) => entry.type === "message"),
+    false,
+  );
+  assert.equal(runtime.getThinkingState()?.level, "high");
+  assert.equal(await readFile(request.sessionPath, "utf8"), original);
+});
+
+test("rerun validates the complete source and retained references before creating a branch", async (t) => {
+  const { root, runtime, request, hooks } = await fixture(t);
+  await assert.rejects(
+    runtime.forkSession({ ...request, rerun: { mode: "regenerate" } }),
+    unavailable,
+  );
+  for (const [index, reference] of [
+    join(root, "required.txt"),
+    String.raw`C:\Users\operator\workspace\required.txt`,
+  ].entries()) {
+    const entryId = runtime.sessionManager.appendMessage({
+      role: "user",
+      content: formatSourceReference(reference),
+      timestamp: 4,
+    });
+    const original = await readFile(request.sessionPath, "utf8");
+    await assert.rejects(
+      runtime.forkSession({
+        ...request,
+        commandId: `too-long-edit-${index}`,
+        entryId,
+        rerun: { mode: "edit", content: "x".repeat(12_000) },
+      }),
+      unavailable,
+    );
+    assert.equal(await readFile(request.sessionPath, "utf8"), original);
+  }
+  const invalidImage = runtime.sessionManager.appendMessage({
+    role: "user",
+    content: [{ type: "image", data: "not-base64", mimeType: "image/png" }],
+    timestamp: 5,
+  });
+  await assert.rejects(
+    runtime.forkSession({
+      ...request,
+      commandId: "invalid-image",
+      entryId: invalidImage,
+      rerun: { mode: "regenerate" },
+    }),
+    unavailable,
+  );
+  assert.equal(runtime.sessionManager.getSessionId(), request.sessionId);
+  assert.equal(
+    hooks.events.some((event) => event.type === "session_before_fork"),
+    false,
+  );
+});
 
 test("native fork retains source history, lineage, model and thinking without a model turn, and replays once", async (t) => {
   const { runtime, request, hooks } = await fixture(t);
@@ -369,6 +531,35 @@ test("an idle active Session can fork while another retained Session runs, witho
     internals.promptOperations.clear();
     background.session.abort = abort;
   }
+});
+
+test("rerun receipt byte limits fail before native creation and keep duplicate failures terminal", async (t) => {
+  const { runtime, internals, request, hooks } = await fixture(t);
+  const entry = runtime.sessionManager
+    .getBranch()
+    .find((entry) => entry.type === "message" && entry.message.role === "user");
+  assert.ok(entry);
+  Object.assign(internals, { historyForkPromptBytes: 128 * 1024 * 1024 });
+  const rerun = {
+    ...request,
+    entryId: entry.id,
+    rerun: { mode: "regenerate" as const },
+  };
+  const capacity = (error: unknown) =>
+    error instanceof WebRuntimeRequestError &&
+    error.code === "SESSION_FORK_CAPACITY";
+  await assert.rejects(runtime.forkSession(rerun), capacity);
+  assert.equal(
+    hooks.events.some((event) => event.type === "session_before_fork"),
+    false,
+  );
+  assert.equal(runtime.sessionManager.getSessionId(), request.sessionId);
+  Object.assign(internals, { historyForkPromptBytes: 0 });
+  await assert.rejects(runtime.forkSession(rerun), capacity);
+  assert.equal(
+    hooks.events.some((event) => event.type === "session_before_fork"),
+    false,
+  );
 });
 
 test("fork requires saved native evidence and bounds command identities and replay receipts", async (t) => {

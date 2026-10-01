@@ -131,6 +131,279 @@ function mount() {
   return { client, store };
 }
 
+function rerunChild() {
+  const child = snapshot("child", "/project/child.jsonl");
+  child.selectedSession!.entries = [];
+  child.selectedSession!.history = { leafEntryId: null, beforeEntryId: null };
+  child.selectedSession!.rerun = { source: anchor, mode: "edit" };
+  return child;
+}
+
+it("edits an older saved question, confirms its native child, and sends the prepared full prompt through ordinary admission", async () => {
+  const { client, store } = mount();
+  const parent = snapshot();
+  parent.selectedSession!.entries.push(
+    projectEntry({
+      type: "message",
+      id: "later",
+      parentId: "answer",
+      timestamp: "2026-10-02T00:00:00Z",
+      message: { role: "user", content: "Later question", timestamp: 3 },
+    }),
+  );
+  store.setState({ snapshot: parent });
+  const images = [
+    {
+      data: "iVBORw0KGgo=",
+      mimeType: "image/png" as const,
+      name: "original.png",
+    },
+  ];
+  const fork = vi
+    .spyOn(client, "forkSession")
+    .mockImplementation(async (request) => ({
+      state: "forked",
+      commandId: request.commandId,
+      source: anchor,
+      sessionId: "child",
+      sessionPath: "/project/child.jsonl",
+      prompt: {
+        content: "Revised question with complete file references",
+        images,
+      },
+    }));
+  vi.spyOn(client, "snapshot").mockResolvedValue(rerunChild());
+  const prompt = vi
+    .spyOn(client, "prompt")
+    .mockImplementation(async (_id, _content, commandId) => ({
+      id: commandId,
+      accepted: true,
+    }));
+  const edit = store.getState().actions.editMessage;
+  render(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Transcript, {
+        snapshot: parent,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: store.getState().actions.sendPrompt,
+        onEdit: edit,
+        onRegenerate: store.getState().actions.regenerateMessage,
+        forkAvailable: true,
+      }),
+    ),
+  );
+  expect(
+    screen.getAllByRole("button", { name: i18n.t("editMessage") }),
+  ).toHaveLength(2);
+  fireEvent.click(
+    screen.getAllByRole("button", { name: i18n.t("editMessage") })[0]!,
+  );
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "Revised question" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("confirmEdit") }));
+  await waitFor(() => expect(prompt).toHaveBeenCalledOnce());
+  expect(fork).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ...anchor,
+      rerun: { mode: "edit", content: "Revised question" },
+    }),
+  );
+  expect(prompt).toHaveBeenCalledWith(
+    "child",
+    "Revised question with complete file references",
+    expect.any(String),
+    "/project/child.jsonl",
+    false,
+    images,
+  );
+  expect(store.getState().notice).toEqual({
+    kind: "success",
+    message: i18n.t("messageRerunStarted"),
+  });
+});
+
+it("regenerates a successful answer from its saved user prompt, while optimistic prompts and failed answers cannot offer rerun", async () => {
+  const parent = snapshot();
+  const regenerate = vi.fn(async () => true);
+  const props = {
+    snapshot: parent,
+    liveMessages: [],
+    liveRunning: false,
+    livePhase: "idle" as const,
+    liveRetry: null,
+    thinkingStarts: {},
+    thinkingDurations: {},
+    scrollToBottom: 0,
+    onResend: async () => true,
+    onEdit: async () => true,
+    onRegenerate: regenerate,
+    forkAvailable: true,
+  };
+  const view = render(
+    createElement(I18nextProvider, { i18n }, createElement(Transcript, props)),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("regenerateMessage") }),
+  );
+  expect(regenerate).toHaveBeenCalledExactlyOnceWith(anchor);
+  parent.selectedSession!.entries = [];
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Transcript, {
+        ...props,
+        snapshot: { ...parent },
+        liveMessages: [
+          {
+            key: "optimistic",
+            message: { role: "user", content: "Pending question" },
+            optimistic: {
+              sessionId: anchor.sessionId,
+              sessionPath: anchor.sessionPath,
+              commandId: "pending",
+              afterEntryId: null,
+              admitted: false,
+            },
+          },
+        ],
+      }),
+    ),
+  );
+  expect(
+    screen.queryByRole("button", { name: i18n.t("editMessage") }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("regenerateMessage") }),
+  ).toBeNull();
+});
+
+it("returns to the exact source message through native branch provenance", async () => {
+  const open = vi.fn(async () => true);
+  render(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Transcript, {
+        snapshot: rerunChild(),
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+        onOpenOriginal: open,
+      }),
+    ),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("openOriginalConversation") }),
+  );
+  expect(open).toHaveBeenCalledExactlyOnceWith(anchor);
+  expect(screen.getByText(i18n.t("messageRerunWorkspaceHint"))).toBeTruthy();
+});
+
+it("restores a rejected rerun's revised draft and original image in the new composer without describing rejection as uncertainty", async () => {
+  vi.spyOn(draftStorage, "createBrowserComposerDraftStorage").mockReturnValue({
+    read: async () => [],
+    write: async () => undefined,
+  });
+  const { client, store } = mount();
+  const images = [
+    {
+      data: "iVBORw0KGgo=",
+      mimeType: "image/png" as const,
+      name: "original.png",
+    },
+  ];
+  vi.spyOn(client, "forkSession").mockImplementation(async (request) => ({
+    state: "forked",
+    commandId: request.commandId,
+    source: anchor,
+    sessionId: "child",
+    sessionPath: "/project/child.jsonl",
+    prompt: { content: "Keep this revised draft", images },
+  }));
+  vi.spyOn(client, "snapshot").mockResolvedValue(rerunChild());
+  vi.spyOn(client, "prompt").mockRejectedValue(
+    new WebApiError("Input hook rejected", 422, "PROMPT_REJECTED"),
+  );
+  function NewComposer() {
+    const state = useStore(store);
+    return createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        snapshot: state.snapshot,
+        selectedPath: state.selectedPath,
+        selectedWorkspace: state.selectedWorkspace,
+        sessionSwitching: state.sessionSwitching,
+        promptAdmissionPending: state.promptAdmissionPending,
+        promptAdmissionRecovery: state.promptAdmissionRecovery,
+        restoredPromptDraft: state.restoredPromptDraft,
+        thinkingPendingLevel: null,
+        liveRunning: state.liveRunning,
+        landing: false,
+        activeTurn: null,
+        turnCancellationPending: false,
+        turnTerminalStatus: null,
+        pendingFollowUpsReceipt: null,
+        actions: state.actions,
+      }),
+    );
+  }
+  render(createElement(NewComposer));
+  expect(
+    await store
+      .getState()
+      .actions.editMessage(anchor, "Keep this revised draft"),
+  ).toBe(false);
+  await waitFor(() =>
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: i18n.t("describeTask"),
+      }).value,
+    ).toBe("Keep this revised draft"),
+  );
+  expect(screen.getByText("original.png")).toBeTruthy();
+  expect(store.getState().promptAdmissionRecovery).toBeNull();
+  expect(screen.queryByText(i18n.t("promptAdmissionUnknown"))).toBeNull();
+});
+
+it("does not send prepared rerun content when the confirmed child has lost runtime authority", async () => {
+  const { client, store } = mount();
+  vi.spyOn(client, "forkSession").mockImplementation(async (request) => ({
+    state: "forked",
+    commandId: request.commandId,
+    source: anchor,
+    sessionId: "child",
+    sessionPath: "/project/child.jsonl",
+    prompt: { content: "Never send to another Session", images: [] },
+  }));
+  vi.spyOn(client, "snapshot").mockResolvedValue({
+    ...rerunChild(),
+    currentSessionId: "other",
+    currentSessionPath: "/project/other.jsonl",
+  });
+  const prompt = vi.spyOn(client, "prompt");
+  expect(await store.getState().actions.editMessage(anchor, "Revision")).toBe(
+    false,
+  );
+  expect(prompt).not.toHaveBeenCalled();
+  expect(store.getState().notice).toBe(i18n.t("forkSessionUncertain"));
+});
+
 it("forks the exact message into a new empty composer, preserves the original draft, and sends no prompt", async () => {
   vi.spyOn(draftStorage, "createBrowserComposerDraftStorage").mockReturnValue({
     read: async () => [],

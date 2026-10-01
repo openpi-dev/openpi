@@ -11,7 +11,11 @@ import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
 import { formatSourceReference } from "../../web/protocol/session-sources.ts";
-import type { WebSnapshot } from "../../web/protocol/types.ts";
+import {
+  projectEntry,
+  type WebHistoryAnchor,
+  type WebSnapshot,
+} from "../../web/protocol/types.ts";
 import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts";
 import { FullMessageText } from "../../web/ui/src/features/transcript/FullMessageText.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
@@ -207,6 +211,10 @@ it("hydrates user text in full before projecting links, retaining the reading fo
 });
 
 it("copies and edits canonical native text after rendering compact references", async () => {
+  const edit = vi.fn(
+    async (_anchor: WebHistoryAnchor, _content: string) => true,
+  );
+  const append = vi.fn(async () => true);
   const snapshot: WebSnapshot = {
     protocolVersion: 1,
     preferences: { theme: "system" },
@@ -239,15 +247,27 @@ it("copies and edits canonical native text after rendering compact references", 
         maxBytes: 2 * 1024 * 1024,
       },
       entries: [
-        {
+        projectEntry({
           id: "prompt",
           type: "message",
+          parentId: null,
           timestamp: "2026-10-01T00:00:00Z",
-          message: { role: "user", content: canonical },
-        },
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: canonical },
+              { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+            ],
+            timestamp: 1,
+          },
+        }),
       ],
     },
   };
+  const originalParts = structuredClone(
+    snapshot.selectedSession!.entries[0]!.message!.parts,
+  );
+  expect(originalParts?.some((part) => part.type === "image")).toBe(true);
   const { container } = render(
     withI18n(
       createElement(Transcript, {
@@ -259,7 +279,9 @@ it("copies and edits canonical native text after rendering compact references", 
         thinkingStarts: {},
         thinkingDurations: {},
         scrollToBottom: 0,
-        onResend: async () => true,
+        onResend: append,
+        onEdit: edit,
+        forkAvailable: true,
       }),
     ),
   );
@@ -274,13 +296,29 @@ it("copies and edits canonical native text after rendering compact references", 
   );
   expect(copyText).toHaveBeenCalledWith(canonical);
   fireEvent.click(
-    within(question).getByRole("button", { name: "Revise and resend" }),
+    within(question).getByRole("button", { name: i18n.t("editMessage") }),
   );
   expect(
     within(question).getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Revise and resend",
+      name: i18n.t("editMessage"),
     }).value,
   ).toBe(canonical);
+  await act(async () =>
+    fireEvent.click(
+      within(question).getByRole("button", { name: i18n.t("confirmEdit") }),
+    ),
+  );
+  expect(edit).toHaveBeenCalledExactlyOnceWith(
+    { sessionId: "session", sessionPath: "/tmp/session", entryId: "prompt" },
+    canonical.trim(),
+  );
+  expect(append).not.toHaveBeenCalled();
+  expect(
+    within(question).queryByRole("textbox", { name: i18n.t("editMessage") }),
+  ).toBeNull();
+  expect(snapshot.selectedSession?.entries[0]?.message?.parts).toEqual(
+    originalParts,
+  );
   expect(snapshot.selectedSession?.entries[0]?.message?.content).toBe(
     canonical,
   );
