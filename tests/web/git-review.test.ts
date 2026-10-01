@@ -222,16 +222,37 @@ test("lazy detail rejects an external write during the actual Git patch invocati
   await mkdir(bin);
   const ready = join(bin, "ready");
   const resume = join(bin, "resume");
-  await writeFile(
-    join(bin, "git"),
-    '#!/bin/sh\ncase " $* " in\n  *" --patch "*)\n    : > "$OPENPI_REVIEW_DETAIL_READY"\n    while [ ! -f "$OPENPI_REVIEW_DETAIL_RESUME" ]; do /bin/sleep 0.02; done\n    ;;\nesac\nexec /usr/bin/git "$@"\n',
-    { mode: 0o700 },
-  );
   const reader = new URL("../../web/host/git-review.ts", import.meta.url).href;
   const probe = join(bin, "detail.mjs");
   await writeFile(
     probe,
-    `import { readGitReview } from ${JSON.stringify(reader)};\nprocess.stdout.write(JSON.stringify(await readGitReview(process.argv[2], { source: "unstaged", filePath: "base.txt", expectedRevision: process.argv[3] })));\n`,
+    `import childProcess from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { promisify } from "node:util";
+const original = childProcess.execFile;
+const barrier = (file, args) => {
+  if (file !== "git" || !args.includes("--patch")) return;
+  writeFileSync(process.env.OPENPI_REVIEW_DETAIL_READY, "ready");
+  const deadline = Date.now() + 5000;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (!existsSync(process.env.OPENPI_REVIEW_DETAIL_RESUME)) {
+    if (Date.now() >= deadline) throw new Error("Git patch barrier expired");
+    Atomics.wait(pause, 0, 0, 20);
+  }
+};
+childProcess.execFile = (file, args, ...rest) => {
+  barrier(file, args);
+  return original(file, args, ...rest);
+};
+childProcess.execFile[promisify.custom] = (file, args, ...rest) => {
+  barrier(file, args);
+  return promisify(original)(file, args, ...rest);
+};
+syncBuiltinESMExports();
+const { readGitReview } = await import(${JSON.stringify(reader)});
+process.stdout.write(JSON.stringify(await readGitReview(process.argv[2], { source: "unstaged", filePath: "base.txt", expectedRevision: process.argv[3] })));
+`,
   );
   const child = execFileAsync(
     process.execPath,
@@ -240,7 +261,6 @@ test("lazy detail rejects an external write during the actual Git patch invocati
       timeout: 10_000,
       env: {
         ...process.env,
-        PATH: `${bin}:${process.env.PATH}`,
         OPENPI_REVIEW_DETAIL_READY: ready,
         OPENPI_REVIEW_DETAIL_RESUME: resume,
       },

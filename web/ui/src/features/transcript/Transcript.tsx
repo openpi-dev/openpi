@@ -2961,10 +2961,14 @@ export function Transcript(props: TranscriptProps) {
         onScroll={(event) => {
           const element = event.currentTarget;
           const upward = element.scrollTop < lastScrollTop.current;
+          const downward = element.scrollTop > lastScrollTop.current;
           lastScrollTop.current = element.scrollTop;
+          // Keep an explicit reveal unpinned through its first smooth frames.
+          // An older page restored at the bottom may resume normal following.
           pinned.current =
+            (!highlightedEntry || pinned.current || downward) &&
             element.scrollTop + element.clientHeight >=
-            element.scrollHeight - 48;
+              element.scrollHeight - 48;
           if (!pinned.current) history.retainReading();
           setReadingHistory(!pinned.current);
           if (upward) readEarlierNearTop(element);

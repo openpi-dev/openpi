@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, test } from "@playwright/test";
+import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
 import { WebHost } from "../../web/host/web-host.ts";
 import type {
   WebSessionHistoryPage,
@@ -490,6 +491,24 @@ test("native turn rail indexes unloaded prompts, lazily previews, and reveals ex
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => {
     release = resolve;
+  });
+  // Earlier appearance tests persist package-wide widths. This geometry
+  // fixture needs explicit pane/content widths, while keeping native history.
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = (await response.json()) as WebSnapshot;
+    await route.fulfill({
+      response,
+      json: {
+        ...snapshot,
+        preferences: {
+          ...snapshot.preferences,
+          chatWidth: DEFAULT_SETUP_CONFIG.ui.webChatWidth,
+          sidebarWidth: DEFAULT_SETUP_CONFIG.ui.webSidebarWidth,
+          auxiliaryWidth: DEFAULT_SETUP_CONFIG.ui.webAuxiliaryWidth,
+        },
+      },
+    });
   });
   try {
     const nativeIds = fixture.manager

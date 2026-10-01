@@ -253,3 +253,29 @@ Diff 读取保留 main 的固定比较版本检查与回归，叠加本轮分支
 发布批次 `publication-20261001/` 复测：`bun run check` 通过；独立重跑 `bun run test` 为 Node **2105 passed / 8 skipped**、UI **1117 passed / 79 files**；生产 Google Chrome 全套 **99 passed**（约 3 分钟）。构建后源码与 Web 制品保持一致；隔离 `pi list` 只报告本次 checkout，provenance 匹配。私有归档、截图、原始 Session、凭据与第三方源码不进 Git，公开回归可从 `tests/web/` 重跑。
 
 失败记录不覆盖：首次 check 检出整合后的重复类型 import，已移除；首次与构建重叠的 Node 测试为 2104 passed / 1 failed / 8 skipped，原有 Antigravity 5ms SSE 用例期待后续事件超时，实际首事件超时。未改动该实现或断言，构建和浏览器结束后的完整重跑通过；这支持负载相关的推断，不能证明原因。前一阶段两次完整浏览器套件中的第六页签失败仍是未定位风险；本批同一用例通过，没有扩展产品修复，不把它重新归类为已解决。PR 因此保留 draft 状态供审查。
+
+## 第六页签风险定位与跨平台复测（2026-10-01）
+
+本段继续 [#639](https://github.com/openpi-dev/openpi/issues/639) / [PR #640](https://github.com/openpi-dev/openpi/pull/640)，保留上文尚未定位阶段的原始结论。诊断基线为 `01111cf182222fec4b4bc65d363121fe4f6ed7a7`，隔离 `pi list` 的唯一 OpenPI 来源仍为该 checkout，provenance 匹配。使用 Google Chrome `154.0.8037.58`、Node `24.19.0`；没有真实 provider 调用或用户活动 Session 操作。诊断扩展只在私有副本中加入事件记录，原始产品扩展未修改。
+
+**已观察到的失败边界。** 可信鼠标按下、抬起和点击有时落在父页面的 iframe 元素，而非子文档链接；另一次按下落在父文档、抬起才进入子链接，没有形成子文档的完整点击。失败前子页已有 bound 和原生标题，但没有随后产生 child click、extension open 或目标 HTTP 请求。因此，DOM、标题和绑定可读不能证明原生鼠标已送入该文档；本次没有观察到已经发出的 open 消息被 Web 丢弃。诊断失败也出现在第四、第七个页签和八页签后的上限操作，不能把“第六个”当成固定产品上限。
+
+**消融与最小修正。** 取消新增页签后的自动聚焦，仍在 11 次通过后失败；移除外部空弹窗步骤，仍在两次通过后失败。单次 hover 再等待 `:hover` 的尝试在三次通过后失败；扩展为全部 iframe 控件后，原生按钮已收到可信 pointermove，但 `:hover` 仍为 false，因此删除该判据。可信 pointermove 回执版原始扩展流程连续 **20/20** 通过；进一步移除事件监听和轮询，仅在这条用例的各 iframe 原生点击前执行一次 `Locator.hover()`，同样 **20/20** 通过，最终保留这一较小实现。没有重试点击、合成 JS click、固定 sleep、增加超时或删除原断言。第六/第八页签、八项上限、单个外部浏览器页面、跨域导航、CSP/X-Frame-Options 与扩展清理仍逐项验证。
+
+新增失败尝试也保留：原始生产用例单独重跑在空弹窗阶段超时；只给新链接加前提的中间版本为 10 passed / 1 failed，仍在空弹窗阶段失败。两个不带 OpenPI/扩展的简化跨域 iframe 夹具各为 20/20，未复现完整条件，不能据此证明 OpenPI 布局无关。Chromium 内部绘制/命中测试原因仍未确定；本段确定的是测试输入发生在扩展 open 之前的失败边界，不宣称修复了跨浏览器产品事件转发缺陷。
+
+**发布期间发现的 Windows CI。** 原提交的 [Windows job](https://github.com/openpi-dev/openpi/actions/runs/36850455058/job/110330842924) 为 Node 2002 passed / 2 failed / 8 skipped。Git detail 的并发写入验证夹具依赖 `/bin/sh`、`/usr/bin/git` 和 POSIX PATH，未到达 barrier；改为隔离子进程内拦截同一次 `execFile("git", … "--patch")`，放行后仍执行真实 Git，并保留读取前后 revision 拒绝断言。
+
+另一个失败为两次相同附件批次并发发布时返回 `PROMPT_FILES_DENIED`。Windows 的 rename 由 [libuv 的 MoveFileExW 路径](https://github.com/libuv/libuv/blob/v1.x/src/win/fs.c)实现，原日志未保留底层错误码，不能从该 403 单独认定具体系统错误。现在将 `EACCES` / `EPERM` 与已有目录冲突一起交给原有完整 batch 验证；仅在原始字节、目录/文件身份、Session 和权限边界全部有效时返回回执。没有目标、文件被篡改或 Session 已变仍拒绝，失败 pending 仍清理。定向 33 项通过；分别强制两种错误码的真实并发文件实验验证相同路径回放、无 pending 残留及缺失/损坏拒绝，撤掉新增错误处理的私有消融失败。真实 Windows 结果由后续 CI 记录，不能用 macOS 故障注入替代。
+
+私有证据身份为 `openpi-web-audit-598-2026-09-30/popup-fix-20261001/`，包含原生事件链、诊断/原始扩展日志、失败 trace、各消融和 933 个 tracked 文件的门禁前冻结。原始证据仍由操作者保留，外部审查可通过公开的 `tests/web/openpi-web.e2e.ts`、`git-review.test.ts` 和 `prompt-files.test.ts` 重跑回归；归档名或 SHA 不构成公开可获取证据。
+
+**完整套件追加发现。** 该次生产 Chrome 全套为 98 passed / 1 failed，增强浏览器用例通过，失败转为历史导航的工作栏几何验证。失败 trace 的真实 snapshot 为正文宽 930、侧栏 280、工作栏 720；2000px 窗口打开工作栏后正文宽 1000、右留白约 35，达不到既有 48px 显示条件。旧验证却仍期待导航可见。此前外观用例会保存 package-wide 偏好，这条几何用例现在显式使用 canonical 默认正文/栏宽的 snapshot 外观夹具；原生 Session、消息/索引、窗口查询与全部导航断言保持。没有扩大产品可见范围或把导航挤进正文。原失败日志/截图/trace 保留，最终复测另记。
+
+固定几何后，连续验证又在 1 passed / 1 failed 阶段捕获了真实滚动问题；加记录的私有重复也复现。当前阅读窗口 scrollHeight 1530、clientHeight 627，向上平滑跳转刚从底部 903 到 900 时，旧 onScroll 仍按距底部不足 48px 将 pinned 设为 true；随后快照更新发出 instant scrollTo(1530)，取消向上跳转。最小产品修正复用已有 upward 判断，向上移动时保持不跟随，向下返回底部仍恢复跟随；没有取消平滑滚动或新增导航状态机。组件专项 23 项与原生历史浏览器连续 10 次通过，撤掉该判断的新回归失败，已逐字恢复。
+
+**收窄滚动修正。** 上述方向判断的完整复测为 97 passed / 2 failed：历史自动分页多消费一页，readonly observer 的可见最终结果仍显示未读。这一版本把布局导致的向上位移也转为阅读窗口，范围过宽。最终改为保留既有 pinned 状态：已主动开始的历史跳转在未移动及向上首帧继续不跟随，明确向下回到底部才恢复；原本跟随中的底部布局位移仍可跟随。没有新增状态或改动已读判据。新组件回归实际点击已加载刻度、模拟平滑首帧与快照刷新，同时验证布局位移和向下返回；原逻辑与过宽逻辑两项消融分别失败，恢复后 23 项通过。原生分页与导航定向重复共 6 项通过，后续完整门禁另记。
+
+其完整复测仍为 98 passed / 1 failed：上述导航与已读通过，普通历史分页补入后恰好被浏览器约束到底部，却未跟随下一段 streamed 内容。最终只对已有精确 Session/entry 的显式定位目标保留不跟随状态；普通分页在底部仍恢复原有跟随。复用现有定位目标，没有增加滚动状态机、改变分页请求或放宽结果已读判据。增加真实组件的预加载消费、prepend、底部约束和新内容跟随回归，专项共 24 项通过；删掉普通分页恢复条件会失败，已恢复。
+
+**最终本地门禁。** `popup-fix-20261001` 的 `check-05`、`unit-05` 和 `final-browser-05` 均通过：Node **2106 passed / 8 skipped**、UI **1119 passed / 79 files**、生产 Google Chrome **99 passed**。门禁前后 933 个 tracked 文件 SHA 一致，构建制品匹配源码；本段结果文字在门禁完成后追加，另做文档合同与 diff 空白检查，Markdown 不在 Biome 格式处理范围。最终分页、阅读锚点、定位和 readonly observer 四项联合重复 **12/12**；简化后的 iframe 输入修正在最终历史修改前以原始扩展重复 **20/20**，这次完整套件同样通过该场景。所有中间失败、trace 和消融仍保留。发布后的真实 Windows 与 Node 矩阵结果通过 [PR #640 的检查](https://github.com/openpi-dev/openpi/pull/640/checks)记录，本地 fault injection 不替代该平台验证；Chromium 内部原因、Safari 和物理移动设备仍是未验证边界。

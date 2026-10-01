@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AxeBuilder } from "@axe-core/playwright";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { chromium, expect, type Page, test } from "@playwright/test";
+import {
+  chromium,
+  expect,
+  type Locator,
+  type Page,
+  test,
+} from "@playwright/test";
 import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
@@ -1276,6 +1282,12 @@ test.describe("installed browser enhancement", () => {
       const active = workbar.locator(".browser-page:not([hidden])");
       const addressBar = active.getByRole("textbox", { name: "浏览器地址" });
       const frame = active.frameLocator("iframe");
+      const clickInFrame = async (target: Locator) => {
+        // Fresh cross-origin frame DOM can be visible before native pointer
+        // events reach it. Position the pointer before clicking once.
+        await target.hover();
+        await target.click();
+      };
       await expect(active.getByText(/浏览增强已开启/)).toBeVisible();
       await addressBar.fill(`${origin}/start`);
       await active
@@ -1306,7 +1318,9 @@ test.describe("installed browser enhancement", () => {
         },
         await active.locator("iframe").getAttribute("data-openpi-browser-page"),
       );
-      await frame.getByRole("link", { name: "Next", exact: true }).click();
+      await clickInFrame(
+        frame.getByRole("link", { name: "Next", exact: true }),
+      );
       await expect(addressBar).toHaveValue(`${origin}/next`);
       await expect(
         active.getByRole("button", { name: "后退", exact: true }),
@@ -1329,12 +1343,16 @@ test.describe("installed browser enhancement", () => {
         "original",
       );
       await expect(addressBar).toHaveValue(`${origin}/next`);
-      await frame.getByRole("button", { name: "SPA", exact: true }).click();
+      await clickInFrame(
+        frame.getByRole("button", { name: "SPA", exact: true }),
+      );
       await expect(addressBar).toHaveValue(`${origin}/spa`);
       await expect(
         workbar.getByRole("tab", { name: "SPA title", exact: true }),
       ).toBeVisible();
-      await frame.getByRole("link", { name: "New link", exact: true }).click();
+      await clickInFrame(
+        frame.getByRole("link", { name: "New link", exact: true }),
+      );
       await expect(
         workbar.getByRole("tablist", { name: "网页标签页" }).getByRole("tab"),
       ).toHaveCount(2);
@@ -1343,9 +1361,9 @@ test.describe("installed browser enhancement", () => {
         workbar.getByRole("tab", { name: "Native /popup", exact: true }),
       ).toBeVisible();
       expect(context.pages()).toHaveLength(1);
-      await frame
-        .getByRole("button", { name: "Script popup", exact: true })
-        .click();
+      await clickInFrame(
+        frame.getByRole("button", { name: "Script popup", exact: true }),
+      );
       await expect(
         workbar.getByRole("tablist", { name: "网页标签页" }).getByRole("tab"),
       ).toHaveCount(3);
@@ -1357,9 +1375,9 @@ test.describe("installed browser enhancement", () => {
         }),
       ).toBeVisible();
       expect(context.pages()).toHaveLength(1);
-      await frame
-        .getByRole("link", { name: "Cross origin", exact: true })
-        .click();
+      await clickInFrame(
+        frame.getByRole("link", { name: "Cross origin", exact: true }),
+      );
       await expect(addressBar).toHaveValue(
         origin.replace("127.0.0.1", "localhost") + "/final",
       );
@@ -1371,15 +1389,15 @@ test.describe("installed browser enhancement", () => {
         .poll(() => frame.locator("body").evaluate(() => document.readyState))
         .toBe("complete");
       const popupPromise = context.waitForEvent("page");
-      await frame
-        .getByRole("button", { name: "Empty popup", exact: true })
-        .click();
+      await clickInFrame(
+        frame.getByRole("button", { name: "Empty popup", exact: true }),
+      );
       await (await popupPromise).close();
 
       for (let count = 4; count <= 8; count++) {
-        await frame
-          .getByRole("link", { name: "New link", exact: true })
-          .click();
+        await clickInFrame(
+          frame.getByRole("link", { name: "New link", exact: true }),
+        );
         await expect(
           workbar.getByRole("tablist", { name: "网页标签页" }).getByRole("tab"),
         ).toHaveCount(count);
@@ -1387,7 +1405,9 @@ test.describe("installed browser enhancement", () => {
           frame.getByRole("textbox", { name: "Editor" }),
         ).toBeVisible();
       }
-      await frame.getByRole("link", { name: "New link", exact: true }).click();
+      await clickInFrame(
+        frame.getByRole("link", { name: "New link", exact: true }),
+      );
       await expect(
         workbar.locator(".browser-workspace > [role=status]"),
       ).toContainText("8");

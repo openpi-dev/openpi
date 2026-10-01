@@ -664,6 +664,144 @@ it("scrolls to and focuses the matched message, stays there during append, and c
   }
 });
 
+it("keeps a smooth loaded-turn jump unpinned through its first frames without unpinning layout clamps, and follows again on a downward return", async () => {
+  const originalScroll = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollTo",
+  );
+  const scroll = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
+    if (options.behavior !== "smooth")
+      this.scrollTop = Math.min(
+        options.top ?? 0,
+        this.scrollHeight - this.clientHeight,
+      );
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: scroll,
+  });
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1530);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(627);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      return this.classList.contains("conversation")
+        ? new DOMRect(0, 0, 1000, 627)
+        : new DOMRect(80, -160, 840, 100);
+    },
+  );
+  try {
+    const selected = session(0, 7);
+    selected.entries.forEach((entry, index) => {
+      entry.message!.role = index % 2 ? "assistant" : "user";
+    });
+    vi.spyOn(WebClient.prototype, "sessionPromptHistory").mockResolvedValue({
+      sessionId: selected.id,
+      sessionPath: selected.path,
+      anchorEntryId: "e7",
+      requestedBeforeEntryId: null,
+      entryIds: ["e0", "e2", "e4", "e6"],
+      nextBeforeEntryId: null,
+    });
+    const cache: SessionReadingCache = new Map();
+    const view = render(node(snapshot(selected), null, cache));
+    await act(async () => {});
+    const viewport =
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    expect(viewport.scrollTop).toBe(903);
+    // A layout clamp while following should preserve automatic following.
+    viewport.scrollTop = 900;
+    fireEvent.scroll(viewport);
+    view.rerender(node(snapshot(selected), null, cache));
+    expect(viewport.scrollTop).toBe(903);
+    expect(
+      screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeNull();
+    fireEvent.click(
+      view.container.querySelector<HTMLElement>('[data-turn-entry="e2"]')!,
+    );
+    expect(scroll).toHaveBeenLastCalledWith({ top: 727, behavior: "smooth" });
+    // A smooth jump can emit an unchanged first frame, then move within 48px.
+    fireEvent.scroll(viewport);
+    viewport.scrollTop = 900;
+    fireEvent.scroll(viewport);
+    expect(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeTruthy();
+    scroll.mockClear();
+    view.rerender(node(snapshot(selected), null, cache));
+    expect(viewport.scrollTop).toBe(900);
+    expect(scroll).not.toHaveBeenCalled();
+    viewport.scrollTop = 903;
+    fireEvent.scroll(viewport);
+    view.rerender(node(snapshot(selected), null, cache));
+    expect(scroll).toHaveBeenCalledWith({ top: 1530, behavior: "instant" });
+    expect(
+      screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeNull();
+  } finally {
+    if (originalScroll)
+      Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
+
+it("follows new content after a prepended native page is clamped to the bottom without a navigation target", async () => {
+  const originalScroll = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollTo",
+  );
+  const scroll = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
+    this.scrollTop = Math.min(
+      options.top ?? 0,
+      this.scrollHeight - this.clientHeight,
+    );
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: scroll,
+  });
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(500);
+  vi.spyOn(WebClient.prototype, "sessionHistory").mockImplementation(
+    async (anchor, before) => {
+      const older = session(0, 1, 3);
+      return {
+        ...older,
+        anchorEntryId: anchor.entryId,
+        requestedBeforeEntryId: before,
+        history: {
+          ...older.history!,
+          anchorEntryId: anchor.entryId,
+          anchorOnBranch: true,
+        },
+      };
+    },
+  );
+  try {
+    const selected = session(2, 3);
+    const cache: SessionReadingCache = new Map();
+    const view = render(node(snapshot(selected), null, cache));
+    const viewport =
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    await act(async () => {});
+    expect(viewport.scrollTop).toBe(300);
+    await act(async () => fireEvent.wheel(viewport, { deltaY: -1 }));
+    expect(screen.getByText("Message 0")).toBeTruthy();
+    expect(viewport.scrollTop).toBe(300);
+    fireEvent.scroll(viewport);
+    scroll.mockClear();
+    view.rerender(node(snapshot(selected), null, cache));
+    expect(scroll).toHaveBeenCalledWith({ top: 800, behavior: "instant" });
+    expect(
+      screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeNull();
+  } finally {
+    if (originalScroll)
+      Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
+
 it("loads the single prefetched page on upward scrolling and keeps the next page outside the DOM", async () => {
   const read = vi
     .spyOn(WebClient.prototype, "sessionHistory")

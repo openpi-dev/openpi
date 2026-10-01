@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import {
+import fs, {
   chmod,
   lstat,
   mkdir,
@@ -12,6 +12,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -163,6 +164,76 @@ test("atomic content-addressed batches replay the same exact paths and handle du
   assert.deepEqual(folders, [basename(dirname(first.files[0].path))]);
   await writeFile(first.files[1].path, "tampered");
   await assert.rejects(persistPromptFiles(f.runtime, request), denied);
+});
+
+test("rename access errors recover only a verified concurrent batch and reject absent or tampered destinations", async (t) => {
+  for (const code of ["EACCES", "EPERM"]) {
+    const f = await fixture(t);
+    const request = f.body();
+    const originalRename = fs.rename;
+    const barrier = Promise.withResolvers<void>();
+    let arrivals = 0;
+    let collisions = 0;
+    const rename = t.mock.method(
+      fs,
+      "rename",
+      async (...args: Parameters<typeof fs.rename>) => {
+        if (++arrivals === 2) barrier.resolve();
+        await barrier.promise;
+        try {
+          await originalRename(...args);
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            !("code" in error) ||
+            !["EEXIST", "ENOTEMPTY", "EACCES", "EPERM"].includes(
+              String(error.code),
+            )
+          )
+            throw error;
+          collisions++;
+          throw Object.assign(new Error("Concurrent destination exists"), {
+            code,
+          });
+        }
+      },
+    );
+    syncBuiltinESMExports();
+    try {
+      const [first, parallel] = await Promise.all([
+        persistPromptFiles(f.runtime, request),
+        persistPromptFiles(f.runtime, request),
+      ]);
+      assert.equal(arrivals, 2);
+      assert.equal(collisions, 1);
+      assert.deepEqual(parallel, first);
+      assert.deepEqual(
+        await readFile(first.files[0].path),
+        Buffer.from("原始文件\n"),
+      );
+      assert.deepEqual(await readdir(dirname(dirname(first.files[0].path))), [
+        basename(dirname(first.files[0].path)),
+      ]);
+      rename.mock.mockImplementation(async () => {
+        throw Object.assign(new Error("Access denied"), { code });
+      });
+      await assert.rejects(
+        persistPromptFiles(f.runtime, {
+          ...request,
+          files: [{ name: "missing.txt", data: "" }],
+        }),
+        denied,
+      );
+      assert.deepEqual(await readdir(dirname(dirname(first.files[0].path))), [
+        basename(dirname(first.files[0].path)),
+      ]);
+      await writeFile(first.files[0].path, "tampered");
+      await assert.rejects(persistPromptFiles(f.runtime, request), denied);
+    } finally {
+      rename.mock.restore();
+      syncBuiltinESMExports();
+    }
+  }
 });
 
 test("multibyte names are bounded by filesystem bytes while preserving document extensions", async (t) => {

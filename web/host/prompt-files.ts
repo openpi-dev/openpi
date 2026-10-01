@@ -209,7 +209,10 @@ export async function persistPromptFiles(runtime: WebRuntimeController, body: Re
       if (!sameFile(pendingIdentity, await privateDirectory(pending))) throw denied();
       try { await rename(pending, batchDirectory); pending = undefined; }
       catch (error) {
-        if (!isRecord(error) || !["EEXIST", "ENOTEMPTY"].includes(String(error.code))) throw error;
+        // Windows can report access errors when another identical batch wins
+        // publication. Accept only the fully verified batch below, never the
+        // error code itself as evidence of a successful upload.
+        if (!isRecord(error) || !["EEXIST", "ENOTEMPTY", "EACCES", "EPERM"].includes(String(error.code))) throw error;
       }
       await verifyBatch();
     }
