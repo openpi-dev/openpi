@@ -3069,6 +3069,13 @@ test("same-named model selection sends the exact identity for an active Session"
     const snapshot = await response.json();
     selectedSessionPath = snapshot.selectedSession.path;
     snapshot.runtime.status = "idle";
+    // Model-selection fixtures must not inherit the Host's thinking capability.
+    snapshot.thinking = {
+      ...snapshot.thinking,
+      level: "off",
+      available: [],
+      supported: false,
+    };
     snapshot.models = [
       {
         provider: "provider-alpha",
@@ -3158,6 +3165,13 @@ test("finds and selects a model omitted from the bounded snapshot", async ({
     activeSessionId = snapshot.currentSessionId;
     activeSessionPath = snapshot.selectedSession.path;
     snapshot.runtime.status = "idle";
+    // Model-selection fixtures must not inherit the Host's thinking capability.
+    snapshot.thinking = {
+      ...snapshot.thinking,
+      level: "off",
+      available: [],
+      supported: false,
+    };
     snapshot.models =
       selectedIdentity === "provider-hidden/needle-251"
         ? [
