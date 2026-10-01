@@ -6,6 +6,7 @@
  */
 
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -1122,6 +1123,7 @@ async function runTamperedAcceptanceReplay(
       ...existingTools,
       {
         name: structuredTool.name,
+        exposure: "direct",
         description: structuredTool.description,
         parameters: structuredTool.parameters,
         promptGuidelines: structuredTool.promptGuidelines,
@@ -1152,7 +1154,7 @@ async function runTamperedAcceptanceReplay(
         },
         new AbortController().signal,
         () => {},
-        ctx,
+        toolExecutionContext(ctx),
       );
       await prompt("fixture prompt");
     };
@@ -1279,6 +1281,7 @@ test("structured agent results survive handoff refs and downstream inputs", asyn
       ...existingTools,
       {
         name: structuredTool.name,
+        exposure: "direct",
         description: structuredTool.description,
         parameters: structuredTool.parameters,
         promptGuidelines: structuredTool.promptGuidelines,
@@ -1302,7 +1305,7 @@ test("structured agent results survive handoff refs and downstream inputs", asyn
         { verdict: "accepted", score: 7 },
         new AbortController().signal,
         () => {},
-        ctx,
+        toolExecutionContext(ctx),
       );
     };
     return { session };
@@ -1374,6 +1377,7 @@ test("oversized authoritative agent results fail without a success record", asyn
       ...existingTools,
       {
         name: structuredTool.name,
+        exposure: "direct",
         description: structuredTool.description,
         parameters: structuredTool.parameters,
         promptGuidelines: structuredTool.promptGuidelines,
@@ -1397,7 +1401,7 @@ test("oversized authoritative agent results fail without a success record", asyn
         { blob: "x".repeat(3 * 1024 * 1024) },
         new AbortController().signal,
         () => {},
-        ctx,
+        toolExecutionContext(ctx),
       );
     };
     return { session };

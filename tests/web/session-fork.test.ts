@@ -401,9 +401,12 @@ test("fork requires saved native evidence and bounds command identities and repl
   manager.newSession();
   const entryId = manager.appendMessage({
     role: "user",
-    content: "Not yet saved",
+    content: "Saved message whose backing file is unavailable",
     timestamp: 4,
   });
+  // Pi 0.99 persists the first user message. Remove its backing file to
+  // exercise the same missing-native-evidence guard explicitly.
+  await rm(manager.getSessionFile()!);
   await assert.rejects(
     runtime.forkSession({
       commandId: "not-saved",

@@ -646,23 +646,24 @@ test("real ToolExecutionComponent shell keeps the preview bounded and expands fu
   );
   component.markExecutionStarted();
   component.setArgsComplete();
+  const nonEmpty = () =>
+    component
+      .render(42)
+      .map((line) => stripVTControlCharacters(line))
+      .filter((line) => line.trim() !== "");
+  const callRows = nonEmpty().length;
   component.updateResult({
     content: [{ type: "text", text: "ok" }],
     details: { plan },
     isError: false,
   });
 
-  const nonEmpty = () =>
-    component
-      .render(42)
-      .map((line) => stripVTControlCharacters(line))
-      .filter((line) => line.trim() !== "");
-
-  // Box(1,1) shell: tool title row + bounded preview (content width 40).
+  // Pi owns the argument preview in its call header; OpenPI owns the result bound.
   const rows = nonEmpty();
+  const previewRows = rows.length - callRows;
   assert.ok(
-    rows.length >= 13 && rows.length <= 15,
-    `shell keeps the preview bounded, got ${rows.length}`,
+    previewRows >= 12 && previewRows <= 14,
+    `shell keeps the result preview bounded, got ${previewRows}`,
   );
   assert.ok(
     rows.every((row) => visibleWidth(row) <= 42),

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateToolArguments } from "@earendil-works/pi-ai";
+import { type ToolCall, validateToolArguments } from "@earendil-works/pi-ai";
 import {
   type AgentToolResult,
   type ExtensionAPI,
@@ -113,7 +113,7 @@ test("workflow launch schema recommends wait while preserving only the published
   );
   assert.equal(parameters.additionalProperties, false);
 
-  const toolCall = (args: Record<string, unknown>) => ({
+  const toolCall = (args: ToolCall["arguments"]) => ({
     type: "toolCall" as const,
     id: "call-schema",
     name: "workflow",

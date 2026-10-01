@@ -836,7 +836,7 @@ test("cancellation during prompt preflight does not enter the provider loop", as
     prompt: async (promptOptions) => {
       preflightStarted.resolve();
       await preflightRelease.promise;
-      promptOptions?.preflightResult?.(true);
+      promptOptions?.preflightResult?.("started");
       providerCalls++;
     },
   });

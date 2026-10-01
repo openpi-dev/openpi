@@ -280,7 +280,7 @@ function buildHistoryRootPrompt(
       const content = assistantRootContent(message, results);
       if (content.length === 0) continue;
       value = { role: "assistant", content };
-    } else {
+    } else if (message.role === "toolResult") {
       if (results.get(message.toolCallId) !== message) continue;
       value = {
         role: "tool",
@@ -692,9 +692,7 @@ export function streamCursor(
   rawContext: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-  // Pi 0.86+ folds the system prompt and tools into transcript system messages;
-  // resolving here keeps every downstream read of `context.systemPrompt` /
-  // `context.tools` / `context.messages` correct on both Pi input shapes.
+  // Project Pi's current prompt and tool deltas into Cursor's wire fields.
   const context = applyTranscript(rawContext);
   const stream = createAssistantMessageEventStream();
   (async () => {

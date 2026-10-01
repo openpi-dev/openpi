@@ -270,8 +270,14 @@ test("queued creation cannot survive exact Session change, revoke, or parent rep
         directory: "parent",
         name: `${condition}.txt`,
       });
-      const rejected = assert.rejects(writing, {
-        code: condition === "parent" ? "ARTIFACT_CHANGED" : "ARTIFACT_DENIED",
+      const rejected = assert.rejects(writing, (error: unknown) => {
+        if (!(error instanceof Error) || !("code" in error)) return false;
+        // Replacing a directory can expose the gap between rename and mkdir
+        // to Pi's asynchronous queue registration. Both observations fail closed.
+        return condition === "parent"
+          ? error.code === "ARTIFACT_CHANGED" ||
+              error.code === "ARTIFACT_MISSING"
+          : error.code === "ARTIFACT_DENIED";
       });
       await parentReady.promise;
       if (condition === "session")

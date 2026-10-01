@@ -44,7 +44,7 @@ test("Pi host packages stay peers while local checks keep development copies", (
   for (const packageName of HOST_PACKAGES) {
     assert.equal(
       manifest.peerDependencies?.[packageName],
-      packageName === "typebox" ? "*" : ">=0.85.1",
+      packageName === "typebox" ? "*" : ">=0.99.1",
     );
     assert.ok(manifest.devDependencies?.[packageName]);
     assert.equal(manifest.dependencies?.[packageName], undefined);

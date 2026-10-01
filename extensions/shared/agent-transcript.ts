@@ -1,6 +1,6 @@
 /** Shared Pi-native operator-facing agent transcript rendering. */
 
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, JsonObject } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent,
   getMarkdownTheme,
@@ -110,7 +110,7 @@ function assistantMessage(
         name: part.name,
         arguments:
           args !== null && typeof args === "object" && !Array.isArray(args)
-            ? args
+            ? (args as JsonObject)
             : {},
       };
     }),

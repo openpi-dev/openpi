@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import {
   mkdir,
   mkdtemp,
@@ -15,12 +16,18 @@ import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
+import {
   createAgentSession,
   createSyntheticSourceInfo,
   DefaultPackageManager,
   DefaultResourceLoader,
   defineTool,
   type ExtensionContext,
+  ModelRuntime,
   ProjectTrustStore,
   SessionManager,
   type SessionShutdownEvent,
@@ -207,6 +214,141 @@ test("child binding restores only requested child-safe package tools after paren
   });
 });
 
+test("Pi nested tool calls preserve child exclusions, allowlists, and permission hooks", async (t) => {
+  for (const exposure of ["codemode", "deferred"] as const) {
+    await t.test(exposure, async () => {
+      await withTempDir(async (directory) => {
+        const agentDir = path.join(directory, "agent");
+        const settingsManager = SettingsManager.inMemory(
+          {
+            retry: { enabled: false },
+            compaction: { enabled: false },
+          },
+          { projectTrusted: false },
+        );
+        const provider = fauxProvider({
+          provider: `child-nested-${exposure}`,
+          models: [{ id: "fixture", name: "Fixture", reasoning: false }],
+        });
+        provider.setResponses([
+          fauxAssistantMessage(
+            fauxToolCall("child_probe", {}, { id: "probe" }),
+            { stopReason: "toolUse" },
+          ),
+          fauxAssistantMessage("Finished the child tool check."),
+        ]);
+        const modelRuntime = await ModelRuntime.create({
+          authPath: path.join(agentDir, "auth.json"),
+          modelsPath: path.join(agentDir, "models.json"),
+          refreshOnCreate: false,
+        });
+        modelRuntime.registerNativeProvider(provider.provider);
+        await modelRuntime.setRuntimeApiKey(
+          provider.provider.id,
+          "fixture-key",
+        );
+        const calls: string[] = [];
+        const outcomes: boolean[] = [];
+        const nestedHooks: string[] = [];
+        const tools = ["child_probe", "child_read", "blocked_read"];
+        const loader = new DefaultResourceLoader({
+          cwd: directory,
+          agentDir,
+          settingsManager,
+          noSkills: true,
+          noPromptTemplates: true,
+          extensionFactories: [
+            (pi) => {
+              for (const name of [
+                "bg_start",
+                "outside_allowlist",
+                "child_read",
+                "blocked_read",
+              ]) {
+                pi.registerTool({
+                  name,
+                  label: name,
+                  description: name,
+                  exposure:
+                    name === "bg_start" || name === "outside_allowlist"
+                      ? exposure
+                      : "direct",
+                  parameters: Type.Object({}),
+                  async execute() {
+                    calls.push(name);
+                    return {
+                      content: [{ type: "text", text: "ok" }],
+                      details: {},
+                    };
+                  },
+                });
+              }
+              pi.on("tool_call", (event) => {
+                if (event.parentToolCallId) nestedHooks.push(event.toolName);
+                if (event.toolName === "blocked_read")
+                  return { block: true, reason: "fixture permission" };
+                return undefined;
+              });
+              pi.registerTool({
+                name: "child_probe",
+                label: "Child Probe",
+                description: "Probe nested child tools",
+                parameters: Type.Object({}),
+                async execute(_id, _args, _signal, _update, ctx) {
+                  for (const name of [
+                    "child_read",
+                    "bg_start",
+                    "outside_allowlist",
+                    "blocked_read",
+                  ]) {
+                    const outcome = await ctx.executeTool(name, {});
+                    outcomes.push(outcome.isError);
+                  }
+                  return {
+                    content: [{ type: "text", text: "checked" }],
+                    details: {},
+                  };
+                },
+              });
+            },
+          ],
+        });
+        await loader.reload();
+        const { session } = await createAgentSession({
+          cwd: directory,
+          agentDir,
+          settingsManager,
+          resourceLoader: loader,
+          model: provider.getModel(),
+          modelRuntime,
+          sessionManager: SessionManager.inMemory(directory),
+          ...childToolPolicy(tools),
+        });
+        try {
+          await bindChildSessionExtensions(session, tools);
+          session.setActiveToolsByName([
+            ...tools,
+            "bg_start",
+            "outside_allowlist",
+          ]);
+          assert.deepEqual(
+            session.getCallableToolNames().sort(),
+            [...tools].sort(),
+          );
+          assert.equal(session.getToolDefinition("bg_start"), undefined);
+          await session.prompt("Check the child authority boundary.");
+          assert.deepEqual(outcomes, [false, true, true, true]);
+          assert.deepEqual(calls, ["child_read"]);
+          assert.ok(nestedHooks.includes("child_read"));
+          assert.ok(nestedHooks.includes("blocked_read"));
+        } finally {
+          await shutdownAndDisposeChildSession(session);
+        }
+      });
+    });
+  }
+});
+
 test("child resources remove only verified parent-only OpenPI extensions", async () => {
   await withTempDir(async (directory) => {
     const cwd = path.join(directory, "project");
@@ -306,7 +448,7 @@ test("headless children preserve Pi shellPath through display extension startup"
           { command: "printf should-not-run" },
           undefined,
           undefined,
-          context,
+          toolExecutionContext(context),
         ),
         /Custom shell path not found/,
       );

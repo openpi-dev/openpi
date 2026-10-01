@@ -31,7 +31,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { readFile } from "node:fs/promises";
 
 const cwd = process.env.OPENPI_TEST_CWD;
@@ -39,7 +39,7 @@ const agentDir = process.env.PI_CODING_AGENT_DIR;
 const extensionPaths = JSON.parse(process.env.OPENPI_TEST_EXTENSION_PATHS);
 const snapshots = [];
 const capture = (context) => ({
-  tools: context.tools?.map(({ name }) => ({ name })),
+  tools: getCurrentTools(context.messages).map(({ name }) => ({ name })),
   messages: context.messages.map(({ role, content, toolName, isError }) => ({
     role,
     content,

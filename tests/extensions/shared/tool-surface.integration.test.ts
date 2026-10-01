@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -304,7 +305,7 @@ test("real Pi session exposes one stable subagent family when delegate loads", a
         { groups: ["delegate"] },
         undefined,
         undefined,
-        session.createReplacedSessionContext(),
+        toolExecutionContext(session.createReplacedSessionContext()),
       );
       assert.deepEqual(session.getActiveToolNames(), [
         "read",
@@ -350,7 +351,7 @@ test("real Pi search capability exposes file and git tools as one group", async 
         { groups: ["search"] },
         undefined,
         undefined,
-        session.createReplacedSessionContext(),
+        toolExecutionContext(session.createReplacedSessionContext()),
       );
       assert.deepEqual(session.getActiveToolNames(), [
         "read",
@@ -391,7 +392,7 @@ test("separate owner wrappers cannot remove each other's lifecycle tools", async
         { groups: ["delegate", "background"] },
         undefined,
         undefined,
-        session.createReplacedSessionContext(),
+        toolExecutionContext(session.createReplacedSessionContext()),
       );
 
       patchOwnedTools(controller, "subagents", {
