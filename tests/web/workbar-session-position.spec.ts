@@ -569,3 +569,32 @@ it("preserves browser address and tabs through detachment without retaining live
     "https://example.com/first",
   );
 });
+
+it("keeps a resized width when save completes with a stale refreshed snapshot", async () => {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 1600,
+  });
+  const current = snapshot();
+  current.preferences = {
+    theme: "system",
+    sidebarWidth: 296,
+    auxiliaryWidth: 520,
+  };
+  webStore.setState({ snapshot: current });
+  const save = vi
+    .spyOn(original.actions, "savePreferences")
+    .mockImplementation(async () => {
+      // A refresh already in flight can still return the earlier saved width.
+      webStore.setState({ snapshot: { ...current } });
+    });
+  const view = render(createElement(Providers, null, createElement(App)));
+  const shell = view.container.querySelector<HTMLElement>(".app-shell")!;
+  fireEvent.keyDown(
+    screen.getByRole("separator", { name: i18n.t("resizeSidebar") }),
+    { key: "Enter" },
+  );
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+});

@@ -626,17 +626,18 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   await openWorkbench(page);
   const sidebar = page.locator(".session-sidebar");
   const conversation = page.locator(".conversation-shell");
+  const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
+  await sidebarHandle.press("Enter");
+  await expect(sidebar).toHaveCSS("width", "280px");
   const initialSidebar = await sidebar.boundingBox();
   const initialConversation = await conversation.boundingBox();
   expect(initialSidebar).not.toBeNull();
   expect(initialConversation).not.toBeNull();
 
-  const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
-  await sidebarHandle.focus();
-  await page.keyboard.press("ArrowRight");
+  await sidebarHandle.press("ArrowRight");
   await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "296");
   await expect(sidebar).toHaveCSS("width", "296px");
-  await page.keyboard.press("Enter");
+  await sidebarHandle.press("Enter");
   await expect(sidebar).toHaveCSS("width", "280px");
 
   await dragPane(page, "left", 80);
@@ -654,10 +655,11 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
 
   const workbar = await openWorkbarTool(page, "文件");
   const workbarHandle = page.getByRole("separator", { name: "调整工具栏宽度" });
-  await workbarHandle.focus();
-  await page.keyboard.press("ArrowLeft");
+  await workbarHandle.press("Enter");
+  await expect(workbarHandle).toHaveAttribute("aria-valuenow", "520");
+  await workbarHandle.press("ArrowLeft");
   await expect(workbarHandle).toHaveAttribute("aria-valuenow", "536");
-  await page.keyboard.press("Enter");
+  await workbarHandle.press("Enter");
   await expect(workbarHandle).toHaveAttribute("aria-valuenow", "520");
   const centerBeforeRightDrag = await conversation.boundingBox();
   await dragPane(page, "right", -70);

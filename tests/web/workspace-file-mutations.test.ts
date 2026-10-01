@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readdir,
   rename,
   rm,
@@ -242,8 +243,10 @@ test("workspace imports reject invalid/oversized data and competing same-name cr
 });
 
 test("queued creation cannot survive exact Session change, revoke, or parent replacement", async () => {
-  const cwd = await mkdtemp(
-    join(tmpdir(), "openpi-workspace-create-boundary-"),
+  // Use the canonical parent for a not-yet-created native queue target.
+  // macOS /var and /private/var aliases otherwise select different Pi lanes.
+  const cwd = await realpath(
+    await mkdtemp(join(tmpdir(), "openpi-workspace-create-boundary-")),
   );
   let scope = { sessionId: "s", sessionPath: "a", cwd };
   let scopeReads = 0;
@@ -270,14 +273,8 @@ test("queued creation cannot survive exact Session change, revoke, or parent rep
         directory: "parent",
         name: `${condition}.txt`,
       });
-      const rejected = assert.rejects(writing, (error: unknown) => {
-        if (!(error instanceof Error) || !("code" in error)) return false;
-        // Replacing a directory can expose the gap between rename and mkdir
-        // to Pi's asynchronous queue registration. Both observations fail closed.
-        return condition === "parent"
-          ? error.code === "ARTIFACT_CHANGED" ||
-              error.code === "ARTIFACT_MISSING"
-          : error.code === "ARTIFACT_DENIED";
+      const rejected = assert.rejects(writing, {
+        code: condition === "parent" ? "ARTIFACT_CHANGED" : "ARTIFACT_DENIED",
       });
       await parentReady.promise;
       if (condition === "session")

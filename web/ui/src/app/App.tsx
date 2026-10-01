@@ -161,7 +161,15 @@ export function App() {
           auxiliaryWidth: saved.auxiliary,
         })
         .then(() => {
-          if (currentPaneWidths.current === saved) setPaneWidthsEdited(false);
+          const preferences = webStore.getState().snapshot?.preferences;
+          // A coalesced refresh can still contain the preceding save. Retain
+          // the operator's width until this exact saved choice is observed.
+          if (
+            currentPaneWidths.current === saved &&
+            preferences?.sidebarWidth === saved.sidebar &&
+            preferences.auxiliaryWidth === saved.auxiliary
+          )
+            setPaneWidthsEdited(false);
         })
         .catch(() => undefined);
     }, 200);
