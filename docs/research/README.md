@@ -8,7 +8,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Draft investigations
 
-- [`WEB_INTERACTION_COMPARISON_2026-09-30.md`](WEB_INTERACTION_COMPARISON_2026-09-30.md) — PR #598 竞品截图对照与后续 Web 迭代：基础交互、普通附件、原始子代理结果、第三栏、真实 Luna 文件读取；追加现场演示、工具菜单焦点、Codex / Maka 历史分页与导航、两小时阅读连续性及发布整合，保留独立冻结、失败、消融和未验证边界（[#639](https://github.com/openpi-dev/openpi/issues/639)、[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+- [`WEB_INTERACTION_COMPARISON_2026-09-30.md`](WEB_INTERACTION_COMPARISON_2026-09-30.md) — PR #598 竞品截图对照与后续 Web 迭代：基础交互、普通附件、原始子代理结果、第三栏、真实 Luna 文件读取；追加现场演示、工具菜单焦点、Codex / Maka 历史分页与导航、两小时阅读连续性及发布整合，保留独立冻结、失败、消融和未验证边界（[#639](https://github.com/openpi-dev/openpi/issues/639)、[PR #640](https://github.com/openpi-dev/openpi/pull/640)、[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 ## Validated investigations
 

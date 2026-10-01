@@ -6,7 +6,7 @@
 - Source boundary: OpenPI PR #598 `563d6808ebbfee27c6bb6aeb02e7b593a656ee0c`；Pi SDK 0.85.1；Node 24.19.0
 - Implementation boundary: 同一隔离 worktree 的后续修改，由 [#639](https://github.com/openpi-dev/openpi/issues/639) 跟踪并整合到已合并 #598 之后的 main。下文未提交阶段的原始观测保留，发布整合与复测另记。
 - Issue: [#639](https://github.com/openpi-dev/openpi/issues/639)；持续任务 [#597](https://github.com/openpi-dev/openpi/issues/597)
-- PR: [#598](https://github.com/openpi-dev/openpi/pull/598)
+- PR: [#640](https://github.com/openpi-dev/openpi/pull/640)；研究基线 [#598](https://github.com/openpi-dev/openpi/pull/598)
 - Supersedes: 无；补充现有交互记录，不改写已修复问题的历史结论
 - Publication: 随 #639 的后续 PR 发布供审查；研究状态仍为 draft，不是已接受 Decision。Issue 保留记录与 PR 的反向链接。
 
@@ -243,3 +243,13 @@ Queue/Steer 验收依据是队列事实、原生历史和终态事件，不以�
 **仍未解决。** 原有增强浏览器连续打开第六个网页时只有五个页签，在两次完整套件中复现；原用例单独运行通过。两份失败 trace 保留，点击前当前页已报告绑定后的原生标题，因此不能归因“未就绪”。尝试添加标题等待后据证据删除，没有增加延时或修改扩展来掩盖异常。需要进一步记录可信点击、扩展 open/lost 消息与 UI add 的边界才能确定原因。
 
 报告复用现有 renderer，新增 PDF 前后、XLSX、附件生命周期、搜索成功和未解决浏览器失败原图。引用媒体逐字节 HTTP 校验、脚本语法及三处私证 404 单独验证；实际报告原图加载为 1280×720，Escape 返回对应查看按钮且无横向溢出。原始 Session、厂商源码与证据 JSON 仍留在私有证据根，没有公开发布、模型调用或跨产品性能结论。
+
+## 发布整合与复测（2026-10-01）
+
+用户授权先建 Issue、认领并推送 PR。已建立 [#639](https://github.com/openpi-dev/openpi/issues/639)，由 `testikun` 认领。#598 已以 `657eff9cf8d58e9cc0a19a86f0d14ca9b2811974` 合并，本次只将后续修改整合到该 main 基线，没有重复带入原分支的 55 个提交。实现提交为 `dfc392675959fdd41f380aa3576283d69e0d6029`，后续文档链接提交不修改已验证的产品代码。
+
+Diff 读取保留 main 的固定比较版本检查与回归，叠加本轮分支基线选择、读取前后校验和独立 `summaryRevision`；文件详情不冒充整份比较的原生身份。上游“切文件前外部修改应拒绝，采用最新后才显示”的组件用例保留并通过。整合时移除重复类型 import，没有引入新抽象。
+
+发布批次 `publication-20261001/` 复测：`bun run check` 通过；独立重跑 `bun run test` 为 Node **2105 passed / 8 skipped**、UI **1117 passed / 79 files**；生产 Google Chrome 全套 **99 passed**（约 3 分钟）。构建后源码与 Web 制品保持一致；隔离 `pi list` 只报告本次 checkout，provenance 匹配。私有归档、截图、原始 Session、凭据与第三方源码不进 Git，公开回归可从 `tests/web/` 重跑。
+
+失败记录不覆盖：首次 check 检出整合后的重复类型 import，已移除；首次与构建重叠的 Node 测试为 2104 passed / 1 failed / 8 skipped，原有 Antigravity 5ms SSE 用例期待后续事件超时，实际首事件超时。未改动该实现或断言，构建和浏览器结束后的完整重跑通过；这支持负载相关的推断，不能证明原因。前一阶段两次完整浏览器套件中的第六页签失败仍是未定位风险；本批同一用例通过，没有扩展产品修复，不把它重新归类为已解决。PR 因此保留 draft 状态供审查。
