@@ -110,3 +110,15 @@ premature completion. Replacing Session lifecycle observation with only the
 active Web trace passed the Web-origin case but failed the extension-origin
 case with the original 422. Both checks therefore remain necessary; the
 queue-growth heuristic remains removed.
+
+CI integration at `33da726` passed the Node 22/24/26 checks and full suites,
+package smoke checks, and Windows lifecycle and full-suite isolation checks.
+The browser suite passed 77 cases and exposed one outdated main-branch
+assertion: stopping a run was expected to consume its pending follow-ups.
+Pi 0.99.1 instead retains unconsumed follow-ups after abort. The observer browser
+test now verifies native queue retention, absence from executed user history,
+and explicit user clearing while the other Session remains running. Its custom
+runtime also mirrors the existing Web host's pre-auth abort guard, so cancellation
+retains Pi's `aborted` outcome instead of becoming an auth-setup error. The
+unchanged guard's necessity was reproduced by the fixture's failed outcome
+before adding it. The corrected real-Pi browser scenario passed locally.

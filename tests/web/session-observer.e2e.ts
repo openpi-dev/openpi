@@ -154,6 +154,12 @@ async function observerFixture() {
           },
         ],
       });
+      // Match the Web host's native abort boundary before ModelRuntime auth.
+      const nativeStream = created.session.agent.streamFunction;
+      created.session.agent.streamFunction = (model, context, options) => {
+        options?.signal?.throwIfAborted();
+        return nativeStream(model, context, options);
+      };
       created.session.setSessionName(`Observer ${name}`);
       const abort = created.session.abort.bind(created.session);
       created.session.abort = async () => {
@@ -430,6 +436,10 @@ test("a readonly observer keeps its pending messages and native progress, then r
       epoch: original.epoch,
     });
     await expect.poll(() => fixture.a.session.isIdle).toBe(true);
+    expect(fixture.web.getSessionExecution(aId, aPath).lastTurn).toMatchObject({
+      commandId: original.commandId,
+      outcome: "cancelled",
+    });
     expect(fixture.aborts.A).toBe(1);
     expect(fixture.aborts.B).toBe(0);
     expect(fixture.b.session.isStreaming).toBe(true);
@@ -437,6 +447,28 @@ test("a readonly observer keeps its pending messages and native progress, then r
       page.getByRole("button", { name: "停止当前轮次", exact: true }),
     ).toHaveCount(0);
     await expect(timer).toHaveCount(0);
+    // Pi keeps unconsumed follow-ups after abort; stopping must not present
+    // those messages as executed or silently discard the user's queue.
+    expect(fixture.a.session.getFollowUpMessages()).toEqual([
+      pendingText,
+      pendingText,
+    ]);
+    await expect(ownPending).toHaveCount(2);
+    await expect(sidebarA.locator(".session-state-running")).toHaveCount(0);
+    await expect(sidebarA.locator(".session-queue")).toHaveText("2");
+    await expect(sidebarA).toHaveAttribute(
+      "aria-label",
+      `Observer A · ${aPath} · 2 条消息正在排队`,
+    );
+    await expect(
+      conversation
+        .locator(".message-row.user .message-body")
+        .filter({ hasText: pendingText }),
+    ).toHaveCount(0);
+    await queue.getByRole("button", { name: "清空队列", exact: true }).click();
+    await expect
+      .poll(() => fixture.a.session.getFollowUpMessages().length)
+      .toBe(0);
     await expect(queue).toHaveCount(0);
     await expect(sidebarA.locator(".session-status")).toHaveCount(0);
     await expect(sidebarA).toHaveAttribute(
@@ -448,7 +480,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
       conversation
         .locator(".message-row.user .message-body")
         .filter({ hasText: pendingText }),
-    ).toHaveCount(2);
+    ).toHaveCount(0);
     await page.screenshot({
       path: testInfo.outputPath("observer-A-stopped-B-still-running.png"),
     });
