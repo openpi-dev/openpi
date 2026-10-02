@@ -1082,7 +1082,7 @@ export default function (
         model,
         reasoningEffort: params.reasoning_effort ?? agentType?.reasoningEffort,
         ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
-        ...(childTools ? { tools: childTools } : {}),
+        ...(childTools ? { tools: childTools, inheritedTools: true } : {}),
         ...(agentType ? { agentTypeName: agentType.name } : {}),
         ...(params.output_schema !== undefined
           ? { outputSchema: params.output_schema }

@@ -2082,6 +2082,7 @@ export default function workflows(
                   ...(sessionManager ? { sessionManager } : {}),
                   modelRegistry: ctx.modelRegistry,
                   tools: childTools,
+                  inheritedTools: true,
                   ...(testAgentSessionFactory
                     ? { sessionFactory: testAgentSessionFactory }
                     : {}),

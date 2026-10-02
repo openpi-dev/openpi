@@ -77,6 +77,12 @@ test("effective child allowlists never advertise parent-only tools", () => {
   });
 });
 
+/** Built-in and inline extensions carry synthetic paths that `realpath` rejects. */
+const realpathExtension = (extensionPath: string) =>
+  extensionPath.startsWith("builtin:") || extensionPath.startsWith("<")
+    ? Promise.resolve(extensionPath)
+    : realpath(extensionPath);
+
 test("explicit child tools are checked against the final bound registry", async () => {
   await withTempDir(async (directory) => {
     const settingsManager = SettingsManager.inMemory(undefined, {
@@ -1145,7 +1151,9 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
     const topLevelPaths = await Promise.all(
       topLevelLoader
         .getExtensions()
-        .extensions.map((extension) => realpath(extension.resolvedPath)),
+        .extensions.map((extension) =>
+          realpathExtension(extension.resolvedPath),
+        ),
     );
     const topLevelPollers = topLevelPaths.filter(
       (extensionPath) => extensionPath === gitInfoPath,
@@ -1160,7 +1168,9 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
     const childPaths = await Promise.all(
       child.loader
         .getExtensions()
-        .extensions.map((extension) => realpath(extension.resolvedPath)),
+        .extensions.map((extension) =>
+          realpathExtension(extension.resolvedPath),
+        ),
     );
     const childPollers = childPaths.filter(
       (extensionPath) => extensionPath === gitInfoPath,
@@ -1176,7 +1186,7 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
     const childGitInfoResource = await Promise.all(
       childPackagePaths.extensions.map(async (resource) => ({
         ...resource,
-        canonicalPath: await realpath(resource.path),
+        canonicalPath: await realpathExtension(resource.path),
       })),
     ).then((resources) =>
       resources.find((resource) => resource.canonicalPath === gitInfoPath),
@@ -1223,7 +1233,9 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
       const parentDirectPaths = await Promise.all(
         directLoader
           .getExtensions()
-          .extensions.map((extension) => realpath(extension.resolvedPath)),
+          .extensions.map((extension) =>
+            realpathExtension(extension.resolvedPath),
+          ),
       );
       assert.equal(
         parentDirectPaths.includes(gitInfoPath),
@@ -1238,7 +1250,9 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
       const directPaths = await Promise.all(
         directChild.loader
           .getExtensions()
-          .extensions.map((extension) => realpath(extension.resolvedPath)),
+          .extensions.map((extension) =>
+            realpathExtension(extension.resolvedPath),
+          ),
       );
       assert.equal(
         directPaths.includes(gitInfoPath),
@@ -1257,9 +1271,13 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
       projectTrusted: true,
     });
     assert.deepEqual(
-      disabledExtensionsChild.loader.getExtensions().extensions,
+      disabledExtensionsChild.loader
+        .getExtensions()
+        .extensions.filter(
+          (extension) => !extension.resolvedPath.startsWith("builtin:"),
+        ),
       [],
-      "an empty package extension filter must remain fully disabled",
+      "an empty package extension filter must remain fully disabled (built-ins excepted)",
     );
   });
 });
@@ -1302,7 +1320,9 @@ test("nested manifestless packages are not mistaken for OpenPI", async () => {
     const childPaths = await Promise.all(
       child.loader
         .getExtensions()
-        .extensions.map((extension) => realpath(extension.resolvedPath)),
+        .extensions.map((extension) =>
+          realpathExtension(extension.resolvedPath),
+        ),
     );
     assert.equal(childPaths.includes(await realpath(ordinaryGitInfo)), true);
   });

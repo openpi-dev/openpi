@@ -67,6 +67,12 @@ export interface SpawnTask {
    * denylist, so this can only narrow. Omitted = the normal child tool set.
    */
   readonly tools?: readonly string[];
+  /**
+   * True when `tools` was projected from the parent's live tool surface rather
+   * than declared by an agent type. A name the child cannot expose then
+   * narrows the child instead of failing the spawn.
+   */
+  readonly inheritedTools?: boolean;
   /** Agent type that supplied the above, for the session label. */
   readonly agentTypeName?: string;
   /** Optional JSON Schema for one terminating, validated child result. */

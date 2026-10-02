@@ -63,6 +63,7 @@ import {
   submittedExtensionCommand,
 } from "./command-discovery.ts";
 import { WEB_COMMAND_INPUT, WEB_COMMAND_HANDLED, publishWebCommandFeedback } from "../../extensions/shared/web-command-feedback.ts";
+import { createPiBuiltinExtensionFactories } from "../../extensions/shared/pi-builtin-extensions.ts";
 import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
@@ -1798,7 +1799,11 @@ export class PiWebRuntime implements WebRuntimeController {
         settingsManager,
         modelRuntimeSignal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
         resourceLoaderOptions: {
-          extensionFactories: [commandDiscovery.extension, turnChanges.extension],
+          extensionFactories: [
+            ...createPiBuiltinExtensionFactories(),
+            commandDiscovery.extension,
+            turnChanges.extension,
+          ],
         },
       });
       registerCommandDiscoveryBridge(services, commandDiscovery);

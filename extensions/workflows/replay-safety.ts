@@ -566,9 +566,18 @@ function resourceFingerprint(loader: ReplayResourceLoader) {
         `${right.name}\0${right.file.path}`,
       ),
     );
+  // Built-in and inline extensions resolve to synthetic paths (`builtin:name`,
+  // `<inline:name>`) that have no file behind them, so realpath would throw and
+  // disable replay for every run. Their code comes from the host pi version, not
+  // from project resources, which is what this fingerprint binds.
   const extensions = loader
     .getExtensions()
-    .extensions.map((extension) => resourceFile(extension.resolvedPath))
+    .extensions.filter(
+      (extension) =>
+        !extension.resolvedPath.startsWith("builtin:") &&
+        !extension.resolvedPath.startsWith("<"),
+    )
+    .map((extension) => resourceFile(extension.resolvedPath))
     .sort((left, right) => left.path.localeCompare(right.path));
 
   return digest(

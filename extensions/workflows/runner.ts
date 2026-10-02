@@ -106,6 +106,11 @@ export interface RunAgentOptions {
   modelRegistry: ExtensionContext["modelRegistry"];
   /** Agent Type allowlist; childToolPolicy can only narrow capabilities. */
   tools?: readonly string[];
+  /**
+   * True when `tools` was projected from the parent's live surface. A name the
+   * child cannot expose then narrows the child instead of failing the run.
+   */
+  inheritedTools?: boolean;
   signal?: AbortSignal;
   onProgress?: (progress: AgentProgress) => void;
   /** Canonical repository boundary required before this call can be journaled. */
@@ -333,7 +338,9 @@ export async function runAgent(
     ({ session } = await Promise.race([sessionCreation, abortRace]));
     if (aborted) throw abortError();
     await Promise.race([
-      bindChildSessionExtensions(session, childTools),
+      bindChildSessionExtensions(session, childTools, {
+        tolerateInheritedMisses: options.inheritedTools === true,
+      }),
       abortRace,
     ]);
     if (aborted) throw abortError();

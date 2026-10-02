@@ -268,6 +268,10 @@ const makePiSession = (
               task.tools,
               structuredOutputTool !== undefined,
             ),
+            // `task.tools` is projected from the parent's live surface, so a
+            // name the child cannot expose narrows the child instead of
+            // failing the spawn.
+            { tolerateInheritedMisses: task.inheritedTools === true },
           );
           checkCancelled();
           return session;
