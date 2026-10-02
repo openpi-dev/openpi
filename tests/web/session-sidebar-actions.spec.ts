@@ -280,7 +280,7 @@ it("does not read the archive list when a current Session is renamed", async () 
 });
 
 it("refreshes an archived rename through native pages without dropping the opened range or selecting it", async () => {
-  const records = Array.from({ length: 50 }, (_, index) =>
+  const records = Array.from({ length: 27 }, (_, index) =>
     session(`Archived ${index + 1}`, true),
   );
   const read = vi
@@ -301,13 +301,13 @@ it("refreshes an archived rename through native pages without dropping the opene
   );
   await screen.findByText("Archived 1");
   fireEvent.click(screen.getByRole("button", { name: i18n.t("moreArchives") }));
-  await screen.findByText("Archived 50");
-  const input = await openRename("Archived 30");
+  await screen.findByText("Archived 27");
+  const input = await openRename("Archived 26");
   fireEvent.change(input, { target: { value: "Revised archived" } });
   fireEvent.click(screen.getByRole("button", { name: i18n.t("save") }));
   await screen.findByText("Revised archived");
   expect(screen.getByText("Archived 1")).toBeTruthy();
-  expect(screen.getByText("Archived 50")).toBeTruthy();
+  expect(screen.getByText("Archived 27")).toBeTruthy();
   expect(read).toHaveBeenCalledTimes(4);
   expect(read.mock.calls.slice(2).map(([query]) => query)).toEqual([
     { query: "", limit: 25 },
@@ -374,7 +374,7 @@ it("does not refresh a different archive query after a late rename settles", asy
 });
 
 it("keeps loaded rows and the retained range retry when a post-rename archive page fails", async () => {
-  const records = Array.from({ length: 50 }, (_, index) =>
+  const records = Array.from({ length: 27 }, (_, index) =>
     session(`Archived ${index + 1}`, true),
   );
   const read = vi
@@ -392,12 +392,12 @@ it("keeps loaded rows and the retained range retry when a post-rename archive pa
   );
   await screen.findByText("Archived 1");
   fireEvent.click(screen.getByRole("button", { name: i18n.t("moreArchives") }));
-  await screen.findByText("Archived 50");
-  const input = await openRename("Archived 30");
+  await screen.findByText("Archived 27");
+  const input = await openRename("Archived 26");
   fireEvent.change(input, { target: { value: "Revised" } });
   fireEvent.click(screen.getByRole("button", { name: i18n.t("save") }));
   await screen.findByText(i18n.t("archiveLoadFailed"));
-  expect(screen.getByText("Archived 50")).toBeTruthy();
+  expect(screen.getByText("Archived 27")).toBeTruthy();
   expect(
     screen.queryByRole("dialog", { name: i18n.t("renameConversation") }),
   ).toBeNull();
@@ -409,11 +409,11 @@ it("keeps loaded rows and the retained range retry when a post-rename archive pa
   await waitFor(() =>
     expect(screen.queryByText(i18n.t("archiveLoadFailed"))).toBeNull(),
   );
-  expect(screen.getByText("Archived 50")).toBeTruthy();
+  expect(screen.getByText("Archived 27")).toBeTruthy();
 });
 
 it("aborts a retained-range refresh when the archive query changes and ignores its late second page", async () => {
-  const records = Array.from({ length: 50 }, (_, index) =>
+  const records = Array.from({ length: 27 }, (_, index) =>
     session(`Alpha ${index + 1}`, true),
   );
   const pending = deferred<ArchivedSessionPage>();
@@ -438,8 +438,8 @@ it("aborts a retained-range refresh when the archive query changes and ignores i
   );
   await screen.findByText("Alpha 1");
   fireEvent.click(screen.getByRole("button", { name: i18n.t("moreArchives") }));
-  await screen.findByText("Alpha 50");
-  const input = await openRename("Alpha 30");
+  await screen.findByText("Alpha 27");
+  const input = await openRename("Alpha 26");
   fireEvent.change(input, { target: { value: "Renamed Alpha" } });
   fireEvent.click(screen.getByRole("button", { name: i18n.t("save") }));
   await waitFor(() => expect(read).toHaveBeenCalledTimes(4));
@@ -448,7 +448,7 @@ it("aborts a retained-range refresh when the archive query changes and ignores i
   await screen.findByText("Beta result");
   await act(async () => pending.resolve(archivePage(records.slice(25))));
   expect(screen.getByText("Beta result")).toBeTruthy();
-  expect(screen.queryByText("Alpha 50")).toBeNull();
+  expect(screen.queryByText("Alpha 27")).toBeNull();
   expect(read).toHaveBeenCalledTimes(5);
 });
 

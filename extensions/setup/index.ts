@@ -71,6 +71,24 @@ const subagentRoleModelValueSchema = Type.Union([
   Type.Null(),
 ]);
 
+const MAX_SESSION_START_PATHS = 3;
+const MAX_SESSION_START_PATH_CODE_POINTS = 80;
+
+// ponytail: startup shows three short paths; /openpi-setup keeps the full report.
+function formatSessionStartPath(path: string) {
+  let formattedPath = "";
+  let codePoints = 0;
+  for (const character of path) {
+    if (codePoints === MAX_SESSION_START_PATH_CODE_POINTS - 1)
+      return `${formattedPath}…`;
+    formattedPath += /[\u0000-\u001f\u007f-\u009f]/u.test(character)
+      ? "�"
+      : character;
+    codePoints++;
+  }
+  return formattedPath;
+}
+
 export const SUBAGENT_ROLE_MODELS_SCHEMA = Type.Partial(
   Type.Record(
     Type.Union(SUBAGENT_ROLE_NAMES.map((role) => Type.Literal(role))),
@@ -259,12 +277,42 @@ export default function openPiSetup(pi: ExtensionAPI) {
     resetEpisode();
     if (!ctx.hasUI) return;
     const inspected = inspectSetupConfig();
-    if (inspected.diagnostics.length === 0) return;
+    const diagnostics = inspected.diagnostics;
+    if (diagnostics.length === 0) return;
+    const actionableDiagnostics = diagnostics.filter(
+      (diagnostic) =>
+        !(
+          diagnostic.severity === "warning" &&
+          diagnostic.path === "configVersion" &&
+          diagnostic.message.startsWith("Legacy unversioned")
+        ),
+    );
+    if (
+      inspected.writable &&
+      diagnostics.length === 1 &&
+      actionableDiagnostics.length === 0
+    )
+      return;
+    const hasErrors = actionableDiagnostics.some(
+      (diagnostic) => diagnostic.severity === "error",
+    );
+    const details = actionableDiagnostics
+      .slice(0, MAX_SESSION_START_PATHS)
+      .map((diagnostic) => {
+        const message =
+          diagnostic.path === "configVersion" && diagnostic.severity === "error"
+            ? "Unsupported configuration version"
+            : diagnostic.message;
+        return `${diagnostic.severity} @ ${formatSessionStartPath(diagnostic.path || inspected.path)}: ${message}`;
+      })
+      .join("; ");
+    const more =
+      actionableDiagnostics.length > MAX_SESSION_START_PATHS ? "; …" : "";
     ctx.ui.notify(
-      inspected.writable
-        ? "OpenPI configuration loaded with warnings (legacy format or unknown fields). The file is unchanged. Run /openpi-setup for details."
-        : "OpenPI could not load the saved configuration; safe defaults are in use and configuration writes are blocked. The file is unchanged. Run /openpi-setup for diagnostics and recovery guidance.",
-      inspected.writable ? "warning" : "error",
+      hasErrors
+        ? `OpenPI could not load the saved configuration; safe defaults are in use and configuration writes are blocked (${details}${more}). The file is unchanged. Run /openpi-setup for diagnostics and recovery guidance.`
+        : `OpenPI configuration loaded with warnings (${details}${more}). The file is unchanged. Run /openpi-setup for full diagnostics.`,
+      hasErrors ? "error" : "warning",
     );
   });
 
