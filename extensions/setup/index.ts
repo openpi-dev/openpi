@@ -41,6 +41,7 @@ import {
   POST_EDIT_COMMAND_MAX_CHARS,
   REASONING_LEVELS,
   SETUP_CONFIG_CHANGED_CHANNEL,
+  type SetupDiagnostic,
   updateSetupConfig,
   WEB_THEMES,
   type WebTheme,
@@ -70,6 +71,41 @@ const subagentRoleModelValueSchema = Type.Union([
   ),
   Type.Null(),
 ]);
+
+function isLegacyUnversionedDiagnostic(diagnostic: SetupDiagnostic): boolean {
+  return (
+    diagnostic.severity === "warning" &&
+    diagnostic.path === "configVersion" &&
+    diagnostic.message.startsWith("Legacy unversioned")
+  );
+}
+
+export function buildSessionStartNotification(
+  diagnostics: readonly SetupDiagnostic[],
+):
+  | { readonly message: string; readonly level: "warning" | "error" }
+  | undefined {
+  if (diagnostics.length === 0) return undefined;
+  const hasError = diagnostics.some((d) => d.severity === "error");
+  if (hasError) {
+    return {
+      level: "error",
+      message:
+        "OpenPI could not load the saved configuration; safe defaults are in use and configuration writes are blocked. The file is unchanged. Run /openpi-setup for diagnostics and recovery guidance.",
+    };
+  }
+  const onlyLegacy = diagnostics.every(isLegacyUnversionedDiagnostic);
+  if (onlyLegacy) return undefined;
+  const sample = diagnostics
+    .filter((d) => !isLegacyUnversionedDiagnostic(d))
+    .slice(0, 3)
+    .map((d) => `${d.severity} @ ${d.path}`)
+    .join("; ");
+  return {
+    level: "warning",
+    message: `OpenPI configuration loaded with warnings (${sample}${diagnostics.length > 3 ? "; …" : ""}). The file is unchanged. Run /openpi-setup for full diagnostics.`,
+  };
+}
 
 export const SUBAGENT_ROLE_MODELS_SCHEMA = Type.Partial(
   Type.Record(
@@ -259,13 +295,9 @@ export default function openPiSetup(pi: ExtensionAPI) {
     resetEpisode();
     if (!ctx.hasUI) return;
     const inspected = inspectSetupConfig();
-    if (inspected.diagnostics.length === 0) return;
-    ctx.ui.notify(
-      inspected.writable
-        ? "OpenPI configuration loaded with warnings (legacy format or unknown fields). The file is unchanged. Run /openpi-setup for details."
-        : "OpenPI could not load the saved configuration; safe defaults are in use and configuration writes are blocked. The file is unchanged. Run /openpi-setup for diagnostics and recovery guidance.",
-      inspected.writable ? "warning" : "error",
-    );
+    const notification = buildSessionStartNotification(inspected.diagnostics);
+    if (!notification) return;
+    ctx.ui.notify(notification.message, notification.level);
   });
 
   const dispatchNextRequest = (ctx: ExtensionContext) => {
