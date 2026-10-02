@@ -581,7 +581,11 @@ async function exists(candidate: string) {
   }
 }
 
-export function createWorkspaceCleanupGuard() {
+export function createWorkspaceCleanupGuard(
+  initialMode: "enforce" | "ask" | "off" = "enforce",
+) {
+  let mode = initialMode;
+  let modeGeneration = 0;
   const origins = new Map<string, Origin>();
   const pending = new Map<string, PendingEffects>();
 
@@ -606,9 +610,19 @@ export function createWorkspaceCleanupGuard() {
       "Blocked cleanup: OpenPI recognized a source-visible deletion outside its supported direct rm command grammar. Use a direct rm command with literal workspace-relative paths so OpenPI can determine whether each target is session-created scratch or a pre-existing path requiring confirmation.",
   });
 
+  const changedModeCleanup = () => ({
+    kind: "block" as const,
+    protectedPaths: [],
+    reason:
+      "Blocked cleanup: the workspace cleanup guard mode changed while this command was being checked. Retry the command so the current mode can be applied.",
+  });
+
   return {
     async beforeWrite(attempt: WriteAttempt) {
+      const generation = modeGeneration;
+      if (mode === "off") return;
       const creation = await prepareCreation(attempt.cwd, attempt.path, false);
+      if (generation !== modeGeneration) return;
       pending.set(attempt.id, {
         creations: creation ? [creation] : [],
         removals: [],
@@ -616,8 +630,17 @@ export function createWorkspaceCleanupGuard() {
     },
 
     async before(attempt: BashAttempt) {
+      const generation = modeGeneration;
+      if (mode === "off") return { kind: "allow" as const };
       const inspected = inspectShell(attempt.command);
-      if (inspected.opaqueDestructiveCommand) return unverifiedCleanup();
+      if (inspected.opaqueDestructiveCommand) {
+        if (mode === "ask") {
+          const confirmed = await attempt.confirmDelete([]);
+          if (generation !== modeGeneration) return changedModeCleanup();
+          if (confirmed) return { kind: "allow" as const };
+        }
+        return unverifiedCleanup();
+      }
 
       const containedRemovals = inspected.removals.map((candidate) =>
         containedPath(attempt.cwd, candidate),
@@ -638,6 +661,7 @@ export function createWorkspaceCleanupGuard() {
         if (!contained) continue;
         const origin = origins.get(contained.absolute);
         const present = await exists(contained.absolute);
+        if (generation !== modeGeneration) return changedModeCleanup();
         if (present && !origin) origins.set(contained.absolute, "baseline");
         if (present && origins.get(contained.absolute) !== "session_created") {
           protectedPaths.push(contained.relative);
@@ -645,15 +669,16 @@ export function createWorkspaceCleanupGuard() {
         removals.push(contained.absolute);
       }
 
-      if (
-        protectedPaths.length > 0 &&
-        !(await attempt.confirmDelete(protectedPaths))
-      ) {
-        return {
-          kind: "block" as const,
-          protectedPaths,
-          reason: `Blocked cleanup: ${protectedPaths.join(", ")} existed before this agent changed it and is not proven session-created scratch. Retry the cleanup without that path, or obtain explicit user confirmation to delete it.`,
-        };
+      if (protectedPaths.length > 0) {
+        const confirmed = await attempt.confirmDelete(protectedPaths);
+        if (generation !== modeGeneration) return changedModeCleanup();
+        if (!confirmed) {
+          return {
+            kind: "block" as const,
+            protectedPaths,
+            reason: `Blocked cleanup: ${protectedPaths.join(", ")} existed before this agent changed it and is not proven session-created scratch. Retry the cleanup without that path, or obtain explicit user confirmation to delete it.`,
+          };
+        }
       }
 
       pending.set(attempt.id, { creations, removals });
@@ -685,6 +710,16 @@ export function createWorkspaceCleanupGuard() {
     },
 
     reset() {
+      origins.clear();
+      pending.clear();
+    },
+
+    setMode(next: "enforce" | "ask" | "off") {
+      if (mode === next) return;
+      mode = next;
+      modeGeneration += 1;
+      // ponytail: discard uncertain ownership on policy changes;
+      // re-confirm if needed.
       origins.clear();
       pending.clear();
     },
