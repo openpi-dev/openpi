@@ -31,3 +31,20 @@ export function partitionNodeTestsByPlatform(
   }
   return { parallel, serial };
 }
+
+export function selectNodeTestShard(files, shard) {
+  const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(shard);
+  const index = Number(match?.[1]);
+  const total = Number(match?.[2]);
+  if (
+    !Number.isSafeInteger(index) ||
+    !Number.isSafeInteger(total) ||
+    index > total ||
+    total > files.length
+  ) {
+    throw new Error(
+      "Invalid Node test shard: expected index/total with no empty shards.",
+    );
+  }
+  return files.filter((_, fileIndex) => fileIndex % total === index - 1);
+}
