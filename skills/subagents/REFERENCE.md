@@ -156,6 +156,11 @@ A Workflow child with a schema, or a Direct Subagent spawned with
 `output_schema`, additionally receives only its terminating `structured_output`
 tool; this does not restore any denied repository tool.
 
+When a long manager-bounded final is durably written, result details may carry
+an owner-bound resource reference beside the existing Pi-readable path. The
+reference names the `manager-bounded-final` coverage and Session-cache lifetime;
+it neither proves uncaptured backend bytes nor grants a child extra read access.
+
 While `/plan` is armed, `isolation: "worktree"` is rejected before Git is
 changed. A selected type whose declared tools plan mode would narrow (such as
 `implementer`) is also rejected rather than spawning it with a contradictory
