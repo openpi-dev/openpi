@@ -54,6 +54,49 @@ test("parent cancellation still stops the timeout wrapper immediately", async ()
   await assert.rejects(pending, (error: unknown) => error === reason);
 });
 
+test("already cancelled tool calls never execute or report success", async () => {
+  const controller = new AbortController();
+  const reason = new Error("cancelled before dispatch");
+  controller.abort(reason);
+  let calls = 0;
+
+  await assert.rejects(
+    runWithToolCallTimeout(
+      "cancelled_fixture",
+      60_000,
+      controller.signal,
+      async () => {
+        calls++;
+        return "must not execute";
+      },
+    ),
+    (error: unknown) => error === reason,
+  );
+
+  assert.equal(calls, 0);
+});
+
+test("already cancelled hung tools never start side effects", async () => {
+  const controller = new AbortController();
+  controller.abort("cancelled before dispatch");
+  let calls = 0;
+
+  await assert.rejects(
+    runWithToolCallTimeout(
+      "cancelled_fixture",
+      60_000,
+      controller.signal,
+      () => {
+        calls++;
+        return new Promise(() => {});
+      },
+    ),
+    { name: "Error", message: 'Tool call "cancelled_fixture" was aborted.' },
+  );
+
+  assert.equal(calls, 0);
+});
+
 test("the guard wraps each definition once and can discover later tools", () => {
   const definitions = new Map<string, ToolDefinition>();
   const createDefinition = (name: string): ToolDefinition => ({

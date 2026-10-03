@@ -34,6 +34,12 @@ export async function runWithToolCallTimeout<T>(
   signal: AbortSignal | undefined,
   execute: (signal: AbortSignal) => Promise<T>,
 ) {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error(`Tool call "${toolName}" was aborted.`);
+  }
+
   const timeoutController = new AbortController();
   const executionSignal = signal
     ? AbortSignal.any([signal, timeoutController.signal])
