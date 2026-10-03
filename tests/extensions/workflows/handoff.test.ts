@@ -285,6 +285,21 @@ test("the rendered handoff fairly projects every result inside 48 KiB", () => {
   assert.doesNotMatch(handoff, /�/);
 });
 
+test("handoff conclusions retain literal replacement-character prefixes", () => {
+  const registry = createWorkflowHandoffRegistry();
+  const ref = registry.register({
+    settled: true,
+    ok: true,
+    output: `${"�".repeat(10_000)}-END`,
+  })!;
+  const [conclusion] = registry.resolve([ref]);
+  assert.match(conclusion, /^�+\n/);
+  assert.match(conclusion, /-END/);
+  assert.match(conclusion, /Projection bounded/);
+  assert.ok(Buffer.byteLength(conclusion, "utf8") <= 16 * 1024);
+  assert.match(registry.renderHandoff([ref]), /\n�+\n/);
+});
+
 test("large fan-out never starves later results by input order", () => {
   let generated = 0;
   const registry = createWorkflowHandoffRegistry({

@@ -151,6 +151,24 @@ test("byte-only truncation keeps valid UTF-8 at both ends", () => {
   assertWithinBudgets(projected, 256, 20, "byte-only projection");
 });
 
+test("byte truncation preserves literal replacement characters in the head", () => {
+  const content = `${"�".repeat(1000)}-END`;
+  for (const maxBytes of [64, 256]) {
+    for (const maxLines of [3, 20]) {
+      const projected = projectText(content, {
+        maxBytes,
+        maxLines,
+        recovery: "kept in artifacts",
+      });
+      assert.match(projected, /^�+\n/);
+      assert.match(projected, /-END/);
+      assert.match(projected, /middle omitted/);
+      assert.ok(Buffer.byteLength(projected, "utf8") <= maxBytes);
+      assert.ok(lineCount(projected) <= maxLines);
+    }
+  }
+});
+
 test("byte and line caps hold across encodings and newline styles", () => {
   const samples = [
     Array.from({ length: 40 }, (_, index) => `ASCII-${index}`).join("\n"),
