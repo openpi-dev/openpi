@@ -106,6 +106,9 @@ export function createCompletionInbox<T>() {
     const current = [...pending.values()];
     pending.clear();
     for (const envelope of envelopes) {
+      // Consumption, acknowledgment, or lifecycle cleanup invalidates the
+      // claim. A late transport failure cannot revive it or a newer claim.
+      if (inFlight.get(envelope.deliveryId) !== envelope) continue;
       inFlight.delete(envelope.deliveryId);
       admit(envelope, owner);
     }
@@ -120,10 +123,12 @@ export function createCompletionInbox<T>() {
     /** Explicit status/wait and automatic delivery atomically race here. */
     consume(producer: CompletionProducer, producerIds: Iterable<string>) {
       const ids = new Set(producerIds);
-      for (const [deliveryId, envelope] of pending) {
-        if (envelope.producer === producer && ids.has(envelope.producerId)) {
-          pending.delete(deliveryId);
-          inFlight.delete(deliveryId);
+      for (const entries of [pending, inFlight]) {
+        for (const [deliveryId, envelope] of entries) {
+          if (envelope.producer === producer && ids.has(envelope.producerId)) {
+            pending.delete(deliveryId);
+            inFlight.delete(deliveryId);
+          }
         }
       }
     },

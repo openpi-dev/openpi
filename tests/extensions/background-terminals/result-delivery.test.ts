@@ -90,6 +90,16 @@ test("a drained result can be retained for retry after delivery fails", () => {
   assert.deepEqual(delivery.drain(), [result]);
 });
 
+test("a status consumption after drain retracts the result from failed delivery", () => {
+  const delivery = createDeferredResultDelivery<{ id: string }>();
+  delivery.defer({ id: "bt-1" });
+  delivery.defer({ id: "bt-2" });
+  const drained = delivery.drain();
+  delivery.consume(["bt-1"]);
+  delivery.restore(drained);
+  assert.deepEqual(delivery.drain(), [{ id: "bt-2" }]);
+});
+
 test("a deferred terminal completion cannot cross a Session switch", () => {
   let sessionId = "session-1";
   const delivery = createDeferredResultDelivery<{ id: string }>({

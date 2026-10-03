@@ -70,6 +70,49 @@ test("a failed transport restores exact envelopes ahead of newer work", () => {
   );
 });
 
+test("consumption during transport prevents retry from reviving a result", () => {
+  for (const consumeById of [false, true]) {
+    const inbox = createCompletionInbox<{ value: string }>();
+    const first = envelope("sa-1");
+    const second = envelope("sa-2");
+    inbox.defer(first, owner);
+    inbox.defer(second, owner);
+    const claimed = inbox.claim(owner);
+    if (consumeById) inbox.consumeDeliveryIds([first.deliveryId]);
+    else inbox.consume("subagent", [first.producerId]);
+    inbox.retry(claimed, owner);
+    assert.deepEqual(inbox.claim(owner), [second]);
+  }
+});
+
+test("clearing or acknowledging a claim invalidates a late retry", () => {
+  for (const clear of [false, true]) {
+    const inbox = createCompletionInbox<{ value: string }>();
+    const first = envelope("sa-1");
+    inbox.defer(first, owner);
+    const claimed = inbox.claim(owner);
+    if (clear) inbox.clear();
+    else inbox.acknowledge([first.deliveryId]);
+    inbox.retry(claimed, owner);
+    assert.deepEqual(inbox.claim(owner), []);
+  }
+});
+
+test("a stale retry cannot replace or invalidate a newer claim with the same id", () => {
+  const inbox = createCompletionInbox<{ value: string }>();
+  const first = envelope("sa-1");
+  inbox.defer(first, owner);
+  const staleClaim = inbox.claim(owner);
+  inbox.clear();
+  const replacement = envelope("sa-1", { payload: { value: "replacement" } });
+  inbox.defer(replacement, owner);
+  const currentClaim = inbox.claim(owner);
+  inbox.retry(staleClaim, owner);
+  assert.deepEqual(inbox.claim(owner), []);
+  inbox.retry(currentClaim, owner);
+  assert.deepEqual(inbox.claim(owner), [replacement]);
+});
+
 test("separate in-flight batches can be acknowledged or retried independently", () => {
   const inbox = createCompletionInbox<{ value: string }>();
   const first = envelope("sa-1");
