@@ -788,6 +788,7 @@ extensions/
 
 bin/openpi.js              # 独立 Web CLI 入口
 web/                       # Web Host、Pi Runtime Adapter、协议与浏览器 UI
+site/                      # 项目网站；合入 main 后由 Pages workflow 发布
 skills/                    # Background terminal、Subagent 与 Workflow 指南
 themes/                    # github-dark-default
 ```
