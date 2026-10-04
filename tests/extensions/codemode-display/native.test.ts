@@ -143,6 +143,7 @@ test("native loader selects the public renderer seam while retaining native Code
       { type: "text", text: output },
     ];
     const details = {
+      fullOutputPath: "/tmp/codemode-output-evidence.txt",
       calls: [
         {
           id: "1",
@@ -159,8 +160,11 @@ test("native loader selects the public renderer seam while retaining native Code
         },
         ...Array.from({ length: 6 }, (_, index) => ({
           id: String(index + 3),
-          name: "read",
-          args: "{}",
+          name: index === 5 ? "bash" : "read",
+          args:
+            index === 5
+              ? `${JSON.stringify({ command: `git status --short; ${"echo long; ".repeat(40)}` }).slice(0, 197)}...`
+              : "{}",
           status: "ok",
           durationMs: 2,
         })),
@@ -168,11 +172,18 @@ test("native loader selects the public renderer seam while retaining native Code
     };
     component.updateResult({ content, details, isError: false }, false);
     const compact = component.render(80).map(stripTerminalSequences).join("\n");
-    assert.match(compact, /codemode · 2 script lines/u);
+    assert.match(
+      compact,
+      /codemode completed · 1\.7s · 8 calls · 2 script lines/u,
+    );
     assert.doesNotMatch(compact, /very long shell command/u);
-    assert.match(compact, /✗ earlier-read · error: file missing/u);
-    assert.match(compact, /⊘ earlier-bash · cancelled/u);
-    assert.doesNotMatch(compact, /\\n/u);
+    assert.match(compact, /✗ earlier-read example\.ts · error: file missing/u);
+    assert.match(compact, /⊘ earlier-bash long shell · cancelled/u);
+    assert.match(compact, /Bash git status --short.*… · 2ms/u);
+    assert.doesNotMatch(
+      compact,
+      /\\n|first output line|Full output:|codemode-output-evidence/u,
+    );
     const artifacts = process.env.OPENPI_CODEMODE_RENDER_ARTIFACT_DIR;
     if (artifacts) await mkdir(artifacts, { recursive: true });
     for (const width of [80, 40]) {
@@ -192,6 +203,10 @@ test("native loader selects the public renderer seam while retaining native Code
       assert.match(expanded, /Calls/u);
       assert.match(expanded, /Output/u);
       assert.match(expanded, /Raw output/u);
+      assert.match(expanded, /first output line/u);
+      assert.match(expanded, /Full output:/u);
+      assert.doesNotMatch(collapsed, /first output line|Full output:/u);
+      assert.match(collapsed, /Bash git status/u);
       if (artifacts) {
         await writeFile(
           path.join(artifacts, `compact-${width}.txt`),

@@ -161,7 +161,7 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 统一配置     | `/openpi-setup` 管理 OpenPI 自有模型、并发、Footer、输出密度与 Post-edit 偏好                             |
 | 模型授权     | `/login google-antigravity`；实验性的 `/login cursor`（支持 Pi 工具，不执行 Cursor 原生工具）                   |
 
-Code Mode 的终端视图由 OpenPI 通过 Pi 原生工具渲染接口提供：默认收起脚本与长参数，展示运行状态、子调用统计和短结果预览；失败与取消保留明显提示。`Ctrl+O` 展开脚本、子调用参数与原始输出。该呈现增强需要 Pi 提供 `registerToolRenderer`（已核对 Pi 1.0.2）；旧版本保留原生显示。它不改变 Code Mode 执行、权限、模型可见结果或默认启用设置。
+Code Mode 的终端视图由 OpenPI 通过 Pi 原生工具渲染接口提供：默认收起脚本、长参数、结果正文及完整输出路径，仅展示运行状态与子调用摘要；子调用沿用普通工具的线框图标，失败与取消保留明显提示。`Ctrl+O` 展开脚本、子调用参数、原始输出与完整输出路径。该呈现增强需要 Pi 提供 `registerToolRenderer`（已核对 Pi 1.0.2）；旧版本保留原生显示。它不改变 Code Mode 执行、权限、模型可见结果或默认启用设置。
 
 OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

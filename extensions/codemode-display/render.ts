@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import { toolActivityIcon } from "../shared/tool-activity.ts";
 
 export type CodemodeRenderers = Pick<
   ToolDefinition<TSchema, unknown, unknown>,
@@ -20,9 +21,7 @@ export type CodemodeRenderers = Pick<
 
 const RECENT_CALLS = 4;
 const SALIENT_CALLS = 2;
-const OUTPUT_LINES = 5;
 const JSON_LIMIT = 32_768;
-const PREVIEW_CHARS = 4_096;
 const HEADER =
   /^Script (completed|failed)\nWall time (\d+(?:\.\d+)?) seconds\nOutput:\n$/u;
 
@@ -127,14 +126,27 @@ function framed(
 
 /**
  * The first top-level string argument (path, command, pattern…) identifies a
- * call at a glance. Native previews are JSON truncated at 200 chars, so this
- * reads only a complete leading string literal and otherwise shows nothing.
+ * call at a glance. Pi truncates JSON previews to 197 chars plus "...".
+ * Retain the verified string prefix without inventing the missing suffix;
+ * a cut through an escape sequence drops only that incomplete escape.
  */
 function argHint(args: unknown) {
-  const match = /^\{"[^"\\]*":("(?:[^"\\]|\\.)*")/u.exec(string(args));
-  if (!match) return "";
+  const raw = string(args);
+  const complete = /^\{"[^"\\]*":("(?:[^"\\]|\\.)*")/u.exec(raw);
   try {
-    return inline(JSON.parse(match[1]!)).trim();
+    if (complete) return inline(JSON.parse(complete[1]!)).trim();
+    if (raw.length !== 200 || !raw.endsWith("...")) return "";
+    const preview = raw.slice(0, -3);
+    const prefix =
+      /^\{"[^"\\]*":("(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[\da-f]{4}))*)/iu.exec(
+        preview,
+      );
+    if (!prefix) return "";
+    const remainder = preview.slice(prefix[0].length);
+    if (remainder && !/^\\(?:u[\da-f]{0,3})?$/iu.test(remainder)) return "";
+    const decoded: string = JSON.parse(`${prefix[1]}"`);
+    // A truncated surrogate pair must not leave a broken terminal glyph.
+    return `${inline(decoded.replace(/[\ud800-\udbff]$/u, "")).trimEnd()}…`;
   } catch {
     return "";
   }
@@ -148,6 +160,9 @@ function callLine(
 ) {
   const status = callStatus(call);
   const name = expanded ? safe(call.name) : inline(call.name);
+  const toolIcon = expanded ? "✓" : toolActivityIcon(string(call.name));
+  const label =
+    toolIcon === "✓" ? name : `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
   const meta: string[] = [];
   if (string(call.error))
     meta.push(expanded ? "error" : `error: ${inline(call.error)}`);
@@ -161,7 +176,8 @@ function callLine(
   )
     meta.push(`$${call.cost.toPrecision(3)}`);
   const tail = meta.length ? ` · ${meta.join(" · ")}` : "";
-  let line = `${theme.fg(ICON_COLOR[status], ICON[status])} ${theme.fg(status === "error" ? "error" : "toolTitle", name)}`;
+  const toolPrefix = toolIcon === "✓" ? "" : `${theme.fg("dim", toolIcon)} `;
+  let line = `${theme.fg(ICON_COLOR[status], ICON[status])} ${toolPrefix}${theme.fg(status === "error" ? "error" : "toolTitle", label)}`;
   // The hint yields its width to status, error and timing facts.
   const hint = expanded ? "" : argHint(call.args);
   const budget = width - visibleWidth(line) - visibleWidth(tail) - 1;
@@ -212,7 +228,6 @@ function resultComponent(
   const output = (knownHeader ? result.content.slice(1) : result.content)
     .filter((item) => item.type === "text")
     .map((item) => item.text);
-  const projections = output.map(outputProjection);
   const images = result.content.filter((item) => item.type === "image").length;
   const failed = isError || knownHeader?.[1] === "failed";
   const outcome = partial
@@ -276,8 +291,8 @@ function resultComponent(
         ...wrapped("(no recorded nested calls)", theme, width, "muted"),
       );
     rows.push(...wrapped("Output", theme, width, "muted"));
-    output.forEach((raw, index) => {
-      const projection = projections[index]!;
+    output.forEach((raw) => {
+      const projection = outputProjection(raw);
       if (projection.decoded) {
         rows.push(
           ...wrapped(
@@ -349,34 +364,8 @@ function resultComponent(
         ),
       );
     rows.push(...recent.map(line));
-    let more = "";
-    if (partial) rows.push(theme.fg("muted", "Output pending"));
-    else if (output.length) {
-      const joined = projections
-        .map((projection) => projection.text)
-        .join("\n");
-      // Blank lines spend the preview budget without showing anything.
-      const visible = joined
-        .slice(0, PREVIEW_CHARS)
-        .split("\n")
-        .filter((row) => row.trim())
-        .join("\n");
-      // A gutter separates script output from the call list above it.
-      const gutter = width > 16 ? theme.fg("dim", "│ ") : "";
-      const lines = wrapped(
-        safe(visible),
-        theme,
-        width - visibleWidth(gutter),
-        outputColor,
-      );
-      rows.push(...lines.slice(0, OUTPUT_LINES).map((row) => gutter + row));
-      if (joined.length > PREVIEW_CHARS) more = "… more output · ";
-      else if (lines.length > OUTPUT_LINES) {
-        const count = lines.length - OUTPUT_LINES;
-        more = `… ${count} more ${count === 1 ? "line" : "lines"} · `;
-      }
-    }
-    rows.push(theme.fg("dim", more) + expandHint());
+    // Output is evidence for the expanded view, not part of the activity list.
+    rows.push(expandHint());
     return rows.map((row) => truncateToWidth(row, width, ""));
   };
 
@@ -396,14 +385,15 @@ function resultComponent(
             "",
           ),
         );
-      if (string(details?.fullOutputPath)) {
-        const path = `Full output: ${expanded ? safe(details?.fullOutputPath) : inline(details?.fullOutputPath)}`;
+      if (expanded && string(details?.fullOutputPath))
         rows.push(
-          ...(expanded
-            ? wrapped(path, theme, width, "muted")
-            : [truncateToWidth(theme.fg("muted", path), width, "")]),
+          ...wrapped(
+            `Full output: ${safe(details?.fullOutputPath)}`,
+            theme,
+            width,
+            "muted",
+          ),
         );
-      }
       return rows;
     },
     { top: false, bottom: () => true },

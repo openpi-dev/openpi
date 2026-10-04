@@ -149,7 +149,7 @@ test("partial updates, outer errors and unknown historical evidence do not claim
     { partial: true },
   ).join("\n");
   assert.match(partial, /… running · 1 call/u);
-  assert.match(partial, /Output pending/u);
+  assert.doesNotMatch(partial, /Output pending/u);
   assert.doesNotMatch(partial, /not-final/u);
   assert.match(
     rendered(result("failed"), { error: true }).join("\n"),
@@ -178,12 +178,47 @@ test("partial updates, outer errors and unknown historical evidence do not claim
 test("outer JSON string becomes readable text with raw evidence retained on expansion", () => {
   const raw = JSON.stringify("first line\nsecond line\nthird line");
   const compact = rendered(result(raw)).join("\n");
-  assert.match(compact, /│ first line\n│ second line\n│ third line/u);
+  assert.doesNotMatch(compact, /first line|second line|third line/u);
   assert.doesNotMatch(compact, /\\n/u);
   const expanded = rendered(result(raw), { expanded: true }).join("\n");
   assert.match(expanded, /Display projection \(outer JSON decoded\)/u);
   assert.match(expanded, /Raw output \(terminal controls stripped\)/u);
   assert.ok(expanded.includes(raw));
+});
+
+test("compact hides all output and spill paths without changing expanded evidence or results", () => {
+  const output =
+    "Warning: truncated output\nPRIVATE_OUTPUT\n" + "x".repeat(8_000);
+  const calls = [
+    { name: "bash", args: '{"command":"echo hello"}', status: "ok" },
+    {
+      name: "read",
+      args: '{"path":"missing.ts"}',
+      status: "error",
+      error: "denied",
+    },
+    { name: "edit", status: "cancelled" },
+    { name: "rg", status: "unknown" },
+  ];
+  const value = result(output, calls);
+  value.details = { calls, fullOutputPath: "/tmp/private-output-evidence.txt" };
+  const before = JSON.stringify(value);
+  for (const options of [{}, { partial: true }, { error: true }]) {
+    const compact = rendered(value, options).join("\n");
+    assert.doesNotMatch(
+      compact,
+      /PRIVATE_OUTPUT|Warning:|Full output:|private-output-evidence/u,
+    );
+    assert.match(compact, /✓ \uea85 Bash echo hello/u);
+    assert.match(compact, /✗ \ueaa4 Read missing\.ts · error: denied/u);
+    assert.match(compact, /⊘ \uea73 Edit · cancelled/u);
+    assert.match(compact, /\? \uea6d Rg · unknown/u);
+    assert.match(compact, /ctrl\+o.*to expand/iu);
+  }
+  const expanded = rendered(value, { expanded: true, width: 200 }).join("\n");
+  assert.match(expanded, /Warning: truncated output\nPRIVATE_OUTPUT/u);
+  assert.match(expanded, /Full output: \/tmp\/private-output-evidence\.txt/u);
+  assert.equal(JSON.stringify(value), before);
 });
 
 test("structured JSON remains structured and nested JSON-looking strings are not interpreted", () => {
@@ -367,14 +402,60 @@ test("compact call rows name their first string argument within the row budget",
   ];
   const rows = rendered(result("done", calls), { width: 60 });
   const text = rows.join("\n");
-  assert.match(text, /✓ read package\.json · 6ms/u);
-  assert.match(text, /✓ bash x+… · 16ms/u);
-  assert.match(text, /^ {2}✓ bash$/mu, "truncated JSON yields no guessed hint");
+  assert.match(text, /✓ \ueaa4 Read package\.json · 6ms/u);
+  assert.match(text, /✓ \uea85 Bash x+… · 16ms/u);
+  assert.match(
+    text,
+    /^ {2}✓ \uea85 Bash$/mu,
+    "truncated JSON yields no guessed hint",
+  );
   assert.match(text, /✗ web cats · error: boom/u);
   assert.ok(rows.every((row) => visibleWidth(row) <= 60));
 });
 
-test("a shared row puts the status in the call header and skips blank preview lines", () => {
+test("native 200-character previews keep long Bash commands and Read paths visible", () => {
+  const command = `git status --short; echo ${"long-command ".repeat(40)}`;
+  const path = `/workspace/${"long-directory/".repeat(30)}README.md`;
+  const preview = (args: unknown) => `${JSON.stringify(args).slice(0, 197)}...`;
+  const value = result("HIDDEN_OUTPUT", [
+    { name: "bash", status: "ok", args: preview({ command }), durationMs: 102 },
+    { name: "read", status: "ok", args: preview({ path }), durationMs: 19 },
+  ]);
+  const before = JSON.stringify(value);
+  for (const width of [60, 120, 300]) {
+    const rows = rendered(value, { width });
+    const text = rows.join("\n");
+    assert.match(
+      text,
+      /Bash git status --short; echo long-command.*… · 102ms/u,
+    );
+    assert.match(text, /Read \/workspace\/long-directory\/.*… · 19ms/u);
+    assert.doesNotMatch(text, /HIDDEN_OUTPUT/u);
+    assert.ok(rows.every((row) => visibleWidth(row) <= width));
+  }
+  assert.equal(JSON.stringify(value), before);
+  const expanded = rendered(value, { expanded: true, width: 300 }).join("\n");
+  assert.ok(expanded.includes(preview({ command })));
+});
+
+test("native preview cuts through escapes and Unicode retain a safe command prefix", () => {
+  for (const suffix of ['"', "\\", "\n", "\t", "\u0001", "🧑‍💻", "你好"]) {
+    for (let fill = 175; fill <= 187; fill++) {
+      const command = `printf ${"x".repeat(fill)}${suffix}${"tail".repeat(30)}`;
+      const raw = `${JSON.stringify({ command }).slice(0, 197)}...`;
+      const value = result("hidden", [
+        { name: "bash", status: "ok", args: raw, durationMs: 102 },
+      ]);
+      const rows = rendered(value, { width: 300 });
+      const compact = rows.join("\n");
+      assert.match(compact, /Bash printf x+.*… · 102ms/u);
+      assert.doesNotMatch(compact, /[\u0001\u001b\ud800-\udfff]/u);
+      assert.ok(rows.every((row) => visibleWidth(row) <= 300));
+    }
+  }
+});
+
+test("a shared row puts the status in the call header and hides output", () => {
   const state = {};
   const shared = { ...context(), state };
   const header = codemodeRenderers.renderCall!({ code }, theme, shared);
@@ -392,5 +473,5 @@ test("a shared row puts the status in the call header and skips blank preview li
     "✓ codemode completed · 2.3s · 1 call · 2 script lines",
   ]);
   assert.doesNotMatch(body.join("\n"), /completed/u);
-  assert.match(body.join("\n"), /│ first\n│ second/u);
+  assert.doesNotMatch(body.join("\n"), /first|second|│/u);
 });
