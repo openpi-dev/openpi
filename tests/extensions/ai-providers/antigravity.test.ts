@@ -21,6 +21,7 @@ import {
 import { fetchAntigravityModels } from "../../../extensions/ai-providers/antigravity/discovery.ts";
 import {
   convertMessages,
+  convertTools,
   isThinkingPart,
   mapStopReasonString,
   retainThoughtSignature,
@@ -524,6 +525,44 @@ test("sanitizeSchemaForCca strips CCA-rejected keywords recursively", () => {
         items: { type: "string", description: '{format: "uri"}' },
       },
     },
+  });
+});
+
+test("convertTools preserves local result schema references", () => {
+  const converted = convertTools(
+    [
+      {
+        name: "structured_result",
+        description: "return a structured result",
+        parameters: {
+          type: "object",
+          properties: {
+            result: { $ref: "#/$defs/result" },
+          },
+          required: ["result"],
+          $defs: {
+            result: {
+              type: "object",
+              properties: { status: { type: "string", enum: ["ok"] } },
+              required: ["status"],
+            },
+          },
+        },
+      },
+    ],
+    true,
+  );
+  const parameters = converted?.[0]?.functionDeclarations[0]?.parameters;
+  assert.deepEqual(parameters, {
+    type: "object",
+    properties: {
+      result: {
+        type: "object",
+        properties: { status: { type: "string", enum: ["ok"] } },
+        required: ["status"],
+      },
+    },
+    required: ["result"],
   });
 });
 

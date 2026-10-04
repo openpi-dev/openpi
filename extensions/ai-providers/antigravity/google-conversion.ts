@@ -431,6 +431,55 @@ function sanitizeForOpenApi(
   return result;
 }
 
+function resolveLocalSchemaRefs(
+  value: unknown,
+  root: Record<string, unknown> = value &&
+  typeof value === "object" &&
+  !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {},
+  seen = new Set<string>(),
+): unknown {
+  if (Array.isArray(value))
+    return value.map((entry) => resolveLocalSchemaRefs(entry, root, seen));
+  if (value === null || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const ref = record.$ref;
+  if (typeof ref === "string" && ref.startsWith("#/$defs/")) {
+    const name = ref.slice("#/$defs/".length);
+    const definitions = root.$defs ?? root.definitions;
+    const target =
+      definitions &&
+      typeof definitions === "object" &&
+      !Array.isArray(definitions)
+        ? (definitions as Record<string, unknown>)[name]
+        : undefined;
+    if (target !== undefined && !seen.has(ref)) {
+      const next = new Set(seen).add(ref);
+      const resolved = resolveLocalSchemaRefs(target, root, next);
+      const siblings = Object.fromEntries(
+        Object.entries(record).filter(([key]) => key !== "$ref"),
+      );
+      const resolvedRecord =
+        resolved && typeof resolved === "object" && !Array.isArray(resolved)
+          ? (resolved as Record<string, unknown>)
+          : {};
+      return {
+        ...resolvedRecord,
+        ...(resolveLocalSchemaRefs(siblings, root, next) as Record<
+          string,
+          unknown
+        >),
+      };
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(record)
+      .filter(([key]) => key !== "$defs" && key !== "definitions")
+      .map(([key, entry]) => [key, resolveLocalSchemaRefs(entry, root, seen)]),
+  );
+}
+
 export function convertTools(
   tools: Tool[],
   useParameters = false,
@@ -442,7 +491,11 @@ export function convertTools(
         name: tool.name,
         description: tool.description,
         ...(useParameters
-          ? { parameters: sanitizeForOpenApi(tool.parameters) }
+          ? {
+              parameters: sanitizeForOpenApi(
+                resolveLocalSchemaRefs(tool.parameters),
+              ),
+            }
           : { parametersJsonSchema: tool.parameters }),
       })),
     },
