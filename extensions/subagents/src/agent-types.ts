@@ -224,6 +224,8 @@ export interface AgentTypeDiagnostic {
   /** File the problem came from, or the directory for a scan failure. */
   readonly source: string;
   readonly message: string;
+  /** Informational provenance versus a definition that needs attention. */
+  readonly severity?: "info" | "warning";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -530,6 +532,7 @@ export function loadAgentTypes(options: LoadAgentTypesOptions) {
         diagnostics.push({
           source: agentType.source,
           message: `overrides the agent type of the same name from ${shadowed.source}`,
+          severity: "info",
         });
       }
       agentTypes.set(agentType.name, agentType);
@@ -544,9 +547,21 @@ export function formatAgentTypeDiagnostics(
   diagnostics: readonly AgentTypeDiagnostic[],
 ) {
   if (diagnostics.length === 0) return undefined;
+  const problems = diagnostics.filter(
+    (entry) => entry.severity !== "info",
+  ).length;
+  const notices = diagnostics.length - problems;
+  const summary = [
+    problems > 0
+      ? `${problems} problem${problems === 1 ? "" : "s"}`
+      : undefined,
+    notices > 0 ? `${notices} notice${notices === 1 ? "" : "s"}` : undefined,
+  ]
+    .filter((entry): entry is string => entry !== undefined)
+    .join(", ");
   return sanitizeTerminalText(
     [
-      `Agent types: ${diagnostics.length} problem${diagnostics.length === 1 ? "" : "s"}.`,
+      `Agent types: ${summary}.`,
       ...diagnostics.map((entry) => `- ${entry.source}: ${entry.message}`),
     ].join("\n"),
   );

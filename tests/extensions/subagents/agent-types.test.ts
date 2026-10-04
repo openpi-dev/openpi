@@ -303,6 +303,12 @@ test("a project agent type overrides the global one of the same name", async () 
     const messages = diagnostics.map((entry) => entry.message).join("\n");
     assert.match(messages, /from built-in:explorer/);
     assert.match(messages, /from .*agent[\\/]agents[\\/]explorer\.md/);
+    assert.ok(
+      diagnostics.some(
+        (entry) =>
+          entry.message.startsWith("overrides") && entry.severity === "info",
+      ),
+    );
   });
 });
 
@@ -411,6 +417,25 @@ test("agent-type diagnostics strip terminal control sequences", () => {
     },
   ]);
   assert.equal(notice, "Agent types: 1 problem.\n- bad.md: wrong");
+});
+
+test("valid overrides are informational while malformed definitions remain problems", () => {
+  const notice = formatAgentTypeDiagnostics([
+    {
+      source: "global/explorer.md",
+      message: "overrides built-in",
+      severity: "info",
+    },
+    {
+      source: "global/broken.md",
+      message: "invalid YAML",
+      severity: "warning",
+    },
+  ]);
+  assert.equal(
+    notice,
+    "Agent types: 1 problem, 1 notice.\n- global/explorer.md: overrides built-in\n- global/broken.md: invalid YAML",
+  );
 });
 
 test("childToolPolicy without an allowlist is unchanged", () => {

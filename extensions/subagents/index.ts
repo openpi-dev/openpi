@@ -889,7 +889,12 @@ export default function (
     // report it once. Never fatal: the rest still loaded. Non-UI modes receive
     // stderr rather than a model-context message.
     const notice = formatAgentTypeDiagnostics(agentTypeDiagnostics);
-    if (notice && ctx.hasUI) ctx.ui.notify(notice, "warning");
+    const noticeSeverity = agentTypeDiagnostics.some(
+      (entry) => entry.severity !== "info",
+    )
+      ? "warning"
+      : "info";
+    if (notice && ctx.hasUI) ctx.ui.notify(notice, noticeSeverity);
     else if (notice) process.stderr.write(`${notice}\n`);
   });
 
