@@ -4,19 +4,20 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>OpenPI — Pi at the core. Power on demand.</title>
-<meta name="description" content="OpenPI 是一套 Pi 原生能力层：后台终端、子代理、工作流与持续任务装进同一个工作台。普通对话不常驻 OpenPI 工具，需要时才展开。" />
+<meta name="description" content="OpenPI 是一套 Pi 原生能力层：终端与本地 Web 工作台、独立上下文的子代理、Workflow 与后台任务。普通对话不常驻 OpenPI 工具，需要时才展开。" />
 <meta name="theme-color" content="#F6F5F0" />
 <meta property="og:title" content="OpenPI — Pi at the core. Power on demand." />
-<meta property="og:description" content="One package. The full Pi-native workbench: background terminals, subagents, workflows, and continuous tasks — zero resident tools until you ask." />
+<meta property="og:description" content="One package. The full Pi-native workbench: background terminals, isolated subagents, replay-safe workflows, and a local Web UI — zero resident tools until you ask." />
 <meta property="og:type" content="website" />
-<meta property="og:image" content="https://raw.githubusercontent.com/tt-a1i/openpi/main/assets/openpi-launch-card-v1.webp" />
+<meta property="og:url" content="https://openpi-dev.github.io/openpi/" />
+<meta property="og:image" content="https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-product-hero-v2.webp" />
+<meta name="twitter:card" content="summary_large_image" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' rx='24' fill='%23F6F5F0'/%3E%3Cg transform='translate(28 28) scale(0.13634)'%3E%3Cpath fill='%2309090b' fill-rule='evenodd' d='M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z'/%3E%3Cpath fill='%2309090b' d='M517.36 400 H634.72 V634.72 H517.36 Z'/%3E%3C/g%3E%3C/svg%3E" />
 <script>
 (function () {
-  var lang = 'en';
-  try {
-    lang = localStorage.getItem('openpi-lang') || 'en';
-  } catch (e) {}
+  var lang;
+  try { lang = localStorage.getItem('openpi-lang'); } catch (e) {}
+  if (lang !== 'zh' && lang !== 'en') lang = /^zh/i.test(navigator.language || '') ? 'zh' : 'en';
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
   document.documentElement.setAttribute('data-lang', lang);
 })();
@@ -210,9 +211,17 @@ nav { opacity: 0; animation: navin 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.1s forw
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 2;
-  min-height: 162px;
+  min-height: 196px;
   white-space: pre-wrap;
 }
+.term-tools { margin-left: auto; margin-right: 16px; }
+.term-tools b { display: inline-block; min-width: 1.4em; text-align: center; color: var(--ink); font-weight: 500; transition: color 0.3s, background 0.3s; border-radius: 3px; }
+.term-tools b.lit { color: var(--blue-ink); background: rgba(243, 224, 122, 0.75); }
+.term-body .t-user { color: var(--ink); }
+.term-body .t-user::before { content: "› "; color: var(--blue); }
+.term-body .t-user mark { background: none; color: #6D5BEA; }
+.term-body .t-load { color: var(--ink); }
+.term-body .t-load span { background: linear-gradient(transparent 55%, rgba(243, 224, 122, 0.75) 55%); padding: 0 2px; }
 .term { scroll-margin-top: 96px; }
 .term-body .t-cmd { color: var(--ink); }
 .term-body .t-cmd::before { content: "$ "; color: var(--blue); }
@@ -309,6 +318,9 @@ html[data-lang="zh"] .hero-promise i { color: var(--blue); font-style: normal; }
 }
 .install-cmd:hover { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(31, 71, 224, 0.12); }
 .install-cmd .prompt { color: var(--blue); user-select: none; }
+.install-cmd { max-width: 100%; }
+.install-cmd > span:nth-child(2) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+@media (max-width: 420px) { .install-cmd, .final .install-cmd { font-size: 12px; padding: 12px 16px; gap: 10px; } }
 .copy-btn {
   background: none;
   border: none;
@@ -365,7 +377,7 @@ html[data-lang="zh"] .hero-promise i { color: var(--blue); font-style: normal; }
 
 /* ---------- sections ---------- */
 section { position: relative; scroll-margin-top: 72px; }
-.sec-inner { max-width: var(--max); margin: 0 auto; padding: clamp(84px, 11vw, 150px) var(--pad); position: relative; }
+.sec-inner { max-width: var(--max); margin: 0 auto; padding: clamp(72px, 8.5vw, 120px) var(--pad); position: relative; }
 .sec-head {
   display: flex;
   align-items: baseline;
@@ -428,38 +440,65 @@ html[data-lang="en"] .pull-quote i { font-style: italic; }
 .reveal { opacity: 0; transform: translateY(20px); transition: opacity 0.9s cubic-bezier(0.22, 1, 0.36, 1), transform 0.9s cubic-bezier(0.22, 1, 0.36, 1); }
 .reveal.in { opacity: 1; transform: none; }
 
-/* ---------- philosophy spec ---------- */
-.spec { margin-top: clamp(44px, 5vw, 64px); border-top: 1px solid var(--rule-dark); }
-.spec-row {
-  display: grid;
-  grid-template-columns: 0.5fr 1.05fr 1fr 1.25fr;
-  border-bottom: 1px solid var(--rule);
-  transition: background 0.3s;
-  align-items: baseline;
+/* ---------- on-demand demo ---------- */
+.demand { margin-top: clamp(44px, 5vw, 64px); }
+.demand-head { display: flex; gap: 16px; align-items: baseline; padding-bottom: 14px; border-bottom: 1px solid var(--ink); font-size: 14px; color: var(--ink-soft); }
+.demand-head .sec-num { font-size: 11px; }
+.demand-grid { display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr); border-bottom: 1px solid var(--rule-dark); }
+.scn-list { display: flex; flex-direction: column; border-right: 1px solid var(--rule); }
+.scn {
+  display: grid; grid-template-columns: 38px 1fr; gap: 4px 10px; align-items: baseline;
+  text-align: left; background: none; border: 0; border-bottom: 1px solid var(--rule);
+  padding: 18px 22px 18px 0; cursor: pointer; font: inherit; color: var(--ink-soft);
+  position: relative; transition: background 0.25s, color 0.25s, padding-left 0.3s;
 }
-.spec-row:hover { background: var(--paper-2); }
-.spec-row > div { padding: 22px 24px 22px 0; }
-.spec-row > div + div { padding-left: 24px; border-left: 1px solid var(--rule); }
-.spec-idx { font-family: var(--mono); font-size: 11px; color: var(--blue); }
-.spec-head { border-bottom: 1px solid var(--rule-dark); font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); }
-.spec-head > div { padding-top: 14px; padding-bottom: 14px; }
-.spec-head:hover { background: none; }
-.spec-scene { font-weight: 500; font-size: 15.5px; }
-.spec-cell { color: var(--ink-soft); font-size: 14.5px; }
-.spec-cell em { color: var(--ink); font-style: normal; }
+.scn:last-child { border-bottom: 0; }
+.scn:hover { color: var(--ink); background: var(--paper-2); }
+.scn .n { font-family: var(--serif-en); font-style: italic; font-size: 22px; color: var(--ink-faint); line-height: 1; padding-left: 4px; transition: color 0.25s; }
+.scn .p { font-size: 15px; line-height: 1.55; }
+.scn .tg { grid-column: 2; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-faint); }
+.scn[aria-selected="true"] { color: var(--ink); background: var(--paper-2); padding-left: 12px; }
+.scn[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: -1px; bottom: -1px; width: 2px; background: var(--blue); }
+.scn[aria-selected="true"] .n { color: var(--blue); }
+.surface { padding: 0 0 8px 32px; }
+.surface-top { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: center; padding: 22px 0; border-bottom: 1px solid var(--rule); }
+.surface-count span { display: block; font-family: var(--serif-en); font-style: italic; font-size: 76px; line-height: 0.9; min-width: 1.1ch; transition: color 0.3s; }
+.surface-count span.lit { color: var(--blue); }
+.surface-count small { display: block; margin-top: 8px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); white-space: nowrap; }
+.why { color: var(--ink-soft); font-size: 14.5px; line-height: 1.8; }
+.why code, .demand-note code { font-family: var(--mono); font-size: 12.5px; color: var(--blue-ink); background: rgba(31, 71, 224, 0.07); padding: 1.5px 6px; border-radius: 4px; }
+.grp { display: grid; grid-template-columns: 128px 1fr; gap: 18px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid var(--rule); }
+.grp:last-child { border-bottom: 0; }
+.grp .gn { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-faint); transition: color 0.3s; }
+.grp .tools { display: flex; flex-wrap: wrap; gap: 4px 16px; font-family: var(--mono); font-size: 12.5px; color: #ABA796; transition: color 0.3s; }
+.grp .tools span { padding: 0 2px; }
+.grp.base .gn, .grp.base .tools { color: var(--ink); }
+.grp.on .gn { color: var(--blue); }
+.grp.on .tools { color: var(--ink); }
+.grp.on .tools span { background: linear-gradient(transparent 55%, rgba(243, 224, 122, 0.8) 55%) no-repeat; background-size: 0% 100%; animation: hl 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards; animation-delay: var(--d); }
+.grp.on .tools span.def { background: none; animation: none; color: var(--blue-ink); text-decoration: underline dotted rgba(43, 73, 216, 0.6); text-underline-offset: 4px; }
+@keyframes hl { to { background-size: 100% 100%; } }
+.demand-note { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: baseline; font-size: 13px; color: var(--ink-faint); }
+.lg { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; }
+.lg::before { content: ""; display: inline-block; width: 18px; height: 8px; margin-right: 8px; vertical-align: 0; }
+.lg-base::before { border-bottom: 1.5px solid var(--ink); height: 5px; }
+.lg-on::before { background: rgba(243, 224, 122, 0.9); }
+.lg-def::before { border-bottom: 1.5px dotted var(--blue); height: 5px; }
+.lg-text { flex-basis: 100%; line-height: 1.8; }
 @media (max-width: 900px) {
-  .spec-row { grid-template-columns: 1fr; }
-  .spec-row > div { padding: 8px 0; }
-  .spec-row > div + div { border-left: none; padding-left: 0; }
-  .spec-row > div:first-child { padding-top: 20px; }
-  .spec-row > div:last-child { padding-bottom: 20px; }
-  .spec-head, .spec-idx { display: none; }
+  .demand-grid { grid-template-columns: minmax(0, 1fr); }
+  .scn-list { border-right: 0; border-bottom: 1px solid var(--rule-dark); }
+  .surface { padding-left: 0; }
+}
+@media (max-width: 560px) {
+  .surface-top { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .grp { grid-template-columns: minmax(0, 1fr); gap: 6px; }
 }
 
 /* ---------- paths: editorial columns ---------- */
-.paths { margin-top: clamp(44px, 5vw, 64px); display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--rule-dark); }
-.path-col { padding: 34px 32px 8px 0; border-bottom: 1px solid var(--rule); }
-.path-col + .path-col { padding-left: 32px; border-left: 1px solid var(--rule); }
+.paths { margin-top: clamp(44px, 5vw, 64px); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 56px; border-top: 1px solid var(--rule-dark); border-bottom: 1px solid var(--rule); }
+.path-col { padding: 34px 0 8px; position: relative; }
+.path-col + .path-col::before { content: ""; position: absolute; left: -28px; top: 0; bottom: 0; border-left: 1px solid var(--rule); }
 .path-num { font-family: var(--serif-en); font-style: italic; font-size: 46px; color: var(--blue); line-height: 1; display: block; }
 .path-en { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.18em; color: var(--ink-faint); text-transform: uppercase; display: block; margin: 20px 0 14px; }
 .path-name { font-family: var(--serif-zh); font-weight: 600; font-size: 23px; letter-spacing: 0.005em; line-height: 1.35; }
@@ -467,9 +506,39 @@ html[data-lang="en"] .path-name { font-family: var(--serif-en); font-weight: 400
 .path-desc { margin-top: 14px; padding-bottom: 30px; color: var(--ink-soft); font-size: 14.5px; line-height: 1.85; }
 .path-desc code { font-family: var(--mono); font-size: 12.5px; color: var(--blue-ink); background: rgba(31, 71, 224, 0.07); padding: 1.5px 6px; border-radius: 4px; }
 @media (max-width: 900px) {
-  .paths { grid-template-columns: 1fr; }
-  .path-col + .path-col { padding-left: 0; border-left: none; }
+  .paths { grid-template-columns: minmax(0, 1fr); }
+  .path-col + .path-col::before { display: none; }
+  .path-col + .path-col { border-top: 1px solid var(--rule); }
 }
+
+/* plates: editorial line figures */
+.plate { margin: 0 0 30px; border: 1px solid var(--rule-dark); background: var(--paper-2); border-radius: 6px; overflow: hidden; }
+.plate svg { display: block; width: 100%; height: 172px; padding: 14px 12px 6px; }
+.plate svg text { font-family: var(--mono); font-size: 10.5px; fill: var(--ink); }
+.plate svg text.sm { font-size: 9px; fill: var(--ink-faint); letter-spacing: 0.02em; }
+.plate svg text.st { font-size: 9.5px; fill: var(--ink-soft); letter-spacing: 0.06em; }
+.plate svg text.b, .plate svg text.r { fill: var(--blue-ink); }
+.plate svg rect, .plate .box { fill: var(--paper); stroke: var(--ink); stroke-width: 1; }
+.plate .ps-row rect { stroke: var(--rule-dark); }
+.plate .ps-row:first-child rect { stroke: var(--ink); }
+.plate circle.pulse { fill: var(--blue); animation: pulse 1.8s ease-in-out infinite; }
+.plate circle.done { fill: var(--ink); }
+.plate circle.ring { fill: none; stroke: var(--ink-soft); stroke-dasharray: 2 2; }
+.plate .wire { fill: none; stroke: var(--rule-dark); stroke-width: 1; }
+.plate .flow { fill: none; stroke: var(--blue); stroke-width: 1.4; stroke-dasharray: 4 120; animation: flow 2.6s linear infinite; }
+.plate .flow.f2 { animation-delay: 0.6s; } .plate .flow.f3 { animation-delay: 1.2s; }
+.plate rect.cell { stroke: var(--rule-dark); animation: fillc 5.2s steps(1) infinite; animation-delay: var(--d); }
+.plate rect.cell.r { stroke: var(--ink); }
+.plate text.ref { fill: var(--ink); }
+.plate figcaption { display: flex; gap: 12px; border-top: 1px solid var(--rule); padding: 9px 14px; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em; color: var(--ink-faint); }
+.plate figcaption span:first-child { white-space: nowrap; color: var(--blue); font-family: var(--serif-en); font-style: italic; font-size: 13px; letter-spacing: 0; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+@keyframes flow { from { stroke-dashoffset: 124; } to { stroke-dashoffset: 0; } }
+@keyframes fillc { 0% { fill: var(--paper); } 8%, 82% { fill: rgba(243, 224, 122, 0.85); } 100% { fill: var(--paper); } }
+.plate rect.cell.v { animation-name: fillv; }
+.plate rect.cell.r { animation-name: fillr; }
+@keyframes fillv { 0% { fill: var(--paper); } 8%, 82% { fill: rgba(43, 73, 216, 0.16); } 100% { fill: var(--paper); } }
+@keyframes fillr { 0% { fill: var(--paper); } 8%, 82% { fill: rgba(43, 73, 216, 0.22); } 100% { fill: var(--paper); } }
 
 .strip { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--rule); }
 .strip > div { padding: 22px 24px 26px 0; }
@@ -480,6 +549,41 @@ html[data-lang="en"] .path-name { font-family: var(--serif-en); font-weight: 400
   .strip { grid-template-columns: 1fr 1fr; }
   .strip > div:nth-child(3) { padding-left: 0; border-left: none; }
 }
+
+/* ---------- surface plates ---------- */
+.plates-2 { margin-top: clamp(40px, 5vw, 56px); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.plates-2 .plate { margin: 0; display: flex; flex-direction: column; }
+.mock-term, .mock-web { height: 236px; margin: 18px 18px 0; border: 1px solid var(--ink); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--paper); overflow: hidden; flex: 1; }
+.mock-term { font-family: var(--mono); font-size: 12px; line-height: 1.95; padding: 14px 16px 0; color: var(--ink-soft); display: flex; flex-direction: column; }
+.mock-term > div { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.mock-term b { color: var(--ink); font-weight: 500; }
+.mock-term .ok { color: var(--blue-ink); }
+.mock-term .f { color: var(--ink-faint); }
+.mock-term .r { color: #6D5BEA; }
+.mt-strip { margin: auto -16px 0; padding: 6px 16px; border-top: 1px solid var(--rule); display: flex; gap: 12px; align-items: center; font-size: 11.5px; }
+.mt-strip .bar { flex: 1; height: 3px; background: var(--rule); border-radius: 3px; overflow: hidden; }
+.mt-strip .bar i { display: block; height: 100%; width: 60%; background: var(--blue); animation: grow 4.5s cubic-bezier(0.22, 1, 0.36, 1) infinite; }
+@keyframes grow { from { width: 0; } to { width: 100%; } }
+.mt-foot { margin: 0 -16px; padding: 7px 16px; border-top: 1px solid var(--rule-dark); background: var(--paper-2); display: flex; gap: 16px; font-size: 11px; color: var(--ink-faint); }
+.mt-foot .sp { flex: 1; }
+.mock-web { font-size: 12px; display: flex; flex-direction: column; }
+.mw-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--rule); background: var(--paper-2); }
+.mw-bar i { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--rule-dark); }
+.mw-bar span { margin-left: 8px; flex: 1; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); border: 1px solid var(--rule); border-radius: 4px; padding: 2px 8px; background: var(--paper); }
+.mw-main { flex: 1; display: grid; grid-template-columns: 120px minmax(0, 1fr); min-height: 0; }
+.mw-side { border-right: 1px solid var(--rule); padding: 10px; display: flex; flex-direction: column; gap: 3px; }
+.mw-side .h { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); margin: 4px 0 2px; }
+.mw-side .it { padding: 3px 8px; border-radius: 4px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mw-side .it.on { background: var(--ink); color: var(--paper); }
+.mw-chat { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.mw-chat .bub { align-self: flex-end; background: var(--paper-2); border: 1px solid var(--rule-dark); padding: 5px 10px; border-radius: 10px 10px 2px 10px; max-width: 85%; }
+.mw-chat .tc { border: 1px solid var(--rule); border-left: 2px solid var(--blue); border-radius: 4px; padding: 5px 10px; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); display: flex; justify-content: space-between; gap: 8px; }
+.mw-chat .tc b { color: var(--ink); font-weight: 500; }
+.mw-chat .ok { color: var(--blue-ink); }
+.mw-chat .ans { color: var(--ink-soft); line-height: 1.6; }
+.mw-chat .inp { margin-top: auto; border: 1px solid var(--rule-dark); border-radius: 6px; padding: 5px 10px; color: var(--ink-faint); display: flex; justify-content: space-between; }
+@media (max-width: 860px) { .plates-2 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 480px) { .mw-main { grid-template-columns: minmax(0, 1fr); } .mw-side { display: none; } .mt-foot span:nth-child(4) { display: none; } }
 
 /* ---------- surface: terminal UI features ---------- */
 .surface-list {
@@ -531,6 +635,29 @@ html[data-lang="en"] .principle h3 { font-family: var(--serif-en); font-weight: 
 .safety-item .s-val { color: var(--ink-soft); font-size: 14px; line-height: 1.7; }
 @media (max-width: 760px) { .safety-item { grid-template-columns: 1fr; gap: 6px; } }
 
+.path-desc code, .surface-item code, .principle p code, .why code, .demand-note code, .sec-lede code { white-space: nowrap; }
+.sec-lede code { font-family: var(--mono); font-size: 0.86em; color: var(--blue-ink); }
+
+/* ---------- code plate & states ---------- */
+.code-plate { margin: clamp(44px, 5vw, 64px) 0 0; }
+.code { margin: 0; padding: 22px 26px; font-family: var(--mono); font-size: 12.5px; line-height: 1.9; color: var(--ink-soft); overflow-x: auto; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.code .k { color: var(--ink); font-weight: 500; }
+.code .fn { color: var(--blue-ink); }
+.code .s { color: #8A5A12; }
+.states { margin-top: clamp(44px, 5vw, 64px); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--ink); border-bottom: 1px solid var(--rule-dark); }
+.state { padding: 22px 22px 24px 0; }
+.state + .state { padding-left: 22px; border-left: 1px solid var(--rule); }
+.st-name { display: inline-block; font-family: var(--serif-en); font-style: italic; font-size: 26px; line-height: 1.1; }
+.st-name::before { content: ""; display: inline-block; width: 8px; height: 8px; background: var(--c); margin-right: 10px; vertical-align: 0.2em; }
+.st-d { display: block; margin-top: 10px; color: var(--ink-soft); font-size: 13.5px; line-height: 1.7; }
+.state.uncertain .st-name { background: linear-gradient(transparent 60%, rgba(243, 224, 122, 0.75) 60%); }
+.states + .safety-list { margin-top: 0; border-top: 0; }
+@media (max-width: 860px) {
+  .states { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .state:nth-child(3) { padding-left: 0; border-left: 0; }
+  .state:nth-child(n+3) { border-top: 1px solid var(--rule); }
+}
+
 /* ---------- commands ---------- */
 .cmd-list { margin-top: clamp(44px, 5vw, 64px); border-top: 1px solid var(--rule-dark); }
 .cmd-row { display: grid; grid-template-columns: minmax(230px, 0.9fr) 1.4fr; border-bottom: 1px solid var(--rule); transition: background 0.25s, padding-left 0.3s; }
@@ -558,6 +685,12 @@ html[data-lang="zh"] .final h2 i { color: #8FA8FF; font-style: normal; }
 .final .install-cmd .prompt { color: #8FA8FF; }
 .final .copy-btn { border-left-color: #3A382F; color: #7A7666; }
 .final .copy-btn:hover { color: #8FA8FF; }
+.final { overflow: hidden; }
+.final .sec-inner > * { position: relative; z-index: 1; }
+.final .sec-inner > .final-mark { position: absolute; z-index: 0; right: var(--pad); bottom: clamp(60px, 8vw, 110px); width: clamp(180px, 26vw, 340px); height: auto; pointer-events: none; }
+.final-mark path { fill: none; stroke: #3A382F; stroke-width: 3; }
+.final-mark path.b { fill: rgba(143, 168, 255, 0.9); stroke: none; }
+@media (max-width: 760px) { .final .sec-inner > .final-mark { display: none; } }
 .final-links { margin-top: 40px; display: flex; gap: 32px; flex-wrap: wrap; }
 .final-links a { color: #A8A494; text-decoration: none; font-size: 13.5px; padding-bottom: 3px; background: linear-gradient(currentColor, currentColor) bottom left no-repeat; background-size: 100% 1px; transition: color 0.25s; }
 .final-links a:hover { color: var(--paper); animation: sweep 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
@@ -582,6 +715,10 @@ footer { border-top: 1px solid var(--rule); }
   .marquee-track { animation: none; }
   .fade-up { opacity: 1; transform: none; }
   nav { opacity: 1; animation: none; }
+  .plate rect.cell { animation: none; fill: rgba(243, 224, 122, 0.85); }
+  .plate rect.cell.v, .plate rect.cell.r { fill: rgba(43, 73, 216, 0.16); }
+  .plate .flow { display: none; }
+  .grp.on .tools span { animation: none; background-size: 100% 100%; }
 }
 </style>
 </head>
@@ -598,7 +735,7 @@ footer { border-top: 1px solid var(--rule); }
       <a href="#runtime" data-i18n="nav.runtime">运行模型</a>
       <a href="#safety" data-i18n="nav.safety">安全边界</a>
       <a href="#commands" data-i18n="nav.commands">命令</a>
-      <a href="https://github.com/tt-a1i/openpi" target="_blank" rel="noopener">GitHub ↗</a>
+      <a href="https://github.com/openpi-dev/openpi" target="_blank" rel="noopener">GitHub ↗</a>
       <div class="lang-toggle" role="group" aria-label="Language">
         <button id="lang-zh" type="button">中文</button>
         <button id="lang-en" type="button">EN</button>
@@ -631,19 +768,20 @@ footer { border-top: 1px solid var(--rule); }
         </div>
       </div>
       <div class="hero-side">
-        <p class="hero-sub fade-up" style="animation-delay:0.45s" data-i18n="hero.sub">后台终端、子代理、工作流与持续任务，装进同一个 Pi 工作台。普通对话不常驻任何 OpenPI 工具——不用时，依然是 Pi。</p>
+        <p class="hero-sub fade-up" style="animation-delay:0.45s" data-i18n="hero.sub">终端与本地 Web 工作台、独立上下文的子代理、Workflow 与后台任务，装进同一个 Pi。普通对话不常驻任何 OpenPI 工具——不用时，依然是 Pi。</p>
         <div class="term fade-up" style="animation-delay:0.6s" id="install">
           <div class="term-bar">
             <span><span class="dot"></span><span data-i18n="term.title">openpi 工作台</span></span>
+            <span class="term-tools"><span data-i18n="term.toolsL">OpenPI 工具</span> <b id="term-n">0</b></span>
             <button class="copy-btn" id="copy-btn" aria-label="copy install command" style="border-left:none;padding-left:0">COPY</button>
           </div>
           <div class="term-body" id="term-body"></div>
         </div>
         <div class="hero-meta fade-up" style="animation-delay:0.75s">
           <span><b>MIT</b> LICENSE</span>
-          <span><b>PI</b> 0.84.1+</span>
+          <span><b>PI</b> 0.99.1+</span>
           <span><b>NODE</b> 22.19+</span>
-          <span><b>CI</b> PASSING</span>
+          <span><b>VERSION</b> 0.9</span>
           <a href="https://pi.dev/packages/@tt-a1i/openpi" target="_blank" rel="noopener" data-i18n="hero.catalog">PI.DEV 包目录 ↗</a>
         </div>
       </div>
@@ -654,7 +792,7 @@ footer { border-top: 1px solid var(--rule); }
 <!-- ============ MARQUEE ============ -->
 <div class="marquee" aria-hidden="true">
   <div class="marquee-track" id="marquee-track">
-    <span>Background Terminal<i>·</i></span><span>Subagent<i>·</i></span><span>Workflow<i>·</i></span><span>Tasks<i>·</i></span><span>Goal<i>·</i></span><span>Plan Mode<i>·</i></span><span>Context Pivot<i>·</i></span><span>Sessions<i>·</i></span><span>Cron<i>·</i></span>
+    <span>Background Terminal<i>·</i></span><span>Subagent<i>·</i></span><span>Workflow<i>·</i></span><span>Tasks<i>·</i></span><span>Goal<i>·</i></span><span>Plan Mode<i>·</i></span><span>Context Pivot<i>·</i></span><span>Web Workbench<i>·</i></span><span>Sessions<i>·</i></span><span>Cron<i>·</i></span>
   </div>
 </div>
 
@@ -676,34 +814,22 @@ footer { border-top: 1px solid var(--rule); }
 
     <p class="pull-quote reveal" data-i18n-html="s1.pq">轻路径不缴复杂度税，<br />重任务不缺工程能力<i>。</i></p>
 
-    <div class="spec reveal">
-      <div class="spec-row spec-head">
-        <div></div><div data-i18n="s1.th1">使用场景</div><div data-i18n="s1.th2">模型看到什么</div><div data-i18n="s1.th3">OpenPI 的行为</div>
+    <div class="demand reveal">
+      <div class="demand-head">
+        <span class="sec-num">fig. 1</span>
+        <span data-i18n="d.h1">选一条请求，看模型这一轮实际拿到哪些工具</span>
       </div>
-      <div class="spec-row">
-        <div class="spec-idx">01.1</div>
-        <div class="spec-scene" data-i18n="s1.r1a">普通编码任务</div>
-        <div class="spec-cell" data-i18n-html="s1.r1b">Pi 原生 <em>read / bash / edit / write</em></div>
-        <div class="spec-cell" data-i18n="s1.r1c">默认不常驻任何 OpenPI 模型工具</div>
+      <div class="demand-grid">
+        <div class="scn-list" role="tablist" aria-label="Scenarios" id="scenarios"></div>
+        <div class="surface" role="tabpanel" id="demand-panel" aria-live="polite">
+          <div class="surface-top">
+            <div class="surface-count"><span id="count">0</span><small data-i18n="d.count">OpenPI 工具 · 本轮</small></div>
+            <p class="why" id="why"></p>
+          </div>
+          <div class="grp-rows" id="groups"></div>
+        </div>
       </div>
-      <div class="spec-row">
-        <div class="spec-idx">01.2</div>
-        <div class="spec-scene" data-i18n="s1.r2a">明确要求委派或高级能力</div>
-        <div class="spec-cell" data-i18n-html="s1.r2b">仅与意图匹配的<em>能力组</em></div>
-        <div class="spec-cell" data-i18n="s1.r2c">当轮开始前直接加载，不要求记住工具名</div>
-      </div>
-      <div class="spec-row">
-        <div class="spec-idx">01.3</div>
-        <div class="spec-scene" data-i18n="s1.r3a">主动开启 adaptive 模式</div>
-        <div class="spec-cell" data-i18n-html="s1.r3b">一个小型 <em>openpi_load_tools</em> 网关</div>
-        <div class="spec-cell" data-i18n="s1.r3c">主模型判断确有收益时，可自主加载一个能力组</div>
-      </div>
-      <div class="spec-row">
-        <div class="spec-idx">01.4</div>
-        <div class="spec-scene" data-i18n="s1.r4a">后台任务或子代理已运行</div>
-        <div class="spec-cell" data-i18n-html="s1.r4b">对应的状态、等待、继续与<em>停止工具</em></div>
-        <div class="spec-cell" data-i18n="s1.r4c">管理面随真实资源出现，结束后按生命周期收敛</div>
-      </div>
+      <p class="demand-note"><span class="lg lg-base" data-i18n="d.l1">Pi 原生，始终存在</span><span class="lg lg-on" data-i18n="d.l2">本轮加载</span><span class="lg lg-def" data-i18n="d.l3">资源真实存在后才出现</span><span class="lg-text" data-i18n-html="d.note">只讨论「子代理是什么」不会加载；否定与条件句保持 fail closed。想让模型自己判断，可在 <code>/openpi-setup</code> 开启 <code>adaptive</code>——只常驻一个小型 <code>openpi_load_tools</code> 网关。</span></p>
     </div>
   </div>
 </section>
@@ -721,22 +847,51 @@ footer { border-top: 1px solid var(--rule); }
 
     <div class="paths reveal">
       <div class="path-col">
+        <figure class="plate" aria-hidden="true">
+          <svg viewBox="0 0 320 150">
+            <g class="ps-row"><rect x="6" y="10" width="308" height="36" rx="5"/><circle class="pulse" cx="24" cy="28" r="4"/><text x="40" y="25">web dev server</text><text class="sm" x="40" y="38">npm run dev</text><text class="st b" x="300" y="32" text-anchor="end">running</text></g>
+            <g class="ps-row"><rect x="6" y="56" width="308" height="36" rx="5"/><circle class="done" cx="24" cy="74" r="4"/><text x="40" y="71">unit tests</text><text class="sm" x="40" y="84">vitest run · 41s</text><text class="st" x="300" y="78" text-anchor="end">exit 0</text></g>
+            <g class="ps-row"><rect x="6" y="102" width="308" height="36" rx="5"/><circle class="ring" cx="24" cy="120" r="4"/><text x="40" y="117">e2e suite</text><text class="sm" x="40" y="130">bg_watch "Ready in|ERROR"</text><text class="st" x="300" y="124" text-anchor="end">watching</text></g>
+          </svg>
+          <figcaption><span>fig. 2</span><span data-i18n="fig.2">/ps · 进程、日志与终态</span></figcaption>
+        </figure>
         <span class="path-num">i.</span>
         <span class="path-en">Background Terminal</span>
         <div class="path-name" data-i18n="s2.p1t">长期进程不阻塞对话</div>
         <p class="path-desc" data-i18n-html="s2.p1d">开发服务器、监听任务、长测试放进后台。独立日志、超时与完成通知；<code>bg_kill</code> 终止整个进程树，会话结束时有界清理。</p>
       </div>
       <div class="path-col">
+        <figure class="plate" aria-hidden="true">
+          <svg viewBox="0 0 320 150">
+            <rect class="box" x="6" y="58" width="78" height="34" rx="5"/><text x="45" y="73" text-anchor="middle">parent</text><text class="sm" x="45" y="85" text-anchor="middle">pi session</text>
+            <path class="wire" d="M84 75 C 130 75, 130 27, 176 27"/><path class="wire" d="M84 75 L 176 75"/><path class="wire" d="M84 75 C 130 75, 130 123, 176 123"/>
+            <path class="flow" d="M84 75 C 130 75, 130 27, 176 27"/><path class="flow f2" d="M84 75 L 176 75"/><path class="flow f3" d="M84 75 C 130 75, 130 123, 176 123"/>
+            <rect class="box" x="176" y="10" width="138" height="34" rx="5"/><text class="r" x="188" y="25">explorer</text><text class="sm" x="188" y="37">isolated context</text>
+            <rect class="box" x="176" y="58" width="138" height="34" rx="5"/><text class="r" x="188" y="73">reviewer</text><text class="sm" x="188" y="85">isolated context</text>
+            <rect class="box" x="176" y="106" width="138" height="34" rx="5"/><text class="r" x="188" y="121">implementer</text><text class="sm" x="188" y="133">worktree</text>
+          </svg>
+          <figcaption><span>fig. 3</span><span data-i18n="fig.3">一个父会话 · 多个独立子会话</span></figcaption>
+        </figure>
         <span class="path-num">ii.</span>
         <span class="path-en">Subagent</span>
         <div class="path-name" data-i18n="s2.p2t">隔离上下文，不另起系统</div>
-        <p class="path-desc" data-i18n-html="s2.p2d">每个子代理是独立的进程内 Pi 会话，继承 Provider、模型与信任决策；内置 <code>explorer / implementer / reviewer / advisor</code> 角色由运行时强制工具边界。</p>
+        <p class="path-desc" data-i18n-html="s2.p2d">每个子代理是独立的进程内 Pi 会话，默认继承 Provider 与模型；可 <code>check</code>、<code>wait</code>、<code>cancel</code>，也能继续对话。并行写入用独立 <code>worktree</code>，自定义角色的显式工具列表由运行时强制。</p>
       </div>
       <div class="path-col">
+        <figure class="plate" aria-hidden="true">
+          <svg viewBox="0 0 320 150">
+            <text class="sm" x="14" y="14">phase("Scan")</text><text class="sm" x="126" y="14">verify</text><text class="sm" x="240" y="14">report</text>
+            <path class="wire" d="M84 35 H126 M84 65 H126 M84 95 H126 M84 125 H126"/>
+            <path class="wire" d="M196 35 C 220 35, 220 80, 240 80 M196 65 C 220 65, 220 80, 240 80 M196 95 C 220 95, 220 80, 240 80 M196 125 C 220 125, 220 80, 240 80"/>
+            <rect class="cell" style="--d:0.00s" x="14" y="24" width="70" height="22" rx="4"/><rect class="cell" style="--d:0.25s" x="14" y="54" width="70" height="22" rx="4"/><rect class="cell" style="--d:0.50s" x="14" y="84" width="70" height="22" rx="4"/><rect class="cell" style="--d:0.75s" x="14" y="114" width="70" height="22" rx="4"/><rect class="cell v" style="--d:0.90s" x="126" y="24" width="70" height="22" rx="4"/><rect class="cell v" style="--d:1.25s" x="126" y="54" width="70" height="22" rx="4"/><rect class="cell v" style="--d:1.60s" x="126" y="84" width="70" height="22" rx="4"/><rect class="cell v" style="--d:1.95s" x="126" y="114" width="70" height="22" rx="4"/>
+            <rect class="cell r" style="--d:2.6s" x="240" y="54" width="70" height="52" rx="4"/><text class="sm ref" x="275" y="84" text-anchor="middle">ref × 4</text>
+          </svg>
+          <figcaption><span>fig. 4</span><span data-i18n="fig.4">pipeline · 每项完成即进入下一阶段</span></figcaption>
+        </figure>
         <span class="path-num">iii.</span>
         <span class="path-en">Workflow</span>
         <div class="path-name" data-i18n="s2.p3t">多阶段编排，有证据有产物</div>
-        <p class="path-desc" data-i18n-html="s2.p3d"><code>pipeline / parallel</code>、结构化输出、结果交接、验收账本与安全重放。一次调用是可审计的生命周期，而不是「进程退出 0」。</p>
+        <p class="path-desc" data-i18n-html="s2.p3d"><code>pipeline / parallel</code>、结构化输出、结果交接、调用账本与安全重放。一次调用是可审计的生命周期，而不是「进程退出 0」。</p>
       </div>
     </div>
 
@@ -759,12 +914,48 @@ footer { border-top: 1px solid var(--rule); }
       <span class="sec-ghost" data-i18n="s2b.ghost">终端里的样子</span>
     </div>
     <h2 class="reveal" data-i18n-html="s2b.h2">看得见，才停得住。</h2>
+    <p class="sec-lede reveal" data-i18n-html="s2b.lede">终端里，状态压进一行，工具结果折叠成语义摘要；需要看清多个项目的对话与工具轨迹时，输入 <code>/web</code> 打开本机 Web 工作台。两边使用同一套能力，会话彼此独立。</p>
+
+    <div class="plates-2 reveal" aria-hidden="true">
+      <figure class="plate">
+        <div class="mock-term">
+          <div><b class="ok">✓</b> <b>Read</b>  src/cart/summary.ts <span class="f">· 214 lines</span></div>
+          <div><b class="ok">✓</b> <b>Bash</b>  npm test -- cart <span class="f">· exit 0 · 3.1s</span></div>
+          <div><b class="ok">✓</b> <b>rg</b>    "discount" src/ <span class="f">· 7 matches</span></div>
+          <div><b class="ok">✓</b> <b>Edit</b>  src/cart/summary.ts <span class="f">· +6 −2</span></div>
+          <div class="f" data-i18n="mock.expand">  Ctrl+O 展开完整证据</div>
+          <div class="mt-strip"><span class="r">explorer</span><span>audit auth flow</span><span class="bar"><i></i></span><span class="ok">● 4 tools</span></div>
+          <div class="mt-foot"><span>◇ model</span><span>▣ ctx 18%</span><span class="sp"></span><span>⎇ feat/checkout</span><span>~/work/shop-web</span></div>
+        </div>
+        <figcaption><span>fig. 5</span><span data-i18n="fig.5">终端 · 一个动作一行</span></figcaption>
+      </figure>
+      <figure class="plate">
+        <div class="mock-web">
+          <div class="mw-bar"><i></i><i></i><i></i><span>http://127.0.0.1</span></div>
+          <div class="mw-main">
+            <div class="mw-side">
+              <span class="h" data-i18n="mock.ws">工作区</span><span class="it on">shop-web</span><span class="it">api-server</span>
+              <span class="h" data-i18n="mock.ss">会话</span><span class="it" data-i18n="mock.s1">结账流程修复</span><span class="it" data-i18n="mock.s2">依赖升级调研</span>
+            </div>
+            <div class="mw-chat">
+              <span class="bub" data-i18n="mock.bub">在后台启动 dev server</span>
+              <span class="tc"><span><b>bg_start</b> npm run dev</span><span class="ok">● running</span></span>
+              <span class="ans" data-i18n="mock.ans">已在后台启动，日志在 /ps 面板。我继续看价格计算……</span>
+              <span class="inp"><span data-i18n="mock.msg">输入消息，/ 查看命令</span><span>↵</span></span>
+            </div>
+          </div>
+        </div>
+        <figcaption><span>fig. 6</span><span data-i18n="fig.6">/web · 按工作区组织的独立会话</span></figcaption>
+      </figure>
+    </div>
 
     <div class="surface-list reveal">
       <div class="surface-item"><b><i>03.1</i><span data-i18n="s2b.f1t">紧凑工具结果</span></b><span data-i18n-html="s2b.f1d">每个动作一行语义摘要：目标、状态、关键规模；<code>Ctrl+O</code> 随时展开完整证据。</span></div>
       <div class="surface-item"><b><i>03.2</i><span data-i18n="s2b.f2t">下一步建议</span></b><span data-i18n-html="s2b.f2d">运行结束后，空输入框出现一条暗色幽灵建议；<code>→</code> 只填入不提交。默认关闭，写入会话之外。</span></div>
       <div class="surface-item"><b><i>03.3</i><span data-i18n="s2b.f3t">自定义角色</span></b><span data-i18n-html="s2b.f3d">全局 <code>~/.pi/agent/agents/*.md</code> 或项目 <code>.pi/agents/*.md</code> 覆盖内置角色，可指定独立模型与推理档位。</span></div>
       <div class="surface-item"><b><i>03.4</i><span data-i18n="s2b.f4t">可定制状态栏</span></b><span data-i18n-html="s2b.f4d">模型、上下文、Git、目录压进一行；powerline、紧凑或多行布局，由 <code>/openpi-setup</code> 调整。</span></div>
+      <div class="surface-item"><b><i>03.5</i><span data-i18n="s2b.f5t">本地 Web 工作台</span></b><span data-i18n-html="s2b.f5d">只监听 loopback；查看已保存的 Prompt、工具参数与结果轨迹。不接管、不写入终端里正在进行的对话；也可用 <code>openpi web /path/to/repo</code> 单独启动。</span></div>
+      <div class="surface-item"><b><i>03.6</i><span data-i18n="s2b.f6t">结构化搜索与只读 Git</span></b><span data-i18n-html="s2b.f6d"><code>fd</code>、<code>rg</code>、<code>git_show / git_diff / git_log</code> 以结构化参数调用，不拼接 Shell，输出有界。</span></div>
     </div>
   </div>
 </section>
@@ -788,6 +979,7 @@ footer { border-top: 1px solid var(--rule); }
       <div class="route-line"><span class="r-when" data-i18n="s3.q4">跨回合工作项</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a4">Tasks</span></div>
       <div class="route-line"><span class="r-when" data-i18n="s3.q5">持续自主目标</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a5">Goal</span></div>
       <div class="route-line"><span class="r-when" data-i18n="s3.q6">同一会话的阶段切换</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a6">上下文切换</span></div>
+      <div class="route-line"><span class="r-when" data-i18n="s3.q7">真正跨顶层 Session</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a7">pi-intercom（按需安装）</span></div>
     </div>
   </div>
 </section>
@@ -802,6 +994,24 @@ footer { border-top: 1px solid var(--rule); }
       <span class="sec-ghost" data-i18n="s4.ghost">不只是并行</span>
     </div>
     <h2 class="reveal" data-i18n-html="s4.h2">把一次调用，拆成<br />可以审计的生命周期。</h2>
+
+    <figure class="plate code-plate reveal" aria-hidden="true">
+<pre class="code"><span class="k">phase</span>(<span class="s">"Scan"</span>);
+<span class="k">const</span> checked = <span class="k">await</span> <span class="fn">pipeline</span>(files,
+  (file) =&gt; <span class="fn">agent</span>(<span class="s">`Trace ${file} for reliability risks`</span>, {
+    agent_type: <span class="s">"explorer"</span>, schema: FINDING_SCHEMA,
+  }),
+  (scan, file) =&gt; scan.ok
+    ? <span class="fn">agent</span>(<span class="s">`Verify findings in ${file}`</span>, { agent_type: <span class="s">"reviewer"</span>, inputs: [scan.ref] })
+    : <span class="k">null</span>,
+);
+
+<span class="k">phase</span>(<span class="s">"Report"</span>);
+<span class="k">return</span> <span class="fn">agent</span>(<span class="s">"Synthesize the verified findings"</span>, {
+  agent_type: <span class="s">"advisor"</span>, inputs: checked.filter((r) =&gt; r?.ok).map((r) =&gt; r.ref),
+});</pre>
+      <figcaption><span>fig. 7</span><span data-i18n="fig.7">一个两阶段 Workflow · 结果用 ref 显式交接</span></figcaption>
+    </figure>
 
     <div class="principles reveal">
       <div class="principle">
@@ -821,8 +1031,8 @@ footer { border-top: 1px solid var(--rule); }
       </div>
       <div class="principle">
         <span class="p-num">05.4</span>
-        <h3 data-i18n="s4.p4t">显式验收</h3>
-        <p data-i18n-html="s4.p4d">可选 <code>acceptance.criteria</code> 要求代理返回证据账本。条件缺失或被拒绝时返回 <code>ok: false</code>，原始输出仍保留——不暗中再启动评审。</p>
+        <h3 data-i18n="s4.p4t">Worktree 交接</h3>
+        <p data-i18n-html="s4.p4d">清理隔离 checkout 前，原子保存 patch、分支 / HEAD、未跟踪文件清单与清理回执。状态不明就保留现场，不自动 merge、apply 或强删。</p>
       </div>
     </div>
   </div>
@@ -839,9 +1049,17 @@ footer { border-top: 1px solid var(--rule); }
     </div>
     <h2 class="reveal" data-i18n-html="s5.h2">安全不是一段提示词，<br />而是运行时约束。</h2>
 
+    <div class="states reveal">
+      <div class="state"><span class="st-name" style="--c:#2E8B7A">completed</span><span class="st-d" data-i18n="s5.st1">子会话执行与结果制品都成功</span></div>
+      <div class="state"><span class="st-name" style="--c:#C4553F">failed</span><span class="st-d" data-i18n="s5.st2">保留原生 Provider 错误与原始输出</span></div>
+      <div class="state"><span class="st-name" style="--c:var(--ink-faint)">cancelled</span><span class="st-d" data-i18n="s5.st3">显式取消与 Session 清理都有时间上限</span></div>
+      <div class="state uncertain"><span class="st-name" style="--c:#C98A1E">uncertain</span><span class="st-d" data-i18n="s5.st4">崩溃后仍未终结的调用——不猜成成功、失败或可安全重试</span></div>
+    </div>
+
     <div class="safety-list reveal">
       <div class="safety-item"><span class="s-key">child.recursion</span><span class="s-val" data-i18n="s5.i1">禁止。子代理与工作流子会话不获得父级编排、交互与状态工具</span></div>
       <div class="safety-item"><span class="s-key">agent_type.tools</span><span class="s-val" data-i18n="s5.i2">运行时强制白名单；声明不能突破父级黑名单</span></div>
+      <div class="safety-item"><span class="s-key">tools.preflight</span><span class="s-val" data-i18n="s5.i9">未知、损坏、错名或最终未注册的工具在首个 Token 前失败</span></div>
       <div class="safety-item"><span class="s-key">workflow.sandbox</span><span class="s-val" data-i18n="s5.i3">无文件、网络、进程、import、eval 或计时器接口</span></div>
       <div class="safety-item"><span class="s-key">replay</span><span class="s-val" data-i18n="s5.i4">只有可证明只读、指纹完整且无不安全重叠的调用才缓存</span></div>
       <div class="safety-item"><span class="s-key">worktree.cleanup</span><span class="s-val" data-i18n="s5.i5">未知即保留；状态不确定时绝不删除现场</span></div>
@@ -865,6 +1083,7 @@ footer { border-top: 1px solid var(--rule); }
 
     <div class="cmd-list reveal">
       <div class="cmd-row"><div class="c">/openpi-setup <span class="blue" data-i18n="s6.nl">[自然语言]</span></div><div class="d" data-i18n="s6.c1">查看或修改统一配置；可选择安装会话间通信</div></div>
+      <div class="cmd-row"><div class="c">/web</div><div class="d" data-i18n="s6.c9">前台运行独立 Web 工作台；Ctrl+C 回到 Pi</div></div>
       <div class="cmd-row"><div class="c">/ps</div><div class="d" data-i18n="s6.c2">查看、跟踪与终止后台终端</div></div>
       <div class="cmd-row"><div class="c">/subagents · /btw</div><div class="d" data-i18n="s6.c3">管理子代理 / 在旁路上下文中提问</div></div>
       <div class="cmd-row"><div class="c">/workflows</div><div class="d" data-i18n="s6.c4">查看阶段、代理、图谱与产物；可停止运行</div></div>
@@ -872,6 +1091,7 @@ footer { border-top: 1px solid var(--rule); }
       <div class="cmd-row"><div class="c">/plan <span class="blue" data-i18n="s6.gl">[目标]</span></div><div class="d" data-i18n="s6.c6">只读调研；计划就绪后显式选择实施方式</div></div>
       <div class="cmd-row"><div class="c">/context-pivot <span class="blue" data-i18n="s6.pl">&lt;阶段&gt;</span></div><div class="d" data-i18n="s6.c7">在同一会话中压缩旧阶段并继续</div></div>
       <div class="cmd-row"><div class="c">/sessions</div><div class="d" data-i18n="s6.c8">搜索、预览与切换会话</div></div>
+      <div class="cmd-row"><div class="c">/cron <span class="blue">…</span></div><div class="d" data-i18n="s6.c10">为当前会话安排一次或周期性 Prompt</div></div>
     </div>
   </div>
 </section>
@@ -893,11 +1113,13 @@ footer { border-top: 1px solid var(--rule); }
       </div>
     </div>
     <div class="final-links reveal">
-      <a href="https://github.com/tt-a1i/openpi" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/openpi-dev/openpi" target="_blank" rel="noopener">GitHub</a>
       <a href="https://www.npmjs.com/package/@tt-a1i/openpi" target="_blank" rel="noopener">npm</a>
-      <a href="https://github.com/tt-a1i/openpi/issues/22" target="_blank" rel="noopener">Benchmark</a>
-      <a href="https://github.com/tt-a1i/openpi/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/openpi-dev/openpi/issues/22" target="_blank" rel="noopener">Benchmark</a>
+      <a href="https://github.com/openpi-dev/openpi/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/openpi-dev/openpi/issues/455" target="_blank" rel="noopener" data-i18n="s7.fb">参与体验改进</a>
     </div>
+    <svg class="final-mark" viewBox="160 160 480 480" aria-hidden="true"><path fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path class="b" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>
   </div>
 </section>
 
@@ -906,7 +1128,7 @@ footer { border-top: 1px solid var(--rule); }
 <footer>
   <div class="foot-inner">
     <span><strong style="color:var(--ink)">OpenPI</strong> · MIT License</span>
-    <a href="https://github.com/tt-a1i/openpi/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">Third-party notices</a>
+    <a href="https://github.com/openpi-dev/openpi/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">Third-party notices</a>
     <a href="https://pi.dev" target="_blank" rel="noopener" data-i18n="foot.built">为 Pi 而建</a>
     <a href="https://pi.dev/packages/@tt-a1i/openpi" target="_blank" rel="noopener" data-i18n="foot.catalog">收录于 Pi 包目录</a>
     <span class="foot-note" data-i18n="foot.note">OpenPI 是独立社区项目，与 Physical Intelligence 的 openpi 机器人项目及 Pi 官方均无关联。项目最初基于 davis7dotsh/my-pi-setup 演进，现作为独立发行版维护。</span>
@@ -919,30 +1141,35 @@ const I18N = {
     'nav.philosophy': '理念', 'nav.paths': '能力', 'nav.runtime': '运行模型', 'nav.safety': '安全边界', 'nav.commands': '命令',
     'hero.eyebrow': 'PI 原生能力层',
     'hero.eyebrowR': '一个安装包 · 完整工作台',
-    'term.title': 'openpi 工作台',
+    'term.title': 'openpi 工作台', 'term.toolsL': 'OpenPI 工具',
     'hero.promise': 'Pi 为核心，<br /><i>能力随需而至。</i>',
-    'hero.sub': '后台终端、子代理、工作流与持续任务，装进同一个 Pi 工作台。普通对话不常驻任何 OpenPI 工具——不用时，依然是 Pi。',
+    'hero.sub': '终端与本地 Web 工作台、独立上下文的子代理、Workflow 与后台任务，装进同一个 Pi。普通对话不常驻任何 OpenPI 工具——不用时，依然是 Pi。',
     'hero.catalog': 'PI.DEV 包目录 ↗',
     's1.tag': '理念', 's1.ghost': '默认轻，按需强',
     's1.h2': '复杂度只在值得的时候出现。',
     's1.lede': '普通编码任务继续走 Pi 原生路径：<strong>read、bash、edit、write</strong>，完整历史与会话压缩。任务一旦需要长期进程、并行调研、隔离实现或跨回合推进，高级能力仍然完整存在——直接说出需求，OpenPI 就在当轮加载对应能力。',
     's1.pq': '轻路径不缴复杂度税，<br />重任务不缺工程能力<i>。</i>',
-    's1.th1': '使用场景', 's1.th2': '模型看到什么', 's1.th3': 'OpenPI 的行为',
-    's1.r1a': '普通编码任务', 's1.r1b': 'Pi 原生 <em>read / bash / edit / write</em>', 's1.r1c': '默认不常驻任何 OpenPI 模型工具',
-    's1.r2a': '明确要求委派或高级能力', 's1.r2b': '仅与意图匹配的<em>能力组</em>', 's1.r2c': '当轮开始前直接加载，不要求记住工具名',
-    's1.r3a': '主动开启 adaptive 模式', 's1.r3b': '一个小型 <em>openpi_load_tools</em> 网关', 's1.r3c': '主模型判断确有收益时，可自主加载一个能力组',
-    's1.r4a': '后台任务或子代理已运行', 's1.r4b': '对应的状态、等待、继续与<em>停止工具</em>', 's1.r4c': '管理面随真实资源出现，结束后按生命周期收敛',
+    'd.h1': '选一条请求，看模型这一轮实际拿到哪些工具', 'd.count': 'OpenPI 工具 · 本轮',
+    'd.l1': 'Pi 原生，始终存在', 'd.l2': '本轮加载', 'd.l3': '资源真实存在后才出现',
+    'd.note': '只讨论「子代理是什么」不会加载；否定与条件句保持 fail closed。想让模型自己判断，可在 <code>/openpi-setup</code> 开启 <code>adaptive</code>——只常驻一个小型 <code>openpi_load_tools</code> 网关。',
     's2.tag': '能力', 's2.ghost': '三条执行路径',
     's2.h2': '一个工作台，<br />而不是一组互不协调的插件。',
     's2.p1t': '长期进程不阻塞对话', 's2.p1d': '开发服务器、监听任务、长测试放进后台。独立日志、超时与完成通知；<code>bg_kill</code> 终止整个进程树，会话结束时有界清理。',
-    's2.p2t': '隔离上下文，不另起系统', 's2.p2d': '每个子代理是独立的进程内 Pi 会话，继承 Provider、模型与信任决策；内置 <code>explorer / implementer / reviewer / advisor</code> 角色由运行时强制工具边界。',
-    's2.p3t': '多阶段编排，有证据有产物', 's2.p3d': '<code>pipeline / parallel</code>、结构化输出、结果交接、验收账本与安全重放。一次调用是可审计的生命周期，而不是「进程退出 0」。',
+    's2.p2t': '隔离上下文，不另起系统', 's2.p2d': '每个子代理是独立的进程内 Pi 会话，默认继承 Provider 与模型；可 <code>check</code>、<code>wait</code>、<code>cancel</code>，也能继续对话。并行写入用独立 <code>worktree</code>，自定义角色的显式工具列表由运行时强制。',
+    's2.p3t': '多阶段编排，有证据有产物', 's2.p3d': '<code>pipeline / parallel</code>、结构化输出、结果交接、调用账本与安全重放。一次调用是可审计的生命周期，而不是「进程退出 0」。',
+    'fig.2': '/ps · 进程、日志与终态', 'fig.3': '一个父会话 · 多个独立子会话', 'fig.4': 'pipeline · 每项完成即进入下一阶段',
     's2.c1t': '工作项与目标', 's2.c1d': '跨回合的工作清单与持续自主目标，完成前要求证据审计',
     's2.c2t': '计划模式', 's2.c2d': '只读调研与批准门禁，计划就绪后才准备实施',
     's2.c3t': '上下文切换', 's2.c3d': '同一会话的阶段切换，用自包含简报替换旧噪音',
     's2.c4t': '可观测性', 's2.c4d': '状态栏、仪表盘、产物与完成通知统一呈现状态',
     's2b.tag': '界面', 's2b.ghost': '终端里的样子',
     's2b.h2': '看得见，才停得住。',
+    's2b.lede': '终端里，状态压进一行，工具结果折叠成语义摘要；需要看清多个项目的对话与工具轨迹时，输入 <code>/web</code> 打开本机 Web 工作台。两边使用同一套能力，会话彼此独立。',
+    's2b.f5t': '本地 Web 工作台', 's2b.f5d': '只监听 loopback；查看已保存的 Prompt、工具参数与结果轨迹。不接管、不写入终端里正在进行的对话；也可用 <code>openpi web /path/to/repo</code> 单独启动。',
+    's2b.f6t': '结构化搜索与只读 Git', 's2b.f6d': '<code>fd</code>、<code>rg</code>、<code>git_show / git_diff / git_log</code> 以结构化参数调用，不拼接 Shell，输出有界。',
+    'fig.5': '终端 · 一个动作一行', 'fig.6': '/web · 按工作区组织的独立会话',
+    'mock.expand': '  Ctrl+O 展开完整证据', 'mock.ws': '工作区', 'mock.ss': '会话', 'mock.s1': '结账流程修复', 'mock.s2': '依赖升级调研',
+    'mock.bub': '在后台启动 dev server', 'mock.ans': '已在后台启动，日志在 /ps 面板。我继续看价格计算……', 'mock.msg': '输入消息，/ 查看命令',
     's2b.f1t': '紧凑工具结果', 's2b.f1d': '每个动作一行语义摘要：目标、状态、关键规模；<code>Ctrl+O</code> 随时展开完整证据。',
     's2b.f2t': '下一步建议', 's2b.f2d': '运行结束后，空输入框出现一条暗色幽灵建议；<code>→</code> 只填入不提交。默认关闭，写入会话之外。',
     's2b.f3t': '自定义角色', 's2b.f3d': '全局 <code>~/.pi/agent/agents/*.md</code> 或项目 <code>.pi/agents/*.md</code> 覆盖内置角色，可指定独立模型与推理档位。',
@@ -956,14 +1183,18 @@ const I18N = {
     's3.q4': '跨回合工作项', 's3.a4': 'Tasks',
     's3.q5': '持续自主目标', 's3.a5': 'Goal',
     's3.q6': '同一会话的阶段切换', 's3.a6': '上下文切换',
+    's3.q7': '真正跨顶层 Session', 's3.a7': 'pi-intercom（按需安装）',
     's4.tag': '工作流', 's4.ghost': '不只是并行',
     's4.h2': '把一次调用，拆成<br />可以审计的生命周期。',
     's4.p1t': '结果交接与派生图谱', 's4.p1d': '成功调用返回不透明引用 <code>ref</code>，后续调用通过 <code>inputs</code> 显式接收上游结论，并标记为不可信数据。产物从引用派生只读图谱，可观察血缘，不参与调度。',
     's4.p2t': '调用账本', 's4.p2d': '每次 <code>agent()</code> 独立记录意图、准入与执行状态。崩溃后未终结的调用恢复为 <code>uncertain</code>——不猜成成功、失败或安全重试。',
     's4.p3t': '安全重放', 's4.p3d': '<code>resume_from_run_id</code> 只重放可证明只读且指纹未变的调用。指纹覆盖提示词、结构、模型、仓库状态与信任决策；不确定就真实执行。',
-    's4.p4t': '显式验收', 's4.p4d': '可选 <code>acceptance.criteria</code> 要求代理返回证据账本。条件缺失或被拒绝时返回 <code>ok: false</code>，原始输出仍保留——不暗中再启动评审。',
+    's4.p4t': 'Worktree 交接', 's4.p4d': '清理隔离 checkout 前，原子保存 patch、分支 / HEAD、未跟踪文件清单与清理回执。状态不明就保留现场，不自动 merge、apply 或强删。',
+    'fig.7': '一个两阶段 Workflow · 结果用 ref 显式交接',
     's5.tag': '安全边界', 's5.ghost': '运行时约束',
     's5.h2': '安全不是一段提示词，<br />而是运行时约束。',
+    's5.st1': '子会话执行与结果制品都成功', 's5.st2': '保留原生 Provider 错误与原始输出', 's5.st3': '显式取消与 Session 清理都有时间上限', 's5.st4': '崩溃后仍未终结的调用——不猜成成功、失败或可安全重试',
+    's5.i9': '未知、损坏、错名或最终未注册的工具在首个 Token 前失败',
     's5.i1': '禁止。子代理与工作流子会话不获得父级编排、交互与状态工具',
     's5.i2': '运行时强制白名单；声明不能突破父级黑名单',
     's5.i3': '无文件、网络、进程、import、eval 或计时器接口',
@@ -983,7 +1214,8 @@ const I18N = {
     's6.c6': '只读调研；计划就绪后显式选择实施方式',
     's6.c7': '在同一会话中压缩旧阶段并继续',
     's6.c8': '搜索、预览与切换会话',
-    's7.tag': '安装',
+    's6.c9': '前台运行独立 Web 工作台；Ctrl+C 回到 Pi', 's6.c10': '为当前会话安排一次或周期性 Prompt',
+    's7.tag': '安装', 's7.fb': '参与体验改进',
     's7.h2': '装一个就够了。<br /><i>不用时，依然是 Pi。</i>',
     'foot.built': '为 Pi 而建',
     'foot.catalog': '收录于 Pi 包目录',
@@ -993,30 +1225,35 @@ const I18N = {
     'nav.philosophy': 'Philosophy', 'nav.paths': 'Capabilities', 'nav.runtime': 'Runtime', 'nav.safety': 'Boundaries', 'nav.commands': 'Commands',
     'hero.eyebrow': 'Pi-native capability layer',
     'hero.eyebrowR': 'One package · the full workbench',
-    'term.title': 'openpi workbench',
+    'term.title': 'openpi workbench', 'term.toolsL': 'OpenPI tools',
     'hero.promise': 'Pi at the core.<br /><i>Power on demand.</i>',
-    'hero.sub': 'Background terminals, subagents, workflows, and continuous tasks in one Pi workbench. Ordinary turns carry zero resident OpenPI tools — when not in use, it is still just Pi.',
+    'hero.sub': 'A terminal and local Web workbench, isolated subagents, workflows, and background tasks — inside Pi. Ordinary turns carry zero resident OpenPI tools; when not in use, it is still just Pi.',
     'hero.catalog': 'PI.DEV CATALOG ↗',
     's1.tag': 'Philosophy', 's1.ghost': 'Light by default, strong on demand',
     's1.h2': 'Complexity appears only when it earns its place.',
     's1.lede': 'Ordinary coding stays on Pi\u2019s native path: <strong>read, bash, edit, write</strong>, with full history and session compaction. When work calls for long-running processes, parallel research, isolated implementation, or multi-turn progress, the advanced capabilities are all still there — state the need, and OpenPI loads the matching capability that very turn.',
     's1.pq': 'Light paths pay no complexity tax.<br /><i>Heavy tasks lack no engineering depth.</i>',
-    's1.th1': 'Scenario', 's1.th2': 'What the model sees', 's1.th3': 'What OpenPI does',
-    's1.r1a': 'Ordinary coding task', 's1.r1b': 'Pi-native <em>read / bash / edit / write</em>', 's1.r1c': 'No resident OpenPI model tools by default',
-    's1.r2a': 'Explicit delegation or advanced capability', 's1.r2b': 'Only the <em>capability group</em> matching intent', 's1.r2c': 'Loaded before the turn begins — no tool names to memorize',
-    's1.r3a': 'User enables adaptive mode', 's1.r3b': 'One small <em>openpi_load_tools</em> gateway', 's1.r3c': 'The model may load a group itself when it judges real benefit',
-    's1.r4a': 'Background tasks or subagents running', 's1.r4b': 'Status, wait, resume, and <em>stop</em> tools', 's1.r4c': 'Management surfaces appear with real resources, then fold away',
+    'd.h1': 'Pick a request to see which tools the model actually gets this turn', 'd.count': 'OpenPI tools · this turn',
+    'd.l1': 'Pi native, always there', 'd.l2': 'Loaded this turn', 'd.l3': 'Appears once a real resource exists',
+    'd.note': 'Merely discussing \u201cwhat is a subagent\u201d loads nothing; negations and conditionals stay fail-closed. Want the model to decide? Enable <code>adaptive</code> in <code>/openpi-setup</code> — only one small <code>openpi_load_tools</code> gateway stays resident.',
     's2.tag': 'Capabilities', 's2.ghost': 'Three execution paths',
     's2.h2': 'One workbench,<br />not a pile of uncoordinated plugins.',
     's2.p1t': 'Long processes never block the agent', 's2.p1d': 'Dev servers, watchers, and long test runs move to the background. Separate logs, timeouts, and completion notifications; <code>bg_kill</code> stops the whole process tree, with bounded cleanup at session end.',
-    's2.p2t': 'Isolated context, no second system', 's2.p2d': 'Every subagent is an independent in-process Pi session inheriting provider, model, and trust decisions; built-in <code>explorer / implementer / reviewer / advisor</code> roles enforce tool boundaries at runtime.',
-    's2.p3t': 'Multi-stage orchestration with evidence', 's2.p3d': '<code>pipeline / parallel</code>, structured output, result handoff, acceptance ledgers, and safe replay. One invocation is an auditable lifecycle, not \u201cprocess exited 0\u201d.',
+    's2.p2t': 'Isolated context, no second system', 's2.p2d': 'Every subagent is an independent in-process Pi session that inherits the parent provider and model; <code>check</code>, <code>wait</code>, <code>cancel</code>, or keep talking to it. Parallel writes get an isolated <code>worktree</code>; explicit tool lists in custom roles are enforced at runtime.',
+    's2.p3t': 'Multi-stage orchestration with evidence', 's2.p3d': '<code>pipeline / parallel</code>, structured output, result handoff, an invocation ledger, and safe replay. One invocation is an auditable lifecycle, not \u201cprocess exited 0\u201d.',
+    'fig.2': '/ps · processes, logs, exit state', 'fig.3': 'one parent · isolated child sessions', 'fig.4': 'pipeline · items advance independently',
     's2.c1t': 'Tasks & Goals', 's2.c1d': 'Cross-turn work items and persistent goals, with an evidence audit before completion',
     's2.c2t': 'Plan Mode', 's2.c2d': 'Read-only research and an approval gate; implementation begins only when the plan is ready',
     's2.c3t': 'Context Pivot', 's2.c3d': 'Phase transitions within one session, replacing stale noise with a self-contained brief',
     's2.c4t': 'Observability', 's2.c4d': 'Footer, dashboard, artifacts, and completion notices present state uniformly',
     's2b.tag': 'Surface', 's2b.ghost': 'How it looks in the terminal',
     's2b.h2': 'Visible enough to stop.',
+    's2b.lede': 'In the terminal, state fits in one line and tool results fold into semantic summaries. When you need to see conversations and tool trails across projects, type <code>/web</code> for the local Web workbench. Same capabilities, independent sessions.',
+    's2b.f5t': 'Local Web workbench', 's2b.f5d': 'Loopback only; inspect saved prompts, tool arguments, and result trails. It never takes over or writes into a running terminal conversation; or launch it with <code>openpi web /path/to/repo</code>.',
+    's2b.f6t': 'Structured search & read-only Git', 's2b.f6d': '<code>fd</code>, <code>rg</code>, and <code>git_show / git_diff / git_log</code> take structured arguments — no shell concatenation, bounded output.',
+    'fig.5': 'terminal · one line per action', 'fig.6': '/web · independent sessions by workspace',
+    'mock.expand': '  Ctrl+O expands the full evidence', 'mock.ws': 'Workspaces', 'mock.ss': 'Sessions', 'mock.s1': 'Fix checkout flow', 'mock.s2': 'Dependency survey',
+    'mock.bub': 'Start the dev server in the background', 'mock.ans': 'Started in the background; logs are in the /ps panel. On to the price math…', 'mock.msg': 'Message, or / for commands',
     's2b.f1t': 'Compact tool results', 's2b.f1d': 'Every action becomes a one-line semantic summary — target, status, key size; <code>Ctrl+O</code> expands the full evidence any time.',
     's2b.f2t': 'Next-action suggestion', 's2b.f2d': 'After a run, an empty editor shows one dim ghost suggestion; <code>→</code> fills it in without submitting. Off by default, never written into the session.',
     's2b.f3t': 'Custom roles', 's2b.f3d': 'Global <code>~/.pi/agent/agents/*.md</code> or project-level <code>.pi/agents/*.md</code> override built-in roles, with their own model and reasoning effort.',
@@ -1030,14 +1267,18 @@ const I18N = {
     's3.q4': 'Cross-turn work items', 's3.a4': 'Tasks',
     's3.q5': 'Persistent autonomous goal', 's3.a5': 'Goal',
     's3.q6': 'Phase transition within one session', 's3.a6': 'Context Pivot',
+    's3.q7': 'Truly across top-level sessions', 's3.a7': 'pi-intercom (optional)',
     's4.tag': 'Workflow', 's4.ghost': 'More than parallelism',
     's4.h2': 'Every invocation becomes<br />an auditable lifecycle.',
     's4.p1t': 'Result handoff & derived graph', 's4.p1d': 'A successful call returns an opaque <code>ref</code>; downstream calls receive upstream conclusions explicitly through <code>inputs</code>, marked as untrusted data. Artifacts derive a read-only graph for lineage — never for scheduling.',
     's4.p2t': 'Invocation ledger', 's4.p2d': 'Every <code>agent()</code> records intent, admission, and execution state independently. Calls still open after a crash recover as <code>uncertain</code> — never guessed as success, failure, or safe retry.',
     's4.p3t': 'Safe replay', 's4.p3d': '<code>resume_from_run_id</code> replays only calls proven read-only with an unchanged fingerprint — prompt, schema, model, repo state, and trust. When in doubt, it executes for real.',
-    's4.p4t': 'Explicit acceptance', 's4.p4d': 'Optional <code>acceptance.criteria</code> requires the agent to return an evidence ledger. Missing or rejected criteria yield <code>ok: false</code> with the raw output preserved — no hidden judge is ever spawned.',
+    's4.p4t': 'Worktree handoff', 's4.p4d': 'Before an isolated checkout is cleaned up, its patch, branch / HEAD, untracked inventory, and cleanup receipt are saved atomically. When state is unclear, the scene is kept — no automatic merge, apply, or force delete.',
+    'fig.7': 'a two-phase workflow · results hand off explicitly via ref',
     's5.tag': 'Boundaries', 's5.ghost': 'Runtime constraints',
     's5.h2': 'Safety is not a prompt.<br />It is a runtime constraint.',
+    's5.st1': 'Child execution and its result artifact both succeeded', 's5.st2': 'Native provider errors and raw output are preserved', 's5.st3': 'Explicit cancel and session cleanup are both time-bounded', 's5.st4': 'A call still open after a crash — never guessed as success, failure, or safe retry',
+    's5.i9': 'Unknown, broken, misnamed, or unregistered tools fail before the first token',
     's5.i1': 'Forbidden. Subagent and workflow children never receive parent orchestration, interaction, or state tools',
     's5.i2': 'Runtime-enforced allowlists; role declarations cannot break through the parent denylist',
     's5.i3': 'No file, network, process, import, eval, or timer APIs',
@@ -1057,7 +1298,8 @@ const I18N = {
     's6.c6': 'Read-only research; choose implementation explicitly once ready',
     's6.c7': 'Compact the old phase and continue in the same session',
     's6.c8': 'Search, preview, and switch sessions',
-    's7.tag': 'Install',
+    's6.c9': 'Run the independent Web workbench; Ctrl+C returns to Pi', 's6.c10': 'Schedule a one-off or recurring prompt for this session',
+    's7.tag': 'Install', 's7.fb': 'Help improve the UX',
     's7.h2': 'Install once.<br /><i>It stays just Pi.</i>',
     'foot.built': 'Built for Pi',
     'foot.catalog': 'Listed in the Pi Package Catalog',
@@ -1070,31 +1312,40 @@ const TERM_LINES = {
   zh: [
     { cls: 't-cmd', text: 'pi install npm:@tt-a1i/openpi' },
     { cls: 't-ok', text: '✓ 已安装 · 普通对话零常驻工具' },
-    { cls: 't-cmd', text: '后台启动 dev server，用子代理检查主链路' },
+    { cls: 't-user', text: '在后台启动 dev server，用子代理检查主链路', html: '在<mark>后台启动</mark> dev server，<mark>用子代理</mark>检查主链路' },
+    { cls: 't-load', html: '◆ 当轮加载 <span>background</span> · <span>delegate</span>', tools: 7 },
     { cls: 't-out', text: '● 后台终端  web dev server · 运行中' },
-    { cls: 't-out', text: '● 子代理  audit main flow · 完成' },
+    { cls: 't-out', text: '● 子代理    audit main flow · 已回传' },
   ],
   en: [
     { cls: 't-cmd', text: 'pi install npm:@tt-a1i/openpi' },
     { cls: 't-ok', text: '✓ installed · zero resident tools' },
-    { cls: 't-cmd', text: 'run the dev server in background, audit the main flow' },
+    { cls: 't-user', text: 'run the dev server in the background, use a subagent to audit the main flow', html: '<mark>run the dev server in the background</mark>, <mark>use a subagent</mark> to audit the main flow' },
+    { cls: 't-load', html: '◆ loaded this turn <span>background</span> · <span>delegate</span>', tools: 7 },
     { cls: 't-out', text: '● background  web dev server · running' },
-    { cls: 't-out', text: '● subagent  audit main flow · done' },
+    { cls: 't-out', text: '● subagent    audit main flow · returned' },
   ],
 };
 let termTimer = null;
 let langReady = false;
+function setTermTools(n) {
+  const el = document.getElementById('term-n');
+  el.textContent = n;
+  el.classList.toggle('lit', n > 0);
+}
 function resetTerm() {
   const body = document.getElementById('term-body');
   if (!body) return;
   if (termTimer) { clearTimeout(termTimer); termTimer = null; }
   const lines = TERM_LINES[document.documentElement.getAttribute('data-lang') || 'zh'];
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const fill = (d, l) => { if (l.html) d.innerHTML = l.html; else d.textContent = l.text; if (l.tools) setTermTools(l.tools); };
   body.innerHTML = '';
+  setTermTools(0);
   if (reduced) {
     for (const l of lines) {
       const d = document.createElement('div');
-      d.className = l.cls; d.textContent = l.text;
+      d.className = l.cls; fill(d, l);
       body.appendChild(d);
     }
     return;
@@ -1106,7 +1357,7 @@ function resetTerm() {
     const d = document.createElement('div');
     d.className = l.cls;
     body.appendChild(d);
-    if (l.cls !== 't-cmd') { d.textContent = l.text; termTimer = setTimeout(nextLine, 520); return; }
+    if (!l.text || l.cls === 't-ok' || l.cls === 't-out') { fill(d, l); termTimer = setTimeout(nextLine, 560); return; }
     let ci = 0;
     const caret = document.createElement('span');
     caret.className = 'caret';
@@ -1117,12 +1368,73 @@ function resetTerm() {
         termTimer = setTimeout(typeChar, 16 + Math.random() * 30);
       } else {
         caret.remove();
-        termTimer = setTimeout(nextLine, 480);
+        termTimer = setTimeout(() => { fill(d, l); termTimer = setTimeout(nextLine, 420); }, 260);
       }
     })();
   }
   termTimer = setTimeout(nextLine, 900);
 }
+
+/* on-demand demo — groups mirror extensions/shared/tool-surface.ts */
+const GROUPS = [
+  { id: 'pi', base: true, tools: ['read', 'bash', 'edit', 'write'] },
+  { id: 'search', tools: ['fd', 'rg', 'git_show', 'git_diff', 'git_log'] },
+  { id: 'delegate', tools: ['subagent_spawn', 'subagent_wait', 'subagent_check', 'subagent_send', 'subagent_cancel', 'subagent_list'] },
+  { id: 'workflow', tools: ['workflow', 'workflow_status', 'workflow_stop'] },
+  { id: 'background', tools: ['bg_start'], deferred: ['bg_status', 'bg_list', 'bg_watch', 'bg_kill'] },
+  { id: 'session', tools: ['tasks_add', 'create_goal'], deferred: ['tasks_update', 'tasks_list', 'get_goal', 'update_goal'] },
+];
+const GROUP_NAME = { pi: 'pi native', search: 'search', delegate: 'delegate', workflow: 'workflow', background: 'background', session: 'session' };
+const SCENARIOS = {
+  zh: [
+    { tag: '普通编码', load: [], prompt: '修复 CartSummary 里折扣为 0 时的空指针', why: '普通编码只走 Pi 原生工具。没有 OpenPI 工具常驻，上下文里也没有它们的说明。' },
+    { tag: 'background', load: ['background'], prompt: '在后台启动 dev server，我继续改页面', why: '当轮开始前加载 <code>background</code> 组；<code>bg_status</code>、<code>bg_kill</code> 等管理工具等进程真实存在后才出现。' },
+    { tag: 'delegate', load: ['delegate'], prompt: '用子代理分别检查登录流程和相关测试，最后汇总', why: '加载 <code>delegate</code> 组。启动几个、怎么分工由模型决定——加载不等于立即启动任务。' },
+    { tag: 'workflow', load: ['workflow'], prompt: '用工作流分批审查这些模块，先并行收集问题再汇总', why: '加载 <code>workflow</code> 组：phase、pipeline 与结构化结果在沙箱脚本中组合。' },
+    { tag: 'plan mode', load: ['search'], prompt: '/plan 把支付接口迁移到 v2', why: 'Plan Mode 是运行时例外：自动加载 <code>search</code> 组，只读调研直接使用 fd、rg 与结构化 Git。' },
+  ],
+  en: [
+    { tag: 'ordinary coding', load: [], prompt: 'Fix the null pointer in CartSummary when the discount is 0', why: 'Ordinary coding uses Pi\u2019s native tools only. No OpenPI tool is resident, and none of their instructions sit in context.' },
+    { tag: 'background', load: ['background'], prompt: 'Run the dev server in the background while I edit the page', why: 'Loads the <code>background</code> group before the turn; <code>bg_status</code> and <code>bg_kill</code> appear only once a process really exists.' },
+    { tag: 'delegate', load: ['delegate'], prompt: 'Use subagents to check the login flow and its tests, then summarize', why: 'Loads the <code>delegate</code> group. How many to spawn and how to split is the model\u2019s call — loading never starts work by itself.' },
+    { tag: 'workflow', load: ['workflow'], prompt: 'Use a workflow to review these modules in batches, then synthesize', why: 'Loads the <code>workflow</code> group: phases, pipelines, and structured results composed in a sandboxed script.' },
+    { tag: 'plan mode', load: ['search'], prompt: '/plan migrate the payments API to v2', why: 'Plan Mode is a runtime exception: it loads the <code>search</code> group so read-only research can use fd, rg, and structured git directly.' },
+  ],
+};
+const ROMAN = ['i.', 'ii.', 'iii.', 'iv.', 'v.'];
+let scnIndex = 1;
+const curLang = () => document.documentElement.getAttribute('data-lang') || 'zh';
+function renderScenarios() {
+  document.getElementById('scenarios').innerHTML = SCENARIOS[curLang()].map((s, i) =>
+    `<button type="button" class="scn" role="tab" id="scn-${i}" aria-controls="demand-panel"><span class="n">${ROMAN[i]}</span><span class="p">${s.prompt}</span><span class="tg">${s.tag}</span></button>`).join('');
+  document.querySelectorAll('.scn').forEach((b, i) => b.addEventListener('click', () => selectScenario(i)));
+  selectScenario(scnIndex, false);
+}
+function selectScenario(i, focus) {
+  scnIndex = i;
+  const s = SCENARIOS[curLang()][i];
+  document.querySelectorAll('.scn').forEach((b, j) => { b.setAttribute('aria-selected', j === i); b.tabIndex = j === i ? 0 : -1; });
+  if (focus) document.getElementById(`scn-${i}`).focus();
+  document.getElementById('demand-panel').setAttribute('aria-labelledby', `scn-${i}`);
+  let n = 0;
+  document.getElementById('groups').innerHTML = GROUPS.map((g) => {
+    const on = s.load.includes(g.id);
+    if (on) n += g.tools.length;
+    let d = 0;
+    const t = (x, def) => `<span${def ? ' class="def"' : ''} style="--d:${(d++) * 70}ms">${x}</span>`;
+    return `<div class="grp${g.base ? ' base' : ''}${on ? ' on' : ''}"><span class="gn">${GROUP_NAME[g.id]}</span><span class="tools">${g.tools.map((x) => t(x)).join('')}${(g.deferred || []).map((x) => t(x, true)).join('')}</span></div>`;
+  }).join('');
+  const c = document.getElementById('count');
+  c.textContent = n;
+  c.classList.toggle('lit', n > 0);
+  document.getElementById('why').innerHTML = s.why;
+}
+document.getElementById('scenarios').addEventListener('keydown', (e) => {
+  const max = SCENARIOS[curLang()].length;
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  const to = step ? (scnIndex + step + max) % max : e.key === 'Home' ? 0 : e.key === 'End' ? max - 1 : null;
+  if (to != null) { e.preventDefault(); selectScenario(to, true); }
+});
 
 function applyLang(lang) {
   const dict = I18N[lang];
@@ -1143,6 +1455,7 @@ function applyLang(lang) {
     : 'OpenPI — Pi at the core. Power on demand.';
   try { localStorage.setItem('openpi-lang', lang); } catch (e) {}
   resetTerm();
+  renderScenarios();
   // gentle crossfade, only when switching after initial load
   if (langReady) {
     const m = document.querySelector('main');
