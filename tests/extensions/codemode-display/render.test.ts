@@ -388,6 +388,24 @@ test("block tint is green only for a clean ledger, neutral for nested issues and
   assert.equal(tone(result("boom"), true), "toolErrorBg");
 });
 
+test("truncated rows keep the block background after nested foreground resets", () => {
+  const ansi = {
+    fg: (_color: string, text: string) => `\u001b[31m${text}\u001b[0m`,
+    bg: (_color: string, text: string) => `\u001b[44m${text}\u001b[0m`,
+    bold: (text: string) => text,
+  } as Theme;
+  const rows = codemodeRenderers.renderCall!(
+    { code },
+    ansi,
+    context(false),
+  ).render(40);
+  assert.ok(rows.length > 0);
+  assert.ok(
+    rows.some((row) => /\u001b\[0m\u001b\[44m/u.test(row)),
+    "each nested reset must reopen the block background",
+  );
+});
+
 test("compact call rows name their first string argument within the row budget", () => {
   const calls = [
     {
