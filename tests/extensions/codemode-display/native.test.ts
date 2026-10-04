@@ -170,6 +170,32 @@ test("native loader selects the public renderer seam while retaining native Code
         })),
       ],
     };
+    component.updateResult(
+      {
+        content,
+        details: {
+          ...details,
+          calls: details.calls.map((call) => ({
+            ...call,
+            status: "running",
+            error: undefined,
+          })),
+        },
+        isError: false,
+      },
+      true,
+    );
+    const pending = component
+      .render(300)
+      .map(stripTerminalSequences)
+      .join("\n");
+    assert.doesNotMatch(
+      pending,
+      /^\s*…|codemode running| · running|more calls?/mu,
+    );
+    assert.match(pending, /earlier-read example\.ts/u);
+    assert.match(pending, /earlier-bash long shell/u);
+    assert.match(pending, /Bash git status --short.*… · 2ms/u);
     component.updateResult({ content, details, isError: false }, false);
     const compact = component.render(80).map(stripTerminalSequences).join("\n");
     assert.match(

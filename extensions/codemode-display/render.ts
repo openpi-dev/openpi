@@ -19,8 +19,7 @@ export type CodemodeRenderers = Pick<
   "renderShell" | "renderCall" | "renderResult"
 >;
 
-const RECENT_CALLS = 4;
-const SALIENT_CALLS = 2;
+const BASH_HINT_COLUMNS = 80;
 const JSON_LIMIT = 32_768;
 const HEADER =
   /^Script (completed|failed)\nWall time (\d+(?:\.\d+)?) seconds\nOutput:\n$/u;
@@ -163,10 +162,11 @@ function callLine(
   const toolIcon = expanded ? "✓" : toolActivityIcon(string(call.name));
   const label =
     toolIcon === "✓" ? name : `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+  const quiet = !expanded && status === "running";
   const meta: string[] = [];
   if (string(call.error))
     meta.push(expanded ? "error" : `error: ${inline(call.error)}`);
-  else if (status !== "ok") meta.push(status);
+  else if (status !== "ok" && !quiet) meta.push(status);
   const time = duration(call.durationMs);
   if (time) meta.push(time);
   if (
@@ -177,10 +177,17 @@ function callLine(
     meta.push(`$${call.cost.toPrecision(3)}`);
   const tail = meta.length ? ` · ${meta.join(" · ")}` : "";
   const toolPrefix = toolIcon === "✓" ? "" : `${theme.fg("dim", toolIcon)} `;
-  let line = `${theme.fg(ICON_COLOR[status], ICON[status])} ${toolPrefix}${theme.fg(status === "error" ? "error" : "toolTitle", label)}`;
+  const statusPrefix = quiet
+    ? "  "
+    : `${theme.fg(ICON_COLOR[status], ICON[status])} `;
+  let line = `${statusPrefix}${toolPrefix}${theme.fg(status === "error" ? "error" : quiet ? "muted" : "toolTitle", label)}`;
   // The hint yields its width to status, error and timing facts.
   const hint = expanded ? "" : argHint(call.args);
-  const budget = width - visibleWidth(line) - visibleWidth(tail) - 1;
+  const available = width - visibleWidth(line) - visibleWidth(tail) - 1;
+  const budget =
+    string(call.name).toLowerCase() === "bash"
+      ? Math.min(available, BASH_HINT_COLUMNS)
+      : available;
   if (hint && budget >= 4)
     line += ` ${theme.fg("muted", truncateToWidth(hint, budget, "…"))}`;
   if (tail) line += theme.fg("dim", tail);
@@ -257,14 +264,19 @@ function resultComponent(
     finished: [ICON.unknown, "warning"],
   } as const;
   const [icon, iconColor] = outcomeIcon[outcome];
-  const outcomeText = `${theme.fg(iconColor, outcome)}${theme.fg("muted", ` · ${facts.join(" · ")}`)}`;
-  const statusLine = `${theme.fg(iconColor, icon)} ${outcomeText}`;
+  const quiet = partial && !expanded;
+  const iconText = quiet ? "" : theme.fg(iconColor, icon);
+  const outcomeText = quiet
+    ? theme.fg("muted", facts.join(" · "))
+    : `${theme.fg(iconColor, outcome)}${theme.fg("muted", ` · ${facts.join(" · ")}`)}`;
+  const statusLine = `${iconText ? `${iconText} ` : ""}${outcomeText}`;
   // A call header rendered from the same row state carries the status line.
   const merged = state?.codemodeHeader === true;
   if (state) {
     state.codemodeTone = tone;
     state.codemodeResult = true;
-    state.codemodeIcon = theme.fg(iconColor, icon);
+    state.codemodeIcon = iconText;
+    state.codemodePending = quiet;
     state.codemodeOutcome = outcomeText;
   }
   const outputColor = failed ? "error" : "toolOutput";
@@ -331,39 +343,8 @@ function resultComponent(
   const compactRows = (width: number) => {
     const rows = merged ? [] : [statusLine];
     const indent = width > 16 ? "  " : "";
-    const issue = (call: Record<string, unknown>) =>
-      ["error", "cancelled", "unknown"].includes(callStatus(call));
-    const recentStart = Math.max(0, calls.length - RECENT_CALLS);
-    const salient = calls
-      .slice(0, recentStart)
-      .filter(issue)
-      .slice(-SALIENT_CALLS);
-    const recent = calls.slice(recentStart);
-    const hidden = calls.length - salient.length - recent.length;
-    // Nested outcomes are not the outer script's status. A total row keeps
-    // any issue that the bounded call list cannot show visible.
-    const shown = [...salient, ...recent];
-    for (const status of ["error", "cancelled", "unknown"] as const) {
-      const count = counts[status];
-      if (count > shown.filter((call) => callStatus(call) === status).length)
-        rows.push(
-          theme.fg(
-            ICON_COLOR[status],
-            `${ICON[status]} ${count} nested ${status}`,
-          ),
-        );
-    }
-    const line = (call: Record<string, unknown>) =>
-      indent + callLine(call, false, theme, width - indent.length);
-    rows.push(...salient.map(line));
-    if (hidden)
-      rows.push(
-        theme.fg(
-          "dim",
-          `${indent}⋯ ${hidden} more ${hidden === 1 ? "call" : "calls"}`,
-        ),
-      );
-    rows.push(...recent.map(line));
+    for (const call of calls)
+      rows.push(indent + callLine(call, false, theme, width - indent.length));
     // Output is evidence for the expanded view, not part of the activity list.
     rows.push(expandHint());
     return rows.map((row) => truncateToWidth(row, width, ""));
@@ -415,11 +396,15 @@ export const codemodeRenderers: CodemodeRenderers = {
           ? "invalid script argument"
           : "receiving script";
     if (state) state.codemodeHeader = true;
-    const name = theme.fg("toolTitle", theme.bold("codemode"));
     const title = () => {
+      const name = theme.fg(
+        state?.codemodePending ? "muted" : "toolTitle",
+        theme.bold("codemode"),
+      );
       const outcome = string(state?.codemodeOutcome);
+      const icon = string(state?.codemodeIcon);
       return outcome
-        ? `${string(state?.codemodeIcon)} ${name} ${outcome}${theme.fg("muted", ` · ${detail}`)}`
+        ? `${icon ? `${icon} ` : ""}${name} ${outcome}${theme.fg("muted", ` · ${detail}`)}`
         : `${name}${theme.fg("muted", ` · ${detail}`)}`;
     };
     return framed(
