@@ -16,6 +16,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`SEARCH_OUTPUT_EVALUATION_2026-10-05.md`](SEARCH_OUTPUT_EVALUATION_2026-10-05.md) — frozen native/FFF tool-output comparisons, cumulative cost and missing-match negatives; model-task gains remain unverified.
+
 - [`CHILD_RENDER_PARITY_2026-10-05.md`](CHILD_RENDER_PARITY_2026-10-05.md) — Session-owned child message/tool presentation, native paired component validation and host-private Mermaid/image boundaries ([#681](https://github.com/openpi-dev/openpi/issues/681)).
 
 - [`CODEMODE_TUI_PRESENTATION_2026-10-04.md`](CODEMODE_TUI_PRESENTATION_2026-10-04.md) — OpenPI presentation through Pi public tool renderer resolvers, compact summaries and raw-evidence boundaries ([#673](https://github.com/openpi-dev/openpi/issues/673)).
