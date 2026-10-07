@@ -16,6 +16,7 @@ import {
   removeEditorLayer,
 } from "../shared/editor-layers.ts";
 
+const MAX_UNDO_ATTACHMENTS = 128;
 const IMAGE_PLACEHOLDER = /\[Image #(\d+)\]/g;
 const PI_CLIPBOARD_IMAGE =
   /^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(gif|jpe?g|png|webp)$/i;
@@ -186,6 +187,7 @@ function expandWith(text: string, attachments: Iterable<Attachment>) {
 export class ImageAttachmentStore {
   private nextAttachmentId = 1;
   private readonly draft = new Map<number, Attachment>();
+  private readonly removed = new Map<number, Attachment>();
 
   get hasDraft() {
     return this.draft.size > 0;
@@ -202,7 +204,7 @@ export class ImageAttachmentStore {
     return placeholder;
   }
 
-  reconcileDraft(text: string) {
+  reconcileDraft(text: string, undo = false) {
     const occurrenceCounts = new Map<number, number>();
     for (const occurrence of placeholderOccurrences(text)) {
       occurrenceCounts.set(
@@ -210,15 +212,26 @@ export class ImageAttachmentStore {
         (occurrenceCounts.get(occurrence.id) ?? 0) + 1,
       );
     }
-    for (const id of [...this.draft.keys()]) {
-      // Placeholder text is user-editable, so only an unambiguous single
-      // occurrence keeps its mapping. Duplicated or removed tokens degrade to
-      // ordinary text; the underlying file is left alone either way.
-      if (occurrenceCounts.get(id) === 1) continue;
-      this.draft.delete(id);
+    for (const [id, attachment] of this.removed) {
+      const count = occurrenceCounts.get(id) ?? 0;
+      if (count === 0) continue;
+      // Only native Undo can recover ownership. Typing a matching literal or
+      // duplicating a token revokes it, even if that edit is later undone.
+      this.removed.delete(id);
+      if (undo && count === 1) this.draft.set(id, attachment);
     }
-    this.nextAttachmentId =
-      this.draft.size === 0 ? 1 : Math.max(...this.draft.keys()) + 1;
+    for (const [id, attachment] of this.draft) {
+      const count = occurrenceCounts.get(id) ?? 0;
+      if (count === 1) continue;
+      this.draft.delete(id);
+      // Undoing an insertion discards it; there is no native redo to recover.
+      if (count === 0 && !undo) this.removed.set(id, attachment);
+    }
+    // Keep only a bounded recovery window, not another editor undo stack.
+    while (this.removed.size > MAX_UNDO_ATTACHMENTS) {
+      const oldest = this.removed.keys().next().value;
+      if (oldest !== undefined) this.removed.delete(oldest);
+    }
   }
 
   /**
@@ -244,6 +257,7 @@ export class ImageAttachmentStore {
 
   clearDraft() {
     this.draft.clear();
+    this.removed.clear();
     this.nextAttachmentId = 1;
   }
 
@@ -264,6 +278,7 @@ export class ImageAttachmentStore {
     if (matches.length === 0) return undefined;
 
     this.clearDraft();
+    const reserved = new Set(placeholderOccurrences(text).map(({ id }) => id));
     // Build replacements in reverse document order so earlier indices stay
     // valid while we splice. Each occurrence — even of the same path — gets
     // its own placeholder identity so that expandWith's single-occurrence
@@ -272,6 +287,7 @@ export class ImageAttachmentStore {
       [];
     for (const match of matches) {
       const path = match[0];
+      while (reserved.has(this.nextAttachmentId)) this.nextAttachmentId += 1;
       const id = this.nextAttachmentId++;
       const placeholder = `[Image #${id}]`;
       this.draft.set(id, { id, placeholder, path } satisfies Attachment);
@@ -338,6 +354,7 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
   private downstreamSubmit?: (text: string) => void;
   private submittedDraft?: readonly Attachment[];
   private settingText = false;
+  private restoringUndo = false;
 
   constructor(
     base: EditorComponent,
@@ -367,12 +384,11 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
     this.downstreamChange = value;
     super.onChange = (text) => {
       if (!this.settingText) {
-        // submitValue() clears the buffer and reports it here before invoking
-        // onSubmit, so an empty buffer ends the draft and restarts numbering.
-        // Keep a snapshot so the submit that caused it can still expand.
+        // Native deletion and submit both report an empty buffer. Retain
+        // recoverable mappings until onSubmit confirms the draft ended.
         if (text.length === 0) {
           this.submittedDraft = this.attachments.snapshotDraft();
-          this.attachments.clearDraft();
+          this.attachments.reconcileDraft(text, this.restoringUndo);
         } else {
           this.submittedDraft = undefined;
           // History recall uses setTextInternal (bypasses setText) and only
@@ -389,7 +405,7 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
               this.settingText = false;
             }
           } else {
-            this.attachments.reconcileDraft(text);
+            this.attachments.reconcileDraft(text, this.restoringUndo);
           }
         }
       }
@@ -411,11 +427,11 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
           // an already expanded string is a no-op.
           const snapshot = this.submittedDraft;
           this.submittedDraft = undefined;
-          value(
-            snapshot
-              ? expandWith(text, snapshot)
-              : this.attachments.expandPlaceholders(text),
-          );
+          const expanded = snapshot
+            ? expandWith(text, snapshot)
+            : this.attachments.expandPlaceholders(text);
+          this.attachments.clearDraft();
+          value(expanded);
         }
       : undefined;
   }
@@ -435,6 +451,7 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
     // Pi restores queued messages and history entries as expanded paths. Adopt
     // them so the buffer shows compact tokens and the next submit can expand
     // again; ordinary text falls through to plain reconciliation.
+    this.submittedDraft = undefined;
     const adopted =
       text.length > 0 ? this.attachments.adoptExpandedText(text) : undefined;
     const next = adopted ?? text;
@@ -498,7 +515,15 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
     ) {
       return;
     }
-    super.handleInput(data);
+    this.restoringUndo = this.editorKeybindings.matches(
+      data,
+      "tui.editor.undo",
+    );
+    try {
+      super.handleInput(data);
+    } finally {
+      this.restoringUndo = false;
+    }
   }
 }
 
@@ -531,6 +556,7 @@ export default function imagePaste(
   );
 
   pi.on("session_start", (_event, ctx) => {
+    attachments.cleanup();
     installImagePasteEditor(pi, ctx, attachments);
   });
 
