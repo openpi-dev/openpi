@@ -1,4 +1,5 @@
 import type { WebLiveMessage, WebMessagePart } from "./types.ts";
+import { sanitizeTerminalText } from "../../extensions/shared/terminal-text.ts";
 
 export const EVIDENCE_MAX_BYTES = 12 * 1024;
 export const EVIDENCE_MAX_LINES = 300;
@@ -25,10 +26,7 @@ export function projectEvidenceArguments(input: unknown) {
 export function evidenceText(value: string, tail = false) {
   // Bound work before stripping terminal controls, including OSC hyperlinks.
   const candidate = tail ? value.slice(-EVIDENCE_MAX_BYTES * 2) : value.slice(0, EVIDENCE_MAX_BYTES * 2);
-  const clean = candidate
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)/gu, "")
-    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/gu, "");
+  const clean = sanitizeTerminalText(candidate);
   const lines = clean.split("\n");
   const limited = (tail ? lines.slice(-EVIDENCE_MAX_LINES) : lines.slice(0, EVIDENCE_MAX_LINES)).join("\n");
   const bytes = new TextEncoder().encode(limited);

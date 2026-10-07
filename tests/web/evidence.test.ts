@@ -17,6 +17,36 @@ function call(name: string, args: Record<string, unknown> = {}) {
   return part;
 }
 
+test("Web evidence strips terminal-owned hidden strings rather than exposing their payloads", () => {
+  for (const start of [
+    "\x1bP",
+    "\x1bX",
+    "\x1b^",
+    "\x1b_",
+    "\u0090",
+    "\u0098",
+    "\u009e",
+    "\u009f",
+  ]) {
+    for (const end of ["\x1b\\", "\u009c"]) {
+      assert.equal(
+        evidenceText(`before${start}hidden${end}after`).text,
+        "beforeafter",
+      );
+    }
+    assert.equal(evidenceText(`before${start}unterminated`).text, "before");
+  }
+  assert.equal(
+    evidenceText("中文\t👩‍💻\x1b[31mvisible\x1b[0m").text,
+    "中文  👩‍💻visible",
+  );
+  const result = projectToolEvidence(call("bash"), {
+    content: "before\x1bPhidden\x1b\\after",
+    isError: false,
+  });
+  assert.equal(result.output, "beforeafter");
+});
+
 test("bounded messages preserve final bash receipts before output truncation", () => {
   const message = projectMessage({
     role: "toolResult",
