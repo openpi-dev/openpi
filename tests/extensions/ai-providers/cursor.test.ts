@@ -75,6 +75,7 @@ import {
   frameConnectMessage,
   streamCursor,
 } from "../../../extensions/ai-providers/cursor/provider.ts";
+import { CURSOR_PI_TOOLS_SYSTEM_PROMPT } from "../../../extensions/ai-providers/cursor/tool-bridge.ts";
 
 const MODEL: Model<Api> = {
   ...CURSOR_MODELS[0]!,
@@ -1426,6 +1427,9 @@ for (const scenario of REQUEST_CONTEXT_CASES) {
     assert.equal(advertisedRules?.[0]?.content, scenario.expectedSystemPrompt);
     assert.equal(advertisedRules?.[0]?.fullPath, "/pi/system-prompt.mdc");
     assert.equal(advertisedRules?.[1]?.fullPath, "/pi/cursor-tools.mdc");
+    assert.equal(advertisedRules?.[1]?.content, CURSOR_PI_TOOLS_SYSTEM_PROMPT);
+    assert.match(advertisedRules?.[1]?.content ?? "", /read, rg, or bash/u);
+    assert.doesNotMatch(advertisedRules?.[1]?.content ?? "", /openpi MCP tools/u);
     assert.equal(
       advertised?.every(
         ({ providerIdentifier }) => providerIdentifier === "openpi",
