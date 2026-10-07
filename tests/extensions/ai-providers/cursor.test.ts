@@ -1429,7 +1429,10 @@ for (const scenario of REQUEST_CONTEXT_CASES) {
     assert.equal(advertisedRules?.[1]?.fullPath, "/pi/cursor-tools.mdc");
     assert.equal(advertisedRules?.[1]?.content, CURSOR_PI_TOOLS_SYSTEM_PROMPT);
     assert.match(advertisedRules?.[1]?.content ?? "", /read, rg, or bash/u);
-    assert.doesNotMatch(advertisedRules?.[1]?.content ?? "", /openpi MCP tools/u);
+    assert.doesNotMatch(
+      advertisedRules?.[1]?.content ?? "",
+      /openpi MCP tools/u,
+    );
     assert.equal(
       advertised?.every(
         ({ providerIdentifier }) => providerIdentifier === "openpi",
