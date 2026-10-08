@@ -5,6 +5,7 @@
 - Last verified: 2026-10-08; local source, native Pi fixtures and browser UI; no release or paid-provider acceptance claimed
 - Source boundary: OpenPI `3cb2ecfe1bfbb98252651885311d309f83749428` plus `codex/settings-resources`; Pi 0.99.1; pi-web comparison `a096af3d09f4dd7eb8685b280f72d97d3ec6e0e5`
 - Related Issue: [#710](https://github.com/openpi-dev/openpi/issues/710)
+- Related PR: [#711](https://github.com/openpi-dev/openpi/pull/711)
 - Supersedes: none
 
 ## Scope
