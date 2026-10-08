@@ -16,7 +16,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
-- [`WEB_CODEX_ACTIVITY_2026-10-08.md`](WEB_CODEX_ACTIVITY_2026-10-08.md) — Codex open-source references, unified tool activity, independent completed collapse, bounded component observations and local deployment; automated suites and numerical fidelity are unverified ([#597](https://github.com/openpi-dev/openpi/issues/597)).
+- [`WEB_CODEX_ACTIVITY_2026-10-08.md`](WEB_CODEX_ACTIVITY_2026-10-08.md) — Codex references and a source-scoped Claude comparison, unified tool activity, compact command/diff summaries, independent completed collapse, bounded component observations and local deployment; automated suites and numerical fidelity are unverified ([#597](https://github.com/openpi-dev/openpi/issues/597)).
 
 - [`CHILD_RENDER_PARITY_2026-10-05.md`](CHILD_RENDER_PARITY_2026-10-05.md) — Session-owned child message/tool presentation, native paired component validation and host-private Mermaid/image boundaries ([#681](https://github.com/openpi-dev/openpi/issues/681)).
 
