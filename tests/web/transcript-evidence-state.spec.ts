@@ -319,7 +319,7 @@ it.each([undefined, "aborted", "error"] as const)(
         ?.getAttribute("data-state"),
     ).toBe("unknown");
     expect(container.querySelector(".process-step.running")).toBeNull();
-    expect(container.querySelector('[aria-label="completed"]')).toBeNull();
+    expect(container.querySelector(".status-mark.done")).toBeNull();
   },
 );
 
@@ -378,9 +378,7 @@ it("uses the exact live tool state while partial output has no terminal receipt"
       .querySelector(".tool-evidence-card")
       ?.getAttribute("data-state"),
   ).toBe("unknown");
-  expect(
-    rendered.container.querySelector('[aria-label="completed"]'),
-  ).toBeNull();
+  expect(rendered.container.querySelector(".status-mark.done")).toBeNull();
 
   const result = { ...partial, content: "Built packages", isError: false };
   rendered.rerender(
@@ -473,8 +471,10 @@ it("keeps family activity status aligned with the exact live tool execution", ()
     container.querySelector(".process-step")?.getAttribute("data-status"),
   ).toBe("running");
   expect(
-    container.querySelector('.activity-card [aria-label="running"]'),
-  ).toBeTruthy();
+    container
+      .querySelector(".activity-card .status-mark.running")
+      ?.getAttribute("aria-label"),
+  ).toBe(i18n.t("toolState_running"));
 });
 
 it("does not borrow a later turn's execution state for an earlier unmatched tool", () => {
@@ -536,7 +536,7 @@ it("does not summarize a mixed returned and unmatched sequence as completed", ()
       element.getAttribute("data-status"),
     ),
   ).toEqual(["done", "unknown"]);
-  expect(container.querySelector('[aria-label="completed"]')).toBeNull();
+  expect(container.querySelector(".status-mark.done")).toBeNull();
 });
 
 it("retains a known process failure in the group while the native status-query receipt succeeded", () => {
@@ -564,10 +564,10 @@ it("retains a known process failure in the group while the native status-query r
     container.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
   ).toBe("failed");
   expect(
-    container.querySelector(
-      '.process-sequence > summary [aria-label="failed"]',
-    ),
-  ).toBeTruthy();
+    container
+      .querySelector(".process-sequence > summary .status-mark.error")
+      ?.getAttribute("aria-label"),
+  ).toBe(i18n.t("toolState_failed"));
   expect(
     container.querySelector(".evidence-content details")?.textContent,
   ).toContain('"isError":false');
@@ -607,11 +607,11 @@ it.each([false, true])(
       container.querySelector(".process-step")?.getAttribute("data-status"),
     ).toBe("warn");
     expect(
-      container.querySelector(
-        '.process-sequence > summary [aria-label="uncertain"]',
-      ),
-    ).toBeTruthy();
-    expect(container.querySelector('[aria-label="completed"]')).toBeNull();
+      container
+        .querySelector(".process-sequence > summary .status-mark.warn")
+        ?.getAttribute("aria-label"),
+    ).toBe(i18n.t("toolState_unknown"));
+    expect(container.querySelector(".status-mark.done")).toBeNull();
   },
 );
 
@@ -647,7 +647,7 @@ it("keeps known process failure ahead of an unmatched step in the group summary"
       element.getAttribute("data-status"),
     ),
   ).toEqual(["error", "unknown"]);
-  expect(container.querySelector('[aria-label="completed"]')).toBeNull();
+  expect(container.querySelector(".status-mark.done")).toBeNull();
 });
 
 it.each([
@@ -683,7 +683,9 @@ it.each([
         .querySelector(".tool-evidence-card")
         ?.getAttribute("data-state"),
     ).toBe(state);
-    expect(container.querySelector(".evidence-log")?.textContent).toBe(content);
+    expect(container.querySelector(".evidence-shell pre")?.textContent).toBe(
+      `$ build\n\n${content}`,
+    );
     expect(container.querySelector(".process-step.running")).toBeNull();
   },
 );

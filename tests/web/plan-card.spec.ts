@@ -154,10 +154,15 @@ it("keeps the next thinking-only message visible after a completed ask_user with
     content: "",
     parts: [{ type: "thinking", text: "Investigating the export plan" }],
   };
-  render(transcript([asked, answered], [next]));
+  const { container } = render(transcript([asked, answered], [next]));
   expect(
-    screen.getByText("Investigating the export plan", { selector: "pre" }),
+    screen.getByText("Investigating the export plan", {
+      selector: ".thinking-line > summary .tool-summary",
+    }),
   ).toBeTruthy();
+  expect(
+    container.querySelector(".thinking-line")?.closest(".process-sequence"),
+  ).toBeNull();
 });
 
 it("does not relocate the answer bubble while plan arguments stream after it", () => {

@@ -7,7 +7,6 @@ import {
   ChevronRight,
   Clipboard,
   GitBranch,
-  Lightbulb,
   Pencil,
   RotateCcw,
   Workflow,
@@ -410,7 +409,7 @@ function thinkingPreview(body: string) {
       .replace(/[*_~`]+/gu, "")
       .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
       .trim(),
-    110,
+    600,
   );
 }
 
@@ -425,7 +424,7 @@ function EvidenceDetails({
   defaultOpen = false,
 }: {
   body: string;
-  icon: ReactNode;
+  icon?: ReactNode;
   name: string;
   status: Status;
   summary?: string;
@@ -445,9 +444,9 @@ function EvidenceDetails({
           ? "running"
           : "unknown";
   const showName =
-    thinking ||
-    ["read", "write", "edit"].includes(name) ||
-    toolActivity(name).action === "call";
+    !thinking &&
+    (["read", "write", "edit"].includes(name) ||
+      toolActivity(name).action === "call");
   return (
     <details
       className={`message-details tool-line ${status} ${thinking ? "thinking-line" : ""}`}
@@ -455,10 +454,17 @@ function EvidenceDetails({
       open={expanded}
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
-      <summary>
-        <span className="tool-icon" aria-hidden="true">
-          {icon}
-        </span>
+      <summary
+        aria-label={
+          thinking ? [name, summary].filter(Boolean).join(" · ") : undefined
+        }
+        title={thinking ? summary : undefined}
+      >
+        {!thinking && (
+          <span className="tool-icon" aria-hidden="true">
+            {icon}
+          </span>
+        )}
         <span className="details-title">
           {showName && <span className="tool-name">{name}</span>}
           {!thinking && (
@@ -468,8 +474,12 @@ function EvidenceDetails({
           )}
           {summary && <span className="tool-summary">{summary}</span>}
         </span>
-        <ChevronRight className="tool-disclosure" aria-hidden="true" />
-        <StatusMark status={status} />
+        {thinking ? (
+          <ChevronDown className="tool-disclosure" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="tool-disclosure" aria-hidden="true" />
+        )}
+        {!thinking && <StatusMark status={status} />}
       </summary>
       {thinking ? (
         <div className="details-body thinking-evidence">
@@ -693,16 +703,18 @@ function ThinkingEvidence({
   return (
     <EvidenceDetails
       body={body}
-      icon={<Lightbulb />}
-      name={
+      name={[
         active
           ? level
             ? t("thinkingActiveLevel", { level })
             : t("thinkingActive")
-          : t("thinkingDone")
-      }
+          : t("thinkingDone"),
+        settled,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
       status={active ? "running" : "done"}
-      summary={[preview, settled].filter(Boolean).join(" · ") || undefined}
+      summary={preview || undefined}
       thinking
       defaultOpen={defaultOpen}
     />
@@ -1338,13 +1350,11 @@ function ProcessSequence({
   const { t } = useTranslation();
   const [open, setOpen] = useState(active);
   useEffect(() => setOpen(active), [active]);
-  const thinking = rows.filter((row) => row.processType === "thinking").length;
   const tools = rows.filter((row) => row.processType === "tool").length;
   const activities = rows.filter(
     (row) => row.processType === "activity",
   ).length;
   const counts = [
-    thinking ? t("processThinkingCount", { count: thinking }) : "",
     tools ? t("processToolCount", { count: tools }) : "",
     activities ? t("processActivityCount", { count: activities }) : "",
   ].filter(Boolean);
@@ -1368,22 +1378,19 @@ function ProcessSequence({
     ...new Set(toolNames.map((name) => toolActivity(name).action)),
   ];
   const actionLabels = actions.map((action) => t(`toolActionGroup_${action}`));
-  const summaryActions = actionLabels.slice(0, 3).join(t("toolGroupSeparator"));
   const title = actions.length
     ? t(
         `toolGroup_${status === "done" ? "done" : active ? "running" : "unknown"}`,
         {
-          actions:
-            actions.length > 3
-              ? t("toolGroupMore", {
-                  actions: summaryActions,
-                  count: actions.length,
-                })
-              : summaryActions,
+          actions: actionLabels.join(t("toolGroupSeparator")),
         },
       )
     : t(active ? "processRunning" : "processDetails");
-  const Icon = toolNames[0] ? toolActivity(toolNames[0]).Icon : Lightbulb;
+  const representative =
+    toolNames.find((name) => toolActivity(name).action === "web") ??
+    toolNames.find((name) => name === "edit" || name === "write") ??
+    toolNames[0];
+  const Icon = representative ? toolActivity(representative).Icon : Wrench;
   return (
     <details
       className={`process-sequence ${status}`}
@@ -1426,16 +1433,13 @@ function ProcessSequence({
   );
 }
 
-function groupRows(
-  rows: RenderRow[],
-  active: boolean,
-  disclosure?: { open: boolean; id: string },
-) {
+function groupRows(rows: RenderRow[], active: boolean) {
   const blocks: Array<{ process: boolean; rows: RenderRow[] }> = [];
   for (const row of rows) {
     const last = blocks.at(-1);
-    if (row.kind === "process" && last?.process) last.rows.push(row);
-    else blocks.push({ process: row.kind === "process", rows: [row] });
+    const process = row.kind === "process" && row.processType !== "thinking";
+    if (process && last?.process) last.rows.push(row);
+    else blocks.push({ process, rows: [row] });
   }
   let lastProcess = -1;
   blocks.forEach((block, index) => {
@@ -1448,25 +1452,6 @@ function groupRows(
         <Fragment key={row.key}>{row.content}</Fragment>
       ));
     }
-    if (disclosure)
-      return (
-        <div
-          key={blockKey}
-          className="turn-process-body"
-          hidden={!disclosure.open}
-          id={`${disclosure.id}-${index}`}
-        >
-          {block.rows.map((row) => (
-            <div
-              key={row.key}
-              className={`process-step ${row.processStatus ?? "unknown"}`}
-              data-status={row.processStatus ?? "unknown"}
-            >
-              {row.content}
-            </div>
-          ))}
-        </div>
-      );
     return (
       <ProcessSequence
         key={blockKey}
@@ -1491,16 +1476,7 @@ function TurnRun({
 }) {
   const { t } = useTranslation();
   const id = useId();
-  const [open, setOpen] = useState(active);
-  useEffect(() => setOpen(active), [active]);
-  const processIds: string[] = [];
-  let blockIndex = -1;
-  rows.forEach((row, index) => {
-    if (row.kind !== "process" || rows[index - 1]?.kind !== "process") {
-      blockIndex++;
-      if (row.kind === "process") processIds.push(`${id}-${blockIndex}`);
-    }
-  });
+  const [open, setOpen] = useState(true);
   const hasTiming = Boolean(timing || timedTurn);
   const elapsed = timing ? (
     <SettledTurnElapsed timing={timing} />
@@ -1520,16 +1496,16 @@ function TurnRun({
     <>
       {hasTiming && (
         <header className="turn-duration" data-outcome={timing?.outcome}>
-          {processIds.length > 0 ? (
+          {rows.length > 0 ? (
             <button
               type="button"
               className="turn-duration-toggle"
               aria-expanded={open}
-              aria-controls={processIds.join(" ")}
+              aria-controls={id}
               onClick={() => setOpen((value) => !value)}
             >
               {elapsed}
-              <ChevronDown aria-hidden="true" />
+              <ChevronRight aria-hidden="true" />
             </button>
           ) : (
             elapsed
@@ -1541,7 +1517,13 @@ function TurnRun({
           )}
         </header>
       )}
-      {groupRows(rows, active, hasTiming ? { open, id } : undefined)}
+      {hasTiming ? (
+        <div className="turn-response-body" id={id} hidden={!open}>
+          {groupRows(rows, active)}
+        </div>
+      ) : (
+        groupRows(rows, active)
+      )}
     </>
   );
 }
@@ -2922,7 +2904,7 @@ export function Transcript(props: TranscriptProps) {
       parent = parent.parentElement
     ) {
       if (parent instanceof HTMLDetailsElement) parent.open = true;
-      if (parent.classList.contains("turn-process-body") && parent.hidden) {
+      if (parent.classList.contains("turn-response-body") && parent.hidden) {
         const toggle = Array.from(
           element.querySelectorAll<HTMLButtonElement>("button[aria-controls]"),
         ).find((button) =>

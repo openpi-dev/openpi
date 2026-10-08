@@ -810,10 +810,14 @@ describe("OpenPI React transcript", () => {
       container.querySelector<HTMLDetailsElement>(".process-sequence");
     expect(process).toBeTruthy();
     expect(process?.open).toBe(false);
-    expect(screen.getByText(/4 (tool calls|次工具调用)/u)).toBeTruthy();
-    expect(screen.getByText(/1 (agent activity|项 Agent 活动)/u)).toBeTruthy();
     expect(
-      container.querySelector(".process-sequence-preview")?.textContent,
+      process?.querySelector("summary")?.getAttribute("aria-label"),
+    ).toContain(i18n.t("processToolCount", { count: 4 }));
+    expect(
+      process?.querySelector("summary")?.getAttribute("aria-label"),
+    ).toContain(i18n.t("processActivityCount", { count: 1 }));
+    expect(
+      container.querySelector(".thinking-line summary")?.textContent,
     ).not.toMatch(/[*_`]/u);
     expect(container.querySelectorAll(".tool-evidence-card")).toHaveLength(4);
     expect(
@@ -824,12 +828,12 @@ describe("OpenPI React transcript", () => {
     );
     expect(screen.getByText("Done.")).toBeTruthy();
     expect(
-      container.querySelectorAll("[aria-label=completed]").length,
+      container.querySelectorAll(".status-mark.done").length,
     ).toBeGreaterThan(0);
 
     fireEvent.click(process!.querySelector("summary")!);
     expect(process?.open).toBe(true);
-    expect(process?.querySelectorAll(".process-step")).toHaveLength(6);
+    expect(process?.querySelectorAll(".process-step")).toHaveLength(5);
   });
 });
 
@@ -892,7 +896,8 @@ it("marks only live execution evidence for shimmer styling", () => {
   );
   expect(process?.dataset.status).toBe("running");
   expect(process?.open).toBe(true);
-  expect(process?.querySelectorAll(".process-step.running")).toHaveLength(2);
+  expect(process?.querySelectorAll(".process-step.running")).toHaveLength(1);
+  expect(view.container.querySelector(".thinking-line.running")).toBeTruthy();
 });
 
 it("folds legacy setup instructions while keeping results and subsequent task messages visible", () => {

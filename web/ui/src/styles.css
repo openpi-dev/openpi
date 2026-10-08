@@ -308,7 +308,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .message-row.assistant.response { padding:10px 0; }
 .message-row.assistant.final-response { margin-top:8px; padding:16px 0 10px; }
 .message-row.detail-only { padding:4px 0; }
-.conversation-turn > .process-sequence { width:100%; margin:7px 0; }
+:is(.conversation-turn, .turn-response-body) > .process-sequence { width:100%; margin:7px 0; }
 .provider-outcome { border-left: 2px solid var(--border-strong); padding: 5px 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .provider-outcome.failed { border-color: var(--error); color: var(--text); }
 .provider-outcome strong { display: block; font-size: 12px; font-weight: 650; }
@@ -385,8 +385,12 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .tool-line.error :is(.tool-icon, .tool-name) { color:var(--error); }
 .tool-line.error .tool-icon { background:oklch(50% .18 28 / 9%); }
 .tool-line.warn :is(.tool-icon, .tool-name) { color:var(--warning); }
-.thinking-line .tool-name { padding:0; background:transparent; color:var(--muted); font-family:inherit; font-size:12.5px; font-weight:500; line-height:20px; }
-.thinking-line .tool-summary { font-family:inherit; font-size:12.5px; line-height:20px; color:var(--subtle); }
+.thinking-line { width:100%; margin-inline:0; }
+.thinking-line > summary { padding-inline:0; }
+.thinking-line .details-title { flex:0 1 auto; min-width:0; }
+.thinking-line .tool-summary { font-family:inherit; font-size:13px; line-height:20px; color:var(--subtle); }
+.thinking-line[open] > summary .tool-disclosure { transform:rotate(180deg); }
+.thinking-line .details-body { margin-left:0; }
 .tool-line:not(.thinking-line):not([data-tool="read"]):not([data-tool="write"]):not([data-tool="edit"]) .tool-name { color:var(--muted); background:var(--sidebar-hover); }
 .thinking-evidence { max-height:360px; overflow:auto; padding:5px 0 5px 12px; border-left:1px solid var(--border); color:var(--muted); white-space:normal; }
 .thinking-evidence .markdown { color:inherit; font-size:13px; line-height:1.75; }
@@ -395,16 +399,16 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .thinking-evidence .markdown > :last-child { margin-bottom:0; }
 .tool-line-empty { @apply flex min-h-8 items-center gap-2; padding: 3px 8px; color: var(--muted); }
 .process-sequence { width:min(var(--conversation-content-width), calc(100% - 48px)); margin:8px auto; color:var(--muted); }
-.process-sequence > summary { position:relative; display:flex; min-height:36px; align-items:center; gap:9px; overflow:hidden; padding:5px 8px; border-radius:6px; cursor:pointer; list-style:none; font-size:12px; transition:background-color 140ms ease, color 140ms ease; }
+.process-sequence > summary { position:relative; display:flex; min-height:36px; align-items:center; gap:9px; overflow:hidden; padding:5px 0; border-radius:6px; cursor:pointer; list-style:none; font-size:12px; transition:background-color 140ms ease, color 140ms ease; }
 .process-sequence > summary > * { position:relative; z-index:1; }
 .process-sequence > summary:hover { background:oklch(95% .008 249 / 72%); color:var(--text); }
 .process-sequence-title { display:flex; min-width:0; align-items:baseline; gap:8px; }
-.process-sequence-title strong { overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:12.5px; font-weight:500; white-space:nowrap; }
+.process-sequence-title strong { overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:13px; font-weight:400; white-space:nowrap; }
 .process-sequence.running .process-sequence-title strong { color:var(--text); }
 .process-sequence-preview { flex:1; min-width:0; overflow:hidden; color:var(--subtle); font-size:11.5px; text-overflow:ellipsis; white-space:nowrap; }
 .process-sequence-body { margin:4px 0 8px 11px; padding-left:12px; border-left:1px solid var(--border); }
 .process-sequence-body .message-row { width:100%; padding:0; }
-.process-sequence-body .message-row.detail-only, .turn-process-body .message-row.detail-only { padding:0; }
+.process-sequence-body .message-row.detail-only { padding:0; }
 .process-step .message-details { width:100%; margin:0; }
 .process-step .message-details > summary { min-height:30px; font-size:13px; }
 .process-step { position:relative; min-width:0; overflow:hidden; }

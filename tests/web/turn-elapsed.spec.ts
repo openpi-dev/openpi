@@ -64,7 +64,10 @@ function snapshot(): WebSnapshot {
     },
   };
 }
-function node(value: WebSnapshot) {
+function node(
+  value: WebSnapshot,
+  extra: Partial<Parameters<typeof Transcript>[0]> = {},
+) {
   return createElement(
     I18nextProvider,
     { i18n },
@@ -78,6 +81,7 @@ function node(value: WebSnapshot) {
       thinkingDurations: {},
       scrollToBottom: 0,
       onResend: async () => true,
+      ...extra,
     }),
   );
 }
@@ -228,7 +232,7 @@ it("does not invent a duration from old timestamps or incomplete runtime evidenc
   expect(view.container.querySelector(".turn-duration")).toBeNull();
 });
 
-it("keeps elapsed above execution and answer, with a disclosure that leaves the answer visible", () => {
+it("folds every assistant response with elapsed while tool groups keep their own disclosure", () => {
   const value = snapshot();
   value.runtime = { status: "idle", capabilities: {} };
   value.selectedSession!.entries = [
@@ -239,6 +243,67 @@ it("keeps elapsed above execution and answer, with a disclosure that leaves the 
       message: { role: "user", content: "Question" },
     },
     {
+      id: "first-update",
+      type: "message",
+      timestamp: "2026-09-22T00:00:01Z",
+      message: {
+        role: "assistant",
+        content: "First update",
+        parts: [
+          { type: "text", text: "First update" },
+          { type: "thinking", text: "Verifying the result" },
+          {
+            type: "toolCall",
+            id: "read-1",
+            name: "read",
+            arguments: '{"path":"README.md"}',
+          },
+        ],
+      },
+    },
+    {
+      id: "read-result",
+      type: "message",
+      timestamp: "2026-09-22T00:00:02Z",
+      message: {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-1",
+        content: "Source",
+        isError: false,
+      },
+    },
+    {
+      id: "second-update",
+      type: "message",
+      timestamp: "2026-09-22T00:00:03Z",
+      message: {
+        role: "assistant",
+        content: "Second update",
+        parts: [
+          { type: "text", text: "Second update" },
+          {
+            type: "toolCall",
+            id: "bash-1",
+            name: "bash",
+            arguments: '{"command":"npm test"}',
+          },
+        ],
+      },
+    },
+    {
+      id: "bash-result",
+      type: "message",
+      timestamp: "2026-09-22T00:00:04Z",
+      message: {
+        role: "toolResult",
+        toolName: "bash",
+        toolCallId: "bash-1",
+        content: "All tests passed",
+        isError: false,
+      },
+    },
+    {
       id: "answer",
       type: "message",
       timestamp: "2026-09-22T00:02:36Z",
@@ -246,7 +311,6 @@ it("keeps elapsed above execution and answer, with a disclosure that leaves the 
         role: "assistant",
         content: "Final answer",
         stopReason: "stop",
-        parts: [{ type: "thinking", text: "Verifying the result" }],
       },
     },
     {
@@ -266,28 +330,65 @@ it("keeps elapsed above execution and answer, with a disclosure that leaves the 
     },
   ];
   const view = render(node(value));
-  const process =
-    view.container.querySelector<HTMLElement>(".turn-process-body")!;
+  const body = view.container.querySelector<HTMLElement>(
+    ".turn-response-body",
+  )!;
   const duration = view.container.querySelector(".turn-duration")!;
   const answer = view.container.querySelector(".final-response")!;
   expect(
-    duration.compareDocumentPosition(process) &
-      Node.DOCUMENT_POSITION_FOLLOWING,
+    duration.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  expect(process.hidden).toBe(true);
+  expect(body.hidden).toBe(false);
+  const groups = [
+    ...body.querySelectorAll<HTMLDetailsElement>(".process-sequence"),
+  ];
+  expect(groups).toHaveLength(2);
+  expect(groups.every((group) => !group.open)).toBe(true);
+  expect(groups[0]?.querySelector("summary")?.textContent).toContain(
+    i18n.t("toolActionGroup_read"),
+  );
+  expect(groups[1]?.querySelector("summary")?.textContent).toContain(
+    i18n.t("toolActionGroup_command"),
+  );
+  expect(body.querySelector(".thinking-line summary")?.textContent).toBe(
+    "Verifying the result",
+  );
+  groups[0]!.open = true;
+  fireEvent(groups[0]!, new Event("toggle"));
   const toggle = screen.getByRole("button", { name: "Worked for 2m37s" });
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(toggle.getAttribute("aria-controls")).toBe(process.id);
-  fireEvent.click(toggle);
-  expect(process.hidden).toBe(false);
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(toggle.getAttribute("aria-controls")).toBe(body.id);
   fireEvent.click(toggle);
-  expect(process.hidden).toBe(true);
-  expect(answer.closest("[hidden]")).toBeNull();
+  expect(body.hidden).toBe(true);
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  for (const text of ["First update", "Second update", "Final answer"])
+    expect(screen.getByText(text).closest("[hidden]")).toBe(body);
+  expect(answer.closest("[hidden]")).toBe(body);
+  expect(screen.getByText("Question").closest("[hidden]")).toBeNull();
+  fireEvent.click(toggle);
+  expect(body.hidden).toBe(false);
+  expect(groups[0]!.open).toBe(true);
+  expect(groups[1]!.open).toBe(false);
   expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
   expect(
     duration.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+  fireEvent.click(toggle);
+  view.rerender(
+    node(value, {
+      historyNavigation: {
+        sessionId: value.selectedSession!.id,
+        sessionPath: value.selectedSession!.path,
+        entryId: "answer",
+        revision: 1,
+        session: value.selectedSession!,
+      },
+    }),
+  );
+  expect(
+    view.container.querySelector<HTMLElement>(".turn-response-body")!.hidden,
+  ).toBe(false);
+  expect(screen.getByText("Final answer").closest("[hidden]")).toBeNull();
 });
 
 it("does not move a duration backward across a user or another timing record", () => {
@@ -404,20 +505,17 @@ it("keeps one top timer through streaming, manual folding, settlement, and a lat
   const toggle = view.container.querySelector<HTMLButtonElement>(
     ".turn-duration-toggle",
   )!;
-  const blocks = [
-    ...view.container.querySelectorAll<HTMLElement>(".turn-process-body"),
-  ];
-  expect(blocks).toHaveLength(2);
-  expect(toggle.getAttribute("aria-controls")?.split(" ")).toEqual(
-    blocks.map((block) => block.id),
-  );
-  expect(blocks.every((block) => !block.hidden)).toBe(true);
+  const body = view.container.querySelector<HTMLElement>(
+    ".turn-response-body",
+  )!;
+  expect(toggle.getAttribute("aria-controls")).toBe(body.id);
+  expect(body.hidden).toBe(false);
   fireEvent.click(toggle);
-  expect(blocks.every((block) => block.hidden)).toBe(true);
+  expect(body.hidden).toBe(true);
   view.rerender(node({ ...value, cursor: 2 }));
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(screen.getByText("First update").closest("[hidden]")).toBeNull();
-  expect(screen.getByText("Final answer").closest("[hidden]")).toBeNull();
+  expect(screen.getByText("First update").closest("[hidden]")).toBe(body);
+  expect(screen.getByText("Final answer").closest("[hidden]")).toBe(body);
 
   const settled = {
     ...value,
@@ -458,7 +556,7 @@ it("keeps one top timer through streaming, manual folding, settlement, and a lat
   expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
 });
 
-it("does not offer an empty disclosure for a plain answer", () => {
+it("can fold a plain answer even when it has no tools or thinking", () => {
   const value = snapshot();
   value.runtime = { status: "idle", capabilities: {} };
   value.selectedSession!.entries = [
@@ -490,5 +588,10 @@ it("does not offer an empty disclosure for a plain answer", () => {
     duration.compareDocumentPosition(screen.getByText("Plain answer")) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  expect(duration.querySelector("button")).toBeNull();
+  const toggle = duration.querySelector("button")!;
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(toggle);
+  expect(screen.getByText("Plain answer").closest("[hidden]")).not.toBeNull();
+  fireEvent.click(toggle);
+  expect(screen.getByText("Plain answer").closest("[hidden]")).toBeNull();
 });
