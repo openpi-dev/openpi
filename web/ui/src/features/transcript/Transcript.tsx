@@ -3,18 +3,13 @@ import {
   ArrowDown,
   Bot,
   Check,
+  ChevronDown,
   ChevronRight,
   Clipboard,
-  FilePenLine,
-  FileText,
-  Folder,
   GitBranch,
-  Globe,
   Lightbulb,
   Pencil,
   RotateCcw,
-  Search,
-  Terminal,
   Workflow,
   Wrench,
   X,
@@ -65,6 +60,11 @@ import {
   sessionReadingScope,
 } from "./session-reading-state.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
+import {
+  toolActivity,
+  toolActivityLabel,
+  toolActivityTarget,
+} from "./tool-activity.ts";
 import { type OpenTurnReview, TurnChangesCard } from "./TurnChangesCard.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
 import { TurnNavigation, type TurnNavigationItem } from "./TurnNavigation.tsx";
@@ -154,8 +154,8 @@ interface RenderRow {
   content: ReactNode;
   processType?: "thinking" | "tool" | "activity";
   processPreview?: string;
+  processToolName?: string;
   processStatus?: Status;
-  defaultOpen?: boolean;
   error?: boolean;
   outcome?: "completed" | "failed" | "interrupted";
   pendingPrompt?: boolean;
@@ -377,33 +377,11 @@ function providerFailures(entries: DisplayEntry[], running: boolean) {
   return { finalErrors, groups };
 }
 
-function iconForTool(name: string) {
-  const lowered = name.toLowerCase();
-  if (lowered === "bash") return <Terminal />;
-  if (lowered === "read") return <FileText />;
-  if (lowered === "write" || lowered === "edit") return <FilePenLine />;
-  if (lowered === "grep") return <Search />;
-  if (lowered === "glob" || lowered === "ls") return <Folder />;
-  if (lowered === "webfetch" || lowered === "websearch") return <Globe />;
-  return <Wrench />;
-}
-
 function toolSummary(name: string, args: Record<string, unknown>) {
-  const value =
-    name === "bash"
-      ? args.command
-      : ["read", "write", "edit", "ls"].includes(name)
-        ? args.path
-        : ["grep", "glob"].includes(name)
-          ? args.pattern
-          : name === "webfetch"
-            ? args.url
-            : name === "websearch"
-              ? args.query
-              : "";
-  return typeof value === "string"
-    ? compactSummary(value.split("\n").find(Boolean), 90)
-    : "";
+  return compactSummary(
+    toolActivityTarget(name, args).split("\n").find(Boolean),
+    120,
+  );
 }
 
 function thinkingPreview(body: string) {
@@ -443,23 +421,48 @@ function EvidenceDetails({
   defaultOpen?: boolean;
 }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(defaultOpen);
+  useEffect(() => setExpanded(defaultOpen), [defaultOpen]);
+  const state =
+    status === "done"
+      ? "returned"
+      : status === "error"
+        ? "failed"
+        : status === "running"
+          ? "running"
+          : "unknown";
+  const showName =
+    thinking ||
+    ["read", "write", "edit"].includes(name) ||
+    toolActivity(name).action === "call";
   return (
     <details
       className={`message-details tool-line ${status} ${thinking ? "thinking-line" : ""}`}
-      open={defaultOpen || undefined}
+      data-tool={name}
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
       <summary>
-        <span className="details-mark" aria-hidden="true" />
         <span className="tool-icon" aria-hidden="true">
           {icon}
         </span>
         <span className="details-title">
-          <span className="tool-name">{name}</span>
+          {showName && <span className="tool-name">{name}</span>}
+          {!thinking && (
+            <span className="tool-action">
+              {toolActivityLabel(t, name, state)}
+            </span>
+          )}
           {summary && <span className="tool-summary">{summary}</span>}
         </span>
+        <ChevronDown className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
-      {output === undefined ? (
+      {thinking ? (
+        <div className="details-body thinking-evidence">
+          {expanded && <Markdown>{evidenceText(body).text}</Markdown>}
+        </div>
+      ) : output === undefined ? (
         <pre className="details-body tool-evidence">
           {evidenceText(body).text}
         </pre>
@@ -510,7 +513,7 @@ function ActivityCard({
           {meta && <span className="activity-meta">{meta}</span>}
         </span>
         <StatusMark status={status} />
-        <span className="details-mark" aria-hidden="true" />
+        <ChevronDown className="tool-disclosure" aria-hidden="true" />
       </summary>
       <pre className="details-body tool-evidence">{body}</pre>
     </details>
@@ -1315,22 +1318,13 @@ function buildEntries(
 function ProcessSequence({
   rows,
   active,
-  defaultOpen,
 }: {
   rows: RenderRow[];
   active: boolean;
-  defaultOpen: boolean;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(active || defaultOpen);
-  const previous = useRef({ active, defaultOpen });
-  useEffect(() => {
-    const prior = previous.current;
-    if (active && !prior.active) setOpen(true);
-    else if (!active && prior.active) setOpen(defaultOpen);
-    else if (!active && defaultOpen !== prior.defaultOpen) setOpen(defaultOpen);
-    previous.current = { active, defaultOpen };
-  }, [active, defaultOpen]);
+  const [open, setOpen] = useState(active);
+  useEffect(() => setOpen(active), [active]);
   const thinking = rows.filter((row) => row.processType === "thinking").length;
   const tools = rows.filter((row) => row.processType === "tool").length;
   const activities = rows.filter(
@@ -1341,7 +1335,9 @@ function ProcessSequence({
     tools ? t("processToolCount", { count: tools }) : "",
     activities ? t("processActivityCount", { count: activities }) : "",
   ].filter(Boolean);
-  const preview = rows.find((row) => row.processPreview)?.processPreview;
+  const preview = (active ? [...rows].reverse() : rows).find(
+    (row) => row.processPreview,
+  )?.processPreview;
   const failed = rows.some((row) => row.error || row.processStatus === "error");
   const status: Status = active
     ? "running"
@@ -1352,6 +1348,23 @@ function ProcessSequence({
         : rows.every((row) => row.processStatus === "done")
           ? "done"
           : "unknown";
+  const toolNames = rows.flatMap((row) =>
+    row.processToolName ? [row.processToolName] : [],
+  );
+  const actions = [
+    ...new Set(toolNames.map((name) => toolActivity(name).action)),
+  ];
+  const title = actions.length
+    ? t(
+        `toolGroup_${status === "done" ? "done" : active ? "running" : "unknown"}`,
+        {
+          actions: actions
+            .map((action) => t(`toolActionGroup_${action}`))
+            .join(t("toolGroupSeparator")),
+        },
+      )
+    : t(active ? "processRunning" : "processDetails");
+  const Icon = toolNames[0] ? toolActivity(toolNames[0]).Icon : Lightbulb;
   return (
     <details
       className={`process-sequence ${status}`}
@@ -1362,26 +1375,27 @@ function ProcessSequence({
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
-        <span className="details-mark" aria-hidden="true" />
+        <span className="tool-icon" aria-hidden="true">
+          <Icon />
+        </span>
         <span className="process-sequence-title">
-          <strong>{t(active ? "processRunning" : "processDetails")}</strong>
+          <strong>{title}</strong>
           {counts.length > 0 && <small>{counts.join(" · ")}</small>}
         </span>
+        <ChevronDown className="tool-disclosure" aria-hidden="true" />
         {preview && <span className="process-sequence-preview">{preview}</span>}
         <StatusMark status={status} />
       </summary>
       <div className="process-sequence-body">
-        <div>
-          {rows.map((row) => (
-            <div
-              className={`process-step ${row.processStatus ?? "unknown"}`}
-              data-status={row.processStatus ?? "unknown"}
-              key={row.key}
-            >
-              {row.content}
-            </div>
-          ))}
-        </div>
+        {rows.map((row) => (
+          <div
+            className={`process-step ${row.processStatus ?? "unknown"}`}
+            data-status={row.processStatus ?? "unknown"}
+            key={row.key}
+          >
+            {row.content}
+          </div>
+        ))}
       </div>
     </details>
   );
@@ -1390,7 +1404,6 @@ function ProcessSequence({
 function groupRows(
   rows: RenderRow[],
   active: boolean,
-  defaultOpen: boolean,
   disclosure?: { open: boolean; id: string },
 ) {
   const blocks: Array<{ process: boolean; rows: RenderRow[] }> = [];
@@ -1434,7 +1447,6 @@ function groupRows(
         key={blockKey}
         rows={block.rows}
         active={active && index === lastProcess}
-        defaultOpen={defaultOpen}
       />
     );
   });
@@ -1445,22 +1457,17 @@ function TurnRun({
   rows,
   timing,
   active,
-  expandProcesses,
   timedTurn,
 }: {
   rows: RenderRow[];
   timing?: WebTurnTiming;
   active: boolean;
-  expandProcesses: boolean;
   timedTurn?: ActiveTurn;
 }) {
   const { t } = useTranslation();
   const id = useId();
-  const [open, setOpen] = useState(active || expandProcesses);
-  useEffect(
-    () => setOpen(active || expandProcesses),
-    [active, expandProcesses],
-  );
+  const [open, setOpen] = useState(active);
+  useEffect(() => setOpen(active), [active]);
   const processIds: string[] = [];
   let blockIndex = -1;
   rows.forEach((row, index) => {
@@ -1497,7 +1504,7 @@ function TurnRun({
               onClick={() => setOpen((value) => !value)}
             >
               {elapsed}
-              <ChevronRight aria-hidden="true" />
+              <ChevronDown aria-hidden="true" />
             </button>
           ) : (
             elapsed
@@ -1509,12 +1516,7 @@ function TurnRun({
           )}
         </header>
       )}
-      {groupRows(
-        rows,
-        active,
-        expandProcesses,
-        hasTiming ? { open, id } : undefined,
-      )}
+      {groupRows(rows, active, hasTiming ? { open, id } : undefined)}
     </>
   );
 }
@@ -1523,7 +1525,6 @@ function ConversationTurn({
   id,
   rows,
   active,
-  expandProcesses,
   changes,
   session,
   timedTurn,
@@ -1532,7 +1533,6 @@ function ConversationTurn({
   id: number;
   rows: RenderRow[];
   active: boolean;
-  expandProcesses: boolean;
   changes?: WebTurnChanges;
   session?: WebSessionProjection;
   timedTurn?: ActiveTurn;
@@ -1592,7 +1592,6 @@ function ConversationTurn({
         rows={runRows}
         timing={timing}
         active={active && current}
-        expandProcesses={expandProcesses}
         timedTurn={current ? currentTimedTurn : undefined}
       />,
     );
@@ -1645,7 +1644,6 @@ function ConversationTurn({
 function renderTurns(
   rows: RenderRow[],
   running: boolean,
-  expandProcesses: boolean,
   activeCommandId?: string,
   changesByPrompt?: Map<string, WebTurnChanges>,
   session?: WebSessionProjection,
@@ -1680,9 +1678,6 @@ function renderTurns(
       id={turn.id}
       rows={turn.rows}
       active={running && turn.id === activeTurn}
-      expandProcesses={
-        expandProcesses || turn.rows.some((row) => row.defaultOpen)
-      }
       changes={changesByPrompt?.get(
         turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
           ?.promptEntryId ?? "",
@@ -2424,7 +2419,10 @@ export function Transcript(props: TranscriptProps) {
                 )
               );
             const args = parseArguments(part.arguments);
-            const toolIcon = iconForTool(part.name);
+            const { Icon, action } = toolActivity(part.name);
+            const toolIcon = (
+              <Icon key={`${entry.key}-${part.id || partIndex}-icon`} />
+            );
             const status = resultStatus(
               result,
               persistedResult ? undefined : live?.state,
@@ -2439,8 +2437,8 @@ export function Transcript(props: TranscriptProps) {
               processType: /^(subagent|workflow)/u.test(part.name)
                 ? "activity"
                 : "tool",
+              processToolName: part.name,
               processStatus: status,
-              defaultOpen,
               error: Boolean(result?.isError),
               content: (
                 <article
@@ -2467,8 +2465,11 @@ export function Transcript(props: TranscriptProps) {
                         icon={toolIcon}
                         name={part.name || "tool"}
                         summary={
-                          result && part.id && pairedToolIds.has(part.id)
-                            ? compactSummary(result.content)
+                          action === "search" && typeof args.path === "string"
+                            ? t("toolSearchTarget", {
+                                path: args.path,
+                                pattern: toolSummary(part.name, args),
+                              })
                             : toolSummary(part.name, args)
                         }
                         output={
@@ -2603,14 +2604,8 @@ export function Transcript(props: TranscriptProps) {
               : toolName === "write" || toolName === "edit"
                 ? props.snapshot.preferences.fileMutationDisplay === "full"
                 : false;
-        const icon =
-          family === "subagent" ? (
-            <Bot key={`${entry.key}-icon`} />
-          ) : family === "workflow" ? (
-            <Workflow key={`${entry.key}-icon`} />
-          ) : (
-            iconForTool(toolName)
-          );
+        const { Icon } = toolActivity(toolName);
+        const icon = <Icon key={`${entry.key}-icon`} />;
         const content = family ? (
           <ActivityCard
             key={`${entry.key}-card`}
@@ -2648,8 +2643,8 @@ export function Transcript(props: TranscriptProps) {
                 ? "response"
                 : "process",
             processType: family ? "activity" : "tool",
+            processToolName: toolName,
             processStatus: status,
-            defaultOpen,
             error: status === "error",
             content: (
               <article
@@ -3273,7 +3268,6 @@ export function Transcript(props: TranscriptProps) {
           running &&
             !historyPaused &&
             selectedExecution?.compaction?.state !== "running",
-          props.snapshot.preferences.expandThinking === true,
           activeTurn?.commandId,
           changesByPrompt,
           selected,

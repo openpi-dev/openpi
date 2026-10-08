@@ -168,7 +168,7 @@ it("expands Bash and file evidence from canonical display preferences without ch
     ).toBe(true);
     expect(
       container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
-    ).toBe(true);
+    ).toBe(false);
     expect(
       container
         .querySelector(".tool-evidence-card")

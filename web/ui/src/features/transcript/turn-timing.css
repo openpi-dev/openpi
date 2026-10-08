@@ -10,6 +10,8 @@
   min-height: 32px;
   gap: 8px;
   margin: 12px 0 16px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -31,9 +33,9 @@
 .turn-duration-toggle:hover { color: var(--text); }
 .turn-duration-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
 .turn-duration-toggle svg { width: 14px; height: 14px; }
-.turn-duration-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.turn-duration-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
 .turn-duration-outcome { font-size: 12px; }
-.turn-process-body { margin-bottom: 12px; }
+.turn-process-body { margin: 0 0 12px; }
 .turn-process-body .message-row { width: 100%; padding: 0; }
 .turn-process-body[hidden] { display: none; }
 

@@ -355,8 +355,8 @@ it("does not move a duration backward across a user or another timing record", (
 });
 
 it("formats readable localized durations for both running and settled turns", () => {
-  expect(formatTurnDuration(2142000, "zh-CN")).toBe("35分钟42秒");
-  expect(formatTurnDuration(157000, "zh-CN")).toBe("2分钟37秒");
+  expect(formatTurnDuration(2142000, "zh-CN")).toBe("35m 42s");
+  expect(formatTurnDuration(157000, "zh-CN")).toBe("2m 37s");
   expect(formatTurnDuration(3601000, "en")).toBe("1h0m1s");
 });
 

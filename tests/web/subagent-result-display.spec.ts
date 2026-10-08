@@ -215,9 +215,10 @@ it("keeps visible reasoning evidence while ignoring whitespace-only provider par
   ]);
   const { container } = render(view(value));
   expect(container.querySelectorAll(".thinking-line")).toHaveLength(1);
-  expect(container.querySelector(".thinking-line pre")?.textContent).toBe(
-    "Checked the tools.",
-  );
+  expect(container.querySelector(".thinking-line .markdown")).toBeNull();
+  expect(
+    container.querySelector(".thinking-line summary")?.textContent,
+  ).toContain("Checked the tools.");
   expect(container.querySelector(".process-sequence small")?.textContent).toBe(
     i18n.t("processThinkingCount", { count: 1 }),
   );

@@ -4,9 +4,9 @@
   color: var(--muted);
   font-size: 12px;
 }
-.context-compaction-heading { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
-.context-compaction-heading::before, .context-compaction-heading::after { content: ""; height: 1px; min-width: 16px; flex: 1; background: var(--border); }
+.context-compaction-heading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding:5px 8px; }
 .context-compaction-label { display: inline-flex; align-items: center; gap: 8px; }
+.context-compaction-label > svg { width:15px; height:15px; }
 .conversation .context-compaction p { margin: 8px 0 0; text-align: center; line-height: 1.6; color: var(--muted); font-size: 12px; }
 .conversation > .context-compaction { width: min(var(--conversation-content-width), calc(100% - 48px)); }
 @media (max-width: 720px) { .conversation > .context-compaction { width: calc(100% - 24px); } }

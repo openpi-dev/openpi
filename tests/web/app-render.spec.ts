@@ -2794,7 +2794,7 @@ it("opens recorded thinking by default only when the canonical preference is ena
   ).toBe(true);
 });
 
-it("applies the thinking preference to grouped completed process evidence", () => {
+it("keeps completed groups collapsed independently of the thinking preference", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.status = "idle";
   snapshot.preferences.expandThinking = true;
@@ -2853,7 +2853,7 @@ it("applies the thinking preference to grouped completed process evidence", () =
 
   expect(
     view.container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
-  ).toBe(true);
+  ).toBe(false);
 });
 
 it("does not attribute current runtime activity to a historical session", () => {

@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { TextSelect } from "lucide-react";
 import type { WebSessionExecution } from "../../../../runtime/types.ts";
 import { RunningTurnElapsed } from "./TurnElapsed.tsx";
 import "./compaction-status.css";
@@ -26,6 +27,7 @@ export function CompactionStatus({
     <div className="context-compaction" data-state={state}>
       <div className="context-compaction-heading">
         <span className="context-compaction-label" role="status">
+          {!(running && observed) && <TextSelect aria-hidden="true" />}
           {running && observed && (
             <span className="context-compaction-spinner" aria-hidden="true" />
           )}
