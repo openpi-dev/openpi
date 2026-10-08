@@ -210,20 +210,33 @@ function resultStatus(
 }
 
 function StatusMark({ status }: { status: Status }) {
+  const { t } = useTranslation();
   if (status === "running") {
     return (
-      <span className="status-mark running" role="img" aria-label="running">
+      <span
+        className="status-mark running"
+        role="img"
+        aria-label={t("toolState_running")}
+      >
         <i />
       </span>
     );
   }
   if (status === "done")
-    return <Check className="status-mark done" aria-label="completed" />;
+    return (
+      <Check className="status-mark done" aria-label={t("execution_done")} />
+    );
   if (status === "error")
-    return <X className="status-mark error" aria-label="failed" />;
+    return (
+      <X className="status-mark error" aria-label={t("toolState_failed")} />
+    );
   if (status === "warn")
     return (
-      <span className="status-mark warn" role="img" aria-label="uncertain">
+      <span
+        className="status-mark warn"
+        role="img"
+        aria-label={t("toolState_unknown")}
+      >
         ?
       </span>
     );
@@ -455,7 +468,7 @@ function EvidenceDetails({
           )}
           {summary && <span className="tool-summary">{summary}</span>}
         </span>
-        <ChevronDown className="tool-disclosure" aria-hidden="true" />
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
       {thinking ? (
@@ -513,7 +526,7 @@ function ActivityCard({
           {meta && <span className="activity-meta">{meta}</span>}
         </span>
         <StatusMark status={status} />
-        <ChevronDown className="tool-disclosure" aria-hidden="true" />
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
       </summary>
       <pre className="details-body tool-evidence">{body}</pre>
     </details>
@@ -1354,13 +1367,19 @@ function ProcessSequence({
   const actions = [
     ...new Set(toolNames.map((name) => toolActivity(name).action)),
   ];
+  const actionLabels = actions.map((action) => t(`toolActionGroup_${action}`));
+  const summaryActions = actionLabels.slice(0, 3).join(t("toolGroupSeparator"));
   const title = actions.length
     ? t(
         `toolGroup_${status === "done" ? "done" : active ? "running" : "unknown"}`,
         {
-          actions: actions
-            .map((action) => t(`toolActionGroup_${action}`))
-            .join(t("toolGroupSeparator")),
+          actions:
+            actions.length > 3
+              ? t("toolGroupMore", {
+                  actions: summaryActions,
+                  count: actions.length,
+                })
+              : summaryActions,
         },
       )
     : t(active ? "processRunning" : "processDetails");
@@ -1374,16 +1393,22 @@ function ProcessSequence({
       data-history-entry={rows[0]?.key}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary>
+      <summary aria-label={[title, ...counts].join(" · ")}>
         <span className="tool-icon" aria-hidden="true">
           <Icon />
         </span>
-        <span className="process-sequence-title">
+        <span
+          className="process-sequence-title"
+          title={[actionLabels.join(t("toolGroupSeparator")), ...counts]
+            .filter(Boolean)
+            .join(" · ")}
+        >
           <strong>{title}</strong>
-          {counts.length > 0 && <small>{counts.join(" · ")}</small>}
         </span>
-        <ChevronDown className="tool-disclosure" aria-hidden="true" />
-        {preview && <span className="process-sequence-preview">{preview}</span>}
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
+        {preview && (active || !actions.length) && (
+          <span className="process-sequence-preview">{preview}</span>
+        )}
         <StatusMark status={status} />
       </summary>
       <div className="process-sequence-body">
@@ -2438,6 +2463,7 @@ export function Transcript(props: TranscriptProps) {
                 ? "activity"
                 : "tool",
               processToolName: part.name,
+              processPreview: toolSummary(part.name, args),
               processStatus: status,
               error: Boolean(result?.isError),
               content: (

@@ -85,6 +85,11 @@ export function toolActivityTarget(
       ? (args.pattern ?? args.query ?? args.path)
       : action === "web"
         ? (args.url ?? args.query)
-        : (args.path ?? args.command ?? args.id ?? args.runId);
+        : (args.path ??
+          args.command ??
+          args.url ??
+          args.query ??
+          args.id ??
+          args.runId);
   return typeof value === "string" ? value : "";
 }

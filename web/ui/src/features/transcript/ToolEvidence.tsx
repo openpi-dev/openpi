@@ -1,9 +1,11 @@
 import { type ReactNode, useContext, useState } from "react";
-import { Check, ChevronDown, Clipboard } from "lucide-react";
+import { Check, ChevronRight, Clipboard } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   type EvidenceState,
+  evidenceText,
   projectToolEvidence,
+  toolArguments,
 } from "../../../../protocol/evidence.ts";
 import type {
   WebLiveMessage,
@@ -11,7 +13,11 @@ import type {
 } from "../../../../protocol/types.ts";
 import { ArtifactContext } from "../artifacts/context.ts";
 import { copyText } from "../../lib/clipboard.ts";
-import { toolActivity, toolActivityLabel } from "./tool-activity.ts";
+import {
+  toolActivity,
+  toolActivityLabel,
+  toolActivityTarget,
+} from "./tool-activity.ts";
 
 function EvidenceBlock({
   children,
@@ -33,14 +39,12 @@ export function ToolEvidence({
   result,
   liveState,
   cwd,
-  summaryMeta,
   defaultOpen = false,
 }: {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
   result?: WebLiveMessage;
   liveState?: EvidenceState;
   cwd?: string;
-  summaryMeta?: ReactNode;
   defaultOpen?: boolean;
 }) {
   const { t } = useTranslation();
@@ -55,6 +59,9 @@ export function ToolEvidence({
   const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   const filename = path.slice(separator + 1) || path;
   const { Icon } = toolActivity(call.name);
+  const target = evidenceText(
+    view.command ?? toolActivityTarget(call.name, toolArguments(call)),
+  ).text;
   const shell = view.kind === "terminal" || view.kind === "test";
   const shellText = [view.command ? `$ ${view.command}` : "", view.output]
     .filter(Boolean)
@@ -64,6 +71,13 @@ export function ToolEvidence({
   const lines = (view.diff ?? view.output)
     .split("\n")
     .map((text, index) => ({ text, number: view.offset + index }));
+  // These are counts in the displayed result, never guesses from edit arguments.
+  const additions = view.diff
+    ? lines.filter((line) => /^\+(?!\+\+)/u.test(line.text)).length
+    : 0;
+  const deletions = view.diff
+    ? lines.filter((line) => /^-(?!--)/u.test(line.text)).length
+    : 0;
   const failures =
     view.tests?.failures.map((text, index) => ({ text, number: index + 1 })) ??
     [];
@@ -81,7 +95,7 @@ export function ToolEvidence({
         {["read", "write", "edit"].includes(call.name) && (
           <strong className="tool-name">{call.name}</strong>
         )}
-        <span className="evidence-target" title={view.path || view.command}>
+        <span className="evidence-target" title={view.path || target}>
           <span className="tool-action">
             {toolActivityLabel(t, call.name, view.state)}
           </span>
@@ -102,10 +116,25 @@ export function ToolEvidence({
             ) : (
               <span className="evidence-filename">{filename}</span>
             )
+          ) : target ? (
+            <span className="evidence-command">{target}</span>
           ) : null}
         </span>
-        <ChevronDown className="evidence-chevron" aria-hidden="true" />
-        {summaryMeta}
+        {view.diff && (additions > 0 || deletions > 0) && (
+          <span
+            className="evidence-summary-meta"
+            title={t("toolDiffStatsHelp")}
+          >
+            <span className="review-additions">
+              +{additions.toLocaleString()}
+            </span>
+            <span className="review-deletions">
+              −{deletions.toLocaleString()}
+            </span>
+            {view.truncated && <span>{t("gitReviewPartialLabel")}</span>}
+          </span>
+        )}
+        <ChevronRight className="evidence-chevron" aria-hidden="true" />
         <span className="evidence-status">{t(`toolState_${view.state}`)}</span>
       </summary>
       <div className="evidence-content">
