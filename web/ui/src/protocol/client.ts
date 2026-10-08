@@ -856,6 +856,13 @@ export class WebClient {
     );
   }
 
+  reloadSettingsResources(sessionId: string, sessionPath: string) {
+    return this.request<{ reloaded: true }>("/api/settings/reload", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath }),
+    });
+  }
+
   savePreferences(patch: WebSettingsPreferencesPatch) {
     return this.request<{ saved: true; setup: WebSettingsCatalog["setup"] }>(
       "/api/settings/preferences",

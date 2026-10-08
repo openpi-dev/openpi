@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_RESOURCE_SETTINGS.md`](WEB_RESOURCE_SETTINGS.md) — scoped Skills/Plugins iteration, native configured versus loaded state, reviewed setup requests and explicit Session reload (#710).
+
 - [`WEB_CHANGE_REVIEW.md`](WEB_CHANGE_REVIEW.md) — validated turn/workspace scopes, unified review navigation, Codex-style cards and bounded pagination for #597 / #598
 
 - [`WEB_SUBAGENT_OVERVIEW.md`](WEB_SUBAGENT_OVERVIEW.md) — source- and UI-validated session summary popover, grouped child list and reference comparison for #597 / #598

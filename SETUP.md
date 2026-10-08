@@ -92,6 +92,10 @@ Web General settings directly save the existing `ui.subagentResultDisplay`, `ui.
 
 Direct Web footer saves update the configuration for Pi's command-line interface. A separate already-running Pi interface refreshes its footer at the next session start or native setup apply; a Web settings event does not itself reconfigure another live Pi session.
 
+Web Skills and Plugins use the same settings shell, search and scope filters. Add, update, remove, invocation and bulk actions submit reviewed natural-language requests through `/openpi-setup`; Pi owns installation, discovery, trust and persistence. Resource-only requests must preserve unrelated OpenPI preferences and do not need the OpenPI preference writer. Installed and configured package versions and disabled/missing entries are projected from native settings without executing resources. The skills.sh link opens an external directory; browsing does not install anything.
+
+Refreshing reads the catalog; explicitly confirmed resource reload calls native Pi reload only for the idle active Session with the matching file identity. Resolve missing or version-mismatched packages through setup first. Configuration persistence and Session loading are separate facts, and changes never trigger automatic reload.
+
 On Windows, OpenPI enables Pi's `clearOnShrink` compatibility behavior for
 the regular TUI so shrinking slash-command autocomplete lists do not leave
 stale rows on screen. Fullscreen TUI keeps its configured behavior. The

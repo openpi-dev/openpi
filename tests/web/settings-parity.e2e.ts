@@ -4,7 +4,141 @@ import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
+  MOCK_SESSION_PATH,
 } from "./thinking-e2e-support.ts";
+
+test("resource settings preserve drafts, distinguish disabled and loaded state, and review reload on desktop and mobile", async ({
+  page,
+}, testInfo) => {
+  await installThinkingFixture(page);
+  const source = "/fixture/pi-plugin";
+  const resources = {
+    skills: [
+      {
+        id: "fixture-review",
+        name: "review",
+        description: "Review native resources.",
+        filePath: "/fixture/skills/review/SKILL.md",
+        source: "auto",
+        scope: "user",
+        origin: "top-level",
+        disableModelInvocation: false,
+      },
+    ],
+    plugins: [
+      {
+        id: "user:package:fixture",
+        source,
+        scope: "user",
+        origin: "package",
+        configured: true,
+        enabled: false,
+        installed: true,
+        installedVersion: "1.2.3",
+        baseDir: source,
+        extensions: [
+          {
+            name: "inspect",
+            path: `${source}/index.ts`,
+            toolCount: 1,
+            commandCount: 0,
+          },
+        ],
+        skills: [],
+        prompts: [],
+        themes: [],
+      },
+    ],
+    totals: { extensions: 1, skills: 1, prompts: 0, themes: 0 },
+    diagnostics: { extensionErrors: 0, skillErrors: 0 },
+    truncation: {
+      truncated: false,
+      skillsOmitted: 0,
+      pluginsOmitted: 0,
+      resourcesOmitted: 0,
+    },
+  };
+  await page.route("**/api/settings/catalog?**", (route) =>
+    route.fulfill({
+      json: {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        setup: projectWebSetupConfig(DEFAULT_SETUP_CONFIG),
+        resources,
+      },
+    }),
+  );
+  const reloads: unknown[] = [];
+  await page.route("**/api/settings/reload", async (route) => {
+    reloads.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 409,
+      json: { error: "Fixture Session is busy" },
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+  await dialog.getByRole("tab", { name: "插件", exact: true }).click();
+  await expect(dialog.getByText("配置已禁用", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("1.2.3", { exact: true })).toBeVisible();
+  await expect(
+    dialog.getByText(
+      "当前会话目录包含 1 项资源。配置变更需要明确重新加载后才会应用。",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await dialog.screenshot({
+    path: testInfo.outputPath("resource-plugins-desktop.png"),
+  });
+  await dialog
+    .getByRole("button", { name: "重新加载资源", exact: true })
+    .click();
+  const review = page.getByRole("alertdialog");
+  await expect(review).toBeVisible();
+  expect(reloads).toEqual([]);
+  await review
+    .getByRole("button", { name: "重新加载资源", exact: true })
+    .click();
+  await expect(
+    dialog.getByText("Fixture Session is busy", { exact: true }),
+  ).toBeVisible();
+  expect(reloads).toEqual([
+    { sessionId: MOCK_SESSION_ID, sessionPath: MOCK_SESSION_PATH },
+  ]);
+  await dialog.getByRole("tab", { name: "技能", exact: true }).click();
+  await dialog.getByRole("button", { name: "添加技能", exact: true }).click();
+  await dialog
+    .getByLabel("软件包、仓库或本地路径", { exact: true })
+    .fill("git:fixture/review");
+  await dialog
+    .getByRole("combobox", { name: "范围", exact: true })
+    .selectOption("project");
+  await dialog.getByRole("tab", { name: "插件", exact: true }).click();
+  await dialog.getByRole("tab", { name: "技能", exact: true }).click();
+  await expect(
+    dialog.getByLabel("软件包、仓库或本地路径", { exact: true }),
+  ).toHaveValue("git:fixture/review");
+  await expect(
+    dialog.getByRole("combobox", { name: "范围", exact: true }),
+  ).toHaveValue("project");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    dialog.getByRole("combobox", { name: "设置导航", exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByLabel("软件包、仓库或本地路径", { exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await dialog.screenshot({
+    path: testInfo.outputPath("resource-skills-mobile.png"),
+  });
+});
 
 test("General result and footer controls save, restore after reload, and preserve values on rejection", async ({
   page,

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readConfiguredPackages } from "./configured-packages.ts";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { createTurnChangeRecorder } from "./turn-changes.ts";
@@ -14,6 +15,7 @@ import {
   ProjectTrustStore,
   SessionManager,
   SettingsManager,
+  DefaultPackageManager,
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
@@ -712,7 +714,27 @@ export class PiWebRuntime implements WebRuntimeController {
   listSettingsResources() {
     this.assertActive();
     this.assertWorkspaceSelected();
-    return projectWebSettingsResources(this.runtime.services.resourceLoader);
+    return projectWebSettingsResources(this.runtime.services.resourceLoader,
+      readConfiguredPackages(this.cwd, this.runtime.services.agentDir, this.runtime.session.settingsManager.isProjectTrusted()));
+  }
+
+  reloadSettingsResources(sessionId: string, sessionPath: string) {
+    return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
+      if (this.sessionManager.getSessionFile() !== sessionPath) {
+        throw new WebRuntimeRequestError("The active Session changed. Refresh before reloading resources.", "SESSION_CONFLICT", 409);
+      }
+      const configured = readConfiguredPackages(this.cwd, this.runtime.services.agentDir, this.runtime.session.settingsManager.isProjectTrusted());
+      if (configured.errors.length || configured.packages.some((pkg) => !pkg.installed)) {
+        throw new Error("Resolve missing or version-mismatched packages through Pi setup before reloading.");
+      }
+      const agentDir = this.runtime.services.agentDir;
+      const settingsManager = SettingsManager.create(this.cwd, agentDir, { projectTrusted: this.runtime.session.settingsManager.isProjectTrusted() });
+      // Let Pi check its own version ranges without installing missing/mismatched sources.
+      await new DefaultPackageManager({ cwd: this.cwd, agentDir, settingsManager }).resolve(async () => {
+        throw new Error("Resolve missing or version-mismatched packages through Pi setup before reloading.");
+      });
+      await this.runtime.session.reload();
+    }));
   }
 
   listProviderAuth(): WebProviderAuthProjection {

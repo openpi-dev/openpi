@@ -1117,6 +1117,20 @@ export class WebHost {
         return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, { error: "Could not save models. Refresh configuration before retrying.", ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}) });
       }
     }
+    if (url.pathname === "/api/settings/reload" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).some((key) => !["sessionId", "sessionPath"].includes(key)) || typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 || typeof body.sessionPath !== "string" || !body.sessionPath || body.sessionPath.length > 4096) {
+        return this.json(response, 400, { error: "The active Session id and path are required" });
+      }
+      if (!this.runtime.reloadSettingsResources) return this.json(response, 501, { error: "Resource reload is unavailable" });
+      try {
+        await this.runtime.reloadSettingsResources(body.sessionId, body.sessionPath);
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { reloaded: true });
+      } catch (error) {
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, { error: "Could not reload Pi resources. Refresh and inspect diagnostics before retrying.", ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}) });
+      }
+    }
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
@@ -1760,6 +1774,7 @@ export class WebHost {
       }
       return this.json(response, 200, {
         sessionId: diagnosticSession,
+        sessionPath: this.runtime.sessionManager.getSessionFile(),
         setup: projectWebSetupConfig(loadSetupConfig()),
         resources: this.runtime.listSettingsResources(),
       });

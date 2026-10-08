@@ -275,6 +275,11 @@ it("submits role and skill changes through the canonical setup entry", async () 
     expect(configure).toHaveBeenCalledWith(expect.stringContaining("3")),
   );
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
+  fireEvent.click(
+    within(screen.getByRole("tabpanel")).getByText(
+      i18n.t("advancedResourceConfiguration"),
+    ),
+  );
   fireEvent.change(
     within(screen.getByRole("tabpanel")).getByLabelText(
       i18n.t("setupConfigurationRequest"),
@@ -287,6 +292,182 @@ it("submits role and skill changes through the canonical setup entry", async () 
   await waitFor(() =>
     expect(configure).toHaveBeenCalledWith("Configure the local skill"),
   );
+});
+
+it("reviews an exact plugin source and scope without claiming installation or reusing an old setup failure", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const configure = vi.fn(async () => true);
+  renderSettings({
+    onConfigureOpenPi: configure,
+    setupOutcome: {
+      requestId: "old",
+      status: "failed",
+      error: "Old unrelated failure",
+    },
+  });
+  await screen.findByText(i18n.t("agentBehavior"));
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("pluginsSettings") }));
+  expect(screen.queryByText("Old unrelated failure")).toBeNull();
+  const panel = within(screen.getByRole("tabpanel"));
+  fireEvent.click(panel.getByRole("button", { name: i18n.t("addPlugin") }));
+  const source = "npm:@fixture/plugin@1.2.3";
+  fireEvent.change(panel.getByLabelText(i18n.t("resourcePackageSource")), {
+    target: { value: source },
+  });
+  fireEvent.change(panel.getByLabelText(i18n.t("scope")), {
+    target: { value: "project" },
+  });
+  fireEvent.click(
+    panel.getByRole("button", {
+      name: i18n.t("configureViaSetup"),
+    }),
+  );
+  await screen.findByText(i18n.t("resourceRequestSubmitted"));
+  expect(configure).toHaveBeenCalledWith(
+    i18n.t("setupResourceInstallRequest", {
+      kind: i18n.t("pluginsSettings"),
+      source: JSON.stringify(source),
+      scope: "project",
+    }),
+  );
+  expect(
+    (panel.getByLabelText(i18n.t("resourcePackageSource")) as HTMLInputElement)
+      .value,
+  ).toBe(source);
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("pluginsSettings") }));
+  expect(
+    (
+      within(screen.getByRole("tabpanel")).getByLabelText(
+        i18n.t("resourcePackageSource"),
+      ) as HTMLInputElement
+    ).value,
+  ).toBe(source);
+});
+
+it("keeps disabled package configuration distinct from still-loaded Session resources", async () => {
+  const payload = settingsPayload();
+  Object.assign(payload.resources.plugins[0]!, {
+    configured: true,
+    installed: true,
+    enabled: false,
+    installedVersion: "1.2.3",
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => reply(payload)),
+  );
+  const configure = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi: configure });
+  await screen.findByText(i18n.t("agentBehavior"));
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("pluginsSettings") }));
+  const panel = within(screen.getByRole("tabpanel"));
+  expect(
+    panel.getAllByText(i18n.t("pluginState_disabled")).length,
+  ).toBeGreaterThan(0);
+  expect(panel.getByText("1.2.3")).toBeTruthy();
+  expect(
+    panel.getByText(i18n.t("pluginLoadedResources", { count: 3 })),
+  ).toBeTruthy();
+  fireEvent.click(
+    panel.getByRole("button", {
+      name: i18n.t("pluginAction_enable"),
+    }),
+  );
+  await waitFor(() =>
+    expect(configure).toHaveBeenCalledWith(
+      i18n.t("setupPluginOperationRequest", {
+        action: "enable",
+        source: JSON.stringify("openpi"),
+        path: JSON.stringify("/workspace/openpi"),
+        scope: "user",
+      }),
+    ),
+  );
+  expect(
+    panel.getAllByText(i18n.t("pluginState_disabled")).length,
+  ).toBeGreaterThan(0);
+});
+
+it("filters skill bulk requests by scope and search while preserving the native invocation state", async () => {
+  const payload = settingsPayload();
+  const base = payload.resources.skills[0]!;
+  payload.resources.skills.push(
+    {
+      ...base,
+      id: "project:one",
+      name: "review-one",
+      filePath: "/project/skills/one/SKILL.md",
+      scope: "project",
+    },
+    {
+      ...base,
+      id: "project:two",
+      name: "review-two",
+      filePath: "/project/skills/two/SKILL.md",
+      scope: "project",
+    },
+    Object.assign(
+      {
+        ...base,
+        id: "project:truncated",
+        name: "review-truncated",
+        filePath: "/project/truncated",
+        scope: "project" as const,
+      },
+      { canManage: false },
+    ),
+  );
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => reply(payload)),
+  );
+  const configure = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi: configure });
+  await screen.findByText(i18n.t("agentBehavior"));
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
+  const panel = within(screen.getByRole("tabpanel"));
+  fireEvent.change(panel.getByLabelText(i18n.t("filterResourceScope")), {
+    target: { value: "project" },
+  });
+  fireEvent.change(panel.getByRole("searchbox"), {
+    target: { value: "review" },
+  });
+  expect(panel.queryByRole("button", { name: /subagents/ })).toBeNull();
+  fireEvent.click(
+    panel.getByRole("button", {
+      name: i18n.t("disableVisibleSkills", { count: 2 }),
+    }),
+  );
+  await waitFor(() =>
+    expect(configure).toHaveBeenCalledWith(
+      i18n.t("setupSkillsBulkRequest", {
+        paths: JSON.stringify([
+          "/project/skills/one/SKILL.md",
+          "/project/skills/two/SKILL.md",
+        ]),
+        disabled: true,
+      }),
+    ),
+  );
+  expect(
+    panel.getByText(i18n.t("availableToModel"), { selector: "dd" }),
+  ).toBeTruthy();
+  fireEvent.click(panel.getByRole("button", { name: /review-truncated/ }));
+  expect(panel.getByText(i18n.t("resourceTargetTruncated"))).toBeTruthy();
+  expect(
+    panel.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("removeResource"),
+    }).disabled,
+  ).toBe(true);
+  fireEvent.change(panel.getByRole("searchbox"), {
+    target: { value: "does-not-exist" },
+  });
+  expect(
+    panel.queryByRole("button", {
+      name: i18n.t("disableVisibleSkills", { count: 2 }),
+    }),
+  ).toBeNull();
 });
 
 it("shows canonical General state and routes real setup/runtime actions", async () => {

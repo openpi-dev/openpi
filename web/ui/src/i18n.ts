@@ -936,6 +936,86 @@ const resources = {
       configurationViaPi:
         "Read-only status. Manage model credentials and trust through Pi; manage OpenPI options with /openpi-setup.",
       noSkillsFound: "No skills are loaded for this Session.",
+      addSkill: "Add skill",
+      addPlugin: "Add plugin",
+      searchResources: "Search by name or source",
+      filterResourceScope: "Resource scope",
+      allResourceScopes: "All scopes",
+      noMatchingResources: "No matching resources",
+      resourceBulkTooLarge:
+        "Filter the list further before submitting a bulk request.",
+      resourceManagement: "Pi resources",
+      resourceSourceAuto: "Pi automatic discovery",
+      resourceSourceLocal: "Local resource",
+      resourcePackageSource: "Package, repository or local path",
+      resourcePackageSourcePlaceholder:
+        "npm:package@version · git:owner/repo · /path/to/skill",
+      resourceInstallIntro:
+        "Choose a source and scope. OpenPI setup will review and apply the request in the conversation.",
+      resourceInstallReview:
+        "Review the exact source and permissions in the conversation. Submitting this request does not mean it is installed or loaded.",
+      resourceRequestSubmitted:
+        "Request submitted. Follow progress and confirmations in the conversation, then refresh this catalog.",
+      browseSkills: "Browse skills.sh",
+      resourceSessionState: "Apply to this Session",
+      resourcesReloadNote:
+        "Refresh reads the catalog. Reload applies saved resources to this idle Session; changes are never reloaded automatically.",
+      reloadResources: "Reload resources",
+      resourceReloadReview:
+        "Apply saved Pi skill and plugin configuration and restart extensions in the current Session? Wait for running work to finish first.",
+      resourceReloaded:
+        "Resources reloaded. Review the refreshed catalog and diagnostics.",
+      resourceReloadFailed:
+        "Could not reload resources. Wait for this Session to become idle and refresh before retrying.",
+      advancedResourceConfiguration: "Advanced configuration",
+      resourceDiagnostics:
+        "Pi reports {{extensionErrors}} extension diagnostics and {{skillErrors}} skill diagnostics.",
+      resourceConfigurationDiagnostics:
+        "{{count}} settings files could not be read. Review Pi configuration diagnostics.",
+      resourceCatalogTruncated:
+        "This catalog is bounded; some resources are omitted.",
+      resourceTargetTruncated:
+        "This source or path is truncated. Confirm the full target through Advanced configuration before making changes.",
+      updateResource: "Review update",
+      removeResource: "Review removal",
+      skillsEmptyTitle: "Add your first skill",
+      skillsEmptyIntro:
+        "Skills give Pi reusable instructions. Add a package, repository or local skill; project skills follow Pi project trust.",
+      pluginsEmptyTitle: "Extend Pi with a plugin",
+      pluginsEmptyIntro:
+        "Packages can include extensions, skills, prompts and themes. Add a source to review its installation through OpenPI setup.",
+      pluginCount: "{{count}} plugin sources",
+      installedVersion: "Installed version",
+      configuredVersion: "Configured version",
+      resourceVersionUnpinned: "Not pinned / local source",
+      pluginState_loaded: "Session resources loaded",
+      pluginState_installed: "Installed · not loaded",
+      pluginState_disabled: "Disabled in configuration",
+      pluginState_missing: "Package missing",
+      pluginState_error: "Load diagnostics",
+      pluginState_notLoaded: "Not loaded",
+      pluginLoadedResources:
+        "{{count}} resources in this Session's catalog. Configuration changes require an explicit reload.",
+      pluginAction_enable: "Review enable",
+      pluginAction_disable: "Review disable",
+      pluginAction_update: "Review update",
+      pluginAction_remove: "Review removal",
+      enableVisibleSkills: "Allow model use ({{count}} shown)",
+      disableVisibleSkills: "Explicit use only ({{count}} shown)",
+      enableVisiblePlugins: "Enable {{count}} shown packages",
+      disableVisiblePlugins: "Disable {{count}} shown packages",
+      setupResourceInstallRequest:
+        "Add these Pi {{kind}} from source {{source}} in scope {{scope}}. Inspect the source and resolve a fixed package identity, review required installation permissions with me using ask_user, then use Pi's native package/skill configuration. For a skill request, preserve unrelated extensions and other resources. Preserve existing preferences and project trust; do not reload this Session automatically. Report saved configuration and any remaining action separately. Do not change unrelated OpenPI settings.",
+      setupPluginOperationRequest:
+        "Review Pi package action {{action}} for exactly configured source {{source}}, native root {{path}}, scope {{scope}}. Resolve relative sources against the native scope's settings directory. Use Pi's native package management. For updates, inspect available versions and review a fixed target identity and required permissions with me using ask_user before installing. Preserve resource filters and all unrelated preferences; if a toggle would destroy filters, stop and explain. Removal must not delete a local source directory. Do not reload automatically. Report persisted and active states separately; do not change unrelated OpenPI settings.",
+      setupSkillManageRequest:
+        "Review Pi skill action {{action}} for exactly file {{path}}, source {{source}}, scope {{scope}}. Inspect native ownership first. Review the update/removal and required permissions with me using ask_user. Preserve unrelated skills and package resources; do not remove an entire shared package to remove one skill. Preserve project trust and do not reload automatically. Do not change unrelated OpenPI settings.",
+      setupSkillsBulkRequest:
+        "For exactly these currently displayed Pi skill files {{paths}}, set native disable-model-invocation to {{disabled}}. Inspect ownership, preserve all other content and preferences, review necessary changes with me, and report any files that cannot be changed safely. Explicit /skill invocation remains available. Do not reload automatically or change unrelated OpenPI settings.",
+      setupPluginsBulkRequest:
+        "For exactly these currently displayed Pi packages {{packages}}, set disabled to {{disabled}} through native Pi configuration. Preserve all other preferences and resource filters; skip and report entries whose filters cannot be preserved. Respect scope and project trust, review necessary changes with me, and do not reload automatically or change unrelated OpenPI settings.",
+      resourceRequestFinished:
+        "The setup turn has ended. Refresh and inspect Pi's configuration and Session resources to confirm what changed.",
       skillCount_one: "{{count}} skill",
       skillCount_other: "{{count}} skills",
       skill: "Skill",
@@ -2183,6 +2263,83 @@ const resources = {
       configurationViaPi:
         "此处为只读状态。模型凭据与信任由 Pi 管理，OpenPI 选项通过 /openpi-setup 配置。",
       noSkillsFound: "当前会话没有加载技能。",
+      addSkill: "添加技能",
+      addPlugin: "添加插件",
+      searchResources: "搜索名称或来源",
+      filterResourceScope: "资源范围",
+      allResourceScopes: "全部范围",
+      noMatchingResources: "没有匹配的资源",
+      resourceBulkTooLarge: "请进一步筛选列表后，再提交批量配置请求。",
+      resourceManagement: "Pi 资源",
+      resourceSourceAuto: "Pi 自动发现",
+      resourceSourceLocal: "本地资源",
+      resourcePackageSource: "软件包、仓库或本地路径",
+      resourcePackageSourcePlaceholder:
+        "npm:包名@版本 · git:owner/repo · /path/to/skill",
+      resourceInstallIntro:
+        "选择来源和范围，在对话中通过 OpenPI setup 审查并应用。",
+      resourceInstallReview:
+        "请在对话中确认准确来源和权限。提交请求不代表已安装或已加载。",
+      resourceRequestSubmitted:
+        "请求已提交。请在对话中查看进度和确认，完成后刷新此目录。",
+      browseSkills: "浏览 skills.sh 技能",
+      resourceSessionState: "应用到当前会话",
+      resourcesReloadNote:
+        "刷新只读取目录；重新加载才会将已保存的资源应用到空闲会话。配置变更不会自动重新加载。",
+      reloadResources: "重新加载资源",
+      resourceReloadReview:
+        "将已保存的 Pi 技能与插件配置应用到当前会话，并重新启动扩展？请先等待运行中的工作结束。",
+      resourceReloaded: "资源已重新加载，请查看更新后的目录和诊断。",
+      resourceReloadFailed:
+        "无法重新加载资源。请等待当前会话空闲，刷新后重试。",
+      advancedResourceConfiguration: "高级配置",
+      resourceDiagnostics:
+        "Pi 报告了 {{extensionErrors}} 项扩展诊断与 {{skillErrors}} 项技能诊断。",
+      resourceConfigurationDiagnostics:
+        "{{count}} 项设置读取失败，请检查 Pi 配置诊断。",
+      resourceCatalogTruncated: "此目录有数量上限，部分资源未展示。",
+      resourceTargetTruncated:
+        "此来源或路径已截断，请通过高级配置确认完整目标后再进行管理。",
+      updateResource: "检查更新",
+      removeResource: "审查移除",
+      skillsEmptyTitle: "添加你的第一个技能",
+      skillsEmptyIntro:
+        "技能为 Pi 提供可复用的指引。可以添加软件包、仓库或本地技能；项目技能遵循 Pi 的项目信任。",
+      pluginsEmptyTitle: "用插件扩展 Pi",
+      pluginsEmptyIntro:
+        "软件包可以包含扩展、技能、提示词和主题。添加来源后，通过 OpenPI setup 审查安装。",
+      pluginCount: "{{count}} 个插件来源",
+      installedVersion: "已安装版本",
+      configuredVersion: "配置版本",
+      resourceVersionUnpinned: "未固定版本 / 本地来源",
+      pluginState_loaded: "本会话资源已加载",
+      pluginState_installed: "已安装 · 未加载",
+      pluginState_disabled: "配置已禁用",
+      pluginState_missing: "软件包缺失",
+      pluginState_error: "加载诊断",
+      pluginState_notLoaded: "未加载",
+      pluginLoadedResources:
+        "当前会话目录包含 {{count}} 项资源。配置变更需要明确重新加载后才会应用。",
+      pluginAction_enable: "审查启用",
+      pluginAction_disable: "审查禁用",
+      pluginAction_update: "检查更新",
+      pluginAction_remove: "审查移除",
+      enableVisibleSkills: "允许模型使用（当前 {{count}} 项）",
+      disableVisibleSkills: "仅显式调用（当前 {{count}} 项）",
+      enableVisiblePlugins: "启用当前 {{count}} 个软件包",
+      disableVisiblePlugins: "禁用当前 {{count}} 个软件包",
+      setupResourceInstallRequest:
+        "添加 Pi {{kind}}，来源为 {{source}}，范围为 {{scope}}。先检查来源并确定固定的软件包身份，通过 ask_user 与我确认安装权限，再使用 Pi 原生的软件包或技能配置。添加技能时保留其他扩展和资源。保留现有偏好与项目信任，不要自动重新加载当前会话。分别报告已保存的配置与仍需执行的操作，不要改动无关的 OpenPI 设置。",
+      setupPluginOperationRequest:
+        "审查 Pi 软件包操作 {{action}}，只针对配置来源 {{source}}、原生安装目录 {{path}}、范围 {{scope}}。相对来源应以该范围的原生设置目录解析。使用 Pi 原生包管理；更新时检查可用版本，通过 ask_user 与我确认固定的目标身份和安装权限。保留资源过滤器及所有无关偏好；如果切换会破坏过滤器，停止并说明。移除时不得删除本地来源目录。不要自动重新加载，分别报告已持久化与当前会话状态，不要改动无关的 OpenPI 设置。",
+      setupSkillManageRequest:
+        "审查 Pi 技能操作 {{action}}，只针对文件 {{path}}、来源 {{source}}、范围 {{scope}}。先检查原生资源归属，通过 ask_user 与我确认更新或移除及所需权限。保留无关技能与软件包资源，不要为了移除一个技能删除整个共享软件包。保留项目信任，不要自动重新加载，也不要改动无关的 OpenPI 设置。",
+      setupSkillsBulkRequest:
+        "只针对当前展示的 Pi 技能文件 {{paths}}，将原生 disable-model-invocation 设为 {{disabled}}。检查资源归属，保留其余内容和偏好，与我审查必要变更，报告无法安全修改的文件。显式 /skill 调用仍应可用。不要自动重新加载，也不要改动无关的 OpenPI 设置。",
+      setupPluginsBulkRequest:
+        "只针对当前展示的 Pi 软件包 {{packages}}，通过 Pi 原生配置将 disabled 设为 {{disabled}}。保留其他偏好与资源过滤器；无法保留过滤器的条目应跳过并报告。遵循范围与项目信任，与我审查必要变更，不要自动重新加载，也不要改动无关的 OpenPI 设置。",
+      resourceRequestFinished:
+        "配置回合已结束。请刷新并查看 Pi 原生配置与会话资源，确认实际变更。",
       skillCount_one: "{{count}} 个技能",
       skillCount_other: "{{count}} 个技能",
       skill: "技能",
