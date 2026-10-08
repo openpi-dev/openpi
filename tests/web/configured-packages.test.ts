@@ -70,8 +70,8 @@ test("native configured packages remain visible before loading and preserve scop
   assert.equal(global?.installedVersion, "1.2.3");
   assert.equal(global?.name, "fixture-package");
   assert.equal(global?.extensions.length, 0);
-  const disabled = catalog.plugins.find((plugin) =>
-    plugin.source.endsWith("/missing"),
+  const disabled = catalog.plugins.find(
+    (plugin) => plugin.source === join(root, "missing"),
   );
   assert.equal(disabled?.enabled, false);
   assert.equal(disabled?.installed, false);
