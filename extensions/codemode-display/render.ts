@@ -103,9 +103,8 @@ type Tone = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
 function paintBackground(theme: Theme, color: Tone, row: string) {
   return row
     .split("\u001b[0m")
-    .filter((segment) => segment.length > 0)
     .map((segment) => theme.bg(color, segment))
-    .join("");
+    .join("\u001b[0m");
 }
 
 /** Mirror Pi's default tool shell (padded, tinted block) with a tone derived from all evidence. */
