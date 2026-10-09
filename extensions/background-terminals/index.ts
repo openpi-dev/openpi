@@ -382,8 +382,8 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const manager = await getManager();
 
-      const command = params.command.trim();
-      if (!command) throw new Error("command must not be empty.");
+      const command = params.command;
+      if (!command.trim()) throw new Error("command must not be empty.");
 
       const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
       if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
