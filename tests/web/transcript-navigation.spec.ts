@@ -1009,7 +1009,7 @@ it.each(["wheel", "ArrowUp", "PageUp", "Home", "Shift+Space"])(
   },
 );
 
-it("returns keyboard focus to the conversation when the latest button disappears", () => {
+it("returns keyboard focus to the latest native message when the latest button disappears", async () => {
   const view = render(node(snapshot(session(0, 3)), null, new Map()));
   const viewport = view.container.querySelector<HTMLElement>(".conversation")!;
   Object.defineProperties(viewport, {
@@ -1022,17 +1022,190 @@ it("returns keyboard focus to the conversation when the latest button disappears
   const jump = screen.getByRole("button", { name: i18n.t("jumpToLatest") });
   jump.focus();
   expect(document.activeElement).toBe(jump);
-  const focus = vi.spyOn(viewport, "focus");
-  fireEvent.click(jump);
+  const target = view.container.querySelector<HTMLElement>(
+    '[data-history-message="e3"]',
+  )!;
+  const focus = vi.spyOn(target, "focus");
+  await act(async () => fireEvent.click(jump));
   expect(
     screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
   ).toBeNull();
-  expect(document.activeElement).toBe(viewport);
+  expect(document.activeElement).toBe(target);
   expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   expect(viewport.scrollTo).toHaveBeenCalledWith({
     top: 900,
     behavior: "smooth",
   });
+});
+
+it.each(["closed process", "folded turn"])(
+  "keeps latest focus inside this conversation and skips native rows in a %s",
+  async (kind) => {
+    const selected = session(0, 3);
+    selected.entries[2]!.message!.stopReason = "stop";
+    selected.entries[3]!.message = {
+      role: "assistant",
+      content: "",
+      parts: [
+        { type: "thinking", text: "Inspect a later file" },
+        {
+          type: "toolCall",
+          id: "late-read",
+          name: "read",
+          arguments: '{"path":"later.ts"}',
+        },
+      ],
+    };
+    selected.entries.push({
+      type: "message",
+      id: "receipt",
+      timestamp: "2026-10-09T00:00:01Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "late-read",
+        toolName: "read",
+        content: "Exact later receipt",
+        isError: false,
+      },
+    });
+    if (kind === "folded turn")
+      selected.entries.push({
+        type: "custom",
+        id: "timing",
+        timestamp: "2026-10-09T00:00:02Z",
+        turnTiming: {
+          version: 1,
+          sessionId: selected.id,
+          commandId: "run",
+          epoch: 1,
+          promptEntryId: "e0",
+          resultEntryId: "e2",
+          startedAt: 0,
+          finishedAt: 2000,
+          elapsedMs: 2000,
+          outcome: "completed",
+        },
+      });
+    const original = JSON.stringify(selected.entries);
+    const view = render(node(snapshot(selected), null, new Map()));
+    const group =
+      view.container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+    if (kind === "folded turn") {
+      group.open = true;
+      fireEvent(group, new Event("toggle"));
+      expect(group.closest<HTMLElement>(".turn-response-body")?.hidden).toBe(
+        true,
+      );
+    } else expect(group.open).toBe(false);
+    const outside = document.createElement("article");
+    outside.className = "message-row";
+    outside.tabIndex = -1;
+    outside.dataset.historyMessage = "unrelated-session";
+    document.body.append(outside);
+    try {
+      const viewport =
+        view.container.querySelector<HTMLElement>(".conversation")!;
+      Object.defineProperties(viewport, {
+        clientHeight: { get: () => 360 },
+        scrollHeight: { get: () => 900 },
+      });
+      viewport.scrollTo = vi.fn();
+      viewport.scrollTop = 100;
+      fireEvent.scroll(viewport);
+      await act(async () =>
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+        ),
+      );
+      const target = view.container.querySelector<HTMLElement>(
+        '[data-history-message="e2"]',
+      )!;
+      expect(document.activeElement).toBe(target);
+      expect(document.activeElement).not.toBe(outside);
+      expect(group.open).toBe(kind === "folded turn");
+      expect(JSON.stringify(selected.entries)).toBe(original);
+    } finally {
+      outside.remove();
+    }
+  },
+);
+
+it("falls back to the conversation when its only native rows are inside a closed process", async () => {
+  const selected = session(0, 2);
+  selected.entries[1]!.message = {
+    role: "assistant",
+    content: "",
+    parts: [
+      { type: "thinking", text: "Inspect the file" },
+      {
+        type: "toolCall",
+        id: "read-only",
+        name: "read",
+        arguments: '{"path":"file.ts"}',
+      },
+    ],
+  };
+  selected.entries[2]!.message = {
+    role: "toolResult",
+    toolCallId: "read-only",
+    toolName: "read",
+    content: "Exact receipt",
+    isError: false,
+  };
+  selected.entries = selected.entries.slice(1);
+  const view = render(node(snapshot(selected), null, new Map()));
+  const viewport = view.container.querySelector<HTMLElement>(".conversation")!;
+  Object.defineProperties(viewport, {
+    clientHeight: { get: () => 360 },
+    scrollHeight: { get: () => 900 },
+  });
+  viewport.scrollTo = vi.fn();
+  viewport.scrollTop = 100;
+  fireEvent.scroll(viewport);
+  await act(async () =>
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ),
+  );
+  expect(document.activeElement).toBe(viewport);
+  expect(
+    view.container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
+  ).toBe(false);
+});
+
+it("hands latest focus to the current native window after clearing an older reading window", async () => {
+  const latest = session(6, 7);
+  const cache: SessionReadingCache = new Map([
+    [
+      sessionReadingScope(latest),
+      {
+        window: {
+          session: session(0, 1, 7),
+          anchor: "e1",
+          validatedLeaf: "e7",
+        },
+      },
+    ],
+  ]);
+  const view = render(node(snapshot(latest), null, cache));
+  expect(
+    view.container.querySelector('[data-history-message="e1"]'),
+  ).toBeTruthy();
+  const viewport = view.container.querySelector<HTMLElement>(".conversation")!;
+  viewport.scrollTo = vi.fn();
+  await act(async () =>
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ),
+  );
+  const target = view.container.querySelector<HTMLElement>(
+    '[data-history-message="e7"]',
+  )!;
+  expect(target).toBeTruthy();
+  expect(document.activeElement).toBe(target);
+  expect(
+    view.container.querySelector('[data-history-message="e1"]'),
+  ).toBeNull();
 });
 
 it.each(

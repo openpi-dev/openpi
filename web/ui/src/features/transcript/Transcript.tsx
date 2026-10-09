@@ -3723,7 +3723,18 @@ export function Transcript(props: TranscriptProps) {
             setHighlightedNavigation(null);
             history.resetToLatest();
             element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-            element.focus({ preventScroll: true });
+            // Returning from a reading window can replace its rows in this commit.
+            queueMicrotask(() => {
+              if (viewport.current !== element) return;
+              const latest = Array.from(
+                element.querySelectorAll<HTMLElement>(
+                  '.message-row[tabindex="-1"]',
+                ),
+              )
+                .reverse()
+                .find((row) => !row.closest("[hidden], details:not([open])"));
+              (latest ?? element).focus({ preventScroll: true });
+            });
           }}
         >
           {running && props.activityObserved !== false ? (
