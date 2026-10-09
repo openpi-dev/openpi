@@ -6,6 +6,7 @@ import {
   realpath,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -140,6 +141,11 @@ test("artifact reads bind Session, canonical file, content revision and explicit
       createHash("sha256").update(first.bytes).digest("hex"),
     );
     await writeFile(path, "# revision two");
+    // Both revisions are 14 bytes, and two writes inside one coarse filesystem
+    // timestamp tick keep identical stat metadata. Advance mtime as a later
+    // save would, so the check exercises the identity, not scheduler timing.
+    const later = new Date(Date.now() + 5_000);
+    await utimes(path, later, later);
     assert.notEqual(
       (await reader.metadata(handle, sessionId)).identity,
       first.preview.identity,
