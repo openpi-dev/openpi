@@ -891,12 +891,17 @@ it("marks only live execution evidence for shimmer styling", () => {
     }),
   );
 
-  const process = view.container.querySelector<HTMLDetailsElement>(
-    ".process-sequence.running",
+  expect(view.container.querySelector(".process-sequence")).toBeNull();
+  const process = view.container.querySelector<HTMLElement>(
+    ".single-tool-step.running",
   );
   expect(process?.dataset.status).toBe("running");
-  expect(process?.open).toBe(true);
-  expect(process?.querySelectorAll(".process-step.running")).toHaveLength(1);
+  expect(
+    process?.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
+  ).toBe("running");
+  expect(view.container.querySelectorAll(".process-step.running")).toHaveLength(
+    1,
+  );
   expect(view.container.querySelector(".thinking-line.running")).toBeTruthy();
 });
 
@@ -2825,6 +2830,12 @@ it("keeps completed groups collapsed independently of the thinking preference", 
             name: "read",
             arguments: '{"path":"src/index.ts"}',
           },
+          {
+            type: "toolCall",
+            id: "read-2",
+            name: "read",
+            arguments: '{"path":"package.json"}',
+          },
         ],
       },
     },
@@ -2837,6 +2848,18 @@ it("keeps completed groups collapsed independently of the thinking preference", 
         toolName: "read",
         toolCallId: "read-1",
         content: "source",
+        isError: false,
+      },
+    },
+    {
+      id: "result-2",
+      type: "message",
+      timestamp: "2026-09-19T00:00:03Z",
+      message: {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-2",
+        content: "package configuration",
         isError: false,
       },
     },
@@ -2859,6 +2882,9 @@ it("keeps completed groups collapsed independently of the thinking preference", 
   expect(
     view.container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
   ).toBe(false);
+  expect(
+    view.container.querySelector<HTMLDetailsElement>(".thinking-line")?.open,
+  ).toBe(true);
 });
 
 it("does not attribute current runtime activity to a historical session", () => {

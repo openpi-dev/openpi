@@ -16,7 +16,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
-- [`WEB_CODEX_ACTIVITY_2026-10-08.md`](WEB_CODEX_ACTIVITY_2026-10-08.md) — Codex/Claude source comparisons, whole-reply duration folding, independent activity summaries, reasoning previews, repository gates and installed native cart-tool evidence; numerical fidelity remains unverified ([#597](https://github.com/openpi-dev/openpi/issues/597)).
+- [`WEB_CODEX_ACTIVITY_2026-10-08.md`](WEB_CODEX_ACTIVITY_2026-10-08.md) — Codex/Claude source comparisons, completed process folding with visible final answers, adjacent-tool grouping, visited completion indicators, repository gates and installed native cart-tool evidence; numerical fidelity remains unverified ([#597](https://github.com/openpi-dev/openpi/issues/597)).
 
 - [`CHILD_RENDER_PARITY_2026-10-05.md`](CHILD_RENDER_PARITY_2026-10-05.md) — Session-owned child message/tool presentation, native paired component validation and host-private Mermaid/image boundaries ([#681](https://github.com/openpi-dev/openpi/issues/681)).
 

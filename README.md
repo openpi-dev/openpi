@@ -458,13 +458,13 @@ Plan 模式下需先退出规划，再通过 `/openpi-setup` 修改配置。Web 
 
 Web 侧栏支持独立置顶会话分区。行内图钉可置顶或取消，置顶区菜单切换最近更新和手动排序；手动模式支持拖动以及会话菜单上移/下移。`ui.webPinnedSort` 默认为 `manual`，可选 `updated`，由 `/openpi-setup` 或置顶区菜单保存。置顶顺序保存在当前 Web 会话目录的工作区元数据中；归档暂时隐藏置顶，恢复后保留顺序。
 
-会话行右侧只保留三种提示：执行中的转圈、已完成未读的小圆点、需要处理的提示。等待输入和失败共用需要处理标记，悬停或打开会话可查看具体原因；停止和未知结果恢复普通行。断线时收起执行动画，由页面连接状态统一提示，绝不当作完成。打开会话并在可见页面停留四秒后，完成圆点在当前浏览器标签页内记为已读；后台完成回执在当前 Host 生命周期内保留，不将已释放运行实例误报为空闲。
+会话行右侧只保留三种提示：执行中的转圈、已完成未读的小圆点、需要处理的提示。等待输入和失败共用需要处理标记，悬停或打开会话可查看具体原因；停止和未知结果恢复普通行。断线时收起执行动画，由页面连接状态统一提示，绝不当作完成。打开并确认加载会话后，在可见的对话或执行轨迹页面立即将该轮完成圆点记为已读；折叠过程或浏览较早的消息不影响已读。后台页面、未确认的切换、断线和被遮住的会话保留提示，已读记录只影响当前浏览器标签页的对应会话与回合。后台完成回执在当前 Host 生命周期内保留，不将已释放运行实例误报为空闲。
 
 Web 模型配置先填写提供商连接，再选择“获取可用模型”。列表支持搜索、勾选当前结果和批量添加，已有配置不会重复添加；搜索保留其他结果的勾选。查询仅请求提供商模型目录，不调用模型。可使用同一已保存端点的 Pi 凭据，或输入仅用于本次查询的临时密钥；临时密钥不会保存。新增模型沿用表单里的能力默认值，可在高级参数中逐项调整。提供商不支持目录接口时仍可手动添加。
 
 Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px（360–720px）。拖动或键盘调整后保存到同一份配置，刷新后恢复；小窗口按当前视口临时限制显示宽度，不覆盖已保存值。也可用 `/openpi-setup` 修改 `ui.webSidebarWidth` 和 `ui.webAuxiliaryWidth`。
 
-Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。正文之间的工具活动组运行时展开，结束后默认收起为图标与操作摘要；点击摘要可独立查看详情，正文默认继续可见。“用时”开关另行折叠整段助手回复，包括中间说明、思考、工具组和最终回答，不折叠用户问题。思考单独显示为一行文字预览，展开后使用 Markdown 排版；工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
+Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。有可靠耗时记录的回合，执行时展开整个过程，完成后“用时”默认收起中间说明、思考和工具，最终回答继续显示在下方；可点击“用时”查看完整过程，不折叠用户问题或最终回答。连续多个工具组成独立活动组，遇到说明、思考或其他消息就分开；单个工具直接显示一行，不再套一层分组。活动组运行时展开，结束后收起为图标与操作摘要；思考单独显示为一行文字预览，展开后使用 Markdown 排版。工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
 <!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 

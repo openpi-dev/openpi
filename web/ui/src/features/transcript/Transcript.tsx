@@ -94,14 +94,6 @@ interface DisplayEntry {
   optimistic?: LiveEntry["optimistic"];
 }
 
-export interface CompletedResultExposure {
-  sessionId: string;
-  sessionPath: string;
-  commandId: string;
-  finishedAt: number;
-  resultEntryId: string;
-}
-
 interface TranscriptProps {
   activityObserved?: boolean;
   snapshot: WebSnapshot;
@@ -129,7 +121,6 @@ interface TranscriptProps {
   forkAvailable?: boolean;
   forkPending?: boolean;
   resultExposureEnabled?: boolean;
-  onCompletedResultSeen?: (completion: CompletedResultExposure) => void;
   onInspectSubagent?: (id: string) => void;
   onReviewTurn?: OpenTurnReview;
   onHistoryAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
@@ -151,6 +142,7 @@ interface RenderRow {
   turn: number;
   kind: "prompt" | "process" | "response" | "outcome" | "custom";
   content: ReactNode;
+  final?: boolean;
   processType?: "thinking" | "tool" | "activity";
   processPreview?: string;
   processToolName?: string;
@@ -1452,6 +1444,18 @@ function groupRows(rows: RenderRow[], active: boolean) {
         <Fragment key={row.key}>{row.content}</Fragment>
       ));
     }
+    if (block.rows.length === 1) {
+      const row = block.rows[0]!;
+      return (
+        <div
+          className={`process-step single-tool-step ${row.processStatus ?? "unknown"}`}
+          data-status={row.processStatus ?? "unknown"}
+          key={row.key}
+        >
+          {row.content}
+        </div>
+      );
+    }
     return (
       <ProcessSequence
         key={blockKey}
@@ -1476,8 +1480,14 @@ function TurnRun({
 }) {
   const { t } = useTranslation();
   const id = useId();
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(timing?.outcome !== "completed");
+  useEffect(() => {
+    if (timing?.outcome === "completed") setOpen(false);
+  }, [timing?.outcome]);
   const hasTiming = Boolean(timing || timedTurn);
+  const processRows = rows.filter((row) => !row.final);
+  const finalRows = rows.filter((row) => row.final);
+  const hasProcess = processRows.some((row) => row.content !== null);
   const elapsed = timing ? (
     <SettledTurnElapsed timing={timing} />
   ) : timedTurn ? (
@@ -1496,7 +1506,7 @@ function TurnRun({
     <>
       {hasTiming && (
         <header className="turn-duration" data-outcome={timing?.outcome}>
-          {rows.length > 0 ? (
+          {hasProcess ? (
             <button
               type="button"
               className="turn-duration-toggle"
@@ -1518,9 +1528,14 @@ function TurnRun({
         </header>
       )}
       {hasTiming ? (
-        <div className="turn-response-body" id={id} hidden={!open}>
-          {groupRows(rows, active)}
-        </div>
+        <>
+          {hasProcess && (
+            <div className="turn-response-body" id={id} hidden={!open}>
+              {groupRows(processRows, active)}
+            </div>
+          )}
+          {groupRows(finalRows, false)}
+        </>
       ) : (
         groupRows(rows, active)
       )}
@@ -2237,6 +2252,8 @@ export function Transcript(props: TranscriptProps) {
             key,
             turn,
             kind: "response",
+            final:
+              message.stopReason === "stop" || message.stopReason === "length",
             content: (
               <article
                 className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
@@ -2958,143 +2975,6 @@ export function Transcript(props: TranscriptProps) {
       if (frame !== undefined) cancelAnimationFrame(frame);
     };
   }, [selected, navigation, navigationKey, readingCache]);
-
-  const reportedCompletion = useRef<string | null>(null);
-  useEffect(() => {
-    const element = viewport.current;
-    const turn = props.snapshot.sessions.find(
-      (session) =>
-        session.id === selected?.id && session.path === selected?.path,
-    )?.execution?.lastTurn;
-    if (
-      !element ||
-      !selected ||
-      !props.onCompletedResultSeen ||
-      props.resultExposureEnabled === false ||
-      props.activityObserved === false ||
-      historyPaused ||
-      turn?.outcome !== "completed" ||
-      !turn.resultEntryId
-    )
-      return;
-    const resultIndex = selected.entries.findIndex(
-      (entry) => entry.id === turn.resultEntryId,
-    );
-    const result = selected.entries[resultIndex]?.message;
-    const timingIndex = selected.entries.findIndex(
-      (entry) =>
-        entry.turnTiming?.sessionId === selected.id &&
-        entry.turnTiming.commandId === turn.commandId &&
-        entry.turnTiming.finishedAt === turn.finishedAt &&
-        entry.turnTiming.outcome === "completed" &&
-        (!entry.turnTiming.resultEntryId ||
-          entry.turnTiming.resultEntryId === turn.resultEntryId),
-    );
-    if (
-      resultIndex < 0 ||
-      timingIndex <= resultIndex ||
-      result?.role !== "assistant" ||
-      !["stop", "length"].includes(result.stopReason ?? "")
-    )
-      return;
-    const exposure: CompletedResultExposure = {
-      sessionId: selected.id,
-      sessionPath: selected.path,
-      commandId: turn.commandId,
-      finishedAt: turn.finishedAt,
-      resultEntryId: turn.resultEntryId,
-    };
-    const key = JSON.stringify(exposure);
-    let frame: number | undefined;
-    const check = () => {
-      frame = undefined;
-      if (
-        reportedCompletion.current === key ||
-        document.visibilityState !== "visible" ||
-        !element.isConnected ||
-        element.closest("[hidden], [inert], [aria-hidden='true']") ||
-        document.querySelector("dialog[open]")
-      )
-        return;
-      const bounds = element.getBoundingClientRect();
-      const top = Math.max(0, bounds.top);
-      const bottom = Math.min(window.innerHeight, bounds.bottom);
-      const left = Math.max(0, bounds.left);
-      const right = Math.min(window.innerWidth, bounds.right);
-      if (
-        bottom <= top ||
-        right <= left ||
-        element.checkVisibility?.() === false
-      )
-        return;
-      const exposed = Array.from(
-        element.querySelectorAll<HTMLElement>(
-          ".message-row.assistant.response[data-history-message]",
-        ),
-      ).some((article) => {
-        if (
-          article.dataset.historyMessage !== exposure.resultEntryId ||
-          article.closest(
-            "details:not([open]), [hidden], [inert], [aria-hidden='true']",
-          )
-        )
-          return false;
-        const content = article.querySelector<HTMLElement>(".message-content");
-        if (!content || !content.textContent?.trim()) return false;
-        const style = getComputedStyle(content);
-        if (
-          style.display === "none" ||
-          style.visibility === "hidden" ||
-          article.checkVisibility?.() === false
-        )
-          return false;
-        const resultBounds = content.getBoundingClientRect();
-        return (
-          resultBounds.height > 0 &&
-          resultBounds.width > 0 &&
-          resultBounds.bottom > top &&
-          resultBounds.top < bottom &&
-          resultBounds.right > left &&
-          resultBounds.left < right
-        );
-      });
-      if (!exposed) return;
-      reportedCompletion.current = key;
-      props.onCompletedResultSeen?.(exposure);
-    };
-    const schedule = () => {
-      if (frame === undefined) frame = requestAnimationFrame(check);
-    };
-    schedule();
-    element.addEventListener("scroll", schedule);
-    document.addEventListener("visibilitychange", schedule);
-    document.addEventListener("close", schedule, true);
-    window.addEventListener("resize", schedule);
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? undefined
-        : new ResizeObserver(schedule);
-    observer?.observe(element);
-    for (const content of element.querySelectorAll<HTMLElement>(
-      ".message-content",
-    ))
-      observer?.observe(content);
-    return () => {
-      if (frame !== undefined) cancelAnimationFrame(frame);
-      observer?.disconnect();
-      element.removeEventListener("scroll", schedule);
-      document.removeEventListener("visibilitychange", schedule);
-      document.removeEventListener("close", schedule, true);
-      window.removeEventListener("resize", schedule);
-    };
-  }, [
-    selected,
-    props.snapshot.sessions,
-    props.onCompletedResultSeen,
-    props.resultExposureEnabled,
-    props.activityObserved,
-    historyPaused,
-  ]);
 
   const runningLabel = !active
     ? t("backgroundSessionRunning")

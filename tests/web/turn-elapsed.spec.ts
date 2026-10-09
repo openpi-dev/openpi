@@ -173,12 +173,18 @@ it("recovers the elapsed value on refresh and resets only for a different turn i
 });
 
 it.each(["completed", "failed", "cancelled", "uncertain"] as const)(
-  "shows fixed persisted elapsed time for a %s run",
+  "shows fixed persisted elapsed time and the appropriate process default for a %s run",
   (outcome) => {
     vi.useFakeTimers();
     const value = snapshot();
     value.runtime = { status: "idle", capabilities: {} };
     value.selectedSession!.entries = [
+      {
+        id: "update",
+        type: "message",
+        timestamp: "2026-09-22T00:00:00Z",
+        message: { role: "assistant", content: "Run evidence" },
+      },
       {
         id: "timing",
         type: "custom",
@@ -204,6 +210,9 @@ it.each(["completed", "failed", "cancelled", "uncertain"] as const)(
         .querySelector(".turn-duration")
         ?.getAttribute("data-outcome"),
     ).toBe(outcome);
+    expect(
+      view.container.querySelector<HTMLElement>(".turn-response-body")?.hidden,
+    ).toBe(outcome === "completed");
     act(() => vi.advanceTimersByTime(60000));
     expect(
       screen.getByText(i18n.t("turnElapsedFinished", { duration: "2m37s" })),
@@ -232,7 +241,7 @@ it("does not invent a duration from old timestamps or incomplete runtime evidenc
   expect(view.container.querySelector(".turn-duration")).toBeNull();
 });
 
-it("folds every assistant response with elapsed while tool groups keep their own disclosure", () => {
+it("defaults completed execution to folded, keeps the final answer visible and preserves nested tool groups", () => {
   const value = snapshot();
   value.runtime = { status: "idle", capabilities: {} };
   value.selectedSession!.entries = [
@@ -258,6 +267,12 @@ it("folds every assistant response with elapsed while tool groups keep their own
             name: "read",
             arguments: '{"path":"README.md"}',
           },
+          {
+            type: "toolCall",
+            id: "read-2",
+            name: "read",
+            arguments: '{"path":"package.json"}',
+          },
         ],
       },
     },
@@ -270,6 +285,18 @@ it("folds every assistant response with elapsed while tool groups keep their own
         toolName: "read",
         toolCallId: "read-1",
         content: "Source",
+        isError: false,
+      },
+    },
+    {
+      id: "read-result-2",
+      type: "message",
+      timestamp: "2026-09-22T00:00:02Z",
+      message: {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-2",
+        content: "Package source",
         isError: false,
       },
     },
@@ -288,6 +315,12 @@ it("folds every assistant response with elapsed while tool groups keep their own
             name: "bash",
             arguments: '{"command":"npm test"}',
           },
+          {
+            type: "toolCall",
+            id: "bash-2",
+            name: "bash",
+            arguments: '{"command":"git diff --check"}',
+          },
         ],
       },
     },
@@ -300,6 +333,18 @@ it("folds every assistant response with elapsed while tool groups keep their own
         toolName: "bash",
         toolCallId: "bash-1",
         content: "All tests passed",
+        isError: false,
+      },
+    },
+    {
+      id: "bash-result-2",
+      type: "message",
+      timestamp: "2026-09-22T00:00:04Z",
+      message: {
+        role: "toolResult",
+        toolName: "bash",
+        toolCallId: "bash-2",
+        content: "",
         isError: false,
       },
     },
@@ -338,6 +383,11 @@ it("folds every assistant response with elapsed while tool groups keep their own
   expect(
     duration.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+  expect(body.hidden).toBe(true);
+  expect(answer.closest("[hidden]")).toBeNull();
+  const toggle = screen.getByRole("button", { name: "Worked for 2m37s" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(toggle);
   expect(body.hidden).toBe(false);
   const groups = [
     ...body.querySelectorAll<HTMLDetailsElement>(".process-sequence"),
@@ -355,15 +405,14 @@ it("folds every assistant response with elapsed while tool groups keep their own
   );
   groups[0]!.open = true;
   fireEvent(groups[0]!, new Event("toggle"));
-  const toggle = screen.getByRole("button", { name: "Worked for 2m37s" });
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
   expect(toggle.getAttribute("aria-controls")).toBe(body.id);
   fireEvent.click(toggle);
   expect(body.hidden).toBe(true);
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  for (const text of ["First update", "Second update", "Final answer"])
+  for (const text of ["First update", "Second update"])
     expect(screen.getByText(text).closest("[hidden]")).toBe(body);
-  expect(answer.closest("[hidden]")).toBe(body);
+  expect(answer.closest("[hidden]")).toBeNull();
   expect(screen.getByText("Question").closest("[hidden]")).toBeNull();
   fireEvent.click(toggle);
   expect(body.hidden).toBe(false);
@@ -379,7 +428,7 @@ it("folds every assistant response with elapsed while tool groups keep their own
       historyNavigation: {
         sessionId: value.selectedSession!.id,
         sessionPath: value.selectedSession!.path,
-        entryId: "answer",
+        entryId: "first-update",
         revision: 1,
         session: value.selectedSession!,
       },
@@ -388,6 +437,20 @@ it("folds every assistant response with elapsed while tool groups keep their own
   expect(
     view.container.querySelector<HTMLElement>(".turn-response-body")!.hidden,
   ).toBe(false);
+  expect(screen.getByText("Final answer").closest("[hidden]")).toBeNull();
+  fireEvent.click(toggle);
+  view.rerender(
+    node(value, {
+      historyNavigation: {
+        sessionId: value.selectedSession!.id,
+        sessionPath: value.selectedSession!.path,
+        entryId: "answer",
+        revision: 2,
+        session: value.selectedSession!,
+      },
+    }),
+  );
+  expect(body.hidden).toBe(true);
   expect(screen.getByText("Final answer").closest("[hidden]")).toBeNull();
 });
 
@@ -516,13 +579,22 @@ it("keeps one top timer through streaming, manual folding, settlement, and a lat
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   expect(screen.getByText("First update").closest("[hidden]")).toBe(body);
   expect(screen.getByText("Final answer").closest("[hidden]")).toBe(body);
+  fireEvent.click(toggle);
+  expect(body.hidden).toBe(false);
 
   const settled = {
     ...value,
     selectedSession: {
       ...value.selectedSession!,
       entries: [
-        ...entries,
+        ...entries.map((entry) =>
+          entry.id === "step-2"
+            ? {
+                ...entry,
+                message: { ...entry.message, stopReason: "stop" as const },
+              }
+            : entry,
+        ),
         {
           id: "timing",
           type: "custom" as const,
@@ -543,6 +615,8 @@ it("keeps one top timer through streaming, manual folding, settlement, and a lat
   };
   // Settlement evidence is already available, but the status is still running.
   view.rerender(node(settled));
+  expect(body.hidden).toBe(true);
+  expect(screen.getByText("Final answer").closest("[hidden]")).toBeNull();
   expect(screen.queryByRole("timer")).toBeNull();
   expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
   expect(
@@ -556,7 +630,7 @@ it("keeps one top timer through streaming, manual folding, settlement, and a lat
   expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
 });
 
-it("can fold a plain answer even when it has no tools or thinking", () => {
+it("leaves a final-only answer visible without an empty execution disclosure", () => {
   const value = snapshot();
   value.runtime = { status: "idle", capabilities: {} };
   value.selectedSession!.entries = [
@@ -564,7 +638,11 @@ it("can fold a plain answer even when it has no tools or thinking", () => {
       id: "answer",
       type: "message",
       timestamp: "2026-09-22T00:00:00Z",
-      message: { role: "assistant", content: "Plain answer" },
+      message: {
+        role: "assistant",
+        content: "Plain answer",
+        stopReason: "stop",
+      },
     },
     {
       id: "timing",
@@ -588,10 +666,7 @@ it("can fold a plain answer even when it has no tools or thinking", () => {
     duration.compareDocumentPosition(screen.getByText("Plain answer")) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  const toggle = duration.querySelector("button")!;
-  expect(toggle.getAttribute("aria-expanded")).toBe("true");
-  fireEvent.click(toggle);
-  expect(screen.getByText("Plain answer").closest("[hidden]")).not.toBeNull();
-  fireEvent.click(toggle);
+  expect(duration.querySelector("button")).toBeNull();
+  expect(view.container.querySelector(".turn-response-body")).toBeNull();
   expect(screen.getByText("Plain answer").closest("[hidden]")).toBeNull();
 });

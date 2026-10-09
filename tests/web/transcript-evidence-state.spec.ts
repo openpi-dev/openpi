@@ -166,9 +166,7 @@ it("expands Bash and file evidence from canonical display preferences without ch
     expect(
       container.querySelector<HTMLDetailsElement>(".tool-evidence-card")?.open,
     ).toBe(true);
-    expect(
-      container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
-    ).toBe(false);
+    expect(container.querySelector(".process-sequence")).toBeNull();
     expect(
       container
         .querySelector(".tool-evidence-card")
@@ -307,9 +305,7 @@ it.each([undefined, "aborted", "error"] as const)(
   "keeps an unpaired historical tool neutral after %s instead of inventing execution or completion",
   (stopReason) => {
     const { container } = render(view(snapshot({ stopReason })));
-    expect(
-      container.querySelector(".process-sequence")?.getAttribute("data-status"),
-    ).toBe("unknown");
+    expect(container.querySelector(".process-sequence")).toBeNull();
     expect(
       container.querySelector(".process-step")?.getAttribute("data-status"),
     ).toBe("unknown");
@@ -338,11 +334,7 @@ it("uses the exact live tool state while partial output has no terminal receipt"
       }),
     ),
   );
-  expect(
-    rendered.container
-      .querySelector(".process-sequence")
-      ?.getAttribute("data-status"),
-  ).toBe("running");
+  expect(rendered.container.querySelector(".process-sequence")).toBeNull();
   expect(
     rendered.container
       .querySelector(".process-step")
@@ -354,20 +346,16 @@ it("uses the exact live tool state while partial output has no terminal receipt"
       ?.getAttribute("data-state"),
   ).toBe("running");
   expect(
-    rendered.container.querySelector<HTMLDetailsElement>(".process-sequence")
+    rendered.container.querySelector<HTMLDetailsElement>(".tool-evidence-card")
       ?.open,
-  ).toBe(true);
+  ).toBe(false);
 
   rendered.rerender(
     view(
       snapshot({ liveTools: [{ call, result: partial, state: "unknown" }] }),
     ),
   );
-  expect(
-    rendered.container
-      .querySelector(".process-sequence")
-      ?.getAttribute("data-status"),
-  ).toBe("unknown");
+  expect(rendered.container.querySelector(".process-sequence")).toBeNull();
   expect(
     rendered.container
       .querySelector(".process-step")
@@ -389,11 +377,7 @@ it("uses the exact live tool state while partial output has no terminal receipt"
       }),
     ),
   );
-  expect(
-    rendered.container
-      .querySelector(".process-sequence")
-      ?.getAttribute("data-status"),
-  ).toBe("done");
+  expect(rendered.container.querySelector(".process-sequence")).toBeNull();
   expect(
     rendered.container
       .querySelector(".process-step")
@@ -408,9 +392,7 @@ it("uses the exact live tool state while partial output has no terminal receipt"
 
 it("does not turn a current unmatched call into running without a native tool execution fact", () => {
   const { container } = render(view(snapshot({ running: true })));
-  expect(
-    container.querySelector(".process-sequence")?.getAttribute("data-status"),
-  ).toBe("running");
+  expect(container.querySelector(".process-sequence")).toBeNull();
   expect(
     container.querySelector(".process-step")?.getAttribute("data-status"),
   ).toBe("unknown");
@@ -422,11 +404,7 @@ it("does not turn a current unmatched call into running without a native tool ex
 it("keeps generic tools consistent with missing or native running evidence", () => {
   const generic = { ...call, name: "custom_tool" };
   const rendered = render(view(snapshot({ tool: generic })));
-  expect(
-    rendered.container
-      .querySelector(".process-sequence")
-      ?.getAttribute("data-status"),
-  ).toBe("unknown");
+  expect(rendered.container.querySelector(".process-sequence")).toBeNull();
   expect(rendered.container.querySelector(".tool-line.running")).toBeNull();
   expect(
     rendered.container
@@ -499,8 +477,9 @@ it("does not borrow a later turn's execution state for an earlier unmatched tool
     },
   );
   const { container } = render(view(value));
+  expect(container.querySelectorAll(".process-sequence")).toHaveLength(0);
   expect(
-    Array.from(container.querySelectorAll(".process-sequence"), (element) =>
+    Array.from(container.querySelectorAll(".single-tool-step"), (element) =>
       element.getAttribute("data-status"),
     ),
   ).toEqual(["unknown", "running"]);
@@ -539,7 +518,7 @@ it("does not summarize a mixed returned and unmatched sequence as completed", ()
   expect(container.querySelector(".status-mark.done")).toBeNull();
 });
 
-it("retains a known process failure in the group while the native status-query receipt succeeded", () => {
+it("retains a known process failure in a single tool while the native status-query receipt succeeded", () => {
   const tool = {
     ...call,
     name: "bg_status",
@@ -554,9 +533,7 @@ it("retains a known process failure in the group while the native status-query r
     details: { status: "failed", exitCode: 2 },
   } satisfies WebLiveMessage;
   const { container } = render(view(snapshot({ tool, results: [receipt] })));
-  expect(
-    container.querySelector(".process-sequence")?.getAttribute("data-status"),
-  ).toBe("error");
+  expect(container.querySelector(".process-sequence")).toBeNull();
   expect(
     container.querySelector(".process-step")?.getAttribute("data-status"),
   ).toBe("error");
@@ -564,9 +541,8 @@ it("retains a known process failure in the group while the native status-query r
     container.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
   ).toBe("failed");
   expect(
-    container
-      .querySelector(".process-sequence > summary .status-mark.error")
-      ?.getAttribute("aria-label"),
+    container.querySelector(".tool-evidence-card > summary .evidence-status")
+      ?.textContent,
   ).toBe(i18n.t("toolState_failed"));
   expect(
     container.querySelector(".evidence-content details")?.textContent,
@@ -574,7 +550,7 @@ it("retains a known process failure in the group while the native status-query r
 });
 
 it.each([false, true])(
-  "retains native workflow uncertainty in the group with an unmatched step %s",
+  "retains native workflow uncertainty with an unmatched step %s",
   (unmatched) => {
     const tool = {
       ...call,
@@ -600,15 +576,23 @@ it.each([false, true])(
         id: "missing-tool",
       });
     const { container } = render(view(value));
-    expect(
-      container.querySelector(".process-sequence")?.getAttribute("data-status"),
-    ).toBe("warn");
+    if (unmatched)
+      expect(
+        container
+          .querySelector(".process-sequence")
+          ?.getAttribute("data-status"),
+      ).toBe("warn");
+    else expect(container.querySelector(".process-sequence")).toBeNull();
     expect(
       container.querySelector(".process-step")?.getAttribute("data-status"),
     ).toBe("warn");
     expect(
       container
-        .querySelector(".process-sequence > summary .status-mark.warn")
+        .querySelector(
+          unmatched
+            ? ".process-sequence > summary .status-mark.warn"
+            : ".activity-card .status-mark.warn",
+        )
         ?.getAttribute("aria-label"),
     ).toBe(i18n.t("toolState_unknown"));
     expect(container.querySelector(".status-mark.done")).toBeNull();
@@ -672,9 +656,7 @@ it.each([
         }),
       ),
     );
-    expect(
-      container.querySelector(".process-sequence")?.getAttribute("data-status"),
-    ).toBe("error");
+    expect(container.querySelector(".process-sequence")).toBeNull();
     expect(
       container.querySelector(".process-step")?.getAttribute("data-status"),
     ).toBe("error");

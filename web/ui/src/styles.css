@@ -412,6 +412,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .process-step .message-details { width:100%; margin:0; }
 .process-step .message-details > summary { min-height:30px; font-size:13px; }
 .process-step { position:relative; min-width:0; overflow:hidden; }
+.single-tool-step .tool-evidence-card > summary { padding-inline:0; }
 .process-step.running .message-details > summary,
 .process-step.running .tool-evidence-card > summary,
 .process-sequence.running > summary,
