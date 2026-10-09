@@ -468,6 +468,8 @@ Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示�
 
 <!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
+活动组收起时仍显示真实的当前工具、图标和目标；展开的列表最高为 360px 或视口高度的一半，可在组内滚动。执行中停留在底部会跟随新活动，向上查看时保留阅读位置。运行提示使用柔和的文字流光，遵循系统减少动态效果设置。展开思考不再套用工具输出的行数和字节限制；超长的已保存思考按原始消息和内容片段加载，超过一页时可继续加载。上下文压缩的进行中、完成、失败、取消和连接未知提示来自 Pi 原生事件。
+
 Web 保存终端页脚偏好不会重新配置另一份已打开的 Pi 界面；该界面在下次 Session 启动或原生 setup 应用时更新页脚。
 
 ```text

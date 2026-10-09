@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 
-import { cleanup, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { LiveToolEvidence } from "../../web/protocol/evidence.ts";
 import type {
   WebLiveMessage,
@@ -12,6 +18,7 @@ import type {
 } from "../../web/protocol/types.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import { WebClient } from "../../web/ui/src/protocol/client.ts";
 
 const call = {
   type: "toolCall",
@@ -129,7 +136,10 @@ function view(value: WebSnapshot, activityObserved = true) {
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 it("expands Bash and file evidence from canonical display preferences without changing results or their state", () => {
   for (const [name, preference] of [
@@ -222,6 +232,8 @@ it("shows one compaction status before an agent turn, freezes on disconnect, and
   const { container, rerender, getByText, queryByText } = render(view(value));
   expect(getByText(i18n.t("compactionRunning"))).toBeTruthy();
   expect(container.querySelectorAll('[data-state="running"]')).toHaveLength(1);
+  expect(getByText(`· ${i18n.t("compactionRunningHelp")}`)).toBeTruthy();
+  expect(container.querySelector(".context-compaction-label svg")).toBeTruthy();
   expect(container.querySelector(".conversation-running")).toBeNull();
   expect(container.querySelector('[role="timer"]')?.textContent).toContain(
     "12",
@@ -299,6 +311,145 @@ it("requires a native compaction entry rather than a message claiming compaction
   };
   const { container } = render(view(value));
   expect(container.querySelector(".context-compaction")).toBeNull();
+});
+
+it("shows the actual running tool in a folded group and follows new rows only while the reader stays at the bottom", async () => {
+  const value: WebSnapshot = snapshot({ running: true });
+  const calls = Array.from({ length: 12 }, (_, index) => ({
+    ...call,
+    id: `read-${index}`,
+    name: "read",
+    arguments: JSON.stringify({ path: `/workspace/src/file-${index}.ts` }),
+  }));
+  value.selectedSession!.entries[1]!.message!.parts = calls;
+  value.runtime.liveTools = calls.map((tool, index) => ({
+    call: tool,
+    state: index === 10 ? "running" : index === 11 ? "unknown" : "returned",
+  }));
+  const rendered = render(view(value));
+  const sequence =
+    rendered.container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+  const scroller = rendered.container.querySelector<HTMLDivElement>(
+    ".process-sequence-scroll",
+  )!;
+  expect(sequence.open).toBe(true);
+  expect(sequence.querySelector("summary")?.textContent).toContain(
+    "file-10.ts",
+  );
+  expect(
+    sequence.querySelector(".process-sequence-preview")?.getAttribute("title"),
+  ).toBe("/workspace/src/file-10.ts");
+  expect(
+    sequence
+      .querySelector("summary svg")
+      ?.classList.contains("lucide-book-open"),
+  ).toBe(true);
+  let height = 900;
+  Object.defineProperties(scroller, {
+    clientHeight: { get: () => 360 },
+    scrollHeight: { get: () => height },
+  });
+  scroller.scrollTop = 100;
+  fireEvent.scroll(scroller);
+  expect(scroller.hasAttribute("data-scroll-above")).toBe(true);
+  expect(scroller.hasAttribute("data-scroll-below")).toBe(true);
+  height = 1100;
+  rendered.rerender(view({ ...value, generatedAt: "2026-09-26T10:00:05Z" }));
+  expect(scroller.scrollTop).toBe(100);
+  scroller.scrollTop = height - scroller.clientHeight;
+  fireEvent.scroll(scroller);
+  height = 1200;
+  rendered.rerender(view({ ...value, generatedAt: "2026-09-26T10:00:06Z" }));
+  expect(scroller.scrollTop).toBe(height);
+  await act(async () => {
+    sequence.open = false;
+    fireEvent(sequence, new Event("toggle"));
+  });
+  expect(sequence.open).toBe(false);
+  expect(sequence.querySelector("summary")?.textContent).toContain(
+    "file-10.ts",
+  );
+  rendered.rerender(view({ ...value, generatedAt: "2026-09-26T10:00:07Z" }));
+  expect(sequence.open).toBe(false);
+});
+
+it("renders complete available thinking without the tool-output byte or line limits", async () => {
+  const value: WebSnapshot = snapshot();
+  const text = `${"完整思考中的一行内容。\n".repeat(420)}思考正文的最后一句`;
+  value.selectedSession!.entries[1]!.message!.parts = [
+    { type: "thinking", text },
+  ];
+  const rendered = render(view(value));
+  expect(rendered.container.querySelector(".thinking-evidence")).toBeNull();
+  await act(async () => {
+    fireEvent.click(
+      rendered.container.querySelector(".thinking-line > summary")!,
+    );
+  });
+  await waitFor(() =>
+    expect(
+      rendered.container.querySelector(".thinking-evidence")?.textContent,
+    ).toContain("思考正文的最后一句"),
+  );
+});
+
+it("recovers a truncated saved thinking part on expansion and retains its complete text across folding", async () => {
+  const value: WebSnapshot = snapshot();
+  value.selectedSession!.entries[1]!.message!.parts = [
+    {
+      type: "thinking",
+      text: "Thinking preview",
+      sourcePartIndex: 3,
+      textTruncated: true,
+    },
+  ];
+  const read = vi.spyOn(WebClient.prototype, "sessionItem").mockResolvedValue({
+    entryId: "assistant",
+    partIndex: 3,
+    text: "Complete provider thinking, including its last line.",
+    nextCursor: null,
+    totalChars: 52,
+  });
+  const rendered = render(view(value));
+  expect(read).not.toHaveBeenCalled();
+  await act(async () => {
+    fireEvent.click(
+      rendered.container.querySelector(".thinking-line > summary")!,
+    );
+  });
+  await waitFor(() =>
+    expect(
+      rendered.container.querySelector(".thinking-evidence")?.textContent,
+    ).toContain("including its last line."),
+  );
+  expect(read).toHaveBeenCalledWith(
+    "session",
+    "/session.jsonl",
+    "assistant",
+    0,
+    expect.any(AbortSignal),
+    "thinking",
+    3,
+  );
+  await act(async () => {
+    fireEvent.click(
+      rendered.container.querySelector(".thinking-line > summary")!,
+    );
+  });
+  await waitFor(() =>
+    expect(rendered.container.querySelector(".thinking-evidence")).toBeNull(),
+  );
+  await act(async () => {
+    fireEvent.click(
+      rendered.container.querySelector(".thinking-line > summary")!,
+    );
+  });
+  await waitFor(() =>
+    expect(
+      rendered.container.querySelector(".thinking-evidence")?.textContent,
+    ).toContain("including its last line."),
+  );
+  expect(read).toHaveBeenCalledOnce();
 });
 
 it.each([undefined, "aborted", "error"] as const)(

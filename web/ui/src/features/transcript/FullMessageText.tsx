@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Markdown } from "../../components/Markdown.tsx";
 import { WebClient } from "../../protocol/client.ts";
@@ -14,6 +14,7 @@ export function FullMessageText({
   onComplete,
   onProgress,
   purpose,
+  partIndex,
 }: {
   preview: string;
   sessionId: string;
@@ -23,7 +24,8 @@ export function FullMessageText({
   fullText?: string;
   onComplete?: (text: string) => void;
   onProgress?: (text: string) => void;
-  purpose?: "plan";
+  purpose?: "plan" | "thinking";
+  partIndex?: number;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
@@ -37,25 +39,30 @@ export function FullMessageText({
 
   useEffect(() => () => request.current?.abort(), []);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (request.current || nextCursor === null) return;
     const controller = new AbortController();
     request.current = controller;
     setLoading(true);
     setError(false);
     try {
-      const page = await client.sessionItem(
+      const identity = [
         sessionId,
         sessionPath,
         entryId,
         nextCursor,
         controller.signal,
-        ...(purpose ? ([purpose] as const) : []),
-      );
+      ] as const;
+      const page = await (purpose === "thinking"
+        ? client.sessionItem(...identity, purpose, partIndex)
+        : purpose
+          ? client.sessionItem(...identity, purpose)
+          : client.sessionItem(...identity));
       if (controller.signal.aborted) return;
       if (
         page.entryId !== entryId ||
         (purpose === "plan" && page.planStatus !== "ready") ||
+        (purpose === "thinking" && page.partIndex !== partIndex) ||
         (page.nextCursor !== null && page.nextCursor <= nextCursor)
       )
         throw new Error("Message identity changed");
@@ -79,7 +86,44 @@ export function FullMessageText({
         if (!controller.signal.aborted) setLoading(false);
       }
     }
-  };
+  }, [
+    client,
+    sessionId,
+    sessionPath,
+    entryId,
+    nextCursor,
+    purpose,
+    partIndex,
+    chunks,
+    onComplete,
+    onProgress,
+  ]);
+
+  useEffect(() => {
+    if (
+      purpose !== "thinking" ||
+      fullText !== undefined ||
+      chunks !== null ||
+      error
+    )
+      return;
+    const element = body.current;
+    if (!element) return;
+    // A default-open reasoning row inside a folded turn is still hidden.
+    // Hydrate only when its expanded body is actually brought into view.
+    if (typeof IntersectionObserver === "undefined") {
+      if (!element.closest("[hidden], details:not([open])")) void load();
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect();
+        void load();
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [purpose, fullText, chunks, error, load]);
 
   const text = fullText ?? chunks?.join("") ?? preview;
   return (
@@ -94,6 +138,11 @@ export function FullMessageText({
           />
         )}
       </div>
+      {purpose === "thinking" &&
+        fullText === undefined &&
+        nextCursor !== null && (
+          <p className="evidence-warning">{t("thinkingPartialText")}</p>
+        )}
       {fullText === undefined && nextCursor !== null && (
         <button
           ref={loadButton}
@@ -106,16 +155,22 @@ export function FullMessageText({
             loading
               ? purpose === "plan"
                 ? "planCardLoadingFull"
-                : "messageLoadingFull"
+                : purpose === "thinking"
+                  ? "thinkingLoadingFull"
+                  : "messageLoadingFull"
               : error
                 ? purpose === "plan"
                   ? "planCardLoadFailed"
-                  : "messageLoadFailed"
+                  : purpose === "thinking"
+                    ? "thinkingLoadFailed"
+                    : "messageLoadFailed"
                 : chunks
                   ? "messageLoadMore"
                   : purpose === "plan"
                     ? "planCardLoadFull"
-                    : "messageLoadFull",
+                    : purpose === "thinking"
+                      ? "thinkingLoadFull"
+                      : "messageLoadFull",
           )}
         </button>
       )}

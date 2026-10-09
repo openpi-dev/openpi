@@ -1,15 +1,15 @@
 .context-compaction {
-  margin: 20px auto;
+  margin: 12px auto;
   width: 100%;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
-.context-compaction-heading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding:5px 8px; }
-.context-compaction-label { display: inline-flex; align-items: center; gap: 8px; }
-.context-compaction-label > svg { width:15px; height:15px; }
-.conversation .context-compaction p { margin: 8px 0 0; text-align: center; line-height: 1.6; color: var(--muted); font-size: 12px; }
+.context-compaction-heading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding:5px 0; }
+.context-compaction-label { display: inline-flex; align-items: center; gap: 9px; min-width:0; }
+.context-compaction-label > svg { width:16px; height:16px; flex:none; stroke-width:1.65; }
+.context-compaction-hint { color:var(--subtle); }
+.context-compaction[data-state="running"] .context-compaction-text { color:var(--subtle); }
+.conversation .context-compaction p { margin: 6px 0 0 25px; line-height: 1.6; color: var(--muted); font-size: 12px; }
 .conversation > .context-compaction { width: min(var(--conversation-content-width), calc(100% - 48px)); }
 @media (max-width: 720px) { .conversation > .context-compaction { width: calc(100% - 24px); } }
-.context-compaction-spinner { width: 12px; height: 12px; border: 1.5px solid var(--border); border-top-color: currentColor; border-radius: 50%; animation: compaction-spin 1s linear infinite; }
-@keyframes compaction-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .context-compaction-spinner { animation: none; } }
+@media (max-width:560px) { .context-compaction-label { flex-wrap:wrap; } .context-compaction-hint { flex-basis:100%; padding-left:25px; } }

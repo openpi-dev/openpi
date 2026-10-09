@@ -412,7 +412,6 @@ function EvidenceDetails({
   status,
   summary,
   output,
-  thinking = false,
   defaultOpen = false,
 }: {
   body: string;
@@ -421,7 +420,6 @@ function EvidenceDetails({
   status: Status;
   summary?: string;
   output?: string;
-  thinking?: boolean;
   defaultOpen?: boolean;
 }) {
   const { t } = useTranslation();
@@ -436,48 +434,30 @@ function EvidenceDetails({
           ? "running"
           : "unknown";
   const showName =
-    !thinking &&
-    (["read", "write", "edit"].includes(name) ||
-      toolActivity(name).action === "call");
+    ["read", "write", "edit"].includes(name) ||
+    toolActivity(name).action === "call";
   return (
     <details
-      className={`message-details tool-line ${status} ${thinking ? "thinking-line" : ""}`}
+      className={`message-details tool-line ${status}`}
       data-tool={name}
       open={expanded}
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
-      <summary
-        aria-label={
-          thinking ? [name, summary].filter(Boolean).join(" · ") : undefined
-        }
-        title={thinking ? summary : undefined}
-      >
-        {!thinking && (
-          <span className="tool-icon" aria-hidden="true">
-            {icon}
-          </span>
-        )}
+      <summary>
+        <span className="tool-icon" aria-hidden="true">
+          {icon}
+        </span>
         <span className="details-title">
           {showName && <span className="tool-name">{name}</span>}
-          {!thinking && (
-            <span className="tool-action">
-              {toolActivityLabel(t, name, state)}
-            </span>
-          )}
+          <span className="tool-action">
+            {toolActivityLabel(t, name, state)}
+          </span>
           {summary && <span className="tool-summary">{summary}</span>}
         </span>
-        {thinking ? (
-          <ChevronDown className="tool-disclosure" aria-hidden="true" />
-        ) : (
-          <ChevronRight className="tool-disclosure" aria-hidden="true" />
-        )}
-        {!thinking && <StatusMark status={status} />}
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
+        <StatusMark status={status} />
       </summary>
-      {thinking ? (
-        <div className="details-body thinking-evidence">
-          {expanded && <Markdown>{evidenceText(body).text}</Markdown>}
-        </div>
-      ) : output === undefined ? (
+      {output === undefined ? (
         <pre className="details-body tool-evidence">
           {evidenceText(body).text}
         </pre>
@@ -682,34 +662,70 @@ function ThinkingEvidence({
   active,
   level,
   defaultOpen,
+  truncated,
+  source,
 }: {
   body: string;
   duration?: number;
   active: boolean;
   level?: string;
   defaultOpen: boolean;
+  truncated?: boolean;
+  source?: WebHistoryAnchor & { partIndex: number };
 }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(defaultOpen);
+  const [fullText, setFullText] = useState<string>();
+  useEffect(() => setExpanded(defaultOpen), [defaultOpen]);
   const settled = duration !== undefined ? formatElapsedMs(0, duration) : "";
   const preview = thinkingPreview(body);
+  const name = [
+    active
+      ? level
+        ? t("thinkingActiveLevel", { level })
+        : t("thinkingActive")
+      : t("thinkingDone"),
+    settled,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <EvidenceDetails
-      body={body}
-      name={[
-        active
-          ? level
-            ? t("thinkingActiveLevel", { level })
-            : t("thinkingActive")
-          : t("thinkingDone"),
-        settled,
-      ]
-        .filter(Boolean)
-        .join(" · ")}
-      status={active ? "running" : "done"}
-      summary={preview || undefined}
-      thinking
-      defaultOpen={defaultOpen}
-    />
+    <details
+      className={`message-details tool-line thinking-line ${active ? "running" : "done"}`}
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary
+        aria-label={[name, preview].filter(Boolean).join(" · ")}
+        title={preview}
+      >
+        <span className="details-title">
+          <span className="tool-summary">{preview || name}</span>
+        </span>
+        <ChevronDown className="tool-disclosure" aria-hidden="true" />
+      </summary>
+      {expanded && (
+        <div className="details-body thinking-evidence">
+          {truncated && source && !active ? (
+            <FullMessageText
+              {...source}
+              preview={body}
+              markdown
+              purpose="thinking"
+              fullText={fullText}
+              onComplete={setFullText}
+            />
+          ) : (
+            <>
+              <Markdown>{body}</Markdown>
+              {truncated && (
+                <p className="evidence-warning">{t("thinkingPreviewOnly")}</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -1341,7 +1357,37 @@ function ProcessSequence({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(active);
+  const viewport = useRef<HTMLElement>(null);
+  const following = useRef(true);
+  const [edges, setEdges] = useState({ above: false, below: false });
+  const updateEdges = useCallback(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const above = element.scrollTop > 1;
+    const below =
+      element.scrollHeight - element.clientHeight - element.scrollTop > 1;
+    setEdges((previous) =>
+      previous.above === above && previous.below === below
+        ? previous
+        : { above, below },
+    );
+  }, []);
   useEffect(() => setOpen(active), [active]);
+  useLayoutEffect(() => {
+    const element = viewport.current;
+    if (!element || !open || rows.length === 0) return;
+    if (active && following.current) element.scrollTop = element.scrollHeight;
+    updateEdges();
+  }, [rows, active, open, updateEdges]);
+  useEffect(() => {
+    const element = viewport.current;
+    const content = element?.firstElementChild;
+    if (!element || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateEdges);
+    observer.observe(element);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [updateEdges]);
   const tools = rows.filter((row) => row.processType === "tool").length;
   const activities = rows.filter(
     (row) => row.processType === "activity",
@@ -1350,9 +1396,22 @@ function ProcessSequence({
     tools ? t("processToolCount", { count: tools }) : "",
     activities ? t("processActivityCount", { count: activities }) : "",
   ].filter(Boolean);
-  const preview = (active ? [...rows].reverse() : rows).find(
-    (row) => row.processPreview,
-  )?.processPreview;
+  const current = active
+    ? [...rows]
+        .reverse()
+        .find((row) => row.processStatus === "running" && row.processToolName)
+    : undefined;
+  const preview =
+    current?.processPreview ??
+    (active ? [...rows].reverse() : rows).find((row) => row.processPreview)
+      ?.processPreview;
+  const previewText =
+    current?.processToolName &&
+    ["read", "write", "edit"].includes(current.processToolName)
+      ? preview?.slice(
+          Math.max(preview.lastIndexOf("/"), preview.lastIndexOf("\\")) + 1,
+        )
+      : preview;
   const failed = rows.some((row) => row.error || row.processStatus === "error");
   const status: Status = active
     ? "running"
@@ -1370,7 +1429,7 @@ function ProcessSequence({
     ...new Set(toolNames.map((name) => toolActivity(name).action)),
   ];
   const actionLabels = actions.map((action) => t(`toolActionGroup_${action}`));
-  const title = actions.length
+  const groupTitle = actions.length
     ? t(
         `toolGroup_${status === "done" ? "done" : active ? "running" : "unknown"}`,
         {
@@ -1378,7 +1437,11 @@ function ProcessSequence({
         },
       )
     : t(active ? "processRunning" : "processDetails");
+  const title = current?.processToolName
+    ? toolActivityLabel(t, current.processToolName, "running")
+    : groupTitle;
   const representative =
+    current?.processToolName ??
     toolNames.find((name) => toolActivity(name).action === "web") ??
     toolNames.find((name) => name === "edit" || name === "write") ??
     toolNames[0];
@@ -1392,7 +1455,11 @@ function ProcessSequence({
       data-history-entry={rows[0]?.key}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary aria-label={[title, ...counts].join(" · ")}>
+      <summary
+        aria-label={[title, current ? preview : "", ...counts]
+          .filter(Boolean)
+          .join(" · ")}
+      >
         <span className="tool-icon" aria-hidden="true">
           <Icon />
         </span>
@@ -1404,23 +1471,42 @@ function ProcessSequence({
         >
           <strong>{title}</strong>
         </span>
-        <ChevronRight className="tool-disclosure" aria-hidden="true" />
         {preview && (active || !actions.length) && (
-          <span className="process-sequence-preview">{preview}</span>
+          <span className="process-sequence-preview" title={preview}>
+            {previewText}
+          </span>
         )}
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
-      <div className="process-sequence-body">
-        {rows.map((row) => (
-          <div
-            className={`process-step ${row.processStatus ?? "unknown"}`}
-            data-status={row.processStatus ?? "unknown"}
-            key={row.key}
-          >
-            {row.content}
-          </div>
-        ))}
-      </div>
+      <section
+        ref={viewport}
+        className="process-sequence-scroll"
+        aria-label={[t("processDetails"), ...counts].join(" · ")}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: The scroll region must support keyboard scrolling.
+        tabIndex={0}
+        data-scroll-above={edges.above || undefined}
+        data-scroll-below={edges.below || undefined}
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          following.current =
+            element.scrollHeight - element.clientHeight - element.scrollTop <=
+            24;
+          updateEdges();
+        }}
+      >
+        <div className="process-sequence-body">
+          {rows.map((row) => (
+            <div
+              className={`process-step ${row.processStatus ?? "unknown"}`}
+              data-status={row.processStatus ?? "unknown"}
+              key={row.key}
+            >
+              {row.content}
+            </div>
+          ))}
+        </div>
+      </section>
     </details>
   );
 }
@@ -2377,7 +2463,27 @@ export function Transcript(props: TranscriptProps) {
                 >
                   <div className="message-content">
                     <ThinkingEvidence
+                      key={JSON.stringify([
+                        selectedId,
+                        selectedPath,
+                        entry.key,
+                        partIndex,
+                      ])}
                       body={part.text}
+                      truncated={part.textTruncated}
+                      source={
+                        entry.entryId &&
+                        selectedId &&
+                        selectedPath &&
+                        part.sourcePartIndex !== undefined
+                          ? {
+                              sessionId: selectedId,
+                              sessionPath: selectedPath,
+                              entryId: entry.entryId,
+                              partIndex: part.sourcePartIndex,
+                            }
+                          : undefined
+                      }
                       active={isLive}
                       level={
                         isLive ? props.snapshot.thinking?.level : undefined
@@ -2462,7 +2568,9 @@ export function Transcript(props: TranscriptProps) {
                 ? "activity"
                 : "tool",
               processToolName: part.name,
-              processPreview: toolSummary(part.name, args),
+              processPreview: toolActivityTarget(part.name, args)
+                .split("\n")
+                .find(Boolean),
               processStatus: status,
               error: Boolean(result?.isError),
               content: (

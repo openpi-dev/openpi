@@ -27,11 +27,13 @@ export function CompactionStatus({
     <div className="context-compaction" data-state={state}>
       <div className="context-compaction-heading">
         <span className="context-compaction-label" role="status">
-          {!(running && observed) && <TextSelect aria-hidden="true" />}
+          <TextSelect aria-hidden="true" />
+          <span className="context-compaction-text">{t(labels[state])}</span>
           {running && observed && (
-            <span className="context-compaction-spinner" aria-hidden="true" />
+            <span className="context-compaction-hint">
+              · {t("compactionRunningHelp")}
+            </span>
           )}
-          {t(labels[state])}
         </span>
         {running && observed && compaction.elapsedMs !== undefined && (
           <RunningTurnElapsed
@@ -41,11 +43,7 @@ export function CompactionStatus({
           />
         )}
       </div>
-      {running && (
-        <p>
-          {t(unavailable ? "compactionReconnectHelp" : "compactionRunningHelp")}
-        </p>
-      )}
+      {unavailable && <p>{t("compactionReconnectHelp")}</p>}
     </div>
   );
 }
