@@ -18,6 +18,11 @@ import type {
 import { App } from "../../web/ui/src/app/App.tsx";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import {
+  loadWorkbarPositions,
+  saveWorkbarPositions,
+  WORKBAR_POSITION_STORAGE_KEY,
+} from "../../web/ui/src/features/workbar/workbar-position-storage.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
@@ -69,6 +74,8 @@ function snapshot(path = "/workspace/a.jsonl", id = "session-a"): WebSnapshot {
 }
 
 beforeEach(() => {
+  // Each test starts without positions remembered by an earlier test.
+  window.localStorage.removeItem(WORKBAR_POSITION_STORAGE_KEY);
   vi.spyOn(original.actions, "start").mockImplementation(() => {});
   vi.spyOn(original.actions, "stop").mockImplementation(() => {});
   vi.spyOn(WebClient.prototype, "pendingQuestions").mockResolvedValue({
@@ -448,10 +455,29 @@ it("bounds remembered tools to 32 exact Session identities while keeping a recen
       target: { value: "https://example.com/remembered" },
     },
   );
-  for (let index = 1; index < 32; index++) {
-    await select(`/workspace/cache-${index}.jsonl`, `cache-${index}`);
-    await open("browser");
-  }
+  // Fill the remaining 31 slots through the persisted position store rather
+  // than 31 full UI round-trips, so the bound is not limited by render speed.
+  view.unmount();
+  saveWorkbarPositions([
+    ...loadWorkbarPositions(),
+    ...Array.from({ length: 31 }, (_, offset) => ({
+      sessionId: `cache-${offset + 1}`,
+      sessionPath: `/workspace/cache-${offset + 1}.jsonl`,
+      tool: "browser" as const,
+      requestRevision: 1,
+      open: true,
+      reading: {},
+    })),
+  ]);
+  expect(loadWorkbarPositions().map((position) => position.sessionId)).toEqual([
+    "session-a",
+    ...Array.from({ length: 31 }, (_, offset) => `cache-${offset + 1}`),
+  ]);
+  webStore.setState({
+    snapshot: snapshot("/workspace/cache-31.jsonl", "cache-31"),
+    selectedPath: "/workspace/cache-31.jsonl",
+  });
+  const reloaded = render(createElement(Providers, null, createElement(App)));
   await select("/workspace/a.jsonl");
   expect(
     screen.getByRole<HTMLInputElement>("textbox", {
@@ -461,7 +487,9 @@ it("bounds remembered tools to 32 exact Session identities while keeping a recen
   await select("/workspace/cache-32.jsonl", "cache-32");
   await open("browser");
   await select("/workspace/cache-1.jsonl", "cache-1");
-  expect(view.container.querySelector(".workbar-panel")).toBeNull();
+  expect(reloaded.container.querySelector(".workbar-panel")).toBeNull();
+  await select("/workspace/cache-2.jsonl", "cache-2");
+  expect(reloaded.container.querySelector(".workbar-panel")).not.toBeNull();
   await select("/workspace/a.jsonl");
   expect(
     screen.getByRole<HTMLInputElement>("textbox", {
@@ -469,7 +497,7 @@ it("bounds remembered tools to 32 exact Session identities while keeping a recen
     }).value,
   ).toBe("https://example.com/remembered");
   await select("/workspace/a.jsonl", "replacement-session");
-  expect(view.container.querySelector(".workbar-panel")).toBeNull();
+  expect(reloaded.container.querySelector(".workbar-panel")).toBeNull();
 }, 20_000);
 
 it("reattaches a Session's file position after a copied same-ID Session, releasing the old preview", async () => {
