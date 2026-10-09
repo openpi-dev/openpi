@@ -16,7 +16,10 @@ export function projectEvidenceArguments(input: unknown) {
   const result: Record<string, string | number> = {};
   for (const key of ["path", "command", "offset", "limit", "id"]) {
     const value = Object.getOwnPropertyDescriptor(source, key)?.value;
-    if (typeof value === "string") result[key] = evidenceText(value).text;
+    // Paths are later resolved by the artifact reader. Keep their exact identity
+    // here; display projections are sanitized separately below.
+    if (typeof value === "string")
+      result[key] = key === "path" ? value : evidenceText(value).text;
     else if (typeof value === "number" && Number.isSafeInteger(value)) result[key] = value;
   }
   return result;
@@ -145,8 +148,10 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
     kind, state, processState: terminal?.state ?? (call.name === "bash" && result?.isError === false ? "returned" : call.name === "bash" && liveState === "running" ? "running" : "unknown"), output: readFooter ? output.text.slice(0, readFooter.index) : output.text, truncated: truncated || diff?.truncated === true,
     readRecovery: readFooter?.[1],
     numberLines: call.name === "read" && result?.isError === false && evidenceRecord(details.truncation).firstLineExceedsLimit !== true && Boolean(output.text),
-    path: typeof args.path === "string" ? evidenceText(args.path).text : undefined,
-    resolvedPath: typeof args.resolvedPath === "string" ? evidenceText(args.resolvedPath).text : undefined,
+    path: typeof args.path === "string" ? args.path : undefined,
+    displayPath: typeof args.path === "string" ? evidenceText(args.path).text : undefined,
+    resolvedPath: typeof args.resolvedPath === "string" ? args.resolvedPath : undefined,
+    displayResolvedPath: typeof args.resolvedPath === "string" ? evidenceText(args.resolvedPath).text : undefined,
     command: typeof args.command === "string" ? evidenceText(args.command).text : undefined,
     offset, diff: diff?.text, tests,
     change: result?.isError === false && ["created", "overwritten", "unchanged"].includes(String(details.change)) ? String(details.change) : undefined,

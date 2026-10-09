@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   evidenceText,
@@ -8,6 +11,7 @@ import {
 } from "../../web/protocol/evidence.ts";
 import { projectMessage } from "../../web/protocol/types.ts";
 import { reduceLiveTools } from "../../web/protocol/live-tools.ts";
+import { ArtifactReader } from "../../web/host/artifacts.ts";
 
 function call(name: string, args: Record<string, unknown> = {}) {
   const part = projectMessage({
@@ -112,6 +116,48 @@ test("file evidence preserves requested range after oversized arguments and neve
     }).diff,
     undefined,
   );
+});
+
+test("file evidence keeps artifact identities separate from sanitized display labels", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-evidence-path-"));
+  const identity = "a\u200bb.txt";
+  const resolvedPath = join(root, identity);
+  const reader = new ArtifactReader(() => ({ sessionId: "s", cwd: root }));
+  try {
+    await writeFile(resolvedPath, "zero-width identity");
+    await writeFile(join(root, "ab.txt"), "different file");
+    const message = projectMessage(
+      {
+        content: [
+          {
+            type: "toolCall",
+            id: "call",
+            name: "read",
+            arguments: { path: identity },
+          },
+        ],
+      },
+      (path) => join(root, path),
+    );
+    const part = message.parts?.[0];
+    assert.ok(part?.type === "toolCall");
+    const view = projectToolEvidence(part);
+    assert.equal(view.path, identity);
+    assert.equal(view.displayPath, "ab.txt");
+    assert.equal(view.resolvedPath, resolvedPath);
+    const handle = await reader.resolveFile("s", view.resolvedPath!);
+    assert.equal(
+      (await reader.read(handle, "s")).preview.text,
+      "zero-width identity",
+    );
+
+    const tabView = projectToolEvidence(call("read", { path: "a\tb.txt" }));
+    assert.equal(tabView.path, "a\tb.txt");
+    assert.equal(tabView.displayPath, "a  b.txt");
+  } finally {
+    reader.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("terminal receipts, TAP observations, and tool returns remain separate", () => {

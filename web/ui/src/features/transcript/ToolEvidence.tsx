@@ -42,6 +42,7 @@ export function ToolEvidence({
   const artifacts = useContext(ArtifactContext);
   const view = projectToolEvidence(call, result, liveState);
   const fileReference = view.resolvedPath ?? view.path;
+  const fileLabel = view.displayResolvedPath ?? view.displayPath;
   const lines = (view.diff ?? view.output)
     .split("\n")
     .map((text, index) => ({ text, number: view.offset + index }));
@@ -56,7 +57,7 @@ export function ToolEvidence({
     >
       <summary>
         <strong className="tool-name">{call.name}</strong>
-        <span>{view.path || view.command || view.kind}</span>
+        <span>{view.displayPath || view.command || view.kind}</span>
         {summaryMeta}
         <span className="evidence-status">{view.state}</span>
       </summary>
@@ -70,10 +71,10 @@ export function ToolEvidence({
                 type="button"
                 onClick={() => artifacts.open(fileReference)}
               >
-                <code>{fileReference}</code>
+                <code>{fileLabel}</code>
               </button>
             ) : (
-              <code>{fileReference}</code>
+              <code>{fileLabel}</code>
             )}
             {cwd && (
               <>
