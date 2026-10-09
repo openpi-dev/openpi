@@ -6,11 +6,18 @@ function workflow(name: string) {
   return readFileSync(`.github/workflows/${name}.yml`, "utf8");
 }
 
-test("shared repository workflows follow the automation main branch", () => {
+test("shared repository workflows pin the automation main branch to a reviewed commit", () => {
   const workflows = [workflow("feishu-pr-notification"), workflow("release")];
 
   for (const source of workflows) {
-    assert.match(source, /uses: openpi-dev\/automation\/.+@main/u);
+    assert.match(
+      source,
+      /uses: openpi-dev\/automation\/\S+@[0-9a-f]{40} # main$/mu,
+    );
+    assert.doesNotMatch(
+      source,
+      /openpi-dev\/automation\/\S+@(?![0-9a-f]{40}\b)/u,
+    );
     assert.doesNotMatch(source, /^\s+(?:run|steps|runs-on):/mu);
   }
 });
