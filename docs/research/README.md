@@ -16,7 +16,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
-- [`PI_BROWSER_TOOLS_2026-10-09.md`](PI_BROWSER_TOOLS_2026-10-09.md) — native Pi browser package loading in OpenPI Web, standalone Chrome acceptance, and the remaining iframe and desktop-input boundaries ([#169](https://github.com/openpi-dev/openpi/issues/169), [#597](https://github.com/openpi-dev/openpi/issues/597)).
+- [`PI_BROWSER_TOOLS_2026-10-09.md`](PI_BROWSER_TOOLS_2026-10-09.md) — native Pi package loading, standalone and iframe boundaries, and a locally validated browser-only pi-computer-use adaptation for OpenPI's bound embedded pages ([#169](https://github.com/openpi-dev/openpi/issues/169), [#597](https://github.com/openpi-dev/openpi/issues/597)).
 
 - [`CHILD_RENDER_PARITY_2026-10-05.md`](CHILD_RENDER_PARITY_2026-10-05.md) — Session-owned child message/tool presentation, native paired component validation and host-private Mermaid/image boundaries ([#681](https://github.com/openpi-dev/openpi/issues/681)).
 
