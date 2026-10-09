@@ -450,3 +450,27 @@ test("expanded mode delegates call and result to Pi native renderers", () => {
     assert.deepEqual(actualResult, expectedResult, `${fixture.name} result`);
   }
 });
+
+test("collapsed labels encode newlines before ANSI-aware width clipping", () => {
+  for (const fixture of fixtures) {
+    const args = { ...fixture.args, path: "合法\nfile.txt" };
+    for (const width of [12, 24, 160]) {
+      for (const status of ["pending", "success", "error"]) {
+        const lines = renderCollapsed(
+          withActivityRenderer(fixture.definition),
+          args,
+          status === "pending" ? undefined : fixture.result,
+          status === "error",
+          width,
+          ansiTheme,
+        );
+        assert.equal(lines.length, 1, fixture.name);
+        assert.doesNotMatch(lines[0]!, /[\r\n]/, fixture.name);
+        assert.ok(visibleWidth(lines[0]!) <= width, fixture.name);
+        if (width === 160 && fixture.name !== "bash" && status === "success") {
+          assert.match(lines[0]!, /合法 ↵ file.txt/, fixture.name);
+        }
+      }
+    }
+  }
+});

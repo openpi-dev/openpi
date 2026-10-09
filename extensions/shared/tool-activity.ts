@@ -308,7 +308,8 @@ export function renderToolActivityLine(
 ) {
   const ellipsis = activity.status === "success" ? theme.fg("muted", "…") : "…";
   return truncateToWidth(
-    toolActivityText(activity, theme, now),
+    // Native paths may contain newlines; only the collapsed projection is one row.
+    toolActivityText(activity, theme, now).replace(/\r?\n/g, " ↵ "),
     width,
     ellipsis,
   );

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { stripVTControlCharacters } from "node:util";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -239,4 +239,57 @@ test("real ToolExecutionComponent toggles between one activity row and native ev
 
   component.setExpanded(false);
   assert.equal(nonEmpty().length, 1);
+});
+
+test("native grep on a newline-containing filename keeps collapsed rows physical", async () => {
+  if (process.platform === "win32") return;
+  const cwd = await mkdtemp(path.join(tmpdir(), "pi-newline-label-"));
+  try {
+    const args = { pattern: "alpha", path: "合法\nfile.txt" };
+    await writeFile(path.join(cwd, args.path), "alpha\nbeta\n");
+    const native = createGrepToolDefinition(cwd);
+    const result = await native.execute(
+      "newline-path",
+      args,
+      undefined,
+      undefined,
+      toolExecutionContext({ cwd } as ExtensionContext),
+    );
+    const evidence = JSON.stringify({ args, result });
+    const makeComponent = (definition: typeof native) => {
+      const component = new ToolExecutionComponent(
+        "grep",
+        "newline-path",
+        args,
+        { showImages: false },
+        definition,
+        { requestRender() {} } as unknown as TUI,
+        cwd,
+      );
+      component.markExecutionStarted();
+      component.setArgsComplete();
+      component.updateResult({ ...result, isError: false });
+      return component;
+    };
+    const component = makeComponent(withActivityRenderer(native));
+    const collapsed = component.render(100).filter((line) => line.trim());
+    assert.equal(collapsed.length, 1);
+    assert.doesNotMatch(collapsed[0]!, /[\r\n]/);
+    assert.match(stripVTControlCharacters(collapsed[0]!), /合法 ↵ file.txt/);
+    const expandedText = (value: ToolExecutionComponent) => {
+      value.setExpanded(true);
+      return value
+        .render(100)
+        .map((line) => stripVTControlCharacters(line).trim())
+        .filter(Boolean);
+    };
+    assert.deepEqual(
+      expandedText(component),
+      expandedText(makeComponent(native)),
+    );
+    assert.equal(JSON.stringify({ args, result }), evidence);
+    assert.match(evidence, /合法\\nfile.txt:1: alpha/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
