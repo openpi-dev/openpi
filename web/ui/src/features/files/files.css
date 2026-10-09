@@ -34,7 +34,7 @@
 @media (hover:none) { .file-tree-item .file-path-actions { opacity:1; } }
 .file-create-toolbar { padding:0 8px 6px; border-bottom:1px solid var(--border); }
 .file-write-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; border:0; padding:0; margin:0; min-width:0; }
-.file-write-actions .file-toolbar-button { width:auto; min-height:32px; height:32px; padding:0 7px; font-size:12px; gap:4px; }
+.file-write-actions .file-toolbar-button { width:auto; min-height:32px; height:32px; padding:0 4px; font-size:12px; gap:4px; }
 .file-write-actions .file-toolbar-button svg { width:14px; height:14px; }
 .file-write-directory { display:flex; align-items:center; gap:5px; margin:4px 0 0; color:var(--muted); font-size:11px; min-width:0; }
 .file-write-directory span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

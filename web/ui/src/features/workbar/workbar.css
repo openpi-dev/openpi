@@ -194,6 +194,10 @@
   cursor: pointer;
 }
 
+.workbar-tool-picker { width:min(300px,calc(100vw - 24px)); }
+.workbar-tool-picker .astryx-dropdown-menu-item { min-width:0; }
+.workbar-tool-picker .astryx-dropdown-menu-item span { white-space:normal; overflow-wrap:anywhere; }
+
 .workbar-tab-close:hover { background: var(--sidebar-hover); color: var(--text); }
 .workbar-tab-close svg { width: 12px; height: 12px; }
 

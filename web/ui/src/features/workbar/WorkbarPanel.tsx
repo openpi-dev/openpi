@@ -820,6 +820,7 @@ export function WorkbarPanel({
               )}
             {tabs.active ? (
               <DropdownMenu
+                className="workbar-tool-picker"
                 button={{
                   ref: openToolsButton,
                   className: "icon-button workbar-add-tab",
@@ -849,7 +850,7 @@ export function WorkbarPanel({
                   description: t(tool.description),
                   onClick: () => select(tool.kind),
                 }))}
-                menuWidth={300}
+                menuWidth="min(300px, calc(100vw - 24px))"
                 alignment="end"
                 hasChevron={false}
               />
