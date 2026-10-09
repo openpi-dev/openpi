@@ -2584,7 +2584,9 @@ test("runtime creation failure releases the Web Host lease", async () => {
 test("message_end and queued prompts do not settle a running turn", (t) => {
   t.mock.method(Date, "now", () => 10000);
   t.mock.method(performance, "now", () => 100);
-  const session = { sessionManager: { getSessionId: () => "session" } };
+  const session = {
+    sessionManager: { getSessionId: () => "session", getBranch: () => [] },
+  };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
   harness.pendingPromptTraces = [];
@@ -2696,13 +2698,15 @@ test("message_end and queued prompts do not settle a running turn", (t) => {
     queued: false,
   };
   projectEvent.call(harness, session, { type: "agent_start" });
-  projectEvent.call(harness, session, userMessage("third"));
+  const thirdInput = userMessage("third");
+  projectEvent.call(harness, session, thirdInput);
   assert.deepEqual(harness.activePromptTrace, {
     commandId: "third",
     sessionId: "session",
     startedAt: 5,
     started: true,
     queued: false,
+    promptMessage: thirdInput.message,
     userMessageObserved: true,
     epoch: 2,
     executionStartedAt: 10000,
