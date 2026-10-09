@@ -102,6 +102,9 @@ const THINKING_LEVELS = new Set([
 ]);
 const execFileAsync = promisify(execFile);
 
+export const WINDOWS_DIRECTORY_CHOOSER_SCRIPT =
+  "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $dialog = New-Object -ComObject Shell.Application; $folder = $dialog.BrowseForFolder(0, 'Choose a workspace', 0); if ($folder) { $folder.Self.Path }";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -2293,9 +2296,9 @@ export class WebHost {
           [
             "-NoProfile",
             "-Command",
-            "$dialog = New-Object -ComObject Shell.Application; $folder = $dialog.BrowseForFolder(0, 'Choose a workspace', 0); if ($folder) { $folder.Self.Path }",
+            WINDOWS_DIRECTORY_CHOOSER_SCRIPT,
           ],
-          { signal: this.chooserAbort.signal },
+          { signal: this.chooserAbort.signal, encoding: "utf8" },
         );
         return stdout.trim() || undefined;
       }

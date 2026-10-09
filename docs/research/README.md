@@ -16,6 +16,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WINDOWS_WORKSPACE_PICKER_ENCODING_2026-10-08.md`](WINDOWS_WORKSPACE_PICKER_ENCODING_2026-10-08.md) — Windows PowerShell stdout encoding, Unicode workspace path regression, and manual Web confirmation ([#712](https://github.com/openpi-dev/openpi/issues/712)).
+
 - [`CHILD_RENDER_PARITY_2026-10-05.md`](CHILD_RENDER_PARITY_2026-10-05.md) — Session-owned child message/tool presentation, native paired component validation and host-private Mermaid/image boundaries ([#681](https://github.com/openpi-dev/openpi/issues/681)).
 
 - [`CODEMODE_TUI_PRESENTATION_2026-10-04.md`](CODEMODE_TUI_PRESENTATION_2026-10-04.md) — OpenPI presentation through Pi public tool renderer resolvers, compact summaries and raw-evidence boundaries ([#673](https://github.com/openpi-dev/openpi/issues/673)).
