@@ -121,12 +121,12 @@ function hasImageSignature(bytes: Buffer, mimeType: WebPromptImage["mimeType"]) 
   if (mimeType === "image/jpeg")
     return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (mimeType === "image/gif") {
-    const signature = bytes.subarray(0, 6).toString("ascii");
-    return signature === "GIF87a" || signature === "GIF89a";
+    const signature = bytes.subarray(0, 6);
+    return signature.equals(Buffer.from("GIF87a")) || signature.equals(Buffer.from("GIF89a"));
   }
   return (
-    bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
-    bytes.subarray(8, 12).toString("ascii") === "WEBP"
+    bytes.subarray(0, 4).equals(Buffer.from("RIFF")) &&
+    bytes.subarray(8, 12).equals(Buffer.from("WEBP"))
   );
 }
 
