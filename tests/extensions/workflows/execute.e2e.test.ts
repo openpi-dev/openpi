@@ -444,7 +444,7 @@ test("print hosts wait by default and reject detached delivery", async () => {
     {
       script:
         'export const meta = { name: "print-legacy-inline" };\nreturn { inline: true };',
-      background: false,
+      wait: true,
     },
     undefined,
     undefined,
@@ -462,7 +462,7 @@ test("print hosts wait by default and reject detached delivery", async () => {
   const workflowsDir = join(agentDir, "workflows");
   const runDirsBefore = readdirSync(workflowsDir).sort();
   const messagesBefore = sentMessages.length;
-  for (const input of [{ wait: false }, { background: true }]) {
+  for (const input of [{ wait: false }]) {
     await assert.rejects(
       Promise.resolve().then(() =>
         workflow.execute(
@@ -755,7 +755,7 @@ test("shutdown preserves a failed completion for reload recovery", async () => {
     {
       script:
         'export const meta = { name: "shutdown-reload-delivery" };\nreturn { durable: true };',
-      background: true,
+      wait: false,
     },
     undefined,
     undefined,
@@ -839,7 +839,7 @@ test("cancelled detached delivery preserves aborted status after artifact persis
         script:
           'export const meta = { name: "cancelled-persistence-failure" };\n' +
           'return await agent("wait for cancellation", { agent_type: "bounded-reviewer" });',
-        background: true,
+        wait: false,
       },
       undefined,
       undefined,
@@ -1710,7 +1710,7 @@ test("forced settlement persists worktree cleanup that finishes later", async ()
           JSON.stringify(selectedRepo) +
           " });\n" +
           "return true;",
-        background: true,
+        wait: false,
       },
       undefined,
       undefined,
@@ -1961,7 +1961,7 @@ for (const dirty of [false, true])
         "cancel-checkout",
         {
           script: 'return await agent("probe", { isolation: "worktree" });',
-          background: true,
+          wait: false,
         },
         undefined,
         undefined,
