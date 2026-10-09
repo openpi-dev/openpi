@@ -195,6 +195,7 @@
 }
 
 .workbar-tool-picker { width:min(300px,calc(100vw - 24px)); }
+.workbar-tool-picker[role="menu"] { max-height:calc(100dvh - 96px); }
 .workbar-tool-picker .astryx-dropdown-menu-item { min-width:0; }
 .workbar-tool-picker .astryx-dropdown-menu-item span { white-space:normal; overflow-wrap:anywhere; }
 
