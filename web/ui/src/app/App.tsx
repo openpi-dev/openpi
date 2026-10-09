@@ -43,10 +43,7 @@ import type {
   WebSessionProjection,
 } from "../../../protocol/types.ts";
 import { WebClient } from "../protocol/client.ts";
-import {
-  type CompletedResultExposure,
-  Transcript,
-} from "../features/transcript/Transcript.tsx";
+import { Transcript } from "../features/transcript/Transcript.tsx";
 import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
 import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
@@ -77,32 +74,6 @@ function clamp(value: number, min: number, max: number) {
 
 export function App() {
   const state = useStore(webStore);
-  const [completedResultSeen, setCompletedResultSeen] =
-    useState<CompletedResultExposure | null>(null);
-  const reportCompletedResultSeen = useCallback(
-    (exposure: CompletedResultExposure) => {
-      const current = webStore.getState();
-      const session = current.snapshot?.selectedSession;
-      const turn = current.snapshot?.sessions.find(
-        (summary) =>
-          summary.id === session?.id && summary.path === session?.path,
-      )?.execution?.lastTurn;
-      if (
-        current.workspaceDraft ||
-        current.sessionSwitching ||
-        current.selectedPath !== exposure.sessionPath ||
-        session?.id !== exposure.sessionId ||
-        session.path !== exposure.sessionPath ||
-        turn?.outcome !== "completed" ||
-        turn.commandId !== exposure.commandId ||
-        turn.finishedAt !== exposure.finishedAt ||
-        turn.resultEntryId !== exposure.resultEntryId
-      )
-        return;
-      setCompletedResultSeen(exposure);
-    },
-    [],
-  );
   const { t } = useTranslation();
   const { actions } = state;
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
@@ -810,7 +781,12 @@ export function App() {
           }}
         >
           <SessionSidebar
-            completedResultSeen={completedResultSeen}
+            sessionViewVisible={
+              !centerCollapsed &&
+              !providerSettingsVisible &&
+              !state.sessionSwitching &&
+              !state.workspaceDraft
+            }
             connected={state.connection === "connected"}
             snapshot={state.snapshot}
             selectedPath={state.workspaceDraft ? null : state.selectedPath}
@@ -993,7 +969,6 @@ export function App() {
               </section>
             ) : state.snapshot ? (
               <Transcript
-                onCompletedResultSeen={reportCompletedResultSeen}
                 resultExposureEnabled={
                   !centerCollapsed &&
                   !providerSettingsVisible &&

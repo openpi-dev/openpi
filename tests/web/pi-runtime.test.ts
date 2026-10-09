@@ -184,6 +184,7 @@ function promptSession(sessionId: string) {
   return {
     isStreaming: false,
     isCompacting: false,
+    isRetrying: false,
     state: { pendingToolCalls: new Set<string>() },
     get isIdle() {
       return !this.isStreaming && !this.isCompacting;
@@ -2584,7 +2585,9 @@ test("runtime creation failure releases the Web Host lease", async () => {
 test("message_end and queued prompts do not settle a running turn", (t) => {
   t.mock.method(Date, "now", () => 10000);
   t.mock.method(performance, "now", () => 100);
-  const session = { sessionManager: { getSessionId: () => "session" } };
+  const session = {
+    sessionManager: { getSessionId: () => "session", getBranch: () => [] },
+  };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
   harness.pendingPromptTraces = [];
@@ -2696,13 +2699,15 @@ test("message_end and queued prompts do not settle a running turn", (t) => {
     queued: false,
   };
   projectEvent.call(harness, session, { type: "agent_start" });
-  projectEvent.call(harness, session, userMessage("third"));
+  const thirdInput = userMessage("third");
+  projectEvent.call(harness, session, thirdInput);
   assert.deepEqual(harness.activePromptTrace, {
     commandId: "third",
     sessionId: "session",
     startedAt: 5,
     started: true,
     queued: false,
+    promptMessage: thirdInput.message,
     userMessageObserved: true,
     epoch: 2,
     executionStartedAt: 10000,
@@ -2836,6 +2841,7 @@ test("native retry completion preserves success, exhaustion and backoff cancella
     const session = {
       sessionManager: {
         getSessionId: () => "session",
+        getSessionFile: () => undefined,
         appendCustomEntry: (_type: string, data: unknown) => timings.push(data),
         getBranch: () => [],
       },
@@ -2907,9 +2913,82 @@ test("native retry completion preserves success, exhaustion and backoff cancella
     assert.equal((timings[0] as { outcome: string }).outcome, outcome);
     assert.deepEqual(
       events.find((event) => event.type === "auto_retry_end")?.detail,
-      { attempt: 1, success: outcome === "completed" },
+      {
+        sessionId: "session",
+        sessionPath: "current:session",
+        attempt: 1,
+        success: outcome === "completed",
+        ...(outcome === "cancelled"
+          ? { finalError: "Retry cancelled" }
+          : outcome === "failed"
+            ? { finalError: "502 exhausted" }
+            : {}),
+      },
     );
   }
+});
+
+test("retry snapshots retain native counts and redacted reasons across reconnects, with exact Session ownership", () => {
+  const session = promptSession("retry-session");
+  session.isStreaming = true;
+  let path = "/tmp/retry-session.jsonl";
+  session.sessionManager.getSessionFile = () => path;
+  const harness = promptHarness(session);
+  const api = harness as unknown as PiWebRuntime;
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: PromptRuntimeHarness,
+        session: object,
+        event: object,
+      ): void;
+    }
+  ).projectEvent;
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  projectEvent.call(harness, session, {
+    type: "auto_retry_start",
+    attempt: 2,
+    maxAttempts: 4,
+    delayMs: 100,
+    errorMessage: "stream closed; Bearer fixture-secret; token=fixture-token",
+  });
+  const retry = {
+    attempt: 2,
+    maxAttempts: 4,
+    errorMessage: "stream closed; Bearer [redacted]; token=[redacted]",
+  };
+  assert.deepEqual(api.getSessionExecution("retry-session", path).retry, retry);
+  assert.deepEqual(api.getSessionExecution("retry-session", path).retry, retry);
+  assert.deepEqual(
+    events.find((event) => event.type === "auto_retry_start")?.detail,
+    {
+      sessionId: "retry-session",
+      sessionPath: path,
+      ...retry,
+      delayMs: 100,
+    },
+  );
+  assert.equal(
+    api.getSessionExecution("retry-session", "/tmp/copied.jsonl").retry,
+    undefined,
+  );
+  path = "/tmp/copied.jsonl";
+  assert.equal(api.getSessionExecution("retry-session", path).retry, undefined);
+  path = "/tmp/retry-session.jsonl";
+  projectEvent.call(harness, session, {
+    type: "auto_retry_end",
+    attempt: 2,
+    success: true,
+  });
+  assert.equal(api.getSessionExecution("retry-session", path).retry, undefined);
+  assert.equal(
+    api.getSessionExecution("retry-session", path).status,
+    "running",
+  );
+  session.isRetrying = true;
+  assert.deepEqual(api.getSessionExecution("retry-session", path).retry, {});
+  session.isRetrying = false;
 });
 
 type ThinkingHarness = {

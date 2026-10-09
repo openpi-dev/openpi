@@ -431,7 +431,7 @@ it("keeps a pending message and its sent time when its original anchor is outsid
   expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(2);
   expect(
     view.container
-      .querySelector(".message-row.user:last-of-type time")
+      .querySelectorAll(".message-row.user time")[1]
       ?.getAttribute("datetime"),
   ).toBe(sent);
   value.cursor++;
@@ -589,7 +589,7 @@ it("shows the selected background session's execution without mixing in the cont
     "Only the other Session should see this",
   );
   expect(
-    view.container.querySelector(".conversation-running")?.textContent,
+    view.container.querySelector(".conversation-execution-status")?.textContent,
   ).toContain(i18n.t("backgroundSessionRunning"));
   expect(view.container.textContent).toContain(
     i18n.t("pendingFollowUpsHint", { count: 2 }),

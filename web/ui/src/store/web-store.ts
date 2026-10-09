@@ -820,6 +820,16 @@ export function createWebStore(
         return;
       }
       if (
+        ["auto_retry_start", "auto_retry_end"].includes(event.type) &&
+        typeof detail.sessionPath === "string" &&
+        detail.sessionPath !==
+          (current.snapshot?.currentSessionPath ??
+            current.snapshot?.selectedSession?.path)
+      ) {
+        scheduleSnapshotRefresh();
+        return;
+      }
+      if (
         !sessionTransition &&
         (detail.message || event.type.startsWith("tool_execution_")) &&
         !isControlledSession(current.snapshot)

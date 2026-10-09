@@ -279,7 +279,8 @@ export class WebClient {
     entryId: string,
     cursor: number,
     signal: AbortSignal,
-    purpose?: "plan",
+    purpose?: "plan" | "thinking",
+    partIndex?: number,
   ) {
     return this.request<{
       entryId: string;
@@ -287,8 +288,9 @@ export class WebClient {
       nextCursor: number | null;
       totalChars: number;
       planStatus?: "ready";
+      partIndex?: number;
     }>(
-      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor), ...(purpose ? { purpose } : {}) })}`,
+      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor), ...(purpose ? { purpose } : {}), ...(partIndex !== undefined ? { partIndex: String(partIndex) } : {}) })}`,
       { signal, timeoutMessage: "Message request timed out. Please retry." },
     );
   }

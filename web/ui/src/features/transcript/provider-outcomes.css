@@ -1,7 +1,20 @@
+.provider-attempts {
+  color: var(--muted);
+  font-size: var(--conversation-font-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+div.provider-attempts,
 .provider-attempts > summary {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 9px;
+  min-height: 32px;
+  padding: 3px 0;
+}
+
+.provider-attempts > summary {
   cursor: pointer;
   list-style: none;
 }
@@ -10,21 +23,32 @@
   display: none;
 }
 
+.provider-attempts > svg,
 .provider-attempts > summary > svg {
-  width: 13px;
-  height: 13px;
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.65;
   flex-shrink: 0;
+}
+
+.provider-attempts > summary > .reconnect-chevron {
+  width: 14px;
+  height: 14px;
   transition: transform 160ms ease;
 }
 
-.provider-attempts[open] > summary > svg {
+.provider-attempts[open] > summary > .reconnect-chevron {
   transform: rotate(90deg);
 }
 
 .provider-attempts ol {
   margin: 7px 0 0;
-  padding-left: 20px;
+  padding: 0;
+  list-style: none;
 }
+
+.provider-attempts p { margin: 0; white-space: pre-wrap; }
+.provider-attempts.retrying > summary { color: var(--subtle); }
 
 .provider-attempts li + li {
   margin-top: 7px;
@@ -44,7 +68,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .provider-attempts > summary > svg {
+  .provider-attempts > summary > .reconnect-chevron {
     transition: none;
   }
 }

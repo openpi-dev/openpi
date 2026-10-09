@@ -361,6 +361,38 @@ test("Cursor image-path conversion is scoped to interactive Cursor input", async
   );
 });
 
+test("Cursor image-path conversion requires literal GIF and WebP signature bytes", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-cursor-signatures-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const signature of ["GIF87a", "GIF89a", "RIFF\0\0\0\0WEBP"]) {
+    const bytes = Buffer.from(signature);
+    const path = join(
+      directory,
+      signature.startsWith("GIF") ? "fixture.gif" : "fixture.webp",
+    );
+    const event = {
+      type: "input" as const,
+      source: "interactive" as const,
+      text: JSON.stringify(path),
+    };
+    const context = { model: { provider: "cursor" } } as ExtensionContext;
+    await writeFile(path, bytes);
+    const valid = await transformCursorImageInput(event, context);
+    assert.equal(valid.action, "transform");
+    for (let index = 0; index < bytes.length; index++) {
+      if (signature.startsWith("RIFF") && index >= 4 && index < 8) continue;
+      const corrupted = Buffer.from(bytes);
+      corrupted[index]! |= 0x80;
+      await writeFile(path, corrupted);
+      assert.deepEqual(
+        await transformCursorImageInput(event, context),
+        { action: "continue" },
+        `signature byte ${index}`,
+      );
+    }
+  }
+});
+
 test("Cursor multi-turn request omits prior thinking outside OMP's Kimi-only replay", async () => {
   const built = await buildCursorRequest(MODEL, {
     messages: [
