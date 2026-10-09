@@ -77,6 +77,7 @@ import {
   type TerminalRuntime,
 } from "./src/runtime.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
+import { createBackgroundStatusWidget } from "./src/ui/status-widget.ts";
 import {
   renderTerminalBatchResult,
   renderTerminalResult,
@@ -176,18 +177,9 @@ export default function (pi: ExtensionAPI) {
         ui.setWidget(WIDGET_KEY, undefined);
         return;
       }
-      ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-        const line =
-          theme.fg("warning", "■ ") +
-          theme.fg(
-            "text",
-            `${running} background terminal${running === 1 ? "" : "s"} running`,
-          ) +
-          theme.fg("dim", " • ") +
-          theme.fg("accent", "/ps") +
-          theme.fg("dim", " to view");
-        return { render: () => [line], invalidate: () => {} };
-      });
+      ui.setWidget(WIDGET_KEY, (_tui, theme) =>
+        createBackgroundStatusWidget(running, theme),
+      );
     } catch {
       // UI may be unavailable (print/RPC modes or teardown).
     }
