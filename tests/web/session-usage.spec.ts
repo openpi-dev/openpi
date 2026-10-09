@@ -134,12 +134,12 @@ it("closes from the visible control and returns focus to the usage strip", async
   const dialog = await screen.findByRole("dialog", {
     name: i18n.t("sessionUsage"),
   });
-  fireEvent.click(
-    within(dialog).getByRole("button", { name: i18n.t("close") }),
-  );
-  await waitFor(() =>
-    expect(trigger.getAttribute("aria-expanded")).toBe("false"),
-  );
-  expect(document.activeElement).toBe(trigger);
+  const close = within(dialog).getByRole("button", { name: i18n.t("close") });
+  await waitFor(() => expect(document.activeElement).toBe(close));
+  fireEvent.click(close);
+  await waitFor(() => {
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
   expect(screen.queryByRole("dialog")).toBeNull();
 });

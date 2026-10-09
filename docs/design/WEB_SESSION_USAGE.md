@@ -26,7 +26,9 @@ Workspace drafts and pending Session switches hide the strip so the previous Ses
 
 ## Validation and limitations
 
-Six component checks cover the always-visible metrics, one-click precise statistics, native totals containing cache, folded identity, unknown versus zero, absent usage and closing with focus restoration. Repository validation uses `bun run check` and `VITEST_MAX_WORKERS=2 bun run test`; the PR contains the final receipt.
+Six component checks cover the always-visible metrics, one-click precise statistics, native totals containing cache, folded identity, unknown versus zero, absent usage and closing with focus restoration. The closing check waits for the popup's initial focus before activating its close button, then verifies both dismissal and restored focus. The workspace-draft regression also includes retained native usage.
+
+Repository validation runs `bun run check` and `bun run test`. Final UI acceptance runs the same complete set of discovered `.spec.ts` files through the Vitest CLI with `--maxWorkers=1`. This checkout does not read `VITEST_MAX_WORKERS`, so setting that environment variable does not bound workers. Assertions and deadlines remain unchanged; the PR distinguishes the native and UI receipts and earlier failed runs.
 
 The real local preview was inspected at 320px and 1280px. The strip and expanded Session ID stayed within the viewport, the panel followed its trigger, and Escape returned focus to the strip. Native usage was read from an existing connected Session; no new model request was necessary. The dark theme was visually inspected. Other themes reuse the same existing tokens but are not claimed as separate visual acceptance runs here.
 
