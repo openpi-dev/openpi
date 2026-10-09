@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-07
+last-verified: 2026-09-07
+applies-to: OpenPI Web startup and browser launch boundaries
+related-issues: #450
+related-prs: none
+supersedes: none
+---
+
 # Web startup feedback and browser waiting
 
 - Status: validated for the source observations below; timings are exploratory.
@@ -19,3 +29,19 @@ These exploratory observations do not establish a cold-start speedup: operating-
 The terminal handoff now writes progress immediately. Host readiness and the usable address are printed before invoking the browser opener. The native `execFile` operation has a three-second deadline and accepts cancellation during Host shutdown. An opener exit is described as an open request, not proof that a browser page loaded. Timeout stops only the owned launcher process; this does not promise cleanup of arbitrary descendants created by operating-system launch services.
 
 `tests/web/startup.test.ts` uses an isolated real CLI and a deliberately stalled opener on POSIX to verify that the address appears and serves HTTP before the opener completes, that timeout preserves the serving Host, and that shutdown cancels the pending launch. The process test is explicitly skipped on Windows; pre-cancelled launch and ready-screen tests are portable. Extension tests check progress before spawn. Browser rendering performance and fully cold user-configured startup remain separate investigation scopes.
+
+## Verified facts
+
+The startup and browser-launch tests establish the readiness, timeout, cancellation, and progress boundaries described above.
+
+## Inferences
+
+The measured local timings support the lifecycle repair but do not prove a general cold-start speedup.
+
+## Recommendations
+
+Keep readiness publication independent from browser opener completion and preserve bounded cancellation on shutdown.
+
+## Unknowns
+
+Cold user-configured startup and browser rendering performance remain unmeasured.
