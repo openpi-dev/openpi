@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_SESSION_USAGE.md`](WEB_SESSION_USAGE.md) — locally validated compact usage strip, native context versus cumulative totals, progressive identity disclosure and shared popover lifecycle (#728).
+
 - [`WEB_RESOURCE_SETTINGS.md`](WEB_RESOURCE_SETTINGS.md) — scoped Skills/Plugins iteration, native configured versus loaded state, reviewed setup requests and explicit Session reload (#710).
 
 - [`WEB_CHANGE_REVIEW.md`](WEB_CHANGE_REVIEW.md) — validated turn/workspace scopes, unified review navigation, Codex-style cards and bounded pagination for #597 / #598

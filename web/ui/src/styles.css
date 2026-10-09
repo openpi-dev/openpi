@@ -218,28 +218,45 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .task-tools-trigger:disabled { opacity:.4; cursor:default; }
 .task-tools-trigger svg { width:17px; height:17px; }
 .session-usage { display:flex; min-width:0; flex:0 0 auto; align-items:center; color:var(--muted); font-variant-numeric:tabular-nums; }
-.session-usage > button { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; border:0; border-radius:6px; padding:6px 8px; color:inherit; background:transparent; font:inherit; font-size:12px; cursor:pointer; }
-.session-usage > button:hover { background:var(--sidebar-hover); color:var(--text); }
-.session-usage > button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-.session-usage svg { width:12px; height:12px; stroke-width:1.9; }
-.session-usage-details { position:fixed; inset:64px 14px auto auto; margin:0; padding:18px; width:min(340px, calc(100vw - 28px)); max-height:calc(100dvh - 90px); overflow:auto; box-sizing:border-box; border:1px solid var(--border); border-radius:12px; background:var(--page); color:var(--text); box-shadow:0 8px 30px #0002; font-size:13px; }
-.session-usage-details h2 { margin:0 0 10px; font-size:13px; font-weight:600; }
-.usage-context-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:12px; }
-.usage-context-heading h2 { margin:0; }
-.usage-context-heading strong { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; }
-.session-usage-details progress { display:block; width:100%; height:6px; border:0; border-radius:6px; overflow:hidden; background:var(--border); accent-color:var(--accent); margin-bottom:12px; }
-.session-usage-details progress::-webkit-progress-bar { background:var(--border); }
-.session-usage-details progress::-webkit-progress-value { background:var(--accent); border-radius:6px; }
-.session-usage-details progress::-moz-progress-bar { background:var(--accent); border-radius:6px; }
-.usage-totals { border-top:1px solid var(--border); padding-top:12px; }
-.usage-totals summary { cursor:pointer; font-size:12px; color:var(--muted); }
-.usage-totals[open] summary { margin-bottom:12px; }
-.session-usage-details p { margin:0 0 18px; font-size:12px; line-height:1.6; color:var(--muted); }
-.session-usage-details p:last-child { margin-bottom:0; }
-.session-usage-details .usage-context-value { color:var(--text); font-size:15px; margin-bottom:6px; }
-.session-usage-details dl { margin:0 0 12px; }
-.session-usage-details dl > div { display:flex; justify-content:space-between; gap:20px; padding:5px 0; }
-.session-usage-details dd { margin:0; font-variant-numeric:tabular-nums; }
+.session-usage-trigger { display:inline-flex; align-items:center; gap:12px; min-height:32px; white-space:nowrap; border:0; border-radius:6px; padding:6px 8px; color:var(--text); background:transparent; font:inherit; font-size:12px; cursor:pointer; }
+.session-usage-trigger:hover, .session-usage-trigger[aria-expanded="true"] { background:var(--sidebar-hover); }
+.usage-stat { display:inline-flex; align-items:center; gap:5px; }
+.usage-stat svg { width:14px; height:14px; color:var(--muted); }
+.usage-capacity { color:var(--muted); }
+.session-usage-details { max-height:calc(100dvh - 100px); overflow:auto; color:var(--text); font-size:13px; font-variant-numeric:tabular-nums; }
+.usage-details-heading, .usage-context-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.usage-details-heading h2 { margin:0; font-size:14px; font-weight:500; }
+.usage-section { border-top:1px solid var(--border); padding:14px 0; }
+.usage-details-heading + .usage-section { border-top:0; }
+.usage-section h3 { margin:0; font-size:13px; font-weight:500; }
+.usage-context-heading > span { color:var(--muted); font-size:12px; }
+.session-usage-details .usage-context-value { margin:8px 0 10px; font-size:12px; color:var(--muted); }
+.usage-context-value strong { font-size:15px; font-weight:500; color:var(--text); }
+.session-usage-details progress { display:block; width:100%; height:4px; border:0; border-radius:4px; overflow:hidden; background:var(--sidebar-hover); accent-color:var(--accent); }
+.session-usage-details progress::-webkit-progress-bar { background:var(--sidebar-hover); }
+.session-usage-details progress::-webkit-progress-value { background:var(--accent); border-radius:4px; }
+.session-usage-details progress::-moz-progress-bar { background:var(--accent); border-radius:4px; }
+.session-usage-details .usage-help { margin:8px 0 0; color:var(--muted); font-size:12px; line-height:1.5; }
+.usage-metrics { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; margin:10px 0 0; }
+.usage-metrics dt { color:var(--muted); font-size:12px; }
+.usage-metrics dd { margin:3px 0 0; font-size:15px; font-weight:500; overflow-wrap:anywhere; }
+.usage-workspace { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin:0; padding-top:14px; border-top:1px solid var(--border); font-size:12px; }
+.usage-workspace dt { color:var(--muted); }
+.usage-workspace dd { margin:0; min-width:0; overflow-wrap:anywhere; text-align:right; }
+.usage-identity summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; color:var(--muted); font-size:12px; list-style:none; cursor:pointer; }
+.usage-identity summary::-webkit-details-marker { display:none; }
+.usage-identity svg { width:14px; height:14px; }
+.usage-identity[open] summary svg { transform:rotate(180deg); }
+.usage-identity code { display:block; padding-bottom:4px; overflow-wrap:anywhere; font-size:12px; user-select:text; }
+@container conversation-shell (max-width: 560px) {
+  .task-header { flex-wrap:wrap; }
+  .session-usage { order:1; flex-basis:100%; justify-content:flex-end; }
+}
+@media (pointer: coarse) {
+  .session-usage-trigger { min-height:44px; }
+  .usage-details-heading .icon-button, .usage-identity summary { min-height:44px; }
+  .usage-details-heading .icon-button { min-width:44px; }
+}
 .shell-state { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 12px; width: min(780px, calc(100% - 48px)); min-width: 0; margin: auto; color: var(--muted); }
 .shell-state h2, .shell-state p { margin: 0; font-size: 14px; font-weight: 500; }
 .shell-state button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--page); color: var(--text); cursor: pointer; }

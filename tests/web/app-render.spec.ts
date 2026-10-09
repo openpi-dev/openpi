@@ -232,6 +232,14 @@ it("prepares an editable implementation prompt only after confirming draft repla
 it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
   const initial = webStore.getState();
   const snapshot = activeSnapshot();
+  snapshot.usage = {
+    input: 1_200,
+    output: 6,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 1_206,
+    context: { tokens: 1_206, contextWindow: 128_000, percent: 0.9421875 },
+  };
   snapshot.workspaces.push({ path: "/tmp/repo-b", name: "B", current: false });
   snapshot.models = [
     {
@@ -260,6 +268,16 @@ it("keeps a workspace draft separate from the old Session UI and retains text af
       view.container.querySelector(".conversation-view-switch"),
     ).toBeNull();
     expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: i18n.t("usageOpenDetails", {
+          input: "1k",
+          output: "6",
+          percent: "1%",
+          capacity: "128k",
+        }),
+      }),
+    ).toBeNull();
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Draft model (test/model)",

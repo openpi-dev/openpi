@@ -864,7 +864,20 @@ export function App() {
                 )}
                 <h1 title={taskTitle}>{taskTitle}</h1>
               </div>
-              <SessionUsageBar usage={state.snapshot?.usage} />
+              <SessionUsageBar
+                key={
+                  selected ? `${selected.id}:${selected.path}` : "no-session"
+                }
+                usage={
+                  selected && !state.sessionSwitching
+                    ? state.snapshot?.usage
+                    : undefined
+                }
+                workspace={
+                  workspace?.name || (selected && workspaceName(selected.cwd))
+                }
+                sessionId={selected?.id}
+              />
               {selected && !state.sessionSwitching && (
                 <SessionOverview
                   key={`${selected.id}:${selected.path}`}
