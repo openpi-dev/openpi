@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_BROWSER_CHROME.md`](WEB_BROWSER_CHROME.md) — scoped browser chrome refinement, retained panel hierarchy, theme-aware surfaces and visual ablation (#729).
+
 - [`WEB_SESSION_USAGE.md`](WEB_SESSION_USAGE.md) — locally validated compact usage strip, native context versus cumulative totals, progressive identity disclosure and shared popover lifecycle (#728).
 
 - [`WEB_RESOURCE_SETTINGS.md`](WEB_RESOURCE_SETTINGS.md) — scoped Skills/Plugins iteration, native configured versus loaded state, reviewed setup requests and explicit Session reload (#710).

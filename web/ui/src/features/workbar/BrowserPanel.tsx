@@ -107,53 +107,55 @@ function DirectBrowserPage({
           }
         }}
       >
-        <button
-          type="button"
-          aria-label={t("browserBack")}
-          title={t("browserBack")}
-          disabled={
-            bridge.page
-              ? !bridge.page.canGoBack
-              : page.unknown || page.index <= 0
-          }
-          onClick={() =>
-            bridge.page
-              ? bridge.command("back")
-              : navigate(page.history, page.index - 1)
-          }
-        >
-          <ArrowLeft aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          aria-label={t("browserForward")}
-          title={t("browserForward")}
-          disabled={
-            bridge.page
-              ? !bridge.page.canGoForward
-              : page.unknown || page.index >= page.history.length - 1
-          }
-          onClick={() =>
-            bridge.page
-              ? bridge.command("forward")
-              : navigate(page.history, page.index + 1)
-          }
-        >
-          <ArrowRight aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          aria-label={t("browserReload")}
-          title={t("browserReload")}
-          disabled={!url}
-          onClick={() =>
-            bridge.page
-              ? bridge.command("reload")
-              : navigate(page.history, page.index)
-          }
-        >
-          <RefreshCw aria-hidden="true" />
-        </button>
+        <div className="browser-navigation">
+          <button
+            type="button"
+            aria-label={t("browserBack")}
+            title={t("browserBack")}
+            disabled={
+              bridge.page
+                ? !bridge.page.canGoBack
+                : page.unknown || page.index <= 0
+            }
+            onClick={() =>
+              bridge.page
+                ? bridge.command("back")
+                : navigate(page.history, page.index - 1)
+            }
+          >
+            <ArrowLeft aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label={t("browserForward")}
+            title={t("browserForward")}
+            disabled={
+              bridge.page
+                ? !bridge.page.canGoForward
+                : page.unknown || page.index >= page.history.length - 1
+            }
+            onClick={() =>
+              bridge.page
+                ? bridge.command("forward")
+                : navigate(page.history, page.index + 1)
+            }
+          >
+            <ArrowRight aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label={t("browserReload")}
+            title={t("browserReload")}
+            disabled={!url}
+            onClick={() =>
+              bridge.page
+                ? bridge.command("reload")
+                : navigate(page.history, page.index)
+            }
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
+        </div>
         <input
           ref={addressInput}
           aria-label={t("browserAddress")}

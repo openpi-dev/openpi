@@ -99,7 +99,8 @@
   justify-content: space-between;
   gap: 8px;
   padding: 0 8px 0 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
+  background: color-mix(in oklab, var(--text) 3%, var(--page));
 }
 
 .workbar-tabs,
@@ -114,6 +115,7 @@
   min-height: 45px;
   flex: 1;
   align-self: stretch;
+  gap: 5px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -124,12 +126,17 @@
   position: relative;
   display: flex;
   min-width: 0;
-  height: 100%;
+  height: 34px;
   align-items: center;
-  border-bottom: 2px solid transparent;
+  flex: none;
+  border-radius: 10px;
 }
 
-.workbar-tab[data-active="true"] { border-bottom-color: var(--accent); }
+.workbar-tab:hover { background: color-mix(in oklab, var(--text) 5%, transparent); }
+.workbar-tab[data-active="true"] {
+  background: var(--page);
+  box-shadow: 0 1px 3px #0001;
+}
 
 .workbar-tab > button:first-child {
   display: flex;
@@ -137,14 +144,16 @@
   height: 100%;
   align-items: center;
   gap: 7px;
-  padding: 0 26px 0 8px;
+  padding: 0 32px 0 11px;
   border: 0;
+  border-radius: inherit;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
 }
 
 .workbar-tab[data-active="true"] > button:first-child { color: var(--text); }
+.workbar-tab > button:first-child:focus-visible { outline-offset: -2px; }
 
 .workbar-tab > button:first-child > svg,
 .workbar-tab-placeholder > svg {
@@ -166,12 +175,12 @@
   position: absolute;
   right: 4px;
   display: grid;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 50%;
   background: transparent;
   color: var(--subtle);
   cursor: pointer;
@@ -193,8 +202,9 @@
 
 .workbar-tabbar-actions .icon-button,
 .workbar-add-tab {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
 }
 
 .workbar-panels,
@@ -694,32 +704,70 @@
 
 .browser-page[hidden] { display: none; }
 
-.browser-tabs-header { display: flex; min-width: 0; border-bottom: 1px solid var(--border); }
-.browser-tabs { display: flex; min-width: 0; overflow-x: auto; }
-.browser-tab { display: flex; flex: 0 0 auto; max-width: 190px; border-right: 1px solid var(--border); }
-.browser-tab[data-active="true"] { background: var(--sidebar-hover); }
+.browser-tabs-header {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 0;
+  background: color-mix(in oklab, var(--text) 3%, var(--page));
+}
+.browser-tabs {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: none;
+}
+.browser-tabs::-webkit-scrollbar { display: none; }
+.browser-tab {
+  display: flex;
+  flex: 0 0 auto;
+  max-width: 190px;
+  height: 32px;
+  align-items: center;
+  border-radius: 10px;
+}
+.browser-tab:hover { background: color-mix(in oklab, var(--text) 5%, transparent); }
+.browser-tab[data-active="true"] {
+  background: var(--page);
+  box-shadow: 0 1px 3px #0001;
+}
 .browser-tab button, .browser-add-tab {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   min-width: 0;
-  padding: 9px 6px;
+  height: 32px;
+  padding: 0 7px;
   border: 0;
+  border-radius: 10px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
 }
-.browser-tab button[role="tab"] { padding-left: 10px; }
+.browser-tab button[role="tab"] { padding-left: 11px; }
+.browser-tab button[role="tab"]:focus-visible { outline-offset: -2px; }
 .browser-tab button[aria-selected="true"] { color: var(--text); }
-.browser-tab button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.browser-tab button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
 .browser-tab svg, .browser-add-tab svg { width: 14px; height: 14px; flex-shrink: 0; }
-.browser-add-tab { flex-shrink: 0; width: 34px; }
+.browser-tab button:not([role="tab"]) { width: 24px; height: 24px; margin-right: 4px; padding: 0; border-radius: 50%; }
+.browser-tab button:not([role="tab"]):hover { color: var(--text); background: var(--sidebar-hover); }
+.browser-tab button:not([role="tab"]) svg { width: 12px; height: 12px; }
+.browser-add-tab { flex-shrink: 0; width: 32px; border-radius: 50%; }
+.browser-add-tab:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text); }
 .browser-add-tab:disabled { opacity: .4; cursor: default; }
 .browser-direct-viewport { display: flex; min-height: 0; overflow: hidden; background: #fff; }
 .browser-direct-viewport > iframe { width: 100%; height: 100%; border: 0; }
-.browser-direct-viewport > .workbar-empty { flex: 1; color: #555; }
-.browser-notice { margin: 0; padding: 6px 9px; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.browser-direct-viewport > .workbar-empty { flex: 1; padding: 24px; background: var(--page); }
+.browser-direct-viewport > .workbar-empty > svg { width: 48px; height: 48px; padding: 12px; border-radius: 16px; background: color-mix(in oklab, var(--text) 4%, var(--page)); }
+.browser-direct-viewport > .workbar-empty > strong { color: var(--text); font-size: 13px; font-weight: 560; }
+.browser-direct-viewport > .workbar-empty > p { line-height: 1.7; }
+.browser-notice { margin: 0; padding: 8px 12px; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 
 .browser-tool {
   display: grid;
@@ -731,20 +779,33 @@
 
 .browser-toolbar {
   display: grid;
-  grid-template-columns: repeat(3, 30px) minmax(0, 1fr) repeat(2, 30px);
-  gap: 5px;
-  padding: 8px;
-  border-bottom: 1px solid var(--border);
+  grid-template-columns: auto minmax(0, 1fr) repeat(2, 32px);
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
+  background: color-mix(in oklab, var(--text) 3%, var(--page));
+}
+
+.browser-navigation {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  border-radius: 999px;
+  background: var(--page);
+  box-shadow: 0 1px 2px #00000008;
 }
 
 .browser-toolbar button {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 50%;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -755,25 +816,32 @@
   color: var(--text);
 }
 
+.browser-toolbar > button {
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: var(--page);
+}
+
 .browser-toolbar button:disabled {
   opacity: .35;
   cursor: default;
 }
 
 .browser-toolbar button svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .browser-toolbar input {
   min-width: 0;
-  height: 30px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--sidebar);
+  width: 100%;
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  border-radius: 999px;
+  background: var(--page);
   color: var(--text);
-  font-size: 11px;
+  font-size: 12px;
+  box-shadow: 0 1px 2px #00000008;
 }
 
 @media (max-width: 1100px) {
