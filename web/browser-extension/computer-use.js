@@ -159,7 +159,7 @@ export async function controlBrowser(
         throw new Error("The observed element is gone.");
       const result = await frameSend("Runtime.callFunctionOn", {
         objectId: resolved.object.objectId,
-        functionDeclaration: `function(nonce, ...args){if(!this.isConnected || this.ownerDocument.documentElement.dataset.openpiBrowserDocument!==nonce)throw new Error('Stale frame element');return (${declaration}).apply(this,args);}`,
+        functionDeclaration: `function(nonce, ...args){if(!this.isConnected || this.ownerDocument!==document || this.ownerDocument.documentElement.dataset.openpiBrowserDocument!==nonce)throw new Error('Stale frame element');return (${declaration}).apply(this,args);}`,
         arguments: [peer.nonce, ...args].map((value) => ({ value })),
         returnByValue: true,
       });
