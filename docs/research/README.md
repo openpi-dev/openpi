@@ -16,6 +16,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_RERUN_CONFIRMATION_RACE_2026-10-09.md`](WEB_RERUN_CONFIRMATION_RACE_2026-10-09.md) — same-child snapshot confirmation race, historical CI symptoms, bounded rechecking and epoch-owned cleanup; controlled store and mock E2E evidence with Windows test limitations ([#717](https://github.com/openpi-dev/openpi/issues/717)).
+
 - [`CHILD_RENDER_PARITY_2026-10-05.md`](CHILD_RENDER_PARITY_2026-10-05.md) — Session-owned child message/tool presentation, native paired component validation and host-private Mermaid/image boundaries ([#681](https://github.com/openpi-dev/openpi/issues/681)).
 
 - [`CODEMODE_TUI_PRESENTATION_2026-10-04.md`](CODEMODE_TUI_PRESENTATION_2026-10-04.md) — OpenPI presentation through Pi public tool renderer resolvers, compact summaries and raw-evidence boundaries ([#673](https://github.com/openpi-dev/openpi/issues/673)).

@@ -1821,11 +1821,21 @@ export function createWebStore(
             draftModel: null,
             sessionSwitching: true,
           });
-          const confirmed = await actions.refreshSnapshot({ epoch: nextEpoch });
+          let confirmed = await actions.refreshSnapshot({ epoch: nextEpoch });
+          if (
+            !confirmed &&
+            nextEpoch === sessionEpoch &&
+            get().selectedPath === result.sessionPath
+          ) {
+            // A concurrent refresh may supersede this confirmation. Recheck
+            // canonical state once without repeating the fork or prompt.
+            confirmed = await actions.refreshSnapshot({ epoch: nextEpoch });
+          }
           if (nextEpoch !== sessionEpoch) return false;
           const current = get().snapshot;
           if (
             !confirmed ||
+            get().selectedPath !== result.sessionPath ||
             current?.selectedSession?.id !== result.sessionId ||
             current.selectedSession.path !== result.sessionPath ||
             !isControlledSession(current)
@@ -1918,7 +1928,7 @@ export function createWebStore(
           set({ sessionForkPending: false });
           if (
             sessionEpoch === ownedEpoch &&
-            get().selectedPath !== anchor.sessionPath &&
+            ownedEpoch !== epoch &&
             get().sessionSwitching
           )
             set({ sessionSwitching: false });
