@@ -3,6 +3,7 @@
 - Status: validated at the source comparison, synthetic component preview, and local installed-asset boundaries. This is not an accepted architecture Decision or a fidelity Benchmark.
 - Created / verified: 2026-10-08.
 - Tracking: [#597](https://github.com/openpi-dev/openpi/issues/597).
+- Related PR: [#711](https://github.com/openpi-dev/openpi/pull/711).
 - OpenPI source: main `3cb2ecfe1bfbb98252651885311d309f83749428`; UI implementation `ce87d2666ee2779d472bb58ed64186a16b4cadd2`.
 - Supersedes: none. Earlier Web display-setting records retain their historical observations; this revision changes only the current outer-disclosure behavior documented in README and SETUP.
 
