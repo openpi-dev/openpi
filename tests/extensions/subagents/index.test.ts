@@ -862,6 +862,118 @@ async function withTempDir(run: (directory: string) => Promise<void>) {
   }
 }
 
+async function readAgentTypeStartupNotices(cwd: string) {
+  const notices: Array<{ message: string; severity: string }> = [];
+  let sessionStart:
+    | ((event: unknown, ctx: ExtensionContext) => unknown)
+    | undefined;
+  let sessionShutdown: (() => unknown) | undefined;
+  const pi = {
+    on(event: string, handler: unknown) {
+      if (event === "session_start") {
+        sessionStart = handler as typeof sessionStart;
+      }
+      if (event === "session_shutdown") {
+        sessionShutdown = handler as typeof sessionShutdown;
+      }
+    },
+    events: { on() {} },
+    registerTool() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
+    registerMessageRenderer() {},
+    registerEntryRenderer() {},
+    registerCommand() {},
+  } as unknown as ExtensionAPI;
+
+  subagents(pi);
+  assert.ok(sessionStart);
+  await sessionStart({}, {
+    cwd,
+    hasUI: true,
+    isProjectTrusted: () => true,
+    sessionManager: emptySessionManager,
+    ui: {
+      notify(message: string, severity: string) {
+        notices.push({ message, severity });
+      },
+      setStatus() {},
+      setWidget() {},
+    },
+  } as unknown as ExtensionContext);
+  await sessionShutdown?.();
+  return notices;
+}
+
+test("session start reports valid built-in and project overrides as info", async () => {
+  await withTempDir(async (cwd) => {
+    const globalDir = path.join(cwd, "agent", "agents");
+    const projectDir = path.join(cwd, ".pi", "agents");
+    await mkdir(globalDir, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      path.join(globalDir, "explorer.md"),
+      "---\nname: explorer\ndescription: Global override.\ntools: [read]\n---\nGlobal.",
+    );
+    await writeFile(
+      path.join(projectDir, "explorer.md"),
+      "---\nname: explorer\ndescription: Project override.\ntools: [read]\n---\nProject.",
+    );
+
+    const notices = await readAgentTypeStartupNotices(cwd);
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]?.severity, "info");
+    assert.match(
+      notices[0]?.message ?? "",
+      /0 problems, 2 informational notices/,
+    );
+    assert.match(notices[0]?.message ?? "", /from built-in:explorer/);
+    assert.match(
+      notices[0]?.message ?? "",
+      /\.pi[\\/]agents[\\/]explorer\.md: overrides the agent type/,
+    );
+  });
+});
+
+test("session start keeps mixed override and error diagnostics at warning", async () => {
+  await withTempDir(async (cwd) => {
+    const globalDir = path.join(cwd, "agent", "agents");
+    const projectDir = path.join(cwd, ".pi", "agents");
+    await mkdir(globalDir, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      path.join(globalDir, "explorer.md"),
+      "---\nname: explorer\ndescription: Global override.\ntools: [read]\n---\nGlobal.",
+    );
+    await writeFile(
+      path.join(globalDir, "unknown-tool.md"),
+      "---\nname: unknown-tool\ndescription: Unknown tool.\ntools: [read, gerp]\n---\nBody.",
+    );
+    await writeFile(
+      path.join(projectDir, "explorer.md"),
+      "---\nname: explorer\ndescription: Project override.\ntools: [read]\n---\nProject.",
+    );
+    await writeFile(
+      path.join(projectDir, "implementer.md"),
+      "---\nname: implementer\ndescription: Malformed override.\ntool: [read]\n---\nBody.",
+    );
+
+    const notices = await readAgentTypeStartupNotices(cwd);
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]?.severity, "warning");
+    assert.match(
+      notices[0]?.message ?? "",
+      /3 problems, 2 informational notices/,
+    );
+    assert.match(notices[0]?.message ?? "", /unrecognized tool "gerp"/);
+    assert.match(
+      notices[0]?.message ?? "",
+      /blocks fallback to built-in:implementer/,
+    );
+    assert.match(notices[0]?.message ?? "", /from built-in:explorer/);
+  });
+});
+
 test("session_start re-registers agent types for its cwd and live trust decision", async () => {
   await withTempDir(async (cwd) => {
     await mkdir(path.join(cwd, ".pi", "agents"), { recursive: true });

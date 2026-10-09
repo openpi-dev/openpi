@@ -218,6 +218,10 @@ test("an unrecognized tool name is reported but still applied", () => {
     result.diagnostics[0]?.message ?? "",
     /unrecognized tool "gerp"/,
   );
+  assert.match(
+    formatAgentTypeDiagnostics(result.diagnostics) ?? "",
+    /1 problem/,
+  );
 });
 
 test("an over-long body is rejected rather than silently truncated", () => {
@@ -286,7 +290,7 @@ test("a project agent type overrides the global one of the same name", async () 
       global: { "explorer.md": BUILT_IN_EXPLORER },
       project: {
         "explorer.md":
-          "---\nname: explorer\ndescription: Project override.\ntools: [read]\n---\nProject body.",
+          "---\nname: explorer\ndescription: Project override.\ntools: [read]\nmodel: project/model\nreasoning_effort: high\n---\nProject body.",
       },
     });
 
@@ -299,10 +303,21 @@ test("a project agent type overrides the global one of the same name", async () 
     assert.equal(agentTypes.size, 4);
     assert.deepEqual(agentTypes.get("explorer")?.tools, ["read"]);
     assert.equal(agentTypes.get("explorer")?.planningCompatible, undefined);
+    assert.equal(agentTypes.get("explorer")?.model, "project/model");
+    assert.equal(agentTypes.get("explorer")?.reasoningEffort, "high");
+    assert.deepEqual(
+      diagnostics.map((entry) =>
+        "severity" in entry ? entry.severity : undefined,
+      ),
+      ["info", "info"],
+    );
     // Global replaces the built-in, then the trusted project replaces global.
     const messages = diagnostics.map((entry) => entry.message).join("\n");
     assert.match(messages, /from built-in:explorer/);
     assert.match(messages, /from .*agent[\\/]agents[\\/]explorer\.md/);
+    const notice = formatAgentTypeDiagnostics(diagnostics) ?? "";
+    assert.match(notice, /0 problems, 2 informational notices/);
+    assert.match(notice, /explorer\.md: overrides the agent type/);
   });
 });
 
@@ -358,6 +373,10 @@ test("an unreadable precedence layer blocks every broader fallback", async () =>
     assert.match(
       loaded.diagnostics.map((entry) => entry.message).join("\n"),
       /all lower-precedence definitions are blocked/,
+    );
+    assert.match(
+      formatAgentTypeDiagnostics(loaded.diagnostics) ?? "",
+      /1 problem/,
     );
   });
 });
@@ -492,6 +511,10 @@ Do not write.
     assert.match(
       loaded.diagnostics.map((entry) => entry.message).join("\n"),
       /blocks fallback to built-in:implementer/,
+    );
+    assert.match(
+      formatAgentTypeDiagnostics(loaded.diagnostics) ?? "",
+      /2 problems/,
     );
   });
 });

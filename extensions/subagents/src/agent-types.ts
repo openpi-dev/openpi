@@ -221,9 +221,11 @@ export function roleModelForAgentType(
 }
 
 export interface AgentTypeDiagnostic {
-  /** File the problem came from, or the directory for a scan failure. */
+  /** File the diagnostic came from, or the directory for a scan failure. */
   readonly source: string;
   readonly message: string;
+  /** Omitted diagnostics are warnings; valid overrides are informational. */
+  readonly severity?: "info" | "warning";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -530,6 +532,7 @@ export function loadAgentTypes(options: LoadAgentTypesOptions) {
         diagnostics.push({
           source: agentType.source,
           message: `overrides the agent type of the same name from ${shadowed.source}`,
+          severity: "info",
         });
       }
       agentTypes.set(agentType.name, agentType);
@@ -539,14 +542,22 @@ export function loadAgentTypes(options: LoadAgentTypesOptions) {
   return { agentTypes, diagnostics };
 }
 
-/** One-line-per-problem notice, or undefined when everything loaded cleanly. */
+/** One-line-per-diagnostic notice, or undefined when everything loaded cleanly. */
 export function formatAgentTypeDiagnostics(
   diagnostics: readonly AgentTypeDiagnostic[],
 ) {
   if (diagnostics.length === 0) return undefined;
+  const problemCount = diagnostics.filter(
+    (entry) => entry.severity !== "info",
+  ).length;
+  const informationalCount = diagnostics.length - problemCount;
   return sanitizeTerminalText(
     [
-      `Agent types: ${diagnostics.length} problem${diagnostics.length === 1 ? "" : "s"}.`,
+      `Agent types: ${problemCount} problem${problemCount === 1 ? "" : "s"}${
+        informationalCount > 0
+          ? `, ${informationalCount} informational notice${informationalCount === 1 ? "" : "s"}`
+          : ""
+      }.`,
       ...diagnostics.map((entry) => `- ${entry.source}: ${entry.message}`),
     ].join("\n"),
   );
