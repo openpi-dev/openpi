@@ -3,7 +3,7 @@
 - Status: `validated`
 - Created: 2026-10-09
 - Last verified: 2026-10-09; complete repository gates, two Chrome regressions and local theme/layout/focus checks; no release or new provider acceptance claimed
-- Source boundary: OpenPI `978a1c431bd99e7ab36f7ab422a0fb71b93fffda`, combining the side-conversation implementation `87959c5d` and existing PR work through `bc354538`
+- Source boundary: OpenPI `7282f681d51e9b4904b10b94c615022355a247b1`, combining the side-conversation implementation `87959c5d` and existing PR work through `b976ed23`
 - Related Issue: [#730](https://github.com/openpi-dev/openpi/issues/730)
 - Related PR: [#711](https://github.com/openpi-dev/openpi/pull/711)
 - Supersedes: none
@@ -24,7 +24,9 @@ When the workbar occupies the content area at a narrow width or the main convers
 
 ## Validation boundary
 
-`bun run check` and the complete `bun run test` passed on the combined source: 2,324 Node tests passed with 9 platform skips, and all 1,181 UI tests passed across 83 files. The two Chrome regressions passed: the existing native action-fixture lifecycle covers create, follow-up and stop while the parent runs; the new regression verifies one visible editor at 783px and 320px, focus without a rectangular inner outline, retained independent drafts, browser-tool switching, return-to-chat focus and restored wide panes. These fixture-based checks do not claim a new live model execution.
+`bun run check` and the complete `bun run test` passed on the first combined source `978a1c43`: 2,324 Node tests passed with 9 platform skips, and all 1,181 UI tests passed across 83 files. The two Chrome regressions passed: the existing native action-fixture lifecycle covers create, follow-up and stop while the parent runs; the new regression verifies one visible editor at 783px and 320px, focus without a rectangular inner outline, retained independent drafts, browser-tool switching, return-to-chat focus and restored wide panes. These fixture-based checks do not claim a new live model execution.
+
+Delivery integration `7282f681` also incorporates the latest accepted chronological-activity, manual-reading and typography work through `b976ed23`. The side-conversation source, scoped stylesheet and browser regression remain unchanged from the first combined source. The complete gates passed again: 2,324 Node passes with 9 platform skips and 1,196 UI passes across 83 files; both Chrome side-conversation regressions also passed again. The preview was restarted at this delivery revision, its unique package source verified and its restored dark view confirmed to have one visible editor and an empty draft at 320px.
 
 The local 30142 preview was restarted at the named combined revision after confirming `pi list` contains one OpenPI source pointing to that checkout. Actual UI inspection covers light/dark states, 320px and 1440px layouts, disabled and ready send controls, Shift+Enter, keyboard button focus and long drafts. A 20-line draft grows to the 180px editor bound and scrolls inside it; at 320px the document remains 320px wide, the composer is 280px wide and its send control stays contained. The temporary appearance setting and viewport override were restored and inspection drafts cleared.
 
