@@ -1,14 +1,14 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
 import {
   ArrowLeft,
+  ArrowUp,
   ChevronRight,
   FileDiff,
   FolderOpen,
   Globe2,
-  MessagesSquare,
+  MessageCirclePlus,
   PanelLeftOpen,
   Plus,
-  Send,
   SquareTerminal,
   StopCircle,
   X,
@@ -59,7 +59,7 @@ import {
 const launcherTools = [
   {
     kind: "side-conversation" as const,
-    icon: MessagesSquare,
+    icon: MessageCirclePlus,
     title: "sideConversation",
     description: "sideConversationDescription",
   },
@@ -153,6 +153,12 @@ function SideConversationPanel({
   const items = (activity?.items ?? []).filter((item) => item.origin === "btw");
   const selected = items.find((item) => item.id === selectedId);
   const status = selected?.status ?? lastStatus;
+  const inputLabel = t(
+    selectedId ? "continueSideConversation" : "startSideConversation",
+  );
+  const submitLabel = t(
+    busy ? "sideConversationPending" : selectedId ? "send" : "start",
+  );
   const selectConversation = (id: string | null) => {
     navigation.current++;
     setSelectedId(id);
@@ -269,9 +275,9 @@ function SideConversationPanel({
           />
         </>
       ) : (
-        <div className="side-conversation-list">
+        <div className="side-conversation-list" data-empty={items.length === 0}>
           <div className="side-conversation-intro">
-            <MessagesSquare aria-hidden="true" />
+            <MessageCirclePlus aria-hidden="true" />
             <h3>{t("sideConversation")}</h3>
             <p>{t("sideConversationDescription")}</p>
           </div>
@@ -308,11 +314,8 @@ function SideConversationPanel({
         <textarea
           value={draft}
           disabled={busy}
-          placeholder={
-            selectedId
-              ? t("continueSideConversation")
-              : t("startSideConversation")
-          }
+          aria-label={inputLabel}
+          placeholder={inputLabel}
           onChange={(event) => {
             const value = event.currentTarget.value;
             setDrafts((current) => ({ ...current, [selectedId ?? ""]: value }));
@@ -344,11 +347,13 @@ function SideConversationPanel({
               <StopCircle aria-hidden="true" /> {t("stop")}
             </button>
           )}
-          <button type="submit" disabled={busy || !draft.trim()}>
-            <Send aria-hidden="true" />
-            {t(
-              busy ? "sideConversationPending" : selectedId ? "send" : "start",
-            )}
+          <button
+            type="submit"
+            disabled={busy || !draft.trim()}
+            aria-label={submitLabel}
+            title={submitLabel}
+          >
+            <ArrowUp aria-hidden="true" />
           </button>
         </div>
       </form>

@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_SIDE_CONVERSATION.md`](WEB_SIDE_CONVERSATION.md) — scoped side-chat appearance, centered empty state, unified composer and native Pi lifecycle preservation (#730).
+
 - [`WEB_BROWSER_CHROME.md`](WEB_BROWSER_CHROME.md) — scoped browser chrome refinement, retained panel hierarchy, theme-aware surfaces and visual ablation (#729).
 
 - [`WEB_SESSION_USAGE.md`](WEB_SESSION_USAGE.md) — locally validated compact usage strip, native context versus cumulative totals, progressive identity disclosure and shared popover lifecycle (#728).
