@@ -43,13 +43,17 @@ function detectImageMimeType(
     return "image/jpeg";
   }
   if (bytes.length >= 6) {
-    const signature = Buffer.from(bytes.subarray(0, 6)).toString("ascii");
-    if (signature === "GIF87a" || signature === "GIF89a") return "image/gif";
+    const signature = Buffer.from(bytes.subarray(0, 6));
+    if (
+      signature.equals(Buffer.from("GIF87a")) ||
+      signature.equals(Buffer.from("GIF89a"))
+    )
+      return "image/gif";
   }
   if (
     bytes.length >= 12 &&
-    Buffer.from(bytes.subarray(0, 4)).toString("ascii") === "RIFF" &&
-    Buffer.from(bytes.subarray(8, 12)).toString("ascii") === "WEBP"
+    Buffer.from(bytes.subarray(0, 4)).equals(Buffer.from("RIFF")) &&
+    Buffer.from(bytes.subarray(8, 12)).equals(Buffer.from("WEBP"))
   ) {
     return "image/webp";
   }

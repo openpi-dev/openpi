@@ -3539,6 +3539,48 @@ test("admits the advertised image byte limits through the HTTP body boundary", a
   }
 });
 
+test("prompt image admission requires literal GIF and WebP signature bytes", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-image-signatures-"));
+  let dispatches = 0;
+  const runtime = testRuntime(cwd, async () => {
+    dispatches++;
+    return { pendingFollowUps: 0 };
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const post = (mimeType: string, bytes: Buffer) =>
+    fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
+        content: "Signature fixture; no model call.",
+        images: [{ mimeType, data: bytes.toString("base64") }],
+      }),
+    });
+  try {
+    for (const signature of ["GIF87a", "GIF89a", "RIFF\0\0\0\0WEBP"]) {
+      const mime = signature.startsWith("GIF") ? "image/gif" : "image/webp";
+      const bytes = Buffer.from(signature);
+      for (let index = 0; index < bytes.length; index++) {
+        if (signature.startsWith("RIFF") && index >= 4 && index < 8) continue;
+        const corrupted = Buffer.from(bytes);
+        corrupted[index]! |= 0x80;
+        const response = await post(mime, corrupted);
+        assert.equal(response.status, 400, `signature byte ${index}`);
+        await response.arrayBuffer();
+      }
+      const response = await post(mime, bytes);
+      assert.equal(response.status, 202);
+      await response.arrayBuffer();
+    }
+    assert.equal(dispatches, 3);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("replays one prompt admission after a browser timeout", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-retry-"));
   let sendCalls = 0;
