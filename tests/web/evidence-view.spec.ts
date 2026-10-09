@@ -93,6 +93,7 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
 
 it("opens resolved file evidence through the active artifact context", () => {
   const open = vi.fn();
+  const identity = "/workspace/a\u200bb.md";
   render(
     createElement(
       ArtifactContext.Provider,
@@ -103,8 +104,8 @@ it("opens resolved file evidence through the active artifact context", () => {
           name: "read",
           arguments: JSON.stringify({ path: "report.md" }),
           evidenceArguments: {
-            path: "report.md",
-            resolvedPath: "/workspace/report.md",
+            path: "a\u200bb.md",
+            resolvedPath: identity,
           },
         },
         result: { content: "report", isError: false },
@@ -113,8 +114,8 @@ it("opens resolved file evidence through the active artifact context", () => {
   );
 
   fireEvent.click(screen.getByText("read"));
-  fireEvent.click(screen.getByRole("button", { name: "/workspace/report.md" }));
-  expect(open).toHaveBeenCalledWith("/workspace/report.md");
+  fireEvent.click(screen.getByRole("button", { name: "/workspace/ab.md" }));
+  expect(open).toHaveBeenCalledWith(identity);
 });
 
 it("opens local links using authenticated API and stops preview reads on close", async () => {

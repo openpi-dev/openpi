@@ -1,4 +1,5 @@
 import type { WebLiveMessage, WebMessagePart } from "./types.ts";
+import { sanitizeTerminalText } from "../../extensions/shared/terminal-text.ts";
 
 export const EVIDENCE_MAX_BYTES = 12 * 1024;
 export const EVIDENCE_MAX_LINES = 300;
@@ -15,7 +16,10 @@ export function projectEvidenceArguments(input: unknown) {
   const result: Record<string, string | number> = {};
   for (const key of ["path", "command", "offset", "limit", "id"]) {
     const value = Object.getOwnPropertyDescriptor(source, key)?.value;
-    if (typeof value === "string") result[key] = evidenceText(value).text;
+    // Paths are later resolved by the artifact reader. Keep their exact identity
+    // here; display projections are sanitized separately below.
+    if (typeof value === "string")
+      result[key] = key === "path" ? value : evidenceText(value).text;
     else if (typeof value === "number" && Number.isSafeInteger(value)) result[key] = value;
   }
   return result;
@@ -25,10 +29,7 @@ export function projectEvidenceArguments(input: unknown) {
 export function evidenceText(value: string, tail = false) {
   // Bound work before stripping terminal controls, including OSC hyperlinks.
   const candidate = tail ? value.slice(-EVIDENCE_MAX_BYTES * 2) : value.slice(0, EVIDENCE_MAX_BYTES * 2);
-  const clean = candidate
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)/gu, "")
-    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/gu, "");
+  const clean = sanitizeTerminalText(candidate);
   const lines = clean.split("\n");
   const limited = (tail ? lines.slice(-EVIDENCE_MAX_LINES) : lines.slice(0, EVIDENCE_MAX_LINES)).join("\n");
   const bytes = new TextEncoder().encode(limited);
@@ -147,8 +148,10 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
     kind, state, processState: terminal?.state ?? (call.name === "bash" && result?.isError === false ? "returned" : call.name === "bash" && liveState === "running" ? "running" : "unknown"), output: readFooter ? output.text.slice(0, readFooter.index) : output.text, truncated: truncated || diff?.truncated === true,
     readRecovery: readFooter?.[1],
     numberLines: call.name === "read" && result?.isError === false && evidenceRecord(details.truncation).firstLineExceedsLimit !== true && Boolean(output.text),
-    path: typeof args.path === "string" ? evidenceText(args.path).text : undefined,
-    resolvedPath: typeof args.resolvedPath === "string" ? evidenceText(args.resolvedPath).text : undefined,
+    path: typeof args.path === "string" ? args.path : undefined,
+    displayPath: typeof args.path === "string" ? evidenceText(args.path).text : undefined,
+    resolvedPath: typeof args.resolvedPath === "string" ? args.resolvedPath : undefined,
+    displayResolvedPath: typeof args.resolvedPath === "string" ? evidenceText(args.resolvedPath).text : undefined,
     command: typeof args.command === "string" ? evidenceText(args.command).text : undefined,
     offset, diff: diff?.text, tests,
     change: result?.isError === false && ["created", "overwritten", "unchanged"].includes(String(details.change)) ? String(details.change) : undefined,
