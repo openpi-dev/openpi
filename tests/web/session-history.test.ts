@@ -1056,6 +1056,151 @@ test("item hydration rejects entries outside the selected native branch", async 
   );
 });
 
+test("thinking item pages recover only the exact visible native assistant part with bounded Unicode pages", async (t) => {
+  const { manager, adapter, runtime } = await fixture(t);
+  const text = `${"a".repeat(31_999)}😀${"完整思考".repeat(10_000)}`;
+  const entryId = manager.appendMessage({
+    role: "assistant",
+    content: [
+      { type: "text", text: "Public answer" },
+      { type: "thinking", thinking: "Another note" },
+      {
+        type: "thinking",
+        thinking: text,
+        thinkingSignature: "opaque signature must stay private",
+      },
+    ],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    stopReason: "stop",
+    usage,
+    timestamp: 1,
+  });
+  const session = (await adapter.getSnapshot()).selectedSession!;
+  const part = session.entries.find((entry) => entry.id === entryId)?.message
+    ?.parts?.[2];
+  assert.equal(part?.type, "thinking");
+  if (part?.type === "thinking") {
+    assert.equal(part.sourcePartIndex, 2);
+    assert.equal(part.textTruncated, true);
+  }
+  let cursor = 0;
+  let restored = "";
+  while (true) {
+    const result = await adapter.getSessionItem(
+      session.id,
+      session.path,
+      entryId,
+      cursor,
+      "thinking",
+      2,
+    );
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") break;
+    assert.equal(result.page.partIndex, 2);
+    assert.ok(result.page.text.length <= 32_000);
+    restored += result.page.text;
+    if (result.page.nextCursor === null) break;
+    assert.ok(result.page.nextCursor > cursor);
+    cursor = result.page.nextCursor;
+  }
+  assert.equal(restored, text);
+  for (const invalid of [undefined, -1, 0, 1.5, 3])
+    assert.equal(
+      (
+        await adapter.getSessionItem(
+          session.id,
+          session.path,
+          entryId,
+          0,
+          "thinking",
+          invalid,
+        )
+      ).status,
+      "changed",
+    );
+  assert.equal(
+    (
+      await adapter.getSessionItem(
+        "other-session",
+        session.path,
+        entryId,
+        0,
+        "thinking",
+        2,
+      )
+    ).status,
+    "changed",
+  );
+  assert.equal(
+    (
+      await adapter.getSessionItem(
+        session.id,
+        session.path,
+        entryId,
+        text.length + 1,
+        "thinking",
+        2,
+      )
+    ).status,
+    "invalid_cursor",
+  );
+  const ordinary = await adapter.getSessionItem(
+    session.id,
+    session.path,
+    entryId,
+    0,
+  );
+  assert.equal(ordinary.status, "ok");
+  if (ordinary.status === "ok")
+    assert.equal(ordinary.page.text, "Public answer");
+  const host = new WebHost({ runtime, token: "ab".repeat(32) });
+  await host.start();
+  t.after(() => host.stop());
+  const headers = { Authorization: `Bearer ${"ab".repeat(32)}` };
+  const query = new URLSearchParams({
+    sessionId: session.id,
+    sessionPath: session.path,
+    entryId,
+    cursor: "0",
+    purpose: "thinking",
+    partIndex: "2",
+  });
+  assert.equal(
+    (await fetch(`${host.origin}/api/session/item?${query}`)).status,
+    401,
+  );
+  assert.equal(
+    (await fetch(`${host.origin}/api/session/item?${query}`, { headers }))
+      .status,
+    200,
+  );
+  for (const partIndex of ["", "-1", "1.5", "1000000"]) {
+    const invalid = new URLSearchParams(query);
+    invalid.set("partIndex", partIndex);
+    assert.equal(
+      (await fetch(`${host.origin}/api/session/item?${invalid}`, { headers }))
+        .status,
+      400,
+    );
+  }
+  assert.equal(
+    (
+      await fetch(`${host.origin}/api/session/item?${query}&partIndex=2`, {
+        headers,
+      })
+    ).status,
+    400,
+  );
+  query.delete("purpose");
+  assert.equal(
+    (await fetch(`${host.origin}/api/session/item?${query}`, { headers }))
+      .status,
+    400,
+  );
+});
+
 test("item hydration includes visible native command input without exposing tool results", async (t) => {
   const { manager, adapter } = await fixture(t);
   const content = "/openpi-setup " + "model ".repeat(3_000);

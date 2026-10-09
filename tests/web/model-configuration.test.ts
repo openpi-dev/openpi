@@ -23,6 +23,7 @@ import {
 } from "../../web/runtime/model-configuration.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import type { WebModelConfiguration } from "../../web/runtime/types.ts";
+import { validProviderDiscovery } from "../../web/runtime/provider-model-discovery.ts";
 
 const model: WebModelConfiguration = {
   provider: "local-fixture",
@@ -34,6 +35,72 @@ const model: WebModelConfiguration = {
   contextWindow: 128000,
   maxTokens: 4096,
 };
+
+test("model, provider and discovery APIs require literal string identities", () => {
+  for (const api of [
+    "openai-responses",
+    "openai-completions",
+    "anthropic-messages",
+  ]) {
+    const valid = { ...model, api };
+    const provider = (apiValue: unknown) => ({
+      action: "save",
+      configuration: {
+        provider: model.provider,
+        name: "Fixture",
+        baseUrl: model.baseUrl,
+        api: apiValue,
+        models: [valid],
+      },
+    });
+    assert.equal(validModelConfiguration(valid), true);
+    assert.equal(validProviderConfigurationChange(provider(api)), true);
+    assert.equal(
+      validProviderDiscovery({
+        provider: model.provider,
+        baseUrl: model.baseUrl,
+        api,
+      }),
+      true,
+    );
+    for (const malformed of [[api], null, {}, 1]) {
+      assert.equal(
+        validModelConfiguration({ ...model, api: malformed }),
+        false,
+      );
+      assert.equal(
+        validProviderConfigurationChange(provider(malformed)),
+        false,
+      );
+      assert.equal(
+        validProviderDiscovery({
+          provider: model.provider,
+          baseUrl: model.baseUrl,
+          api: malformed,
+        }),
+        false,
+      );
+    }
+  }
+});
+
+test("a malformed API cannot rewrite native model configuration bytes", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-model-api-type-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "models.json");
+  const original = '{"providers":{},"future":{"keep":true}}\n';
+  await writeFile(path, original);
+  const before = await readModelConfigurations(directory);
+  const malformed = {
+    ...model,
+    api: [model.api],
+  } as unknown as WebModelConfiguration;
+  await assert.rejects(
+    saveModelConfiguration(directory, before.revision, malformed),
+    /Invalid model configurations/u,
+  );
+  assert.equal(await readFile(path, "utf8"), original);
+});
 
 test("provider card saves and removals preserve native fields, credentials and other providers", async () => {
   const directory = await mkdtemp(join(tmpdir(), "openpi-provider-card-"));

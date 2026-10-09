@@ -392,7 +392,7 @@ export type WebMessagePart =
       previewUrl?: string;
       sourcePartIndex?: number;
     }
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; text: string; sourcePartIndex?: number; textTruncated?: true }
   | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
 
 export interface WebSnapshotTruncation {
@@ -625,9 +625,12 @@ function boundedStructuredValue(
     if (value.length > length) budget.truncated = true;
     const projected: unknown[] = [];
     for (let index = 0; index < length; index++) {
+      if (budget.nodes <= 0 || budget.bytes <= 0) {
+        budget.truncated = true;
+        break;
+      }
       const item = boundedStructuredValue(value[index], budget, depth + 1);
       if (item !== undefined) projected.push(item);
-      if (budget.nodes <= 0 || budget.bytes <= 0) break;
     }
     return projected;
   }
@@ -639,6 +642,10 @@ function boundedStructuredValue(
       break;
     }
     if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    if (budget.nodes <= 0 || budget.bytes <= 0) {
+      budget.truncated = true;
+      break;
+    }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor || !("value" in descriptor)) {
       budget.truncated = true;
@@ -646,8 +653,14 @@ function boundedStructuredValue(
     }
     const boundedKey = consumeStructuredText(key, budget);
     const item = boundedStructuredValue(descriptor.value, budget, depth + 1);
-    if (item !== undefined) projected[boundedKey] = item;
-    if (budget.nodes <= 0 || budget.bytes <= 0) break;
+    if (item !== undefined) {
+      Object.defineProperty(projected, boundedKey, {
+        value: item,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
   }
   return projected;
 }
@@ -751,7 +764,8 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       typeof typed.thinking === "string"
     ) {
       const text = boundedTextProjection(typed.thinking, WEB_MAX_TEXT);
-      projected = { type: "thinking", text: text.value };
+      projected = { type: "thinking", text: text.value, sourcePartIndex: index,
+        ...(text.truncated ? { textTruncated: true as const } : {}) };
       textTruncated ||= text.truncated;
     } else if (typed.type === "toolCall") {
       const argumentsBudget: StructuredBudget = {

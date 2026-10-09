@@ -6,6 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { listenBrowserPort } from "./browser-port.ts";
 import { validProviderDiscovery } from "../runtime/provider-model-discovery.ts";
 import {
   createServer,
@@ -120,12 +121,12 @@ function hasImageSignature(bytes: Buffer, mimeType: WebPromptImage["mimeType"]) 
   if (mimeType === "image/jpeg")
     return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (mimeType === "image/gif") {
-    const signature = bytes.subarray(0, 6).toString("ascii");
-    return signature === "GIF87a" || signature === "GIF89a";
+    const signature = bytes.subarray(0, 6);
+    return signature.equals(Buffer.from("GIF87a")) || signature.equals(Buffer.from("GIF89a"));
   }
   return (
-    bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
-    bytes.subarray(8, 12).toString("ascii") === "WEBP"
+    bytes.subarray(0, 4).equals(Buffer.from("RIFF")) &&
+    bytes.subarray(8, 12).equals(Buffer.from("WEBP"))
   );
 }
 
@@ -394,14 +395,7 @@ export class WebHost {
 
   async start() {
     await this.adapter.initialize();
-    await new Promise<void>((resolve, reject) => {
-      this.server.once("error", reject);
-      this.server.listen(this.requestedPort, HOST, () => resolve());
-    });
-    const address = this.server.address();
-    if (!address || typeof address === "string")
-      throw new Error("Web host did not expose a TCP port");
-    this.port = address.port;
+    this.port = await listenBrowserPort(this.server, this.requestedPort, HOST);
     this.publish("web_host_started", {
       port: this.port,
       ...(this.runtime.workspaceSelected === true
@@ -2235,7 +2229,7 @@ export class WebHost {
     }
     if (url.pathname === "/api/session/item") {
       if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
-      const keys = ["sessionId", "sessionPath", "entryId", "cursor", "purpose"] as const;
+      const keys = ["sessionId", "sessionPath", "entryId", "cursor", "purpose", "partIndex"] as const;
       const required = keys.slice(0, 4);
       if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
         required.some((key) => {
@@ -2243,14 +2237,18 @@ export class WebHost {
           return url.searchParams.getAll(key).length !== 1 || !value ||
             value.length > (key === "sessionPath" ? 4096 : 128) || /[\u0000-\u001f]/u.test(value);
         }) || !/^(0|[1-9]\d{0,9})$/u.test(url.searchParams.get("cursor") ?? "") ||
-        (url.searchParams.has("purpose") && (url.searchParams.getAll("purpose").length !== 1 || url.searchParams.get("purpose") !== "plan")))
+        (url.searchParams.has("purpose") && (url.searchParams.getAll("purpose").length !== 1 || !["plan", "thinking"].includes(url.searchParams.get("purpose")!))) ||
+        (url.searchParams.get("purpose") === "thinking"
+          ? url.searchParams.getAll("partIndex").length !== 1 || !/^(0|[1-9]\d{0,5})$/u.test(url.searchParams.get("partIndex") ?? "")
+          : url.searchParams.has("partIndex")))
         return this.json(response, 400, { code: "INVALID_SESSION_ITEM_REQUEST", error: "an exact Session item and bounded cursor are required" });
       const result = await this.adapter.getSessionItem(
         url.searchParams.get("sessionId")!,
         url.searchParams.get("sessionPath")!,
         url.searchParams.get("entryId")!,
         Number(url.searchParams.get("cursor")),
-        url.searchParams.get("purpose") === "plan" ? "plan" : undefined,
+        url.searchParams.get("purpose") === "thinking" ? "thinking" : url.searchParams.get("purpose") === "plan" ? "plan" : undefined,
+        url.searchParams.has("partIndex") ? Number(url.searchParams.get("partIndex")) : undefined,
       );
       if (result.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is not in the selected workspace" });
       if (result.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "Session item is no longer on this branch" });

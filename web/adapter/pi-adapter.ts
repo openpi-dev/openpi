@@ -1589,7 +1589,7 @@ export class PiWebAdapter {
     return { data: image.data, mimeType: image.mimeType };
   }
 
-  async getSessionItem(sessionId: string, path: string, entryId: string, cursor: number, purpose?: "plan") {
+  async getSessionItem(sessionId: string, path: string, entryId: string, cursor: number, purpose?: "plan" | "thinking", partIndex?: number) {
     const summary = (await this.listSessions(path)).find((session) => session.path === path);
     if (!summary) return { status: "not_found" as const };
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
@@ -1600,7 +1600,18 @@ export class PiWebAdapter {
     if (!entry) return { status: "changed" as const };
     let content: unknown;
     let planStatus: "ready" | undefined;
-    if (purpose === "plan") {
+    if (purpose === "thinking") {
+      if (entry.type !== "message" || entry.message.role !== "assistant" ||
+        !Array.isArray(entry.message.content) || !Number.isSafeInteger(partIndex) || partIndex! < 0)
+        return { status: "changed" as const };
+      const part = entry.message.content[partIndex!];
+      if (part?.type !== "thinking" || typeof part.thinking !== "string")
+        return { status: "changed" as const };
+      // Read only the provider's saved, visible thinking text. Signatures and
+      // other parts are never exposed through this explicit projection.
+      content = part.thinking;
+    } else if (partIndex !== undefined) return { status: "changed" as const };
+    else if (purpose === "plan") {
       if (entry.type !== "message" || entry.message.role !== "toolResult" ||
         entry.message.toolName !== "plan_ready" || entry.message.isError !== false)
         return { status: "changed" as const };
@@ -1618,7 +1629,8 @@ export class PiWebAdapter {
       content = entry.data.text;
     else return { status: "changed" as const };
     const page = visibleTextPage(content, cursor);
-    return page ? { status: "ok" as const, page: { entryId, ...page, ...(planStatus ? { planStatus } : {}) } }
+    return page ? { status: "ok" as const, page: { entryId, ...page, ...(planStatus ? { planStatus } : {}),
+      ...(purpose === "thinking" ? { partIndex } : {}) } }
       : { status: "invalid_cursor" as const };
   }
 }

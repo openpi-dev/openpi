@@ -216,3 +216,49 @@ test("successful foreground completion does not invent an exit code or complete 
     "unknown",
   );
 });
+
+test("background process outcomes require literal status identities and integral exit codes", () => {
+  for (const status of [
+    ["done"],
+    ["failed"],
+    ["killed"],
+    ["timed_out"],
+    null,
+    {},
+    1,
+  ]) {
+    const evidence = projectToolEvidence(call("bg_status"), {
+      content: "status",
+      isError: false,
+      details: { status, exitCode: 7, signal: "SIGTERM" },
+    });
+    assert.equal(evidence.state, "returned");
+    assert.equal(evidence.processState, "unknown");
+    assert.equal(evidence.exitCode, undefined);
+    assert.equal(evidence.signal, undefined);
+  }
+  for (const [status, expected] of [
+    ["done", "returned"],
+    ["failed", "failed"],
+    ["killed", "cancelled"],
+    ["timed_out", "timed_out"],
+    ["running", "running"],
+  ]) {
+    const evidence = projectToolEvidence(call("bg_status"), {
+      content: "status",
+      isError: false,
+      details: { status, exitCode: 7 },
+    });
+    assert.equal(evidence.processState, expected);
+    assert.equal(evidence.exitCode, status === "running" ? undefined : 7);
+  }
+  for (const exitCode of [0.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN]) {
+    assert.equal(
+      projectToolEvidence(call("bg_status"), {
+        content: "status",
+        details: { status: "failed", exitCode },
+      }).exitCode,
+      undefined,
+    );
+  }
+});

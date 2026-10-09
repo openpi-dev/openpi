@@ -140,6 +140,8 @@ export interface WebActiveTurn {
   sessionId: string;
   commandId: string;
   epoch: number;
+  /** Native input owning the run; steering does not replace this identity. */
+  promptEntryId?: string;
   /** Actual execution start; admission/queue waiting is excluded. */
   startedAt?: number;
   /** Monotonic elapsed time captured with this projection. */
@@ -163,6 +165,8 @@ export interface WebSessionExecution {
   liveTools: LiveToolEvidence[];
   liveToolsOmitted: number;
   activeTurn?: WebActiveTurn;
+  /** Pi retry facts survive a Web reconnect; unknown counts stay omitted. */
+  retry?: { attempt?: number; maxAttempts?: number; errorMessage?: string };
   /** Native compaction observation; completion history remains in Pi entries. */
   compaction?: {
     state: "running" | "completed" | "failed" | "cancelled" | "unchanged";
