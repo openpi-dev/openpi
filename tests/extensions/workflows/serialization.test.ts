@@ -199,6 +199,26 @@ test("oversized object keys fail before their values are read", () => {
   assert.ok(Buffer.byteLength(encoded.path, "utf8") <= 256);
 });
 
+test("reported JSON paths keep a truncated key on code points", () => {
+  // The 128 cap must not split a surrogate pair: the reported path is user- and
+  // model-visible, and a lone surrogate is not representable there.
+  const key = `${"a".repeat(127)}\u{1F600}${"b".repeat(10)}`;
+  assert.equal(key.length, 139);
+
+  const encoded = encodeCompleteJson(
+    { [key]: "value", other: "value" },
+    { maxBytes: 1_024, maxDepth: 8, maxNodes: 2, maxStringBytes: 128 },
+  );
+
+  assert.equal(encoded.ok, false);
+  if (encoded.ok) return;
+  assert.equal(encoded.limit, "string");
+  assert.equal(
+    encoded.path,
+    `$root.${"a".repeat(127)}\u{1F600}...[key truncated]`,
+  );
+});
+
 test("safeStringify handles cycles, bigint, depth, and size", () => {
   const value: Record<string, unknown> = {
     bigint: 42n,

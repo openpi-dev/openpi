@@ -36,8 +36,14 @@ function byteLength(value: string) {
 }
 
 function boundedPath(parent: string, child: string) {
+  // Count and cut on code points: a UTF-16 unit cut can split a surrogate pair
+  // and leave a lone surrogate in the reported path, which reaches error
+  // messages and artifacts that cannot represent it.
+  const characters = [...child];
   const childPreview =
-    child.length <= 128 ? child : `${child.slice(0, 128)}...[key truncated]`;
+    characters.length <= 128
+      ? child
+      : `${characters.slice(0, 128).join("")}...[key truncated]`;
   const path = `${parent}.${childPreview}`;
   return byteLength(path) <= 256
     ? path
