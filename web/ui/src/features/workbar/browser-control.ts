@@ -27,6 +27,7 @@ export function useBrowserControl(
   ) => string | undefined | Promise<string | undefined>,
 ) {
   const open = useRef(onOpen);
+  const connectorSeen = useRef(0);
   open.current = onOpen;
   useEffect(() => {
     if (!sessionId || !sessionPath) return;
@@ -71,10 +72,13 @@ export function useBrowserControl(
       if (
         event.source === window &&
         event.origin === location.origin &&
-        message?.source === "openpi-browser-extension" &&
-        message.type === "control-result"
-      )
-        reply(message.requestId, message.result, message.error);
+        message?.source === "openpi-browser-extension"
+      ) {
+        if (message.type === "connector-hello")
+          connectorSeen.current = Date.now();
+        else if (message.type === "control-result")
+          reply(message.requestId, message.result, message.error);
+      }
     };
     const openPage = async (
       requestId: string,
@@ -137,6 +141,16 @@ export function useBrowserControl(
       inspect();
     };
     const poll = async () => {
+      // Presence only gates transport traffic; the host still owns all grants.
+      // Ordinary iframe browsing without the optional extension needs no API polling.
+      if (
+        Date.now() - connectorSeen.current > 15_000 &&
+        document.documentElement.dataset.openpiBrowserExtension !== "ready"
+      ) {
+        cancel();
+        if (!abort.signal.aborted) timer = setTimeout(() => void poll(), 1000);
+        return;
+      }
       try {
         const { pending } = await client.request<{
           pending: null | {

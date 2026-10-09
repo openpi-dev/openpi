@@ -2,13 +2,37 @@ import { createServer } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, expect, test } from "@playwright/test";
+import { chromium, expect, test as base } from "@playwright/test";
 
-test("native browser selection uses its live profile, Chinese input, exact document and real screenshot", async () => {
+// The shared setup path is frozen on import. A dedicated worker prevents an
+// unrelated spec's config import from choosing this fixture's agent directory.
+const test = base.extend<
+  Record<never, never>,
+  { browserAgentDirectory: string }
+>({
+  browserAgentDirectory: [
+    async ({ browserName }, use) => {
+      const directory = await mkdtemp(
+        join(tmpdir(), `openpi-native-${browserName}-`),
+      );
+      const previous = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = directory;
+      try {
+        await use(directory);
+      } finally {
+        if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previous;
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    { scope: "worker" },
+  ],
+});
+
+test("native browser selection uses its live profile, Chinese input, exact document and real screenshot", async ({
+  browserAgentDirectory: directory,
+}) => {
   test.setTimeout(60_000);
-  const directory = await mkdtemp(join(tmpdir(), "openpi-native-control-"));
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = directory;
   const config = join(directory, "my-pi-setup.json");
   await writeFile(
     config,
@@ -23,6 +47,10 @@ test("native browser selection uses its live profile, Chinese input, exact docum
   const { WebBrowserBroker, validBrowserPages } = await import(
     "../../web/host/browser-control.ts"
   );
+  const { SETUP_CONFIG_PATH } = await import(
+    "../../extensions/shared/setup-config.ts"
+  );
+  expect(SETUP_CONFIG_PATH).toBe(config);
   const owner = {
     sessionId: "native-fixture",
     workspace: directory,
@@ -220,8 +248,5 @@ test("native browser selection uses its live profile, Chinese input, exact docum
       new Promise<void>((resolve) => host.close(() => resolve())),
       new Promise<void>((resolve) => fixture.close(() => resolve())),
     ]);
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
-    await rm(directory, { recursive: true, force: true });
   }
 });
