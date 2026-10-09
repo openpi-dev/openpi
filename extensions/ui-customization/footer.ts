@@ -311,7 +311,12 @@ function renderPowerlineLine(
   const leftText = renderPowerlineSide(left);
   const rightText = renderPowerlineSide(right);
   if (!rightText) return truncateToWidth(leftText, width);
-  if (!leftText) return truncateToWidth(rightText, width);
+  if (!leftText) {
+    const fittedRight = truncateToWidth(rightText, width);
+    return (
+      " ".repeat(Math.max(0, width - visibleWidth(fittedRight))) + fittedRight
+    );
+  }
 
   const gap = width - visibleWidth(leftText) - visibleWidth(rightText);
   if (gap >= 1) {
@@ -329,7 +334,12 @@ function renderPlainLine(
   const leftText = joinPlain(left, theme);
   const rightText = joinPlain(right, theme);
   if (!rightText) return truncateToWidth(leftText, width);
-  if (!leftText) return truncateToWidth(rightText, width);
+  if (!leftText) {
+    const fittedRight = truncateToWidth(rightText, width);
+    return (
+      " ".repeat(Math.max(0, width - visibleWidth(fittedRight))) + fittedRight
+    );
+  }
 
   const naturalGap = width - visibleWidth(leftText) - visibleWidth(rightText);
   if (naturalGap >= 1) {
