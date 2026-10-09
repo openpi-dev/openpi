@@ -1377,3 +1377,38 @@ test("setup tool propagates real consumer failure and preserves disk and runtime
   assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), "{}");
   rmSync(SETUP_CONFIG_PATH);
 });
+
+test("configure_my_pi_setup preserves malformed UTF-8 without applying", async () => {
+  const original = Buffer.concat([
+    Buffer.from('{"configVersion":1,"future":{"note":"'),
+    Buffer.from([0xff]),
+    Buffer.from('"}}\n'),
+  ]);
+  writeFileSync(SETUP_CONFIG_PATH, original);
+  const h = visibilityHarness();
+  let applies = 0;
+  onSetupApply({ events: h.events }, () => {
+    applies += 1;
+  });
+  const error = await h.tools
+    .get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!
+    .execute(
+      "invalid-utf8",
+      { ui_show_header: true },
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    )
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  assert.deepEqual(
+    {
+      rejected: error instanceof Error,
+      applies,
+      unchanged: readFileSync(SETUP_CONFIG_PATH).equals(original),
+    },
+    { rejected: true, applies: 0, unchanged: true },
+  );
+});
