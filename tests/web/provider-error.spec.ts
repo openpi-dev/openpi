@@ -356,6 +356,22 @@ it("restores an inline native reconnect row after refresh, reveals its reason, a
   expect(row.open).toBe(true);
   rerender(transcriptNode(state));
   expect(row.querySelector("summary")?.textContent).toBe("Reconnecting 1/5");
+  state.selectedExecution.retry = {
+    attempt: 2,
+    maxAttempts: 5,
+    errorMessage: "second stream failure",
+  };
+  state.selectedSession!.entries.push({
+    id: "second-error",
+    type: "message",
+    timestamp: "2026-09-19T00:00:03Z",
+    message: error("second stream failure"),
+  });
+  rerender(transcriptNode({ ...state }));
+  expect(container.querySelector(".provider-attempts")).toBe(row);
+  expect(row.open).toBe(true);
+  expect(row.querySelector("summary")?.textContent).toBe("Reconnecting 2/5");
+  expect(row.querySelectorAll("li")).toHaveLength(2);
   state.selectedExecution.sessionPath = "/tmp/copied.jsonl";
   rerender(transcriptNode({ ...state }));
   expect(container.querySelector(".provider-attempts.retrying")).toBeNull();
@@ -417,6 +433,61 @@ it("shows an observed native retry even when its failed message is outside the l
   expect(container.querySelector(".provider-attempts li")?.textContent).toBe(
     "native stream failure",
   );
+});
+
+it("does not mark completed tools as running while the model reconnects", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+    projectMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "read",
+          name: "read",
+          arguments: { path: "README.md" },
+        },
+        {
+          type: "toolCall",
+          id: "bash",
+          name: "bash",
+          arguments: { command: "node --test" },
+        },
+      ],
+    }),
+    projectMessage({
+      role: "toolResult",
+      toolCallId: "read",
+      toolName: "read",
+      content: "read output",
+      isError: false,
+    }),
+    projectMessage({
+      role: "toolResult",
+      toolCallId: "bash",
+      toolName: "bash",
+      content: "passed",
+      isError: false,
+    }),
+    error("temporary stream failure"),
+  ]);
+  state.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    retry: { attempt: 1, maxAttempts: 5 },
+  };
+  const { container } = render(transcriptNode(state));
+  const group =
+    container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+  expect(group.getAttribute("data-status")).toBe("done");
+  expect(group.open).toBe(false);
+  expect(group.querySelector(".status-mark.running")).toBeNull();
+  expect(
+    container.querySelector(".provider-attempts summary")?.textContent,
+  ).toBe("Reconnecting 1/5");
 });
 
 it("offers one final retry after exhaustion while folding the earlier attempts", () => {

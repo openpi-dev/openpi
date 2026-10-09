@@ -1451,7 +1451,7 @@ function ProcessSequence({
         )
       : preview;
   const failed = rows.some((row) => row.error || row.processStatus === "error");
-  const status: Status = active
+  const status: Status = current
     ? "running"
     : failed
       ? "error"
@@ -1469,12 +1469,12 @@ function ProcessSequence({
   const actionLabels = actions.map((action) => t(`toolActionGroup_${action}`));
   const groupTitle = actions.length
     ? t(
-        `toolGroup_${status === "done" ? "done" : active ? "running" : "unknown"}`,
+        `toolGroup_${status === "done" ? "done" : status === "running" ? "running" : "unknown"}`,
         {
           actions: actionLabels.join(t("toolGroupSeparator")),
         },
       )
-    : t(active ? "processRunning" : "processDetails");
+    : t(status === "running" ? "processRunning" : "processDetails");
   const title = current?.processToolName
     ? toolActivityLabel(t, current.processToolName, "running")
     : groupTitle;
@@ -1489,7 +1489,7 @@ function ProcessSequence({
       className={`process-sequence ${status}`}
       open={open}
       data-status={status}
-      data-running={active ? "true" : undefined}
+      data-running={status === "running" ? "true" : undefined}
       data-history-entry={rows[0]?.key}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
@@ -1509,7 +1509,7 @@ function ProcessSequence({
         >
           <strong>{title}</strong>
         </span>
-        {preview && (active || !actions.length) && (
+        {preview && (current || !actions.length) && (
           <span className="process-sequence-preview" title={preview}>
             {previewText}
           </span>
@@ -1557,10 +1557,6 @@ function groupRows(rows: RenderRow[], active: boolean) {
     if (process && last?.process) last.rows.push(row);
     else blocks.push({ process, rows: [row] });
   }
-  let lastProcess = -1;
-  blocks.forEach((block, index) => {
-    if (block.process) lastProcess = index;
-  });
   return blocks.flatMap((block, index) => {
     const blockKey = `${block.process ? "process" : "rows"}-${block.rows[0]?.key}`;
     if (!block.process) {
@@ -1584,7 +1580,7 @@ function groupRows(rows: RenderRow[], active: boolean) {
       <ProcessSequence
         key={blockKey}
         rows={block.rows}
-        active={active && index === lastProcess}
+        active={active && index === blocks.length - 1}
       />
     );
   });
@@ -2721,7 +2717,7 @@ export function Transcript(props: TranscriptProps) {
         if (attempts) {
           if (attempts.state === "retrying" && retry) retryRendered = true;
           detailRows.push({
-            key: `${entry.key}-attempts`,
+            key: `${attempts.attempts[0]!.key}-attempts`,
             turn,
             kind: "outcome",
             outcome:
