@@ -145,6 +145,59 @@ for (const outcome of ["failed", "cancelled", "uncertain"] as const) {
   });
 }
 
+test("the exact first native input owns an execution through later steering and settlement", () => {
+  const { runtime, sessionManager, emit } = harness();
+  const prompt = {
+    role: "user" as const,
+    content: "Initial task",
+    timestamp: 1,
+  };
+  emit({ type: "agent_start" });
+  emit({ type: "message_start", message: prompt });
+  const initialId = sessionManager.appendMessage(prompt);
+  assert.equal(runtime.getActiveTurn()?.promptEntryId, initialId);
+
+  const steering = {
+    role: "user" as const,
+    content: "Additional detail",
+    timestamp: 2,
+  };
+  emit({ type: "message_start", message: steering });
+  sessionManager.appendMessage(steering);
+  assert.equal(runtime.getActiveTurn()?.promptEntryId, initialId);
+  const answer = fauxAssistantMessage({
+    type: "text",
+    text: "Actual final answer",
+  });
+  const finalId = sessionManager.appendMessage(answer);
+  emit({ type: "message_end", message: answer });
+  emit({ type: "agent_settled" });
+  const record = sessionManager
+    .getBranch()
+    .find(
+      (entry) =>
+        entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY,
+    );
+  assert.ok(record?.type === "custom");
+  assert.equal(readTurnTiming(record.data)?.promptEntryId, initialId);
+  assert.equal(readTurnTiming(record.data)?.resultEntryId, finalId);
+});
+
+test("a matching user text cannot manufacture a native execution input identity", () => {
+  const { runtime, sessionManager, emit } = harness();
+  sessionManager.appendMessage({
+    role: "user",
+    content: "Same text",
+    timestamp: 1,
+  });
+  emit({ type: "agent_start" });
+  emit({
+    type: "message_start",
+    message: { role: "user", content: "Same text", timestamp: 1 },
+  });
+  assert.equal(runtime.getActiveTurn()?.promptEntryId, undefined);
+});
+
 test("an optional timing write failure cannot suppress Pi's terminal event", (t) => {
   const { runtime, sessionManager, emit, events } = harness();
   t.mock.method(sessionManager, "appendCustomEntry", () => {
@@ -219,6 +272,12 @@ test("unrecognized custom entries and malformed timing do not become duration ev
     undefined,
   );
   assert.equal(readTurnTiming({ ...timing, resultEntryId: "\n" }), undefined);
+  for (const promptEntryId of ["", "x".repeat(501), "\n", 42])
+    assert.equal(readTurnTiming({ ...timing, promptEntryId }), undefined);
+  assert.equal(
+    readTurnTiming({ ...timing, promptEntryId: "native-input" })?.promptEntryId,
+    "native-input",
+  );
   assert.equal(
     readTurnTiming({ ...timing, resultEntryId: "native-result" })
       ?.resultEntryId,

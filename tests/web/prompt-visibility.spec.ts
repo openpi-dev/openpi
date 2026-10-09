@@ -589,7 +589,7 @@ it("shows the selected background session's execution without mixing in the cont
     "Only the other Session should see this",
   );
   expect(
-    view.container.querySelector(".conversation-running")?.textContent,
+    view.container.querySelector(".conversation-execution-status")?.textContent,
   ).toContain(i18n.t("backgroundSessionRunning"));
   expect(view.container.textContent).toContain(
     i18n.t("pendingFollowUpsHint", { count: 2 }),

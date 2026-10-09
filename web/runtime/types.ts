@@ -140,6 +140,8 @@ export interface WebActiveTurn {
   sessionId: string;
   commandId: string;
   epoch: number;
+  /** Native input owning the run; steering does not replace this identity. */
+  promptEntryId?: string;
   /** Actual execution start; admission/queue waiting is excluded. */
   startedAt?: number;
   /** Monotonic elapsed time captured with this projection. */

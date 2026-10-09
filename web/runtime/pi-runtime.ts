@@ -108,6 +108,7 @@ type PromptTrace = {
   userMessageObserved: boolean;
   epoch?: number;
   outcome?: "completed" | "cancelled" | "failed" | "uncertain";
+  promptMessage?: Extract<AgentSessionEvent, { type: "message_start" }>["message"];
   resultMessage?: Extract<AgentSessionEvent, { type: "message_end" }>["message"];
 };
 
@@ -116,6 +117,9 @@ type TurnSettlement = WebActiveTurn & {
 };
 
 function observePromptOutcome(trace: PromptTrace, event: AgentSessionEvent) {
+  if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "user") {
+    trace.promptMessage ??= event.message;
+  }
   // Cancelling Pi's retry backoff emits no aborted assistant message. This
   // native terminal event is the cancellation evidence retained at settlement.
   if (event.type === "auto_retry_end" && !event.success && event.finalError === "Retry cancelled") {
@@ -384,7 +388,7 @@ export class PiWebRuntime implements WebRuntimeController {
     const held = this.compactionQueues?.get(owner);
     const queued = [...followUps, ...(held?.items.map((item) => item.content) ?? [])];
     const trace = owner === this.runtime ? this.activePromptTrace : this.suspendedPromptTraces?.get(session)?.active;
-    const activeTurn = this.activeTurnFromTrace(trace);
+    const activeTurn = this.activeTurnFromTrace(trace, session.sessionManager);
     const compaction = this.getCompaction(session);
     const branch = session.sessionManager.getBranch();
     const terminalEntry = branch.slice().reverse().find((entry) => entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY);
@@ -2107,12 +2111,14 @@ export class PiWebRuntime implements WebRuntimeController {
     for (const listener of this.listeners) listener({ type, detail });
   }
 
-  private activeTurnFromTrace(trace?: PromptTrace): WebActiveTurn | undefined {
+  private activeTurnFromTrace(trace?: PromptTrace, sessionManager = this.sessionManager): WebActiveTurn | undefined {
     if (!trace?.started || trace.epoch === undefined) return undefined;
+    const prompt = trace.promptMessage && sessionManager.getBranch().find((entry) => entry.type === "message" && entry.message === trace.promptMessage && entry.message.role === "user");
     return {
       sessionId: trace.sessionId,
       commandId: trace.commandId,
       epoch: trace.epoch,
+      ...(prompt ? { promptEntryId: prompt.id } : {}),
       ...(trace.executionStartedAt !== undefined && trace.executionClock !== undefined
         ? {
             startedAt: trace.executionStartedAt,
@@ -2131,12 +2137,12 @@ export class PiWebRuntime implements WebRuntimeController {
     trace.sessionPath = sessionManager.getSessionFile?.() ?? `current:${trace.sessionId}`;
     this.completedSessionTurns?.delete(JSON.stringify([trace.sessionPath, trace.sessionId]));
     trace.epoch = ++this.nextTurnEpoch;
-    const activeTurn = this.activeTurnFromTrace(trace);
+    const activeTurn = this.activeTurnFromTrace(trace, sessionManager);
     if (activeTurn && publish) this.emit("turn_started", { ...activeTurn });
   }
 
   private settlePromptTrace(trace: PromptTrace, sessionManager = this.sessionManager, publish = true) {
-    const activeTurn = this.activeTurnFromTrace(trace);
+    const activeTurn = this.activeTurnFromTrace(trace, sessionManager);
     if (!activeTurn) return;
     const settlement: TurnSettlement = {
       ...activeTurn,
@@ -2156,6 +2162,7 @@ export class PiWebRuntime implements WebRuntimeController {
         finishedAt: Date.now(),
         elapsedMs: activeTurn.elapsedMs,
         outcome: settlement.outcome,
+        ...(activeTurn.promptEntryId ? { promptEntryId: activeTurn.promptEntryId } : {}),
       };
       const result = settlement.outcome === "completed" && trace.resultMessage ? sessionManager.getBranch().find((entry) => entry.type === "message" && entry.message === trace.resultMessage) : undefined;
       if (result) timing.resultEntryId = result.id;

@@ -92,6 +92,8 @@ Web General settings directly save the existing `ui.subagentResultDisplay`, `ui.
 
 A running group's summary keeps the actual current tool, icon, and target visible when folded. Its expanded list is capped at 360px or half the viewport height and scrolls internally; new activity follows the bottom only while the reader stays there. Running text uses a gentle shimmer that respects reduced motion. Expanded thinking retains all available text; oversized saved thinking loads by exact native message and part identity, with explicit further pages. Context compaction states remain native Pi facts. These are presentation behaviors, not additional configuration choices.
 
+Current-turn steering shares the elapsed-time disclosure of the exact native initial input. Folding preserves user inputs and the exact native final answer; expanding preserves their chronological positions. Legacy records without that input identity retain their existing boundaries. Text, tools and the elapsed separator share the conversation width; tools and thinking follow the conversation font size. When reading above the bottom, a centered button above the composer returns to the latest content. It shows three animated dots during execution and a down arrow afterward, respecting reduced motion. The redundant generic running line is hidden visually.
+
 Direct Web footer saves update the configuration for Pi's command-line interface. A separate already-running Pi interface refreshes its footer at the next session start or native setup apply; a Web settings event does not itself reconfigure another live Pi session.
 
 On Windows, OpenPI enables Pi's `clearOnShrink` compatibility behavior for

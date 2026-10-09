@@ -518,6 +518,262 @@ it("does not move a duration backward across a user or another timing record", (
   ]);
 });
 
+it("folds one native execution across steering while preserving user inputs, its exact final answer and chronology", () => {
+  const value = snapshot();
+  const entries: NonNullable<WebSnapshot["selectedSession"]>["entries"] = [
+    {
+      id: "initial",
+      type: "message",
+      timestamp: "2026-09-22T00:00:00Z",
+      message: { role: "user", content: "Initial task" },
+    },
+    {
+      id: "progress-1",
+      type: "message",
+      timestamp: "2026-09-22T00:00:01Z",
+      message: {
+        role: "assistant",
+        content: "First progress",
+        stopReason: "stop",
+      },
+    },
+    {
+      id: "steering-1",
+      type: "message",
+      timestamp: "2026-09-22T00:00:02Z",
+      message: { role: "user", content: "First additional detail" },
+    },
+    {
+      id: "progress-2",
+      type: "message",
+      timestamp: "2026-09-22T00:00:03Z",
+      message: {
+        role: "assistant",
+        content: "Second progress",
+        parts: [{ type: "thinking", text: "Complete available thought" }],
+      },
+    },
+    {
+      id: "steering-2",
+      type: "message",
+      timestamp: "2026-09-22T00:00:04Z",
+      message: { role: "user", content: "Second additional detail" },
+    },
+    {
+      id: "answer",
+      type: "message",
+      timestamp: "2026-09-22T00:00:05Z",
+      message: {
+        role: "assistant",
+        content: "Native final answer",
+        stopReason: "stop",
+      },
+    },
+  ];
+  value.selectedSession!.entries = entries;
+  value.runtime.activeTurn = {
+    ...value.runtime.activeTurn!,
+    promptEntryId: "initial",
+  };
+  const view = render(node(value));
+  const button = view.container.querySelector<HTMLButtonElement>(
+    ".turn-duration-toggle",
+  )!;
+  expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
+  fireEvent.click(button);
+  for (const text of [
+    "First progress",
+    "Second progress",
+    "Native final answer",
+  ])
+    expect(
+      screen.getByText(text).closest<HTMLElement>("[hidden]")?.hidden,
+    ).toBe(true);
+  for (const text of [
+    "Initial task",
+    "First additional detail",
+    "Second additional detail",
+  ])
+    expect(screen.getByText(text).closest("[hidden]")).toBeNull();
+
+  const settled = structuredClone(value);
+  settled.runtime = { status: "idle", capabilities: {} };
+  settled.selectedSession!.entries.push({
+    id: "timing",
+    type: "custom",
+    timestamp: "2026-09-22T00:00:06Z",
+    turnTiming: {
+      version: 1,
+      sessionId: "session",
+      commandId: "a",
+      epoch: 1,
+      startedAt: 10000,
+      finishedAt: 11000,
+      elapsedMs: 1000,
+      outcome: "completed",
+      promptEntryId: "initial",
+      resultEntryId: "answer",
+    },
+  });
+  view.rerender(node(settled));
+  expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
+  expect(
+    screen.getByText("Native final answer").closest("[hidden]"),
+  ).toBeNull();
+  expect(
+    screen.getByText("First progress").closest<HTMLElement>("[hidden]")?.hidden,
+  ).toBe(true);
+  fireEvent.click(button);
+  expect(
+    [
+      ...view.container.querySelectorAll<HTMLElement>(".turn-response-body"),
+    ].every((body) => !body.hidden),
+  ).toBe(true);
+  const visible = [
+    ...view.container.querySelectorAll(
+      ".turn-duration, .message-row .message-content",
+    ),
+  ].map((element) => element.textContent?.trim());
+  expect(visible).toEqual([
+    "Initial task",
+    i18n.t("turnElapsedFinished", { duration: "1s" }),
+    "First progress",
+    "First additional detail",
+    "Complete available thought",
+    "Second progress",
+    "Second additional detail",
+    "Native final answer",
+  ]);
+  const controlled = button.getAttribute("aria-controls")!.split(" ");
+  expect(controlled).toHaveLength(2);
+  expect(
+    controlled.every((id) =>
+      document.getElementById(id)?.classList.contains("turn-response-body"),
+    ),
+  ).toBe(true);
+});
+
+it("does not fold an earlier execution when a native timing input is missing from the visible branch", () => {
+  const value = snapshot();
+  value.runtime = { status: "idle", capabilities: {} };
+  value.selectedSession!.entries = [
+    {
+      id: "old-input",
+      type: "message",
+      timestamp: "2026-09-22T00:00:00Z",
+      message: { role: "user", content: "Earlier input" },
+    },
+    {
+      id: "old-progress",
+      type: "message",
+      timestamp: "2026-09-22T00:00:01Z",
+      message: { role: "assistant", content: "Earlier visible progress" },
+    },
+    {
+      id: "new-input",
+      type: "message",
+      timestamp: "2026-09-22T00:00:02Z",
+      message: { role: "user", content: "New input" },
+    },
+    {
+      id: "new-progress",
+      type: "message",
+      timestamp: "2026-09-22T00:00:03Z",
+      message: { role: "assistant", content: "New hidden progress" },
+    },
+    {
+      id: "timing",
+      type: "custom",
+      timestamp: "2026-09-22T00:00:04Z",
+      turnTiming: {
+        version: 1,
+        sessionId: "session",
+        commandId: "a",
+        epoch: 1,
+        startedAt: 10000,
+        finishedAt: 11000,
+        elapsedMs: 1000,
+        outcome: "completed",
+        promptEntryId: "missing-input",
+      },
+    },
+  ];
+  render(node(value));
+  expect(
+    screen.getByText("Earlier visible progress").closest("[hidden]"),
+  ).toBeNull();
+  expect(
+    screen.getByText("New hidden progress").closest<HTMLElement>("[hidden]")
+      ?.hidden,
+  ).toBe(true);
+});
+
+it("offers animated latest activity only while reading above the bottom and replaces it with an arrow at settlement", () => {
+  const originalScroll = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollTo",
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(900);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+  const scrollTo = vi.fn(function (
+    this: HTMLElement,
+    options: ScrollToOptions,
+  ) {
+    this.scrollTop = Math.min(options.top ?? 0, 600);
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: scrollTo,
+  });
+  try {
+    const value = snapshot();
+    value.selectedSession!.entries = [
+      {
+        id: "prompt",
+        type: "message",
+        timestamp: "2026-09-22T00:00:00Z",
+        message: { role: "user", content: "Question" },
+      },
+    ];
+    const view = render(node(value));
+    const viewport =
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    expect(
+      screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeNull();
+    expect(view.container.querySelector(".conversation-running")).toBeNull();
+    expect(
+      view.container
+        .querySelector(".conversation-execution-status")
+        ?.classList.contains("sr-only"),
+    ).toBe(true);
+    viewport.scrollTop = 100;
+    fireEvent.scroll(viewport);
+    const jump = screen.getByRole("button", { name: i18n.t("jumpToLatest") });
+    expect(jump.querySelectorAll(".latest-activity-dots i")).toHaveLength(3);
+    expect(jump.closest(".transcript-surface")).toBe(viewport.parentElement);
+    fireEvent.click(jump);
+    expect(viewport.scrollTop).toBe(600);
+    expect(
+      screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeNull();
+    viewport.scrollTop = 100;
+    fireEvent.scroll(viewport);
+    view.rerender(
+      node({ ...value, runtime: { status: "idle", capabilities: {} } }),
+    );
+    const settled = screen.getByRole("button", {
+      name: i18n.t("jumpToLatest"),
+    });
+    expect(settled.querySelector(".latest-activity-dots")).toBeNull();
+    expect(settled.querySelector("svg")).toBeTruthy();
+  } finally {
+    if (originalScroll)
+      Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
+
 it("formats readable localized durations for both running and settled turns", () => {
   expect(formatTurnDuration(2142000, "zh-CN")).toBe("35m 42s");
   expect(formatTurnDuration(157000, "zh-CN")).toBe("2m 37s");

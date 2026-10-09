@@ -152,6 +152,7 @@ interface RenderRow {
   pendingPrompt?: boolean;
   promptCommandId?: string;
   promptEntryId?: string;
+  responseEntryId?: string;
   commandHandledInputId?: string;
   commandHandledCommandId?: string;
   timing?: WebTurnTiming;
@@ -1571,9 +1572,20 @@ function TurnRun({
     if (timing?.outcome === "completed") setOpen(false);
   }, [timing?.outcome]);
   const hasTiming = Boolean(timing || timedTurn);
-  const processRows = rows.filter((row) => !row.final);
-  const finalRows = rows.filter((row) => row.final);
-  const hasProcess = processRows.some((row) => row.content !== null);
+  const blocks: Array<{ foldable: boolean; rows: RenderRow[] }> = [];
+  for (const row of rows) {
+    if (row.content === null) continue;
+    const final = timing?.resultEntryId
+      ? row.responseEntryId === timing.resultEntryId
+      : !active && row.final;
+    const foldable = row.kind !== "prompt" && !final;
+    const previous = blocks.at(-1);
+    if (foldable && previous?.foldable) previous.rows.push(row);
+    else blocks.push({ foldable, rows: [row] });
+  }
+  const bodies = blocks.filter((block) => block.foldable);
+  const bodyId = (index: number) => (index === 0 ? id : `${id}-${index}`);
+  const hasProcess = bodies.length > 0;
   const elapsed = timing ? (
     <SettledTurnElapsed timing={timing} />
   ) : timedTurn ? (
@@ -1597,7 +1609,7 @@ function TurnRun({
               type="button"
               className="turn-duration-toggle"
               aria-expanded={open}
-              aria-controls={id}
+              aria-controls={bodies.map((_, index) => bodyId(index)).join(" ")}
               onClick={() => setOpen((value) => !value)}
             >
               {elapsed}
@@ -1613,18 +1625,24 @@ function TurnRun({
           )}
         </header>
       )}
-      {hasTiming ? (
-        <>
-          {hasProcess && (
-            <div className="turn-response-body" id={id} hidden={!open}>
-              {groupRows(processRows, active)}
-            </div>
-          )}
-          {groupRows(finalRows, false)}
-        </>
-      ) : (
-        groupRows(rows, active)
-      )}
+      {hasTiming
+        ? blocks.map((block) =>
+            block.foldable ? (
+              <div
+                className="turn-response-body"
+                key={block.rows[0]!.key}
+                id={bodyId(bodies.indexOf(block))}
+                hidden={!open}
+              >
+                {groupRows(block.rows, active && block === bodies.at(-1))}
+              </div>
+            ) : (
+              <Fragment key={block.rows[0]!.key}>
+                {groupRows(block.rows, false)}
+              </Fragment>
+            ),
+          )
+        : groupRows(rows, active)}
     </>
   );
 }
@@ -1707,8 +1725,8 @@ function ConversationTurn({
   };
   for (const row of rows) {
     if (row.kind === "prompt") {
-      if (runRows.length) appendRun();
-      content.push(<Fragment key={row.key}>{row.content}</Fragment>);
+      if (runRows.length) runRows.push(row);
+      else content.push(<Fragment key={row.key}>{row.content}</Fragment>);
     } else if (row.timing) appendRun(row.timing);
     else runRows.push(row);
   }
@@ -1758,16 +1776,39 @@ function renderTurns(
   timedTurn?: ActiveTurn,
   onReviewTurn?: OpenTurnReview,
 ) {
+  const owners = new Map<RenderRow, number>();
+  const attachRun = (promptEntryId: string | undefined, end: number) => {
+    if (!promptEntryId) return;
+    const start = rows.findIndex(
+      (row) => row.kind === "prompt" && row.promptEntryId === promptEntryId,
+    );
+    if (start < 0 || start >= end) return;
+    if (rows.slice(start + 1, end).some((row) => row.timing)) return;
+    for (let index = start; index <= end; index++) {
+      const row = rows[index]!;
+      if (!row.pendingPrompt) owners.set(row, rows[start]!.turn);
+    }
+  };
+  rows.forEach((row, index) => {
+    if (row.timing) attachRun(row.timing.promptEntryId, index);
+  });
+  if (running && timedTurn) attachRun(timedTurn.promptEntryId, rows.length - 1);
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
+    const id = owners.get(row) ?? row.turn;
     const current = turns.at(-1);
-    if (current?.id === row.turn) current.rows.push(row);
-    else turns.push({ id: row.turn, rows: [row] });
+    if (current?.id === id) current.rows.push(row);
+    else turns.push({ id, rows: [row] });
   }
   if (turns.length === 0 && running) turns.push({ id: 0, rows: [] });
   const confirmedTurn = activeCommandId
     ? turns.find((turn) =>
-        turn.rows.some((row) => row.promptCommandId === activeCommandId),
+        turn.rows.some(
+          (row) =>
+            row.promptCommandId === activeCommandId ||
+            (timedTurn?.promptEntryId &&
+              row.promptEntryId === timedTurn.promptEntryId),
+        ),
       )
     : undefined;
   let nativeTurnIndex = turns.length - 1;
@@ -2338,6 +2379,7 @@ export function Transcript(props: TranscriptProps) {
             key,
             turn,
             kind: "response",
+            responseEntryId: entry.entryId,
             final:
               message.stopReason === "stop" || message.stopReason === "length",
             content: (
@@ -3127,7 +3169,7 @@ export function Transcript(props: TranscriptProps) {
   };
 
   return (
-    <>
+    <div className="transcript-surface">
       <div
         ref={viewport}
         className="conversation"
@@ -3289,11 +3331,10 @@ export function Transcript(props: TranscriptProps) {
           )}
         {running && selectedExecution?.compaction?.state !== "running" && (
           <div
-            className="conversation-running"
+            className="conversation-execution-status sr-only"
             role="status"
             aria-live="polite"
           >
-            <span className="conversation-running-dot" />
             <span>{runningLabel}</span>
             {observedRunningTools > 0 && (
               <span>
@@ -3326,7 +3367,15 @@ export function Transcript(props: TranscriptProps) {
             element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
           }}
         >
-          <ArrowDown aria-hidden="true" /> {t("jumpToLatest")}
+          {running ? (
+            <span className="latest-activity-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          ) : (
+            <ArrowDown aria-hidden="true" />
+          )}
         </button>
       )}
       <TurnNavigation
@@ -3339,6 +3388,6 @@ export function Transcript(props: TranscriptProps) {
         readingHistory={readingHistory || history.hasNewer}
         onNavigate={navigateTurn}
       />
-    </>
+    </div>
   );
 }
