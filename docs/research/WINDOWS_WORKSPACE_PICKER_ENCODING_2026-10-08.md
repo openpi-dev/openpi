@@ -59,6 +59,8 @@ After, captured after selecting the added workspace from the menu and entering a
 
 The implementation head's [upstream CI run](https://github.com/openpi-dev/openpi/actions/runs/37772950126) completed all 19 reported checks successfully, including Windows jobs. This is separate from the earlier local Windows suite failures above. The screenshots verify workspace import and selection; no model turn was sent.
 
+The documentation follow-up also ran `bun run check` successfully and repeated `bun run test` on 2026-10-09. Its parallel Node group reported 2,186 passed, 7 failed, and 14 skipped out of 2,207 tests; the picker regression passed. The earlier five Windows failures recurred, plus two Antigravity fixture failures (OAuth callback HTTP `502` instead of `400`, and stalled-body request count `0` instead of `2`). Their causes were not established or attributed to this fix. The aggregate command exited before serial Node/UI stages, so their earlier results above were not revalidated in this repeat. The follow-up changes only documentation and screenshots, with runtime/test blobs unchanged from the reviewed implementation head.
+
 ## Boundaries
 
 The automated fixture checks the real PowerShell stdout boundary and stubs the native dialog; it does not automate the full browser/dialog interaction. The added Web screenshots cover real native-dialog selection with human input under the controlled CP936 condition. Two earlier attempts exceeded the Web request's 15-second deadline; their timeout captures are excluded from the published evidence. Other Windows code pages were not individually exercised. macOS and Linux chooser branches, persisted configuration, and Pi provider/model behavior are outside this change.
