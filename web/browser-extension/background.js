@@ -1,5 +1,6 @@
 // Permissions belong to the installed browser extension, not a Pi tool or Session.
 import { controlBrowser, cancelBrowserControl } from "./computer-use.js";
+import "./native-browser.js";
 const owners = new Map();
 let serial = chrome.declarativeNetRequest.getSessionRules().then((rules) =>
   chrome.declarativeNetRequest.updateSessionRules({
@@ -96,6 +97,7 @@ function installPopupBridge(eventName) {
 }
 
 chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === "openpi-native-workbench") return;
   const sender = port.sender;
   const tabId = sender?.tab?.id;
   if (!Number.isInteger(tabId) || !sender.documentId) return port.disconnect();

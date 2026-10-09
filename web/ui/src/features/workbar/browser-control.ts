@@ -21,7 +21,10 @@ function connectedPages() {
 export function useBrowserControl(
   sessionId: string | undefined,
   sessionPath: string | undefined,
-  onOpen: (url: string) => string | undefined,
+  onOpen: (
+    url: string,
+    signal: AbortSignal,
+  ) => string | undefined | Promise<string | undefined>,
 ) {
   const open = useRef(onOpen);
   open.current = onOpen;
@@ -73,13 +76,22 @@ export function useBrowserControl(
       )
         reply(message.requestId, message.result, message.error);
     };
-    const openPage = (requestId: string, requestedUrl: string | undefined) => {
+    const openPage = async (
+      requestId: string,
+      requestedUrl: string | undefined,
+    ) => {
       const url = browserAddress(requestedUrl || "", location.origin);
       if (!url) {
         reply(requestId, undefined, "Invalid internal browser URL.");
         return;
       }
-      const containerId = open.current(url);
+      const opening = new AbortController();
+      stopOpen = () => opening.abort();
+      const containerId = await open.current(
+        url,
+        AbortSignal.any([abort.signal, opening.signal]),
+      );
+      if (abort.signal.aborted || active !== requestId) return;
       if (!containerId) {
         reply(
           requestId,
@@ -118,6 +130,7 @@ export function useBrowserControl(
         10000,
       );
       stopOpen = () => {
+        opening.abort();
         observer.disconnect();
         clearTimeout(timeout);
       };
@@ -145,7 +158,13 @@ export function useBrowserControl(
         if (pending && !pending.running && pending.request && !active) {
           active = pending.requestId;
           if (pending.request.operation === "open")
-            openPage(pending.requestId, pending.request.url);
+            void openPage(pending.requestId, pending.request.url).catch(() =>
+              reply(
+                pending.requestId,
+                undefined,
+                "The embedded browser could not open.",
+              ),
+            );
           else if (pending.page)
             post({
               type: "control",

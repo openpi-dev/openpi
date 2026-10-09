@@ -8,6 +8,27 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CONFIG_FIELD_CONTRACT = [
   {
+    path: "browser.embedded",
+    writerTokens: ["params.browser_embedded"],
+    statusTokens: ["config.browser.embedded"],
+    readmeTerms: ["browser_embedded"],
+    setupTerms: ["browser_embedded"],
+  },
+  {
+    path: "browser.defaultBrowser",
+    writerTokens: ["params.browser_default"],
+    statusTokens: ["config.browser.defaultBrowser"],
+    readmeTerms: ["browser_default"],
+    setupTerms: ["browser_default"],
+  },
+  {
+    path: "browser.externalBrowsers",
+    writerTokens: ["params.browser_external"],
+    statusTokens: ["config.browser.externalBrowsers"],
+    readmeTerms: ["browser_external"],
+    setupTerms: ["browser_external"],
+  },
+  {
     path: "browser.control",
     writerTokens: ["params.browser_control"],
     statusTokens: ["config.browser.control"],

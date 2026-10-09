@@ -1,7 +1,16 @@
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog } from "@astryxdesign/core/Dialog";
-import { Bot, Cpu, Layers3, Plug, SlidersHorizontal, X } from "lucide-react";
+import {
+  Bot,
+  Cpu,
+  Globe2,
+  Layers3,
+  Plug,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
+import { BrowserSettingsPanel } from "./BrowserSettingsPanel.tsx";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
@@ -24,6 +33,7 @@ import { useSettingsCatalog } from "./useSettingsCatalog.ts";
 type SettingsSection =
   | "general"
   | "models"
+  | "browser"
   | "skills"
   | "subagents"
   | "plugins";
@@ -31,6 +41,7 @@ type SettingsSection =
 const settingsSections = [
   { id: "general", label: "generalSettings", Icon: SlidersHorizontal },
   { id: "models", label: "modelSettings", Icon: Cpu },
+  { id: "browser", label: "browserSettings", Icon: Globe2 },
   { id: "skills", label: "skillsSettings", Icon: Layers3 },
   { id: "subagents", label: "subagentsSettings", Icon: Bot },
   { id: "plugins", label: "pluginsSettings", Icon: Plug },
@@ -59,7 +70,7 @@ export function ProviderSettingsPage({
 }: {
   sessionId: string;
   cwd: string;
-  entry?: "general" | "credentials";
+  entry?: "general" | "credentials" | "browser";
   models: WebModelSummary[];
   currentModel?: WebModelSummary;
   thinkingLevel: string;
@@ -84,7 +95,7 @@ export function ProviderSettingsPage({
   const closeButton = useRef<HTMLButtonElement>(null);
   const tabs = useRef<HTMLDivElement>(null);
   const [section, setSection] = useState<SettingsSection>(
-    entry === "credentials" ? "models" : "general",
+    entry === "credentials" ? "models" : entry,
   );
   const [modelsVisited, setModelsVisited] = useState(entry === "credentials");
   const [setupPending, setSetupPending] = useState(false);
@@ -322,7 +333,7 @@ export function ProviderSettingsPage({
           </button>
         </header>
 
-        {planBlocked && (
+        {planBlocked && section !== "browser" && (
           <div className="settings-plan-notice" role="status">
             <span>{t(setupBusy ? "setupPlanBusy" : "setupPlanBlocked")}</span>
             <Button
@@ -335,6 +346,16 @@ export function ProviderSettingsPage({
           </div>
         )}
         <div className="provider-settings-main">
+          <div
+            id="settings-panel-browser"
+            aria-labelledby="settings-tab-browser"
+            role="tabpanel"
+            hidden={section !== "browser"}
+          >
+            {section === "browser" && (
+              <BrowserSettingsPanel onSaved={onPreferencesChanged} />
+            )}
+          </div>
           <div
             id="settings-panel-general"
             aria-labelledby="settings-tab-general"

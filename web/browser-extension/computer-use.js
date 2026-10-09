@@ -77,8 +77,17 @@ export async function controlBrowser(
   let attached = false;
   let cleanup;
   const detach = () => (cleanup ??= bounded(chrome.debugger.detach({ tabId })));
+  const checkNativeDocument = async () => {
+    if (!peer.native || operation.navigating) return;
+    const frame = await bounded(
+      chrome.webNavigation.getFrame({ tabId, frameId: 0 }),
+    );
+    if (frame?.documentId !== peer.documentId)
+      throw new Error("The native browser document changed. Observe again.");
+  };
   const send = async (method, params = {}, sessionId) => {
     check();
+    await checkNativeDocument();
     const result = await bounded(
       chrome.debugger.sendCommand(
         { tabId, ...(sessionId ? { sessionId } : {}) },
@@ -89,7 +98,10 @@ export async function controlBrowser(
     if (method === "Page.navigate") {
       if (operation.cancelled || !current())
         throw new Error("Navigation was interrupted; delivery is uncertain.");
-    } else check();
+    } else {
+      check();
+      await checkNativeDocument();
+    }
     return result;
   };
   try {
@@ -104,16 +116,19 @@ export async function controlBrowser(
       filter: [{ type: "iframe", exclude: false }],
     });
     const selector = `iframe[data-openpi-browser-page=${JSON.stringify(peer.id)}]`;
-    const document = await send("DOM.getDocument", { depth: 1 });
-    const queried = await send("DOM.querySelector", {
-      nodeId: document.root.nodeId,
-      selector,
-    });
-    if (!queried.nodeId) throw new Error("The embedded iframe is gone.");
-    const described = await send("DOM.describeNode", {
-      nodeId: queried.nodeId,
-    });
-    const frameId = described.node.frameId;
+    let frameId;
+    if (peer.native)
+      frameId = (await send("Page.getFrameTree")).frameTree.frame.id;
+    else {
+      const document = await send("DOM.getDocument", { depth: 1 });
+      const queried = await send("DOM.querySelector", {
+        nodeId: document.root.nodeId,
+        selector,
+      });
+      if (!queried.nodeId) throw new Error("The embedded iframe is gone.");
+      frameId = (await send("DOM.describeNode", { nodeId: queried.nodeId }))
+        .node.frameId;
+    }
     if (!frameId)
       throw new Error("The selected iframe has no controllable frame.");
     // Same-process frames share the parent target; OOPIFs need only their exact target.
@@ -138,11 +153,23 @@ export async function controlBrowser(
         );
       return result.result.value;
     };
-    if (
-      (await evaluate(
-        "document.documentElement.dataset.openpiBrowserDocument",
-      )) !== peer.nonce
-    )
+    if (peer.native) {
+      if (
+        await evaluate(
+          "Boolean(document.querySelector('meta[name=\"openpi-web-token\"]'))",
+        )
+      )
+        throw new Error(
+          "OpenPI workbench pages cannot be controlled by this tool.",
+        );
+      await evaluate(
+        `globalThis.__openpiDocument = ${JSON.stringify(peer.nonce)}`,
+      );
+    }
+    const documentIdentity = peer.native
+      ? "globalThis.__openpiDocument"
+      : "document.documentElement.dataset.openpiBrowserDocument";
+    if ((await evaluate(documentIdentity)) !== peer.nonce)
       throw new Error(
         "The frame's document no longer matches its native binding.",
       );
@@ -159,7 +186,7 @@ export async function controlBrowser(
         throw new Error("The observed element is gone.");
       const result = await frameSend("Runtime.callFunctionOn", {
         objectId: resolved.object.objectId,
-        functionDeclaration: `function(nonce, ...args){if(!this.isConnected || this.ownerDocument!==document || this.ownerDocument.documentElement.dataset.openpiBrowserDocument!==nonce)throw new Error('Stale frame element');return (${declaration}).apply(this,args);}`,
+        functionDeclaration: `function(nonce, ...args){if(!this.isConnected || this.ownerDocument!==document || ${documentIdentity}!==nonce)throw new Error('Stale frame element');return (${declaration}).apply(this,args);}`,
         arguments: [peer.nonce, ...args].map((value) => ({ value })),
         returnByValue: true,
       });
@@ -225,6 +252,7 @@ export async function controlBrowser(
       )
         throw new Error("Invalid embedded navigation URL.");
       peer.refs = undefined;
+      await checkNativeDocument();
       operation.navigating = true;
       const result = await frameSend("Page.navigate", {
         frameId,
@@ -266,13 +294,15 @@ export async function controlBrowser(
         timeout: 5000,
       });
       const geometry = await send("Runtime.evaluate", {
-        expression: `(()=>{const f=document.querySelector(${JSON.stringify(selector)});if(!f)return null;const r=f.getBoundingClientRect(),v=f.parentElement.getBoundingClientRect();const x=Math.max(0,r.left,v.left),y=Math.max(0,r.top,v.top);return {x:x+scrollX,y:y+scrollY,width:Math.min(r.right,v.right,innerWidth)-x,height:Math.min(r.bottom,v.bottom,innerHeight)-y};})()`,
+        expression: peer.native
+          ? "({x:scrollX,y:scrollY,width:innerWidth,height:innerHeight})"
+          : `(()=>{const f=document.querySelector(${JSON.stringify(selector)});if(!f || [...document.querySelectorAll('dialog[open],[role="dialog"],[role="alertdialog"]')].some(d=>!d.contains(f)&&d.getClientRects().length&&getComputedStyle(d).visibility!=='hidden'))return null;const r=f.getBoundingClientRect(),v=f.parentElement.getBoundingClientRect();const x=Math.max(0,r.left,v.left),y=Math.max(0,r.top,v.top);return {x:x+scrollX,y:y+scrollY,width:Math.min(r.right,v.right,innerWidth)-x,height:Math.min(r.bottom,v.bottom,innerHeight)-y};})()`,
         returnByValue: true,
       });
       const clip = geometry.result.value;
       if (!clip || clip.width <= 0 || clip.height <= 0)
         throw new Error(
-          "Show this embedded page before requesting a screenshot.",
+          "Show this browser page and close covering dialogs before requesting a screenshot.",
         );
       // An explicit layout clip with captureBeyondViewport handles Chrome's
       // native viewport differing from an emulated one without capturing the workbench.

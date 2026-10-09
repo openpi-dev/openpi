@@ -8,7 +8,8 @@ export interface BrowserAction {
 }
 
 export interface BrowserRequest {
-  operation: "tabs" | "open" | "observe" | "act" | "navigate";
+  operation: "browsers" | "tabs" | "open" | "observe" | "act" | "navigate";
+  browser?: string;
   root?: string;
   stateId?: string;
   url?: string;

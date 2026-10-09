@@ -139,10 +139,10 @@ test("embedded computer-use targets exact same-process and cross-process documen
       });
       expect(observed.error).toBeUndefined();
       expect(observed.result!.text).toContain("Embedded fixture");
-      const input = observed.result!.nodes.find(
+      let input = observed.result!.nodes.find(
         (node) => node.role === "textbox" && node.name === "Editor",
       )!;
-      const save = observed.result!.nodes.find(
+      let save = observed.result!.nodes.find(
         (node) => node.role === "button" && node.name === "Save",
       )!;
       expect(input).toBeTruthy();
@@ -178,6 +178,35 @@ test("embedded computer-use targets exact same-process and cross-process documen
         [23, 170, 68, 255],
         [23, 170, 68, 255],
       ]);
+      // A settings dialog overlays the iframe. Its pixels must never be
+      // returned as if they belonged to the selected embedded document.
+      await page.evaluate(() => {
+        const cover = window.document.createElement("dialog");
+        cover.id = "browser-screenshot-cover";
+        cover.textContent = "Workbench settings are outside the page";
+        window.document.body.append(cover);
+        cover.showModal();
+      });
+      const covered = await control(id, documentId, {
+        operation: "observe",
+        image: true,
+      });
+      expect(covered.result).toBeUndefined();
+      expect(covered.error).toContain("close covering dialogs");
+      await page.evaluate(() => {
+        window.document.getElementById("browser-screenshot-cover")!.remove();
+      });
+      const uncovered = await control(id, documentId, {
+        operation: "observe",
+        image: true,
+      });
+      expect(uncovered.error).toBeUndefined();
+      input = uncovered.result!.nodes.find(
+        (node) => node.role === "textbox" && node.name === "Editor",
+      )!;
+      save = uncovered.result!.nodes.find(
+        (node) => node.role === "button" && node.name === "Save",
+      )!;
       const acted = await control(id, documentId, {
         operation: "act",
         actions: [

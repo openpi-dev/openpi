@@ -44,6 +44,134 @@ after(async () => {
   await rm(hostAgentDirectory, { recursive: true, force: true });
 });
 
+test("browser settings hot-apply without a model turn and native credentials cannot authorize Web APIs", async () => {
+  const path = join(hostAgentDirectory, "my-pi-setup.json");
+  const before = await readFile(path, "utf8").catch(() => undefined);
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-browser-host-"));
+  const runtime = testRuntime(cwd);
+  runtime.isIdle = () => false;
+  let applied = 0;
+  let prompted = 0;
+  runtime.applySetupConfiguration = async () => {
+    applied++;
+  };
+  runtime.sendPrompt = async () => {
+    prompted++;
+    return { pendingFollowUps: 0 };
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const controller = "795239cc-8ff9-49cb-9894-e16b3ba86af7";
+  const post = (
+    route: string,
+    body: unknown,
+    extra: Record<string, string> = {},
+  ) =>
+    fetch(`${launched.origin}${route}`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+        "X-OpenPI-Web-Controller": controller,
+        ...extra,
+      },
+      body: JSON.stringify(body),
+    });
+  try {
+    for (const body of [
+      { externalBrowsers: ["safari"] },
+      { defaultBrowser: "shell" },
+      { command: "open" },
+      { control: "true" },
+      { embedded: null },
+      { externalBrowsers: ["chrome", "chrome"] },
+    ])
+      assert.equal((await post("/api/settings/browser", body)).status, 400);
+    const saved = await post("/api/settings/browser", {
+      control: true,
+      defaultBrowser: "chrome",
+      externalBrowsers: ["chrome"],
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json()).config.defaultBrowser, "chrome");
+    assert.equal(loadSetupConfig().browser.control, true);
+    assert.equal(applied, 1);
+    assert.equal(prompted, 0);
+    const identity = {
+      browser: "chrome",
+      profileId: controller,
+      extensionId: "a".repeat(32),
+      version: "0.3.0",
+    };
+    assert.equal(
+      (
+        await post("/api/browser/connections", {
+          ...identity,
+          browser: "unknown",
+        })
+      ).status,
+      400,
+    );
+    const paired = await post("/api/browser/connections", identity);
+    assert.equal(paired.status, 200);
+    const connection = await paired.json();
+    const scoped = {
+      Authorization: `Bearer ${connection.token}`,
+      Origin: `chrome-extension://${identity.extensionId}`,
+    };
+    const route = `/api/browser/native?connectionId=${connection.connectionId}`;
+    assert.equal(
+      (
+        await post(
+          route,
+          { pages: [] },
+          { ...scoped, Origin: "https://foreign.example" },
+        )
+      ).status,
+      401,
+    );
+    assert.equal((await post(route, { pages: [] }, scoped)).status, 200);
+    const page = {
+      id: "wrong-connection/1",
+      document: controller,
+      title: "No",
+      url: "https://example.com/",
+    };
+    assert.equal((await post(route, { pages: [page] }, scoped)).status, 400);
+    const nativePage = {
+      ...page,
+      id: `${connection.connectionId}/123`,
+      document: "C172E720FA2F839B12DE8D2D9E5709F0",
+    };
+    assert.equal(
+      (await post(route, { pages: [nativePage] }, scoped)).status,
+      200,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/snapshot`, {
+          headers: { Authorization: scoped.Authorization },
+        })
+      ).status,
+      401,
+    );
+    assert.equal(
+      (await post("/api/settings/browser", { control: false }, scoped)).status,
+      403,
+    );
+    const revoked = await post("/api/settings/browser", { control: false });
+    assert.equal(revoked.status, 200);
+    const polling = await post(route, { pages: [] }, scoped);
+    assert.equal((await polling.json()).enabled, false);
+    assert.equal(applied, 2);
+    assert.equal(prompted, 0);
+  } finally {
+    await host.stop();
+    if (before === undefined) await rm(path, { force: true });
+    else await writeFile(path, before);
+    await rm(cwd, { force: true, recursive: true });
+  }
+});
+
 test("appearance writes preserve package config, reject extra authority, and never prompt the agent", async () => {
   const path = join(hostAgentDirectory, "my-pi-setup.json");
   const original = await readFile(path, "utf8").catch(() => undefined);
