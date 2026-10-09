@@ -46,6 +46,7 @@ export interface LiveToolEvidence {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
   result?: WebLiveMessage;
   state: EvidenceState;
+  parentToolCallId?: string;
 }
 
 export function bashReceipt(content: unknown, isError: unknown) {

@@ -112,7 +112,7 @@ function safeUrl(value: string) {
   }
 }
 
-function CodeBlock({
+export function CodeBlock({
   children,
   node: _node,
   ...props

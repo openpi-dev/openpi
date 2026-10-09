@@ -126,6 +126,75 @@ function activeSnapshot(
   return next;
 }
 
+for (const boundary of ["same", "settled", "reset", "copied"] as const) {
+  it(`retains Code Mode observations only for native pending parents in the same stream (${boundary})`, async () => {
+    const client = new FakeClient();
+    const previous = snapshot();
+    const call = {
+      type: "toolCall" as const,
+      id: "script",
+      name: "codemode",
+      arguments: '{"code":"await tools.bash({command: \'wc -l report.md\'});"}',
+    };
+    const result = {
+      content: "",
+      details: {
+        calls: [
+          {
+            id: "script/?",
+            name: "bash",
+            args: '{"command":"wc -l report.md"}',
+            status: "running",
+          },
+        ],
+      },
+    };
+    previous.runtime.status = "running";
+    previous.runtime.liveTools = [
+      { call, state: "running", result },
+      {
+        call: {
+          type: "toolCall",
+          id: "script/1",
+          name: "read",
+          arguments: '{"path":"report.md"}',
+        },
+        parentToolCallId: "script",
+        state: "returned",
+        result: { content: "observed output" },
+      },
+    ];
+    const next = snapshot();
+    next.runtime.status = boundary === "settled" ? "idle" : "running";
+    next.runtime.liveTools =
+      boundary === "settled" ? [] : [{ call, state: "running" }];
+    if (boundary === "copied") {
+      next.sessions[0]!.path = "/tmp/ws/copied.jsonl";
+      next.selectedSession!.path = "/tmp/ws/copied.jsonl";
+    }
+    client.snapshots.push(Promise.resolve(next));
+    const store = createWebStore(client);
+    store.setState({ snapshot: previous, selectedPath: null });
+    expect(
+      await store
+        .getState()
+        .actions.refreshSnapshot({ resetCursor: boundary === "reset" }),
+    ).toBe(true);
+    const live = store.getState().snapshot?.runtime.liveTools ?? [];
+    if (boundary === "same") {
+      expect(live.find((item) => item.call.id === "script")?.result).toEqual(
+        result,
+      );
+      expect(
+        live.find((item) => item.call.id === "script/1")?.result?.content,
+      ).toBe("observed output");
+    } else {
+      expect(live.some((item) => item.result)).toBe(false);
+      expect(live.some((item) => item.parentToolCallId)).toBe(false);
+    }
+  });
+}
+
 it("binds explicit steering to its active turn and preserves queue receipt as admission evidence", async () => {
   const client = new FakeClient();
   const current = snapshot();

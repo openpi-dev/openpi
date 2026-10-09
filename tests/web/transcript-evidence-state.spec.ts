@@ -141,6 +141,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("renders native Code Mode as one script with its own nested call ledger", () => {
+  const tool = {
+    ...call,
+    id: "script",
+    name: "codemode",
+    arguments: '{"code":"await tools.read({path: \'report.md\'});"}',
+  };
+  const result = {
+    role: "toolResult",
+    toolName: "codemode",
+    toolCallId: "script",
+    content: "Script completed",
+    isError: false,
+    details: {
+      calls: [
+        {
+          id: "script/1",
+          name: "read",
+          args: '{"path":"report.md"}',
+          status: "ok",
+        },
+      ],
+    },
+  };
+  const { container } = render(view(snapshot({ tool, results: [result] })));
+  expect(container.querySelectorAll(".codemode-evidence")).toHaveLength(1);
+  expect(
+    container.querySelector(".codemode-evidence")?.getAttribute("data-state"),
+  ).toBe("returned");
+  expect(
+    container.querySelector('[data-call-id="script/1"] .evidence-command')
+      ?.textContent,
+  ).toBe("report.md");
+});
+
 it("expands Bash and file evidence from canonical display preferences without changing results or their state", () => {
   for (const [name, preference] of [
     ["bash", "bashToolDisplay"],
