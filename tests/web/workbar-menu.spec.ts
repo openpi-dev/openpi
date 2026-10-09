@@ -63,10 +63,8 @@ function tab(name: string) {
 
 async function menuItem(name: string) {
   fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
-  const launcher = await screen.findByRole("region", {
-    name: i18n.t("openTools"),
-  });
-  return within(launcher).getByRole("button", {
+  const launcher = await screen.findByRole("menu");
+  return within(launcher).getByRole("menuitem", {
     name: new RegExp(`^${name}`),
   });
 }
@@ -193,7 +191,6 @@ it("reactivates an already opened inactive tool from the full launcher without r
   view.rerender(panel("files", 1));
   const row = await menuItem(i18n.t("browser"));
   expect(row.getAttribute("aria-disabled")).not.toBe("true");
-  expect(row.querySelector(".lucide-chevron-right")).not.toBeNull();
   fireEvent.click(row);
 
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());

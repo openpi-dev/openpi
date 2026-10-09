@@ -145,24 +145,25 @@ async function select(path: string, id = "session-a") {
 
 async function open(tool: "files" | "browser" | "review") {
   const workbar = document.querySelector<HTMLElement>(".workbar-panel");
-  fireEvent.click(
+  const trigger =
     workbar && !workbar.hidden
       ? within(workbar).getByRole("button", {
           name: i18n.t("openTools"),
         })
       : screen.getAllByRole("button", {
           name: i18n.t("openTools"),
-        })[0]!,
-  );
+        })[0]!;
+  const menu = trigger.getAttribute("aria-haspopup") === "menu";
+  fireEvent.click(trigger);
+  const picker = await screen.findByRole(menu ? "menu" : "region", {
+    name: i18n.t("openTools"),
+  });
   fireEvent.click(
-    within(screen.getByRole("region", { name: i18n.t("openTools") })).getByRole(
-      "button",
-      {
-        name: new RegExp(
-          `^${i18n.t(tool === "review" ? "changeEvidence" : tool)}`,
-        ),
-      },
-    ),
+    within(picker).getByRole(menu ? "menuitem" : "button", {
+      name: new RegExp(
+        `^${i18n.t(tool === "review" ? "changeEvidence" : tool)}`,
+      ),
+    }),
   );
 }
 

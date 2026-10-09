@@ -444,6 +444,66 @@ it("distinguishes a complete count from partial evidence and searches only loade
   rerender(node(true));
   expect(screen.queryByText("3 files changed")).toBeNull();
   expect(screen.getByText("3 files loaded")).toBeTruthy();
+  rerender(node(true, undefined, 3));
+  expect(screen.getAllByText("3 files loaded")).toHaveLength(1);
+  expect(screen.getByText(i18n.t("gitReviewTruncated"))).toBeTruthy();
+});
+
+it("shows each native file status without inventing zero stats or treating a rename as unchanged", () => {
+  wideReviewContainer();
+  const statuses = [
+    "added",
+    "modified",
+    "deleted",
+    "renamed",
+    "copied",
+    "untracked",
+    "unknown",
+  ] as const;
+  const data = {
+    ...snapshot,
+    additions: 2,
+    deletions: 3,
+    files: statuses.map((status) => ({
+      ...snapshot.files[0]!,
+      path: `changes/${status}.ts`,
+      previousPath: status === "renamed" ? "changes/before.ts" : undefined,
+      status,
+      diff:
+        status === "renamed"
+          ? "diff --git a/changes/before.ts b/changes/renamed.ts\nsimilarity index 100%\nrename from changes/before.ts\nrename to changes/renamed.ts\n"
+          : snapshot.files[0]!.diff,
+      additions: status === "added" ? 2 : 0,
+      deletions: status === "deleted" ? 3 : 0,
+    })),
+  };
+  const original = JSON.stringify(data);
+  render(
+    withI18n(
+      createElement(ReviewPanel, {
+        embedded: true,
+        review: {
+          result: { ok: true, snapshot: data },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        onClose: () => {},
+      }),
+    ),
+  );
+  for (const file of data.files) {
+    const row = screen.getByRole("button", { name: file.path });
+    expect(row.textContent).toContain(i18n.t(`gitFileStatus_${file.status}`));
+    expect(row.getAttribute("aria-description")).toBe(
+      i18n.t(`gitFileStatus_${file.status}`),
+    );
+    expect(row.textContent).not.toContain("+0");
+    expect(row.textContent).not.toContain("-0");
+    if (file.additions) expect(row.textContent).toContain(`+${file.additions}`);
+    if (file.deletions) expect(row.textContent).toContain(`-${file.deletions}`);
+  }
+  expect(JSON.stringify(data)).toBe(original);
 });
 
 it("does not reload the selected diff for an unchanged snapshot revision", async () => {
@@ -552,6 +612,11 @@ it("switches from the changed-file list to a separate full-height diff view", as
     ),
   );
   expect(screen.getByText("feature/review compared with main")).toBeTruthy();
+  expect(
+    screen
+      .getByText("feature/review compared with main")
+      .closest(".review-source-picker"),
+  ).toBeTruthy();
   expect(container.querySelectorAll(".session-review-file")).toHaveLength(2);
   const first = container.querySelector<HTMLButtonElement>(
     ".session-review-file",
@@ -564,6 +629,10 @@ it("switches from the changed-file list to a separate full-height diff view", as
     }),
   ).toBeTruthy();
   const diff = screen.getByRole("figure", { name: "Change diff" });
+  expect(screen.getAllByText("feature/review compared with main")).toHaveLength(
+    1,
+  );
+  expect(container.querySelector(".review-file-mode")).toBeNull();
   expect(diff.textContent).toContain("old");
   expect(diff.textContent).toContain("new");
   expect(

@@ -1,4 +1,7 @@
-import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+} from "@astryxdesign/core/DropdownMenu";
 import {
   ChevronDown,
   ChevronRight,
@@ -1287,40 +1290,62 @@ function FileTree({
           className="file-write-actions"
           aria-label={t("filesWorkspaceActions")}
         >
-          {(["create-file", "create-directory"] as const).map((kind) => {
-            const label = t(
-              kind === "create-file" ? "filesNewFile" : "filesNewDirectory",
-            );
-            const Icon = kind === "create-file" ? FilePlus2 : FolderPlus;
-            return (
-              <button
-                key={kind}
-                type="button"
-                className="icon-button"
-                aria-label={label}
-                title={canWrite ? label : t("filesWriteUnavailable")}
-                disabled={!canWrite || mutationBusy}
-                onClick={(event) => {
-                  createOpener.current = event.currentTarget;
+          <DropdownMenu
+            button={{
+              ref: createOpener,
+              label: t("filesCreateMenu"),
+              variant: "ghost",
+              className: "file-toolbar-button",
+              tooltip:
+                canWrite && !mutationBusy ? t("filesCreateMenu") : undefined,
+              isDisabled: !canWrite || mutationBusy,
+            }}
+            items={(["create-file", "create-directory"] as const).map(
+              (kind) => ({
+                label: t(
+                  kind === "create-file" ? "filesNewFile" : "filesNewDirectory",
+                ),
+                icon:
+                  kind === "create-file" ? (
+                    <FilePlus2 aria-hidden="true" />
+                  ) : (
+                    <FolderPlus aria-hidden="true" />
+                  ),
+                isDisabled: !canWrite || mutationBusy,
+                onClick: () => {
                   setCreating(kind);
                   setName("");
                   setOperationMessage(null);
-                }}
-              >
-                <Icon aria-hidden="true" />
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t("filesImport")}
-            title={canWrite ? t("filesImport") : t("filesWriteUnavailable")}
-            disabled={!canWrite || mutationBusy}
-            onClick={() => uploadInput.current?.click()}
-          >
-            <Upload aria-hidden="true" />
-          </button>
+                },
+              }),
+            )}
+            menuWidth={190}
+          />
+          <DropdownMenu
+            button={{
+              label: t("filesImportMenu"),
+              variant: "ghost",
+              className: "file-toolbar-button",
+              tooltip:
+                canWrite && !mutationBusy ? t("filesImportMenu") : undefined,
+              isDisabled: !canWrite || mutationBusy,
+            }}
+            items={[
+              {
+                label: t("filesImport"),
+                icon: <Upload aria-hidden="true" />,
+                isDisabled: !canWrite || mutationBusy,
+                onClick: () => uploadInput.current?.click(),
+              },
+              {
+                label: t("filesImportFolder"),
+                icon: <FolderInput aria-hidden="true" />,
+                isDisabled: !canWrite || mutationBusy,
+                onClick: () => folderInput.current?.click(),
+              },
+            ]}
+            menuWidth={190}
+          />
           <input
             ref={uploadInput}
             type="file"
@@ -1332,18 +1357,6 @@ function FileTree({
               event.currentTarget.value = "";
             }}
           />
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t("filesImportFolder")}
-            title={
-              canWrite ? t("filesImportFolder") : t("filesWriteUnavailable")
-            }
-            disabled={!canWrite || mutationBusy}
-            onClick={() => folderInput.current?.click()}
-          >
-            <FolderInput aria-hidden="true" />
-          </button>
           <input
             ref={folderInput}
             type="file"
@@ -1355,30 +1368,34 @@ function FileTree({
               event.currentTarget.value = "";
             }}
           />
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t("filesSelectMultiple")}
-            title={t("filesSelectMultiple")}
-            aria-pressed={selecting}
-            disabled={!canWrite || mutationBusy}
-            onClick={() => {
-              setSelecting((value) => !value);
-              setChecked([]);
+          <DropdownMenu
+            button={{
+              label: t("filesMoreMenu"),
+              variant: "ghost",
+              className: "file-toolbar-button",
+              tooltip: t("filesMoreMenu"),
             }}
+            menuWidth={210}
           >
-            <ListChecks aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t("filesTrash")}
-            title={t("filesTrash")}
-            aria-pressed={trashOpen}
-            onClick={() => setTrashOpen((value) => !value)}
-          >
-            <Trash2 aria-hidden="true" />
-          </button>
+            <DropdownMenuCheckboxItem
+              label={t("filesSelectMultiple")}
+              icon={<ListChecks aria-hidden="true" />}
+              value={selecting}
+              isDisabled={!canWrite || mutationBusy}
+              hasCloseOnSelect
+              onChange={(value: boolean) => {
+                setSelecting(value);
+                setChecked([]);
+              }}
+            />
+            <DropdownMenuCheckboxItem
+              label={t("filesTrash")}
+              icon={<Trash2 aria-hidden="true" />}
+              value={trashOpen}
+              hasCloseOnSelect
+              onChange={setTrashOpen}
+            />
+          </DropdownMenu>
         </fieldset>
         <p className="file-write-directory" title={directory}>
           <span>

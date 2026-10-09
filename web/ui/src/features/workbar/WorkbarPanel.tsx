@@ -1,4 +1,5 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
+import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import {
   ArrowLeft,
   ArrowUp,
@@ -8,6 +9,7 @@ import {
   Globe2,
   MessageCirclePlus,
   PanelLeftOpen,
+  PanelRightClose,
   Plus,
   SquareTerminal,
   StopCircle,
@@ -531,7 +533,12 @@ export function WorkbarPanel({
       if (!target?.isConnected || target.closest("[hidden], [inert]")) return;
       if (
         document.activeElement !== document.body &&
-        !target.closest(".workbar-panel")?.contains(document.activeElement)
+        !target.closest(".workbar-panel")?.contains(document.activeElement) &&
+        !document
+          .getElementById(
+            openToolsButton.current?.getAttribute("aria-controls") ?? "",
+          )
+          ?.contains(document.activeElement)
       )
         return;
       target.focus({ preventScroll: true });
@@ -752,8 +759,16 @@ export function WorkbarPanel({
                   <button
                     type="button"
                     className="workbar-tab-close"
-                    aria-label={`${t("close")} ${label}`}
-                    title={t("close")}
+                    aria-label={
+                      kind === "terminal" && canControl
+                        ? t("workbarEndTerminal", { name: label })
+                        : `${t("close")} ${label}`
+                    }
+                    title={
+                      kind === "terminal" && canControl
+                        ? t("workbarEndTerminal", { name: label })
+                        : `${t("close")} ${label}`
+                    }
                     disabled={
                       kind === "terminal" &&
                       canControl &&
@@ -803,38 +818,64 @@ export function WorkbarPanel({
                   />
                 </button>
               )}
-            {conversationCollapsed && (
+            {tabs.active ? (
+              <DropdownMenu
+                button={{
+                  ref: openToolsButton,
+                  className: "icon-button workbar-add-tab",
+                  icon: <Plus aria-hidden="true" />,
+                  label: t("openTools"),
+                  isIconOnly: true,
+                  variant: "ghost",
+                  "aria-label": t("openTools"),
+                  tooltip: t("openTools"),
+                }}
+                onOpenChange={(open: boolean) => {
+                  if (open) return;
+                  tabFocus.current ??= {
+                    tool: tabs.active,
+                    scope: browserScope,
+                  };
+                  setTabs(dismissWorkbarLauncher);
+                }}
+                items={launcherTools.map((tool) => ({
+                  id: tool.kind,
+                  icon: <tool.icon aria-hidden="true" />,
+                  label: t(
+                    tool.kind === "terminal"
+                      ? "workbarNewTerminal"
+                      : tool.title,
+                  ),
+                  description: t(tool.description),
+                  onClick: () => select(tool.kind),
+                }))}
+                menuWidth={300}
+                alignment="end"
+                hasChevron={false}
+              />
+            ) : (
               <button
                 type="button"
-                className="icon-button"
-                aria-label={t("restoreConversation")}
-                title={t("restoreConversation")}
-                onClick={onRestoreConversation}
+                ref={openToolsButton}
+                className="icon-button workbar-add-tab"
+                aria-label={t("openTools")}
+                title={t("openTools")}
+                aria-pressed={tabs.launcherOpen}
+                onClick={() =>
+                  setTabs((current) => openWorkbarTool(current, "launcher"))
+                }
               >
-                <PanelLeftOpen aria-hidden="true" />
+                <Plus aria-hidden="true" />
               </button>
             )}
             <button
               type="button"
-              ref={openToolsButton}
-              className="icon-button workbar-add-tab"
-              aria-label={t("openTools")}
-              title={t("openTools")}
-              aria-pressed={tabs.launcherOpen}
-              onClick={() =>
-                setTabs((current) => openWorkbarTool(current, "launcher"))
-              }
-            >
-              <Plus aria-hidden="true" />
-            </button>
-            <button
-              type="button"
               className="icon-button"
-              aria-label={t("close")}
-              title={t("close")}
+              aria-label={t("workbarCollapseTools")}
+              title={t("workbarCollapseTools")}
               onClick={onClose}
             >
-              <X aria-hidden="true" />
+              <PanelRightClose aria-hidden="true" />
             </button>
           </div>
         </header>

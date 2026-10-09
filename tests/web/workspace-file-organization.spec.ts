@@ -192,19 +192,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const menu = async (name: string, action: string) => {
+const menu = async (name: string, action: string, toolbar = false) => {
   fireEvent.click(
     await screen.findByRole("button", {
-      name: i18n.t("filesPathActions", { name }),
+      name: toolbar ? name : i18n.t("filesPathActions", { name }),
     }),
   );
-  const item = await screen.findByRole("menuitem", { name: action });
+  const role =
+    toolbar &&
+    [i18n.t("filesSelectMultiple"), i18n.t("filesTrash")].includes(action)
+      ? "menuitemcheckbox"
+      : "menuitem";
+  const item = await screen.findByRole(role, { name: action });
   const popup = item.closest('[role="menu"]')!;
   // detail=0 opens in keyboard/AT mode. Wait for its opening-frame focus
   // before selecting: jsdom lets a late callback focus a display:none item.
   await waitFor(() =>
     expect(document.activeElement).toBe(
-      within(popup as HTMLElement).getAllByRole("menuitem")[0],
+      within(popup as HTMLElement).getAllByRole(role)[0],
     ),
   );
   fireEvent.click(item);
@@ -259,9 +264,7 @@ it("a batch reports each failed and successful item and keeps failed selections 
   });
   render(node());
   await screen.findByRole("button", { name: "one.md" });
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("filesSelectMultiple") }),
-  );
+  await menu(i18n.t("filesMoreMenu"), i18n.t("filesSelectMultiple"), true);
   fireEvent.click(
     screen.getByRole("checkbox", {
       name: i18n.t("filesSelectItem", { name: "one.md" }),
@@ -306,9 +309,7 @@ it("selecting a folder and its child removes contents once and offers an immedia
   render(node());
   fireEvent.click(await screen.findByRole("button", { name: "folder" }));
   await screen.findByRole("button", { name: "child.md" });
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("filesSelectMultiple") }),
-  );
+  await menu(i18n.t("filesMoreMenu"), i18n.t("filesSelectMultiple"), true);
   fireEvent.click(
     screen.getByRole("checkbox", {
       name: i18n.t("filesSelectItem", { name: "folder" }),
@@ -374,7 +375,7 @@ it("renaming an expanded folder follows its selected child and unsaved draft, an
       }) as HTMLTextAreaElement
     ).value,
   ).toBe("# Folder draft");
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("filesNewFile") }));
+  await menu(i18n.t("filesCreateMenu"), i18n.t("filesNewFile"), true);
   const name = screen.getByRole("textbox", { name: i18n.t("filesFileName") });
   fireEvent.change(name, { target: { value: "next.txt" } });
   fireEvent.submit(name.closest("form")!);
@@ -405,9 +406,7 @@ it("trash can be reopened after remount, shows unverifiable entries and closes a
     }),
   );
   render(node());
-  fireEvent.click(
-    await screen.findByRole("button", { name: i18n.t("filesTrash") }),
-  );
+  await menu(i18n.t("filesMoreMenu"), i18n.t("filesTrash"), true);
   await screen.findByRole("button", {
     name: i18n.t("filesRestoreItem", { name: "two.md" }),
   });

@@ -8,7 +8,7 @@
 .file-search svg { width:14px; height:14px; flex:none; }
 .file-search input { min-width:0; width:100%; padding:0; border:0; outline:0; background:transparent; color:var(--text); font-size:12px; }
 .file-search input:focus { outline:none; box-shadow:none; }
-.file-search button { flex:none; width:24px; height:24px; padding:3px; }
+.file-search button { flex:none; width:32px; height:32px; padding:5px; }
 .file-search-progress { width:5px; height:5px; border-radius:50%; flex:none; }
 .file-search-progress[data-loading] { background:var(--accent); }
 .file-tree { min-height:0; overflow:auto; flex:1; padding:2px 5px 14px; }
@@ -20,12 +20,12 @@
 .file-tree-row:disabled { opacity:.5; cursor:not-allowed; }
 .file-tree-item { display:flex; align-items:center; min-width:0; }
 .file-tree-item .file-tree-row { flex:1; min-width:0; }
-.file-tree-item .file-path-actions { flex:none; width:24px; min-width:24px; height:28px; padding:4px; color:var(--muted); }
+.file-tree-item .file-path-actions { flex:none; width:32px; min-width:32px; height:32px; padding:5px; color:var(--muted); }
 .file-tree-item .file-path-actions { opacity:0; }
 .file-tree-item:hover .file-path-actions,.file-tree-item:focus-within .file-path-actions { opacity:1; }
 .file-tree-check { flex:none; margin:0 3px; }
 .file-organization-bar { display:flex; gap:5px; flex-wrap:wrap; align-items:center; padding:6px 8px; border-bottom:1px solid var(--border); font-size:11px; }
-.file-organization-bar button,.file-trash-list button { padding:4px 6px; border:1px solid var(--border); border-radius:4px; background:var(--page); color:var(--text); font-size:11px; }
+.file-organization-bar button,.file-trash-list button { min-height:32px; padding:4px 6px; border:1px solid var(--border); border-radius:4px; background:var(--page); color:var(--text); font-size:11px; }
 .file-trash-list { padding:8px; border-bottom:1px solid var(--border); max-height:35%; overflow:auto; font-size:11px; }
 .file-trash-list p { color:var(--muted); margin:0 0 6px; }
 .file-trash-list ul { list-style:none; padding:0; margin:0; }
@@ -34,15 +34,16 @@
 @media (hover:none) { .file-tree-item .file-path-actions { opacity:1; } }
 .file-create-toolbar { padding:0 8px 6px; border-bottom:1px solid var(--border); }
 .file-write-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; border:0; padding:0; margin:0; min-width:0; }
-.file-write-actions button { width:28px; height:28px; padding:5px; }
-.file-write-directory { display:flex; align-items:center; gap:5px; margin:4px 0 0; color:var(--muted); font-size:10px; min-width:0; }
+.file-write-actions .file-toolbar-button { width:auto; min-height:32px; height:32px; padding:0 7px; font-size:12px; gap:4px; }
+.file-write-actions .file-toolbar-button svg { width:14px; height:14px; }
+.file-write-directory { display:flex; align-items:center; gap:5px; margin:4px 0 0; color:var(--muted); font-size:11px; min-width:0; }
 .file-write-directory span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.file-write-directory button { flex:none; border:0; padding:1px 3px; background:transparent; color:var(--accent); font-size:10px; }
+.file-write-directory button { flex:none; min-height:32px; border:0; padding:1px 3px; background:transparent; color:var(--accent); font-size:11px; }
 .file-create-form { margin:8px; padding:8px; border:1px solid var(--border); border-radius:7px; font-size:11px; }
 .file-create-form label { display:flex; flex-direction:column; gap:6px; }
 .file-create-form input { width:100%; min-width:0; padding:6px; border:1px solid var(--border); border-radius:4px; background:var(--page); color:var(--text); font-size:12px; }
 .file-create-form > div { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-.file-create-form button,.file-import-results button { padding:4px 7px; border:1px solid var(--border); border-radius:4px; background:var(--page); color:var(--text); font-size:11px; }
+.file-create-form button,.file-import-results button { min-height:32px; padding:4px 7px; border:1px solid var(--border); border-radius:4px; background:var(--page); color:var(--text); font-size:11px; }
 .file-import-results { padding:6px 8px; border-bottom:1px solid var(--border); min-height:0; max-height:40%; overflow:auto; font-size:10px; }
 .file-import-results > p { color:var(--muted); margin:0 0 6px; }
 .file-import-results ol { padding:0; margin:0; list-style:none; }
@@ -59,13 +60,13 @@
 .file-icon-code { color:light-dark(#357cb0,#83b7e0); }
 .file-icon-document { color:light-dark(#bc5953,#db8c83); }
 .file-tree-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; line-height:1.6; }
-.file-tree-name small { display:block; color:var(--muted); overflow:hidden; text-overflow:ellipsis; font-size:10px; }
+.file-tree-name small { display:block; color:var(--muted); overflow:hidden; text-overflow:ellipsis; font-size:11px; }
 .file-tree-note { padding:8px 12px; color:var(--muted); font-size:11px; overflow-wrap:anywhere; }
 .files-preview-empty { grid-column:1; grid-row:2; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:24px; color:var(--muted); }
 .files-preview-empty > svg { width:32px; height:32px; stroke-width:1.2; opacity:.6; }
 .files-preview-empty h3 { color:var(--text); font-size:14px; font-weight:500; margin:14px 0 6px; }
 .files-preview-empty p { font-size:12px; line-height:1.7; max-width:260px; margin:0; }
-.files-tree-toggle { position:relative; grid-column:1 / -1; grid-row:1; align-self:start; justify-self:end; margin:8px; z-index:2; background:var(--page); }
+.files-tree-toggle { position:relative; grid-column:1 / -1; grid-row:1; align-self:start; justify-self:end; width:32px; min-height:32px; margin:8px; z-index:2; background:var(--page); }
 .files-tree-toggle[aria-pressed="true"] { background:var(--sidebar-hover); color:var(--text); }
 .files-tree-toggle:hover { background:var(--sidebar-hover); }
 .files-empty-header { grid-column:1 / -1; grid-row:1; display:flex; align-items:center; gap:8px; min-height:48px; padding:8px 48px 8px 16px; border-bottom:1px solid var(--border); font-size:13px; }
@@ -73,7 +74,8 @@
 .files-workspace .artifact-panel-embedded { display:grid; grid-column:1 / -1; grid-row:1 / -1; grid-template-columns:subgrid; grid-template-rows:subgrid; height:auto; border:0; }
 .artifact-panel > header { flex:none; }
 .artifact-panel .artifact-header-actions { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
-.artifact-panel .artifact-header-actions > button:not(.file-source-toggle) { width:30px; padding:5px; font-size:0; gap:0; flex:none; }
+.artifact-panel .artifact-header-actions > button:not(.file-source-toggle):not(.file-save-button) { width:32px; min-height:32px; padding:5px; font-size:0; gap:0; flex:none; }
+.artifact-panel .artifact-header-actions > .file-save-button { width:auto; min-height:32px; padding:5px 9px; font-size:12px; gap:5px; }
 .artifact-header-actions svg { flex:none; }
 .artifact-panel .artifact-header-actions .file-source-toggle { border-color:transparent; font-size:12px; white-space:nowrap; }
 .files-workspace .artifact-panel-embedded > header { grid-column:1 / -1; grid-row:1; display:flex; flex-wrap:wrap; gap:8px 12px; min-height:48px; padding:8px 48px 8px 16px; }
@@ -83,12 +85,19 @@
 .files-workspace .artifact-title h2 { font-size:13px; font-weight:550; margin:0; min-width:0; }
 .files-workspace .artifact-header-actions { flex:none; }
 .file-mode-switch { display:flex; margin:0; min-width:0; padding:2px; border:1px solid var(--border); border-radius:6px; background:var(--sidebar); }
-.artifact-panel .file-mode-switch button:not(.artifact-link) { min-height:24px; padding:2px 9px; border:0; border-radius:4px; font-size:12px; background:transparent; color:var(--muted); transition:background-color 120ms,color 120ms,box-shadow 120ms; }
+.artifact-panel .file-mode-switch button:not(.artifact-link) { min-height:32px; padding:2px 9px; border:0; border-radius:4px; font-size:12px; background:transparent; color:var(--muted); transition:background-color 120ms,color 120ms,box-shadow 120ms; }
 .artifact-panel .file-mode-switch button[aria-pressed="true"] { background:var(--page); color:var(--text); box-shadow:0 1px 3px #0001; }
 .artifact-panel .file-mode-switch button:hover:not(:disabled):not([aria-pressed="true"]) { background:var(--sidebar-hover); color:var(--text); }
 .artifact-panel .file-mode-switch button:active:not(:disabled) { background:var(--sidebar-hover); box-shadow:inset 0 1px 2px #0001; }
 .artifact-panel .file-mode-switch button:focus-visible,.files-tree-toggle:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 @media (prefers-reduced-motion:reduce) { .artifact-panel .file-mode-switch button { transition:none; } }
+@media (pointer:coarse) {
+  .file-tree-row,.file-write-directory button,.files-tree-toggle,.files-workspace .artifact-header-actions > button,.files-workspace .file-mode-switch button,.file-create-form button,.file-import-results button,.file-organization-bar button,.file-trash-list button { min-height:44px; }
+  .files-tree-toggle { width:44px; }
+  .file-search button,.file-tree-item .file-path-actions { width:44px; min-width:44px; height:44px; }
+  .file-write-actions .file-toolbar-button { min-height:44px; height:44px; }
+  .files-workspace .artifact-header-actions > button:not(.file-source-toggle):not(.file-save-button) { width:44px; }
+}
 .file-unsaved { color:light-dark(#a16c16,#e5b65b); font-size:9px; flex:none; }
 .file-editor { display:block; width:100%; min-height:calc(100% - 48px); resize:vertical; padding:14px; border:1px solid var(--border); border-radius:6px; background:var(--page); color:var(--text); font:13px/1.7 var(--font-mono,monospace); tab-size:2; }
 .file-editor:focus { outline:2px solid var(--focus); outline-offset:1px; }
