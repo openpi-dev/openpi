@@ -1,9 +1,9 @@
 # Windows workspace picker: Unicode stdout boundary
 
-- Status: validated on Windows at the subprocess encoding boundary, with separate manual Web confirmation.
-- Created and verified: 2026-10-08.
-- Source boundary: upstream `3cb2ecfe1bfbb98252651885311d309f83749428` plus the Windows picker fix and regression test in this change.
-- Related Issue and implementation discussion: [#712](https://github.com/openpi-dev/openpi/issues/712), which links the implementation PR.
+- Status: validated at the subprocess encoding boundary and in real Windows Web interaction under CP936, with manual native-dialog selection.
+- Created: 2026-10-08. Last verified: 2026-10-09.
+- Source boundary: baseline `3cb2ecfe1bfbb98252651885311d309f83749428` and implementation head `50107076f4f241d136c6aaa6b458c90d5d815932`; subsequent evidence additions are documentation only.
+- Related Issue and implementation PR: [#712](https://github.com/openpi-dev/openpi/issues/712), [PR #713](https://github.com/openpi-dev/openpi/pull/713).
 - Superseding relationship: none; this is a scoped bug investigation, not a new project constraint.
 
 ## Verified facts
@@ -25,6 +25,40 @@ Set `[Console]::OutputEncoding` to UTF-8 without a BOM inside the picker subproc
 
 The same five parallel-group failures occurred before the fix on this Windows host at `26da591`: one in `git-review`, three in `transcript-search`, and one in `turn-changes`. Four report symlink `EPERM`; the remaining test expects a `changed-session` reason after symlink substitution. This is a comparison with the earlier local checkout, not a clean upstream baseline or a passing full suite.
 
+## Real Windows Web verification: 2026-10-09
+
+Both runs used the same Windows machine, browser, and existing temporary directory, `C:\openpi-review\学校`. The reporter selected it through the real Web workspace-selection entry and Windows Shell folder dialog. The dialog was operated manually because the computer-control tool did not expose that PowerShell-owned window. The page screenshots below are direct, unedited browser captures; they contain no access token or private workspace data.
+
+| Environment | Both runs |
+| --- | --- |
+| OS | Windows 11 Pro, version `10.0.26200`, build `26200` |
+| Windows PowerShell | `5.1.26100.9444` (`powershell.exe`) |
+| Node | `v24.12.0` |
+| Console condition | CP936, explicitly selected in each launcher's own console with `chcp.com 936` and matching console output encoding |
+| Child-process encoding probe | PowerShell output code page `936`, input code page `936`, default ANSI encoding `936` |
+| Checkout / unique OpenPI source | `E:\OpenPi`, loaded as a local source package |
+| Isolation | Fresh `PI_CODING_AGENT_DIR` per run; `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`; no model or credentials configured |
+| Web launch | `node E:\OpenPi\bin\openpi.js web --no-workspace --port 50878 --no-open` |
+
+Before each launch, `git rev-parse HEAD` and `pi list` were recorded. In each isolated environment, `pi list` showed only `User packages: E:/OpenPi -> E:\OpenPi`. Both checkouts had clean tracked files at capture time. The baseline host was stopped before switching source, the production UI was rebuilt at each revision with `bun run build:web`, and a new host was started and the browser reloaded. No chooser stub, path injection, or source instrumentation was used in these runs. CP936 was deliberately held constant for reproducibility; the machine's system locale was not changed.
+
+| Run | Exact loaded revision | Observed result |
+| --- | --- | --- |
+| Before | `3cb2ecfe1bfbb98252651885311d309f83749428` | `ENOENT: no such file or directory, realpath 'C:\openpi-review\ѧУ'`; workspace was not added |
+| After | `50107076f4f241d136c6aaa6b458c90d5d815932` | `学校` was added, appeared in the workspace list, and could be selected in the workspace menu; the header's accessibility projection retained `C:\openpi-review\学校`, and the task composer accepted the unsent draft `工作区测试（未发送）` |
+
+Before, captured from the baseline Web page:
+
+![Baseline: Chinese workspace path is corrupted and realpath fails](assets/windows-workspace-picker-2026-10-09/before-web.jpg)
+
+After, captured after selecting the added workspace from the menu and entering a draft without sending it:
+
+![Fixed: Chinese workspace is selected and the task composer is editable](assets/windows-workspace-picker-2026-10-09/after-web.jpg)
+
+[Additional screenshot: the workspace appears in the sidebar](assets/windows-workspace-picker-2026-10-09/after-workspace-list.jpg).
+
+The implementation head's [upstream CI run](https://github.com/openpi-dev/openpi/actions/runs/37772950126) completed all 19 reported checks successfully, including Windows jobs. This is separate from the earlier local Windows suite failures above. The screenshots verify workspace import and selection; no model turn was sent.
+
 ## Boundaries
 
-The automated fixture checks the real PowerShell stdout boundary and stubs the native dialog; it does not automate the full browser/dialog interaction. It runs only on Windows. CP936 is the deliberately reproduced legacy encoding; other Windows code pages were not individually exercised. macOS and Linux chooser branches, persisted configuration, and Pi provider/model behavior are outside this change.
+The automated fixture checks the real PowerShell stdout boundary and stubs the native dialog; it does not automate the full browser/dialog interaction. The added Web screenshots cover real native-dialog selection with human input under the controlled CP936 condition. Two earlier attempts exceeded the Web request's 15-second deadline; their timeout captures are excluded from the published evidence. Other Windows code pages were not individually exercised. macOS and Linux chooser branches, persisted configuration, and Pi provider/model behavior are outside this change.
