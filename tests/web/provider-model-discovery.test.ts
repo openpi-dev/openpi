@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import test from "node:test";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import {
@@ -259,4 +259,304 @@ test("catalog discovery is bounded, filters unsupported records, and never follo
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+async function withAnthropicCatalog(
+  handler: RequestListener,
+  run: (
+    discover: (
+      signal?: AbortSignal,
+    ) => ReturnType<typeof discoverProviderModels>,
+  ) => Promise<void>,
+) {
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const runtime = Object.assign(
+      Object.create(PiWebRuntime.prototype) as object,
+      {
+        runtime: {
+          session: { sessionManager: { getSessionId: () => "fixture" } },
+        },
+      },
+    ) as unknown as PiWebRuntime;
+    await run((signal = AbortSignal.timeout(2000)) =>
+      runtime.discoverProviderModels(
+        "fixture",
+        {
+          provider: "fixture",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          api: "anthropic-messages",
+          apiKey: "dummy-fixture-key",
+        },
+        signal,
+      ),
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test("Anthropic discovery follows the cursor through the production caller", async () => {
+  const seen: string[] = [];
+  await withAnthropicCatalog(
+    (request, response) => {
+      seen.push(request.url!);
+      assert.equal(request.headers["x-api-key"], "dummy-fixture-key");
+      assert.equal(request.headers["anthropic-version"], "2023-06-01");
+      assert.equal(request.headers.authorization, undefined);
+      response.end(
+        JSON.stringify(
+          seen.length === 1
+            ? {
+                data: Array.from({ length: 20 }, (_, i) => ({
+                  id: `first-${i}`,
+                })),
+                has_more: true,
+                last_id: "first-19",
+              }
+            : {
+                data: [
+                  {
+                    id: "later-model",
+                    display_name: "Later model",
+                    reasoning: true,
+                  },
+                ],
+                has_more: false,
+                last_id: "later-model",
+              },
+        ),
+      );
+    },
+    async (discover) => {
+      const result = await discover();
+      assert.equal(result.models.length, 21);
+      assert.deepEqual(
+        result.models.find((m) => m.id === "later-model"),
+        { id: "later-model", name: "Later model", reasoning: true },
+      );
+      assert.equal(result.truncated, false);
+      assert.deepEqual(seen, ["/v1/models", "/v1/models?after_id=first-19"]);
+    },
+  );
+});
+
+for (const [secondCount, hasMore, truncated] of [
+  [250, false, false],
+  [251, false, true],
+  [250, true, true],
+] as const) {
+  test(`Anthropic shares the 500-model cap across pages: ${secondCount}/${hasMore}`, async () => {
+    let requests = 0;
+    await withAnthropicCatalog(
+      (_request, response) => {
+        const first = ++requests === 1;
+        response.end(
+          JSON.stringify({
+            data: Array.from({ length: first ? 250 : secondCount }, (_, i) => ({
+              id: `model-${(first ? i : i + 250).toString().padStart(3, "0")}`,
+            })),
+            has_more: first || hasMore,
+            last_id: first ? "model-249" : "model-499",
+          }),
+        );
+      },
+      async (discover) => {
+        const result = await discover();
+        assert.equal(requests, 2);
+        assert.equal(result.models.length, 500);
+        assert.equal(result.models.at(-1)?.id, "model-499");
+        assert.equal(result.truncated, truncated);
+      },
+    );
+  });
+}
+
+for (const cursor of [undefined, "", "repeat", "bad\n", "x".repeat(257)]) {
+  test(`Anthropic rejects a missing, invalid or repeated cursor: ${JSON.stringify(cursor?.slice(0, 10))}`, async () => {
+    let requests = 0;
+    await withAnthropicCatalog(
+      (_request, response) => {
+        requests++;
+        response.end(
+          JSON.stringify({
+            data: [{ id: "repeat" }],
+            has_more: true,
+            last_id: cursor,
+          }),
+        );
+      },
+      async (discover) => {
+        await assert.rejects(discover(), /pagination/i);
+        assert.equal(requests, cursor === "repeat" ? 2 : 1);
+      },
+    );
+  });
+}
+
+test("Anthropic discovery shares the byte budget across pages", async () => {
+  let requests = 0;
+  await withAnthropicCatalog(
+    (_request, response) => {
+      requests++;
+      response.end(
+        JSON.stringify({
+          data: [{ id: `model-${requests}` }],
+          padding: "x".repeat(600_000),
+          has_more: requests === 1,
+          last_id: "model-1",
+        }),
+      );
+    },
+    async (discover) => {
+      await assert.rejects(discover(), /too large/);
+      assert.equal(requests, 2);
+    },
+  );
+});
+
+for (const status of [503, 302]) {
+  test(`Anthropic rejects later-page HTTP ${status} without returning partial success`, async () => {
+    const seen: string[] = [];
+    await withAnthropicCatalog(
+      (request, response) => {
+        seen.push(request.url!);
+        if (seen.length === 1)
+          response.end(
+            JSON.stringify({
+              data: [{ id: "first" }],
+              has_more: true,
+              last_id: "first",
+            }),
+          );
+        else {
+          response.writeHead(status, { Location: "/not-followed" });
+          response.end("private fixture detail");
+        }
+      },
+      async (discover) => {
+        await assert.rejects(
+          discover(),
+          status === 503 ? /HTTP 503/ : /fetch failed/,
+        );
+        assert.deepEqual(seen, ["/v1/models", "/v1/models?after_id=first"]);
+      },
+    );
+  });
+}
+
+test("Anthropic retains the caller's cancellation through a later response body", async () => {
+  const controller = new AbortController();
+  let requests = 0;
+  await withAnthropicCatalog(
+    (_request, response) => {
+      if (++requests === 1)
+        response.end(
+          JSON.stringify({
+            data: [{ id: "first" }],
+            has_more: true,
+            last_id: "first",
+          }),
+        );
+      else {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.write('{"data":[');
+        controller.abort();
+      }
+    },
+    async (discover) => {
+      await assert.rejects(
+        discover(
+          AbortSignal.any([controller.signal, AbortSignal.timeout(2000)]),
+        ),
+        { name: "AbortError" },
+      );
+      assert.equal(requests, 2);
+    },
+  );
+});
+
+test("Anthropic encodes opaque cursors and deduplicates validated models across pages", async () => {
+  const seen: string[] = [];
+  const cursor = "next/&?x=1";
+  await withAnthropicCatalog(
+    (request, response) => {
+      seen.push(request.url!);
+      response.end(
+        JSON.stringify(
+          seen.length === 1
+            ? {
+                data: [{ id: "first" }, { id: "bad\n" }],
+                has_more: true,
+                last_id: cursor,
+              }
+            : {
+                data: [
+                  { id: "first", display_name: "Updated" },
+                  { id: "second" },
+                  { name: "missing id" },
+                ],
+                has_more: false,
+              },
+        ),
+      );
+    },
+    async (discover) => {
+      const result = await discover();
+      assert.deepEqual(result, {
+        models: [
+          { id: "first", name: "Updated" },
+          { id: "second", name: "second" },
+        ],
+        truncated: false,
+      });
+      assert.equal(seen.length, 2);
+      const next = new URL(seen[1]!, "http://127.0.0.1");
+      assert.equal(next.pathname, "/v1/models");
+      assert.deepEqual([...next.searchParams], [["after_id", cursor]]);
+    },
+  );
+});
+
+test("Anthropic rejects an empty continuation page", async () => {
+  let requests = 0;
+  await withAnthropicCatalog(
+    (_request, response) => {
+      requests++;
+      response.end(
+        JSON.stringify({ data: [], has_more: true, last_id: "empty" }),
+      );
+    },
+    async (discover) => {
+      await assert.rejects(discover(), /pagination/);
+      assert.equal(requests, 1);
+    },
+  );
+});
+
+test("Anthropic keeps the original deadline while waiting for the next page", async () => {
+  let requests = 0;
+  await withAnthropicCatalog(
+    (_request, response) => {
+      if (++requests === 1)
+        response.end(
+          JSON.stringify({
+            data: [{ id: "first" }],
+            has_more: true,
+            last_id: "first",
+          }),
+        );
+      // Leave the next response pending until the caller's one deadline expires.
+    },
+    async (discover) => {
+      await assert.rejects(discover(AbortSignal.timeout(1000)), {
+        name: "TimeoutError",
+      });
+      assert.equal(requests, 2);
+    },
+  );
 });
