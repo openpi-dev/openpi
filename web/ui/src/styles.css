@@ -433,7 +433,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .process-sequence-body .message-row.detail-only { padding:0; }
 .process-step .message-details { width:100%; margin:0; }
 .process-step .message-details > summary { min-height:30px; font-size:var(--conversation-font-size); }
-.process-step { position:relative; min-width:0; overflow:hidden; }
+.process-step { position:relative; min-width:0; }
 .single-tool-step .tool-evidence-card > summary { padding-inline:0; }
 .process-sequence.single-process { width:100%; margin:0; }
 .single-process > summary { display:none; }
@@ -1047,6 +1047,9 @@ button.activity-chip:hover { filter: brightness(1.15); }
 @media (max-width:560px) {
   .tool-evidence-card > summary, .message-details > summary, .process-step .message-details > summary { min-height:40px; gap:7px; }
   .evidence-content { margin-left:26px; }
+}
+@media (max-width:360px) {
+  .evidence-target:has(> .evidence-filename) { flex-direction:column; align-items:stretch; gap:0; }
 }
 .evidence-lines > span { display:block; white-space:pre; }
 .evidence-line-number { display:inline-block; min-width:4ch; margin-right:2ch; color:var(--muted); user-select:none; text-align:right; }
