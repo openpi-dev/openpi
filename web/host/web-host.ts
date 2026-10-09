@@ -6,6 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { listenBrowserPort } from "./browser-port.ts";
 import { validProviderDiscovery } from "../runtime/provider-model-discovery.ts";
 import {
   createServer,
@@ -394,14 +395,7 @@ export class WebHost {
 
   async start() {
     await this.adapter.initialize();
-    await new Promise<void>((resolve, reject) => {
-      this.server.once("error", reject);
-      this.server.listen(this.requestedPort, HOST, () => resolve());
-    });
-    const address = this.server.address();
-    if (!address || typeof address === "string")
-      throw new Error("Web host did not expose a TCP port");
-    this.port = address.port;
+    this.port = await listenBrowserPort(this.server, this.requestedPort, HOST);
     this.publish("web_host_started", {
       port: this.port,
       ...(this.runtime.workspaceSelected === true
