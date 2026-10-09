@@ -824,8 +824,9 @@ describe("OpenPI React transcript", () => {
       }),
     );
 
-    const process =
-      container.querySelector<HTMLDetailsElement>(".process-sequence");
+    const process = container.querySelector<HTMLDetailsElement>(
+      ".process-sequence:not(.single-process)",
+    );
     expect(process).toBeTruthy();
     expect(process?.open).toBe(false);
     expect(
@@ -834,6 +835,19 @@ describe("OpenPI React transcript", () => {
     expect(
       process?.querySelector("summary")?.getAttribute("aria-label"),
     ).toContain(i18n.t("processActivityCount", { count: 1 }));
+    const counts = process?.querySelector(".process-sequence-counts");
+    expect(counts?.textContent).toContain(
+      i18n.t("processThinkingCount", { count: 1 }),
+    );
+    expect(counts?.textContent).toContain(
+      i18n.t("processToolCount", { count: 4 }),
+    );
+    expect(counts?.textContent).toContain(
+      i18n.t("processActivityCount", { count: 1 }),
+    );
+    expect(
+      process?.querySelector(".process-step:first-child .thinking-line"),
+    ).toBeTruthy();
     expect(
       container.querySelector(".thinking-line summary")?.textContent,
     ).not.toMatch(/[*_`]/u);
@@ -851,7 +865,7 @@ describe("OpenPI React transcript", () => {
 
     fireEvent.click(process!.querySelector("summary")!);
     expect(process?.open).toBe(true);
-    expect(process?.querySelectorAll(".process-step")).toHaveLength(5);
+    expect(process?.querySelectorAll(".process-step")).toHaveLength(6);
   });
 });
 
@@ -909,9 +923,13 @@ it("marks only live execution evidence for shimmer styling", () => {
     }),
   );
 
-  expect(view.container.querySelector(".process-sequence")).toBeNull();
+  const sequence = view.container.querySelector<HTMLDetailsElement>(
+    ".process-sequence:not(.single-process)",
+  );
+  expect(sequence?.open).toBe(true);
+  expect(sequence?.dataset.status).toBe("running");
   const process = view.container.querySelector<HTMLElement>(
-    ".single-tool-step.running",
+    ".process-step.running",
   );
   expect(process?.dataset.status).toBe("running");
   expect(
@@ -920,7 +938,13 @@ it("marks only live execution evidence for shimmer styling", () => {
   expect(view.container.querySelectorAll(".process-step.running")).toHaveLength(
     1,
   );
-  expect(view.container.querySelector(".thinking-line.running")).toBeTruthy();
+  expect(view.container.querySelector(".thinking-line.running")).toBeNull();
+  expect(view.container.querySelector(".thinking-line.done")).toBeTruthy();
+  expect(
+    Array.from(sequence!.querySelectorAll(".process-step"), (step) =>
+      step.getAttribute("data-status"),
+    ),
+  ).toEqual(["done", "running"]);
 });
 
 it("folds legacy setup instructions while keeping results and subsequent task messages visible", () => {
@@ -2820,6 +2844,11 @@ it("opens recorded thinking by default only when the canonical preference is ena
   expect(
     view.container.querySelector<HTMLDetailsElement>(".thinking-line")?.open,
   ).toBe(true);
+  expect(
+    view.container.querySelector<HTMLDetailsElement>(
+      ".process-sequence.single-process",
+    )?.open,
+  ).toBe(true);
 });
 
 it("keeps completed groups collapsed independently of the thinking preference", () => {
@@ -2898,7 +2927,9 @@ it("keeps completed groups collapsed independently of the thinking preference", 
   );
 
   expect(
-    view.container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
+    view.container.querySelector<HTMLDetailsElement>(
+      ".process-sequence:not(.single-process)",
+    )?.open,
   ).toBe(false);
   expect(
     view.container.querySelector<HTMLDetailsElement>(".thinking-line")?.open,

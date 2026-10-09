@@ -9,8 +9,8 @@ import {
   GitBranch,
   Pencil,
   RotateCcw,
-  Workflow,
   Wifi,
+  Workflow,
   Wrench,
   X,
 } from "lucide-react";
@@ -32,9 +32,13 @@ import {
   evidenceText,
   isEvidenceTool,
 } from "../../../../protocol/evidence.ts";
+import {
+  isSetupPromptEcho,
+  setupDisplayMessage,
+  setupPromptParent,
+} from "../../../../protocol/prompt-navigation.ts";
 import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
-import type { WebSessionExecution } from "../../../../runtime/types.ts";
 import type {
   WebHistoryAnchor,
   WebLiveMessage,
@@ -42,6 +46,7 @@ import type {
   WebSessionProjection,
   WebSnapshot,
 } from "../../../../protocol/types.ts";
+import type { WebSessionExecution } from "../../../../runtime/types.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { copyText } from "../../lib/clipboard.ts";
 import {
@@ -55,29 +60,24 @@ import { CompactionStatus } from "./CompactionStatus.tsx";
 import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
 import {
-  rememberSessionReading,
   type ReadingPosition,
+  rememberSessionReading,
   type SessionReadingCache,
   sessionReadingScope,
 } from "./session-reading-state.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
+import { type OpenTurnReview, TurnChangesCard } from "./TurnChangesCard.tsx";
+import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
+import { TurnNavigation, type TurnNavigationItem } from "./TurnNavigation.tsx";
 import {
   toolActivity,
   toolActivityLabel,
   toolActivityTarget,
 } from "./tool-activity.ts";
-import { type OpenTurnReview, TurnChangesCard } from "./TurnChangesCard.tsx";
-import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
-import { TurnNavigation, type TurnNavigationItem } from "./TurnNavigation.tsx";
 import { UserImageAttachments } from "./UserImageAttachments.tsx";
 import { UserMessageContent } from "./UserMessageContent.tsx";
-import { useSessionHistory } from "./use-session-history.ts";
 import { usePromptNavigation } from "./use-prompt-navigation.ts";
-import {
-  setupDisplayMessage,
-  isSetupPromptEcho,
-  setupPromptParent,
-} from "../../../../protocol/prompt-navigation.ts";
+import { useSessionHistory } from "./use-session-history.ts";
 import "./provider-outcomes.css";
 import "./conversation-navigation.css";
 import "./message-branch.css";
@@ -1395,8 +1395,12 @@ function ProcessSequence({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(active);
+  const single = rows.length === 1;
+  const previousSingle = useRef(single);
   const viewport = useRef<HTMLElement>(null);
   const following = useRef(true);
+  const lastScrollTop = useRef(0);
+  const touchY = useRef<number | undefined>(undefined);
   const [edges, setEdges] = useState({ above: false, below: false });
   const updateEdges = useCallback(() => {
     const element = viewport.current;
@@ -1413,32 +1417,46 @@ function ProcessSequence({
   useEffect(() => setOpen(active), [active]);
   useLayoutEffect(() => {
     const element = viewport.current;
-    if (!element || !open || rows.length === 0) return;
-    if (active && following.current) element.scrollTop = element.scrollHeight;
+    const promoted = previousSingle.current && !single;
+    previousSingle.current = single;
+    if (!element || single || !open || rows.length === 0) return;
+    if (promoted && !following.current)
+      element.scrollTop = lastScrollTop.current;
+    if (active && following.current) {
+      element.scrollTop = element.scrollHeight;
+      lastScrollTop.current = element.scrollTop;
+    }
     updateEdges();
-  }, [rows, active, open, updateEdges]);
+  }, [rows, active, open, single, updateEdges]);
   useEffect(() => {
     const element = viewport.current;
     const content = element?.firstElementChild;
-    if (!element || !content || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(updateEdges);
+    if (!element || !content || single || typeof ResizeObserver === "undefined")
+      return;
+    const observer = new ResizeObserver(() => {
+      if (open && active && following.current) {
+        element.scrollTop = element.scrollHeight;
+        lastScrollTop.current = element.scrollTop;
+      }
+      updateEdges();
+    });
     observer.observe(element);
     observer.observe(content);
     return () => observer.disconnect();
-  }, [updateEdges]);
+  }, [active, open, single, updateEdges]);
+  const thoughts = rows.filter((row) => row.processType === "thinking").length;
   const tools = rows.filter((row) => row.processType === "tool").length;
   const activities = rows.filter(
     (row) => row.processType === "activity",
   ).length;
   const counts = [
+    thoughts ? t("processThinkingCount", { count: thoughts }) : "",
     tools ? t("processToolCount", { count: tools }) : "",
     activities ? t("processActivityCount", { count: activities }) : "",
   ].filter(Boolean);
-  const current = active
-    ? [...rows]
-        .reverse()
-        .find((row) => row.processStatus === "running" && row.processToolName)
-    : undefined;
+  const current = [...rows]
+    .reverse()
+    .find((row) => row.processStatus === "running");
   const preview =
     current?.processPreview ??
     (active ? [...rows].reverse() : rows).find((row) => row.processPreview)
@@ -1477,7 +1495,9 @@ function ProcessSequence({
     : t(status === "running" ? "processRunning" : "processDetails");
   const title = current?.processToolName
     ? toolActivityLabel(t, current.processToolName, "running")
-    : groupTitle;
+    : current?.processType === "thinking"
+      ? t("thinkingActive")
+      : groupTitle;
   const representative =
     current?.processToolName ??
     toolNames.find((name) => toolActivity(name).action === "web") ??
@@ -1486,14 +1506,17 @@ function ProcessSequence({
   const Icon = representative ? toolActivity(representative).Icon : Wrench;
   return (
     <details
-      className={`process-sequence ${status}`}
-      open={open}
+      className={`process-sequence ${single ? "single-process " : ""}${status}`}
+      open={single || open}
       data-status={status}
       data-running={status === "running" ? "true" : undefined}
       data-history-entry={rows[0]?.key}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => {
+        if (!single) setOpen(event.currentTarget.open);
+      }}
     >
       <summary
+        hidden={single}
         aria-label={[title, current ? preview : "", ...counts]
           .filter(Boolean)
           .join(" · ")}
@@ -1514,29 +1537,102 @@ function ProcessSequence({
             {previewText}
           </span>
         )}
+        <span className="process-sequence-counts">{counts.join(" · ")}</span>
         <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
       <section
         ref={viewport}
         className="process-sequence-scroll"
-        aria-label={[t("processDetails"), ...counts].join(" · ")}
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: The scroll region must support keyboard scrolling.
-        tabIndex={0}
+        aria-label={
+          single ? undefined : [t("processDetails"), ...counts].join(" · ")
+        }
+        tabIndex={single ? undefined : 0}
         data-scroll-above={edges.above || undefined}
         data-scroll-below={edges.below || undefined}
+        onScrollCapture={(event) => {
+          const target = event.target;
+          if (
+            single &&
+            target instanceof HTMLElement &&
+            target.classList.contains("thinking-evidence") &&
+            target.scrollTop > 0
+          ) {
+            following.current = false;
+            lastScrollTop.current =
+              target.getBoundingClientRect().top -
+              event.currentTarget.getBoundingClientRect().top +
+              target.scrollTop;
+          }
+        }}
         onScroll={(event) => {
+          if (single) return;
           const element = event.currentTarget;
+          const downward = element.scrollTop > lastScrollTop.current;
+          lastScrollTop.current = element.scrollTop;
           following.current =
+            (following.current || downward) &&
             element.scrollHeight - element.clientHeight - element.scrollTop <=
-            24;
+              24;
           updateEdges();
+        }}
+        onWheel={(event) => {
+          if (
+            !event.defaultPrevented &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            event.deltaY < 0 &&
+            (single ||
+              upwardInputReachesConversation(
+                event.nativeEvent,
+                event.currentTarget,
+              ))
+          )
+            following.current = false;
+        }}
+        onKeyDown={(event) => {
+          const target = event.target;
+          if (
+            !event.defaultPrevented &&
+            !event.altKey &&
+            !event.metaKey &&
+            (!event.ctrlKey || event.key === "Home") &&
+            (["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+              (event.key === " " && event.shiftKey)) &&
+            target instanceof HTMLElement &&
+            !target.isContentEditable &&
+            !target.closest("input, textarea, select, button, summary") &&
+            (single ||
+              upwardInputReachesConversation(
+                event.nativeEvent,
+                event.currentTarget,
+              ))
+          )
+            following.current = false;
+        }}
+        onTouchStart={(event) => {
+          touchY.current = event.touches[0]?.clientY;
+        }}
+        onTouchMove={(event) => {
+          const next = event.touches[0]?.clientY;
+          if (
+            next !== undefined &&
+            touchY.current !== undefined &&
+            next > touchY.current &&
+            (single ||
+              upwardInputReachesConversation(
+                event.nativeEvent,
+                event.currentTarget,
+              ))
+          )
+            following.current = false;
+          touchY.current = next;
         }}
       >
         <div className="process-sequence-body">
           {rows.map((row) => (
             <div
-              className={`process-step ${row.processStatus ?? "unknown"}`}
+              className={`process-step ${single ? "single-tool-step " : ""}${row.processStatus ?? "unknown"}`}
               data-status={row.processStatus ?? "unknown"}
               key={row.key}
             >
@@ -1553,7 +1649,7 @@ function groupRows(rows: RenderRow[], active: boolean) {
   const blocks: Array<{ process: boolean; rows: RenderRow[] }> = [];
   for (const row of rows) {
     const last = blocks.at(-1);
-    const process = row.kind === "process" && row.processType !== "thinking";
+    const process = row.kind === "process";
     if (process && last?.process) last.rows.push(row);
     else blocks.push({ process, rows: [row] });
   }
@@ -1563,18 +1659,6 @@ function groupRows(rows: RenderRow[], active: boolean) {
       return block.rows.map((row) => (
         <Fragment key={row.key}>{row.content}</Fragment>
       ));
-    }
-    if (block.rows.length === 1) {
-      const row = block.rows[0]!;
-      return (
-        <div
-          className={`process-step single-tool-step ${row.processStatus ?? "unknown"}`}
-          data-status={row.processStatus ?? "unknown"}
-          key={row.key}
-        >
-          {row.content}
-        </div>
-      );
     }
     return (
       <ProcessSequence
@@ -1929,8 +2013,10 @@ function upwardInputReachesConversation(event: Event, root: HTMLElement) {
 export function Transcript(props: TranscriptProps) {
   const { t } = useTranslation();
   const viewport = useRef<HTMLDivElement>(null);
+  const conversationContent = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastScrollTop = useRef(0);
+  const touchY = useRef<number | undefined>(undefined);
   const savePositionTimer = useRef(0);
   const restorePending = useRef(props.readingRestorePending);
   restorePending.current = props.readingRestorePending;
@@ -2117,8 +2203,11 @@ export function Transcript(props: TranscriptProps) {
       } else {
         element.scrollTop = element.scrollHeight;
       }
+      lastScrollTop.current = element.scrollTop;
     });
     observer.observe(element);
+    if (conversationContent.current)
+      observer.observe(conversationContent.current);
     return () => observer.disconnect();
   }, []);
 
@@ -2396,6 +2485,14 @@ export function Transcript(props: TranscriptProps) {
             .join("");
         const detailRows: RenderRow[] = [];
         const parts = message.parts ?? [];
+        const lastVisiblePart = parts.reduce(
+          (last, part, partIndex) =>
+            (part.type === "thinking" || part.type === "text") &&
+            !part.text.trim()
+              ? last
+              : partIndex,
+          -1,
+        );
         const lastTextIndex = parts.reduce(
           (last, part, partIndex) => (part.type === "text" ? partIndex : last),
           -1,
@@ -2527,7 +2624,12 @@ export function Transcript(props: TranscriptProps) {
           // empty part is not a visible reasoning note or disclosure body.
           if (part.type === "thinking" && part.text.trim()) {
             const isLive =
-              !historyPaused && running && index === entries.length - 1;
+              !historyPaused &&
+              !retry &&
+              selectedExecution?.compaction?.state !== "running" &&
+              running &&
+              index === entries.length - 1 &&
+              partIndex === lastVisiblePart;
             detailRows.push({
               key: `${entry.key}-thinking-${partIndex}`,
               turn,
@@ -3236,6 +3338,11 @@ export function Transcript(props: TranscriptProps) {
     )
       void history.loadOlder();
   };
+  const pauseFollowing = () => {
+    pinned.current = false;
+    setReadingHistory(true);
+    history.retainReading();
+  };
 
   return (
     <div className="transcript-surface">
@@ -3250,9 +3357,24 @@ export function Transcript(props: TranscriptProps) {
           if (navigation?.restorePosition)
             lastNavigation.current = navigationKey;
         }}
-        onTouchStartCapture={() => {
+        onTouchStartCapture={(event) => {
+          touchY.current = event.touches[0]?.clientY;
           if (navigation?.restorePosition)
             lastNavigation.current = navigationKey;
+        }}
+        onTouchMove={(event) => {
+          const next = event.touches[0]?.clientY;
+          if (
+            next !== undefined &&
+            touchY.current !== undefined &&
+            next > touchY.current &&
+            upwardInputReachesConversation(
+              event.nativeEvent,
+              event.currentTarget,
+            )
+          )
+            pauseFollowing();
+          touchY.current = next;
         }}
         onScroll={(event) => {
           const element = event.currentTarget;
@@ -3262,7 +3384,7 @@ export function Transcript(props: TranscriptProps) {
           // Keep an explicit reveal unpinned through its first smooth frames.
           // An older page restored at the bottom may resume normal following.
           pinned.current =
-            (!highlightedEntry || pinned.current || downward) &&
+            (pinned.current || downward) &&
             element.scrollTop + element.clientHeight >=
               element.scrollHeight - 48;
           if (!pinned.current) history.retainReading();
@@ -3297,8 +3419,10 @@ export function Transcript(props: TranscriptProps) {
               event.nativeEvent,
               event.currentTarget,
             )
-          )
+          ) {
+            pauseFollowing();
             readEarlierNearTop(event.currentTarget);
+          }
         }}
         onKeyDown={(event) => {
           if (
@@ -3329,96 +3453,102 @@ export function Transcript(props: TranscriptProps) {
               event.nativeEvent,
               event.currentTarget,
             )
-          )
+          ) {
+            pauseFollowing();
             readEarlierNearTop(event.currentTarget);
+          }
         }}
       >
-        {selected?.rerun && props.onOpenOriginal && (
-          <div className="message-branch-origin">
-            <button
-              type="button"
-              onClick={() => void props.onOpenOriginal!(selected.rerun!.source)}
-            >
-              <GitBranch aria-hidden="true" /> {t("openOriginalConversation")}
-            </button>
-            <span>{t("messageRerunWorkspaceHint")}</span>
-          </div>
-        )}
-        {(history.hasMore || history.error || history.verifying) && (
-          <div className="conversation-history">
-            {history.error && <p role="alert">{t(history.error)}</p>}
-            {history.error && history.error !== "historyChanged" && (
+        <div ref={conversationContent} className="conversation-content">
+          {selected?.rerun && props.onOpenOriginal && (
+            <div className="message-branch-origin">
               <button
                 type="button"
-                className="secondary"
-                disabled={history.loading}
-                onClick={() => void history.loadOlder()}
+                onClick={() =>
+                  void props.onOpenOriginal!(selected.rerun!.source)
+                }
               >
-                {t("retryAdmissionCheck")}
+                <GitBranch aria-hidden="true" /> {t("openOriginalConversation")}
               </button>
-            )}
-            {history.loading && <p role="status">{t("historyLoading")}</p>}
-            {history.verifying && !history.error && !history.loading && (
-              <p role="status">{t("historyVerifying")}</p>
-            )}
-            {history.hasMore && (
-              <span>
-                {t("historyOmitted", {
-                  count: selected?.truncation.entriesOmitted ?? 0,
-                })}
-              </span>
-            )}
-          </div>
-        )}
-        {renderTurns(
-          rows,
-          running &&
-            !historyPaused &&
-            selectedExecution?.compaction?.state !== "running",
-          activeTurn?.commandId,
-          changesByPrompt,
-          selected,
-          props.activityObserved !== false && !historyPaused
-            ? timedTurn
-            : undefined,
-          props.onReviewTurn,
-        )}
-        {selectedExecution?.compaction &&
-          selectedExecution.compaction.state !== "completed" && (
-            <CompactionStatus
-              key={JSON.stringify([
-                selected?.id,
-                selected?.path,
-                selectedExecution.compaction.startedAt,
-              ])}
-              compaction={selectedExecution.compaction}
-              observed={
-                props.activityObserved !== false &&
-                selectedExecution.status !== "unknown"
-              }
-            />
+              <span>{t("messageRerunWorkspaceHint")}</span>
+            </div>
           )}
-        {running && selectedExecution?.compaction?.state !== "running" && (
-          <div
-            className="conversation-execution-status sr-only"
-            role="status"
-            aria-live="polite"
-          >
-            <span>{runningLabel}</span>
-            {observedRunningTools > 0 && (
-              <span>
-                {t("observedSessionTools", { count: observedRunningTools })}
-              </span>
+          {(history.hasMore || history.error || history.verifying) && (
+            <div className="conversation-history">
+              {history.error && <p role="alert">{t(history.error)}</p>}
+              {history.error && history.error !== "historyChanged" && (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={history.loading}
+                  onClick={() => void history.loadOlder()}
+                >
+                  {t("retryAdmissionCheck")}
+                </button>
+              )}
+              {history.loading && <p role="status">{t("historyLoading")}</p>}
+              {history.verifying && !history.error && !history.loading && (
+                <p role="status">{t("historyVerifying")}</p>
+              )}
+              {history.hasMore && (
+                <span>
+                  {t("historyOmitted", {
+                    count: selected?.truncation.entriesOmitted ?? 0,
+                  })}
+                </span>
+              )}
+            </div>
+          )}
+          {renderTurns(
+            rows,
+            running &&
+              !historyPaused &&
+              selectedExecution?.compaction?.state !== "running",
+            activeTurn?.commandId,
+            changesByPrompt,
+            selected,
+            props.activityObserved !== false && !historyPaused
+              ? timedTurn
+              : undefined,
+            props.onReviewTurn,
+          )}
+          {selectedExecution?.compaction &&
+            selectedExecution.compaction.state !== "completed" && (
+              <CompactionStatus
+                key={JSON.stringify([
+                  selected?.id,
+                  selected?.path,
+                  selectedExecution.compaction.startedAt,
+                ])}
+                compaction={selectedExecution.compaction}
+                observed={
+                  props.activityObserved !== false &&
+                  selectedExecution.status !== "unknown"
+                }
+              />
             )}
-            {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
-              <span>
-                {t("pendingFollowUpsHint", {
-                  count: selectedExecution!.pendingFollowUps,
-                })}
-              </span>
-            )}
-          </div>
-        )}
+          {running && selectedExecution?.compaction?.state !== "running" && (
+            <div
+              className="conversation-execution-status sr-only"
+              role="status"
+              aria-live="polite"
+            >
+              <span>{runningLabel}</span>
+              {observedRunningTools > 0 && (
+                <span>
+                  {t("observedSessionTools", { count: observedRunningTools })}
+                </span>
+              )}
+              {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
+                <span>
+                  {t("pendingFollowUpsHint", {
+                    count: selectedExecution!.pendingFollowUps,
+                  })}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       {(readingHistory || history.hasNewer) && rows.length > 0 && (
         <button

@@ -422,6 +422,8 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .process-sequence-title { display:flex; flex:0 1 auto; min-width:0; align-items:baseline; gap:8px; }
 .process-sequence-title strong { overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:inherit; font-weight:400; white-space:nowrap; }
 .process-sequence-preview { flex:0 1 auto; min-width:0; overflow:hidden; color:var(--subtle); text-overflow:ellipsis; white-space:nowrap; }
+.process-sequence-counts { flex:0 1 auto; min-width:0; margin-left:auto; overflow:hidden; color:var(--subtle); font-size:.8em; font-variant-numeric:tabular-nums; text-overflow:ellipsis; white-space:nowrap; }
+.process-sequence > summary .status-mark { margin-left:0; }
 .process-sequence-scroll { --fade-top:0px; --fade-bottom:0px; max-height:min(360px, 50dvh); overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:color-mix(in oklch, var(--muted) 30%, transparent) transparent; mask-image:linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent); }
 .process-sequence-scroll[data-scroll-above] { --fade-top:18px; }
 .process-sequence-scroll[data-scroll-below] { --fade-bottom:18px; }
@@ -430,9 +432,19 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .process-sequence-body .message-row { width:100%; padding:0; }
 .process-sequence-body .message-row.detail-only { padding:0; }
 .process-step .message-details { width:100%; margin:0; }
-.process-step .message-details > summary { min-height:30px; font-size:13px; }
+.process-step .message-details > summary { min-height:30px; font-size:var(--conversation-font-size); }
 .process-step { position:relative; min-width:0; overflow:hidden; }
 .single-tool-step .tool-evidence-card > summary { padding-inline:0; }
+.process-sequence.single-process { width:100%; margin:0; }
+.single-process > summary { display:none; }
+.single-process > .process-sequence-scroll { max-height:none; overflow:visible; overscroll-behavior:auto; mask-image:none; }
+.single-process .process-sequence-body { margin:0; padding:0; border:0; }
+.single-process .tool-evidence-card > summary { padding-inline:0; }
+.process-sequence:not(.single-process) .thinking-evidence { max-height:none; overflow:visible; padding-left:0; border-left:0; }
+@media (max-width:560px) {
+  .process-sequence > summary { gap:6px; }
+  .process-sequence-counts { max-width:44%; font-size:.75em; }
+}
 .process-step.running .message-details > summary,
 .process-step.running .tool-evidence-card > summary,
 .process-sequence.running > summary,
@@ -440,15 +452,15 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .subagent-tool.running > summary,
 .subagent-thinking.running > summary { position:relative; overflow:hidden; }
 .subagent-tool.running > summary::after,
-.subagent-thinking.running > summary::after { position:absolute; z-index:0; inset:0; pointer-events:none; content:""; background:linear-gradient(100deg, transparent 18%, color-mix(in oklch, var(--text) 8%, transparent) 45%, transparent 72%); transform:translateX(-115%); animation:execution-shimmer 1.8s ease-in-out infinite; }
+.subagent-thinking.running > summary::after { position:absolute; z-index:0; inset:0; pointer-events:none; content:""; background:linear-gradient(100deg, transparent 18%, color-mix(in oklch, var(--text) 8%, transparent) 45%, transparent 72%); transform:translateX(-115%); animation:execution-shimmer 6s ease-in-out infinite; }
 .process-step.running .message-details > summary > *,
 .process-step.running .tool-evidence-card > summary > *,
 .subagent-tool.running > summary > *,
 .subagent-thinking.running > summary > * { position:relative; z-index:1; }
 @supports (background-clip:text) {
   :is(.tool-evidence-card[data-state="running"], .tool-line.running) > summary :is(.tool-action, .tool-summary, .evidence-command, .evidence-filename),
-  .process-sequence.running > summary :is(strong, .process-sequence-preview),
-  .context-compaction[data-state="running"] .context-compaction-text { background:linear-gradient(100deg, var(--subtle) 25%, var(--text) 45%, var(--subtle) 65%); background-size:250% 100%; background-clip:text; -webkit-text-fill-color:transparent; animation:activity-text-shimmer 2.2s linear infinite; }
+  .process-sequence.running:not([open]) > summary :is(strong, .process-sequence-preview),
+  .context-compaction[data-state="running"] .context-compaction-text { background:linear-gradient(100deg, var(--subtle) 25%, var(--text) 45%, var(--subtle) 65%); background-size:250% 100%; background-clip:text; -webkit-text-fill-color:transparent; animation:activity-text-shimmer 6s ease-in-out infinite; }
 }
 .review-additions { color:oklch(55% .15 145); }
 .review-deletions { color:var(--error); }
@@ -612,8 +624,8 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 @keyframes latest-dot-bounce { 0%, 60%, 100% { transform:none; opacity:.65; } 30% { transform:translateY(-3px); opacity:1; } }
 .markdown-table-scroll:focus-visible, .markdown-code-scroll:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
 @keyframes conversation-pulse { 70% { box-shadow: 0 0 0 6px oklch(52% .15 253 / 0%); } 100% { box-shadow: 0 0 0 0 oklch(52% .15 253 / 0%); } }
-@keyframes execution-shimmer { to { transform:translateX(115%); } }
-@keyframes activity-text-shimmer { from { background-position:150% 0; } to { background-position:-150% 0; } }
+@keyframes execution-shimmer { 0%, 20% { transform:translateX(-115%); } 80%, 100% { transform:translateX(115%); } }
+@keyframes activity-text-shimmer { 0%, 20% { background-position:150% 0; } 80%, 100% { background-position:-150% 0; } }
 @media (prefers-reduced-motion: reduce) {
   .latest-activity-dots i { animation:none; }
   .process-sequence > summary { transition: none; }
@@ -623,7 +635,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .subagent-tool.running > summary::after,
   .subagent-thinking.running > summary::after { animation:none; content:none; }
   :is(.tool-evidence-card[data-state="running"], .tool-line.running) > summary :is(.tool-action, .tool-summary, .evidence-command, .evidence-filename),
-  .process-sequence.running > summary :is(strong, .process-sequence-preview),
+  .process-sequence.running:not([open]) > summary :is(strong, .process-sequence-preview),
   .context-compaction[data-state="running"] .context-compaction-text { animation:none; background:none; -webkit-text-fill-color:currentColor; }
 }
 .switching { @apply flex items-center; }

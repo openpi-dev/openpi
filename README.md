@@ -464,11 +464,11 @@ Web 模型配置先填写提供商连接，再选择“获取可用模型”。�
 
 Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px（360–720px）。拖动或键盘调整后保存到同一份配置，刷新后恢复；小窗口按当前视口临时限制显示宽度，不覆盖已保存值。也可用 `/openpi-setup` 修改 `ui.webSidebarWidth` 和 `ui.webAuxiliaryWidth`。
 
-Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。有可靠耗时记录的回合，执行时展开整个过程，完成后“用时”默认收起中间说明、思考和工具，最终回答继续显示在下方；可点击“用时”查看完整过程，不折叠用户问题或最终回答。连续多个工具组成独立活动组，遇到说明、思考或其他消息就分开；单个工具直接显示一行，不再套一层分组。活动组运行时展开，结束后收起为图标与操作摘要；思考单独显示为一行文字预览，展开后使用 Markdown 排版。工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
+Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。有可靠耗时记录的回合，执行时展开整个过程，完成后“用时”默认收起中间说明、思考和工具，最终回答继续显示在下方；可点击“用时”查看完整过程，不折叠用户问题或最终回答。连续的思考、工具和活动按原生顺序组成同一组，遇到说明文字或其他消息就分开；单行活动直接显示，不再套一层分组。活动组运行时展开，结束后收起为图标、操作摘要与计数；思考保留在实际发生的位置，使用独立的一行文字预览，展开后使用 Markdown 排版。工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
 <!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
-活动组收起时仍显示真实的当前工具、图标和目标；展开的列表最高为 360px 或视口高度的一半，可在组内滚动。执行中停留在底部会跟随新活动，向上查看时保留阅读位置。运行提示使用柔和的文字流光，遵循系统减少动态效果设置。展开思考不再套用工具输出的行数和字节限制；超长的已保存思考按原始消息和内容片段加载，超过一页时可继续加载。上下文压缩的进行中、完成、失败、取消和连接未知提示来自 Pi 原生事件。
+活动组收起时仍显示真实的当前活动：工具显示图标和目标，思考显示当前预览；组内思考、工具和其他活动的计数保持可见。展开的列表最高为 360px 或视口高度的一半，可在组内滚动。执行中停留在底部会跟随新活动，向上查看时保留阅读位置，主动回到底部或点击“跳至最新”后恢复跟随。只有当前执行的活动使用缓慢、间歇的文字流光，展开的组标题保持静止，并遵循系统减少动态效果设置。展开思考不再套用工具输出的行数和字节限制；超长的已保存思考按原始消息和内容片段加载，超过一页时可继续加载。上下文压缩的进行中、完成、失败、取消和连接未知提示来自 Pi 原生事件。
 
 执行中追加的当前轮消息归属于原生执行的初始输入，使用同一个“用时”开关；折叠时保留追加消息和原生完成记录对应的最终回答，展开后保持时间顺序。没有原生输入身份的旧记录沿用原先边界，不猜测合并。正文、工具和“用时”分隔线共用聊天宽度，用户气泡按比例限制宽度；工具与思考字号随聊天字号变化。向上阅读时，输入框上方居中显示回到最新位置的按钮：运行时为跳动三点，结束后为向下箭头；底部不再另列通用“正在运行”提示。减少动态效果设置会停用三点动画。
 

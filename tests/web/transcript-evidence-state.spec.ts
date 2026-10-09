@@ -176,7 +176,9 @@ it("expands Bash and file evidence from canonical display preferences without ch
     expect(
       container.querySelector<HTMLDetailsElement>(".tool-evidence-card")?.open,
     ).toBe(true);
-    expect(container.querySelector(".process-sequence")).toBeNull();
+    expect(
+      container.querySelector(".process-sequence:not(.single-process)"),
+    ).toBeNull();
     expect(
       container
         .querySelector(".tool-evidence-card")
@@ -432,6 +434,457 @@ it("shows the actual running tool in a folded group and follows new rows only wh
   expect(sequence.open).toBe(false);
 });
 
+it("keeps interleaved reasoning and tools in chronological groups separated by prose without changing native receipts", () => {
+  const tools = [
+    { ...call, id: "read", name: "read", arguments: '{"path":"a.ts"}' },
+    { ...call, id: "write", name: "write", arguments: '{"path":"b.ts"}' },
+    { ...call, id: "bash" },
+  ];
+  const results = tools.map((tool) => ({
+    role: "toolResult",
+    toolName: tool.name,
+    toolCallId: tool.id,
+    content: `Exact receipt for ${tool.id}`,
+    isError: false,
+  }));
+  const value: WebSnapshot = snapshot({ running: true, results });
+  value.preferences = {
+    ...value.preferences,
+    expandThinking: true,
+    bashToolDisplay: "full",
+    fileMutationDisplay: "full",
+  };
+  value.selectedSession!.entries[1]!.message!.parts = [
+    { type: "thinking", text: "Inspect before reading" },
+    tools[0]!,
+    { type: "thinking", text: "Plan before writing" },
+    tools[1]!,
+    { type: "text", text: "The files are ready; verify next." },
+    { type: "thinking", text: "Check before building" },
+    tools[2]!,
+  ];
+  value.selectedSession!.entries.push({
+    id: "current-thinking",
+    type: "message",
+    timestamp: "2026-09-26T10:00:03Z",
+    message: {
+      role: "assistant",
+      content: "",
+      parts: [{ type: "thinking", text: "Review the completed build" }],
+    },
+  });
+  const original = JSON.stringify(value.selectedSession!.entries);
+  const { container, getByText } = render(view(value));
+  const sequences = Array.from(
+    container.querySelectorAll<HTMLDetailsElement>(
+      ".process-sequence:not(.single-process)",
+    ),
+  );
+  expect(sequences).toHaveLength(2);
+  const stepKinds = (sequence: HTMLElement) =>
+    Array.from(
+      sequence.querySelectorAll(".process-sequence-body > .process-step"),
+      (step) =>
+        step.querySelector(".thinking-line")
+          ? step.querySelector(".thinking-evidence")?.textContent
+          : step
+              .querySelector(".tool-evidence-card")
+              ?.getAttribute("data-tool"),
+    );
+  expect(stepKinds(sequences[0]!)).toEqual([
+    "Inspect before reading",
+    "read",
+    "Plan before writing",
+    "write",
+  ]);
+  expect(stepKinds(sequences[1]!)).toEqual([
+    "Check before building",
+    "bash",
+    "Review the completed build",
+  ]);
+  const prose = getByText("The files are ready; verify next.");
+  expect(prose.closest(".process-sequence")).toBeNull();
+  expect(
+    sequences[0]!.compareDocumentPosition(prose) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    prose.compareDocumentPosition(sequences[1]!) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    Array.from(container.querySelectorAll(".thinking-line"), (thinking) =>
+      thinking.classList.contains("running") ? "running" : "done",
+    ),
+  ).toEqual(["done", "done", "done", "running"]);
+  expect(sequences[0]!.querySelector("summary")?.textContent).toContain(
+    i18n.t("processThinkingCount", { count: 2 }),
+  );
+  expect(sequences[0]!.querySelector("summary")?.textContent).toContain(
+    i18n.t("processToolCount", { count: 2 }),
+  );
+  expect(
+    Array.from(container.querySelectorAll(".tool-evidence-card"), (card) =>
+      card.getAttribute("data-state"),
+    ),
+  ).toEqual(["returned", "returned", "returned"]);
+  for (const result of results)
+    expect(container.textContent).toContain(result.content);
+  expect(JSON.stringify(value.selectedSession!.entries)).toBe(original);
+});
+
+it("preserves expanded recovered thinking and its DOM when a singleton gains a second process row", async () => {
+  const value: WebSnapshot = snapshot();
+  const thinking = {
+    type: "thinking",
+    text: "Thinking preview",
+    sourcePartIndex: 3,
+    textTruncated: true,
+  } satisfies WebMessagePart;
+  value.selectedSession!.entries[1]!.message!.parts = [thinking];
+  const text = "Complete recovered reasoning, including the final line.";
+  const read = vi.spyOn(WebClient.prototype, "sessionItem").mockResolvedValue({
+    entryId: "assistant",
+    partIndex: 3,
+    text,
+    nextCursor: null,
+    totalChars: text.length,
+  });
+  const rendered = render(view(value));
+  const sequence =
+    rendered.container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+  const disclosure =
+    rendered.container.querySelector<HTMLDetailsElement>(".thinking-line")!;
+  expect(sequence.classList.contains("single-process")).toBe(true);
+  fireEvent.click(disclosure.querySelector("summary")!);
+  await waitFor(() => expect(rendered.container.textContent).toContain(text));
+  const body = disclosure.querySelector(".thinking-evidence");
+  const result = {
+    role: "toolResult",
+    toolName: call.name,
+    toolCallId: call.id,
+    content: "Exact completed build receipt",
+    isError: false,
+  } satisfies WebLiveMessage;
+  const next: WebSnapshot = snapshot({ results: [result] });
+  next.selectedSession!.entries[1]!.message!.parts = [thinking, call];
+  const original = JSON.stringify(next.selectedSession!.entries);
+  rendered.rerender(view(next));
+  expect(rendered.container.querySelector(".process-sequence")).toBe(sequence);
+  expect(sequence.classList.contains("single-process")).toBe(false);
+  expect(rendered.container.querySelector(".thinking-line")).toBe(disclosure);
+  expect(disclosure.open).toBe(true);
+  expect(disclosure.querySelector(".thinking-evidence")).toBe(body);
+  expect(body?.textContent).toContain(text);
+  expect(read).toHaveBeenCalledOnce();
+  expect(read).toHaveBeenCalledWith(
+    "session",
+    "/session.jsonl",
+    "assistant",
+    0,
+    expect.any(AbortSignal),
+    "thinking",
+    3,
+  );
+  expect(
+    sequence.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
+  ).toBe("returned");
+  expect(JSON.stringify(next.selectedSession!.entries)).toBe(original);
+});
+
+it("transfers a singleton reasoning reader into the promoted group without jumping to live output", () => {
+  const text = `${"A complete reasoning line.\n".repeat(60)}Last reasoning line.`;
+  const thinking = { type: "thinking", text } satisfies WebMessagePart;
+  const stream = (content?: string) => {
+    const value: WebSnapshot = snapshot({
+      running: true,
+      liveTools:
+        content === undefined
+          ? []
+          : [
+              {
+                call,
+                state: "running",
+                result: {
+                  role: "toolResult",
+                  toolName: call.name,
+                  toolCallId: call.id,
+                  content,
+                },
+              },
+            ],
+    });
+    value.preferences.expandThinking = true;
+    value.selectedSession!.entries[1]!.message!.parts =
+      content === undefined ? [thinking] : [thinking, call];
+    return view(value);
+  };
+  const rendered = render(stream());
+  const sequence =
+    rendered.container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+  const disclosure =
+    sequence.querySelector<HTMLDetailsElement>(".thinking-line")!;
+  const body = disclosure.querySelector<HTMLElement>(".thinking-evidence")!;
+  const scroller = sequence.querySelector<HTMLElement>(
+    ".process-sequence-scroll",
+  )!;
+  let thoughtTop = 0;
+  let groupTop = 0;
+  let height = 1200;
+  Object.defineProperties(body, {
+    clientHeight: {
+      get: () => (sequence.classList.contains("single-process") ? 360 : 900),
+    },
+    scrollHeight: { get: () => 900 },
+    offsetTop: { get: () => 40 },
+    scrollTop: {
+      get: () => Math.min(thoughtTop, 900 - body.clientHeight),
+      set: (top: number) => {
+        thoughtTop = Math.max(0, Math.min(top, 900 - body.clientHeight));
+      },
+    },
+  });
+  Object.defineProperties(scroller, {
+    clientHeight: { get: () => 360 },
+    scrollHeight: { get: () => height },
+    scrollTop: {
+      get: () => groupTop,
+      set: (top: number) => {
+        groupTop = Math.max(0, Math.min(top, height - 360));
+      },
+    },
+  });
+  vi.spyOn(scroller, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, 100, 800, 360),
+  );
+  vi.spyOn(body, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, 140 - groupTop, 800, 360),
+  );
+  expect(disclosure.open).toBe(true);
+  body.scrollTop = 540;
+  fireEvent.scroll(body);
+  fireEvent.wheel(body, { deltaY: -100 });
+  body.scrollTop = 180;
+  fireEvent.scroll(body);
+  rendered.rerender(stream("First native tool delta"));
+  expect(rendered.container.querySelector(".process-sequence")).toBe(sequence);
+  expect(sequence.classList.contains("single-process")).toBe(false);
+  expect(sequence.querySelector(".thinking-line")).toBe(disclosure);
+  expect(disclosure.querySelector(".thinking-evidence")).toBe(body);
+  expect(disclosure.open).toBe(true);
+  expect(body.textContent).toContain("Last reasoning line.");
+  // The body starts 40px below the group viewport: 40 + 180 preserves the line.
+  expect(scroller.scrollTop).toBe(220);
+  expect(body.scrollTop).toBe(0);
+  height = 1400;
+  rendered.rerender(stream("Second native tool delta"));
+  expect(scroller.scrollTop).toBe(220);
+  expect(body.scrollTop).toBe(0);
+  expect(
+    sequence.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
+  ).toBe("running");
+});
+
+it("retains an earlier phase's exact running tool status while only the current phase opens and follows", () => {
+  const second = { ...call, id: "current-tool" };
+  const value: WebSnapshot = snapshot({
+    running: true,
+    liveTools: [
+      { call, state: "running" },
+      { call: second, state: "running" },
+    ],
+  });
+  value.selectedSession!.entries[1]!.message!.parts = [
+    { type: "thinking", text: "Start the first task" },
+    call,
+    { type: "text", text: "Start the next task while the first is running." },
+    { type: "thinking", text: "Start the second task" },
+    second,
+  ];
+  const original = JSON.stringify(value.selectedSession!.entries);
+  const rendered = render(view(value));
+  const sequences = Array.from(
+    rendered.container.querySelectorAll<HTMLDetailsElement>(
+      ".process-sequence:not(.single-process)",
+    ),
+  );
+  expect(sequences).toHaveLength(2);
+  expect(sequences[0]!.open).toBe(false);
+  expect(sequences[1]!.open).toBe(true);
+  expect(sequences[0]!.getAttribute("data-status")).toBe("running");
+  expect(
+    sequences[0]!
+      .querySelector("summary > .status-mark")
+      ?.getAttribute("aria-label"),
+  ).toBe(i18n.t("toolState_running"));
+  const scrollers = sequences.map(
+    (sequence) =>
+      sequence.querySelector<HTMLElement>(".process-sequence-scroll")!,
+  );
+  let height = 900;
+  for (const scroller of scrollers)
+    Object.defineProperties(scroller, {
+      clientHeight: { get: () => 360 },
+      scrollHeight: { get: () => height },
+    });
+  scrollers[0]!.scrollTop = 100;
+  scrollers[1]!.scrollTop = 100;
+  height = 1100;
+  rendered.rerender(view({ ...value, generatedAt: "2026-09-26T10:00:05Z" }));
+  expect(scrollers[0]!.scrollTop).toBe(100);
+  expect(scrollers[1]!.scrollTop).toBe(height);
+  expect(
+    Array.from(
+      rendered.container.querySelectorAll(".tool-evidence-card"),
+      (card) => card.getAttribute("data-state"),
+    ),
+  ).toEqual(["running", "running"]);
+  expect(JSON.stringify(value.selectedSession!.entries)).toBe(original);
+});
+
+it.each(["wheel", "ArrowUp", "PageUp", "Home", "Shift+Space"])(
+  "pauses the inner process stream on %s before scroll delivery and resumes only on a downward bottom return",
+  (input) => {
+    const second = { ...call, id: "tool-2" };
+    const stream = (content: string) => {
+      const value: WebSnapshot = snapshot({
+        running: true,
+        liveTools: [
+          { call, state: "returned" },
+          {
+            call: second,
+            state: "running",
+            result: {
+              role: "toolResult",
+              toolName: second.name,
+              toolCallId: second.id,
+              content,
+            },
+          },
+        ],
+      });
+      value.preferences.bashToolDisplay = "full";
+      value.selectedSession!.entries[1]!.message!.parts = [call, second];
+      return view(value);
+    };
+    const rendered = render(stream("First live output"));
+    const scroller = rendered.container.querySelector<HTMLElement>(
+      ".process-sequence-scroll",
+    )!;
+    let height = 900;
+    let top = 0;
+    const setTop = vi.fn((value: number) => {
+      top = Math.max(0, Math.min(value, height - 360));
+    });
+    Object.defineProperties(scroller, {
+      clientHeight: { get: () => 360 },
+      scrollHeight: { get: () => height },
+      scrollTop: { get: () => top, set: setTop },
+    });
+    rendered.rerender(stream("Second live output"));
+    expect(scroller.scrollTop).toBe(540);
+    setTop.mockClear();
+    if (input === "wheel") fireEvent.wheel(scroller, { deltaY: -7 });
+    else
+      fireEvent.keyDown(scroller, {
+        key: input === "Shift+Space" ? " " : input,
+        shiftKey: input === "Shift+Space",
+      });
+    rendered.rerender(stream("Third live output"));
+    expect(rendered.container.textContent).toContain("Third live output");
+    expect(setTop).not.toHaveBeenCalled();
+    scroller.scrollTop = 533;
+    fireEvent.scroll(scroller);
+    setTop.mockClear();
+    height = 910;
+    rendered.rerender(stream("Fourth live output"));
+    expect(scroller.scrollTop).toBe(533);
+    expect(setTop).not.toHaveBeenCalled();
+    fireEvent.scroll(scroller);
+    rendered.rerender(stream("Fifth live output"));
+    expect(scroller.scrollTop).toBe(533);
+    expect(setTop).not.toHaveBeenCalled();
+    expect(scroller.hasAttribute("data-scroll-below")).toBe(true);
+    scroller.scrollTop = height - scroller.clientHeight;
+    fireEvent.scroll(scroller);
+    height = 1000;
+    rendered.rerender(stream("Sixth live output"));
+    expect(scroller.scrollTop).toBe(640);
+    expect(scroller.hasAttribute("data-scroll-below")).toBe(false);
+    expect(
+      rendered.container
+        .querySelectorAll(".tool-evidence-card")[1]
+        ?.getAttribute("data-state"),
+    ).toBe("running");
+  },
+);
+
+it("follows resize-only process growth at the bottom while preserving an upward reader", () => {
+  const resized = new Map<Element, ResizeObserverCallback>();
+  const disconnect = vi.fn();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      callback: ResizeObserverCallback;
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+      }
+      observe(element: Element) {
+        resized.set(element, this.callback);
+      }
+      disconnect = disconnect;
+    },
+  );
+  try {
+    const value: WebSnapshot = snapshot({ running: true });
+    value.selectedSession!.entries[1]!.message!.parts = [
+      call,
+      { ...call, id: "tool-2" },
+    ];
+    const rendered = render(view(value));
+    const scroller = rendered.container.querySelector<HTMLElement>(
+      ".process-sequence-scroll",
+    )!;
+    const body = scroller.querySelector<HTMLElement>(".process-sequence-body")!;
+    let height = 900;
+    let top = 0;
+    Object.defineProperties(scroller, {
+      clientHeight: { get: () => 360 },
+      scrollHeight: { get: () => height },
+      scrollTop: {
+        get: () => top,
+        set: (value: number) => {
+          top = Math.max(0, Math.min(value, height - 360));
+        },
+      },
+    });
+    const resize = resized.get(body);
+    expect(resize).toBeDefined();
+    act(() => resize?.([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(540);
+    height = 1000;
+    act(() => resize?.([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(640);
+    fireEvent.wheel(scroller, { deltaY: -10 });
+    scroller.scrollTop = 630;
+    fireEvent.scroll(scroller);
+    height = 1100;
+    act(() => resize?.([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(630);
+    expect(scroller.hasAttribute("data-scroll-below")).toBe(true);
+    scroller.scrollTop = height - scroller.clientHeight;
+    fireEvent.scroll(scroller);
+    height = 1200;
+    act(() => resize?.([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(840);
+    expect(scroller.hasAttribute("data-scroll-below")).toBe(false);
+    rendered.unmount();
+    expect(disconnect).toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it("renders complete available thinking without the tool-output byte or line limits", async () => {
   const value: WebSnapshot = snapshot();
   const text = `${"完整思考中的一行内容。\n".repeat(420)}思考正文的最后一句`;
@@ -515,7 +968,9 @@ it.each([undefined, "aborted", "error"] as const)(
   "keeps an unpaired historical tool neutral after %s instead of inventing execution or completion",
   (stopReason) => {
     const { container } = render(view(snapshot({ stopReason })));
-    expect(container.querySelector(".process-sequence")).toBeNull();
+    expect(
+      container.querySelector(".process-sequence:not(.single-process)"),
+    ).toBeNull();
     expect(
       container.querySelector(".process-step")?.getAttribute("data-status"),
     ).toBe("unknown");
@@ -544,7 +999,9 @@ it("uses the exact live tool state while partial output has no terminal receipt"
       }),
     ),
   );
-  expect(rendered.container.querySelector(".process-sequence")).toBeNull();
+  expect(
+    rendered.container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
   expect(
     rendered.container
       .querySelector(".process-step")
@@ -565,7 +1022,9 @@ it("uses the exact live tool state while partial output has no terminal receipt"
       snapshot({ liveTools: [{ call, result: partial, state: "unknown" }] }),
     ),
   );
-  expect(rendered.container.querySelector(".process-sequence")).toBeNull();
+  expect(
+    rendered.container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
   expect(
     rendered.container
       .querySelector(".process-step")
@@ -587,7 +1046,9 @@ it("uses the exact live tool state while partial output has no terminal receipt"
       }),
     ),
   );
-  expect(rendered.container.querySelector(".process-sequence")).toBeNull();
+  expect(
+    rendered.container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
   expect(
     rendered.container
       .querySelector(".process-step")
@@ -602,7 +1063,9 @@ it("uses the exact live tool state while partial output has no terminal receipt"
 
 it("does not turn a current unmatched call into running without a native tool execution fact", () => {
   const { container } = render(view(snapshot({ running: true })));
-  expect(container.querySelector(".process-sequence")).toBeNull();
+  expect(
+    container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
   expect(
     container.querySelector(".process-step")?.getAttribute("data-status"),
   ).toBe("unknown");
@@ -614,7 +1077,9 @@ it("does not turn a current unmatched call into running without a native tool ex
 it("keeps generic tools consistent with missing or native running evidence", () => {
   const generic = { ...call, name: "custom_tool" };
   const rendered = render(view(snapshot({ tool: generic })));
-  expect(rendered.container.querySelector(".process-sequence")).toBeNull();
+  expect(
+    rendered.container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
   expect(rendered.container.querySelector(".tool-line.running")).toBeNull();
   expect(
     rendered.container
@@ -687,7 +1152,9 @@ it("does not borrow a later turn's execution state for an earlier unmatched tool
     },
   );
   const { container } = render(view(value));
-  expect(container.querySelectorAll(".process-sequence")).toHaveLength(0);
+  expect(
+    container.querySelectorAll(".process-sequence:not(.single-process)"),
+  ).toHaveLength(0);
   expect(
     Array.from(container.querySelectorAll(".single-tool-step"), (element) =>
       element.getAttribute("data-status"),
@@ -718,7 +1185,9 @@ it("does not summarize a mixed returned and unmatched sequence as completed", ()
   });
   const { container } = render(view(value));
   expect(
-    container.querySelector(".process-sequence")?.getAttribute("data-status"),
+    container
+      .querySelector(".process-sequence:not(.single-process)")
+      ?.getAttribute("data-status"),
   ).toBe("unknown");
   expect(
     Array.from(container.querySelectorAll(".process-step"), (element) =>
@@ -743,7 +1212,9 @@ it("retains a known process failure in a single tool while the native status-que
     details: { status: "failed", exitCode: 2 },
   } satisfies WebLiveMessage;
   const { container } = render(view(snapshot({ tool, results: [receipt] })));
-  expect(container.querySelector(".process-sequence")).toBeNull();
+  expect(
+    container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
   expect(
     container.querySelector(".process-step")?.getAttribute("data-status"),
   ).toBe("error");
@@ -789,10 +1260,13 @@ it.each([false, true])(
     if (unmatched)
       expect(
         container
-          .querySelector(".process-sequence")
+          .querySelector(".process-sequence:not(.single-process)")
           ?.getAttribute("data-status"),
       ).toBe("warn");
-    else expect(container.querySelector(".process-sequence")).toBeNull();
+    else
+      expect(
+        container.querySelector(".process-sequence:not(.single-process)"),
+      ).toBeNull();
     expect(
       container.querySelector(".process-step")?.getAttribute("data-status"),
     ).toBe("warn");
@@ -834,7 +1308,9 @@ it("keeps known process failure ahead of an unmatched step in the group summary"
   });
   const { container } = render(view(value));
   expect(
-    container.querySelector(".process-sequence")?.getAttribute("data-status"),
+    container
+      .querySelector(".process-sequence:not(.single-process)")
+      ?.getAttribute("data-status"),
   ).toBe("error");
   expect(
     Array.from(container.querySelectorAll(".process-step"), (element) =>
@@ -866,7 +1342,9 @@ it.each([
         }),
       ),
     );
-    expect(container.querySelector(".process-sequence")).toBeNull();
+    expect(
+      container.querySelector(".process-sequence:not(.single-process)"),
+    ).toBeNull();
     expect(
       container.querySelector(".process-step")?.getAttribute("data-status"),
     ).toBe("error");
