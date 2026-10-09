@@ -45,7 +45,10 @@ import {
   type PlatformTarget,
   type ResolvedBinary,
 } from "./src/binaries.ts";
-import { formatCapturedOutput, type CapturedOutput } from "./src/output.ts";
+import {
+  formatCapturedOutput,
+  type CapturedOutput,
+} from "../shared/search-output.ts";
 import {
   FD_PARAMETER_DESCRIPTIONS,
   FD_PROMPT_GUIDELINES,
@@ -56,7 +59,10 @@ import {
   RG_PROMPT_SNIPPET,
   RG_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
-import { discardCapturedOutput, executeSearchProcess } from "./src/process.ts";
+import {
+  discardCapturedOutput,
+  executeSearchProcess,
+} from "../shared/search-process.ts";
 import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
