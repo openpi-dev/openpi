@@ -432,7 +432,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .process-sequence-body .message-row { width:100%; padding:0; }
 .process-sequence-body .message-row.detail-only { padding:0; }
 .process-step .message-details { width:100%; margin:0; }
-.process-step .message-details > summary { min-height:30px; font-size:13px; }
+.process-step .message-details > summary { min-height:30px; font-size:var(--conversation-font-size); }
 .process-step { position:relative; min-width:0; overflow:hidden; }
 .single-tool-step .tool-evidence-card > summary { padding-inline:0; }
 .process-sequence.single-process { width:100%; margin:0; }
@@ -440,7 +440,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .single-process > .process-sequence-scroll { max-height:none; overflow:visible; overscroll-behavior:auto; mask-image:none; }
 .single-process .process-sequence-body { margin:0; padding:0; border:0; }
 .single-process .tool-evidence-card > summary { padding-inline:0; }
-.single-process .message-details > summary { font-size:var(--conversation-font-size); }
 .process-sequence:not(.single-process) .thinking-evidence { max-height:none; overflow:visible; padding-left:0; border-left:0; }
 @media (max-width:560px) {
   .process-sequence > summary { gap:6px; }
