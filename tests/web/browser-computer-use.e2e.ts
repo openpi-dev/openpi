@@ -247,7 +247,7 @@ test("embedded computer-use targets exact same-process and cross-process documen
               {
                 action: "setText",
                 ref: input.ref,
-                text: "must not write after cancellation",
+                text: "input dispatched before cancellation was acknowledged",
               },
             ],
           },
@@ -257,11 +257,30 @@ test("embedded computer-use targets exact same-process and cross-process documen
         const cancelled = await cancelling;
         expect(cancelled.cancellationSent).toBe(true);
         expect(cancelled.error).toMatch(/revoked.*uncertain/i);
-        await expect(
-          active
-            .frameLocator("iframe")
-            .getByRole("textbox", { name: "Editor" }),
-        ).toHaveValue("内置浏览器中文输入");
+        const editor = active
+          .frameLocator("iframe")
+          .getByRole("textbox", { name: "Editor" });
+        const settledValue = await editor.inputValue();
+        // A window postMessage is not a native cancellation receipt. A queued
+        // step can land before the extension processes cancellation, especially
+        // when the page thread is blocked. After its revoked result, however,
+        // the consumed observation must never authorize another input.
+        expect([
+          "内置浏览器中文输入",
+          "input dispatched before cancellation was acknowledged",
+        ]).toContain(settledValue);
+        const afterCancellation = await control(id, documentId, {
+          operation: "act",
+          actions: [
+            {
+              action: "setText",
+              ref: input.ref,
+              text: "must not write after the cancellation receipt",
+            },
+          ],
+        });
+        expect(afterCancellation.error).toMatch(/stale/i);
+        await expect(editor).toHaveValue(settledValue);
       }
     }
     expect(context.pages()).toHaveLength(1);
