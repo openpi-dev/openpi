@@ -1098,9 +1098,12 @@ it.each(
       scrollTop: { get: () => top, set: setTop },
     });
     if (owner === "conversation")
-      element.scrollTo = vi.fn((options: ScrollToOptions) => {
-        element.scrollTop = options.top ?? 0;
-      });
+      element.scrollTo = vi.fn(
+        (options?: ScrollToOptions | number, y?: number) => {
+          element.scrollTop =
+            typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+        },
+      );
     view.rerender(stream("Second native output"));
     expect(element.scrollTop).toBe(540);
     const target = view.container.querySelector<HTMLElement>(

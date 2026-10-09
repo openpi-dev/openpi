@@ -1358,10 +1358,15 @@ it.each([
   "preserves native child $status/$outcome evidence when observation is lost",
   ({ status, outcome, expected }) => {
     const snapshot = activeSnapshot();
-    snapshot.runtime.capabilities.subagents = {
-      items: [{ id: "child", title: "Inspect", status, outcome, createdAt: 1 }],
-      omitted: 0,
-      truncated: false,
+    snapshot.runtime.capabilities = {
+      ...snapshot.runtime.capabilities,
+      subagents: {
+        items: [
+          { id: "child", title: "Inspect", status, outcome, createdAt: 1 },
+        ],
+        omitted: 0,
+        truncated: false,
+      },
     };
     snapshot.selectedSession!.entries = [
       {
