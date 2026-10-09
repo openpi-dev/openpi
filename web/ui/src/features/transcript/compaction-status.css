@@ -10,5 +10,5 @@
 .context-compaction-label > svg { width:18px; height:18px; flex:none; stroke-width:1.65; }
 .context-compaction[data-state="running"] .context-compaction-text { color:var(--subtle); }
 .conversation .context-compaction p { margin: 6px 0 0 27px; color: var(--muted); }
-.conversation > .context-compaction { width: min(var(--conversation-content-width), calc(100% - 48px)); }
-@media (max-width: 720px) { .conversation > .context-compaction { width: calc(100% - 24px); } }
+.conversation-content > .context-compaction { width: min(var(--conversation-content-width), calc(100% - 48px)); }
+@media (max-width: 720px) { .conversation-content > .context-compaction { width: calc(100% - 24px); } }

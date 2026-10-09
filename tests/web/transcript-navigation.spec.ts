@@ -745,7 +745,97 @@ it("keeps a smooth loaded-turn jump unpinned through its first frames without un
   }
 });
 
-it("follows new content after a prepended native page is clamped to the bottom without a navigation target", async () => {
+it.each(["wheel", "ArrowUp", "PageUp", "Home", "Shift+Space"])(
+  "pauses streamed bottom following on %s before scroll delivery and resumes on a downward return",
+  async (input) => {
+    const originalScroll = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollTo",
+    );
+    const scroll = vi.fn(function (
+      this: HTMLElement,
+      options: ScrollToOptions,
+    ) {
+      this.scrollTop = Math.min(
+        options.top ?? 0,
+        this.scrollHeight - this.clientHeight,
+      );
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scroll,
+    });
+    let height = 1530;
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+      () => height,
+    );
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(627);
+    try {
+      const selected = session(0, 1);
+      const state = snapshot(selected);
+      state.runtime.status = "running";
+      const cache: SessionReadingCache = new Map();
+      const stream = (content: string) =>
+        node(
+          state,
+          null,
+          cache,
+          [{ key: "stream", message: { role: "assistant", content } }],
+          { liveRunning: true, livePhase: "running" },
+        );
+      const view = render(stream("First streamed text"));
+      const viewport =
+        view.container.querySelector<HTMLElement>(".conversation")!;
+      expect(viewport.scrollTop).toBe(903);
+      scroll.mockClear();
+      if (input === "wheel") fireEvent.wheel(viewport, { deltaY: -3 });
+      else
+        fireEvent.keyDown(viewport, {
+          key: input === "Shift+Space" ? " " : input,
+          shiftKey: input === "Shift+Space",
+        });
+      // Streaming can render between the input and the browser's scroll event.
+      view.rerender(stream("Second streamed text"));
+      expect(screen.getByText("Second streamed text")).toBeTruthy();
+      expect(viewport.scrollTop).toBe(903);
+      expect(scroll).not.toHaveBeenCalled();
+      viewport.scrollTop = 900;
+      fireEvent.scroll(viewport);
+      expect(
+        screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+      ).toBeTruthy();
+      height = 1550;
+      view.rerender(stream("Third streamed text"));
+      expect(viewport.scrollTop).toBe(900);
+      expect(scroll).not.toHaveBeenCalled();
+      // Unchanged near-bottom frames must not undo the reader's pause.
+      fireEvent.scroll(viewport);
+      view.rerender(stream("Fourth streamed text"));
+      expect(screen.getByText("Fourth streamed text")).toBeTruthy();
+      expect(viewport.scrollTop).toBe(900);
+      expect(scroll).not.toHaveBeenCalled();
+      viewport.scrollTop = height - viewport.clientHeight;
+      fireEvent.scroll(viewport);
+      expect(
+        screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+      ).toBeNull();
+      height = 1600;
+      view.rerender(stream("Fifth streamed text"));
+      expect(viewport.scrollTop).toBe(973);
+      expect(scroll).toHaveBeenCalledWith({ top: 1600, behavior: "instant" });
+    } finally {
+      if (originalScroll)
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollTo",
+          originalScroll,
+        );
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+    }
+  },
+);
+
+it("preserves an upward reader through a prepended bottom clamp and resumes after a downward return", async () => {
   const originalScroll = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "scrollTo",
@@ -790,6 +880,16 @@ it("follows new content after a prepended native page is clamped to the bottom w
     expect(viewport.scrollTop).toBe(300);
     fireEvent.scroll(viewport);
     scroll.mockClear();
+    view.rerender(node(snapshot(selected), null, cache));
+    expect(scroll).not.toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(300);
+    expect(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeTruthy();
+    viewport.scrollTop = 299;
+    fireEvent.scroll(viewport);
+    viewport.scrollTop = 300;
+    fireEvent.scroll(viewport);
     view.rerender(node(snapshot(selected), null, cache));
     expect(scroll).toHaveBeenCalledWith({ top: 800, behavior: "instant" });
     expect(
