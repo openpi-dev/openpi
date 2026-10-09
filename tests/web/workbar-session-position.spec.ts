@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+/// <reference types="vitest/jsdom" />
 
 import {
   act,
@@ -74,8 +75,10 @@ function snapshot(path = "/workspace/a.jsonl", id = "session-a"): WebSnapshot {
 }
 
 beforeEach(() => {
+  // Node 26 defines its own global localStorage; the app must use jsdom's.
+  vi.stubGlobal("localStorage", jsdom.window.localStorage);
   // Each test starts without positions remembered by an earlier test.
-  window.localStorage.removeItem(WORKBAR_POSITION_STORAGE_KEY);
+  localStorage.removeItem(WORKBAR_POSITION_STORAGE_KEY);
   vi.spyOn(original.actions, "start").mockImplementation(() => {});
   vi.spyOn(original.actions, "stop").mockImplementation(() => {});
   vi.spyOn(WebClient.prototype, "pendingQuestions").mockResolvedValue({
@@ -137,6 +140,7 @@ afterEach(() => {
     value: originalViewportWidth,
   });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
