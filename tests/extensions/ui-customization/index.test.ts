@@ -91,7 +91,7 @@ test("marks context occupancy unknown instead of guessing a percentage", () => {
   });
 
   const footer = harness.render().join("\n");
-  assert.match(footer, /\?%\/1\.0m/);
+  assert.match(footer, /\?%\/1\.0M/);
 });
 
 test("always renders operational activity while custom footer is enabled", () => {

@@ -93,13 +93,13 @@ test("default one-line layout leads with model context and ends with cwd", () =>
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /project/);
   assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);
-  assert.match(lines[0]!, /25%\/1\.0m/);
+  assert.match(lines[0]!, /25%\/1\.0M/);
   // Cost is an opt-in metric and stays out of the default layout.
   assert.doesNotMatch(lines[0]!, /\$/);
   assert.match(lines[0]!, /main/);
   assert.match(lines[0]!, /PR #42/);
   const modelIndex = lines[0]!.indexOf("seal/gpt-5.6-sol");
-  const contextIndex = lines[0]!.indexOf("25%/1.0m");
+  const contextIndex = lines[0]!.indexOf("25%/1.0M");
   const branchIndex = lines[0]!.indexOf("main");
   const prIndex = lines[0]!.indexOf("PR #42");
   const cwdIndex = lines[0]!.indexOf("project");
@@ -107,8 +107,29 @@ test("default one-line layout leads with model context and ends with cwd", () =>
   assert.ok(contextIndex < branchIndex);
   assert.ok(branchIndex < prIndex);
   assert.ok(prIndex < cwdIndex);
-  const gap = branchIndex - contextIndex - "25%/1.0m".length;
+  const gap = branchIndex - contextIndex - "25%/1.0M".length;
   assert.ok(gap > 1);
+});
+
+test("footer context window matches the shared compact token formatter", () => {
+  const render = (contextWindow: number) =>
+    renderFooter({
+      cwd: "/Users/me/project",
+      modelInfo: { ...modelInfo, contextWindow, contextPercent: 25 },
+      gitInfo,
+      style: "plain",
+      lines: DEFAULT_FOOTER_LINES,
+      width: 140,
+      theme,
+      formatPullRequest: (n) => `PR #${n}`,
+    })[0]!;
+
+  // The footer shows the same capacity the shared child-agent projection
+  // shows, so the two must agree at every magnitude. It previously kept a
+  // private formatter that rounded across the whole 1k-999k range and used a
+  // lowercase "m".
+  assert.match(render(8_192), /25%\/8\.2k/);
+  assert.match(render(1_048_576), /25%\/1\.0M/);
 });
 
 test("legacy footerItems migration preserves the rendered footer", () => {
@@ -363,7 +384,7 @@ test("renderFooter renders only the configured segments", () => {
 
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);
-  assert.match(lines[0]!, /25%\/1\.0m/);
+  assert.match(lines[0]!, /25%\/1\.0M/);
   assert.match(lines[0]!, /cache 82%/);
   assert.doesNotMatch(lines[0]!, /project|main|PR #42/);
 });
