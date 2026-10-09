@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "OpenPI Browser Bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Native browser navigation and X-Frame-Options support inside the local OpenPI workbench.",
   "minimum_chrome_version": "145",
   "permissions": [
     "declarativeNetRequestWithHostAccess",
     "webNavigation",
-    "scripting"
+    "scripting",
+    "debugger"
   ],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js", "type": "module" },

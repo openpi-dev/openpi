@@ -1,4 +1,5 @@
 // Permissions belong to the installed browser extension, not a Pi tool or Session.
+import { controlBrowser, cancelBrowserControl } from "./computer-use.js";
 const owners = new Map();
 let serial = chrome.declarativeNetRequest.getSessionRules().then((rules) =>
   chrome.declarativeNetRequest.updateSessionRules({
@@ -37,6 +38,8 @@ const post = (port, message) => {
   } catch {}
 };
 const closePeer = (owner, peer) => {
+  if (owner.control?.page === peer.id && !owner.control.navigating)
+    cancelBrowserControl(owner);
   if (!owner.peers.delete(peer.nonce)) return;
   clearTimeout(peer.timeout);
   peer.port.disconnect();
@@ -49,6 +52,7 @@ const closePeer = (owner, peer) => {
 const closeOwner = (tabId, owner = owners.get(tabId)) => {
   if (!owner || owners.get(tabId) !== owner) return;
   owners.delete(tabId);
+  cancelBrowserControl(owner);
   for (const peer of owner.peers.values()) closePeer(owner, peer);
   owner.port.disconnect();
   queue(() =>
@@ -184,6 +188,48 @@ chrome.runtime.onConnect.addListener((port) => {
                 eventName: peer.nonce,
               });
           });
+      } else if (message.type === "control-cancel") {
+        cancelBrowserControl(owner, message.requestId);
+      } else if (
+        message.type === "control" &&
+        typeof message.requestId === "string" &&
+        message.requestId.length === 36
+      ) {
+        const peer = [...owner.peers.values()].find(
+          (peer) => peer.id === message.id && peer.nonce === message.document,
+        );
+        if (!peer || !owner.pages.has(peer.id)) {
+          post(port, {
+            type: "control-result",
+            id: message.id,
+            requestId: message.requestId,
+            error: "The embedded document binding is stale.",
+          });
+          return;
+        }
+        controlBrowser(
+          tabId,
+          owner,
+          peer,
+          message.requestId,
+          message.request,
+          current,
+        ).then(
+          (result) =>
+            post(port, {
+              type: "control-result",
+              id: peer.id,
+              requestId: message.requestId,
+              result,
+            }),
+          (error) =>
+            post(port, {
+              type: "control-result",
+              id: peer.id,
+              requestId: message.requestId,
+              error: String(error.message || error).slice(0, 1000),
+            }),
+        );
       } else if (
         message.type === "command" &&
         ["back", "forward", "reload"].includes(message.action)
@@ -237,6 +283,7 @@ chrome.runtime.onConnect.addListener((port) => {
         post(owner.port, {
           type: "state",
           id: peer.id,
+          document: peer.nonce,
           url: url.href,
           title:
             typeof message.title === "string"

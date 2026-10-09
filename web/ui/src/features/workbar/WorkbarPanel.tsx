@@ -871,7 +871,11 @@ export function WorkbarPanel({
                   visible &&
                   canControl &&
                   (browserActive || retainedBrowser === browserScope) ? (
-                  <BrowserPanel key={browserScope} />
+                  <BrowserPanel
+                    key={browserScope}
+                    sessionId={sessionId}
+                    sessionPath={sessionPath}
+                  />
                 ) : visible && !tabs.launcherOpen && tabs.active === tool ? (
                   !canControl &&
                   ["side-conversation", "terminal", "browser"].includes(

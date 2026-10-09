@@ -189,6 +189,7 @@ export function buildInteractiveSetupPrompt(options: {
     '- "let the model discover OpenPI capabilities when useful" → capability_discovery=adaptive',
     '- "only use OpenPI capabilities when I ask" → capability_discovery=explicit',
     '- "use dark theme in OpenPI Web" → ui_web_theme=dark',
+    '- "allow the model to use the embedded browser" → browser_control=true (off by default; Browser Bridge debugger permission is reviewed in Chrome/Edge)',
     '- "set OpenPI Web chat width to 960px" → ui_web_chat_width=960',
     `- Web sidebar width defaults to ${DEFAULT_WEB_SIDEBAR_WIDTH}px (${MIN_WEB_SIDEBAR_WIDTH}-${MAX_WEB_SIDEBAR_WIDTH}); tool pane width defaults to ${DEFAULT_WEB_AUXILIARY_WIDTH}px (${MIN_WEB_AUXILIARY_WIDTH}-${MAX_WEB_AUXILIARY_WIDTH}). Dragging a pane saves the same canonical preferences; small viewports temporarily clamp the visible width.`,
     '- "use a 320px sidebar and 600px tool pane" → ui_web_sidebar_width=320, ui_web_auxiliary_width=600',
@@ -526,6 +527,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "Canonical OpenPI Web theme: system follows the browser/OS color scheme; light, dark, mist, rose, and pine force that appearance. Stored in package setup rather than browser storage. Omit to preserve the current value.",
         }),
       ),
+      browser_control: Type.Optional(
+        Type.Boolean({
+          description:
+            "Allow model control of pages in the initiating OpenPI Web tab's embedded browser. Off by default; requires the permissioned Browser Bridge extension. Omit to preserve the current value.",
+        }),
+      ),
       ui_web_chat_width: Type.Optional(
         Type.Integer({
           minimum: MIN_WEB_CHAT_WIDTH,
@@ -717,6 +724,9 @@ export default function openPiSetup(pi: ExtensionAPI) {
               : params.child_execution_limit === null
                 ? {}
                 : { maxActive: params.child_execution_limit },
+          browser: {
+            control: params.browser_control ?? current.browser.control,
+          },
           ui: {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??

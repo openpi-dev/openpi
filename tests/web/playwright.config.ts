@@ -20,6 +20,7 @@ export default defineConfig({
   testDir: repositoryRoot,
   testMatch: [
     "tests/web/openpi-web.e2e.ts",
+    "tests/web/browser-computer-use.e2e.ts",
     "tests/web/composer-clipboard.e2e.ts",
     "tests/web/file-formats.e2e.ts",
     "tests/web/draft-file-preview.e2e.ts",

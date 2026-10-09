@@ -1,6 +1,6 @@
 # OpenPI Browser Bridge
 
-Chrome/Edge 145+ 的可选 Manifest V3 扩展。安装后，打开本机 OpenPI 工作台的浏览器工具即默认启用；网页输入、滚动和选择仍由原生 iframe 处理，不启动 Chromium 服务、截图或视频串流。
+Chrome/Edge 145+ 的可选 Manifest V3 扩展。安装后，打开本机 OpenPI 工作台的浏览器工具即默认启用导航增强。网页仍由原生 iframe 渲染，不启动独立 Chromium 服务或视频串流。0.2.0 加入默认关闭的模型控制，适配 `pi-computer-use` 0.5.1 的 CDP 浏览器操作。
 
 ## 安装
 
@@ -8,7 +8,9 @@ Chrome/Edge 145+ 的可选 Manifest V3 扩展。安装后，打开本机 OpenPI 
 2. 选择“加载已解压的扩展程序”，选择本目录（包含 `manifest.json`）。
 3. 刷新 `http://127.0.0.1:端口/` 或 `http://localhost:端口/` 的 OpenPI 页面，打开浏览器工具。底部出现“浏览增强已开启”才表示连接成功。
 
-更新文件后，在扩展管理页点击重新加载，再刷新 OpenPI。禁用或移除扩展即可撤销增强；OpenPI 保留普通 iframe 浏览。扩展不由 npm 安装脚本自动安装，不修改 Pi 配置，不增加 `/openpi-setup` 开关。安装及站点权限由浏览器管理。
+更新文件后，在扩展管理页点击重新加载，再刷新 OpenPI。0.2.0 新增 `debugger` 权限，需在浏览器中审阅并接受。禁用或移除扩展即可撤销增强；OpenPI 保留普通 iframe 浏览。扩展不由 npm 安装脚本自动安装，也不修改 Pi 配置。安装及站点权限由浏览器管理。
+
+如需模型控制，在 `/openpi-setup` 请求开启 `browser_control`（默认关闭），从同一个 OpenPI 标签发起任务。配置成功后 Pi Session 向模型提供 `openpi_browser`：`tabs` 返回内置页面 root，`open` 在面板内新增 HTTP(S) 页面并等待它绑定；`observe` 读取指定 root 的文本和无障碍节点，`image=true` 返回实际可见 iframe 截图；`act` 使用该观察的 `stateId` 和节点 ref，支持 `press`、`setText`、`typeText` 和 `scroll`。点击和输入操作需明确 ref。`navigate` 需要观察状态，只确认导航已发送，随后重新观察验证加载结果。无需安装完整桌面 `pi-computer-use` 或授予 macOS 桌面控制权限。
 
 ## 行为
 
@@ -21,7 +23,9 @@ Chrome/Edge 145+ 的可选 Manifest V3 扩展。安装后，打开本机 OpenPI 
 
 ## 权限与边界
 
-扩展申请 HTTP(S) 全站访问权限，才能在用户选择的网站中读地址/标题、处理导航及移除 XFO；安装时浏览器会提示这些权限。它不读取 OpenPI token 的值，不发送页面内容到服务器，不使用 debugger、Cookie API 或远程脚本。
+扩展申请 HTTP(S) 全站访问及 `debugger` 权限；安装时浏览器会提示。导航增强不使用调试接口。模型控制开启后，每次操作仅暂时 attach 当前已绑定的 OpenPI 原生标签，定位其指定 iframe，并在 finally 中 detach。页面文本和请求的截图通过已认证的本机 Web 连接返回 Pi 工具，随后进入模型上下文；它不读取 token 的值，不提供 Cookie API、任意 JavaScript 或远程脚本入口。无权限、DevTools 冲突或站点阻止嵌入时返回明确错误。
+
+控制限定于发起当前 Turn 的浏览器 controller、Pi Session 和 document。只接受本次观察产生的节点；写操作消耗观察，关闭/导航/切换/取消使旧引用失效。已发送的浏览器操作可能产生部分效果，超时或中断按不确定结果报告。服务不会重放输入。截图限于可见 iframe 区域，隐藏页面需先显示；嵌套框架的独立内容暂不提供操作权限。
 
 顶层仅识别 loopback 根路径的 OpenPI 页面（标题及入口标记），不是远程身份认证机制。后台端口绑定原生 tab/document，页面桥接还必须匹配 OpenPI 实际 iframe 窗口、一次性 nonce 和活动页面 ID；嵌套框架不接收导航权限。XFO 规则受原生 tab ID、loopback 顶层域及子框架资源类型限制；该顶层标签中的嵌套子框架也在规则范围内，其他浏览器标签页不受影响。规则仅存在于浏览器会话中，后台重启先清理旧规则，再由活跃工作台重新连接。
 

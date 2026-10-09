@@ -8,6 +8,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CONFIG_FIELD_CONTRACT = [
   {
+    path: "browser.control",
+    writerTokens: ["params.browser_control"],
+    statusTokens: ["config.browser.control"],
+    readmeTerms: ["browser_control"],
+    setupTerms: ["browser_control"],
+  },
+  {
     path: "capabilities.discovery",
     writerTokens: ["params.capability_discovery"],
     statusTokens: ["config.capabilities.discovery"],

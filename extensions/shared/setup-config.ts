@@ -180,6 +180,7 @@ export interface MyPiSetupConfig {
   readonly childExecutions: {
     readonly maxActive?: number;
   };
+  readonly browser: { readonly control: boolean };
   readonly ui: {
     readonly webTheme: WebTheme;
     readonly webChatWidth: number;
@@ -218,6 +219,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
   },
   childExecutions: {},
+  browser: { control: false },
   ui: {
     webTheme: "system",
     webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
@@ -538,6 +540,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     ? value.childExecutions
     : {};
   const ui = isRecord(value.ui) ? value.ui : {};
+  const browser = isRecord(value.browser) ? value.browser : {};
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
@@ -570,6 +573,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         ? { maxActive: childExecutions.maxActive }
         : {}),
     },
+    browser: { control: browser.control === true },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
       webPinnedSort: ui.webPinnedSort === "updated" ? "updated" : "manual",
@@ -675,6 +679,7 @@ const setupShape: ConfigShape = {
   childExecutions: {
     maxActive: integerBetween(1, MAX_SESSION_CHILD_EXECUTION_LIMIT),
   },
+  browser: { control: booleanValue },
   ui: {
     webTheme: isWebTheme,
     webChatWidth: integerBetween(MIN_WEB_CHAT_WIDTH, MAX_WEB_CHAT_WIDTH),
@@ -1411,6 +1416,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
   return [
     `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
+    `Embedded browser control: ${config.browser.control ? "on" : "off"}`,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"

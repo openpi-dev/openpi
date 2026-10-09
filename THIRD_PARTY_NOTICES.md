@@ -1,5 +1,13 @@
 # Third-Party Notices
 
+The embedded browser control operations in `web/browser-extension/computer-use.js`
+adapt the CDP element resolve/click/text/scroll pattern from
+[`@injaneity/pi-computer-use`](https://github.com/injaneity/pi-computer-use)
+version `0.5.1` (MIT, Copyright (c) 2026 Zane Chee). The complete notice is
+included in [`web/browser-extension/LICENSE.pi-computer-use`](web/browser-extension/LICENSE.pi-computer-use).
+OpenPI supplies the frame-specific Chrome transport and Pi Session ownership;
+it does not install or activate the package's desktop helper.
+
 ## Project origins and acknowledgments
 
 The Web model settings page adapts the provider cards, inline editors and model

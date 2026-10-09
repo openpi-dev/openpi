@@ -466,7 +466,9 @@ Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px�
 
 Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，并用于 Web 的结果与执行过程默认展开。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+
+内置浏览器模型控制默认关闭。在 `/openpi-setup` 请求开启 `browser_control`，并安装或重新加载 [Browser Bridge](web/browser-extension/README.md) 0.2.0、接受浏览器的 debugger 权限后，Pi Session 向模型提供 `openpi_browser`。它可新增内置页面，读取、点击、输入和截图的目标是发起当前 Turn 的 OpenPI 标签内的 iframe。浏览器操作代码适配自 `pi-computer-use` 0.5.1 的 CDP 路径；无需安装桌面辅助程序，不启动独立 Chrome。模型不能用这个工具访问其他顶层标签、操作 OpenPI 自身界面或控制子 Agent 的浏览器。关闭扩展、关闭页面、切换 Session 或取消 Turn 会撤销控制；写入后必须使用新的观察状态。站点 CSP 和登录策略仍可能禁止嵌入。
 
 Web 保存终端页脚偏好不会重新配置另一份已打开的 Pi 界面；该界面在下次 Session 启动或原生 setup 应用时更新页脚。
 

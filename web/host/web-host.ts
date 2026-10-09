@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { registerWebBrowserBridge } from "../../extensions/browser/web-bridge.ts";
+import { WebBrowserBroker, validBrowserPages } from "./browser-control.ts";
 import {
   createHash,
   randomBytes,
@@ -307,20 +309,24 @@ export class WebHost {
   private stopping = false;
   private stopPromise?: Promise<void>;
   private readonly questions: WebQuestionBroker;
+  private readonly browser: WebBrowserBroker;
+  private unregisterBrowser?: () => void;
   private questionSession?: object;
   private unregisterQuestions?: () => void;
   private promptFileUploads = 0;
 
   constructor(options: WebHostOptions) {
     this.runtime = options.runtime;
-    this.questions = new WebQuestionBroker(() => {
+    const turnOwner = () => {
       if (this.stopping || !this.runtime.workspaceSelected) return undefined;
       const turn = this.runtime.getActiveTurn();
       const admission = turn && this.promptAdmissions.get(turn.commandId);
       if (!turn || !admission?.controllerId || admission.sessionId !== turn.sessionId ||
           !this.adapter.isCurrentSession({ id: admission.sessionId, path: admission.sessionPath })) return undefined;
       return { ...turn, workspace: this.runtime.cwd, controllerId: admission.controllerId };
-    }, () => this.publish("questions_changed"));
+    };
+    this.questions = new WebQuestionBroker(turnOwner, () => this.publish("questions_changed"));
+    this.browser = new WebBrowserBroker(turnOwner);
     this.artifacts = new ArtifactReader(() => this.runtime.workspaceSelected && !this.stopping ? { sessionId: this.runtime.sessionManager.getSessionId(), sessionPath: this.runtime.sessionManager.getSessionFile() ?? `current:${this.runtime.sessionManager.getSessionId()}`, cwd: this.runtime.cwd } : undefined);
     this.requestedPort = options.port ?? 0;
     this.token = options.token
@@ -422,6 +428,7 @@ export class WebHost {
   publish(type: string, detail?: Record<string, unknown>) {
     this.syncQuestionBridge();
     this.questions.reconcile();
+    this.browser.reconcile();
     if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) {
       this.artifacts.revoke();
       if (this.runtime.workspaceSelected) {
@@ -470,6 +477,9 @@ export class WebHost {
     const scope = this.stopping ? undefined : this.runtime.sessionManager;
     if (scope === this.questionSession) return;
     this.unregisterQuestions?.();
+    this.unregisterBrowser?.();
+    this.unregisterBrowser = undefined;
+    this.browser.close();
     this.unregisterCommandFeedback?.();
     this.unregisterCommandFeedback = undefined;
     this.unregisterQuestions = undefined;
@@ -477,6 +487,7 @@ export class WebHost {
     this.questions.cancel();
     if (scope) this.unregisterQuestions = registerWebQuestionBridge(scope,
       (toolCallId, questions, signal, handoff) => this.questions.request(toolCallId, questions, signal, handoff));
+    if (scope) this.unregisterBrowser = registerWebBrowserBridge(scope, (request, signal) => this.browser.execute(request, signal));
     if (scope) this.unregisterCommandFeedback = registerWebCommandFeedback(scope, (text, level) => {
       if (this.stopping || scope !== this.runtime.sessionManager) return;
       scope.appendCustomEntry(WEB_COMMAND_FEEDBACK, { text: text.slice(0, 12_000), level, truncated: text.length > 12_000 });
@@ -589,6 +600,7 @@ export class WebHost {
     if (pathname === "/api/artifacts/save" || pathname === "/api/files/mutate") return true;
     if (pathname === "/api/turns/cancel") return true;
     if (pathname === "/api/questions/answer") return true;
+    if (pathname === "/api/browser/control") return true;
     if (pathname === "/api/session/fork") return true;
     if (pathname.startsWith("/api/plan")) return true;
     if (pathname === "/api/compact" || pathname === "/api/prompt-queue") return true;
@@ -679,6 +691,22 @@ export class WebHost {
     }
     if (!this.authorized(request))
       return this.json(response, 401, { error: "invalid or missing token" });
+    if (url.pathname === "/api/browser/control" && request.method === "POST") {
+      const body = await this.readJson(request, 4_300_000);
+      const controller = request.headers["x-openpi-web-controller"];
+      if (!isWebControllerId(controller) || typeof body.sessionId !== "string" || !this.adapter.isCurrentSession({ id: body.sessionId, path: typeof body.sessionPath === "string" ? body.sessionPath : "" })) return this.json(response, 409, { error: "An exact active Session and browser controller are required" });
+      if (body.requestId !== undefined) {
+        if (!isWebControllerId(body.requestId) || (body.error !== undefined && typeof body.error !== "string")) return this.json(response, 400, { error: "Invalid browser result" });
+        if (body.pages !== undefined) {
+          if (!validBrowserPages(body.pages)) return this.json(response, 400, { error: "Invalid embedded pages" });
+          this.browser.poll(body.sessionId, controller, body.pages);
+        }
+        const accepted = this.browser.result(body.sessionId, controller, body.requestId, body.result, body.error as string | undefined);
+        return this.json(response, accepted ? 200 : 409, { accepted });
+      }
+      if (!validBrowserPages(body.pages)) return this.json(response, 400, { error: "Invalid embedded pages" });
+      return this.json(response, 200, { pending: this.browser.poll(body.sessionId, controller, body.pages) });
+    }
     if (url.pathname === "/api/terminal/events") {
       if (request.method !== "GET")
         return this.json(response, 405, {

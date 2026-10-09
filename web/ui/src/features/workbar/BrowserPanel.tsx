@@ -11,6 +11,7 @@ import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { browserAddress } from "./browser-address.ts";
 import { useBrowserBridge } from "./browser-bridge.ts";
+import { useBrowserControl } from "./browser-control.ts";
 import { useWorkbarReadingState } from "./workbar-reading-state.ts";
 
 // Fixed resource bound, not a persisted user preference.
@@ -204,6 +205,9 @@ function DirectBrowserPage({
           <iframe
             key={page.revision}
             data-openpi-browser-page={pageId}
+            data-openpi-browser-document={bridge.page?.document}
+            data-openpi-browser-url={bridge.page?.url}
+            data-openpi-browser-title={bridge.page?.title}
             src={url}
             title={t("browserPageTitle", { address: new URL(url).host })}
             referrerPolicy="no-referrer"
@@ -235,7 +239,13 @@ function DirectBrowserPage({
   );
 }
 
-export function BrowserPanel() {
+export function BrowserPanel({
+  sessionId,
+  sessionPath,
+}: {
+  sessionId?: string;
+  sessionPath?: string;
+} = {}) {
   const { t } = useTranslation();
   const prefix = useId();
   const reading = useWorkbarReadingState();
@@ -259,7 +269,7 @@ export function BrowserPanel() {
   const add = (url = "") => {
     if (tabsRef.current.length >= MAX_PAGES) {
       if (url) setBlockedUrl(url);
-      return;
+      return undefined;
     }
     const tab = {
       id: nextId.current++,
@@ -272,7 +282,9 @@ export function BrowserPanel() {
     setSelected(tab.id);
     setBlockedUrl(undefined);
     focusTab(tab.id);
+    return `${prefix}-page-${tab.id}`;
   };
+  useBrowserControl(sessionId, sessionPath, add);
   const close = (id: number) => {
     if (reading?.browser) delete reading.browser.pages[id];
     setBlockedUrl(undefined);
