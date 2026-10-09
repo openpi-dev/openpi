@@ -431,7 +431,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 @supports (background-clip:text) {
   :is(.tool-evidence-card[data-state="running"], .tool-line.running) > summary :is(.tool-action, .tool-summary, .evidence-command, .evidence-filename),
   .process-sequence.running > summary :is(strong, .process-sequence-preview),
-  .context-compaction[data-state="running"] :is(.context-compaction-text, .context-compaction-hint) { background:linear-gradient(100deg, var(--subtle) 25%, var(--text) 45%, var(--subtle) 65%); background-size:250% 100%; background-clip:text; -webkit-text-fill-color:transparent; animation:activity-text-shimmer 2.2s linear infinite; }
+  .context-compaction[data-state="running"] .context-compaction-text { background:linear-gradient(100deg, var(--subtle) 25%, var(--text) 45%, var(--subtle) 65%); background-size:250% 100%; background-clip:text; -webkit-text-fill-color:transparent; animation:activity-text-shimmer 2.2s linear infinite; }
 }
 .review-additions { color:oklch(55% .15 145); }
 .review-deletions { color:var(--error); }
@@ -607,7 +607,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .subagent-thinking.running > summary::after { animation:none; content:none; }
   :is(.tool-evidence-card[data-state="running"], .tool-line.running) > summary :is(.tool-action, .tool-summary, .evidence-command, .evidence-filename),
   .process-sequence.running > summary :is(strong, .process-sequence-preview),
-  .context-compaction[data-state="running"] :is(.context-compaction-text, .context-compaction-hint) { animation:none; background:none; -webkit-text-fill-color:currentColor; }
+  .context-compaction[data-state="running"] .context-compaction-text { animation:none; background:none; -webkit-text-fill-color:currentColor; }
 }
 .switching { @apply flex items-center; }
 .message-actions { @apply mt-1 flex h-6 items-center justify-end gap-1; color: var(--subtle); font-size: 10.5px; opacity: 0; transition: opacity 120ms ease; }

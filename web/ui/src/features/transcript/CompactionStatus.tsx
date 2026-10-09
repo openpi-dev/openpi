@@ -29,11 +29,6 @@ export function CompactionStatus({
         <span className="context-compaction-label" role="status">
           <TextSelect aria-hidden="true" />
           <span className="context-compaction-text">{t(labels[state])}</span>
-          {running && observed && (
-            <span className="context-compaction-hint">
-              · {t("compactionRunningHelp")}
-            </span>
-          )}
         </span>
         {running && observed && compaction.elapsedMs !== undefined && (
           <RunningTurnElapsed

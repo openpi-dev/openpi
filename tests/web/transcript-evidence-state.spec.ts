@@ -232,7 +232,6 @@ it("shows one compaction status before an agent turn, freezes on disconnect, and
   const { container, rerender, getByText, queryByText } = render(view(value));
   expect(getByText(i18n.t("compactionRunning"))).toBeTruthy();
   expect(container.querySelectorAll('[data-state="running"]')).toHaveLength(1);
-  expect(getByText(`· ${i18n.t("compactionRunningHelp")}`)).toBeTruthy();
   expect(container.querySelector(".context-compaction-label svg")).toBeTruthy();
   expect(container.querySelector(".conversation-running")).toBeNull();
   expect(container.querySelector('[role="timer"]')?.textContent).toContain(
@@ -311,6 +310,66 @@ it("requires a native compaction entry rather than a message claiming compaction
   };
   const { container } = render(view(value));
   expect(container.querySelector(".context-compaction")).toBeNull();
+});
+
+it("keeps completed compaction inside the elapsed process fold and leaves the exact final answer visible", () => {
+  const value: WebSnapshot = snapshot();
+  value.selectedSession!.entries = [
+    value.selectedSession!.entries[0]!,
+    {
+      type: "compaction",
+      id: "native-compaction",
+      timestamp: "2026-09-26T10:00:01Z",
+    },
+    {
+      type: "message",
+      id: "final",
+      timestamp: "2026-09-26T10:00:02Z",
+      message: {
+        role: "assistant",
+        content: "Exact final answer",
+        stopReason: "stop",
+      },
+    },
+    {
+      type: "custom",
+      id: "timing",
+      timestamp: "2026-09-26T10:00:02Z",
+      turnTiming: {
+        version: 1,
+        sessionId: "session",
+        commandId: "run",
+        epoch: 1,
+        promptEntryId: "prompt",
+        resultEntryId: "final",
+        startedAt: 0,
+        finishedAt: 2000,
+        elapsedMs: 2000,
+        outcome: "completed",
+      },
+    },
+  ];
+  value.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/session.jsonl",
+    status: "idle",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    compaction: { state: "completed" },
+  };
+  const { container, getByText } = render(view(value));
+  const body = container.querySelector<HTMLElement>(".turn-response-body")!;
+  expect(body.hidden).toBe(true);
+  expect(
+    body.querySelectorAll('.context-compaction[data-state="completed"]'),
+  ).toHaveLength(1);
+  expect(getByText("Exact final answer").closest("[hidden]")).toBeNull();
+  fireEvent.click(container.querySelector(".turn-duration-toggle")!);
+  expect(body.hidden).toBe(false);
+  expect(container.querySelectorAll(".context-compaction")).toHaveLength(1);
+  fireEvent.click(container.querySelector(".turn-duration-toggle")!);
+  expect(body.hidden).toBe(true);
+  expect(getByText("Exact final answer").closest("[hidden]")).toBeNull();
 });
 
 it("shows the actual running tool in a folded group and follows new rows only while the reader stays at the bottom", async () => {

@@ -10,6 +10,7 @@ import {
   Pencil,
   RotateCcw,
   Workflow,
+  Wifi,
   Wrench,
   X,
 } from "lucide-react";
@@ -33,6 +34,7 @@ import {
 } from "../../../../protocol/evidence.ts";
 import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
+import type { WebSessionExecution } from "../../../../runtime/types.ts";
 import type {
   WebHistoryAnchor,
   WebLiveMessage,
@@ -288,29 +290,64 @@ type ProviderAttemptState =
 function ProviderAttempts({
   attempts,
   state,
+  retry,
+  observed = true,
 }: {
   attempts: { entry: DisplayEntry; content?: RenderRow[] }[];
   state: ProviderAttemptState;
+  retry?: WebSessionExecution["retry"];
+  observed?: boolean;
 }) {
   const { t } = useTranslation();
-  return (
-    <details className={`provider-outcome provider-attempts ${state}`}>
-      <summary>
-        <ChevronRight aria-hidden="true" />
-        {state !== "earlier" && (
-          <strong>
-            {t(
+  const unavailable = state === "retrying" && !observed;
+  const attempt = retry?.attempt;
+  const maxAttempts = retry?.maxAttempts;
+  const hasCounts =
+    typeof attempt === "number" &&
+    Number.isSafeInteger(attempt) &&
+    attempt > 0 &&
+    typeof maxAttempts === "number" &&
+    Number.isSafeInteger(maxAttempts) &&
+    maxAttempts >= attempt;
+  const hasDetails = attempts.length > 0 || Boolean(retry?.errorMessage);
+  const heading = (
+    <>
+      <Wifi aria-hidden="true" />
+      <span role={state === "retrying" ? "status" : undefined}>
+        {unavailable
+          ? t("modelReconnectUnknown")
+          : t(
               state === "recovered"
                 ? "modelRequestRecovered"
                 : state === "retrying"
-                  ? "modelRetrying"
-                  : "modelRequestStopped",
+                  ? retry
+                    ? "modelReconnecting"
+                    : "modelEarlierAttempts"
+                  : state === "interrupted"
+                    ? "modelRequestStopped"
+                    : "modelEarlierAttempts",
             )}
-          </strong>
-        )}
+        {state === "retrying" && hasCounts && ` ${attempt}/${maxAttempts}`}
+      </span>
+      {state !== "retrying" && (
         <span>{t("modelFailedAttempts", { count: attempts.length })}</span>
-      </summary>
+      )}
+      {hasDetails && (
+        <ChevronRight className="reconnect-chevron" aria-hidden="true" />
+      )}
+    </>
+  );
+  const className = `provider-attempts ${state}${unavailable ? " unavailable" : ""}`;
+  if (!hasDetails) return <div className={className}>{heading}</div>;
+  return (
+    <details className={className}>
+      <summary>{heading}</summary>
       <ol>
+        {attempts.length === 0 && (
+          <li>
+            <p>{retry?.errorMessage}</p>
+          </li>
+        )}
         {attempts.map(({ entry, content }) => (
           <li key={entry.key} data-history-entry={entry.entryId ?? entry.key}>
             <p>{entry.message.errorMessage || t("modelFailureUnknown")}</p>
@@ -2037,6 +2074,14 @@ export function Transcript(props: TranscriptProps) {
     (selectedExecution
       ? selectedExecution.status === "running"
       : active && props.snapshot.runtime.status === "running");
+  const retry =
+    !historyPaused && running
+      ? selectedExecution
+        ? selectedExecution.retry
+        : active
+          ? (props.liveRetry ?? undefined)
+          : undefined
+      : undefined;
   const nativeRowKeys = useRef({
     scope: hydrationScope,
     keys: new Map<string, string>(),
@@ -2085,6 +2130,7 @@ export function Transcript(props: TranscriptProps) {
     const failures = providerFailures(entries, running && !historyPaused);
     const lastFinalError = [...failures.finalErrors].at(-1);
     const attemptContents = new Map<string, RenderRow[]>();
+    let retryRendered = false;
     const results = new Map<string, DisplayEntry>();
     const pairedToolIds = new Set<string>();
     const liveTools = historyPaused
@@ -2673,6 +2719,7 @@ export function Transcript(props: TranscriptProps) {
         }
         const attempts = failures.groups.get(index);
         if (attempts) {
+          if (attempts.state === "retrying" && retry) retryRendered = true;
           detailRows.push({
             key: `${entry.key}-attempts`,
             turn,
@@ -2683,6 +2730,11 @@ export function Transcript(props: TranscriptProps) {
               <article className="message-row assistant outcome-row">
                 <ProviderAttempts
                   state={attempts.state}
+                  retry={attempts.state === "retrying" ? retry : undefined}
+                  observed={
+                    props.activityObserved !== false &&
+                    selectedExecution?.status !== "unknown"
+                  }
                   attempts={attempts.attempts.map((attempt) => ({
                     entry: attempt,
                     content: attemptContents.get(attempt.key),
@@ -2839,11 +2891,32 @@ export function Transcript(props: TranscriptProps) {
       }
       return [];
     });
+    if (retry && !retryRendered)
+      rendered.push({
+        key: "native-retry",
+        turn,
+        kind: "outcome",
+        content: (
+          <article className="message-row assistant outcome-row">
+            <ProviderAttempts
+              attempts={[]}
+              state="retrying"
+              retry={retry}
+              observed={
+                props.activityObserved !== false &&
+                selectedExecution?.status !== "unknown"
+              }
+            />
+          </article>
+        ),
+      });
     return { rows: rendered, turns: turnItems };
   }, [
     active,
     running,
     selectedExecution,
+    retry,
+    props.activityObserved,
     historyPaused,
     entries,
     props.onResend,

@@ -165,6 +165,8 @@ export interface WebSessionExecution {
   liveTools: LiveToolEvidence[];
   liveToolsOmitted: number;
   activeTurn?: WebActiveTurn;
+  /** Pi retry facts survive a Web reconnect; unknown counts stay omitted. */
+  retry?: { attempt?: number; maxAttempts?: number; errorMessage?: string };
   /** Native compaction observation; completion history remains in Pi entries. */
   compaction?: {
     state: "running" | "completed" | "failed" | "cancelled" | "unchanged";

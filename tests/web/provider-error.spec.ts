@@ -295,6 +295,9 @@ it("updates the failed attempt projection during retry and live recovery without
     }),
   );
   expect(container.querySelector(".provider-attempts.retrying")).toBeTruthy();
+  expect(
+    container.querySelector(".provider-attempts summary")?.textContent,
+  ).toBe("Reconnecting 1/3");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
   expect(container.querySelector(".turn-state.failed")).toBeNull();
@@ -318,6 +321,102 @@ it("updates the failed attempt projection during retry and live recovery without
   expect(screen.getByText("Live success")).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+});
+
+it("restores an inline native reconnect row after refresh, reveals its reason, and freezes on a Web disconnect", () => {
+  const reason =
+    "stream disconnected before completion: stream closed before response.completed";
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+    error(reason),
+  ]);
+  state.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    retry: { attempt: 1, maxAttempts: 5, errorMessage: reason },
+  };
+  const { container, rerender } = render(transcriptNode(state));
+  const row =
+    container.querySelector<HTMLDetailsElement>(".provider-attempts")!;
+  expect(container.querySelectorAll(".provider-attempts")).toHaveLength(1);
+  expect(row.open).toBe(false);
+  expect(row.querySelector("summary")?.textContent).toBe("Reconnecting 1/5");
+  expect(row.querySelector("summary > svg.lucide-wifi")).toBeTruthy();
+  expect(row.classList.contains("provider-outcome")).toBe(false);
+  fireEvent.click(row.querySelector("summary")!);
+  expect(row.open).toBe(true);
+  expect(row.querySelector("li")?.textContent).toBe(reason);
+  rerender(transcriptNode(state, { activityObserved: false }));
+  expect(row.querySelector("summary")?.textContent).toBe(
+    "Reconnection status unconfirmed 1/5",
+  );
+  expect(row.open).toBe(true);
+  rerender(transcriptNode(state));
+  expect(row.querySelector("summary")?.textContent).toBe("Reconnecting 1/5");
+  state.selectedExecution.sessionPath = "/tmp/copied.jsonl";
+  rerender(transcriptNode({ ...state }));
+  expect(container.querySelector(".provider-attempts.retrying")).toBeNull();
+});
+
+it("does not invent retry limits or a reconnect phase from an incomplete model response", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+    error("temporary failure"),
+  ]);
+  const { container, rerender } = render(
+    transcriptNode(state, { liveRunning: true, livePhase: "running" }),
+  );
+  expect(
+    container.querySelector(".provider-attempts summary")?.textContent,
+  ).toBe("Earlier request errors");
+  state.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    retry: {},
+  };
+  rerender(transcriptNode(state));
+  expect(
+    container.querySelector(".provider-attempts summary")?.textContent,
+  ).toBe("Reconnecting");
+  state.selectedExecution.retry = undefined;
+  rerender(
+    transcriptNode({ ...state }, { liveRetry: { attempt: 3, maxAttempts: 5 } }),
+  );
+  expect(
+    container.querySelector(".provider-attempts summary")?.textContent,
+  ).toBe("Earlier request errors");
+});
+
+it("shows an observed native retry even when its failed message is outside the loaded history", () => {
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+  ]);
+  state.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    retry: {
+      attempt: 2,
+      maxAttempts: 3,
+      errorMessage: "native stream failure",
+    },
+  };
+  const { container } = render(transcriptNode(state));
+  expect(container.querySelectorAll(".provider-attempts")).toHaveLength(1);
+  expect(
+    container.querySelector(".provider-attempts summary")?.textContent,
+  ).toBe("Reconnecting 2/3");
+  expect(container.querySelector(".provider-attempts li")?.textContent).toBe(
+    "native stream failure",
+  );
 });
 
 it("offers one final retry after exhaustion while folding the earlier attempts", () => {
