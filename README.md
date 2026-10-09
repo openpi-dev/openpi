@@ -456,6 +456,8 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 Plan 模式下需先退出规划，再通过 `/openpi-setup` 修改配置。Web 设置页会禁用相关修改入口，并在会话空闲时提供退出按钮；退出仅切换状态，不调用模型或开始实施。Setup 在接收命令和投递排队请求时都检查当前 Session 的 Plan 状态。设置页依据实际工具回执反馈保存、设置未变化、失败或取消；回合结束或模型声称成功都不能替代保存回执。
 
+工作区清理保护默认使用 `enforce`；可用 `/openpi-setup 不透明清理命令走确认` 切换为 `ask`，或选择 `off` 关闭。
+
 Web 侧栏支持独立置顶会话分区。行内图钉可置顶或取消，置顶区菜单切换最近更新和手动排序；手动模式支持拖动以及会话菜单上移/下移。`ui.webPinnedSort` 默认为 `manual`，可选 `updated`，由 `/openpi-setup` 或置顶区菜单保存。置顶顺序保存在当前 Web 会话目录的工作区元数据中；归档暂时隐藏置顶，恢复后保留顺序。
 
 会话行右侧只保留三种提示：执行中的转圈、已完成未读的小圆点、需要处理的提示。等待输入和失败共用需要处理标记，悬停或打开会话可查看具体原因；停止和未知结果恢复普通行。断线时收起执行动画，由页面连接状态统一提示，绝不当作完成。打开会话并在可见页面停留四秒后，完成圆点在当前浏览器标签页内记为已读；后台完成回执在当前 Host 生命周期内保留，不将已释放运行实例误报为空闲。
@@ -466,7 +468,7 @@ Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px�
 
 Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，并用于 Web 的结果与执行过程默认展开。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: workspaceCleanupGuard capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 Web 保存终端页脚偏好不会重新配置另一份已打开的 Pi 界面；该界面在下次 Session 启动或原生 setup 应用时更新页脚。
 
@@ -498,6 +500,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 
 | 配置                         | 默认值                                         |
 | ---------------------------- | ---------------------------------------------- |
+| Workspace cleanup guard      | `enforce`；另有 `ask` / `off`                  |
 | Capability discovery         | `explicit`；`adaptive` 必须显式开启            |
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |

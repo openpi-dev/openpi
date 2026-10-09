@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -27,7 +28,9 @@ interface HarnessOptions {
 
 function harness(options: HarnessOptions) {
   const handlers = new Map<string, Handler[]>();
+  const events = createEventBus();
   const pi = {
+    events,
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },

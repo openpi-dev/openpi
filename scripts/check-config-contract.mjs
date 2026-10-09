@@ -8,6 +8,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CONFIG_FIELD_CONTRACT = [
   {
+    path: "workspaceCleanupGuard",
+    writerTokens: ["params.workspace_cleanup_guard"],
+    statusTokens: ["config.workspaceCleanupGuard"],
+    readmeTerms: ["Workspace cleanup guard"],
+    setupTerms: ["Workspace cleanup guard"],
+  },
+  {
     path: "capabilities.discovery",
     writerTokens: ["params.capability_discovery"],
     statusTokens: ["config.capabilities.discovery"],
