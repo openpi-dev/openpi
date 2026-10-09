@@ -2,7 +2,6 @@ import {
   BookOpen,
   Bot,
   ClipboardList,
-  CodeXml,
   Folder,
   GitBranch,
   Globe,
@@ -27,8 +26,6 @@ export function toolActivity(name: string) {
       return { action: "edit", Icon: Pencil };
     case "bash":
       return { action: "command", Icon: SquareTerminal };
-    case "codemode":
-      return { action: "script", Icon: CodeXml };
     case "grep":
     case "rg":
     case "find":

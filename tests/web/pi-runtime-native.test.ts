@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -7,14 +7,12 @@ import {
   contentText,
   fauxAssistantMessage,
   fauxProvider,
-  fauxToolCall,
   type FauxResponseStep,
 } from "@earendil-works/pi-ai";
 import {
   AgentSessionRuntime,
   createAgentSessionFromServices,
   createAgentSessionServices,
-  createCodemodeExtension,
   type ExtensionFactory,
   ModelRuntime,
   SessionManager,
@@ -22,8 +20,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import type { WebRuntimeEvent } from "../../web/runtime/types.ts";
-import { projectMessage } from "../../web/protocol/types.ts";
-import { projectCodemodeEvidence } from "../../web/protocol/codemode.ts";
 
 async function nativeRuntime(
   t: TestContext,
@@ -89,74 +85,8 @@ async function nativeRuntime(
   ).startRuntimeSession();
   const events: WebRuntimeEvent[] = [];
   runtime.subscribe((event) => events.push(event));
-  return { runtime, session, events, cwd };
+  return { runtime, session, events };
 }
-
-test("native Code Mode retains nested execution ownership and failed calls when the script succeeds", {
-  timeout: 15_000,
-}, async (t) => {
-  const code = `const reads = await Promise.allSettled([tools.read({path: 'one.txt'}), tools.read({path: 'two.txt'})]);
-for (const result of reads) text(result);
-text(await tools.bash({command: 'exit 7'}));
-text(await tools.bash({command: 'wc -l one.txt'}));`;
-  const { runtime, session, events, cwd } = await nativeRuntime(
-    t,
-    createCodemodeExtension({ mode: "only", models: false }),
-    [
-      fauxAssistantMessage(
-        fauxToolCall("codemode", { code }, { id: "script" }),
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("Native script finished."),
-    ],
-  );
-  await writeFile(join(cwd, "one.txt"), "one\n");
-  await writeFile(join(cwd, "two.txt"), "two\n");
-  session.setActiveToolsByName(["read", "bash", "codemode"]);
-  await runtime.sendPrompt(
-    "Read both fixtures, retain a failed command and continue.",
-    { commandId: "codemode-native" },
-  );
-  await session.waitForIdle();
-  const starts = events.filter(
-    (event) =>
-      event.type === "tool_execution_start" &&
-      event.detail?.parentToolCallId === "script",
-  );
-  assert.deepEqual(
-    starts.map((event) => event.detail?.toolName),
-    ["read", "read", "bash", "bash"],
-  );
-  const ends = events.filter(
-    (event) =>
-      event.type === "tool_execution_end" &&
-      event.detail?.parentToolCallId === "script",
-  );
-  assert.equal(ends.length, 4);
-  assert.equal(
-    ends.filter((event) => event.detail?.isError === true).length,
-    1,
-  );
-  const raw = session.messages.find(
-    (message) =>
-      message.role === "toolResult" && message.toolCallId === "script",
-  );
-  assert.ok(raw);
-  const result = projectMessage(raw);
-  const outer = projectMessage({
-    content: [fauxToolCall("codemode", { code }, { id: "script" })],
-  }).parts?.[0];
-  assert.ok(outer?.type === "toolCall");
-  const view = projectCodemodeEvidence(outer, result);
-  assert.equal(view.state, "returned");
-  assert.equal(view.calls.length, 4);
-  assert.equal(view.calls[2]?.state, "failed");
-  assert.match(view.calls[2]?.error ?? "", /code 7/u);
-  assert.equal(view.calls[3]?.state, "returned");
-  assert.equal(view.calls[0]?.args?.path, "one.txt");
-  assert.equal(view.calls[1]?.args?.path, "two.txt");
-  assert.equal(view.partial, false);
-});
 
 test("handled input retains its native queued work until Pi settles", {
   timeout: 15_000,

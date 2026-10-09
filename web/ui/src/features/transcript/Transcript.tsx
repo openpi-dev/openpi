@@ -52,7 +52,6 @@ import {
 import { isControlledSession } from "../../lib/session-control.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
 import { CompactionStatus } from "./CompactionStatus.tsx";
-import { CodemodeEvidence } from "./CodemodeEvidence.tsx";
 import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
 import {
@@ -2594,12 +2593,7 @@ export function Transcript(props: TranscriptProps) {
                   ? props.snapshot.preferences.fileMutationDisplay === "full"
                   : false;
             const live = part.id
-              ? ((part.name === "codemode" && active
-                  ? props.snapshot.runtime.liveTools?.find(
-                      (item) => item.call.id === part.id,
-                    )
-                  : undefined) ??
-                liveTools.find((item) => item.call.id === part.id))
+              ? liveTools.find((item) => item.call.id === part.id)
               : undefined;
             const persistedResultEntry = part.id
               ? results.get(part.id)
@@ -2616,24 +2610,6 @@ export function Transcript(props: TranscriptProps) {
                   sessionId={selectedId}
                   sessionPath={selectedPath}
                   entryId={persistedResultEntry?.entryId}
-                />
-              ) : part.name === "codemode" ? (
-                <CodemodeEvidence
-                  key={`${entry.key}-${part.id || partIndex}-codemode`}
-                  call={part}
-                  result={result}
-                  liveState={
-                    persistedResult
-                      ? undefined
-                      : props.activityObserved !== false
-                        ? live?.state
-                        : "unknown"
-                  }
-                  liveTools={
-                    active && props.activityObserved !== false
-                      ? props.snapshot.runtime.liveTools
-                      : undefined
-                  }
                 />
               ) : isEvidenceTool(part.name) ? (
                 <ToolEvidence

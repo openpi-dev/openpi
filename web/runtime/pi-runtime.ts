@@ -2132,7 +2132,6 @@ export class PiWebRuntime implements WebRuntimeController {
           sessionId: session.sessionManager.getSessionId(),
           toolName: event.toolName,
           toolCallId: event.toolCallId,
-          ...("parentToolCallId" in event && typeof event.parentToolCallId === "string" ? { parentToolCallId: event.parentToolCallId } : {}),
           ...(event.type === "tool_execution_end"
             ? { isError: event.isError, result: projectMessage({ ...event.result, role: "toolResult", toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError }) }
             : { call: projectMessage({ content: [{ type: "toolCall", id: event.toolCallId, name: event.toolName, arguments: event.args }] }).parts?.[0],

@@ -1,6 +1,5 @@
 import { createStore } from "zustand/vanilla";
 import { reduceLiveTools } from "../../../protocol/live-tools.ts";
-import { mergeCodemodeLiveTools } from "../../../protocol/codemode.ts";
 import {
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebCommandSummary,
@@ -1317,12 +1316,6 @@ export function createWebStore(
             get().snapshot?.selectedSession?.path !==
               snapshot.selectedSession?.path;
           const previous = get().snapshot;
-          if (!shouldReset && !controllerChanged && !selectionChanged) {
-            snapshot.runtime.liveTools = mergeCodemodeLiveTools(
-              previous?.runtime.liveTools ?? [],
-              snapshot.runtime.liveTools ?? [],
-            );
-          }
           const modelSearchChanged =
             shouldReset ||
             controllerChanged ||

@@ -342,7 +342,6 @@ export interface WebMessageTruncation {
   readonly visibleText?: true;
   readonly partsOmitted?: number;
   readonly details?: true;
-  readonly nestedCalls?: true;
 }
 
 export interface WebLiveMessage {
@@ -361,8 +360,6 @@ export interface WebLiveMessage {
   customType?: string;
   display?: boolean;
   details?: unknown;
-  /** Pi's bounded nested-call receipt; it does not contain child outputs. */
-  nestedCalls?: unknown;
   truncation?: WebMessageTruncation;
 }
 
@@ -832,7 +829,6 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
       : {};
   const content = projectContent(value, resolvePath);
   const details = detailsProjection(value.details);
-  const nestedCalls = detailsProjection(value.role === "toolResult" ? Object.getOwnPropertyDescriptor(value, "nestedCalls")?.value : undefined);
   const role =
     typeof value.role === "string"
       ? boundedTextProjection(value.role, WEB_MAX_METADATA_TEXT)
@@ -863,7 +859,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
   const truncated =
     content.textTruncated ||
     content.partsOmitted > 0 ||
-    details.truncated || nestedCalls.truncated ||
+    details.truncated ||
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
@@ -879,7 +875,6 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     ...(customType ? { customType: customType.value } : {}),
     ...(typeof value.display === "boolean" ? { display: value.display } : {}),
     ...(details.value !== undefined ? { details: details.value } : {}),
-    ...(nestedCalls.value !== undefined ? { nestedCalls: nestedCalls.value } : {}),
     ...(truncated
       ? {
           truncation: {
@@ -894,7 +889,6 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
               ? { partsOmitted: content.partsOmitted }
               : {}),
             ...(details.truncated ? { details: true as const } : {}),
-            ...(nestedCalls.truncated ? { nestedCalls: true as const } : {}),
           },
         }
       : {}),

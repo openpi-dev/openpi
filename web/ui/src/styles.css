@@ -1003,10 +1003,6 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .review-additions { color:var(--healthy); }
 .review-deletions { color:var(--error); }
 .evidence-content { margin:6px 8px 12px 35px; font-size:12px; overflow-wrap:anywhere; }
-.codemode-evidence > summary .tool-name { color:var(--muted); background:var(--sidebar-hover); }
-.codemode-evidence .codemode-failure-count { flex:none; font-size:11px; }
-.codemode-calls { max-height:min(360px, 50dvh); overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:color-mix(in oklch, var(--muted) 30%, transparent) transparent; }
-.codemode-calls:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
 .evidence-content > p { margin:6px 0; color:var(--muted); }
 .evidence-content pre { max-height:360px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:10px; background:var(--sidebar-hover); line-height:1.65; }
 .evidence-content h4 { margin:12px 0 6px; }
