@@ -99,6 +99,14 @@ const ICON_COLOR = {
 
 type Tone = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
 
+/** Reapply the block tint after nested foreground styles reset all SGR state. */
+function paintBackground(theme: Theme, color: Tone, row: string) {
+  return row
+    .split("\u001b[0m")
+    .map((segment) => theme.bg(color, segment))
+    .join("\u001b[0m");
+}
+
 /** Mirror Pi's default tool shell (padded, tinted block) with a tone derived from all evidence. */
 function framed(
   theme: Theme,
@@ -115,15 +123,13 @@ function framed(
       if (edges.top) rows.unshift("");
       if (edges.bottom()) rows.push("");
       const bg = tone();
-      return rows.map((row) => {
-        const padded = row + " ".repeat(Math.max(0, width - visibleWidth(row)));
-        // Pi's truncation/wrapping resets all SGR styles. Reapply the owning
-        // card background after each reset, including ellipsis and padding.
-        return padded
-          .split("\x1b[0m")
-          .map((segment) => theme.bg(bg, segment))
-          .join("\x1b[0m");
-      });
+      return rows.map((row) =>
+        paintBackground(
+          theme,
+          bg,
+          row + " ".repeat(Math.max(0, width - visibleWidth(row))),
+        ),
+      );
     },
     invalidate() {},
   };
