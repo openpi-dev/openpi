@@ -219,12 +219,21 @@ export async function createWorktree(options: {
   const worktreePath = path.join(gitDir, ...WORKTREE_DIR_SEGMENTS, name);
   const branch = `${WORKTREE_NAME_PREFIX}${name}`;
 
-  // Read before creating: this is the baseline teardown measures against.
+  // Pin creation to the same baseline teardown and handoff measure against:
+  // the parent's HEAD can advance before the worktree add process runs.
   const base = await runGit(["rev-parse", "HEAD"], options.cwd);
   const baseSha = base.code === 0 ? firstLine(base.stdout) : undefined;
 
   const added = await runGit(
-    ["worktree", "add", "--quiet", "-b", branch, worktreePath, "HEAD"],
+    [
+      "worktree",
+      "add",
+      "--quiet",
+      "-b",
+      branch,
+      worktreePath,
+      baseSha || "HEAD",
+    ],
     options.cwd,
   );
   if (added.code !== 0) {
