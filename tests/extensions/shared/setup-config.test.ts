@@ -1123,3 +1123,88 @@ test("IO errors remain visible and unknown model fields cannot disappear on role
   if (process.platform !== "win32")
     assert.equal(statSync(SETUP_CONFIG_PATH).mode & 0o777, 0o600);
 });
+
+for (const invalid of [[0xff], [0xc0, 0xaf], [0xe2, 0x82]]) {
+  test(`malformed UTF-8 ${Buffer.from(invalid).toString("hex")} blocks setup writes without losing original bytes`, async () => {
+    const original = Buffer.concat([
+      Buffer.from('{"configVersion":1,"future":{"note":"'),
+      Buffer.from(invalid),
+      Buffer.from('"}}\n'),
+    ]);
+    writeFileSync(SETUP_CONFIG_PATH, original);
+    const inspected = inspectSetupConfig();
+    let mutations = 0;
+    let applies = 0;
+    const error = await updateSetupConfig(
+      (config) => {
+        mutations += 1;
+        return { ...config, ui: { ...config.ui, showHeader: true } };
+      },
+      async () => {
+        applies += 1;
+      },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    assert.deepEqual(
+      {
+        writable: inspected.writable,
+        rejected: error instanceof Error,
+        mutations,
+        applies,
+        unchanged: readFileSync(SETUP_CONFIG_PATH).equals(original),
+      },
+      {
+        writable: false,
+        rejected: true,
+        mutations: 0,
+        applies: 0,
+        unchanged: true,
+      },
+    );
+  });
+}
+
+for (const note of ["ASCII", "中文", "😀", "�"]) {
+  test(`valid UTF-8 ${note} survives unrelated setup updates and rollback`, async () => {
+    const future = { nested: { note }, list: [note] };
+    const original = Buffer.from(
+      ` ${JSON.stringify({ configVersion: 1, future })}\n`,
+    );
+    writeFileSync(SETUP_CONFIG_PATH, original);
+    assert.equal(inspectSetupConfig().writable, true);
+    await updateSetupConfig((config) => ({
+      ...config,
+      ui: { ...config.ui, showHeader: true },
+    }));
+    const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+    assert.deepEqual(saved.future, future);
+    assert.equal(saved.ui.showHeader, true);
+    writeFileSync(SETUP_CONFIG_PATH, original);
+    const applied: boolean[] = [];
+    await assert.rejects(
+      updateSetupConfig(
+        (config) => ({ ...config, ui: { ...config.ui, showHeader: true } }),
+        async (config) => {
+          applied.push(config.ui.showHeader);
+          if (config.ui.showHeader) throw new Error("synthetic apply failure");
+        },
+      ),
+      /previous file and configuration restored/,
+    );
+    assert.deepEqual(applied, [true, false]);
+    assert.deepEqual(readFileSync(SETUP_CONFIG_PATH), original);
+  });
+}
+
+test("UTF-8 BOM retains the existing malformed JSON rejection", async () => {
+  const original = Buffer.from('\ufeff{"configVersion":1}');
+  writeFileSync(SETUP_CONFIG_PATH, original);
+  assert.equal(inspectSetupConfig().writable, false);
+  await assert.rejects(
+    updateSetupConfig((config) => config),
+    /Refusing to overwrite/,
+  );
+  assert.deepEqual(readFileSync(SETUP_CONFIG_PATH), original);
+});

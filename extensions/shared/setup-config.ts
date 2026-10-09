@@ -818,7 +818,11 @@ export function inspectSetupConfig() {
   let diagnostics: SetupDiagnostic[] = [];
   let source: "missing" | "disk" = "disk";
   try {
-    bytes = readFileSync(SETUP_CONFIG_PATH, "utf8");
+    // Reject malformed bytes before replacement decoding can hide corruption.
+    // Retain a BOM so JSON parsing keeps its existing rejection semantics.
+    bytes = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      readFileSync(SETUP_CONFIG_PATH),
+    );
     try {
       raw = JSON.parse(bytes);
       diagnostics = inspectDocument(raw);
