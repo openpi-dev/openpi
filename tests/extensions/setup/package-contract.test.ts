@@ -32,23 +32,106 @@ const npmConfig = readFileSync(
   new URL("../../../.npmrc", import.meta.url),
   "utf8",
 );
+const bunLock = readFileSync(
+  new URL("../../../bun.lock", import.meta.url),
+  "utf8",
+);
+const readme = readFileSync(
+  new URL("../../../README.md", import.meta.url),
+  "utf8",
+);
+const setupGuide = readFileSync(
+  new URL("../../../SETUP.md", import.meta.url),
+  "utf8",
+);
 
-const HOST_PACKAGES = [
+const PI_HOST_PACKAGES = [
   "@earendil-works/pi-ai",
   "@earendil-works/pi-coding-agent",
   "@earendil-works/pi-tui",
-  "typebox",
 ] as const;
+
+const HOST_PACKAGES = [...PI_HOST_PACKAGES, "typebox"] as const;
+
+const PI_MINIMUM_VERSION =
+  /^\^(\d+\.\d+\.\d+)$/.exec(
+    manifest.devDependencies?.[PI_HOST_PACKAGES[0]] ?? "",
+  )?.[1] ?? "";
 
 test("Pi host packages stay peers while local checks keep development copies", () => {
   for (const packageName of HOST_PACKAGES) {
     assert.equal(
       manifest.peerDependencies?.[packageName],
-      packageName === "typebox" ? "*" : ">=0.99.1",
+      packageName === "typebox" ? "*" : `>=${PI_MINIMUM_VERSION}`,
     );
     assert.ok(manifest.devDependencies?.[packageName]);
     assert.equal(manifest.dependencies?.[packageName], undefined);
   }
+});
+
+test("Pi package ranges, docs, and Bun lock share one support minimum", () => {
+  const importerMatch = bunLock.match(
+    /"workspaces"\s*:\s*\{\s*""\s*:\s*\{([\s\S]*?)\n\s*\}\s*,\s*\}\s*,\s*"packages"\s*:/u,
+  );
+  assert.ok(importerMatch, "bun.lock root workspace importer is missing");
+  const devSection = importerMatch[1].match(
+    /"devDependencies"\s*:\s*\{([\s\S]*?)\n\s*\},/u,
+  );
+  const peerSection = importerMatch[1].match(
+    /"peerDependencies"\s*:\s*\{([\s\S]*?)\n\s*\},/u,
+  );
+  assert.ok(devSection, "bun.lock devDependencies importer is missing");
+  assert.ok(peerSection, "bun.lock peerDependencies importer is missing");
+
+  assert.ok(
+    PI_MINIMUM_VERSION,
+    "Pi manifest must declare a stable minimum version",
+  );
+  const minimumVersion = PI_MINIMUM_VERSION;
+  assert.ok(readme.includes(`Pi \`${minimumVersion}\` 或更新版本`));
+  assert.ok(setupGuide.includes(`Pi ${minimumVersion} or newer`));
+
+  const resolvedVersions: string[] = [];
+  for (const packageName of PI_HOST_PACKAGES) {
+    const devMatch: RegExpMatchArray | null = devSection[1].match(
+      new RegExp(`"${packageName}"\\s*:\\s*"([^"]+)"`, "u"),
+    );
+    const peerMatch: RegExpMatchArray | null = peerSection[1].match(
+      new RegExp(`"${packageName}"\\s*:\\s*"([^"]+)"`, "u"),
+    );
+    assert.ok(devMatch, `bun.lock devDependencies is missing ${packageName}`);
+    assert.ok(peerMatch, `bun.lock peerDependencies is missing ${packageName}`);
+    assert.equal(manifest.devDependencies?.[packageName], devMatch[1]);
+    assert.equal(manifest.peerDependencies?.[packageName], peerMatch[1]);
+    assert.equal(devMatch[1], `^${minimumVersion}`);
+    assert.equal(peerMatch[1], `>=${minimumVersion}`);
+
+    const resolvedMatch = bunLock.match(
+      new RegExp(
+        `^\\s*"${packageName}":\\s*\\[\\s*"${packageName}@(\\d+\\.\\d+\\.\\d+)"`,
+        "mu",
+      ),
+    );
+    assert.ok(
+      resolvedMatch,
+      `bun.lock resolved package is missing ${packageName}`,
+    );
+    resolvedVersions.push(resolvedMatch[1]);
+  }
+  assert.equal(new Set(resolvedVersions).size, 1);
+  const [resolvedMajor, resolvedMinor, resolvedPatch] = resolvedVersions[0]
+    .split(".")
+    .map(Number);
+  const [minimumMajor, minimumMinor, minimumPatch] = minimumVersion
+    .split(".")
+    .map(Number);
+  assert.ok(
+    resolvedMajor > minimumMajor ||
+      (resolvedMajor === minimumMajor &&
+        (resolvedMinor > minimumMinor ||
+          (resolvedMinor === minimumMinor && resolvedPatch >= minimumPatch))),
+    `resolved Pi hosts must be at least ${minimumVersion}`,
+  );
 });
 
 test("Git source installs do not resolve host-provided peer dependencies", () => {

@@ -44,6 +44,8 @@ function context(expanded = false, isError = false, showImages = false) {
     expanded,
     showImages,
     isError,
+    durationMs: undefined,
+    outputPad: 1,
   };
 }
 const header = "Script completed\nWall time 2.3 seconds\nOutput:\n";

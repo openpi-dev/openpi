@@ -296,7 +296,7 @@ test("standalone fail-closes without a peer and does not walk PATH", async () =>
   }
 });
 
-test("real checkout 0.99.1 exports resolve from this install", () => {
+test("real installed host exports resolve from this install", (t) => {
   const aliases = resolveStandaloneJitiAliases({
     env: {},
     fromUrl: new URL("../../bin/openpi.js", import.meta.url).href,
@@ -331,6 +331,7 @@ test("real checkout 0.99.1 exports resolve from this install", () => {
       "utf8",
     ),
   ) as { version?: string; exports?: { "."?: { import?: string } } };
-  assert.equal(manifest.version, "0.99.1");
+  assert.match(manifest.version ?? "", /^\d+\.\d+\.\d+$/u);
   assert.equal(manifest.exports?.["."]?.import, "./dist/index.js");
+  t.diagnostic(`Resolved installed Pi host ${manifest.version}`);
 });

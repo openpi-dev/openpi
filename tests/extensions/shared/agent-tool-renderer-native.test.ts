@@ -73,12 +73,16 @@ test("child tool cards equal the main public renderer chain, without changing ex
       ToolDefinition,
       "renderCall" | "renderResult" | "renderShell"
     >;
-    const runner = session.extensionRunner as typeof session.extensionRunner & {
+    type RendererResolver = Omit<
+      typeof session.extensionRunner,
+      "resolveToolRenderers"
+    > & {
       resolveToolRenderers?: (
         name: string,
         base: () => Presentation | undefined,
       ) => Presentation | undefined;
     };
+    const runner = session.extensionRunner as RendererResolver;
     const surfaceBefore = JSON.stringify(session.getAllTools());
     const fixtures = [
       ["read", { path: "fixture.ts" }],

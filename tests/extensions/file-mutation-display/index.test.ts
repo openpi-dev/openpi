@@ -133,7 +133,7 @@ test("overrides all seven activity renderers without changing model-facing defin
         "\n",
       ),
     };
-    const renderContext: Parameters<typeof renderWrite>[2] = {
+    const renderContext = {
       args,
       toolCallId: "write-render",
       invalidate() {},
@@ -146,6 +146,8 @@ test("overrides all seven activity renderers without changing model-facing defin
       expanded: false,
       showImages: false,
       isError: false,
+      durationMs: undefined,
+      outputPad: 1,
     };
     assert.equal(
       renderWrite(args, identityTheme, renderContext).render(100).length,

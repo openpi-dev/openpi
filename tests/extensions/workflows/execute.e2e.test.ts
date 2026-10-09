@@ -649,26 +649,29 @@ test("a settled launch card does not repaint while its detached run stays active
     const renderResult = workflow.renderResult;
     assert.ok(renderResult);
     let invalidations = 0;
+    const renderContext = {
+      args: {},
+      toolCallId: "call-detached-render",
+      invalidate: () => {
+        invalidations += 1;
+      },
+      lastComponent: undefined,
+      state: {},
+      cwd: repoDir,
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: false,
+      isError: false,
+      durationMs: undefined,
+      outputPad: 1,
+    };
     const component = renderResult(
       launch,
       { expanded: false, isPartial: false },
       ctx.ui.theme,
-      {
-        args: {},
-        toolCallId: "call-detached-render",
-        invalidate: () => {
-          invalidations += 1;
-        },
-        lastComponent: undefined,
-        state: {},
-        cwd: repoDir,
-        executionStarted: true,
-        argsComplete: true,
-        isPartial: false,
-        expanded: false,
-        showImages: false,
-        isError: false,
-      },
+      renderContext,
     );
     const first = component.render(100);
 

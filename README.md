@@ -521,6 +521,8 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
 - GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
 
+Pi 的最低支持版本、开发锁定版本和 CI 当次解析的最新稳定版本分别验证；较新版本的 peer 声明不代表尚未发布的宿主已经验收。范围与证据边界见 [Pi 版本支持策略](docs/decisions/0005-supported-pi-versions.md)（提案，随本改动审阅）。
+
 #### 开发运行时：区分 npm 与当前源码
 
 npm 制品、GitHub 安装和本地 checkout 是三个不同的运行资产。源码目录更新、测试通过或版本号相同，都不能证明当前 Pi 已经加载这份代码。所有本地开发、Provider 兼容排查、手工 smoke 和 UI 验收都使用下面这一条证据链。

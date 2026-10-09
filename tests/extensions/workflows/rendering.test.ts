@@ -143,7 +143,7 @@ test("workflow call rendering labels an explicit inline wait", () => {
     wait: true,
   };
 
-  const component = workflow.renderCall(args, theme, {
+  const context = {
     args,
     toolCallId: "call-inline-wait",
     invalidate() {},
@@ -156,7 +156,10 @@ test("workflow call rendering labels an explicit inline wait", () => {
     expanded: false,
     showImages: false,
     isError: false,
-  });
+    durationMs: undefined,
+    outputPad: 1,
+  };
+  const component = workflow.renderCall(args, theme, context);
 
   assert.match(component.render(100).join("\n"), /workflow inline \(wait\)/);
 });
@@ -169,7 +172,7 @@ test("workflow call rendering gives legacy callers an actionable migration", () 
     background: true,
   };
 
-  const component = workflow.renderCall(args, theme, {
+  const context = {
     args,
     toolCallId: "call-legacy-background",
     invalidate() {},
@@ -182,7 +185,10 @@ test("workflow call rendering gives legacy callers an actionable migration", () 
     expanded: false,
     showImages: false,
     isError: false,
-  });
+    durationMs: undefined,
+    outputPad: 1,
+  };
+  const component = workflow.renderCall(args, theme, context);
 
   assert.match(
     component.render(100).join("\n"),
@@ -211,6 +217,8 @@ test("workflow tool errors with malformed details fall back to plain text", (t) 
     expanded: false,
     showImages: false,
     isError: true,
+    durationMs: undefined,
+    outputPad: 1,
   } as Parameters<typeof renderResult>[3];
 
   for (const details of [{}, { runId: "wf_incomplete", agents: [] }]) {
@@ -257,6 +265,8 @@ test("running workflow cards request and render each shared spinner frame", (t) 
       expanded,
       showImages: false,
       isError: false,
+      durationMs: undefined,
+      outputPad: 1,
     } as Parameters<typeof renderResult>[3];
     const component = renderResult(
       result,

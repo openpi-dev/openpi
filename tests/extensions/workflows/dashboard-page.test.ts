@@ -12,7 +12,6 @@ import {
 import {
   Container,
   compositeTuiLine,
-  type Terminal,
   TuiMainScreen,
   TuiAltScreen,
 } from "@earendil-works/pi-tui";
@@ -39,7 +38,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
       assert.equal(compositeTuiLine(image, "Dashboard", 0, 80, 80), image);
       const writes: string[] = [];
       const dimensions = { columns: 80, rows: 18 };
-      const terminal: Terminal = {
+      const terminal = {
         get columns() {
           return dimensions.columns;
         },
@@ -50,7 +49,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
         start() {},
         stop() {},
         async drainInput() {},
-        write: (data) => writes.push(data),
+        write: (data: string) => writes.push(data),
         moveBy() {},
         hideCursor() {},
         showCursor() {},
@@ -59,6 +58,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
         clearScreen() {},
         setTitle() {},
         setProgress() {},
+        setProgramStatus() {},
       };
       const tui =
         mode === "regular"

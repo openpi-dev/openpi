@@ -18,13 +18,28 @@ env:
 
 jobs:
   test-node:
-    name: Runtime Node ${{ matrix.node-version }}
+    name: Runtime Node ${{ matrix.node-version }}${{ matrix.label }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.19.0, 24, 26]
+        include:
+          - node-version: 22.19.0
+            pi-host: locked
+            label: ""
+          - node-version: 24
+            pi-host: locked
+            label: ""
+          - node-version: 26
+            pi-host: locked
+            label: ""
+          - node-version: 22.19.0
+            pi-host: minimum
+            label: " (Pi minimum)"
+          - node-version: 22.19.0
+            pi-host: latest
+            label: " (Pi latest)"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -37,6 +52,66 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
         run: bun install --frozen-lockfile
+      - name: Install and verify the selected Pi compatibility host
+        if: matrix.pi-host != 'locked'
+        env:
+          PI_HOST: ${{ matrix.pi-host }}
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { execFileSync } from "node:child_process";
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const originalManifest = readFileSync("package.json", "utf8");
+          const originalLock = readFileSync("bun.lock", "utf8");
+          const manifest = JSON.parse(originalManifest);
+          const hosts = Object.keys(manifest.peerDependencies)
+            .filter((name) => name.startsWith("@earendil-works/pi-"));
+          const floor = /^>=(\d+\.\d+\.\d+)$/.exec(
+            manifest.peerDependencies["@earendil-works/pi-coding-agent"],
+          )?.[1];
+          assert.ok(floor, "Pi peers must declare an explicit minimum version");
+          for (const name of hosts) {
+            assert.equal(manifest.peerDependencies[name], `>=${floor}`);
+          }
+          const version = process.env.PI_HOST === "minimum" ? floor : execFileSync(
+            "npm", ["view", "@earendil-works/pi-coding-agent@latest", "version"],
+            { encoding: "utf8", timeout: 60_000 },
+          ).trim();
+          assert.match(version, /^\d+\.\d+\.\d+$/, "latest must be a stable Pi release");
+          const minimum = floor.split(".").map(Number);
+          const selected = version.split(".").map(Number);
+          const difference = selected.findIndex((value, index) => value !== minimum[index]);
+          assert.ok(difference < 0 || selected[difference] > minimum[difference], "Pi latest is below the supported minimum");
+          const family = [...originalLock.matchAll(/"(@earendil-works\/pi-[^"/]+)": \[/g)]
+            .map((match) => match[1]);
+          for (const name of hosts) assert.ok(family.includes(name), `Missing locked ${name}`);
+          for (const name of hosts) manifest.devDependencies[name] = version;
+          manifest.overrides = {
+            ...manifest.overrides,
+            ...Object.fromEntries(family.map((name) => [name, version])),
+          };
+          try {
+            writeFileSync("package.json", `${JSON.stringify(manifest, null, 2)}\n`);
+            execFileSync("bun", ["install"], { stdio: "inherit", timeout: 300_000 });
+            const installed = [...execFileSync("bun", ["pm", "ls", "--all"], {
+              encoding: "utf8",
+            }).matchAll(/(@earendil-works\/pi-[\w-]+)@(\d+\.\d+\.\d+)/g)];
+            for (const name of family) {
+              assert.ok(installed.some((match) => match[1] === name), `Missing ${name}`);
+            }
+            for (const [, name, actual] of installed) {
+              assert.equal(actual, version, `Mixed Pi host: ${name}`);
+              const loaded = JSON.parse(readFileSync(`node_modules/${name}/package.json`, "utf8"));
+              assert.equal(loaded.version, version, `Installed Pi host: ${name}`);
+            }
+            console.log(`Pi ${process.env.PI_HOST} host verified: ${version} (${family.length} packages)`);
+          } finally {
+            writeFileSync("package.json", originalManifest);
+            writeFileSync("bun.lock", originalLock);
+          }
+          NODE
       - run: bun run check
       - name: Verify committed Web build
         run: |
@@ -52,6 +127,7 @@ jobs:
           agent_dir="$(mktemp -d)"
           trap 'rm -rf "$agent_dir"' EXIT
           PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi install "$PWD"
+          PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi list
           output="$(PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi --offline --no-session --mode rpc </dev/null)"
           grep -q '"statusKey":"plan-mode"' <<<"$output"
           grep -q '"widgetKey":"session-tasks-panel"' <<<"$output"
@@ -75,7 +151,7 @@ jobs:
             --extension "$package/extensions/git-info/index.ts" \
             --extension "$package/extensions/ai-providers/index.ts" \
             </dev/null
-      - name: Smoke-test packed Web CLI with locked Pi host
+      - name: Smoke-test packed Web CLI with selected Pi host
         run: |
           root="$(mktemp -d)"
           server_pid=""
@@ -88,7 +164,17 @@ jobs:
           }
           trap cleanup EXIT
           mkdir "$root/app" "$root/workspace" "$root/agent"
-          printf '{"private":true}\n' >"$root/app/package.json"
+          node --input-type=module - "$root/app/package.json" <<'NODE'
+          import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+          const overrides = Object.fromEntries(
+            readdirSync("node_modules/@earendil-works")
+              .filter((name) => name.startsWith("pi-"))
+              .map((name) => [`@earendil-works/${name}`, JSON.parse(
+                readFileSync(`node_modules/@earendil-works/${name}/package.json`, "utf8"),
+              ).version]),
+          );
+          writeFileSync(process.argv[2], JSON.stringify({ private: true, overrides }));
+          NODE
           npm pack --ignore-scripts --silent --pack-destination "$root" >/dev/null
           tarballs=("$root"/*.tgz)
           test "${#tarballs[@]}" -eq 1
@@ -156,7 +242,7 @@ jobs:
           test -s "$root/source/web/dist/favicon.svg"
           npm install --prefix "$root/source" --ignore-scripts --omit=dev --no-audit --no-fund
           test ! -e "$root/source/node_modules/@earendil-works/pi-coding-agent"
-          # Exercise the CLI with the lockfile's Pi host, not package-owned peers.
+          # Exercise the CLI with this job's verified Pi host.
           mkdir -p "$root/source/node_modules/@earendil-works"
           for peer in pi-ai pi-coding-agent pi-tui; do
             ln -s \
