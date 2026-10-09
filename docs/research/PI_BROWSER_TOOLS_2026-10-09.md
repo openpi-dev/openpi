@@ -5,7 +5,7 @@
 - Verified: 2026-10-09
 - Source: OpenPI `3cb2ecfe1bfbb98252651885311d309f83749428`, its frozen Pi `0.99.1` dependencies, and installed `@injaneity/pi-computer-use` `0.5.1`
 - Issues: [#169](https://github.com/openpi-dev/openpi/issues/169), [#597](https://github.com/openpi-dev/openpi/issues/597)
-- Related PR: draft browser adaptation on `codex/browser-tools-probe`; initial investigation made no runtime implementation change
+- Related PR: [#720](https://github.com/openpi-dev/openpi/pull/720), draft browser adaptation; initial investigation made no runtime implementation change
 - Supersedes: none; complements the [native iframe trial](WEB_BROWSER_VIDEO_TRIAL_2026-09-28.md)
 - Evidence: local archive `/Users/admin/Documents/ChatGPT/openpi-evidence/browser-tools-20261009`; raw observations, images, and isolated agent data remain outside Git
 
