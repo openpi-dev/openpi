@@ -5,6 +5,7 @@
 - Last verified: 2026-10-10
 - Source boundary: native account implementation `5ed9fb8b7a8a38e9e837c3c17d1de912a486a916`; integrated three-entry layout and icons `2c59d44f86b143ce87131763a8e61fe23c73ebcf`
 - Follow-up source boundary: native default selection and brand accents `2c07c0f3bc8e9e01caacdbed780181d68cc98626`; final validation including the decorated-label regression `4c82bf4f19a12ff80f6b3125668a30bbf7bfe3c2`
+- Custom-icon follow-up source boundary: `663608541f234bacde59e606d94967a709d23363`
 - Related Issue: [#732](https://github.com/openpi-dev/openpi/issues/732)
 - Related PR: [#711](https://github.com/openpi-dev/openpi/pull/711)
 - Supersedes: none
@@ -66,3 +67,11 @@ The 30142 preview was restarted with implementation `2c07c0f3`; the later test-o
 Follow-up evidence remains outside Git under the same stable evidence identity: `model-default-final-check-confirmed.log`, `model-default-final-test-confirmed.log`, `model-default-e2e-final.log`, `model-default-side-e2e.log`, `model-default-preview-receipt.json`, `model-default-choice-dark.jpg` and `model-default-brands-dark.jpg`. External account completion, endpoint availability, all-provider coverage and new-commit CI remain unverified.
 
 The follow-up ablation removed the always-visible search field from small model lists. The compact chooser still passes the same selection/default checks; large or truncated catalogs progressively reveal search, and tests select a model beyond the first bounded page. No extra picker framework, parallel model-default store, automatic selection write or account-routing state is needed.
+
+## Custom connection mark follow-up, 2026-10-10
+
+The user rejected the inconsistent `Lo` and `co` initials shown for the same custom connection. At source `66360854`, unknown/custom provider IDs use one neutral Lucide Server outline in the default row, connection list, chooser and both composers. Known provider IDs retain their existing brand marks and restrained accents. A custom endpoint's name never implies an official brand or authentication method.
+
+The ablation removes the display-name prop, name slicing and monogram typography from the shared icon. Exact provider IDs still select known marks; the neutral fallback has no text and remains decorative. Its transparent container preserves the existing 16px composer, 20px selector and 22px avatar sizes without adding another identity mapping or preference.
+
+`bun run check` and four installed-Chrome regressions passed at this source, covering current/default selection, native account fixtures and 320px light/dark accessibility. The existing 30142 preview reloaded the rebuilt frontend without restarting its native backend. Real inspection confirmed identical custom marks in the default row, chooser, configured row and composer; served asset hashes matched and private configuration hashes remained unchanged. No model call or external authorization was performed. Follow-up evidence remains under the existing external evidence identity: `provider-fallback-check-server.log`, `provider-fallback-browser-final.log`, `provider-fallback-preview-receipt.json` and `provider-fallback-default-dark.jpg`. These are scoped UI checks, not all-provider or complete browser-suite acceptance.
