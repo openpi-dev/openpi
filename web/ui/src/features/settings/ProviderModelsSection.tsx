@@ -412,10 +412,7 @@ export function ProviderModelsSection({
                 </span>
               ) : defaults?.model ? (
                 <span className="models-default-value">
-                  <ProviderIcon
-                    id={defaults.model.provider}
-                    name={providerName(defaults.model.provider)}
-                  />
+                  <ProviderIcon id={defaults.model.provider} />
                   <span>
                     {modelName(defaults.model)}
                     <small>{providerName(defaults.model.provider)}</small>
@@ -467,7 +464,7 @@ export function ProviderModelsSection({
                 <div className="models-provider-head">
                   <div className="models-provider-identity">
                     <span className="models-provider-avatar" aria-hidden="true">
-                      <ProviderIcon id={provider.id} name={provider.name} />
+                      <ProviderIcon id={provider.id} />
                     </span>
                     <div className="models-provider-label">
                       <span className="models-provider-name">
@@ -667,12 +664,7 @@ export function ProviderModelsSection({
                       options={accounts.map((provider) => ({
                         value: provider.id,
                         label: provider.name || provider.id,
-                        icon: (
-                          <ProviderIcon
-                            id={provider.id}
-                            name={provider.name || provider.id}
-                          />
-                        ),
+                        icon: <ProviderIcon id={provider.id} />,
                       }))}
                       value={selectedAccount.id}
                       isDisabled={saving}
@@ -709,12 +701,7 @@ export function ProviderModelsSection({
                       options={available.map((provider) => ({
                         value: provider.id,
                         label: provider.name || provider.id,
-                        icon: (
-                          <ProviderIcon
-                            id={provider.id}
-                            name={provider.name || provider.id}
-                          />
-                        ),
+                        icon: <ProviderIcon id={provider.id} />,
                       }))}
                       value={selectedCatalog.id}
                       isDisabled={saving}

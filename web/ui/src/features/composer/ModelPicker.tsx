@@ -211,9 +211,7 @@ export function ModelPicker(props: ModelPickerProps) {
       value={selected ? `${selected.provider}/${selected.id}` : ""}
       triggerLabel={
         <span className="model-thinking-label" title={triggerLabel}>
-          {selected && (
-            <ProviderIcon id={selected.provider} name={selected.provider} />
-          )}
+          {selected && <ProviderIcon id={selected.provider} />}
           <span className="model-picker-label">
             {selected?.name || selected?.id || triggerLabel}
           </span>
@@ -435,10 +433,7 @@ export function ModelPicker(props: ModelPickerProps) {
                           optionRefs.current[moveTo]?.focus();
                         }}
                       >
-                        <ProviderIcon
-                          id={model.provider}
-                          name={model.provider}
-                        />
+                        <ProviderIcon id={model.provider} />
                         <span className="model-menu-item-text">
                           <span className="model-menu-item-label">
                             {model.name || model.id}
