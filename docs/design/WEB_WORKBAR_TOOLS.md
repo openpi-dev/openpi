@@ -2,7 +2,7 @@
 
 - Status: `validated`
 - Created: 2026-10-09
-- Last verified: 2026-10-09; scoped component regressions and repository checks; installed-page acceptance is recorded below
+- Last verified: 2026-10-10; scoped component regressions, repository checks and installed-page acceptance; earlier revision boundaries remain below
 - Source boundary: OpenPI product commit `7685f38dc89e958644c9ac9881d7ecb3d494317e`, including the Files menu's 4px horizontal padding, responsive tool-picker wrapping and viewport-bounded menu height
 - Related Issue: [#597](https://github.com/openpi-dev/openpi/issues/597)
 - Related PR: [#711](https://github.com/openpi-dev/openpi/pull/711)
@@ -59,3 +59,15 @@ The combined product passed `bun run check` with exit code 0, including the Web 
 Delivery evidence is archived at `/Users/admin/.local/state/openpi-web/evidence/sidebar-tools-20261009`, outside Git and excluding credentials. The bundle includes `native-acceptance.json`, screenshots, validation logs and a SHA-256 `manifest.json`; private connection settings and Session transcripts remain outside the published record.
 
 Ablation removed repeated menu-trigger glyphs, duplicate viewed/scope summaries, a redundant terminal return-action synchronization call, and a controlled tool-picker state. Native Astryx menu ownership and existing workbar selection/focus remain sufficient. Synchronization after restored xterm output remains necessary: removing it leaves a saved viewport of 80 when xterm has actually clamped to 50, and the regression fails. Disabled trigger tooltip removal also has red/green evidence: read-only and in-flight menus opened via ArrowDown before the fix and remain closed afterward. No additional design framework survived this iteration.
+
+## File toolbar clarification (2026-10-10)
+
+This follow-up uses product commit `20d3628f0605c174fe16eead6e54ad84b0f2539f` and preserves the earlier acceptance boundary above. New / Import / More remain text menus because these categories need explicit names. The file-preview toolbar keeps compact icons for Copy file path, Refresh file, Download file and Close preview, with a state-dependent Hide / Show file tree action. Each reuses the existing Astryx Tooltip for pointer hover and keyboard focus. Native disabled behavior remains intact; no duplicate browser title, tooltip state owner or preference is added. The icon-specific class preserves the existing 32px / 44px targets through Tooltip's display-contents wrapper.
+
+Actual installed keyboard testing exposed an Escape ownership conflict: a visible tooltip was bypassed by the parent preview's handler, closing the whole preview. Files preview and Workbar now participate in Astryx's public dismissal stack, with nonmodal participation scoped to focus inside their panels. Nested depth makes one Escape dismiss one layer: tooltip, then preview, then Workbar. The redundant element-level Escape interception, including terminal rename/restart Dialog guards, was removed. Save shortcuts, focus restoration, IME/default-prevented ownership and native terminal lifecycle retain their existing owners.
+
+Validation passed `bun run check` and the canonical `VITEST_MAX_WORKERS=1 bun run test`: 2,324 Node passes, nine skips and zero failures; 1,257 UI passes across 84 suites. The initial full run hit the existing workflow retention-pressure VM deadline; the final complete run passed without changing that timeout. Scoped regressions cover both standalone and real App Files tooltip dismissal, outside Settings input, terminal rename cancellation and the existing restart cases. Frozen `314ba385` replays fail after the first Escape. Ablation retaining the hooks but removing nested depth also fails both new tooltip regressions, so depth is retained; duplicate manual Escape handlers remain removed.
+
+Installed acceptance at 57161 used `20d3628f`, after confirming an idle service, one resident OpenPI package, and exact served `app.js` / `styles.css` bytes. Native keyboard focus displayed all five explanations; the file-tree description changed between Hide and Show as its state changed. Consecutive Escape presses dismissed only the tooltip, then only the preview, then the Workbar. Escape from the main conversation input retained the open preview. The file tree was restored to visible and the existing synthetic acceptance file was reopened; no file edits, downloads or model requests were made. The user's viewport and panel sizes were retained.
+
+Evidence is archived outside Git at `/Users/admin/.local/state/openpi-web/evidence/file-toolbar-tooltips-20261010`, with bounded receipts, screenshots, complete logs and a SHA-256 manifest. Component pointer events establish hover-triggered behavior; installed acceptance uses native keyboard input and does not claim automated native pointer-hover coverage. This follow-up does not change model context configuration.
