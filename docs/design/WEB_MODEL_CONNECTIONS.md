@@ -26,7 +26,7 @@ Provider capabilities come from Pi, rather than a UI list of supported account b
 
 ## Interaction and appearance
 
-Account is a third entry in the existing segmented control. The account service selector uses the native catalog, with a short explanation and one sign-in action. It does not expose API addresses, model details or another nested Account/API-key selector. The third-party entry contains API-key providers; OAuth-only providers remain discoverable through Account. Custom model definitions keep the existing revision-checked editor and discovery.
+Account is one of three entries in the existing segmented control, alongside Third-party providers and Custom model API. The account service selector uses the native catalog, with a short explanation and one sign-in action. It does not expose API addresses, model details or another nested Account/API-key selector. The third-party entry contains API-key providers; OAuth-only providers remain discoverable through Account. Custom model definitions keep the existing revision-checked editor and discovery.
 
 All three entry points preserve their drafts while switching. Settings navigation and method selection remain locked during active native authorization; cancelling waits for native termination. Browser links require an explicit click and open with `noopener noreferrer`. Manual authorization input is masked and progressively disclosed. A lost status request is shown as uncertainty, with a status refresh action; it does not announce authentication failure or start a duplicate login. Successful login refreshes the configured connection list. Sign-out uses a confirmation that explains Pi's shared credential scope.
 
