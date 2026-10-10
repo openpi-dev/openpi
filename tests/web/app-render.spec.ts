@@ -3935,9 +3935,10 @@ it("does not repeat a provider identity used as the fallback model label", () =>
     }),
   );
 
-  expect(
-    screen.getByRole("button", { name: "provider-alpha/model-a" }).textContent,
-  ).toBe("model-a");
+  const trigger = screen.getByRole("button", {
+    name: "provider-alpha/model-a",
+  });
+  expect(within(trigger).getByText("model-a", { exact: true })).toBeTruthy();
   expect(
     screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
   ).toBeNull();
