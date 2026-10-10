@@ -39,12 +39,18 @@ const initial = (): BrowserSettingsStatus => ({
 });
 function backend(state = initial()) {
   const writes: { path: string; body: Record<string, unknown> }[] = [];
+  const server = { writes, state, failActions: false };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
       if (init?.method === "POST") {
         const body = JSON.parse(String(init.body));
         writes.push({ path: input, body });
+        if (input === "/api/settings/browser/action" && server.failActions)
+          return new Response(
+            JSON.stringify({ error: "Could not open browser" }),
+            { status: 422 },
+          );
         if (input === "/api/settings/browser")
           state.config = { ...state.config, ...body };
       }
@@ -54,11 +60,11 @@ function backend(state = initial()) {
   render(
     createElement(BrowserSettingsPanel, { onSaved: vi.fn(async () => true) }),
   );
-  return { writes, state };
+  return server;
 }
 
 it("separates installation evidence from authorization and guides setup without a model request", async () => {
-  const { writes } = backend();
+  const { writes, state } = backend();
   await screen.findByRole("heading", { name: "Browser" });
   expect(screen.queryByText("Connected")).toBeNull();
   expect(
@@ -71,18 +77,133 @@ it("separates installation evidence from authorization and guides setup without 
   fireEvent.click(screen.getByRole("button", { name: "Set up Chrome" }));
   const guide = screen.getByRole("region", { name: "Connect Chrome" });
   fireEvent.click(
-    within(guide).getByRole("button", { name: "Open installation" }),
+    within(guide).getByRole("button", { name: "Open Chrome extensions" }),
   );
   await waitFor(() =>
     expect(writes).toEqual([
       {
         path: "/api/settings/browser/action",
-        body: { browser: "chrome", action: "install" },
+        body: { browser: "chrome", action: "manage" },
       },
     ]),
   );
   expect(screen.queryByText("Connected")).toBeNull();
+  await within(guide).findByRole("heading", { name: "Turn on Developer mode" });
+  fireEvent.click(within(guide).getByRole("button", { name: "It’s on. Next" }));
+  expect(within(guide).getByText(state.extensionPath)).toBeTruthy();
+  fireEvent.click(within(guide).getByRole("button", { name: "Open folder" }));
+  await waitFor(() =>
+    expect(writes.at(-1)?.body).toEqual({
+      browser: "chrome",
+      action: "folder",
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      (
+        within(guide).getByRole("button", {
+          name: "Added. Connect to OpenPI",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(
+    within(guide).getByRole("button", { name: "Added. Connect to OpenPI" }),
+  );
+  await within(guide).findByRole("heading", { name: "Connect to OpenPI" });
+  expect(writes.at(-1)?.body).toEqual({ browser: "chrome", action: "connect" });
+  expect(
+    within(guide).queryByRole("button", { name: "Allow OpenPI to use it" }),
+  ).toBeNull();
+  expect(
+    writes.every((write) => write.path === "/api/settings/browser/action"),
+  ).toBe(true);
+  state.profiles = [
+    {
+      id: "connection",
+      browser: "chrome",
+      profileId: "profile",
+      extensionId: "extension",
+      version: "0.3.0",
+      connected: true,
+      current: true,
+    },
+  ];
+  fireEvent.focus(window);
+  fireEvent.click(
+    await within(guide).findByRole("button", {
+      name: "Allow OpenPI to use it",
+    }),
+  );
+  await waitFor(() =>
+    expect(writes.at(-1)).toEqual({
+      path: "/api/settings/browser",
+      body: { control: true, externalBrowsers: ["chrome"] },
+    }),
+  );
   expect(writes.some((write) => write.path.includes("prompt"))).toBe(false);
+});
+
+it("keeps a failed native launch on the same step and permits retry", async () => {
+  const server = backend();
+  server.failActions = true;
+  fireEvent.click(await screen.findByRole("button", { name: "Set up Chrome" }));
+  const guide = screen.getByRole("region", { name: "Connect Chrome" });
+  fireEvent.click(
+    within(guide).getByRole("button", { name: "Open Chrome extensions" }),
+  );
+  await screen.findByRole("alert");
+  expect(
+    within(guide).getByRole("heading", { name: "Open Chrome extensions" }),
+  ).toBeTruthy();
+  expect(
+    within(guide).queryByRole("heading", { name: "Turn on Developer mode" }),
+  ).toBeNull();
+  server.failActions = false;
+  fireEvent.click(
+    within(guide).getByRole("button", { name: "Open Chrome extensions" }),
+  );
+  await within(guide).findByRole("heading", { name: "Turn on Developer mode" });
+  expect(server.writes.every((write) => write.path.endsWith("/action"))).toBe(
+    true,
+  );
+});
+
+it("skips installation without claiming a stale or other-profile embedded connection", async () => {
+  const { state, writes } = backend();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Set up OpenPI browser" }),
+  );
+  const guide = screen.getByRole("region", { name: "Connect OpenPI browser" });
+  fireEvent.click(
+    within(guide).getByRole("button", { name: "Already installed? Connect" }),
+  );
+  state.profiles = [
+    {
+      id: "connection",
+      browser: "chrome",
+      profileId: "profile",
+      extensionId: "extension",
+      version: "0.2.0",
+      connected: true,
+      current: true,
+    },
+  ];
+  fireEvent.click(
+    within(guide).getByRole("button", { name: "Check connection" }),
+  );
+  await screen.findByText(/No connection yet/);
+  expect(
+    within(guide).queryByRole("button", { name: "Allow OpenPI to use it" }),
+  ).toBeNull();
+  state.profiles[0].version = "0.3.0";
+  state.profiles[0].current = false;
+  fireEvent.focus(window);
+  await screen.findByRole("button", { name: "Manage Chrome" });
+  expect(
+    within(guide).queryByRole("button", { name: "Allow OpenPI to use it" }),
+  ).toBeNull();
+  expect(writes).toEqual([]);
 });
 
 it("keeps default selection and grants separate, and uses typed settings writes", async () => {

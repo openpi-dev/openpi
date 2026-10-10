@@ -44,12 +44,50 @@
 .browser-settings-guide-heading span { font-size: 11px; color: var(--muted); }
 .browser-settings-guide-heading h3 { margin: 5px 0 0; font-size: 17px; font-weight: 600; }
 .browser-settings-install-browser { display: flex; align-items: center; gap: 14px; font-size: 12px; margin-bottom: 20px; }
-.browser-settings-steps { list-style: none; padding: 0; margin: 0; }
-.browser-settings-steps li { display: flex; gap: 13px; padding: 0 0 24px; }
-.browser-settings-steps li:last-child { padding-bottom: 8px; }
-.browser-settings-step { display: inline-flex; flex: 0 0 23px; width: 23px; height: 23px; align-items: center; justify-content: center; background: var(--page); border: 1px solid var(--border-strong); border-radius: 50%; font-size: 11px; color: var(--muted); }
-.browser-settings-steps strong { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 550; }
-.browser-settings-steps button { margin-top: 10px; }
+.browser-settings-progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); list-style: none; gap: 8px; margin: 0 0 22px; padding: 0; }
+.browser-settings-progress button { display: flex; align-items: center; gap: 7px; width: 100%; padding: 0 0 12px; border: 0; border-bottom: 2px solid var(--border); background: transparent; color: var(--muted); font-size: 11px; text-align: left; cursor: pointer; }
+.browser-settings-progress button[aria-current] { color: var(--text); border-bottom-color: var(--text); }
+.browser-settings-progress button > span { display: inline-flex; flex: 0 0 20px; height: 20px; align-items: center; justify-content: center; border: 1px solid var(--border-strong); border-radius: 50%; font-size: 10px; }
+.browser-settings-progress button[aria-current] > span { background: var(--text); color: var(--page); border-color: var(--text); }
+.browser-settings-wizard { padding: 22px; border: 1px solid var(--border); border-radius: 10px; background: var(--page); }
+.browser-settings-step-count { color: var(--muted); font-size: 11px; }
+.browser-settings-wizard h4 { margin: 8px 0; font-size: 17px; font-weight: 600; letter-spacing: -.2px; }
+.browser-settings-address { display: flex; align-items: center; gap: 12px; margin: 22px 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--sidebar); }
+.browser-settings-address code { font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
+.browser-settings-illustration { margin: 20px 0 0; }
+.browser-settings-illustration figcaption { margin-bottom: 8px; color: var(--muted); font-size: 10px; }
+.browser-settings-demo { overflow: hidden; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--sidebar); pointer-events: none; }
+.browser-settings-demo-bar { display: flex; align-items: center; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.browser-settings-demo-bar > i { width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
+.browser-settings-demo-bar > code { margin-left: 8px; color: var(--muted); font-size: 9px; }
+.browser-settings-demo-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 18px 14px 8px; font-size: 12px; }
+.browser-settings-demo-toggle { display: flex; align-items: center; gap: 9px; padding: 7px; border: 1px solid transparent; border-radius: 6px; font-size: 10px; }
+.browser-settings-demo-toggle i { display: inline-flex; align-items: center; justify-content: flex-end; width: 24px; height: 14px; padding: 2px; border-radius: 10px; background: var(--text); }
+.browser-settings-demo-toggle i::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--page); }
+.browser-settings-demo-toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 14px 20px; }
+.browser-settings-demo-toolbar > span { padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: 5px; font-size: 10px; }
+.browser-settings-demo-toolbar > i { width: 40px; height: 6px; border-radius: 3px; background: var(--border); }
+.browser-settings-demo .highlight { border-color: var(--text); outline: 3px solid color-mix(in srgb, var(--text) 10%, transparent); outline-offset: 2px; background: var(--page); font-weight: 600; }
+.browser-settings-illustration.edge .browser-settings-demo-heading { flex-direction: column; align-items: flex-start; }
+.browser-settings-folder { margin-top: 18px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
+.browser-settings-folder-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.browser-settings-folder-heading svg { width: 16px; height: 16px; }
+.browser-settings-folder-heading strong { font-weight: 550; }
+.browser-settings-folder-heading span { color: var(--muted); font-size: 10px; }
+.browser-settings-folder .browser-settings-guide-actions { margin-top: 12px; }
+.browser-settings-folder p { margin-top: 12px; font-size: 11px; }
+.browser-settings-wizard-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.browser-settings-wizard-actions .browser-settings-primary { margin-left: auto; }
+.browser-settings-wizard-actions .browser-settings-button, .browser-settings-wizard-actions .browser-settings-primary { min-height: 36px; }
+.browser-settings-text-button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; border: 0; color: var(--muted); background: transparent; font-size: 11px; cursor: pointer; }
+.browser-settings-text-button:hover { color: var(--text); text-decoration: underline; }
+.browser-settings-text-button svg { width: 12px; height: 12px; }
+.browser-settings-wizard > .browser-settings-text-button { margin-top: 14px; }
+.browser-settings-waiting { display: flex; align-items: flex-start; gap: 9px; margin: 20px 0; padding: 14px; border-radius: 8px; background: var(--sidebar); color: var(--muted); font-size: 12px; line-height: 1.6; }
+.browser-settings-waiting svg { flex: 0 0 15px; width: 15px; height: 15px; margin-top: 2px; }
+.browser-settings-connect-help { margin-top: 18px; }
+.browser-settings-connect-help p { font-size: 11px; }
+.browser-settings-connect-help button { margin-top: 8px; }
 .browser-settings-help { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .browser-settings-help > summary { font-size: 12px; color: var(--muted); }
 .browser-settings-help > summary svg { width: 13px; height: 13px; }
@@ -76,4 +114,13 @@
   .browser-settings-description > span { font-size: 10px; }
   .browser-settings-row .browser-settings-button { padding: 5px 9px; }
   .browser-settings-guide { padding: 18px 15px; }
+  .browser-settings-progress { gap: 6px; }
+  .browser-settings-progress button { flex-direction: column; align-items: flex-start; gap: 8px; font-size: 10px; }
+  .browser-settings-progress button > span { flex-basis: auto; width: 20px; }
+  .browser-settings-wizard { padding: 18px 14px; }
+  .browser-settings-wizard-actions { gap: 12px; }
+  .browser-settings-wizard-actions .browser-settings-primary { width: 100%; }
+  .browser-settings-folder { padding: 12px; }
+  .browser-settings-demo-toolbar > i:last-child { display: none; }
+  .browser-settings-demo-heading { flex-wrap: wrap; }
 }

@@ -62,16 +62,113 @@ test("browser setup preserves the settings shell, works during a turn and explai
   const guide = panel.getByRole("region", { name: "连接 Chrome", exact: true });
   await guide.scrollIntoViewIfNeeded();
   await expect(
-    guide.getByText("安装 Browser Bridge", { exact: true }),
+    guide.getByRole("heading", { name: "打开 Chrome 扩展页", exact: true }),
   ).toBeVisible();
   await dialog.screenshot({
-    path: info.outputPath("browser-settings-install.png"),
+    path: info.outputPath("browser-settings-step-1.png"),
   });
   await guide
-    .getByRole("button", { name: "打开安装位置", exact: true })
+    .getByRole("button", { name: "打开 Chrome 扩展页", exact: true })
     .click();
-  expect(actions).toEqual([{ browser: "chrome", action: "install" }]);
+  await expect(
+    guide.getByRole("heading", { name: "开启「开发者模式」", exact: true }),
+  ).toBeVisible();
+  await dialog.screenshot({
+    path: info.outputPath("browser-settings-step-2.png"),
+  });
+  expect(actions).toEqual([{ browser: "chrome", action: "manage" }]);
+  await guide
+    .getByRole("button", { name: "已开启，下一步", exact: true })
+    .click();
+  await expect(
+    guide.getByRole("heading", {
+      name: "安装 OpenPI Browser Bridge",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(guide.getByText(status.extensionPath)).toBeVisible();
+  await guide.scrollIntoViewIfNeeded();
+  await dialog.screenshot({
+    path: info.outputPath("browser-settings-step-3.png"),
+  });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await guide
+    .getByRole("button", { name: "复制扩展文件夹路径", exact: true })
+    .click();
+  await expect(
+    guide.getByRole("button", { name: "已复制路径", exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    status.extensionPath,
+  );
+  await guide.getByRole("button", { name: "打开文件夹", exact: true }).click();
+  await expect(
+    guide.getByRole("button", { name: "已添加，连接 OpenPI", exact: true }),
+  ).toBeEnabled();
+  await guide
+    .getByRole("button", { name: "已添加，连接 OpenPI", exact: true })
+    .click();
+  await expect(
+    guide.getByRole("heading", { name: "连接 OpenPI", exact: true }),
+  ).toBeVisible();
+  await dialog.screenshot({
+    path: info.outputPath("browser-settings-step-4.png"),
+  });
+  expect(actions).toEqual([
+    { browser: "chrome", action: "manage" },
+    { browser: "chrome", action: "folder" },
+    { browser: "chrome", action: "connect" },
+  ]);
+  await expect(
+    guide.getByRole("button", { name: "允许 OpenPI 使用", exact: true }),
+  ).toHaveCount(0);
   expect(writes).toEqual([]);
+  // Exercise the longest step at narrow widths and in dark mode.
+  await guide
+    .getByRole("button", { name: "第 3 步：添加扩展", exact: true })
+    .click();
+  await page.emulateMedia({ colorScheme: "dark" });
+  await dialog.screenshot({
+    path: info.outputPath("browser-settings-guide-dark.png"),
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await guide.scrollIntoViewIfNeeded();
+  await dialog.screenshot({
+    path: info.outputPath("browser-settings-guide-mobile.png"),
+  });
+  expect(
+    await panel.evaluate(
+      (element) => element.scrollWidth > element.clientWidth,
+    ),
+  ).toBe(false);
+  const guideAccessibility = await new AxeBuilder({ page })
+    .include("#settings-panel-browser")
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  expect(guideAccessibility.violations).toEqual([]);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.emulateMedia({ colorScheme: "light" });
+  await guide
+    .getByRole("button", { name: "第 4 步：连接", exact: true })
+    .click();
+  status.profiles = [
+    {
+      id: "test-connection",
+      browser: "chrome",
+      profileId: "test-profile",
+      extensionId: "test-extension",
+      version: "0.3.0",
+      connected: true,
+      current: true,
+    },
+  ];
+  await expect(
+    guide.getByRole("button", { name: "允许 OpenPI 使用", exact: true }),
+  ).toBeVisible({ timeout: 6000 });
+  expect(writes).toEqual([]);
+  await dialog.screenshot({
+    path: info.outputPath("browser-settings-ready.png"),
+  });
   await guide.getByRole("button", { name: "收起浏览器设置引导" }).click();
   await panel
     .getByRole("switch", { name: "允许使用 Chrome", exact: true })

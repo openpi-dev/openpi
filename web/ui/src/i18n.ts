@@ -719,7 +719,7 @@ const resources = {
       browserSpeakHint:
         "Say “Use Chrome to…” to choose a different browser for a request.",
       browserGuideTitle: "Connect {{browser}}",
-      browserGuideEyebrow: "A quick setup",
+      browserGuideEyebrow: "One step at a time",
       browserConnectionTitle: "Connection",
       browserCloseGuide: "Close browser setup",
       browserConnectionReady:
@@ -732,34 +732,62 @@ const resources = {
       browserAllowUse: "Allow OpenPI to use it",
       browserMakeDefault: "Use as default",
       browserInstallIn: "Install in",
-      browserInstallTitle: "Install Browser Bridge",
-      browserInstallHint:
-        "We’ll open the extension folder and browser manager. Turn on Developer mode, choose Load unpacked, then select the opened folder.",
+      browserInstallTitle: "Install OpenPI Browser Bridge",
+      browserSetupSteps: "Setup steps",
+      browserStepCount: "Step {{step}} of {{total}}",
+      browserStepLabel: "Step {{step}}: {{label}}",
+      browserStepOpen: "Open page",
+      browserStepAdd: "Add extension",
+      browserStepConnect: "Connect",
+      browserOpenManagerTitle: "Open {{browser}} extensions",
+      browserOpenManagerHint: "Start here. We’ll open the right page for you.",
+      browserOpenManager: "Open {{browser}} extensions",
+      browserReopenManager: "Open extensions page again",
+      browserAlreadyInstalled: "Already installed? Connect",
+      browserDeveloperMode: "Developer mode",
+      browserDeveloperTitle: "Turn on Developer mode",
+      browserDeveloperHint:
+        "In the extensions page you just opened, turn on the Developer mode switch.",
+      browserDeveloperDone: "It’s on. Next",
+      browserIllustration: "Illustration · In {{browser}}",
+      browserExtensions: "Extensions",
+      browserLoadUnpacked: "Load unpacked",
+      browserLoadHint:
+        "Click Load unpacked in your browser, then select the folder below.",
+      browserFolderBundled: "Included with OpenPI",
+      browserOpenFolder: "Open folder",
+      browserFolderOpened: "Extension folder opened.",
+      browserPathCopied: "Path copied",
+      browserCopyFailed:
+        "Couldn’t copy. Select the path above and copy it manually.",
+      browserChooseFolderMac:
+        "In the folder picker, press ⌘ ⇧ G, paste this path and press Return, then click Select.",
+      browserChooseFolderOther:
+        "In the folder picker, paste this path into the address bar and select the folder.",
+      browserInstalledConnect: "Added. Connect to OpenPI",
+      browserPreviousStep: "Back",
+      browserWaiting:
+        "Waiting for OpenPI Browser Bridge… We’ll detect it automatically.",
       browserInstallBrowserFirst:
         "Install {{browser}} first, or open this OpenPI address in your installed browser.",
-      browserOpenInstall: "Open installation",
-      browserReopenInstall: "Open installation again",
       browserConnectTitle: "Connect to OpenPI",
       browserConnectHint:
         "Open OpenPI in {{browser}}. Use the profile where you installed the extension.",
       browserOpenIn: "Open in {{browser}}",
-      browserAllowTitle: "Allow browser control",
       browserAllowHint:
-        "Check the connection, then choose whether to allow access. Installing the extension alone does not grant model access.",
+        "Once connected, you can allow OpenPI to use this browser. Installing the extension does not change your browser permissions.",
       browserCheck: "Check connection",
       browserNotConnectedYet:
         "No connection yet. Finish installation, refresh OpenPI in that browser and check again.",
       browserHelp: "Setup help",
       browserReloadHint:
-        "Already installed? Reload Browser Bridge in the extension manager and refresh OpenPI. Accept the browser’s permission prompt if shown.",
+        "Already installed? Reload OpenPI Browser Bridge in the extension manager and refresh OpenPI. Accept the browser’s permission prompt if shown.",
       browserSupportedHint:
         "Chrome, Edge, Brave and Chromium 145+ are supported. Safari and Firefox are not supported by this extension.",
       browserCopyPath: "Copy extension folder path",
       browserLoading: "Checking browser connections…",
       browserSaved: "Saved. Browser permissions take effect immediately.",
       browserSaving: "Saving…",
-      browserNativeOpened:
-        "Opened. Continue in your browser, then return here to check the connection.",
       modelSettings: "Models",
       skillsSettings: "Skills",
       subagentsSettings: "Sub-agents",
@@ -2055,7 +2083,7 @@ const resources = {
       browserMore: "更多浏览器",
       browserSpeakHint: "对话中说“使用 Chrome …”，即可指定这次使用的浏览器。",
       browserGuideTitle: "连接 {{browser}}",
-      browserGuideEyebrow: "只需几步",
+      browserGuideEyebrow: "跟着做，一次一步",
       browserConnectionTitle: "连接状态",
       browserCloseGuide: "收起浏览器设置引导",
       browserConnectionReady: "连接正常，可选择是否允许 OpenPI 使用。",
@@ -2067,34 +2095,60 @@ const resources = {
       browserAllowUse: "允许 OpenPI 使用",
       browserMakeDefault: "设为默认",
       browserInstallIn: "安装到",
-      browserInstallTitle: "安装 Browser Bridge",
-      browserInstallHint:
-        "将打开扩展文件夹与浏览器扩展页。开启「开发者模式」，点击「加载已解压的扩展程序」，选择刚打开的文件夹。",
+      browserInstallTitle: "安装 OpenPI Browser Bridge",
+      browserSetupSteps: "设置步骤",
+      browserStepCount: "第 {{step}} 步，共 {{total}} 步",
+      browserStepLabel: "第 {{step}} 步：{{label}}",
+      browserStepOpen: "打开扩展页",
+      browserStepAdd: "添加扩展",
+      browserStepConnect: "连接",
+      browserOpenManagerTitle: "打开 {{browser}} 扩展页",
+      browserOpenManagerHint: "从这里开始，我们会帮你打开对应的页面。",
+      browserOpenManager: "打开 {{browser}} 扩展页",
+      browserReopenManager: "重新打开扩展页",
+      browserAlreadyInstalled: "已经安装？直接连接",
+      browserDeveloperMode: "开发者模式",
+      browserDeveloperTitle: "开启「开发者模式」",
+      browserDeveloperHint: "在刚打开的扩展页，找到并开启「开发者模式」开关。",
+      browserDeveloperDone: "已开启，下一步",
+      browserIllustration: "操作示意 · 在 {{browser}} 中完成",
+      browserExtensions: "扩展程序",
+      browserLoadUnpacked: "加载已解压的扩展程序",
+      browserLoadHint:
+        "在浏览器中点击「加载已解压的扩展程序」，选择下面的文件夹。",
+      browserFolderBundled: "已随 OpenPI 准备好",
+      browserOpenFolder: "打开文件夹",
+      browserFolderOpened: "扩展文件夹已打开。",
+      browserPathCopied: "已复制路径",
+      browserCopyFailed: "未能复制，请选中上方路径手动复制。",
+      browserChooseFolderMac:
+        "在文件选择窗口按 ⌘ ⇧ G，粘贴路径并回车，再点击「选择」。",
+      browserChooseFolderOther:
+        "在文件选择窗口的地址栏粘贴路径，再选择该文件夹。",
+      browserInstalledConnect: "已添加，连接 OpenPI",
+      browserPreviousStep: "上一步",
+      browserWaiting:
+        "等待 OpenPI Browser Bridge 连接，连接后会自动进入下一步。",
       browserInstallBrowserFirst:
         "请先安装 {{browser}}，或在已安装的浏览器中打开当前 OpenPI 地址。",
-      browserOpenInstall: "打开安装位置",
-      browserReopenInstall: "再次打开安装位置",
       browserConnectTitle: "连接 OpenPI",
       browserConnectHint:
         "在 {{browser}} 中打开 OpenPI，使用刚安装扩展的浏览器配置。",
       browserOpenIn: "在 {{browser}} 中打开",
-      browserAllowTitle: "允许浏览器控制",
       browserAllowHint:
-        "检查连接后，再选择是否授权。仅安装扩展不会允许模型操作浏览器。",
+        "连接成功后，可以允许 OpenPI 使用此浏览器。安装扩展不会自动开启浏览器控制。",
       browserCheck: "检查连接",
       browserNotConnectedYet:
         "还未连接。请完成安装，在该浏览器中刷新 OpenPI 后再次检查。",
       browserHelp: "设置帮助",
       browserReloadHint:
-        "已安装旧版？在扩展页重新加载 Browser Bridge，再刷新 OpenPI。如浏览器提示权限，请完成其原生确认。",
+        "已安装旧版？在扩展页重新加载 OpenPI Browser Bridge，再刷新 OpenPI。如浏览器提示权限，请完成其原生确认。",
       browserSupportedHint:
         "支持 Chrome、Edge、Brave、Chromium 145 及以上版本。此扩展暂不支持 Safari 和 Firefox。",
       browserCopyPath: "复制扩展文件夹路径",
       browserLoading: "正在检查浏览器连接…",
       browserSaved: "已保存，浏览器权限立即生效。",
       browserSaving: "正在保存…",
-      browserNativeOpened:
-        "已打开。请在浏览器中完成设置，然后回到此处检查连接。",
       modelSettings: "模型",
       skillsSettings: "技能",
       subagentsSettings: "子代理",

@@ -35,7 +35,12 @@ export async function installedBrowsers() {
 }
 
 /** Explicit UI actions only. A launch receipt is never installation or permission evidence. */
-export async function browserSetupAction(browser: ExternalBrowser, action: "install" | "manage" | "connect", origin: string) {
+export async function browserSetupAction(browser: ExternalBrowser, action: "folder" | "manage" | "connect", origin: string) {
+  if (action === "folder") {
+    const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
+    await exec(command, [browserExtensionPath], { timeout: 5000 });
+    return { opened: true };
+  }
   const app = await application(browser);
   if (!app) throw new Error("Browser not found in a standard installation location. Open OpenPI in that browser to connect it.");
   const target = action === "connect" ? `${origin}/?settings=browser` : `${browser === "edge" ? "edge" : "chrome"}://extensions/`;
@@ -45,10 +50,6 @@ export async function browserSetupAction(browser: ExternalBrowser, action: "inst
     const child = spawn(app, [target], { detached: true, stdio: "ignore" });
     await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
     child.unref();
-  }
-  if (action === "install") {
-    const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-    await exec(command, [browserExtensionPath], { timeout: 5000 });
   }
   return { opened: true };
 }

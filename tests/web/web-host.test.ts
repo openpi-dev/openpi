@@ -86,6 +86,20 @@ test("browser settings hot-apply without a model turn and native credentials can
       { externalBrowsers: ["chrome", "chrome"] },
     ])
       assert.equal((await post("/api/settings/browser", body)).status, 400);
+    for (const body of [
+      { browser: "chrome", action: "install" },
+      { browser: "chrome", action: "folder", path: "/arbitrary" },
+      {
+        browser: "chrome",
+        action: "connect",
+        url: "https://arbitrary.example",
+      },
+      { browser: "shell", action: "manage" },
+    ])
+      assert.equal(
+        (await post("/api/settings/browser/action", body)).status,
+        400,
+      );
     const saved = await post("/api/settings/browser", {
       control: true,
       defaultBrowser: "chrome",
@@ -156,6 +170,16 @@ test("browser settings hot-apply without a model turn and native credentials can
     );
     assert.equal(
       (await post("/api/settings/browser", { control: false }, scoped)).status,
+      403,
+    );
+    assert.equal(
+      (
+        await post(
+          "/api/settings/browser/action",
+          { browser: "chrome", action: "folder" },
+          scoped,
+        )
+      ).status,
       403,
     );
     const revoked = await post("/api/settings/browser", { control: false });

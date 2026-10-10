@@ -742,8 +742,8 @@ export class WebHost {
     }
     if (url.pathname === "/api/settings/browser/action" && request.method === "POST") {
       const body = await this.readJson(request);
-      if (!isExternalBrowser(body.browser) || !["install", "manage", "connect"].includes(String(body.action)) || Object.keys(body).some((key) => !["browser", "action"].includes(key))) return this.json(response, 400, { error: "Invalid browser setup action" });
-      try { return this.json(response, 200, await browserSetupAction(body.browser, body.action as "install" | "manage" | "connect", this.origin)); }
+      if (!isExternalBrowser(body.browser) || !["folder", "manage", "connect"].includes(String(body.action)) || Object.keys(body).some((key) => !["browser", "action"].includes(key))) return this.json(response, 400, { error: "Invalid browser setup action" });
+      try { return this.json(response, 200, await browserSetupAction(body.browser, body.action as "folder" | "manage" | "connect", this.origin)); }
       catch { return this.json(response, 422, { error: "Could not open that browser. Open it yourself, then follow the setup steps." }); }
     }
     if (url.pathname === "/api/browser/control" && request.method === "POST") {

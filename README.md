@@ -523,7 +523,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
 - GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
 
-浏览器控制使用可选的 [Browser Bridge](web/browser-extension/README.md) 0.3.0（Chrome、Edge、Brave、Chromium 145+），需浏览器原生安装及权限确认。它适配 pi-computer-use 0.5.1 的 CDP 路径；无需修改 Pi 内核、fork 或安装完整桌面 pi-computer-use。模型使用一个父 Session 专属的 `openpi_browser`：未指定浏览器时使用用户默认值，明确指定 Chrome 等名称时只使用该浏览器；未授权、离线、多配置歧义均返回明确错误，不自动换浏览器。内置页面绑定发起 Turn 的 OpenPI 标签；普通浏览器使用已连接配置中的现有页面和登录状态，需在对应配置中保留 OpenPI 标签。授权不会复制 Cookie 或用户配置。关闭授权、取消 Turn 或更换文档后旧观察失效，已发送但未确认的效果按不确定报告。部分站点仍会限制嵌入，Safari 和 Firefox 暂不支持此扩展。
+浏览器控制使用可选的 [OpenPI Browser Bridge](web/browser-extension/README.md) 0.3.0（Chrome、Edge、Brave、Chromium 145+），需浏览器原生安装及权限确认。它适配 pi-computer-use 0.5.1 的 CDP 路径；无需修改 Pi 内核、fork 或安装完整桌面 pi-computer-use。模型使用一个父 Session 专属的 `openpi_browser`：未指定浏览器时使用用户默认值，明确指定 Chrome 等名称时只使用该浏览器；未授权、离线、多配置歧义均返回明确错误，不自动换浏览器。内置页面绑定发起 Turn 的 OpenPI 标签；普通浏览器使用已连接配置中的现有页面和登录状态，需在对应配置中保留 OpenPI 标签。授权不会复制 Cookie 或用户配置。关闭授权、取消 Turn 或更换文档后旧观察失效，已发送但未确认的效果按不确定报告。部分站点仍会限制嵌入，Safari 和 Firefox 暂不支持此扩展。
 
 #### 开发运行时：区分 npm 与当前源码
 
