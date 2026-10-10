@@ -20,6 +20,9 @@ export default defineConfig({
   testDir: repositoryRoot,
   testMatch: [
     "tests/web/openpi-web.e2e.ts",
+    "tests/web/browser-computer-use.e2e.ts",
+    "tests/web/browser-native.e2e.ts",
+    "tests/web/browser-settings.e2e.ts",
     "tests/web/composer-clipboard.e2e.ts",
     "tests/web/file-formats.e2e.ts",
     "tests/web/draft-file-preview.e2e.ts",
@@ -27,6 +30,8 @@ export default defineConfig({
     "tests/web/transcript-search.e2e.ts",
     "tests/web/history-images.e2e.ts",
     "tests/web/settings-parity.e2e.ts",
+    "tests/web/provider-account-login.e2e.ts",
+    "tests/web/model-connections.e2e.ts",
     "tests/web/conversation-reading.e2e.ts",
     "tests/web/workbench-polish.e2e.ts",
     "tests/web/message-rerun.e2e.ts",

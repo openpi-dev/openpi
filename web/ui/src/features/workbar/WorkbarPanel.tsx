@@ -1,21 +1,28 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
+import { ComplexSelector } from "@astryxdesign/core/ComplexSelector";
+import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
+import {
+  LayerDepthProvider,
+  useLayerDismissal,
+} from "@astryxdesign/core/Layer";
 import {
   ArrowLeft,
+  ArrowUp,
   ChevronRight,
   FileDiff,
+  Folder,
   FolderOpen,
   Globe2,
-  MessagesSquare,
+  MessageCirclePlus,
   PanelLeftOpen,
+  PanelRightClose,
   Plus,
-  Send,
   SquareTerminal,
-  StopCircle,
+  Square,
   X,
 } from "lucide-react";
 import {
   type FormEvent,
-  type KeyboardEvent,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -28,8 +35,13 @@ import type {
   WebCapabilityProjection,
   WebCapabilitySnapshot,
   WebSubagentActivity,
+  WebSubagentDetail,
 } from "../../../../../extensions/shared/web-observer-registry.ts";
+import type { WebSnapshot } from "../../../../protocol/types.ts";
+import { formatSourceReference } from "../../../../protocol/session-sources.ts";
+import { workspaceName } from "../../lib/format.ts";
 import { WebClient } from "../../protocol/client.ts";
+import { FileReferenceDialog } from "../composer/FileReferenceDialog.tsx";
 import { FilesPanel } from "../files/FilesPanel.tsx";
 import type { DiffLineReference } from "../review/DiffCodePreview.tsx";
 import {
@@ -59,7 +71,7 @@ import {
 const launcherTools = [
   {
     kind: "side-conversation" as const,
-    icon: MessagesSquare,
+    icon: MessageCirclePlus,
     title: "sideConversation",
     description: "sideConversationDescription",
   },
@@ -122,9 +134,13 @@ function WorkbarLauncher({
 
 function SideConversationPanel({
   sessionId,
+  cwd,
+  snapshot,
   activity,
 }: {
   sessionId: string;
+  cwd: string;
+  snapshot?: WebSnapshot;
   activity?: WebCapabilityProjection<WebSubagentActivity>;
 }) {
   const { t } = useTranslation();
@@ -141,6 +157,14 @@ function SideConversationPanel({
   }, [reading, selectedId, drafts]);
   const draft = drafts[selectedId ?? ""] ?? "";
   const navigation = useRef(0);
+  const [identity, setIdentity] = useState<Pick<
+    WebSubagentDetail,
+    "id" | "cwd" | "model"
+  > | null>(null);
+  const [fileReferenceOwner, setFileReferenceOwner] = useState<{
+    key: string;
+    generation: number;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,11 +177,36 @@ function SideConversationPanel({
   const items = (activity?.items ?? []).filter((item) => item.origin === "btw");
   const selected = items.find((item) => item.id === selectedId);
   const status = selected?.status ?? lastStatus;
+  const childIdentity = identity?.id === selectedId ? identity : null;
+  const model = snapshot?.models.find((model) =>
+    selectedId
+      ? `${model.provider}/${model.id}` === childIdentity?.model
+      : model.current,
+  );
+  const modelLabel = selectedId
+    ? childIdentity?.model
+    : model && `${model.provider}/${model.id}`;
+  const modelName = model?.name || model?.id || modelLabel || t("usageUnknown");
+  const thinkingLevel =
+    !selectedId && snapshot?.thinking?.supported
+      ? snapshot.thinking.level
+      : undefined;
+  const workspace = childIdentity?.cwd ?? cwd;
+  const workspaceLabel =
+    snapshot?.workspaces.find((item) => item.path === workspace)?.name ??
+    workspaceName(workspace);
+  const inputLabel = t(
+    selectedId ? "continueSideConversation" : "startSideConversation",
+  );
+  const submitLabel = t(
+    busy ? "sideConversationPending" : selectedId ? "send" : "start",
+  );
   const selectConversation = (id: string | null) => {
     navigation.current++;
     setSelectedId(id);
     setLastStatus(null);
     setError(null);
+    setFileReferenceOwner(null);
   };
 
   const submit = async (event: FormEvent) => {
@@ -266,12 +315,19 @@ function SideConversationPanel({
             refreshRevision={detailRevision}
             fullView={false}
             readOnlyNote={false}
+            onDetail={(detail) =>
+              setIdentity({
+                id: detail.id,
+                cwd: detail.cwd,
+                model: detail.model,
+              })
+            }
           />
         </>
       ) : (
-        <div className="side-conversation-list">
+        <div className="side-conversation-list" data-empty={items.length === 0}>
           <div className="side-conversation-intro">
-            <MessagesSquare aria-hidden="true" />
+            <MessageCirclePlus aria-hidden="true" />
             <h3>{t("sideConversation")}</h3>
             <p>{t("sideConversationDescription")}</p>
           </div>
@@ -300,58 +356,153 @@ function SideConversationPanel({
           {error}
         </p>
       )}
-      <form
-        className="side-conversation-composer"
-        onSubmit={submit}
-        aria-busy={busy}
-      >
-        <textarea
-          value={draft}
-          disabled={busy}
-          placeholder={
-            selectedId
-              ? t("continueSideConversation")
-              : t("startSideConversation")
-          }
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            setDrafts((current) => ({ ...current, [selectedId ?? ""]: value }));
-          }}
-          onKeyDown={(event) => {
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.altKey &&
-              !event.ctrlKey &&
-              !event.metaKey &&
-              !event.defaultPrevented &&
-              !event.nativeEvent.isComposing &&
-              event.nativeEvent.keyCode !== 229
-            ) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-        />
-        <div>
-          {selectedId && status === "running" && (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={() => void stop()}
-            >
-              <StopCircle aria-hidden="true" /> {t("stop")}
-            </button>
-          )}
-          <button type="submit" disabled={busy || !draft.trim()}>
-            <Send aria-hidden="true" />
-            {t(
-              busy ? "sideConversationPending" : selectedId ? "send" : "start",
-            )}
-          </button>
-        </div>
-      </form>
+      <div className="composer-dock">
+        <form
+          className="composer composer-m02 side-conversation-composer"
+          onSubmit={submit}
+          aria-busy={busy}
+        >
+          <textarea
+            rows={1}
+            value={draft}
+            disabled={busy}
+            aria-label={inputLabel}
+            placeholder={inputLabel}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setDrafts((current) => ({
+                ...current,
+                [selectedId ?? ""]: value,
+              }));
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.altKey &&
+                !event.ctrlKey &&
+                !event.metaKey &&
+                !event.defaultPrevented &&
+                !event.nativeEvent.isComposing &&
+                event.nativeEvent.keyCode !== 229
+              ) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
+          <div className="composer-toolbar">
+            <div className="composer-toolbar-context">
+              <button
+                type="button"
+                className="composer-context-trigger icon-button"
+                aria-label={t("addContext")}
+                title={t("fileReference")}
+                disabled={busy}
+                onClick={() =>
+                  setFileReferenceOwner({
+                    key: selectedId ?? "",
+                    generation: navigation.current,
+                  })
+                }
+              >
+                <Plus aria-hidden="true" />
+              </button>
+              <span className="composer-workspace-label" title={workspace}>
+                <Folder aria-hidden="true" /> {workspaceLabel}
+              </span>
+            </div>
+            <div className="composer-toolbar-controls">
+              <div className="model-picker-wrap">
+                <ComplexSelector
+                  key={selectedId ?? "new"}
+                  className="model-selector model-picker"
+                  label={`${t("model")}: ${modelName}`}
+                  isLabelHidden
+                  value={modelLabel ?? ""}
+                  triggerLabel={
+                    <span
+                      className="model-thinking-label"
+                      title={modelLabel || modelName}
+                    >
+                      <span className="model-picker-label">{modelName}</span>
+                      {thinkingLevel && (
+                        <span className="model-picker-thinking">
+                          {thinkingLevel[0]!.toUpperCase() +
+                            thinkingLevel.slice(1)}
+                        </span>
+                      )}
+                    </span>
+                  }
+                  variant="ghost"
+                  size="sm"
+                  placement="above"
+                  alignment="end"
+                  isDisabled={!modelLabel}
+                >
+                  {() => (
+                    <div className="side-conversation-model-details">
+                      <strong>{modelName}</strong>
+                      <code>{modelLabel}</code>
+                      <p>
+                        {t(
+                          selectedId
+                            ? "sideConversationModelFixed"
+                            : "sideConversationModelInherited",
+                        )}
+                      </p>
+                    </div>
+                  )}
+                </ComplexSelector>
+              </div>
+              {selectedId && status === "running" && (
+                <button
+                  type="button"
+                  className="send-button"
+                  aria-label={t("stop")}
+                  title={t("stop")}
+                  disabled={busy}
+                  onClick={() => void stop()}
+                >
+                  <Square aria-hidden="true" />
+                </button>
+              )}
+              {(!selectedId ||
+                status !== "running" ||
+                Boolean(draft.trim())) && (
+                <button
+                  type="submit"
+                  className="send-button"
+                  disabled={busy || !draft.trim()}
+                  aria-label={submitLabel}
+                  title={submitLabel}
+                >
+                  <ArrowUp aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          </div>
+        </form>
+      </div>
+      <FileReferenceDialog
+        open={fileReferenceOwner !== null}
+        sessionId={sessionId}
+        onClose={() => setFileReferenceOwner(null)}
+        onInsert={(reference) => {
+          if (
+            !fileReferenceOwner ||
+            fileReferenceOwner.generation !== navigation.current ||
+            fileReferenceOwner.key !== (selectedId ?? "") ||
+            busyRef.current
+          )
+            return t("fileReferenceDraftChanged");
+          const key = fileReferenceOwner.key;
+          setDrafts((current) => ({
+            ...current,
+            [key]: `${current[key] ?? ""}${current[key] ? "\n" : ""}${formatSourceReference(reference)}`,
+          }));
+        }}
+      />
     </div>
   );
 }
@@ -417,6 +568,7 @@ export function WorkbarPanel({
   sessionId,
   sessionPath,
   cwd,
+  snapshot,
   capabilities,
   review,
   reviewInitialFilePath,
@@ -431,6 +583,7 @@ export function WorkbarPanel({
   onActivateSession,
   readingState: cachedReading,
   onReferenceLine,
+  onBrowserReady,
 }: {
   visible: boolean;
   requestedTool: WorkbarTool;
@@ -438,6 +591,7 @@ export function WorkbarPanel({
   sessionId: string;
   sessionPath: string;
   cwd: string;
+  snapshot?: WebSnapshot;
   capabilities: WebCapabilitySnapshot;
   review: GitReviewViewState;
   reviewInitialFilePath?: string;
@@ -452,6 +606,9 @@ export function WorkbarPanel({
   onActivateSession?: () => void;
   readingState?: WorkbarReadingState;
   onReferenceLine?: (reference: DiffLineReference) => void;
+  onBrowserReady?: (
+    open: ((url: string) => string | undefined) | undefined,
+  ) => void;
 }) {
   const { t } = useTranslation();
   const localReading = useRef<WorkbarReadingState>({});
@@ -470,6 +627,7 @@ export function WorkbarPanel({
   const browserScope = JSON.stringify([sessionId, sessionPath]);
   const tabButtons = useRef(new Map<WorkbarTabId, HTMLButtonElement>());
   const openToolsButton = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLElement>(null);
   const tabFocus = useRef<{
     tool: WorkbarTabId | null;
     scope: string;
@@ -526,7 +684,12 @@ export function WorkbarPanel({
       if (!target?.isConnected || target.closest("[hidden], [inert]")) return;
       if (
         document.activeElement !== document.body &&
-        !target.closest(".workbar-panel")?.contains(document.activeElement)
+        !target.closest(".workbar-panel")?.contains(document.activeElement) &&
+        !document
+          .getElementById(
+            openToolsButton.current?.getAttribute("aria-controls") ?? "",
+          )
+          ?.contains(document.activeElement)
       )
         return;
       target.focus({ preventScroll: true });
@@ -656,341 +819,376 @@ export function WorkbarPanel({
     ? "openTools"
     : (launcherTools.find((tool) => tool.kind === activeTool)?.title ??
       "openTools");
+  useLayerDismissal({
+    isActive: visible,
+    onDismiss: () => {
+      if (tabs.launcherOpen && tabs.active) {
+        tabFocus.current = { tool: tabs.active, scope: browserScope };
+        setTabs(dismissWorkbarLauncher);
+      } else onClose();
+    },
+    getContainer: () => panel.current,
+    isPresent: () => panel.current?.contains(document.activeElement) ?? false,
+  });
 
   return (
     <WorkbarReadingContext.Provider value={readingState}>
-      <aside
-        className="workbar-panel"
-        hidden={!visible}
-        aria-label={t(activeLabel ?? "openTools")}
-        onKeyDown={(event) => {
-          if (
-            event.key !== "Escape" ||
-            event.defaultPrevented ||
-            event.nativeEvent.isComposing
-          )
-            return;
-          event.stopPropagation();
-          if (tabs.launcherOpen && tabs.active) {
-            event.preventDefault();
-            tabFocus.current = { tool: tabs.active, scope: browserScope };
-            setTabs(dismissWorkbarLauncher);
-            return;
-          }
-          event.preventDefault();
-          onClose();
-        }}
-      >
-        <header className="workbar-tabbar">
-          <div
-            className="workbar-tabs"
-            role="toolbar"
-            aria-label={t("openTools")}
-          >
-            {tabs.tabs.length === 0 && (
-              <span className="workbar-tab-placeholder">
-                <Plus aria-hidden="true" /> {t("openTools")}
-              </span>
-            )}
+      <LayerDepthProvider>
+        <aside
+          ref={panel}
+          className="workbar-panel"
+          hidden={!visible}
+          aria-label={t(activeLabel ?? "openTools")}
+        >
+          <header className="workbar-tabbar">
+            <div
+              className="workbar-tabs"
+              role="toolbar"
+              aria-label={t("openTools")}
+            >
+              {tabs.tabs.length === 0 && (
+                <span className="workbar-tab-placeholder">
+                  <Plus aria-hidden="true" /> {t("openTools")}
+                </span>
+              )}
+              {tabs.tabs.map((tool) => {
+                const kind = workbarTabTool(tool);
+                const definition = launcherTools.find(
+                  (item) => item.kind === kind,
+                )!;
+                const Icon = definition.icon;
+                const active = !tabs.launcherOpen && tabs.active === tool;
+                const label =
+                  kind === "terminal"
+                    ? terminalLabel(tool)
+                    : t(definition.title);
+                const renameTerminal = () => {
+                  if (kind !== "terminal") return;
+                  setTerminalName(label);
+                  setRenamingTerminal(tool);
+                };
+                return (
+                  <div
+                    className="workbar-tab"
+                    data-active={active || undefined}
+                    key={tool}
+                  >
+                    <button
+                      type="button"
+                      ref={(button) => {
+                        if (button) tabButtons.current.set(tool, button);
+                        else tabButtons.current.delete(tool);
+                      }}
+                      aria-pressed={active}
+                      title={
+                        kind === "terminal"
+                          ? `${label} · ${t("renameTerminal")}`
+                          : label
+                      }
+                      onDoubleClick={renameTerminal}
+                      onContextMenu={(event) => {
+                        if (kind === "terminal") {
+                          event.preventDefault();
+                          renameTerminal();
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (kind === "terminal" && event.key === "F2") {
+                          event.preventDefault();
+                          renameTerminal();
+                        }
+                      }}
+                      onClick={() =>
+                        setTabs((current) => activateWorkbarTool(current, tool))
+                      }
+                    >
+                      <Icon aria-hidden="true" />
+                      <span>{label}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="workbar-tab-close"
+                      aria-label={
+                        kind === "terminal" && canControl
+                          ? t("workbarEndTerminal", { name: label })
+                          : `${t("close")} ${label}`
+                      }
+                      title={
+                        kind === "terminal" && canControl
+                          ? t("workbarEndTerminal", { name: label })
+                          : `${t("close")} ${label}`
+                      }
+                      disabled={
+                        kind === "terminal" &&
+                        canControl &&
+                        (closingTerminals.includes(tool) ||
+                          terminalConnections[tool]?.pending !== false)
+                      }
+                      onClick={(event) =>
+                        void closeTab(tool, event.currentTarget)
+                      }
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="workbar-tabbar-actions">
+              <button
+                type="button"
+                className="workbar-back-to-chat"
+                onClick={() => {
+                  if (conversationCollapsed) onRestoreConversation();
+                  else onClose();
+                  requestAnimationFrame(() =>
+                    document
+                      .querySelector<HTMLTextAreaElement>(".composer textarea")
+                      ?.focus({ preventScroll: true }),
+                  );
+                }}
+              >
+                <ArrowLeft aria-hidden="true" />
+                <span>{t("workbarBackToChat")}</span>
+              </button>
+              {!conversationCollapsed &&
+                tabs.active === "review" &&
+                onExpandReview && (
+                  <button
+                    type="button"
+                    className="icon-button review-expand"
+                    aria-label={t("gitReviewExpand")}
+                    title={t("gitReviewExpand")}
+                    onClick={onExpandReview}
+                  >
+                    <PanelLeftOpen
+                      aria-hidden="true"
+                      style={{ transform: "rotate(180deg)" }}
+                    />
+                  </button>
+                )}
+              {tabs.active ? (
+                <DropdownMenu
+                  className="workbar-tool-picker"
+                  button={{
+                    ref: openToolsButton,
+                    className: "icon-button workbar-add-tab",
+                    icon: <Plus aria-hidden="true" />,
+                    label: t("openTools"),
+                    isIconOnly: true,
+                    variant: "ghost",
+                    "aria-label": t("openTools"),
+                    tooltip: t("openTools"),
+                  }}
+                  onOpenChange={(open: boolean) => {
+                    if (open) return;
+                    tabFocus.current ??= {
+                      tool: tabs.active,
+                      scope: browserScope,
+                    };
+                    setTabs(dismissWorkbarLauncher);
+                  }}
+                  items={launcherTools.map((tool) => ({
+                    id: tool.kind,
+                    icon: <tool.icon aria-hidden="true" />,
+                    label: t(
+                      tool.kind === "terminal"
+                        ? "workbarNewTerminal"
+                        : tool.title,
+                    ),
+                    description: t(tool.description),
+                    onClick: () => select(tool.kind),
+                  }))}
+                  menuWidth="min(300px, calc(100vw - 24px))"
+                  alignment="end"
+                  hasChevron={false}
+                />
+              ) : (
+                <button
+                  type="button"
+                  ref={openToolsButton}
+                  className="icon-button workbar-add-tab"
+                  aria-label={t("openTools")}
+                  title={t("openTools")}
+                  aria-pressed={tabs.launcherOpen}
+                  onClick={() =>
+                    setTabs((current) => openWorkbarTool(current, "launcher"))
+                  }
+                >
+                  <Plus aria-hidden="true" />
+                </button>
+              )}
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={t("workbarCollapseTools")}
+                title={t("workbarCollapseTools")}
+                onClick={onClose}
+              >
+                <PanelRightClose aria-hidden="true" />
+              </button>
+            </div>
+          </header>
+          {terminalError && (
+            <p className="error" role="alert">
+              {terminalError}
+            </p>
+          )}
+          <div className="workbar-panels">
+            <div className="workbar-tool-panel" hidden={!tabs.launcherOpen}>
+              <WorkbarLauncher onSelect={select} />
+            </div>
             {tabs.tabs.map((tool) => {
               const kind = workbarTabTool(tool);
-              const definition = launcherTools.find(
-                (item) => item.kind === kind,
-              )!;
-              const Icon = definition.icon;
-              const active = !tabs.launcherOpen && tabs.active === tool;
-              const label =
-                kind === "terminal" ? terminalLabel(tool) : t(definition.title);
-              const renameTerminal = () => {
-                if (kind !== "terminal") return;
-                setTerminalName(label);
-                setRenamingTerminal(tool);
-              };
               return (
                 <div
-                  className="workbar-tab"
-                  data-active={active || undefined}
+                  className="workbar-tool-panel"
+                  data-tool={kind}
+                  data-tab={tool}
+                  hidden={tabs.launcherOpen || tabs.active !== tool}
+                  inert={tabs.launcherOpen || tabs.active !== tool || !visible}
                   key={tool}
                 >
-                  <button
-                    type="button"
-                    ref={(button) => {
-                      if (button) tabButtons.current.set(tool, button);
-                      else tabButtons.current.delete(tool);
-                    }}
-                    aria-pressed={active}
-                    title={
-                      kind === "terminal"
-                        ? `${label} · ${t("renameTerminal")}`
-                        : label
-                    }
-                    onDoubleClick={renameTerminal}
-                    onContextMenu={(event) => {
-                      if (kind === "terminal") {
-                        event.preventDefault();
-                        renameTerminal();
+                  {kind === "terminal" && visible && canControl ? (
+                    <TerminalPanel
+                      sessionId={sessionId}
+                      cwd={cwd}
+                      tabId={tool}
+                      active={!tabs.launcherOpen && tabs.active === tool}
+                      onConnectionChange={(state) =>
+                        setTerminalConnections((current) => ({
+                          ...current,
+                          [tool]: state,
+                        }))
                       }
-                    }}
-                    onKeyDown={(event) => {
-                      if (kind === "terminal" && event.key === "F2") {
-                        event.preventDefault();
-                        renameTerminal();
-                      }
-                    }}
-                    onClick={() =>
-                      setTabs((current) => activateWorkbarTool(current, tool))
-                    }
-                  >
-                    <Icon aria-hidden="true" />
-                    <span>{label}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="workbar-tab-close"
-                    aria-label={`${t("close")} ${label}`}
-                    title={t("close")}
-                    disabled={
-                      kind === "terminal" &&
-                      canControl &&
-                      (closingTerminals.includes(tool) ||
-                        terminalConnections[tool]?.pending !== false)
-                    }
-                    onClick={(event) =>
-                      void closeTab(tool, event.currentTarget)
-                    }
-                  >
-                    <X aria-hidden="true" />
-                  </button>
+                      activity={capabilities["background-terminals"]}
+                    />
+                  ) : kind === "browser" &&
+                    visible &&
+                    canControl &&
+                    (browserActive || retainedBrowser === browserScope) ? (
+                    <BrowserPanel key={browserScope} onReady={onBrowserReady} />
+                  ) : visible && !tabs.launcherOpen && tabs.active === tool ? (
+                    !canControl &&
+                    ["side-conversation", "terminal", "browser"].includes(
+                      kind,
+                    ) ? (
+                      <div className="workbar-empty">
+                        <p>{t("toolsRequireCurrentSession")}</p>
+                        {onActivateSession && (
+                          <button
+                            type="button"
+                            className="secondary"
+                            onClick={onActivateSession}
+                          >
+                            {t("activateViewedSession")}
+                          </button>
+                        )}
+                      </div>
+                    ) : kind === "side-conversation" ? (
+                      <SideConversationPanel
+                        sessionId={sessionId}
+                        cwd={cwd}
+                        snapshot={snapshot}
+                        activity={capabilities.subagents}
+                      />
+                    ) : kind === "review" ? (
+                      <ReviewPanel
+                        key={
+                          reviewTurn
+                            ? `${reviewTurn.promptEntryId}:${reviewTurn.revision}`
+                            : (review.source ?? "workspace")
+                        }
+                        review={
+                          reviewTurn
+                            ? {
+                                ...savedReview,
+                                setSource: (source) => {
+                                  review.setSource?.(source);
+                                  onWorkspaceReview?.();
+                                },
+                              }
+                            : review
+                        }
+                        initialFilePath={
+                          reviewTurn?.filePath ?? reviewInitialFilePath
+                        }
+                        readingScope={
+                          reviewTurn
+                            ? `turn:${reviewTurn.promptEntryId}:${reviewTurn.revision}`
+                            : `workspace:${review.source ?? "unstaged"}`
+                        }
+                        onOpenFiles={() => select("files")}
+                        onReferenceLine={
+                          canControl ? onReferenceLine : undefined
+                        }
+                        onClose={() =>
+                          setTabs((current) =>
+                            closeWorkbarTool(current, "review"),
+                          )
+                        }
+                        embedded
+                      />
+                    ) : (
+                      <FilesPanel
+                        key={JSON.stringify([sessionId, sessionPath, cwd])}
+                        sessionId={sessionId}
+                        sessionPath={sessionPath}
+                        cwd={cwd}
+                        active
+                        canWrite={canControl}
+                      />
+                    )
+                  ) : null}
                 </div>
               );
             })}
           </div>
-          <div className="workbar-tabbar-actions">
-            <button
-              type="button"
-              className="workbar-back-to-chat"
-              onClick={() => {
-                if (conversationCollapsed) onRestoreConversation();
-                else onClose();
-                requestAnimationFrame(() =>
-                  document
-                    .querySelector<HTMLTextAreaElement>(".composer textarea")
-                    ?.focus({ preventScroll: true }),
-                );
-              }}
-            >
-              <ArrowLeft aria-hidden="true" />
-              <span>{t("workbarBackToChat")}</span>
-            </button>
-            {!conversationCollapsed &&
-              tabs.active === "review" &&
-              onExpandReview && (
-                <button
-                  type="button"
-                  className="icon-button review-expand"
-                  aria-label={t("gitReviewExpand")}
-                  title={t("gitReviewExpand")}
-                  onClick={onExpandReview}
-                >
-                  <PanelLeftOpen
-                    aria-hidden="true"
-                    style={{ transform: "rotate(180deg)" }}
-                  />
-                </button>
-              )}
-            {conversationCollapsed && (
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={t("restoreConversation")}
-                title={t("restoreConversation")}
-                onClick={onRestoreConversation}
-              >
-                <PanelLeftOpen aria-hidden="true" />
-              </button>
-            )}
-            <button
-              type="button"
-              ref={openToolsButton}
-              className="icon-button workbar-add-tab"
-              aria-label={t("openTools")}
-              title={t("openTools")}
-              aria-pressed={tabs.launcherOpen}
-              onClick={() =>
-                setTabs((current) => openWorkbarTool(current, "launcher"))
-              }
-            >
-              <Plus aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label={t("close")}
-              title={t("close")}
-              onClick={onClose}
-            >
-              <X aria-hidden="true" />
-            </button>
-          </div>
-        </header>
-        {terminalError && (
-          <p className="error" role="alert">
-            {terminalError}
-          </p>
-        )}
-        <div className="workbar-panels">
-          <div className="workbar-tool-panel" hidden={!tabs.launcherOpen}>
-            <WorkbarLauncher onSelect={select} />
-          </div>
-          {tabs.tabs.map((tool) => {
-            const kind = workbarTabTool(tool);
-            return (
-              <div
-                className="workbar-tool-panel"
-                data-tool={kind}
-                data-tab={tool}
-                hidden={tabs.launcherOpen || tabs.active !== tool}
-                inert={tabs.launcherOpen || tabs.active !== tool || !visible}
-                key={tool}
-              >
-                {kind === "terminal" && visible && canControl ? (
-                  <TerminalPanel
-                    sessionId={sessionId}
-                    cwd={cwd}
-                    tabId={tool}
-                    active={!tabs.launcherOpen && tabs.active === tool}
-                    onConnectionChange={(state) =>
-                      setTerminalConnections((current) => ({
-                        ...current,
-                        [tool]: state,
-                      }))
-                    }
-                    activity={capabilities["background-terminals"]}
-                  />
-                ) : kind === "browser" &&
-                  visible &&
-                  canControl &&
-                  (browserActive || retainedBrowser === browserScope) ? (
-                  <BrowserPanel key={browserScope} />
-                ) : visible && !tabs.launcherOpen && tabs.active === tool ? (
-                  !canControl &&
-                  ["side-conversation", "terminal", "browser"].includes(
-                    kind,
-                  ) ? (
-                    <div className="workbar-empty">
-                      <p>{t("toolsRequireCurrentSession")}</p>
-                      {onActivateSession && (
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={onActivateSession}
-                        >
-                          {t("activateViewedSession")}
-                        </button>
-                      )}
-                    </div>
-                  ) : kind === "side-conversation" ? (
-                    <SideConversationPanel
-                      sessionId={sessionId}
-                      activity={capabilities.subagents}
-                    />
-                  ) : kind === "review" ? (
-                    <ReviewPanel
-                      key={
-                        reviewTurn
-                          ? `${reviewTurn.promptEntryId}:${reviewTurn.revision}`
-                          : (review.source ?? "workspace")
-                      }
-                      review={
-                        reviewTurn
-                          ? {
-                              ...savedReview,
-                              setSource: (source) => {
-                                review.setSource?.(source);
-                                onWorkspaceReview?.();
-                              },
-                            }
-                          : review
-                      }
-                      initialFilePath={
-                        reviewTurn?.filePath ?? reviewInitialFilePath
-                      }
-                      readingScope={
-                        reviewTurn
-                          ? `turn:${reviewTurn.promptEntryId}:${reviewTurn.revision}`
-                          : `workspace:${review.source ?? "unstaged"}`
-                      }
-                      onOpenFiles={() => select("files")}
-                      onReferenceLine={canControl ? onReferenceLine : undefined}
-                      onClose={() =>
-                        setTabs((current) =>
-                          closeWorkbarTool(current, "review"),
-                        )
-                      }
-                      embedded
-                    />
-                  ) : (
-                    <FilesPanel
-                      key={JSON.stringify([sessionId, sessionPath, cwd])}
-                      sessionId={sessionId}
-                      sessionPath={sessionPath}
-                      cwd={cwd}
-                      active
-                      canWrite={canControl}
-                    />
-                  )
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-        <Dialog
-          isOpen={renamingTerminal !== null}
-          purpose="form"
-          aria-label={t("renameTerminal")}
-          onKeyDown={(event: KeyboardEvent<HTMLDialogElement>) => {
-            if (event.key === "Escape") event.stopPropagation();
-          }}
-          onOpenChange={(open: boolean) => {
-            if (!open) setRenamingTerminal(null);
-          }}
-        >
-          <form
-            className="openpi-dialog"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const title = terminalName.trim();
-              if (!renamingTerminal || !title) return;
-              setTerminalTitles((current) => ({
-                ...current,
-                [renamingTerminal]: title,
-              }));
-              const saved = (readingState.terminals ??= {})[renamingTerminal];
-              readingState.terminals[renamingTerminal] = {
-                ...(saved ?? { viewport: 0, atBottom: true }),
-                title,
-              };
-              setRenamingTerminal(null);
+          <Dialog
+            isOpen={renamingTerminal !== null}
+            purpose="form"
+            aria-label={t("renameTerminal")}
+            onOpenChange={(open: boolean) => {
+              if (!open) setRenamingTerminal(null);
             }}
           >
-            <strong>{t("renameTerminal")}</strong>
-            <input
-              aria-label={t("terminalName")}
-              value={terminalName}
-              maxLength={80}
-              onChange={(event) => setTerminalName(event.target.value)}
-            />
-            <div className="dialog-actions">
-              <button type="button" onClick={() => setRenamingTerminal(null)}>
-                {t("cancel")}
-              </button>
-              <button type="submit" disabled={!terminalName.trim()}>
-                {t("save")}
-              </button>
-            </div>
-          </form>
-        </Dialog>
-      </aside>
+            <form
+              className="openpi-dialog"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const title = terminalName.trim();
+                if (!renamingTerminal || !title) return;
+                setTerminalTitles((current) => ({
+                  ...current,
+                  [renamingTerminal]: title,
+                }));
+                const saved = (readingState.terminals ??= {})[renamingTerminal];
+                readingState.terminals[renamingTerminal] = {
+                  ...(saved ?? { viewport: 0, atBottom: true }),
+                  title,
+                };
+                setRenamingTerminal(null);
+              }}
+            >
+              <strong>{t("renameTerminal")}</strong>
+              <input
+                aria-label={t("terminalName")}
+                value={terminalName}
+                maxLength={80}
+                onChange={(event) => setTerminalName(event.target.value)}
+              />
+              <div className="dialog-actions">
+                <button type="button" onClick={() => setRenamingTerminal(null)}>
+                  {t("cancel")}
+                </button>
+                <button type="submit" disabled={!terminalName.trim()}>
+                  {t("save")}
+                </button>
+              </div>
+            </form>
+          </Dialog>
+        </aside>
+      </LayerDepthProvider>
     </WorkbarReadingContext.Provider>
   );
 }

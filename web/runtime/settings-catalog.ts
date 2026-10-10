@@ -1,5 +1,8 @@
 import { basename, dirname, extname } from "node:path";
+import { createHash } from "node:crypto";
 import type { MyPiSetupConfig } from "../../extensions/shared/setup-config.ts";
+import type { readConfiguredPackages } from "./configured-packages.ts";
+import { projectAssistantError } from "../protocol/types.ts";
 import type {
   WebOpenPiSetupProjection,
   WebSettingsPluginSummary,
@@ -72,7 +75,7 @@ function pluginFor(
   sourceInfo: SettingsSourceInfo,
 ) {
   const source = boundedText(sourceInfo.source);
-  const id = `${sourceInfo.scope}:${sourceInfo.origin}:${source}`;
+  const id = `${sourceInfo.scope}:${sourceInfo.origin}:${source === sourceInfo.source ? source : createHash("sha256").update(sourceInfo.source).digest("hex")}`;
   const existing = plugins.get(id);
   if (existing) return existing;
   const plugin: WebSettingsPluginSummary = {
@@ -98,6 +101,7 @@ function appendBounded(values: string[], value: string) {
 
 export function projectWebSettingsResources(
   resourceLoader: SettingsResourceLoader,
+  configured: ReturnType<typeof readConfiguredPackages> = { packages: [], errors: [] },
 ): WebSettingsResourceCatalog {
   const extensionResult = resourceLoader.getExtensions();
   const skillResult = resourceLoader.getSkills();
@@ -135,12 +139,35 @@ export function projectWebSettingsResources(
     if (!appendBounded(plugin.themes, theme.name)) resourcesOmitted++;
   }
 
+  for (const pkg of configured.packages) {
+    const plugin = pluginFor(plugins, { ...pkg, origin: "package" });
+    Object.assign(plugin, {
+      configured: true,
+      canManage: boundedText(pkg.source) === pkg.source && (!pkg.baseDir || boundedText(pkg.baseDir) === pkg.baseDir),
+      enabled: pkg.enabled,
+      installed: pkg.installed,
+      ...(pkg.name ? { name: boundedText(pkg.name) } : {}),
+      ...(pkg.installedVersion ? { installedVersion: boundedText(pkg.installedVersion) } : {}),
+      ...(pkg.configuredVersion ? { configuredVersion: boundedText(pkg.configuredVersion) } : {}),
+      diagnostics: pkg.diagnostics.map((message) => boundedText(message)),
+    });
+  }
+  for (const error of extensionResult.errors) {
+    if (!error || typeof error !== "object" || !("path" in error) || typeof error.path !== "string") continue;
+    const errorPath = error.path;
+    const plugin = [...plugins.values()].find((value) => value.extensions.some((extension) => extension.path === errorPath) || (value.baseDir && errorPath.startsWith(`${value.baseDir}/`)));
+    if (!plugin) continue;
+    const message = "error" in error && typeof error.error === "string" ? error.error : "Pi could not load an extension from this package.";
+    if ((plugin.diagnostics ??= []).length < 16) plugin.diagnostics.push(projectAssistantError(message).value);
+  }
+
   const visibleSkills = skillResult.skills.slice(0, MAX_SKILLS).map((skill) => ({
-    id: `${skill.sourceInfo.source}:${skill.name}`,
+    id: `${skill.sourceInfo.scope}:${skill.filePath}`,
     name: boundedText(skill.name),
     description: boundedText(skill.description, MAX_DESCRIPTION),
     filePath: boundedText(skill.filePath),
     source: boundedText(skill.sourceInfo.source),
+    ...(boundedText(skill.filePath) !== skill.filePath || boundedText(skill.sourceInfo.source) !== skill.sourceInfo.source ? { canManage: false } : {}),
     scope: skill.sourceInfo.scope,
     origin: skill.sourceInfo.origin,
     disableModelInvocation: skill.disableModelInvocation,
@@ -171,6 +198,7 @@ export function projectWebSettingsResources(
       themes: themes.length,
     },
     diagnostics: {
+      ...(configured.errors.length ? { settingsErrors: configured.errors.length } : {}),
       extensionErrors: extensionResult.errors.length,
       skillErrors: skillResult.diagnostics.length,
     },
@@ -189,6 +217,7 @@ export function projectWebSetupConfig(
 ): WebOpenPiSetupProjection {
   return {
     capabilities: { discovery: config.capabilities.discovery },
+    webSearch: { enabled: config.webSearch.enabled },
     suggestions: {
       enabled: config.suggestions.enabled,
       ...(config.suggestions.model

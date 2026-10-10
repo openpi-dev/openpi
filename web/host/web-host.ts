@@ -1,4 +1,8 @@
 import { execFile } from "node:child_process";
+import { registerWebBrowserBridge } from "../../extensions/browser/web-bridge.ts";
+import { WebBrowserBroker, validBrowserPages, validBrowserIdentity } from "./browser-control.ts";
+import { isBrowserId, isBrowserList, isExternalBrowser } from "../../extensions/shared/browser-config.ts";
+import { installedBrowsers, browserSetupAction, browserExtensionPath, portableBrowserExtensionPath, BROWSER_EXTENSION_VERSION } from "./browser-setup.ts";
 import {
   createHash,
   randomBytes,
@@ -308,20 +312,24 @@ export class WebHost {
   private stopping = false;
   private stopPromise?: Promise<void>;
   private readonly questions: WebQuestionBroker;
+  private readonly browser: WebBrowserBroker;
+  private unregisterBrowser?: () => void;
   private questionSession?: object;
   private unregisterQuestions?: () => void;
   private promptFileUploads = 0;
 
   constructor(options: WebHostOptions) {
     this.runtime = options.runtime;
-    this.questions = new WebQuestionBroker(() => {
+    const turnOwner = () => {
       if (this.stopping || !this.runtime.workspaceSelected) return undefined;
       const turn = this.runtime.getActiveTurn();
       const admission = turn && this.promptAdmissions.get(turn.commandId);
       if (!turn || !admission?.controllerId || admission.sessionId !== turn.sessionId ||
           !this.adapter.isCurrentSession({ id: admission.sessionId, path: admission.sessionPath })) return undefined;
       return { ...turn, workspace: this.runtime.cwd, controllerId: admission.controllerId };
-    }, () => this.publish("questions_changed"));
+    };
+    this.questions = new WebQuestionBroker(turnOwner, () => this.publish("questions_changed"));
+    this.browser = new WebBrowserBroker(turnOwner);
     this.artifacts = new ArtifactReader(() => this.runtime.workspaceSelected && !this.stopping ? { sessionId: this.runtime.sessionManager.getSessionId(), sessionPath: this.runtime.sessionManager.getSessionFile() ?? `current:${this.runtime.sessionManager.getSessionId()}`, cwd: this.runtime.cwd } : undefined);
     this.requestedPort = options.port ?? 0;
     this.token = options.token
@@ -416,6 +424,7 @@ export class WebHost {
   publish(type: string, detail?: Record<string, unknown>) {
     this.syncQuestionBridge();
     this.questions.reconcile();
+    this.browser.reconcile();
     if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) {
       this.artifacts.revoke();
       if (this.runtime.workspaceSelected) {
@@ -464,6 +473,10 @@ export class WebHost {
     const scope = this.stopping ? undefined : this.runtime.sessionManager;
     if (scope === this.questionSession) return;
     this.unregisterQuestions?.();
+    this.unregisterBrowser?.();
+    this.unregisterBrowser = undefined;
+    if (this.stopping) this.browser.dispose();
+    else this.browser.close();
     this.unregisterCommandFeedback?.();
     this.unregisterCommandFeedback = undefined;
     this.unregisterQuestions = undefined;
@@ -471,6 +484,7 @@ export class WebHost {
     this.questions.cancel();
     if (scope) this.unregisterQuestions = registerWebQuestionBridge(scope,
       (toolCallId, questions, signal, handoff) => this.questions.request(toolCallId, questions, signal, handoff));
+    if (scope) this.unregisterBrowser = registerWebBrowserBridge(scope, (request, signal) => this.browser.execute(request, signal));
     if (scope) this.unregisterCommandFeedback = registerWebCommandFeedback(scope, (text, level) => {
       if (this.stopping || scope !== this.runtime.sessionManager) return;
       scope.appendCustomEntry(WEB_COMMAND_FEEDBACK, { text: text.slice(0, 12_000), level, truncated: text.length > 12_000 });
@@ -583,6 +597,7 @@ export class WebHost {
     if (pathname === "/api/artifacts/save" || pathname === "/api/files/mutate") return true;
     if (pathname === "/api/turns/cancel") return true;
     if (pathname === "/api/questions/answer") return true;
+    if (pathname.startsWith("/api/browser/")) return true;
     if (pathname === "/api/session/fork") return true;
     if (pathname.startsWith("/api/plan")) return true;
     if (pathname === "/api/compact" || pathname === "/api/prompt-queue") return true;
@@ -603,6 +618,29 @@ export class WebHost {
   private async handle(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? "/", `http://${HOST}`);
     const expectedHost = `${HOST}:${this.port}`;
+    // Native extension transport has a separate credential and origin scope. It never grants Web API access.
+    if (url.pathname === "/api/browser/native" && request.headers.host === expectedHost) {
+      const connectionId = url.searchParams.get("connectionId") ?? "";
+      const origin = request.headers.origin;
+      if (request.method === "OPTIONS" && this.browser.allowsOrigin(connectionId, origin)) {
+        response.writeHead(204, { "Access-Control-Allow-Origin": origin!, "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "authorization, content-type", "Vary": "Origin", "Cache-Control": "no-store" });
+        return response.end();
+      }
+      if (!this.browser.authenticate(connectionId, request.headers.authorization, origin)) return this.json(response, 401, { error: "Invalid browser connection credential" });
+      if (origin) response.setHeader("Access-Control-Allow-Origin", origin);
+      if (request.method !== "POST") return this.json(response, 405, { error: "Browser transport requires POST" });
+      const body = await this.readJson(request, 4_300_000);
+      if (body.closed === true) { this.browser.disconnect(connectionId); return this.json(response, 200, { closed: true }); }
+      if (!validBrowserPages(body.pages, 64) || body.pages.some((page) => !page.id.startsWith(`${connectionId}/`)) ||
+        (body.requestId !== undefined && !isWebControllerId(body.requestId)) ||
+        (body.error !== undefined && typeof body.error !== "string")) return this.json(response, 400, { error: "Invalid browser transport message" });
+      const state = this.browser.pollNative(connectionId, body.pages);
+      if (typeof body.requestId === "string") {
+        const accepted = this.browser.resultNative(connectionId, body.requestId, body.result, body.error as string | undefined);
+        return this.json(response, accepted ? 200 : 409, { accepted, enabled: state.enabled });
+      }
+      return this.json(response, 200, state);
+    }
     if (
       request.headers.host !== expectedHost ||
       (request.headers.origin &&
@@ -673,6 +711,57 @@ export class WebHost {
     }
     if (!this.authorized(request))
       return this.json(response, 401, { error: "invalid or missing token" });
+    if (url.pathname === "/api/browser/connections" && request.method === "POST") {
+      const body = await this.readJson(request);
+      const controller = request.headers["x-openpi-web-controller"];
+      if (!isWebControllerId(controller) || !validBrowserIdentity(body)) return this.json(response, 400, { error: "Invalid browser identity" });
+      return this.json(response, 200, this.browser.connect(controller, body));
+    }
+    if (url.pathname === "/api/settings/browser") {
+      const controller = request.headers["x-openpi-web-controller"];
+      if (request.method === "POST") {
+        const body = await this.readJson(request);
+        const { control, embedded, defaultBrowser, externalBrowsers } = body;
+        if (!Object.keys(body).length || Object.keys(body).some((key) => !["control", "embedded", "defaultBrowser", "externalBrowsers"].includes(key)) ||
+          (control !== undefined && typeof control !== "boolean") || (embedded !== undefined && typeof embedded !== "boolean") ||
+          (defaultBrowser !== undefined && !isBrowserId(defaultBrowser)) || (externalBrowsers !== undefined && !isBrowserList(externalBrowsers))) return this.json(response, 400, { error: "Invalid browser preferences" });
+        try {
+          await updateSetupConfig((current) => ({ ...current, browser: { ...current.browser,
+            ...(typeof control === "boolean" ? { control } : {}), ...(typeof embedded === "boolean" ? { embedded } : {}),
+            ...(isBrowserId(defaultBrowser) ? { defaultBrowser } : {}), ...(isBrowserList(externalBrowsers) ? { externalBrowsers } : {}),
+          } }));
+          // Revocation is enforced before tool-surface projection, including during an active turn.
+          this.browser.reconcile();
+          await this.runtime.applySetupConfiguration?.();
+          this.publish("settings_changed", {});
+        } catch {
+          return this.json(response, 422, { error: "Browser settings could not be fully applied. Refresh to inspect the saved state before retrying." });
+        }
+      } else if (request.method !== "GET") return this.json(response, 405, { error: "Use GET or POST" });
+      return this.json(response, 200, { config: loadSetupConfig().browser, profiles: this.browser.profiles(typeof controller === "string" ? controller : undefined), browsers: await installedBrowsers(), extensionPath: browserExtensionPath, portableExtensionPath: portableBrowserExtensionPath, extensionVersion: BROWSER_EXTENSION_VERSION });
+    }
+    if (url.pathname === "/api/settings/browser/action" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (!isExternalBrowser(body.browser) || !["folder", "manage", "connect"].includes(String(body.action)) || Object.keys(body).some((key) => !["browser", "action"].includes(key))) return this.json(response, 400, { error: "Invalid browser setup action" });
+      try { return this.json(response, 200, await browserSetupAction(body.browser, body.action as "folder" | "manage" | "connect", this.origin)); }
+      catch { return this.json(response, 422, { error: "Could not open that browser. Open it yourself, then follow the setup steps." }); }
+    }
+    if (url.pathname === "/api/browser/control" && request.method === "POST") {
+      const body = await this.readJson(request, 4_300_000);
+      const controller = request.headers["x-openpi-web-controller"];
+      if (!isWebControllerId(controller) || typeof body.sessionId !== "string" || !this.adapter.isCurrentSession({ id: body.sessionId, path: typeof body.sessionPath === "string" ? body.sessionPath : "" })) return this.json(response, 409, { error: "An exact active Session and browser controller are required" });
+      if (body.requestId !== undefined) {
+        if (!isWebControllerId(body.requestId) || (body.error !== undefined && typeof body.error !== "string")) return this.json(response, 400, { error: "Invalid browser result" });
+        if (body.pages !== undefined) {
+          if (!validBrowserPages(body.pages)) return this.json(response, 400, { error: "Invalid embedded pages" });
+          this.browser.poll(body.sessionId, controller, body.pages);
+        }
+        const accepted = this.browser.result(body.sessionId, controller, body.requestId, body.result, body.error as string | undefined);
+        return this.json(response, accepted ? 200 : 409, { accepted });
+      }
+      if (!validBrowserPages(body.pages)) return this.json(response, 400, { error: "Invalid embedded pages" });
+      return this.json(response, 200, { pending: this.browser.poll(body.sessionId, controller, body.pages) });
+    }
     if (url.pathname === "/api/terminal/events") {
       if (request.method !== "GET")
         return this.json(response, 405, {
@@ -1034,6 +1123,39 @@ export class WebHost {
       this.publish("session_selected", { sessionPath: session.path });
       return this.json(response, 200, result);
     }
+    if (["/api/providers/login", "/api/providers/login/respond", "/api/providers/login/cancel", "/api/providers/logout"].includes(url.pathname) && request.method === "POST") {
+      const body = await this.readJson(request);
+      const action = url.pathname.split("/").at(-1);
+      const fields = action === "respond" ? ["sessionId", "id", "promptId", "value"] : action === "cancel" ? ["sessionId", "id"] : ["sessionId", "provider"];
+      if (Object.keys(body).length !== fields.length || fields.some((field) => typeof body[field] !== "string") ||
+        typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 ||
+        ("provider" in body && (typeof body.provider !== "string" || !/^[a-zA-Z0-9._-]{1,160}$/u.test(body.provider))) ||
+        ("id" in body && (typeof body.id !== "string" || !body.id || body.id.length > 128)) ||
+        ("promptId" in body && (typeof body.promptId !== "string" || !body.promptId || body.promptId.length > 128)) ||
+        ("value" in body && (typeof body.value !== "string" || body.value.length > 8192 || /[\r\n\u0000]/u.test(body.value))))
+        return this.json(response, 400, { error: "Invalid account login request" });
+      if (body.sessionId !== this.runtime.sessionManager.getSessionId()) return this.json(response, 409, { code: "PROVIDER_LOGIN_CONFLICT", error: "The active Session changed. Refresh before continuing." });
+      try {
+        if (action === "respond" && typeof body.id === "string" && typeof body.promptId === "string" && typeof body.value === "string" && this.runtime.respondProviderLogin)
+          return this.json(response, 200, this.runtime.respondProviderLogin(body.sessionId, body.id, body.promptId, body.value));
+        if (action === "cancel" && typeof body.id === "string" && this.runtime.cancelProviderLogin)
+          return this.json(response, 200, this.runtime.cancelProviderLogin(body.sessionId, body.id));
+        if (action === "login" && typeof body.provider === "string" && this.runtime.startProviderLogin)
+          return this.json(response, 200, await this.runtime.startProviderLogin(body.sessionId, body.provider));
+        if (action === "logout" && typeof body.provider === "string" && this.runtime.logoutProvider) {
+          const result = await this.runtime.logoutProvider(body.sessionId, body.provider);
+          this.publish("settings_changed", {});
+          return this.json(response, 200, result);
+        }
+        return this.json(response, 501, { error: "Account login is unavailable" });
+      } catch (error) {
+        // Native errors may carry a committed credential or an authorization code.
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
+          error: "Could not complete account login. Refresh its status before retrying.",
+          ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}),
+        });
+      }
+    }
     if (url.pathname === "/api/providers/api-key" && request.method === "POST") {
       const body = await this.readJson(request);
       if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.provider !== "string" || body.provider.length > 160 || typeof body.apiKey !== "string" || !body.apiKey.trim() || body.apiKey.length > 8192 || /[\r\n\u0000]/u.test(body.apiKey)) {
@@ -1062,6 +1184,29 @@ export class WebHost {
       } catch (error) {
         return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
           error: "Could not save provider configuration. Refresh configuration before retrying.",
+          ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}),
+        });
+      }
+    }
+    if (url.pathname === "/api/models/default" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 4 ||
+        typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 ||
+        !validSessionPath(body.sessionPath) ||
+        typeof body.provider !== "string" || !/^[a-zA-Z0-9._-]{1,160}$/u.test(body.provider) ||
+        typeof body.modelId !== "string" || !body.modelId || body.modelId.length > 256 || /[\u0000-\u001f]/u.test(body.modelId)) {
+        return this.json(response, 400, { error: "Invalid model default" });
+      }
+      if (!this.runtime.saveModelDefault) return this.json(response, 501, { error: "Model defaults unavailable" });
+      try {
+        const defaults = await this.runtime.saveModelDefault(body.provider, body.modelId, {
+          expectedSessionId: body.sessionId, expectedSessionPath: body.sessionPath,
+        });
+        this.publish("settings_changed", {});
+        return this.json(response, 200, defaults);
+      } catch (error) {
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
+          error: "Could not save the model default. Refresh status before retrying.",
           ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}),
         });
       }
@@ -1109,6 +1254,20 @@ export class WebHost {
         return this.json(response, 200, { saved: true });
       } catch (error) {
         return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, { error: "Could not save models. Refresh configuration before retrying.", ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}) });
+      }
+    }
+    if (url.pathname === "/api/settings/reload" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).some((key) => !["sessionId", "sessionPath"].includes(key)) || typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 || typeof body.sessionPath !== "string" || !body.sessionPath || body.sessionPath.length > 4096) {
+        return this.json(response, 400, { error: "The active Session id and path are required" });
+      }
+      if (!this.runtime.reloadSettingsResources) return this.json(response, 501, { error: "Resource reload is unavailable" });
+      try {
+        await this.runtime.reloadSettingsResources(body.sessionId, body.sessionPath);
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { reloaded: true });
+      } catch (error) {
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, { error: "Could not reload Pi resources. Refresh and inspect diagnostics before retrying.", ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}) });
       }
     }
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
@@ -1685,7 +1844,7 @@ export class WebHost {
     const diagnosticSession = url.searchParams.get("sessionId");
     if (
       diagnosticSession !== null &&
-      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/models/configuration", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
+      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/models/configuration", "/api/models/default", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
       diagnosticSession !== this.runtime.sessionManager.getSessionId()
     ) {
       return this.json(response, 409, {
@@ -1754,7 +1913,9 @@ export class WebHost {
       }
       return this.json(response, 200, {
         sessionId: diagnosticSession,
+        sessionPath: this.runtime.sessionManager.getSessionFile(),
         setup: projectWebSetupConfig(loadSetupConfig()),
+        webSearch: this.runtime.getWebSearchSupport?.() ?? { available: false, reason: "unknown-connection" },
         resources: this.runtime.listSettingsResources(),
       });
     }
@@ -1972,6 +2133,10 @@ export class WebHost {
         const limitText = url.searchParams.get("limit");
         const limit = limitText === null ? WEB_MAX_MODEL_SEARCH_RESULTS : Number(limitText);
         const sessionId = url.searchParams.get("sessionId");
+        const provider = url.searchParams.get("provider") ?? undefined;
+        if (provider !== undefined && (!/^[a-zA-Z0-9._-]{1,160}$/u.test(provider) || url.searchParams.getAll("provider").length !== 1)) {
+          return this.json(response, 400, { error: "Invalid model provider" });
+        }
         if (query.length > WEB_MAX_MODEL_QUERY) {
           return this.json(response, 400, {
             code: "INVALID_MODEL_QUERY",
@@ -1993,7 +2158,7 @@ export class WebHost {
             error: "The active Session changed. Refresh the model list.",
           });
         }
-        const result = this.runtime.searchModels(query, limit);
+        const result = this.runtime.searchModels(query, limit, provider);
         return this.json(response, 200, result);
       }
     if (url.pathname === "/api/trust") {
@@ -2060,6 +2225,14 @@ export class WebHost {
         workspaceSelected: this.runtime.workspaceSelected,
         models: this.runtime.listModels().filter((model) => model.current),
       });
+    if (url.pathname === "/api/models/default") {
+      if (!this.runtime.readModelDefaults) return this.json(response, 501, { error: "Model defaults unavailable" });
+      try {
+        return this.json(response, 200, this.runtime.readModelDefaults());
+      } catch {
+        return this.json(response, 422, { error: "Could not read Pi model defaults" });
+      }
+    }
     if (url.pathname === "/api/models/configuration") {
       if (!this.runtime.readModelConfigurations) return this.json(response, 501, { error: "Model configuration unavailable" });
       try {
@@ -2067,6 +2240,18 @@ export class WebHost {
       } catch {
         return this.json(response, 422, { error: "Cannot read models.json; check its JSON format" });
       }
+    }
+    if (url.pathname === "/api/providers/login") {
+      const sessionId = url.searchParams.get("sessionId");
+      const id = url.searchParams.get("id");
+      if (!sessionId || sessionId.length > 128 || url.searchParams.getAll("sessionId").length !== 1 ||
+        (id !== null && (!id || id.length > 128 || url.searchParams.getAll("id").length !== 1)) ||
+        [...url.searchParams.keys()].some((key) => key !== "sessionId" && key !== "id"))
+        return this.json(response, 400, { error: "An exact Session and login identity are required" });
+      if (sessionId !== this.runtime.sessionManager.getSessionId()) return this.json(response, 409, { code: "PROVIDER_LOGIN_CONFLICT", error: "The active Session changed" });
+      if (!this.runtime.readProviderLogin) return this.json(response, 501, { error: "Account login is unavailable" });
+      try { return this.json(response, 200, this.runtime.readProviderLogin(sessionId, id ?? undefined)); }
+      catch { return this.json(response, 409, { code: "PROVIDER_LOGIN_CONFLICT", error: "This login has changed. Refresh its status." }); }
     }
     if (url.pathname === "/api/providers/auth-status") {
       if (!this.runtime.listProviderAuth) {
@@ -2214,7 +2399,7 @@ export class WebHost {
     }
     if (url.pathname === "/api/session/item") {
       if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
-      const keys = ["sessionId", "sessionPath", "entryId", "cursor", "purpose"] as const;
+      const keys = ["sessionId", "sessionPath", "entryId", "cursor", "purpose", "partIndex"] as const;
       const required = keys.slice(0, 4);
       if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
         required.some((key) => {
@@ -2222,14 +2407,18 @@ export class WebHost {
           return url.searchParams.getAll(key).length !== 1 || !value ||
             value.length > (key === "sessionPath" ? 4096 : 128) || /[\u0000-\u001f]/u.test(value);
         }) || !/^(0|[1-9]\d{0,9})$/u.test(url.searchParams.get("cursor") ?? "") ||
-        (url.searchParams.has("purpose") && (url.searchParams.getAll("purpose").length !== 1 || url.searchParams.get("purpose") !== "plan")))
+        (url.searchParams.has("purpose") && (url.searchParams.getAll("purpose").length !== 1 || !["plan", "thinking"].includes(url.searchParams.get("purpose")!))) ||
+        (url.searchParams.get("purpose") === "thinking"
+          ? url.searchParams.getAll("partIndex").length !== 1 || !/^(0|[1-9]\d{0,5})$/u.test(url.searchParams.get("partIndex") ?? "")
+          : url.searchParams.has("partIndex")))
         return this.json(response, 400, { code: "INVALID_SESSION_ITEM_REQUEST", error: "an exact Session item and bounded cursor are required" });
       const result = await this.adapter.getSessionItem(
         url.searchParams.get("sessionId")!,
         url.searchParams.get("sessionPath")!,
         url.searchParams.get("entryId")!,
         Number(url.searchParams.get("cursor")),
-        url.searchParams.get("purpose") === "plan" ? "plan" : undefined,
+        url.searchParams.get("purpose") === "thinking" ? "thinking" : url.searchParams.get("purpose") === "plan" ? "plan" : undefined,
+        url.searchParams.has("partIndex") ? Number(url.searchParams.get("partIndex")) : undefined,
       );
       if (result.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is not in the selected workspace" });
       if (result.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "Session item is no longer on this branch" });

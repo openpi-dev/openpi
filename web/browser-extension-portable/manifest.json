@@ -1,0 +1,30 @@
+{
+  "manifest_version": 2,
+  "name": "OpenPI Browser Bridge",
+  "version": "0.4.0",
+  "description": "Read and operate explicitly authorized Safari and Firefox tabs from OpenPI.",
+  "permissions": ["storage", "tabs", "webNavigation", "<all_urls>"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "openpi-browser@openpi.dev",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["connector.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["portable-page.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

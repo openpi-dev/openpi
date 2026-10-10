@@ -479,6 +479,50 @@ it("retains the original opener and reports nested preview navigation", async ()
   expect(document.activeElement).toBe(opener);
 });
 
+it("dismisses a focused tooltip before its preview and ignores Escape from outside Settings input", async () => {
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+    this: Element,
+    selector: string,
+  ) {
+    // jsdom has no native Popover API; expose Astryx's visible fallback.
+    if (selector === ":popover-open")
+      return this instanceof HTMLElement && this.style.display === "block";
+    return matches.call(this, selector);
+  });
+  mockFile();
+  focusFrames();
+  const close = vi.fn();
+  render(
+    createElement(
+      ArtifactProvider,
+      { sessionId: "session", onClose: close },
+      createElement(Content),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Open file" }));
+  await screen.findByText("File text");
+  const copy = screen.getByRole("button", { name: i18n.t("copyFilePath") });
+  fireEvent.keyDown(document.activeElement!, { key: "Tab" });
+  act(() => copy.focus());
+  expect(document.activeElement).toBe(copy);
+  fireEvent.mouseEnter(copy);
+  const tooltip = (await screen.findByText(i18n.t("copyFilePath"))).closest(
+    '[role="tooltip"]',
+  )!;
+  await waitFor(() => expect(tooltip.matches(":popover-open")).toBe(true));
+  expect(fireEvent.keyDown(copy, { key: "Escape" })).toBe(false);
+  expect(screen.getByRole("complementary")).toBeTruthy();
+  expect(tooltip.isConnected && tooltip.matches(":popover-open")).toBe(false);
+  expect(close).not.toHaveBeenCalled();
+  const settings = screen.getByRole("textbox", { name: "Settings input" });
+  act(() => settings.focus());
+  fireEvent.keyDown(settings, { key: "Escape" });
+  expect(document.activeElement).toBe(settings);
+  expect(screen.getByRole("complementary")).toBeTruthy();
+  expect(close).not.toHaveBeenCalled();
+});
+
 it("leaves composition and already-handled Escape to their owner", async () => {
   mockFile();
   const frames = focusFrames();
@@ -493,6 +537,8 @@ it("leaves composition and already-handled Escape to their owner", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Open file" }));
   await screen.findByText("File text");
   const button = screen.getByRole("button", { name: i18n.t("closePreview") });
+  act(() => button.focus());
+  fireEvent.pointerDown(button, { pointerType: "mouse" });
   fireEvent.keyDown(button, { key: "Escape", isComposing: true });
   expect(close).not.toHaveBeenCalled();
   const prevent = (event: KeyboardEvent) => event.preventDefault();

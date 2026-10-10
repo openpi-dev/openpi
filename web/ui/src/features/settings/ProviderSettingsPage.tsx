@@ -1,7 +1,18 @@
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog } from "@astryxdesign/core/Dialog";
-import { Bot, Cpu, Layers3, Plug, SlidersHorizontal, X } from "lucide-react";
+import {
+  Bot,
+  Cpu,
+  Globe2,
+  Layers3,
+  Plug,
+  Search,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
+import { BrowserSettingsPanel } from "./BrowserSettingsPanel.tsx";
+import { WebSearchSettingsPanel } from "./WebSearchSettingsPanel.tsx";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
@@ -24,6 +35,8 @@ import { useSettingsCatalog } from "./useSettingsCatalog.ts";
 type SettingsSection =
   | "general"
   | "models"
+  | "browser"
+  | "web-search"
   | "skills"
   | "subagents"
   | "plugins";
@@ -31,6 +44,8 @@ type SettingsSection =
 const settingsSections = [
   { id: "general", label: "generalSettings", Icon: SlidersHorizontal },
   { id: "models", label: "modelSettings", Icon: Cpu },
+  { id: "browser", label: "browserSettings", Icon: Globe2 },
+  { id: "web-search", label: "webSearchSettings", Icon: Search },
   { id: "skills", label: "skillsSettings", Icon: Layers3 },
   { id: "subagents", label: "subagentsSettings", Icon: Bot },
   { id: "plugins", label: "pluginsSettings", Icon: Plug },
@@ -38,6 +53,7 @@ const settingsSections = [
 
 export function ProviderSettingsPage({
   sessionId,
+  sessionPath,
   cwd,
   entry = "general",
   models,
@@ -54,12 +70,14 @@ export function ProviderSettingsPage({
   onConfigureOpenPi,
   interaction,
   onPreferencesChanged,
+  onSelectModel,
   onOpenRuntimeStatus,
   onClose,
 }: {
   sessionId: string;
+  sessionPath?: string;
   cwd: string;
-  entry?: "general" | "credentials";
+  entry?: "general" | "credentials" | "browser";
   models: WebModelSummary[];
   currentModel?: WebModelSummary;
   thinkingLevel: string;
@@ -72,7 +90,7 @@ export function ProviderSettingsPage({
   onExitPlan?: () => Promise<void>;
   setupOutcome?: WebSnapshot["runtime"]["setup"];
   modelSelectionPending: boolean;
-  onSelectModel: (value: string) => void;
+  onSelectModel: (value: string) => Promise<boolean> | boolean;
   onConfigureOpenPi: (request: string) => Promise<boolean>;
   interaction?: import("react").ReactNode;
   onPreferencesChanged: () => Promise<boolean>;
@@ -84,11 +102,12 @@ export function ProviderSettingsPage({
   const closeButton = useRef<HTMLButtonElement>(null);
   const tabs = useRef<HTMLDivElement>(null);
   const [section, setSection] = useState<SettingsSection>(
-    entry === "credentials" ? "models" : "general",
+    entry === "credentials" ? "models" : entry,
   );
   const [modelsVisited, setModelsVisited] = useState(entry === "credentials");
   const [setupPending, setSetupPending] = useState(false);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
+  const [setupSection, setSetupSection] = useState<SettingsSection>("general");
   const setupRefreshPending = useRef(false);
   const setupObservedBusy = useRef(false);
   const setupRefreshTimer = useRef(0);
@@ -106,9 +125,15 @@ export function ProviderSettingsPage({
   const setupDisabled =
     setupPending || setupBusy || planBlocked || planSelectionPending;
   const currentOutcome =
-    !setupSubmitted || setupOutcome?.requestId !== setupBaseline.current
-      ? setupOutcome
-      : undefined;
+    (setupSubmitted && setupSection !== section) ||
+    (!setupSubmitted &&
+      (section === "skills" ||
+        section === "plugins" ||
+        section === "web-search"))
+      ? undefined
+      : !setupSubmitted || setupOutcome?.requestId !== setupBaseline.current
+        ? setupOutcome
+        : undefined;
   const {
     catalog,
     error: catalogError,
@@ -155,6 +180,7 @@ export function ProviderSettingsPage({
     setPreferencesSaved(false);
     if (setupDisabled) return false;
     setupBaseline.current = setupOutcome?.requestId;
+    setSetupSection(section);
     setSetupPending(true);
     setSetupSubmitted(false);
     setupRefreshPending.current = false;
@@ -188,6 +214,22 @@ export function ProviderSettingsPage({
     }
   };
 
+  const reloadResources = async () => {
+    if (setupDisabled || !catalog?.sessionPath)
+      throw new Error(t("resourceReloadFailed"));
+    setSetupPending(true);
+    try {
+      await new WebClient().reloadSettingsResources(
+        sessionId,
+        catalog.sessionPath,
+      );
+      refresh();
+      void onPreferencesChanged();
+    } finally {
+      setSetupPending(false);
+    }
+  };
+
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
     if (preferencePending || !catalog) return false;
     setPreferencePending(true);
@@ -208,6 +250,7 @@ export function ProviderSettingsPage({
   };
 
   const selectSection = (next: SettingsSection) => {
+    if (saving) return;
     setSection(next);
     if (next === "models") setModelsVisited(true);
     setSetupError(null);
@@ -245,6 +288,7 @@ export function ProviderSettingsPage({
           <select
             className="provider-settings-mobile-picker"
             aria-label={t("settingsNavigation")}
+            disabled={saving}
             value={section}
             onChange={(event) => {
               const next = settingsSections.find(
@@ -270,6 +314,7 @@ export function ProviderSettingsPage({
                 key={id}
                 type="button"
                 role="tab"
+                disabled={saving}
                 id={`settings-tab-${id}`}
                 tabIndex={section === id ? 0 : -1}
                 aria-selected={section === id}
@@ -322,7 +367,7 @@ export function ProviderSettingsPage({
           </button>
         </header>
 
-        {planBlocked && (
+        {planBlocked && section !== "browser" && (
           <div className="settings-plan-notice" role="status">
             <span>{t(setupBusy ? "setupPlanBusy" : "setupPlanBlocked")}</span>
             <Button
@@ -335,6 +380,32 @@ export function ProviderSettingsPage({
           </div>
         )}
         <div className="provider-settings-main">
+          <div
+            id="settings-panel-web-search"
+            aria-labelledby="settings-tab-web-search"
+            role="tabpanel"
+            hidden={section !== "web-search"}
+          >
+            {section === "web-search" && (
+              <WebSearchSettingsPanel
+                catalog={catalog}
+                error={catalogError}
+                pending={setupDisabled}
+                onConfigure={configureOpenPi}
+                onRefresh={refresh}
+              />
+            )}
+          </div>
+          <div
+            id="settings-panel-browser"
+            aria-labelledby="settings-tab-browser"
+            role="tabpanel"
+            hidden={section !== "browser"}
+          >
+            {section === "browser" && (
+              <BrowserSettingsPanel onSaved={onPreferencesChanged} />
+            )}
+          </div>
           <div
             id="settings-panel-general"
             aria-labelledby="settings-tab-general"
@@ -371,11 +442,13 @@ export function ProviderSettingsPage({
               <ProviderModelsSection
                 key={sessionId}
                 sessionId={sessionId}
+                sessionPath={sessionPath}
                 models={models}
                 currentModel={currentModel}
                 busy={setupBusy}
                 focusCredentials={entry === "credentials"}
                 onSaved={onPreferencesChanged}
+                onSelectModel={onSelectModel}
                 onDraftChange={setModelDraftDirty}
                 onSavingChange={setModelSaving}
               />
@@ -389,11 +462,13 @@ export function ProviderSettingsPage({
             hidden={section !== "skills"}
           >
             <SkillsSettingsPanel
+              key={sessionId}
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
-              setupPending={setupPending || setupBusy}
+              setupPending={setupDisabled}
               onConfigure={configureOpenPi}
+              onReload={reloadResources}
             />
           </div>
 
@@ -423,11 +498,13 @@ export function ProviderSettingsPage({
             hidden={section !== "plugins"}
           >
             <PluginsSettingsPanel
+              key={sessionId}
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
-              setupPending={setupPending || setupBusy}
+              setupPending={setupDisabled}
               onConfigure={configureOpenPi}
+              onReload={reloadResources}
             />
           </div>
         </div>
@@ -446,7 +523,7 @@ export function ProviderSettingsPage({
         )}
         {!preferencePending &&
           !preferencesSaved &&
-          (setupSubmitted || currentOutcome) &&
+          ((setupSubmitted && setupSection === section) || currentOutcome) &&
           !setupError && (
             <div
               className={
@@ -457,8 +534,25 @@ export function ProviderSettingsPage({
               role={currentOutcome?.status === "failed" ? "alert" : "status"}
             >
               {currentOutcome
-                ? t(`setupOutcome_${currentOutcome.status}`)
-                : t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
+                ? t(
+                    (section === "skills" ||
+                      section === "plugins" ||
+                      section === "web-search") &&
+                      ["unconfirmed", "saved", "unchanged"].includes(
+                        currentOutcome.status,
+                      )
+                      ? "resourceRequestFinished"
+                      : `setupOutcome_${currentOutcome.status}`,
+                  )
+                : t(
+                    setupBusy
+                      ? "setupRequestRunning"
+                      : section === "skills" ||
+                          section === "plugins" ||
+                          section === "web-search"
+                        ? "resourceRequestSubmitted"
+                        : "setupRequestAccepted",
+                  )}
               {currentOutcome?.error && <p>{currentOutcome.error}</p>}
             </div>
           )}

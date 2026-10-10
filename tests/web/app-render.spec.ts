@@ -31,6 +31,7 @@ import {
   sessionReadingScope,
 } from "../../web/ui/src/features/transcript/session-reading-state.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
+import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
@@ -69,6 +70,72 @@ it("presents fork success as status and a subsequent ordinary error as an alert"
       within(error).getByRole("button", { name: i18n.t("close") }),
     );
     expect(screen.queryByRole("alert")).toBeNull();
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    webStore.setState(initial, true);
+  }
+});
+
+it("keeps one usage strip with the selected Session when its sibling overview also changes identity", () => {
+  const initial = webStore.getState();
+  const start = vi.spyOn(initial.actions, "start").mockImplementation(() => {});
+  const stop = vi.spyOn(initial.actions, "stop").mockImplementation(() => {});
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.usage = {
+    input: 6_835,
+    output: 6,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 6_841,
+    context: { tokens: 6_841, contextWindow: 128_000, percent: 5.3 },
+  };
+  webStore.setState({
+    snapshot,
+    selectedPath: snapshot.selectedSession!.path,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    connection: "connected",
+    workspaceDraft: false,
+    liveRunning: false,
+    liveMessages: [],
+  });
+  const view = render(createElement(Providers, null, createElement(App)));
+  try {
+    for (const [index, [id, path]] of [
+      ["other", "/tmp/other"],
+      ["other", "/tmp/other-copy"],
+      ["session", "/tmp/session"],
+    ].entries()) {
+      const output = 100 + index;
+      act(() =>
+        webStore.setState({
+          selectedPath: path,
+          snapshot: {
+            ...snapshot,
+            currentSessionId: id,
+            currentSessionPath: path,
+            selectedSession: { ...snapshot.selectedSession!, id, path },
+            usage: { ...snapshot.usage!, output },
+          },
+        }),
+      );
+      expect(view.container.querySelectorAll(".session-usage")).toHaveLength(1);
+      expect(
+        view.container.querySelector(".session-usage-trigger")?.textContent,
+      ).toContain(String(output));
+      expect(
+        screen.getAllByRole("button", {
+          name: i18n.t("sessionOverview"),
+        }),
+      ).toHaveLength(1);
+    }
+    act(() => webStore.setState({ sessionSwitching: true }));
+    expect(view.container.querySelector(".session-usage")).toBeNull();
+    act(() => webStore.setState({ sessionSwitching: false, snapshot }));
+    expect(view.container.querySelectorAll(".session-usage")).toHaveLength(1);
   } finally {
     view.unmount();
     start.mockRestore();
@@ -232,6 +299,14 @@ it("prepares an editable implementation prompt only after confirming draft repla
 it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
   const initial = webStore.getState();
   const snapshot = activeSnapshot();
+  snapshot.usage = {
+    input: 1_200,
+    output: 6,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 1_206,
+    context: { tokens: 1_206, contextWindow: 128_000, percent: 0.9421875 },
+  };
   snapshot.workspaces.push({ path: "/tmp/repo-b", name: "B", current: false });
   snapshot.models = [
     {
@@ -260,6 +335,16 @@ it("keeps a workspace draft separate from the old Session UI and retains text af
       view.container.querySelector(".conversation-view-switch"),
     ).toBeNull();
     expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: i18n.t("usageOpenDetails", {
+          input: "1k",
+          output: "6",
+          percent: "1%",
+          capacity: "128k",
+        }),
+      }),
+    ).toBeNull();
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Draft model (test/model)",
@@ -806,14 +891,32 @@ describe("OpenPI React transcript", () => {
       }),
     );
 
-    const process =
-      container.querySelector<HTMLDetailsElement>(".process-sequence");
+    const process = container.querySelector<HTMLDetailsElement>(
+      ".process-sequence:not(.single-process)",
+    );
     expect(process).toBeTruthy();
     expect(process?.open).toBe(false);
-    expect(screen.getByText(/4 (tool calls|次工具调用)/u)).toBeTruthy();
-    expect(screen.getByText(/1 (agent activity|项 Agent 活动)/u)).toBeTruthy();
     expect(
-      container.querySelector(".process-sequence-preview")?.textContent,
+      process?.querySelector("summary")?.getAttribute("aria-label"),
+    ).toContain(i18n.t("processToolCount", { count: 4 }));
+    expect(
+      process?.querySelector("summary")?.getAttribute("aria-label"),
+    ).toContain(i18n.t("processActivityCount", { count: 1 }));
+    const counts = process?.querySelector(".process-sequence-counts");
+    expect(counts?.textContent).toContain(
+      i18n.t("processThinkingCount", { count: 1 }),
+    );
+    expect(counts?.textContent).toContain(
+      i18n.t("processToolCount", { count: 4 }),
+    );
+    expect(counts?.textContent).toContain(
+      i18n.t("processActivityCount", { count: 1 }),
+    );
+    expect(
+      process?.querySelector(".process-step:first-child .thinking-line"),
+    ).toBeTruthy();
+    expect(
+      container.querySelector(".thinking-line summary")?.textContent,
     ).not.toMatch(/[*_`]/u);
     expect(container.querySelectorAll(".tool-evidence-card")).toHaveLength(4);
     expect(
@@ -824,13 +927,151 @@ describe("OpenPI React transcript", () => {
     );
     expect(screen.getByText("Done.")).toBeTruthy();
     expect(
-      container.querySelectorAll("[aria-label=completed]").length,
+      container.querySelectorAll(".status-mark.done").length,
     ).toBeGreaterThan(0);
 
     fireEvent.click(process!.querySelector("summary")!);
     expect(process?.open).toBe(true);
     expect(process?.querySelectorAll(".process-step")).toHaveLength(6);
   });
+});
+
+it("folds saved native searches with ordinary tool groups while retaining provider order and the final answer", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  const message = {
+    role: "assistant",
+    stopReason: "stop" as const,
+    content:
+      "I will check.\nThe registry agrees.\nSlovenia. [IANA](https://www.iana.org/domains/root/db/si.html)",
+    parts: [
+      { type: "text" as const, text: "I will check." },
+      { type: "text" as const, text: "The registry agrees." },
+      {
+        type: "text" as const,
+        text: "Slovenia. [IANA](https://www.iana.org/domains/root/db/si.html)",
+      },
+    ],
+    webSearch: [
+      {
+        id: "ws",
+        query: ".si IANA",
+        status: "completed" as const,
+        beforePartIndex: 1,
+      },
+      {
+        id: "ws2",
+        query: ".si registry",
+        status: "completed" as const,
+        beforePartIndex: 1,
+      },
+      {
+        id: "ws3",
+        query: "ARNES official",
+        status: "completed" as const,
+        beforePartIndex: 2,
+      },
+    ],
+  };
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: "2026-10-10T00:00:00Z",
+      message: { role: "user", content: "Check this" },
+    },
+    {
+      id: "native-search",
+      type: "message",
+      timestamp: "2026-10-10T00:00:39Z",
+      message,
+    },
+    {
+      id: "timing",
+      type: "custom",
+      timestamp: "2026-10-10T00:00:39Z",
+      turnTiming: {
+        version: 1,
+        sessionId: "session",
+        commandId: "run",
+        epoch: 1,
+        promptEntryId: "prompt",
+        resultEntryId: "native-search",
+        startedAt: 0,
+        finishedAt: 39000,
+        elapsedMs: 39000,
+        outcome: "completed",
+      },
+    },
+  ];
+  const { container } = renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+  const intro = screen.getByText("I will check.");
+  const interim = screen.getByText("The registry agrees.");
+  const firstSearch = container.querySelector('[data-tool="web_search"]')!;
+  const elapsed = container.querySelector<HTMLButtonElement>(
+    ".turn-duration-toggle",
+  )!;
+  expect(elapsed.getAttribute("aria-expanded")).toBe("false");
+  expect(intro.closest<HTMLElement>("[hidden]")?.hidden).toBe(true);
+  expect(firstSearch.closest<HTMLElement>("[hidden]")?.hidden).toBe(true);
+  expect(
+    screen.getByRole("link", { name: "IANA" }).closest("[hidden]"),
+  ).toBeNull();
+  fireEvent.click(elapsed);
+  expect(elapsed.getAttribute("aria-expanded")).toBe("true");
+  expect(intro.closest("[hidden]")).toBeNull();
+  const group = firstSearch.closest<HTMLDetailsElement>(".process-sequence")!;
+  expect(group.querySelector("summary")?.getAttribute("aria-label")).toContain(
+    i18n.t("processToolCount", { count: 2 }),
+  );
+  expect(group.dataset.status).toBe("done");
+  expect(group.open).toBe(false);
+  fireEvent.click(group.querySelector("summary")!);
+  expect(group.open).toBe(true);
+  expect(firstSearch.querySelector("summary")?.textContent).toContain(
+    i18n.t("toolActionDone_web"),
+  );
+  expect(
+    intro.compareDocumentPosition(firstSearch) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    firstSearch.compareDocumentPosition(interim) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  const lastSearch = container.querySelectorAll('[data-tool="web_search"]')[2]!;
+  expect(
+    interim.compareDocumentPosition(lastSearch) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    lastSearch.compareDocumentPosition(
+      screen.getByRole("link", { name: "IANA" }),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  fireEvent.click(firstSearch.querySelector("summary")!);
+  expect((firstSearch as HTMLDetailsElement).open).toBe(true);
+  expect(firstSearch.querySelector(".details-body")?.textContent).toBe(
+    ".si IANA",
+  );
+  fireEvent.click(elapsed);
+  expect(intro.closest<HTMLElement>("[hidden]")?.hidden).toBe(true);
+  expect(screen.getByRole("link", { name: "IANA" }).getAttribute("href")).toBe(
+    "https://www.iana.org/domains/root/db/si.html",
+  );
+  expect(screen.queryByText("function_call_output")).toBeNull();
 });
 
 it("marks only live execution evidence for shimmer styling", () => {
@@ -887,13 +1128,700 @@ it("marks only live execution evidence for shimmer styling", () => {
     }),
   );
 
-  const process = view.container.querySelector<HTMLDetailsElement>(
-    ".process-sequence.running",
+  const sequence = view.container.querySelector<HTMLDetailsElement>(
+    ".process-sequence:not(.single-process)",
+  );
+  expect(sequence?.open).toBe(true);
+  expect(sequence?.dataset.status).toBe("running");
+  const process = view.container.querySelector<HTMLElement>(
+    ".process-step.running",
   );
   expect(process?.dataset.status).toBe("running");
-  expect(process?.open).toBe(true);
-  expect(process?.querySelectorAll(".process-step.running")).toHaveLength(2);
+  expect(
+    process?.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
+  ).toBe("running");
+  expect(view.container.querySelectorAll(".process-step.running")).toHaveLength(
+    1,
+  );
+  expect(view.container.querySelector(".thinking-line.running")).toBeNull();
+  expect(view.container.querySelector(".thinking-line.done")).toBeTruthy();
+  expect(
+    Array.from(sequence!.querySelectorAll(".process-step"), (step) =>
+      step.getAttribute("data-status"),
+    ),
+  ).toEqual(["done", "running"]);
 });
+
+it("freezes unobserved activity without changing terminal receipts and resumes on observation", () => {
+  const snapshot = activeSnapshot();
+  const finished = [
+    {
+      id: "read-returned",
+      name: "read",
+      content: "Exact source",
+      isError: false,
+    },
+    {
+      id: "bash-failed",
+      name: "bash",
+      content: "Command exited with code 2",
+      isError: true,
+    },
+    {
+      id: "bash-stopped",
+      name: "bash",
+      content: "Command aborted",
+      isError: true,
+    },
+    {
+      id: "bash-timeout",
+      name: "bash",
+      content: "Command timed out after 10 seconds",
+      isError: true,
+    },
+    {
+      id: "background-status",
+      name: "bg_status",
+      content: "Native background process is still running",
+      isError: false,
+      details: { status: "running" },
+    },
+  ];
+  const pending = [
+    { id: "read-live", name: "read" },
+    { id: "generic-live", name: "custom_tool" },
+    { id: "workflow-live", name: "workflow_status" },
+  ].map((tool) => ({
+    type: "toolCall" as const,
+    ...tool,
+    arguments: '{"path":"src/index.ts","command":"build"}',
+  }));
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "user", content: "Inspect it" },
+    },
+    {
+      id: "assistant",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [
+          ...finished.map((tool) => ({
+            type: "toolCall" as const,
+            id: tool.id,
+            name: tool.name,
+            arguments: '{"path":"src/index.ts","command":"build"}',
+          })),
+          ...pending,
+        ],
+      },
+    },
+    ...finished.map((tool) => ({
+      id: `${tool.id}-receipt`,
+      type: "message" as const,
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "toolResult",
+        toolCallId: tool.id,
+        toolName: tool.name,
+        content: tool.content,
+        isError: tool.isError,
+        details: tool.details,
+      },
+    })),
+    {
+      id: "current-thinking",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [{ type: "thinking", text: "Inspecting the current activity" }],
+      },
+    },
+  ];
+  snapshot.runtime.liveTools = pending.map((call) => ({
+    call,
+    state: "running",
+  }));
+  const original = JSON.stringify(snapshot);
+  const node = (observed: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: observed,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node(true));
+  const statuses = () =>
+    Array.from(view.container.querySelectorAll(".process-step"), (step) =>
+      step.getAttribute("data-status"),
+    );
+  const toolStates = () =>
+    Array.from(view.container.querySelectorAll(".tool-evidence-card"), (card) =>
+      card.getAttribute("data-state"),
+    );
+  expect(statuses()).toEqual([
+    "done",
+    "error",
+    "error",
+    "error",
+    "running",
+    "running",
+    "running",
+    "running",
+    "running",
+  ]);
+  expect(toolStates()).toEqual([
+    "returned",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "running",
+    "running",
+  ]);
+
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(statuses()).toEqual([
+    "done",
+    "error",
+    "error",
+    "error",
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+  ]);
+  expect(toolStates()).toEqual([
+    "returned",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "unknown",
+    "unknown",
+  ]);
+  expect(view.container.querySelector(".thinking-line.unknown")).toBeTruthy();
+  expect(view.container.querySelector(".process-step.running")).toBeNull();
+  expect(view.container.querySelector(".status-mark.running")).toBeNull();
+  for (const receipt of finished)
+    expect(view.container.textContent).toContain(receipt.content);
+  expect(JSON.stringify(snapshot)).toBe(original);
+
+  view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
+  expect(statuses().slice(4)).toEqual([
+    "running",
+    "running",
+    "running",
+    "running",
+    "running",
+  ]);
+  expect(view.container.querySelector(".thinking-line.running")).toBeTruthy();
+  expect(toolStates()).toEqual([
+    "returned",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "running",
+    "running",
+  ]);
+  expect(JSON.stringify(snapshot)).toBe(original);
+});
+
+it("freezes untimed turn and navigation presentation when native activity observation is lost", () => {
+  const snapshot = activeSnapshot();
+  const call = {
+    type: "toolCall" as const,
+    id: "read-live",
+    name: "read",
+    arguments: '{"path":"src/index.ts"}',
+  };
+  snapshot.runtime.liveTools = [{ call, state: "running" }];
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "user", content: "Inspect it" },
+    },
+    {
+      id: "current-assistant",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [{ type: "thinking", text: "Inspecting the file" }, call],
+      },
+    },
+  ];
+  const original = JSON.stringify(snapshot);
+  const node = (observed?: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node());
+  expect(snapshot.runtime.activeTurn).toBeUndefined();
+  expect(view.container.querySelector(".turn-state.running")).toBeTruthy();
+  expect(
+    view.container.querySelector(".conversation-execution-status")?.textContent,
+  ).toContain(i18n.t("modelRunning"));
+  fireEvent.wheel(view.container.querySelector(".conversation")!, {
+    deltaY: -20,
+  });
+  expect(view.container.querySelector(".latest-activity-dots")).toBeTruthy();
+  const sequence = view.container.querySelector<HTMLDetailsElement>(
+    ".process-sequence:not(.single-process)",
+  )!;
+  expect(sequence.open).toBe(true);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(
+    view.container.querySelector(".turn-state.unknown")?.textContent,
+  ).toContain(i18n.t("toolState_unknown"));
+  expect(view.container.querySelector(".turn-state.running")).toBeNull();
+  expect(
+    view.container.querySelector(".conversation-execution-status"),
+  ).toBeNull();
+  expect(view.container.querySelector(".latest-activity-dots")).toBeNull();
+  expect(
+    view.container.querySelector(".jump-to-latest .lucide-arrow-down"),
+  ).toBeTruthy();
+  expect(
+    view.container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBe(sequence);
+  expect(sequence.open).toBe(true);
+  expect(JSON.stringify(snapshot)).toBe(original);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
+  expect(view.container.querySelector(".turn-state.running")).toBeTruthy();
+  expect(
+    view.container.querySelector(".conversation-execution-status")?.textContent,
+  ).toContain(i18n.t("modelRunning"));
+  expect(view.container.querySelector(".latest-activity-dots")).toBeTruthy();
+  expect(JSON.stringify(snapshot)).toBe(original);
+});
+
+it("keeps background evidence observed by default and freezes only its nonterminal presentation", () => {
+  const call = {
+    type: "toolCall" as const,
+    id: "background-status",
+    name: "bg_status",
+    arguments: '{"id":"background-process"}',
+  };
+  const result = {
+    role: "toolResult",
+    toolName: call.name,
+    toolCallId: call.id,
+    content: "Exact native background receipt",
+    isError: false,
+    details: { status: "running" },
+  };
+  const original = JSON.stringify(result);
+  const view = renderWithI18n(createElement(ToolEvidence, { call, result }));
+  const state = () =>
+    view.container
+      .querySelector(".tool-evidence-card")
+      ?.getAttribute("data-state");
+  expect(state()).toBe("running");
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(ToolEvidence, { call, result, observed: false }),
+    ),
+  );
+  expect(state()).toBe("unknown");
+  expect(JSON.stringify(result)).toBe(original);
+  for (const [status, expected] of [
+    ["done", "returned"],
+    ["failed", "failed"],
+    ["killed", "cancelled"],
+    ["timed_out", "timed_out"],
+  ]) {
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(ToolEvidence, {
+          call,
+          result: { ...result, details: { status, exitCode: 2 } },
+          observed: false,
+        }),
+      ),
+    );
+    expect(state()).toBe(expected);
+  }
+  expect(view.container.textContent).toContain(result.content);
+  expect(JSON.stringify(result)).toBe(original);
+});
+
+it("freezes orphan native running receipts after observation loss without changing terminal evidence", () => {
+  const snapshot = activeSnapshot();
+  const states = [
+    "running",
+    "done",
+    "failed",
+    "killed",
+    "timed_out",
+    "uncertain",
+  ];
+  snapshot.selectedSession!.entries = states.map((status) => ({
+    id: `orphan-${status}`,
+    type: "message",
+    timestamp: snapshot.generatedAt,
+    message: {
+      role: "toolResult",
+      toolCallId: `trimmed-call-${status}`,
+      toolName: "bg_status",
+      content: `Exact orphan native receipt: ${status}`,
+      isError: false,
+      details: { status },
+    },
+  }));
+  const original = JSON.stringify(snapshot);
+  const node = (observed?: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node());
+  const statuses = () =>
+    Array.from(view.container.querySelectorAll(".process-step"), (step) =>
+      step.getAttribute("data-status"),
+    );
+  expect(statuses()).toEqual([
+    "running",
+    "done",
+    "error",
+    "error",
+    "error",
+    "warn",
+  ]);
+  expect(view.container.querySelector(".tool-evidence-card")).toBeNull();
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(statuses()).toEqual([
+    "unknown",
+    "done",
+    "error",
+    "error",
+    "error",
+    "warn",
+  ]);
+  expect(view.container.querySelector(".process-step.running")).toBeNull();
+  expect(view.container.querySelector(".status-mark.running")).toBeNull();
+  for (const status of states)
+    expect(view.container.textContent).toContain(
+      `Exact orphan native receipt: ${status}`,
+    );
+  expect(JSON.stringify(snapshot)).toBe(original);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
+  expect(statuses()).toEqual([
+    "running",
+    "done",
+    "error",
+    "error",
+    "error",
+    "warn",
+  ]);
+  expect(JSON.stringify(snapshot)).toBe(original);
+});
+
+it.each([
+  { status: "running", outcome: undefined, expected: "unknown" },
+  { status: "done", outcome: "completed", expected: "done" },
+  { status: "error", outcome: "failed", expected: "error" },
+  { status: "error", outcome: "interrupted", expected: "interrupted" },
+] as const)(
+  "preserves native child $status/$outcome evidence when observation is lost",
+  ({ status, outcome, expected }) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.capabilities = {
+      ...snapshot.runtime.capabilities,
+      subagents: {
+        items: [
+          { id: "child", title: "Inspect", status, outcome, createdAt: 1 },
+        ],
+        omitted: 0,
+        truncated: false,
+      },
+    };
+    snapshot.selectedSession!.entries = [
+      {
+        id: "spawn",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "spawn",
+              name: "subagent_spawn",
+              arguments: '{"name":"Inspect","prompt":"Inspect"}',
+            },
+          ],
+        },
+      },
+      {
+        id: "spawn-receipt",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "toolResult",
+          toolCallId: "spawn",
+          toolName: "subagent_spawn",
+          content: "Exact native spawn receipt",
+          isError: false,
+          details: { id: "child" },
+        },
+      },
+    ];
+    const original = JSON.stringify(snapshot);
+    const node = (observed?: boolean) =>
+      createElement(Transcript, {
+        snapshot,
+        activityObserved: observed,
+        liveMessages: [],
+        liveRunning: true,
+        livePhase: "running",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      });
+    const view = renderWithI18n(node());
+    expect(
+      view.container.querySelector(
+        `.subagent-state.${outcome === "interrupted" ? "interrupted" : status}`,
+      ),
+    ).toBeTruthy();
+    view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+    expect(
+      view.container.querySelector(`.subagent-state.${expected}`),
+    ).toBeTruthy();
+    expect(view.container.querySelector(".subagent-state.running")).toBeNull();
+    expect(view.container.textContent).toContain("Exact native spawn receipt");
+    expect(JSON.stringify(snapshot)).toBe(original);
+  },
+);
+
+it("shows an unobserved pending child as unknown while preserving a native failed spawn receipt", () => {
+  const snapshot = activeSnapshot();
+  snapshot.selectedSession!.entries = [
+    {
+      id: "spawns",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: ["pending", "failed"].map((id) => ({
+          type: "toolCall" as const,
+          id,
+          name: "subagent_spawn",
+          arguments: JSON.stringify({ name: id, prompt: "Inspect" }),
+        })),
+      },
+    },
+    {
+      id: "failed-spawn",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "toolResult",
+        toolCallId: "failed",
+        toolName: "subagent_spawn",
+        content: "Exact native failed spawn receipt",
+        isError: true,
+      },
+    },
+  ];
+  const original = JSON.stringify(snapshot);
+  const node = (observed?: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node());
+  const labels = () =>
+    Array.from(
+      view.container.querySelectorAll(".subagent-state"),
+      (item) => item.textContent,
+    );
+  expect(labels()).toEqual([
+    i18n.t("subagentStarting"),
+    i18n.t("subagentSpawnFailed"),
+  ]);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(labels()).toEqual([
+    i18n.t("toolState_unknown"),
+    i18n.t("subagentSpawnFailed"),
+  ]);
+  expect(view.container.textContent).toContain(
+    "Exact native failed spawn receipt",
+  );
+  expect(JSON.stringify(snapshot)).toBe(original);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
+  expect(labels()).toEqual([
+    i18n.t("subagentStarting"),
+    i18n.t("subagentSpawnFailed"),
+  ]);
+});
+
+it("freezes native running workflow cards while preserving their terminal and uncertain receipts", () => {
+  const snapshot = activeSnapshot();
+  const states = ["running", "completed", "failed", "aborted", "uncertain"];
+  snapshot.selectedSession!.entries = [
+    {
+      id: "workflow-calls",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: states.map((id) => ({
+          type: "toolCall" as const,
+          id,
+          name: "workflow_status",
+          arguments: JSON.stringify({ runId: id }),
+        })),
+      },
+    },
+    ...states.map((status) => ({
+      id: `workflow-${status}`,
+      type: "message" as const,
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "toolResult",
+        toolCallId: status,
+        toolName: "workflow_status",
+        content: `Exact native workflow receipt: ${status}`,
+        isError: false,
+        details: { status },
+      },
+    })),
+  ];
+  const original = JSON.stringify(snapshot);
+  const node = (observed?: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node());
+  const statuses = () =>
+    Array.from(
+      view.container.querySelectorAll(".activity-card.workflow"),
+      (card) =>
+        ["running", "done", "error", "warn"].find((status) =>
+          card.querySelector(".status-mark")?.classList.contains(status),
+        ) ?? "unknown",
+    );
+  expect(statuses()).toEqual(["running", "done", "error", "error", "warn"]);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(statuses()).toEqual(["unknown", "done", "error", "error", "warn"]);
+  for (const status of states)
+    expect(view.container.textContent).toContain(
+      `Exact native workflow receipt: ${status}`,
+    );
+  expect(JSON.stringify(snapshot)).toBe(original);
+});
+
+it.each(["stop", "length"] as const)(
+  "keeps thinking settled after native %s even while the runtime remains busy",
+  (stopReason) => {
+    const snapshot = activeSnapshot();
+    snapshot.selectedSession!.entries = [
+      {
+        id: "prompt",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: { role: "user", content: "Inspect it" },
+      },
+      {
+        id: "finished-answer",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "Exact final answer",
+          stopReason,
+          parts: [{ type: "thinking", text: "Finished inspecting" }],
+        },
+      },
+    ];
+    const original = JSON.stringify(snapshot);
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [],
+        liveRunning: true,
+        livePhase: "running",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    );
+    expect(view.container.querySelector(".thinking-line.running")).toBeNull();
+    expect(view.container.querySelector(".thinking-line.done")).toBeTruthy();
+    expect(
+      view.container
+        .querySelector(".thinking-line")
+        ?.closest(".process-step")
+        ?.getAttribute("data-status"),
+    ).toBe("done");
+    expect(
+      screen.getByText("Exact final answer").closest("[hidden]"),
+    ).toBeNull();
+    expect(JSON.stringify(snapshot)).toBe(original);
+  },
+);
 
 it("folds legacy setup instructions while keeping results and subsequent task messages visible", () => {
   const snapshot = activeSnapshot();
@@ -1718,6 +2646,7 @@ it("keeps background Session files, trajectory and activity scoped to the select
     snapshot,
     selectedPath: "/tmp/b",
     selectedWorkspace: "/tmp",
+    connection: "connected",
     workspaceDraft: false,
     sessionSwitching: false,
     liveRunning: true,
@@ -2342,8 +3271,10 @@ it("restores the same native entry offset after leaving a Session, without shari
     .mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains("conversation"))
         return new DOMRect(0, 10, 300, 100);
-      if (this.dataset.historyEntry === "e2")
-        return new DOMRect(0, returned ? 200 : 5, 300, 50);
+      if (this.dataset.historyEntry === "e2") {
+        const scrollTop = this.closest(".conversation")?.scrollTop ?? 0;
+        return new DOMRect(0, (returned ? 200 : 155) - scrollTop, 300, 50);
+      }
       return new DOMRect();
     });
   const scrollHeight = vi
@@ -2792,9 +3723,14 @@ it("opens recorded thinking by default only when the canonical preference is ena
   expect(
     view.container.querySelector<HTMLDetailsElement>(".thinking-line")?.open,
   ).toBe(true);
+  expect(
+    view.container.querySelector<HTMLDetailsElement>(
+      ".process-sequence.single-process",
+    )?.open,
+  ).toBe(true);
 });
 
-it("applies the thinking preference to grouped completed process evidence", () => {
+it("keeps completed groups collapsed independently of the thinking preference", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.status = "idle";
   snapshot.preferences.expandThinking = true;
@@ -2820,6 +3756,12 @@ it("applies the thinking preference to grouped completed process evidence", () =
             name: "read",
             arguments: '{"path":"src/index.ts"}',
           },
+          {
+            type: "toolCall",
+            id: "read-2",
+            name: "read",
+            arguments: '{"path":"package.json"}',
+          },
         ],
       },
     },
@@ -2832,6 +3774,18 @@ it("applies the thinking preference to grouped completed process evidence", () =
         toolName: "read",
         toolCallId: "read-1",
         content: "source",
+        isError: false,
+      },
+    },
+    {
+      id: "result-2",
+      type: "message",
+      timestamp: "2026-09-19T00:00:03Z",
+      message: {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-2",
+        content: "package configuration",
         isError: false,
       },
     },
@@ -2852,7 +3806,12 @@ it("applies the thinking preference to grouped completed process evidence", () =
   );
 
   expect(
-    view.container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
+    view.container.querySelector<HTMLDetailsElement>(
+      ".process-sequence:not(.single-process)",
+    )?.open,
+  ).toBe(false);
+  expect(
+    view.container.querySelector<HTMLDetailsElement>(".thinking-line")?.open,
   ).toBe(true);
 });
 
@@ -3180,9 +4139,10 @@ it("does not repeat a provider identity used as the fallback model label", () =>
     }),
   );
 
-  expect(
-    screen.getByRole("button", { name: "provider-alpha/model-a" }).textContent,
-  ).toBe("model-a");
+  const trigger = screen.getByRole("button", {
+    name: "provider-alpha/model-a",
+  });
+  expect(within(trigger).getByText("model-a", { exact: true })).toBeTruthy();
   expect(
     screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
   ).toBeNull();
@@ -3551,7 +4511,7 @@ it("debounces bounded model search when the snapshot omitted models", async () =
   };
   const baseStore = createWebStore();
   const searchModels = vi.fn(async (_query: string) => {});
-  const selectModel = vi.fn(async (_value: string) => {});
+  const selectModel = vi.fn(async (_value: string) => true);
   const actions = {
     ...baseStore.getState().actions,
     searchModels,

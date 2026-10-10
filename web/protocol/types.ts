@@ -5,6 +5,7 @@ import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK, WEB_COMMAND_HANDLED } from "..
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
+import { readNativeSearchEvidence, type NativeSearchActivity } from "../../extensions/web-search/native.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
@@ -151,6 +152,8 @@ export interface WebSettingsSkillSummary {
   scope: "user" | "project" | "temporary";
   origin: "package" | "top-level";
   disableModelInvocation: boolean;
+  /** False when a bounded projection cannot retain an exact operation target. */
+  canManage?: boolean;
 }
 
 export interface WebSettingsExtensionSummary {
@@ -166,6 +169,16 @@ export interface WebSettingsPluginSummary {
   scope: "user" | "project" | "temporary";
   origin: "package" | "top-level";
   baseDir?: string;
+  /** Native configuration on disk, distinct from this Session's loaded resources. */
+  configured?: boolean;
+  /** False when a bounded projection cannot retain an exact operation target. */
+  canManage?: boolean;
+  enabled?: boolean;
+  installed?: boolean;
+  name?: string;
+  installedVersion?: string;
+  configuredVersion?: string;
+  diagnostics?: string[];
   extensions: WebSettingsExtensionSummary[];
   skills: string[];
   prompts: string[];
@@ -182,6 +195,7 @@ export interface WebSettingsResourceCatalog {
     themes: number;
   };
   diagnostics: {
+    settingsErrors?: number;
     extensionErrors: number;
     skillErrors: number;
   };
@@ -194,6 +208,7 @@ export interface WebSettingsResourceCatalog {
 }
 
 export interface WebOpenPiSetupProjection {
+  webSearch?: { enabled: boolean };
   capabilities: {
     discovery: "explicit" | "adaptive";
   };
@@ -236,7 +251,9 @@ export interface WebOpenPiSetupProjection {
 }
 
 export interface WebSettingsCatalog {
+  webSearch?: { available: boolean; reason?: string; model?: string; provider?: string };
   sessionId: string;
+  sessionPath?: string;
   setup: WebOpenPiSetupProjection;
   resources: WebSettingsResourceCatalog;
 }
@@ -345,6 +362,7 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  webSearch?: (NativeSearchActivity & { beforePartIndex?: number })[];
   timestamp?: number;
   commandId?: string;
   terminalReceipt?: ReturnType<typeof bashReceipt>;
@@ -378,7 +396,7 @@ export type WebMessagePart =
       previewUrl?: string;
       sourcePartIndex?: number;
     }
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; text: string; sourcePartIndex?: number; textTruncated?: true }
   | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
 
 export interface WebSnapshotTruncation {
@@ -750,7 +768,8 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       typeof typed.thinking === "string"
     ) {
       const text = boundedTextProjection(typed.thinking, WEB_MAX_TEXT);
-      projected = { type: "thinking", text: text.value };
+      projected = { type: "thinking", text: text.value, sourcePartIndex: index,
+        ...(text.truncated ? { textTruncated: true as const } : {}) };
       textTruncated ||= text.truncated;
     } else if (typed.type === "toolCall") {
       const argumentsBudget: StructuredBudget = {
@@ -821,12 +840,35 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
   };
 }
 
+function projectNativeSearch(message: unknown, partCount: number) {
+  const evidence = readNativeSearchEvidence(message);
+  if (!evidence?.activities.length) return undefined;
+  // Pi 0.99.1 emits one normalized content part for each of these provider
+  // blocks. Hosted calls/results are omitted by Pi, so retain their positions
+  // separately without inventing executable function calls.
+  const normalizedTypes = evidence.adapter === "responses"
+    ? ["message", "reasoning", "function_call", "custom_tool_call"]
+    : ["text", "thinking", "redacted_thinking", "tool_use"];
+  const positions = new Map<string, number>();
+  let beforePartIndex = 0;
+  for (const item of evidence.output) {
+    if (normalizedTypes.includes(String(item.type)))
+      beforePartIndex = Math.min(partCount, beforePartIndex + 1);
+    else if (typeof item.id === "string") positions.set(item.id, beforePartIndex);
+  }
+  return evidence.activities.slice(0, 32).map((item) => ({
+    id: item.id.slice(0, 128), status: item.status, query: item.query.slice(0, 500),
+    beforePartIndex: positions.get(item.id) ?? 0,
+  }));
+}
+
 export function projectMessage(message: unknown, resolvePath?: (path: string) => string | undefined): WebLiveMessage {
   const value =
     message && typeof message === "object"
       ? (message as Record<string, unknown>)
       : {};
   const content = projectContent(value, resolvePath);
+  const webSearch = projectNativeSearch(value, content.parts.length);
   const details = detailsProjection(value.details);
   const role =
     typeof value.role === "string"
@@ -862,6 +904,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
+    ...(webSearch ? { webSearch } : {}),
     ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
     ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,

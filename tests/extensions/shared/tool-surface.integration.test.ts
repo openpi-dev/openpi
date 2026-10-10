@@ -74,6 +74,7 @@ const BACKGROUND_EXTENSION = extensionPath(
 const PLAN_EXTENSION = extensionPath("../../../extensions/plan-mode/index.ts");
 const OPENPI_EXTENSION_PATHS = [
   extensionPath("../../../extensions/ask-user/index.ts"),
+  extensionPath("../../../extensions/browser/index.ts"),
   BACKGROUND_EXTENSION,
   CAPABILITIES_EXTENSION,
   "../../../extensions/context-pivot/index.ts",

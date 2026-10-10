@@ -78,6 +78,7 @@ export function SubagentDetailView({
   readOnlyNote = true,
   active = true,
   refreshRevision = 0,
+  onDetail,
 }: {
   sessionId: string;
   id: string;
@@ -89,6 +90,7 @@ export function SubagentDetailView({
   readOnlyNote?: boolean;
   active?: boolean;
   refreshRevision?: number;
+  onDetail?: (detail: WebSubagentDetail) => void;
 }) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<WebSubagentDetail | null>(null);
@@ -98,6 +100,8 @@ export function SubagentDetailView({
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const detailListener = useRef(onDetail);
+  detailListener.current = onDetail;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revisions explicitly request a fresh detail projection.
   useEffect(() => {
@@ -137,6 +141,7 @@ export function SubagentDetailView({
         }
         running = response.detail.status === "running";
         setDetail(response.detail);
+        detailListener.current?.(response.detail);
         setError(null);
         setUpdatedAt(new Date().toLocaleTimeString());
       } catch (caught) {

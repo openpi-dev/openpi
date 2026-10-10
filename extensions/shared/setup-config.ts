@@ -15,6 +15,16 @@ import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+  isWebSearchModelSupport,
+  type WebSearchConfig,
+} from "../web-search/support.ts";
+import {
+  EXTERNAL_BROWSERS,
+  type BrowserConfig,
+  isBrowserId,
+  isBrowserList,
+} from "./browser-config.ts";
+import {
   SUBAGENT_ROLE_NAMES,
   type SubagentRoleModel,
   type SubagentRoleModels,
@@ -180,6 +190,8 @@ export interface MyPiSetupConfig {
   readonly childExecutions: {
     readonly maxActive?: number;
   };
+  readonly browser: BrowserConfig;
+  readonly webSearch: WebSearchConfig;
   readonly ui: {
     readonly webTheme: WebTheme;
     readonly webChatWidth: number;
@@ -213,11 +225,18 @@ export interface MyPiSetupConfig {
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   capabilities: { discovery: "explicit" },
   suggestions: { enabled: false },
+  webSearch: { enabled: false, modelSupport: [] },
   workflows: {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
   },
   childExecutions: {},
+  browser: {
+    control: false,
+    embedded: true,
+    defaultBrowser: "embedded",
+    externalBrowsers: [],
+  },
   ui: {
     webTheme: "system",
     webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
@@ -538,6 +557,8 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     ? value.childExecutions
     : {};
   const ui = isRecord(value.ui) ? value.ui : {};
+  const browser = isRecord(value.browser) ? value.browser : {};
+  const webSearch = isRecord(value.webSearch) ? value.webSearch : {};
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
@@ -545,6 +566,15 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       discovery: isCapabilityDiscoveryMode(capabilities.discovery)
         ? capabilities.discovery
         : "explicit",
+    },
+    webSearch: {
+      enabled:
+        webSearch.enabled === true &&
+        (webSearch.modelSupport === undefined ||
+          isWebSearchModelSupport(webSearch.modelSupport)),
+      modelSupport: isWebSearchModelSupport(webSearch.modelSupport)
+        ? webSearch.modelSupport
+        : [],
     },
     suggestions: {
       enabled: requestedEnabled && Boolean(model),
@@ -569,6 +599,23 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       childExecutions.maxActive <= MAX_SESSION_CHILD_EXECUTION_LIMIT
         ? { maxActive: childExecutions.maxActive }
         : {}),
+    },
+    browser: {
+      control:
+        browser.control === true &&
+        (browser.embedded === undefined ||
+          typeof browser.embedded === "boolean") &&
+        (browser.defaultBrowser === undefined ||
+          isBrowserId(browser.defaultBrowser)) &&
+        (browser.externalBrowsers === undefined ||
+          isBrowserList(browser.externalBrowsers)),
+      embedded: browser.embedded === undefined || browser.embedded === true,
+      defaultBrowser: isBrowserId(browser.defaultBrowser)
+        ? browser.defaultBrowser
+        : "embedded",
+      externalBrowsers: isBrowserList(browser.externalBrowsers)
+        ? [...browser.externalBrowsers]
+        : [],
     },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
@@ -675,6 +722,13 @@ const setupShape: ConfigShape = {
   childExecutions: {
     maxActive: integerBetween(1, MAX_SESSION_CHILD_EXECUTION_LIMIT),
   },
+  browser: {
+    control: booleanValue,
+    embedded: booleanValue,
+    defaultBrowser: isBrowserId,
+    externalBrowsers: isBrowserList,
+  },
+  webSearch: { enabled: booleanValue, modelSupport: isWebSearchModelSupport },
   ui: {
     webTheme: isWebTheme,
     webChatWidth: integerBetween(MIN_WEB_CHAT_WIDTH, MAX_WEB_CHAT_WIDTH),
@@ -1411,6 +1465,9 @@ export function formatSetupConfig(config = loadSetupConfig()) {
   return [
     `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
+    `Browser control: ${config.browser.control ? "on" : "off"} · default ${config.browser.defaultBrowser} · embedded ${config.browser.embedded ? "allowed" : "blocked"} · external ${config.browser.externalBrowsers.join(", ") || "none"}`,
+    `Browser choices: embedded (Chromium host), ${EXTERNAL_BROWSERS.join(", ")}; Safari/Firefox use native tabs.`,
+    `Web search: ${config.webSearch.enabled ? "on" : "off"} · current Session model and Pi credentials · unsupported or unknown connections receive no search tool · ${config.webSearch.modelSupport.length} explicit model support declarations · no search-provider fallback`,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"
@@ -1420,6 +1477,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Post-edit command: ${config.postEdit.command ? "configured" : "off"}`,
+    "Pi Skills and packages: native configuration · Web setup requests review changes · explicit idle Session reload",
     `Agent role models (Subagents + Workflows): ${SUBAGENT_ROLE_NAMES.map((role) => `${role} ${config.subagents.roleModels[role] ? `${config.subagents.roleModels[role].provider}/${config.subagents.roleModels[role].model}` : "inherit"}`).join(" · ")}`,
   ].join("\n");
 }

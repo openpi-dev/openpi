@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -43,13 +44,12 @@ import type {
   WebSessionProjection,
 } from "../../../protocol/types.ts";
 import { WebClient } from "../protocol/client.ts";
-import {
-  type CompletedResultExposure,
-  Transcript,
-} from "../features/transcript/Transcript.tsx";
+import { Transcript } from "../features/transcript/Transcript.tsx";
 import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
 import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
+import { useBrowserConnector } from "../features/workbar/browser-connector.ts";
+import { useBrowserControl } from "../features/workbar/browser-control.ts";
 import {
   loadWorkbarPositions,
   saveWorkbarPositions,
@@ -76,33 +76,8 @@ function clamp(value: number, min: number, max: number) {
 }
 
 export function App() {
+  useBrowserConnector();
   const state = useStore(webStore);
-  const [completedResultSeen, setCompletedResultSeen] =
-    useState<CompletedResultExposure | null>(null);
-  const reportCompletedResultSeen = useCallback(
-    (exposure: CompletedResultExposure) => {
-      const current = webStore.getState();
-      const session = current.snapshot?.selectedSession;
-      const turn = current.snapshot?.sessions.find(
-        (summary) =>
-          summary.id === session?.id && summary.path === session?.path,
-      )?.execution?.lastTurn;
-      if (
-        current.workspaceDraft ||
-        current.sessionSwitching ||
-        current.selectedPath !== exposure.sessionPath ||
-        session?.id !== exposure.sessionId ||
-        session.path !== exposure.sessionPath ||
-        turn?.outcome !== "completed" ||
-        turn.commandId !== exposure.commandId ||
-        turn.finishedAt !== exposure.finishedAt ||
-        turn.resultEntryId !== exposure.resultEntryId
-      )
-        return;
-      setCompletedResultSeen(exposure);
-    },
-    [],
-  );
   const { t } = useTranslation();
   const { actions } = state;
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
@@ -112,6 +87,15 @@ export function App() {
   const providerSettingsTrigger = useRef<HTMLElement | null>(null);
   const workbarReturnFocus = useRef<HTMLElement | null>(null);
   const artifactProvider = useRef<ArtifactProviderHandle>(null);
+  const browserOpener = useRef<
+    ((url: string) => string | undefined) | undefined
+  >(undefined);
+  const browserReady = useCallback(
+    (open: ((url: string) => string | undefined) | undefined) => {
+      browserOpener.current = open;
+    },
+    [],
+  );
   const readingCache = useMemo(createSessionReadingCache, []);
   const readingRestored = useRef(new Set<string>());
   const [, updateReadingRestore] = useState(0);
@@ -202,7 +186,7 @@ export function App() {
     sessionId: string;
     sessionPath: string;
     cwd: string;
-    entry: "general" | "credentials";
+    entry: "general" | "credentials" | "browser";
   } | null>(null);
   const [workbarWorkspaces, setWorkbarWorkspaces] =
     useState<WorkbarWorkspace[]>(loadWorkbarPositions);
@@ -367,7 +351,7 @@ export function App() {
     if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
   }, [providerSettings, providerSettingsVisible]);
   const openProviderSettings = async (
-    entry: "general" | "credentials" = "general",
+    entry: "general" | "credentials" | "browser" = "general",
   ) => {
     providerSettingsTrigger.current =
       document.activeElement instanceof HTMLElement
@@ -689,6 +673,39 @@ export function App() {
       if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus();
     });
   };
+  const browserScope =
+    !state.sessionSwitching &&
+    !state.workspaceDraft &&
+    isControlledSession(state.snapshot, selected)
+      ? selected
+      : undefined;
+  useBrowserControl(
+    browserScope?.id,
+    browserScope?.path,
+    async (url, signal) => {
+      openWorkbar("browser");
+      const deadline = Date.now() + 5000;
+      while (!browserOpener.current && !signal.aborted && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      return signal.aborted ? undefined : browserOpener.current?.(url);
+    },
+  );
+  const browserSettingsLink = useRef(
+    new URLSearchParams(location.search).get("settings") === "browser",
+  );
+  const openBrowserSettingsFromLink = useEffectEvent(() => {
+    void openProviderSettings("browser");
+  });
+  useEffect(() => {
+    if (
+      !browserSettingsLink.current ||
+      !state.snapshot ||
+      state.sessionSwitching
+    )
+      return;
+    browserSettingsLink.current = false;
+    openBrowserSettingsFromLink();
+  }, [state.snapshot, state.sessionSwitching]);
   const auxiliaryVisible = Boolean(
     subagentVisible || workbarVisible || artifactPanelOpen,
   );
@@ -810,7 +827,12 @@ export function App() {
           }}
         >
           <SessionSidebar
-            completedResultSeen={completedResultSeen}
+            sessionViewVisible={
+              !centerCollapsed &&
+              !providerSettingsVisible &&
+              !state.sessionSwitching &&
+              !state.workspaceDraft
+            }
             connected={state.connection === "connected"}
             snapshot={state.snapshot}
             selectedPath={state.workspaceDraft ? null : state.selectedPath}
@@ -864,10 +886,25 @@ export function App() {
                 )}
                 <h1 title={taskTitle}>{taskTitle}</h1>
               </div>
-              <SessionUsageBar usage={state.snapshot?.usage} />
+              <SessionUsageBar
+                key={
+                  selected
+                    ? `usage:${selected.id}:${selected.path}`
+                    : "usage:no-session"
+                }
+                usage={
+                  selected && !state.sessionSwitching
+                    ? state.snapshot?.usage
+                    : undefined
+                }
+                workspace={
+                  workspace?.name || (selected && workspaceName(selected.cwd))
+                }
+                sessionId={selected?.id}
+              />
               {selected && !state.sessionSwitching && (
                 <SessionOverview
-                  key={`${selected.id}:${selected.path}`}
+                  key={`overview:${selected.id}:${selected.path}`}
                   sessionId={selected.id}
                   workspace={workspace?.name || workspaceName(selected.cwd)}
                   agents={overviewAgents}
@@ -980,7 +1017,6 @@ export function App() {
               </section>
             ) : state.snapshot ? (
               <Transcript
-                onCompletedResultSeen={reportCompletedResultSeen}
                 resultExposureEnabled={
                   !centerCollapsed &&
                   !providerSettingsVisible &&
@@ -1200,6 +1236,7 @@ export function App() {
               requestRevision={workbarTarget.requestRevision}
               sessionId={selected.id}
               sessionPath={selected.path}
+              onBrowserReady={browserReady}
               canControl={
                 !state.sessionSwitching &&
                 isControlledSession(state.snapshot, selected)
@@ -1208,6 +1245,7 @@ export function App() {
                 void actions.selectSession(selected.path)
               }
               cwd={selected.cwd}
+              snapshot={state.snapshot ?? undefined}
               capabilities={
                 isControlledSession(state.snapshot, selected)
                   ? (state.snapshot?.runtime.capabilities ?? {})
@@ -1325,7 +1363,8 @@ export function App() {
               : undefined
           }
           modelSelectionPending={state.modelSelectionPending}
-          onSelectModel={(value) => void actions.selectModel(value)}
+          sessionPath={providerSettings.sessionPath}
+          onSelectModel={(value) => actions.selectModel(value)}
           onConfigureOpenPi={configureOpenPiFromSettings}
           interaction={
             state.snapshot &&

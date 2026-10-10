@@ -286,7 +286,7 @@ export interface WebStoreActions {
     before?: { path: string; id: string } | null,
   ) => Promise<void>;
   unarchiveSession: (path: string) => Promise<boolean>;
-  selectModel: (value: string) => Promise<void>;
+  selectModel: (value: string) => Promise<boolean>;
   searchModels: (query: string) => Promise<void>;
   clearModelSearch: () => void;
   selectThinking: (level: string) => void;
@@ -815,6 +815,16 @@ export function createWebStore(
         typeof eventSessionId === "string" &&
         eventSessionId !== current.snapshot?.currentSessionId &&
         !sessionTransition
+      ) {
+        scheduleSnapshotRefresh();
+        return;
+      }
+      if (
+        ["auto_retry_start", "auto_retry_end"].includes(event.type) &&
+        typeof detail.sessionPath === "string" &&
+        detail.sessionPath !==
+          (current.snapshot?.currentSessionPath ??
+            current.snapshot?.selectedSession?.path)
       ) {
         scheduleSnapshotRefresh();
         return;
@@ -1984,7 +1994,7 @@ export function createWebStore(
           (!state.workspaceDraft &&
             (state.liveRunning || state.snapshot?.runtime.status === "running"))
         )
-          return;
+          return false;
         const sessionId = state.snapshot?.selectedSession?.id;
         if (
           state.workspaceDraft ||
@@ -1995,7 +2005,7 @@ export function createWebStore(
             ...state.modelSearch.models,
           ].find((item) => item.provider === provider && item.id === modelId);
           if (model) set({ draftModel: model, notice: null });
-          return;
+          return Boolean(model);
         }
         if (
           !sessionId ||
@@ -2004,9 +2014,9 @@ export function createWebStore(
           sessionId !== state.snapshot?.currentSessionId ||
           state.selectedPath !== state.snapshot?.selectedSession?.path
         )
-          return;
+          return false;
         resetThinking();
-        await applyModel(
+        return applyModel(
           { provider, id: modelId },
           sessionEpoch,
           sessionId,

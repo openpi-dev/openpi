@@ -22,6 +22,7 @@ import {
   type WebInteractiveTerminalEvent,
 } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
+import { WebProviderLoginService } from "../../web/runtime/provider-login.ts";
 import {
   type WebRuntimeController,
   type WebRuntimeEvent,
@@ -42,6 +43,158 @@ after(async () => {
     delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = previousHostAgentDirectory;
   await rm(hostAgentDirectory, { recursive: true, force: true });
+});
+
+test("browser settings hot-apply without a model turn and native credentials cannot authorize Web APIs", async () => {
+  const path = join(hostAgentDirectory, "my-pi-setup.json");
+  const before = await readFile(path, "utf8").catch(() => undefined);
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-browser-host-"));
+  const runtime = testRuntime(cwd);
+  runtime.isIdle = () => false;
+  let applied = 0;
+  let prompted = 0;
+  runtime.applySetupConfiguration = async () => {
+    applied++;
+  };
+  runtime.sendPrompt = async () => {
+    prompted++;
+    return { pendingFollowUps: 0 };
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const controller = "795239cc-8ff9-49cb-9894-e16b3ba86af7";
+  const post = (
+    route: string,
+    body: unknown,
+    extra: Record<string, string> = {},
+  ) =>
+    fetch(`${launched.origin}${route}`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+        "X-OpenPI-Web-Controller": controller,
+        ...extra,
+      },
+      body: JSON.stringify(body),
+    });
+  try {
+    for (const body of [
+      { externalBrowsers: ["unknown-browser"] },
+      { defaultBrowser: "shell" },
+      { command: "open" },
+      { control: "true" },
+      { embedded: null },
+      { externalBrowsers: ["chrome", "chrome"] },
+    ])
+      assert.equal((await post("/api/settings/browser", body)).status, 400);
+    for (const body of [
+      { browser: "chrome", action: "install" },
+      { browser: "chrome", action: "folder", path: "/arbitrary" },
+      {
+        browser: "chrome",
+        action: "connect",
+        url: "https://arbitrary.example",
+      },
+      { browser: "shell", action: "manage" },
+    ])
+      assert.equal(
+        (await post("/api/settings/browser/action", body)).status,
+        400,
+      );
+    const saved = await post("/api/settings/browser", {
+      control: true,
+      defaultBrowser: "chrome",
+      externalBrowsers: ["chrome"],
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json()).config.defaultBrowser, "chrome");
+    assert.equal(loadSetupConfig().browser.control, true);
+    assert.equal(applied, 1);
+    assert.equal(prompted, 0);
+    const identity = {
+      browser: "chrome",
+      profileId: controller,
+      extensionId: "a".repeat(32),
+      version: "0.3.0",
+    };
+    assert.equal(
+      (
+        await post("/api/browser/connections", {
+          ...identity,
+          browser: "unknown",
+        })
+      ).status,
+      400,
+    );
+    const paired = await post("/api/browser/connections", identity);
+    assert.equal(paired.status, 200);
+    const connection = await paired.json();
+    const scoped = {
+      Authorization: `Bearer ${connection.token}`,
+      Origin: `chrome-extension://${identity.extensionId}`,
+    };
+    const route = `/api/browser/native?connectionId=${connection.connectionId}`;
+    assert.equal(
+      (
+        await post(
+          route,
+          { pages: [] },
+          { ...scoped, Origin: "https://foreign.example" },
+        )
+      ).status,
+      401,
+    );
+    assert.equal((await post(route, { pages: [] }, scoped)).status, 200);
+    const page = {
+      id: "wrong-connection/1",
+      document: controller,
+      title: "No",
+      url: "https://example.com/",
+    };
+    assert.equal((await post(route, { pages: [page] }, scoped)).status, 400);
+    const nativePage = {
+      ...page,
+      id: `${connection.connectionId}/123`,
+      document: "C172E720FA2F839B12DE8D2D9E5709F0",
+    };
+    assert.equal(
+      (await post(route, { pages: [nativePage] }, scoped)).status,
+      200,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/snapshot`, {
+          headers: { Authorization: scoped.Authorization },
+        })
+      ).status,
+      401,
+    );
+    assert.equal(
+      (await post("/api/settings/browser", { control: false }, scoped)).status,
+      403,
+    );
+    assert.equal(
+      (
+        await post(
+          "/api/settings/browser/action",
+          { browser: "chrome", action: "folder" },
+          scoped,
+        )
+      ).status,
+      403,
+    );
+    const revoked = await post("/api/settings/browser", { control: false });
+    assert.equal(revoked.status, 200);
+    const polling = await post(route, { pages: [] }, scoped);
+    assert.equal((await polling.json()).enabled, false);
+    assert.equal(applied, 2);
+    assert.equal(prompted, 0);
+  } finally {
+    await host.stop();
+    if (before === undefined) await rm(path, { force: true });
+    else await writeFile(path, before);
+    await rm(cwd, { force: true, recursive: true });
+  }
 });
 
 test("appearance writes preserve package config, reject extra authority, and never prompt the agent", async () => {
@@ -2434,6 +2587,131 @@ async function startTestHost(
   return { host, launched, headers };
 }
 
+test("account login routes require authenticated exact ownership, validate responses and redact native failures", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-login-host-"));
+  const runtime = testRuntime(cwd);
+  const service = new WebProviderLoginService();
+  const sessionId = runtime.sessionManager.getSessionId();
+  let starts = 0;
+  let logouts = 0;
+  runtime.startProviderLogin = async (owner, provider) => {
+    starts++;
+    return service.start(owner, provider, async (interaction) => {
+      interaction.notify({
+        type: "device_code",
+        userCode: "FIXTURE-CODE",
+        verificationUri: "https://accounts.example/device",
+      });
+      await interaction.prompt({ type: "secret", message: "Code" });
+      return {};
+    });
+  };
+  runtime.readProviderLogin = (owner, id) => service.read(owner, id);
+  runtime.respondProviderLogin = (owner, id, prompt, value) =>
+    service.respond(owner, id, prompt, value);
+  runtime.cancelProviderLogin = (owner, id) => service.cancel(owner, id);
+  runtime.logoutProvider = async () => {
+    logouts++;
+    return {};
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  t.after(async () => {
+    await service.dispose();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const post = (path: string, body: object, authenticated = true) =>
+    fetch(`${launched.origin}/api/providers/${path}`, {
+      method: "POST",
+      headers: {
+        ...(authenticated ? headers : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const read = (query: string, authenticated = true) =>
+    fetch(`${launched.origin}/api/providers/login?${query}`, {
+      headers: authenticated ? headers : {},
+    });
+  assert.equal(
+    (await post("login", { sessionId, provider: "fixture" }, false)).status,
+    401,
+  );
+  assert.equal((await read(`sessionId=${sessionId}`, false)).status, 401);
+  for (const body of [
+    { sessionId, provider: "fixture", injected: true },
+    { sessionId, provider: "invalid/provider" },
+    { sessionId: "", provider: "fixture" },
+  ])
+    assert.equal((await post("login", body)).status, 400);
+  assert.equal(
+    (await post("login", { sessionId: "stale", provider: "fixture" })).status,
+    409,
+  );
+  assert.equal(starts, 0);
+  assert.equal(
+    (await read(`sessionId=${sessionId}&sessionId=${sessionId}`)).status,
+    400,
+  );
+  assert.equal((await read(`sessionId=${sessionId}&value=secret`)).status, 400);
+  assert.equal((await read("sessionId=stale")).status, 409);
+  assert.equal(await (await read(`sessionId=${sessionId}`)).json(), null);
+  const response = await post("login", { sessionId, provider: "fixture" });
+  assert.equal(response.status, 200);
+  const flow = (await response.json()) as { id: string };
+  const current = (await (
+    await read(`sessionId=${sessionId}&id=${flow.id}`)
+  ).json()) as { device: { code: string }; prompt: { id: string } };
+  assert.equal(current.device.code, "FIXTURE-CODE");
+  assert.equal(
+    (
+      await post("login/respond", {
+        sessionId,
+        id: flow.id,
+        promptId: "stale",
+        value: "private-response",
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await post("login/respond", {
+        sessionId,
+        id: flow.id,
+        promptId: current.prompt.id,
+        value: "x".repeat(8193),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await post("login/cancel", { sessionId: "stale", id: flow.id })).status,
+    409,
+  );
+  assert.equal(
+    (await post("login/cancel", { sessionId, id: flow.id })).status,
+    200,
+  );
+  await service.dispose();
+  assert.equal(
+    (await post("logout", { sessionId: "stale", provider: "fixture" })).status,
+    409,
+  );
+  assert.equal(logouts, 0);
+  assert.equal(
+    (await post("logout", { sessionId, provider: "fixture" })).status,
+    200,
+  );
+  assert.equal(logouts, 1);
+  runtime.startProviderLogin = async () => {
+    throw new Error("private-native-credential-error");
+  };
+  const failure = await post("login", { sessionId, provider: "fixture" });
+  assert.equal(failure.status, 422);
+  assert.equal((await failure.text()).includes("private-native"), false);
+});
+
 test("compaction and queue endpoints require authenticated exact active ownership and bounded typed input", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-compact-"));
   const runtime = testRuntime(cwd);
@@ -2881,6 +3159,50 @@ test("serves Session-bound command discovery with fail-closed request validation
     const body = await response.text();
     assert.match(body, /"name":"review"/u);
     assert.doesNotMatch(body, /sourceInfo|\/private\/|private-fixture/u);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("resource reload validates its target and reports native conflicts without a success receipt", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-resource-reload-"));
+  const runtime = testRuntime(cwd);
+  const attempts: Array<{ sessionId: string; sessionPath: string }> = [];
+  let conflict = false;
+  runtime.reloadSettingsResources = async (sessionId, sessionPath) => {
+    attempts.push({ sessionId, sessionPath });
+    if (conflict)
+      throw new WebRuntimeRequestError("stale target", "SESSION_CONFLICT", 409);
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const target = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: "/fixture/current.jsonl",
+  };
+  const post = (body: unknown) =>
+    fetch(`${launched.origin}/api/settings/reload`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await post({ sessionId: target.sessionId })).status, 400);
+    assert.equal(
+      (await post({ ...target, source: "npm:unexpected" })).status,
+      400,
+    );
+    assert.equal(attempts.length, 0);
+    const success = await post(target);
+    assert.equal(success.status, 200);
+    assert.deepEqual(await success.json(), { reloaded: true });
+    assert.deepEqual(attempts, [target]);
+    conflict = true;
+    const rejected = await post(target);
+    assert.equal(rejected.status, 409);
+    const receipt = await rejected.json();
+    assert.equal(receipt.code, "SESSION_CONFLICT");
+    assert.equal(receipt.reloaded, undefined);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
@@ -4423,6 +4745,84 @@ test("provider configuration edits validate their native scope and redact save f
     const failed = await save({ action: "remove", provider: "fixture" });
     assert.equal(failed.status, 422);
     assert.doesNotMatch(await failed.text(), /fixture-secret/);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("native model-default routes retain exact identity, validate input and sanitize persistence failures", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-model-default-"));
+  const runtime = testRuntime(cwd);
+  const defaults = { model: { provider: "fixture", id: "same-id" } };
+  let failure: Error | undefined;
+  let writes = 0;
+  runtime.readModelDefaults = () => defaults;
+  runtime.setModel = async () =>
+    assert.fail("saving a default must not switch the active model");
+  runtime.saveModelDefault = async (provider, id, options) => {
+    assert.equal(provider, "fixture");
+    assert.equal(id, "same-id");
+    assert.equal(
+      options.expectedSessionId,
+      runtime.sessionManager.getSessionId(),
+    );
+    assert.equal(
+      options.expectedSessionPath,
+      `current:${runtime.sessionManager.getSessionId()}`,
+    );
+    writes++;
+    if (failure) throw failure;
+    return defaults;
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const body = {
+    provider: "fixture",
+    modelId: "same-id",
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: `current:${runtime.sessionManager.getSessionId()}`,
+  };
+  const post = (value: unknown) =>
+    fetch(`${launched.origin}/api/models/default`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(value),
+    });
+  try {
+    const read = await fetch(
+      `${launched.origin}/api/models/default?sessionId=${body.sessionId}`,
+      { headers },
+    );
+    assert.deepEqual(await read.json(), defaults);
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/models/default?sessionId=stale`, {
+          headers,
+        })
+      ).status,
+      409,
+    );
+    for (const invalid of [
+      { ...body, extra: true },
+      { ...body, provider: "bad/provider" },
+      { ...body, modelId: "bad\nmodel" },
+      { ...body, sessionPath: "" },
+    ])
+      assert.equal((await post(invalid)).status, 400);
+    assert.equal(writes, 0);
+    assert.deepEqual(await (await post(body)).json(), defaults);
+    failure = new WebRuntimeRequestError(
+      "private-secret",
+      "SESSION_CONFLICT",
+      409,
+    );
+    const conflict = await post(body);
+    assert.equal(conflict.status, 409);
+    assert.doesNotMatch(await conflict.text(), /private-secret/);
+    failure = new Error("private-secret");
+    const failed = await post(body);
+    assert.equal(failed.status, 422);
+    assert.doesNotMatch(await failed.text(), /private-secret/);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

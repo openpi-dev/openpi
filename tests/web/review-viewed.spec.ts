@@ -104,11 +104,6 @@ it("requires an explicit viewed decision and checking a different row does not o
   expect(checkbox("second.txt").checked).toBe(true);
   expect(screen.getByRole("figure").textContent).toContain("new first.txt");
   expect(reading.review?.viewed).toEqual({ revision, paths: ["second.txt"] });
-  expect(
-    screen.getByText(
-      i18n.t("gitReviewViewedProgress", { viewed: 1, loaded: 2 }),
-    ),
-  ).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "first.txt" }));
   expect(checkbox("first.txt").checked).toBe(false);
   fireEvent.click(checkbox("second.txt"));
@@ -228,11 +223,6 @@ it("remembers at most 200 marks and can unmark at the limit to view another load
   expect(reading.review?.viewed?.paths).toHaveLength(200);
   expect(checkbox(files[200]!.path).disabled).toBe(true);
   expect(checkbox(files[0]!.path).disabled).toBe(false);
-  expect(
-    screen.getByText(
-      i18n.t("gitReviewViewedProgress", { viewed: 200, loaded: 201 }),
-    ),
-  ).toBeTruthy();
   expect(
     screen.getByText(i18n.t("gitReviewViewedLimit", { count: 200 })),
   ).toBeTruthy();

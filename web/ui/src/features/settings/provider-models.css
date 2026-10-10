@@ -8,12 +8,28 @@
 .models-provider-list { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 12px 0 0; padding: 0; }
 .models-provider-card { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border: 1px solid var(--models-border); border-radius: 16px; }
 .models-provider-head { display: flex; align-items: center; gap: 10px; min-height: 28px; }
-.models-provider-identity { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.models-provider-identity { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
+.models-provider-avatar { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 12px; background: var(--models-surface); color: var(--text); }
+.models-provider-icon { display: inline-block; flex: none; width: 20px; height: 20px; background: currentcolor; mask-repeat: no-repeat; mask-position: center; mask-size: contain; }
+.models-provider-avatar .models-provider-icon { width: 22px; height: 22px; }
+.models-provider-connection { display: inline-flex; background: transparent; color: var(--muted); }
+.models-provider-icon.models-provider-connection > svg { width: 100%; height: 100%; }
+.models-provider-label { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.models-provider-status { display: flex; align-items: center; gap: 6px; flex-basis: 100%; color: var(--muted); font-size: 12px; line-height: 18px; }
 .models-provider-name { font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
 .models-provider-tag { flex: none; padding: 1px 6px; border: 1px solid var(--models-border); border-radius: 4px; color: var(--muted); font-size: 11px; line-height: 16px; }
+.models-default-card { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; padding: 14px 16px; border-radius: 16px; background: var(--models-surface); }
+.models-default-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.models-default-copy { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.models-default-title { font-size: 12px; color: var(--muted); }
+.models-default-value { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.models-default-value small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.models-connection-choice { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 2px; border-top: 1px solid var(--models-border); min-width: 0; }
+.models-connection-choice .models-provider-picker { width: 100%; }
+.model-thinking-label > .models-provider-icon { width: 16px; height: 16px; }
 .models-credential-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .models-credential-dot.configured { background: var(--healthy); }
-.models-credential-dot.missing { background: var(--error); }
+.models-credential-dot.missing { background: var(--subtle); }
 .models-provider-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
 .models-button, .models-add-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 36px; padding: 0 14px; border: 1px solid var(--models-border); border-radius: 10px; background: transparent; color: var(--text); font: inherit; font-size: 14px; line-height: 22px; cursor: pointer; white-space: nowrap; }
 .models-button.primary { border-color: transparent; background: var(--text); color: var(--page); }
@@ -41,7 +57,9 @@
 .models-add-button { width: 100%; min-height: 44px; border: 1px dashed var(--models-border); border-radius: 12px; gap: 6px; }
 .models-add-button svg, .models-add-model svg { width: 14px; height: 14px; }
 .models-add-card .models-editor { padding: 0; background: transparent; }
-.models-provider-select { margin-bottom: 14px; }
+.models-provider-select { width: min(100%, 280px); margin-bottom: 14px; }
+.models-provider-picker { min-height: 36px; border-radius: 10px; background: var(--page); color: var(--text); font-size: 14px; }
+.models-provider-picker button:focus-visible { outline: none; }
 .models-add-modes { display: flex; width: fit-content; max-width: 100%; min-width: 0; margin: 0; padding: 3px; gap: 3px; border: 0; border-radius: 10px; background: var(--models-track); }
 .models-add-modes button { min-height: 30px; padding: 0 16px; border: 1px solid transparent; border-radius: 7px; background: transparent; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
 .models-add-modes button[aria-pressed="true"] { border-color: var(--models-border); background: var(--page); color: var(--text); box-shadow: 0 1px 3px rgb(0 0 0 / 6%); }
@@ -70,6 +88,32 @@
 .models-input-types legend { padding: 0; margin-bottom: 4px; }
 .models-input-types > div { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; min-height: 32px; }
 .models-add-model { align-self: flex-start; }
+.models-account-login, .models-login-flow { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.models-login-intro { display: flex; align-items: center; gap: 12px; }
+.models-login-intro strong { font-size: 14px; line-height: 22px; font-weight: 500; }
+.models-login-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.models-login-status { display: flex; align-items: center; gap: 8px; font-size: 14px; line-height: 22px; }
+.models-login-status svg { width: 15px; height: 15px; color: var(--muted); animation: model-login-spin 1.2s linear infinite; }
+.models-login-open { align-self: flex-start; text-decoration: none; }
+.models-login-open svg, .models-login-flow .models-hint a svg { width: 14px; height: 14px; }
+.models-login-options { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.models-login-option { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; padding: 12px 14px; border: 1px solid var(--models-border); border-radius: 12px; background: var(--page); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.models-login-option:hover:not(:disabled) { border-color: var(--muted); }
+.models-login-option strong { font-size: 14px; line-height: 22px; font-weight: 500; }
+.models-login-option span { color: var(--muted); font-size: 12px; line-height: 18px; }
+.models-device-code { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-radius: 12px; background: var(--page); }
+.models-device-code code { font-size: 24px; line-height: 32px; letter-spacing: .12em; overflow-wrap: anywhere; }
+.models-login-input { display: flex; flex-direction: column; gap: 10px; }
+.models-login-input > button { align-self: flex-end; }
+.models-login-fallback { font-size: 12px; line-height: 18px; color: var(--muted); }
+.models-login-fallback summary { width: fit-content; cursor: pointer; border-radius: 4px; }
+.models-login-fallback[open] { display: flex; flex-direction: column; gap: 12px; }
+.models-login-fallback summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.models-login-cancel { align-self: flex-start; margin-left: -10px; }
+.models-login-flow .models-hint p { margin: 0; }
+.models-login-flow .models-hint a { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; color: var(--accent); }
+@keyframes model-login-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .models-login-status svg { animation: none; } }
 .models-picker-dialog { padding: 0 !important; border: 1px solid var(--models-border) !important; border-radius: 24px !important; background: var(--page) !important; color: var(--text); overflow: hidden !important; max-width: calc(100vw - 24px) !important; }
 .models-picker { display: flex; flex-direction: column; gap: 14px; padding: 24px; max-height: min(620px, 85dvh); }
 .models-picker header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -92,6 +136,9 @@
 @media (max-width: 640px) {
   .models-page { padding: 22px 16px 32px; }
   .models-provider-card { padding: 10px 12px; }
+  .models-provider-head { flex-wrap: wrap; }
+  .models-provider-actions { flex-wrap: wrap; margin-left: 0; }
+  .models-default-row { align-items: flex-start; flex-wrap: wrap; }
   .models-provider-identity { flex-wrap: wrap; gap: 5px; }
   .models-editor, .models-add-card { padding: 14px 12px; }
   .models-add-modes { width: 100%; }

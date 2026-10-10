@@ -149,8 +149,12 @@ it("shows exact background result batches once and keeps the parent's historical
   expect(container.textContent).not.toContain("model transport instruction");
   const cards = container.querySelectorAll(".activity-card.subagent");
   expect(cards).toHaveLength(2);
-  expect(cards[0]?.querySelector('[aria-label="completed"]')).toBeTruthy();
-  expect(cards[1]?.querySelector('[aria-label="completed"]')).toBeTruthy();
+  expect(
+    cards[0]?.querySelector(".status-mark.done")?.getAttribute("aria-label"),
+  ).toBe(i18n.t("execution_done"));
+  expect(
+    cards[1]?.querySelector(".status-mark.done")?.getAttribute("aria-label"),
+  ).toBe(i18n.t("execution_done"));
   expect(cards[0]?.querySelector("summary")?.textContent).toContain(
     i18n.t("subagentBackgroundResult", { count: 2 }),
   );
@@ -191,7 +195,7 @@ it.each([
         container.querySelector(".activity-card summary")?.textContent,
       ).toContain(i18n.t("subagentState_interrupted"));
     expect(
-      container.querySelector('.activity-card [aria-label="completed"]'),
+      container.querySelector(".activity-card .status-mark.done"),
     ).toBeNull();
   },
 );
@@ -215,10 +219,17 @@ it("keeps visible reasoning evidence while ignoring whitespace-only provider par
   ]);
   const { container } = render(view(value));
   expect(container.querySelectorAll(".thinking-line")).toHaveLength(1);
-  expect(container.querySelector(".thinking-line pre")?.textContent).toBe(
-    "Checked the tools.",
-  );
-  expect(container.querySelector(".process-sequence small")?.textContent).toBe(
-    i18n.t("processThinkingCount", { count: 1 }),
-  );
+  expect(container.querySelector(".thinking-line .markdown")).toBeNull();
+  expect(
+    container.querySelector(".thinking-line summary")?.textContent,
+  ).toContain("Checked the tools.");
+  expect(container.querySelector(".thinking-line .tool-icon")).toBeNull();
+  expect(container.querySelector(".thinking-line .tool-name")).toBeNull();
+  expect(
+    container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
+  const sequence =
+    container.querySelector<HTMLDetailsElement>(".single-process")!;
+  expect(sequence.open).toBe(true);
+  expect(sequence.querySelector("summary")?.hidden).toBe(true);
 });

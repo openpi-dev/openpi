@@ -10,10 +10,15 @@ import {
 import {
   createEventBus,
   CustomMessageComponent,
+  DefaultPackageManager,
   initTheme,
   type MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
 import { onSetupApply } from "../../../extensions/shared/setup-apply.ts";
+import {
+  registerWebQuestionBridge,
+  type WebQuestionOutcome,
+} from "../../../extensions/ask-user/web-bridge.ts";
 import { tmpdir } from "node:os";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -335,6 +340,58 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   );
 });
 
+test("native search setup defaults off, preserves preferences, and binds support to the current connection", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const apply = (params: Record<string, unknown>) =>
+    tool.execute(
+      "search-setup",
+      params,
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+  assert.equal(loadSetupConfig().webSearch.enabled, false);
+  await apply({ web_search_enabled: true });
+  assert.equal(loadSetupConfig().webSearch.enabled, true);
+  await apply({ ui_web_theme: "dark" });
+  assert.equal(loadSetupConfig().webSearch.enabled, true);
+  await assert.rejects(
+    apply({ web_search_model_support: true }),
+    /Select a current Session model/u,
+  );
+  h.ctx.model = {
+    id: "current",
+    name: "Current",
+    provider: "gateway",
+    api: "openai-responses",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 128000,
+    maxTokens: 2048,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  await apply({ web_search_model_support: true });
+  assert.deepEqual(loadSetupConfig().webSearch.modelSupport, [
+    {
+      provider: "gateway",
+      model: "current",
+      api: "openai-responses",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      supported: true,
+    },
+  ]);
+  await apply({ web_search_model_support: null, web_search_enabled: false });
+  assert.deepEqual(loadSetupConfig().webSearch, {
+    enabled: false,
+    modelSupport: [],
+  });
+  assert.equal(loadSetupConfig().ui.webTheme, "dark");
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+});
+
 test("post-edit stays off or preserved unless the setup request changes it", async () => {
   rmSync(SETUP_CONFIG_PATH, { force: true });
   const h = visibilityHarness();
@@ -654,6 +711,145 @@ test("successful configure_my_pi_setup hides the tool", async () => {
   assert.equal(h.isActive(), false);
   await h.emit("agent_settled");
   assert.deepEqual(h.closures(), []);
+});
+
+test("optional package setup rejects mixed changes, requires native UI, and preserves files on cancellation", async () => {
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const before = existsSync(SETUP_CONFIG_PATH)
+    ? readFileSync(SETUP_CONFIG_PATH, "utf8")
+    : undefined;
+  const execute = (params: Record<string, unknown>) =>
+    tool.execute(
+      "web-setup",
+      params,
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+  await assert.rejects(
+    execute({ web_access_action: "install-exa", ui_web_theme: "dark" }),
+    /web_access_action alone/u,
+  );
+  await assert.rejects(
+    execute({ web_access_action: "install-exa" }),
+    /native confirmation UI/u,
+  );
+  h.ctx.hasUI = true;
+  let confirmations = 0;
+  h.ctx.ui.confirm = async (title, detail) => {
+    confirmations++;
+    assert.match(title, /Enable web search/u);
+    assert.match(detail, /npm:pi-web-access@0\.38\.0/u);
+    return false;
+  };
+  await assert.rejects(
+    execute({ web_access_action: "install-exa" }),
+    /cancelled/u,
+  );
+  assert.equal(confirmations, 1);
+  assert.equal(existsSync(join(setupAgentDir, "web-search.json")), false);
+  assert.equal(
+    existsSync(SETUP_CONFIG_PATH)
+      ? readFileSync(SETUP_CONFIG_PATH, "utf8")
+      : undefined,
+    before,
+  );
+});
+
+test("optional package setup reviews Web permissions through the owning Session and fails closed without an exact approval", async (t) => {
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const signal = new AbortController().signal;
+  const execute = () =>
+    tool.execute(
+      "web-setup-review",
+      { web_access_action: "install-exa" },
+      signal,
+      () => {},
+      h.ctx,
+    );
+  const before = existsSync(SETUP_CONFIG_PATH)
+    ? readFileSync(SETUP_CONFIG_PATH, "utf8")
+    : undefined;
+  const outcomes: WebQuestionOutcome[] = [
+    { kind: "dismissed" },
+    { kind: "cancelled" },
+    { kind: "expired" },
+    { kind: "unavailable" },
+    {
+      kind: "answered",
+      answers: [{ id: "web_access_review", selected: "取消" }],
+    },
+    {
+      kind: "answered",
+      answers: [{ id: "web_access_review", custom: "确认应用" }],
+    },
+    {
+      kind: "answered",
+      answers: [
+        { id: "web_access_review", selected: "确认应用", note: "先不要安装" },
+      ],
+    },
+  ];
+  let reviews = 0;
+  for (const outcome of outcomes) {
+    const unregister = registerWebQuestionBridge(
+      h.ctx.sessionManager,
+      async (id, questions, receivedSignal) => {
+        reviews++;
+        assert.equal(id, "web-setup-review");
+        assert.equal(receivedSignal, signal);
+        assert.equal(questions.length, 1);
+        assert.match(questions[0]!.question, /npm:pi-web-access@0\.38\.0/u);
+        assert.match(
+          questions[0]!.question,
+          /Third-party Pi packages execute local code/u,
+        );
+        assert.match(questions[0]!.question, /Search queries go to Exa/u);
+        assert.deepEqual(
+          questions[0]!.options.map((option) => option.label),
+          ["取消", "确认应用"],
+        );
+        return outcome;
+      },
+    );
+    try {
+      await assert.rejects(execute(), /cancelled/u);
+    } finally {
+      unregister();
+    }
+  }
+  assert.equal(reviews, outcomes.length);
+  assert.equal(existsSync(join(setupAgentDir, "web-search.json")), false);
+  assert.equal(
+    existsSync(SETUP_CONFIG_PATH)
+      ? readFileSync(SETUP_CONFIG_PATH, "utf8")
+      : undefined,
+    before,
+  );
+  await assert.rejects(execute(), /native confirmation UI/u);
+  const install = t.mock.method(
+    DefaultPackageManager.prototype,
+    "install",
+    async () => {
+      throw new Error("review approved before installation");
+    },
+  );
+  const unregister = registerWebQuestionBridge(
+    h.ctx.sessionManager,
+    async () => ({
+      kind: "answered",
+      answers: [{ id: "web_access_review", selected: "确认应用" }],
+    }),
+  );
+  try {
+    await assert.rejects(execute(), /review approved before installation/u);
+    assert.equal(install.mock.callCount(), 1);
+  } finally {
+    unregister();
+    rmSync(join(setupAgentDir, "web-search.json"), { force: true });
+  }
 });
 
 test("invalid explicit footer styles and presets list allowed values without writing or applying", async () => {
@@ -1174,7 +1370,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Capability discovery, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Capability discovery, optional Web search, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);

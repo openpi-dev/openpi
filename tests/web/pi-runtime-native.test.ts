@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -12,6 +12,7 @@ import {
 import {
   AgentSessionRuntime,
   createAgentSessionFromServices,
+  createAgentSession,
   createAgentSessionServices,
   type ExtensionFactory,
   ModelRuntime,
@@ -85,8 +86,245 @@ async function nativeRuntime(
   ).startRuntimeSession();
   const events: WebRuntimeEvent[] = [];
   runtime.subscribe((event) => events.push(event));
-  return { runtime, session, events };
+  return {
+    cwd,
+    agentDir,
+    services,
+    runtime,
+    session,
+    events,
+    modelRuntime,
+    provider: provider.provider,
+  };
 }
+
+test("Web saves a Pi default without changing the active model; a fresh native Session uses it", async (t) => {
+  const { runtime, session, modelRuntime, agentDir, cwd, services } =
+    await nativeRuntime(t, () => undefined, []);
+  const second = fauxProvider({
+    provider: "second-default-fixture",
+    models: [{ id: "fixture", name: "Second fixture", reasoning: false }],
+  });
+  modelRuntime.registerNativeProvider(second.provider);
+  await modelRuntime.setRuntimeApiKey(second.provider.id, "fixture-key");
+  await writeFile(
+    join(agentDir, "settings.json"),
+    JSON.stringify({ theme: "dark", privateUnrelated: { preserved: true } }),
+  );
+  const original = session.model;
+  const options = {
+    expectedSessionId: session.sessionId,
+    expectedSessionPath: `current:${session.sessionId}`,
+  };
+  assert.deepEqual(runtime.readModelDefaults(), { model: null });
+  assert.deepEqual(
+    await runtime.saveModelDefault(second.provider.id, "fixture", options),
+    { model: { provider: second.provider.id, id: "fixture" } },
+  );
+  assert.equal(session.model, original);
+  assert.equal(session.messages.length, 0);
+  assert.equal(
+    session.sessionManager
+      .getBranch()
+      .some(
+        (entry) =>
+          entry.type === "model_change" &&
+          entry.provider === second.provider.id,
+      ),
+    false,
+  );
+  const saved = JSON.parse(
+    await readFile(join(agentDir, "settings.json"), "utf8"),
+  );
+  assert.deepEqual(saved.privateUnrelated, { preserved: true });
+  assert.equal(saved.theme, "dark");
+  const fresh = await createAgentSession({
+    cwd,
+    agentDir,
+    modelRuntime,
+    resourceLoader: services.resourceLoader,
+    settingsManager: SettingsManager.create(cwd, agentDir),
+    sessionManager: SessionManager.inMemory(cwd),
+    tools: [],
+  });
+  assert.equal(fresh.session.model?.provider, second.provider.id);
+  assert.equal(fresh.session.model?.id, "fixture");
+  fresh.session.dispose();
+  await runtime.setModel(original!.provider, original!.id, options);
+  await session.settingsManager.flush();
+  assert.equal(runtime.readModelDefaults().model?.provider, second.provider.id);
+  await assert.rejects(
+    runtime.saveModelDefault(original!.provider, original!.id, {
+      ...options,
+      expectedSessionPath: "/copied.jsonl",
+    }),
+    { code: "SESSION_CONFLICT" },
+  );
+  await assert.rejects(
+    runtime.saveModelDefault("not-configured", "fixture", options),
+    { code: "MODEL_NOT_AVAILABLE" },
+  );
+  assert.equal(runtime.readModelDefaults().model?.provider, second.provider.id);
+});
+
+test("Web scopes large model search to the exact connection before bounding results", async (t) => {
+  const { runtime, modelRuntime } = await nativeRuntime(t, () => undefined, []);
+  for (const id of ["catalog", "catalog-extra"]) {
+    const provider = fauxProvider({
+      provider: id,
+      models: Array.from({ length: 70 }, (_, index) => ({
+        id: `model-${index}`,
+        name: `Model ${index}`,
+        reasoning: false,
+      })),
+    });
+    modelRuntime.registerNativeProvider(provider.provider);
+    await modelRuntime.setRuntimeApiKey(id, "fixture-key");
+  }
+  const page = runtime.searchModels("", 50, "catalog-extra");
+  assert.equal(page.totalAvailable, 70);
+  assert.equal(page.models.length, 50);
+  assert.equal(page.truncation.matchesOmitted, 20);
+  assert.equal(
+    page.models.every((model) => model.provider === "catalog-extra"),
+    true,
+  );
+  const exact = runtime.searchModels("model-69", 50, "catalog");
+  assert.deepEqual(
+    exact.models.map(({ provider, id }) => ({ provider, id })),
+    [{ provider: "catalog", id: "model-69" }],
+  );
+});
+
+test("Web reports trusted project default overrides and refuses malformed native settings", async (t) => {
+  const { runtime, session, agentDir, cwd, provider } = await nativeRuntime(
+    t,
+    () => undefined,
+    [],
+  );
+  await mkdir(join(cwd, ".pi"));
+  await writeFile(
+    join(cwd, ".pi", "settings.json"),
+    JSON.stringify({ defaultProvider: provider.id, defaultModel: "fixture" }),
+  );
+  await writeFile(
+    join(agentDir, "settings.json"),
+    JSON.stringify({ defaultProvider: "other", defaultModel: "other-model" }),
+  );
+  session.settingsManager.setProjectTrusted(true);
+  assert.deepEqual(runtime.readModelDefaults(), {
+    model: { provider: "other", id: "other-model" },
+    projectOverride: { provider: provider.id, id: "fixture" },
+  });
+  await writeFile(join(agentDir, "settings.json"), "{malformed");
+  await assert.rejects(
+    runtime.saveModelDefault(provider.id, "fixture", {
+      expectedSessionId: session.sessionId,
+      expectedSessionPath: `current:${session.sessionId}`,
+    }),
+  );
+  assert.equal(
+    await readFile(join(agentDir, "settings.json"), "utf8"),
+    "{malformed",
+  );
+});
+
+test("Web account login uses Pi's credential store, blocks competing mutations and clears through native logout", {
+  timeout: 15_000,
+}, async (t) => {
+  const { runtime, session, modelRuntime, provider } = await nativeRuntime(
+    t,
+    () => undefined,
+    [],
+  );
+  let logins = 0;
+  modelRuntime.registerNativeProvider({
+    ...provider,
+    auth: {
+      ...provider.auth,
+      oauth: {
+        name: "Fixture account",
+        isSubscription: true,
+        login: async (interaction) => {
+          logins++;
+          const method = await interaction.prompt({
+            type: "select",
+            message: "Choose",
+            options: [{ id: "browser", label: "Browser" }],
+          });
+          assert.equal(method, "browser");
+          interaction.notify({
+            type: "auth_url",
+            url: "https://accounts.example/authorize",
+          });
+          const code = await interaction.prompt({
+            type: "manual_code",
+            message: "Callback",
+          });
+          assert.equal(code, "fixture-code");
+          return {
+            type: "oauth",
+            access: "fixture-access",
+            refresh: "fixture-refresh",
+            expires: Date.now() + 3_600_000,
+          };
+        },
+        refresh: async (credential) => credential,
+        toAuth: async (credential) => ({ apiKey: credential.access }),
+      },
+    },
+  });
+  await modelRuntime.removeRuntimeApiKey(provider.id);
+  const sessionId = session.sessionManager.getSessionId();
+  await assert.rejects(
+    runtime.startProviderLogin("wrong-session", provider.id),
+    { code: "SESSION_CONFLICT" },
+  );
+  const flow = await runtime.startProviderLogin(sessionId, provider.id);
+  const waitFor = async (predicate: () => boolean) => {
+    for (let i = 0; i < 100; i++) {
+      if (predicate()) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    assert.fail("Native login did not settle");
+  };
+  await waitFor(() =>
+    Boolean(runtime.readProviderLogin(sessionId, flow.id)?.prompt),
+  );
+  await assert.rejects(runtime.setModel(provider.id, "fixture"), {
+    code: "PROVIDER_LOGIN_CONFLICT",
+  });
+  await assert.rejects(runtime.sendPrompt("must not start during login"), {
+    code: "PROVIDER_LOGIN_CONFLICT",
+  });
+  const select = runtime.readProviderLogin(sessionId, flow.id)!.prompt!;
+  runtime.respondProviderLogin(sessionId, flow.id, select.id, "browser");
+  await waitFor(
+    () =>
+      runtime.readProviderLogin(sessionId, flow.id)?.prompt?.type ===
+      "manual_code",
+  );
+  const prompt = runtime.readProviderLogin(sessionId, flow.id)!.prompt!;
+  runtime.respondProviderLogin(sessionId, flow.id, prompt.id, "fixture-code");
+  await waitFor(
+    () => runtime.readProviderLogin(sessionId, flow.id)?.status === "succeeded",
+  );
+  assert.equal(logins, 1);
+  assert.equal(modelRuntime.isUsingSubscription(provider.id), true);
+  assert.deepEqual(await modelRuntime.listCredentials(), [
+    { providerId: provider.id, type: "oauth" },
+  ]);
+  assert.equal(
+    JSON.stringify(runtime.readProviderLogin(sessionId, flow.id)).includes(
+      "fixture-access",
+    ),
+    false,
+  );
+  assert.equal(session.messages.length, 0);
+  await runtime.logoutProvider(sessionId, provider.id);
+  assert.deepEqual(await modelRuntime.listCredentials(), []);
+  assert.equal(modelRuntime.isUsingSubscription(provider.id), false);
+});
 
 test("handled input retains its native queued work until Pi settles", {
   timeout: 15_000,

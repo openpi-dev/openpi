@@ -132,7 +132,7 @@ function snapshot(): WebSnapshot {
 function setup(overrides: Partial<Props> = {}) {
   const store = createWebStore();
   const searchModels = vi.fn(async (_query: string) => {});
-  const selectModel = vi.fn(async (_value: string) => {});
+  const selectModel = vi.fn(async (_value: string) => true);
   const clearModelSearch = vi.fn();
   const initial = snapshot();
   let props: Props = {

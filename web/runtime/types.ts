@@ -14,6 +14,7 @@ import type {
   WebHistoryAnchor,
 } from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
+import type { WebProviderLogin } from "../protocol/provider-login.ts";
 
 export type WebProviderAuthSource =
   | "stored"
@@ -34,6 +35,7 @@ export interface WebProviderAuthSummary {
   readonly custom?: boolean;
   readonly baseUrl?: string;
   readonly api?: WebModelConfiguration["api"];
+  readonly loginLabel?: string;
 }
 
 export interface WebProviderAuthProjection {
@@ -62,6 +64,12 @@ export interface WebModelConfigurations {
   revision: string;
   models: WebModelConfiguration[];
   providers?: WebProviderConfigurationSummary[];
+}
+
+/** Pi-owned global default; trusted project settings may override it. */
+export interface WebModelDefaults {
+  model: { provider: string; id: string } | null;
+  projectOverride?: { provider: string; id: string };
 }
 
 export interface WebProviderConfigurationSummary {
@@ -96,6 +104,7 @@ export type WebRuntimeRequestErrorCode =
   | "PLAN_CONTROL_UNAVAILABLE"
   | "MODEL_NOT_AVAILABLE"
   | "MODEL_CONFIGURATION_CONFLICT"
+  | "PROVIDER_LOGIN_CONFLICT"
   | "SESSION_CONFLICT"
   | "SESSION_FORK_UNAVAILABLE"
   | "SESSION_FORK_CAPACITY"
@@ -140,6 +149,8 @@ export interface WebActiveTurn {
   sessionId: string;
   commandId: string;
   epoch: number;
+  /** Native input owning the run; steering does not replace this identity. */
+  promptEntryId?: string;
   /** Actual execution start; admission/queue waiting is excluded. */
   startedAt?: number;
   /** Monotonic elapsed time captured with this projection. */
@@ -163,6 +174,8 @@ export interface WebSessionExecution {
   liveTools: LiveToolEvidence[];
   liveToolsOmitted: number;
   activeTurn?: WebActiveTurn;
+  /** Pi retry facts survive a Web reconnect; unknown counts stay omitted. */
+  retry?: { attempt?: number; maxAttempts?: number; errorMessage?: string };
   /** Native compaction observation; completion history remains in Pi entries. */
   compaction?: {
     state: "running" | "completed" | "failed" | "cancelled" | "unchanged";
@@ -255,12 +268,22 @@ export interface WebRuntimeController {
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   forkSession?(request: WebSessionForkRequest): Promise<WebSessionForkResult>;
   listModels(): WebModelSummary[];
-  searchModels(query: string, limit?: number): WebModelSearchResult;
+  searchModels(query: string, limit?: number, provider?: string): WebModelSearchResult;
   listCommands?(): WebCommandDiscoveryResult;
   listSettingsResources?(): WebSettingsResourceCatalog;
+  getWebSearchSupport?(): { available: boolean; reason?: string; model?: string; provider?: string };
+  applySetupConfiguration?(): Promise<void>;
+  reloadSettingsResources?(sessionId: string, sessionPath: string): Promise<void>;
   listProviderAuth?(): WebProviderAuthProjection;
   saveProviderKey?(sessionId: string, provider: string, apiKey: string): Promise<void>;
+  startProviderLogin?(sessionId: string, provider: string): Promise<WebProviderLogin>;
+  readProviderLogin?(sessionId: string, id?: string): WebProviderLogin | null;
+  respondProviderLogin?(sessionId: string, id: string, promptId: string, value: string): WebProviderLogin;
+  cancelProviderLogin?(sessionId: string, id: string): WebProviderLogin;
+  logoutProvider?(sessionId: string, provider: string): Promise<{ refreshRequired?: boolean }>;
   readModelConfigurations?(): Promise<WebModelConfigurations>;
+  readModelDefaults?(): WebModelDefaults;
+  saveModelDefault?(provider: string, modelId: string, options: WebModelSelectionOptions): Promise<WebModelDefaults>;
   saveModelConfiguration?(sessionId: string, revision: string, model: WebModelConfiguration): Promise<void>;
   saveModelConfigurations?(sessionId: string, revision: string, models: WebModelConfiguration[]): Promise<void>;
   changeProviderConfiguration?(sessionId: string, revision: string, change: WebProviderConfigurationChange): Promise<void>;

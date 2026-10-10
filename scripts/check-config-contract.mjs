@@ -8,6 +8,48 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CONFIG_FIELD_CONTRACT = [
   {
+    path: "webSearch.enabled",
+    writerTokens: ["params.web_search_enabled"],
+    statusTokens: ["config.webSearch.enabled"],
+    readmeTerms: ["web_search_enabled"],
+    setupTerms: ["web_search_enabled"],
+  },
+  {
+    path: "webSearch.modelSupport",
+    writerTokens: ["params.web_search_model_support"],
+    statusTokens: ["config.webSearch.modelSupport"],
+    readmeTerms: ["web_search_model_support"],
+    setupTerms: ["web_search_model_support"],
+  },
+  {
+    path: "browser.embedded",
+    writerTokens: ["params.browser_embedded"],
+    statusTokens: ["config.browser.embedded"],
+    readmeTerms: ["browser_embedded"],
+    setupTerms: ["browser_embedded"],
+  },
+  {
+    path: "browser.defaultBrowser",
+    writerTokens: ["params.browser_default"],
+    statusTokens: ["config.browser.defaultBrowser"],
+    readmeTerms: ["browser_default"],
+    setupTerms: ["browser_default"],
+  },
+  {
+    path: "browser.externalBrowsers",
+    writerTokens: ["params.browser_external"],
+    statusTokens: ["config.browser.externalBrowsers"],
+    readmeTerms: ["browser_external"],
+    setupTerms: ["browser_external"],
+  },
+  {
+    path: "browser.control",
+    writerTokens: ["params.browser_control"],
+    statusTokens: ["config.browser.control"],
+    readmeTerms: ["browser_control"],
+    setupTerms: ["browser_control"],
+  },
+  {
     path: "capabilities.discovery",
     writerTokens: ["params.capability_discovery"],
     statusTokens: ["config.capabilities.discovery"],
