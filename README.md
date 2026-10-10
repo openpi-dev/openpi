@@ -93,6 +93,8 @@ pi install npm:@tt-a1i/openpi
 
 Skill 使用 Pi 原生机制：模型根据名称、描述和路径按需用 `read` 读取；用户明确调用时，在输入开头使用 `/skill:code-review 审查这个 PR`（前提是 Pi 已加载该 Skill）。候选补全、正文展开和运行中追加输入均由 Pi 处理。OpenPI 不提供专门的 `$skill` 语法或独立的 Skill 加载通道。
 
+联网搜索是可选集成，默认不安装插件、不增加工具或能力组。Web **设置 → 联网搜索** 或 `/openpi-setup 开启联网搜索，使用 Exa` 可选择经审阅的 [`pi-web-access@0.38.0`](https://github.com/nicobailon/pi-web-access)。`web_access_action` 仅在 setup episode 中提供 `install-exa`、`install-existing`、`disable` 三种固定包操作，并再次通过 Pi 原生确认审阅安装权限。Exa 由用户明确选择，首次创建的私有 `web-search.json` 限定 Exa 搜索、直接网页/PDF 读取和插件原生动态工具加载，默认返回原始搜索结果；不启用浏览器 Cookie、Git 克隆、视频或第三方网页提取。插件仍支持模型逐次选择摘要工作流。已有文件绝不覆盖，可选择原样保留其搜索服务与权限。密钥留在插件/Pi 配置中。安装和关闭只修改 Pi 原生 package 资源配置，当前 Session 的加载状态单独显示；用户在空闲时明确重新加载或新建 Session 后生效。整个插件在 Direct/Workflow 子会话导入前排除。其他搜索服务继续通过 `/openpi-setup` 审阅插件原生配置，不增加 OpenPI 的搜索 Provider 栈。
+
 Skill 正文通过原生用户消息或工具结果进入正常 Session 历史，压缩也交给 Pi。OpenPI 不另存正文快照，不叠加隐藏正文，也不在压缩后自动补回。压缩后不保证全文仍在模型上下文中；需要时可重新读取或显式调用。普通 `read` 的输出限制和模型总上下文限制仍然适用。设计边界见 [Decision 0002](docs/decisions/0002-native-skill-lifecycle.md)。
 
 </details>

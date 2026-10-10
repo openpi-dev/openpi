@@ -656,6 +656,50 @@ test("successful configure_my_pi_setup hides the tool", async () => {
   assert.deepEqual(h.closures(), []);
 });
 
+test("optional package setup rejects mixed changes, requires native UI, and preserves files on cancellation", async () => {
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const before = existsSync(SETUP_CONFIG_PATH)
+    ? readFileSync(SETUP_CONFIG_PATH, "utf8")
+    : undefined;
+  const execute = (params: Record<string, unknown>) =>
+    tool.execute(
+      "web-setup",
+      params,
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+  await assert.rejects(
+    execute({ web_access_action: "install-exa", ui_web_theme: "dark" }),
+    /web_access_action alone/u,
+  );
+  await assert.rejects(
+    execute({ web_access_action: "install-exa" }),
+    /native confirmation UI/u,
+  );
+  h.ctx.hasUI = true;
+  let confirmations = 0;
+  h.ctx.ui.confirm = async (title, detail) => {
+    confirmations++;
+    assert.match(title, /Enable web search/u);
+    assert.match(detail, /npm:pi-web-access@0\.38\.0/u);
+    return false;
+  };
+  await assert.rejects(
+    execute({ web_access_action: "install-exa" }),
+    /cancelled/u,
+  );
+  assert.equal(confirmations, 1);
+  assert.equal(existsSync(join(setupAgentDir, "web-search.json")), false);
+  assert.equal(
+    existsSync(SETUP_CONFIG_PATH)
+      ? readFileSync(SETUP_CONFIG_PATH, "utf8")
+      : undefined,
+    before,
+  );
+});
+
 test("invalid explicit footer styles and presets list allowed values without writing or applying", async () => {
   const original =
     '{"configVersion":1,"ui":{"footerStyle":"powerline","footerLines":[["cwd"]]}}\n';
@@ -1174,7 +1218,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Capability discovery, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Capability discovery, optional Web search, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);

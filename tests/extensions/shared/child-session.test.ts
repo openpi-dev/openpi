@@ -1437,6 +1437,8 @@ test("child package snapshot handles canonical and historical package Git source
       "git:github:nicobailon/pi-intercom@feature/test",
       "git:github.com/nicobailon/pi-intercom@feature/test",
       "git:git@github.com:nicobailon/pi-intercom@feature/test",
+      "npm:pi-web-access@0.38.0",
+      "git:github.com/nicobailon/pi-web-access@v0.38.0",
     ];
     const openPiSources = [
       "git:github.com/openpi-dev/openpi",
@@ -1486,10 +1488,64 @@ test("child package snapshot handles canonical and historical package Git source
   });
 });
 
+test("web access local package and renamed tools stay out of children before execution", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const source = path.join(directory, "renamed-checkout");
+    const marker = path.join(directory, "executed");
+    await mkdir(cwd);
+    await mkdir(agentDir);
+    await mkdir(source);
+    await writeFile(
+      path.join(source, "package.json"),
+      JSON.stringify({
+        name: "pi-web-access",
+        version: "0.38.0",
+        pi: { extensions: ["index.ts"] },
+      }),
+    );
+    await writeFile(
+      path.join(source, "index.ts"),
+      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "executed"); export default function () {}`,
+    );
+    const settingsPath = path.join(agentDir, "settings.json");
+    const bytes = JSON.stringify({ packages: [source] });
+    await writeFile(settingsPath, bytes);
+    const child = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    assert.deepEqual(child.settingsManager.getGlobalSettings().packages, []);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+    assert.equal(await readFile(settingsPath, "utf8"), bytes);
+    assert.deepEqual(
+      inheritedChildToolAllowlist(["renamed_search"], undefined, {
+        cwd,
+        availableTools: [
+          {
+            name: "renamed_search",
+            sourceInfo: {
+              path: path.join(source, "index.ts"),
+              source,
+              scope: "user",
+              origin: "package",
+              baseDir: source,
+            },
+          },
+        ],
+      }),
+      [],
+    );
+  });
+});
+
 test("unverifiable local package identities fail closed before factory execution", async () => {
   for (const fixture of [
     { directoryName: "local-package-checkout", manifest: "{ invalid json" },
     { directoryName: "pi-intercom", manifest: undefined },
+    { directoryName: "pi-web-access", manifest: undefined },
   ]) {
     await withTempDir(async (directory) => {
       const cwd = path.join(directory, "project");

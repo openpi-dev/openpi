@@ -14,6 +14,7 @@ import {
 import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { WEB_ACCESS_PACKAGE } from "./web-access.ts";
 import {
   EXTERNAL_BROWSERS,
   type BrowserConfig,
@@ -1450,6 +1451,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     suggestions,
     `Browser control: ${config.browser.control ? "on" : "off"} · default ${config.browser.defaultBrowser} · embedded ${config.browser.embedded ? "allowed" : "blocked"} · external ${config.browser.externalBrowsers.join(", ") || "none"}`,
     `Browser choices: embedded (Chromium host), ${EXTERNAL_BROWSERS.join(", ")}; Safari/Firefox use native tabs.`,
+    `Web search: optional ${WEB_ACCESS_PACKAGE.source} · not bundled or enabled by default · Pi owns package configuration and Session loading · /openpi-setup manages the reviewed integration`,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"

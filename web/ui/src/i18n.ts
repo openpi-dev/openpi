@@ -703,6 +703,32 @@ const resources = {
       settingsNavigation: "Settings navigation",
       generalSettings: "General",
       browserSettings: "Browser",
+      webSearchSettings: "Web search",
+      webSearchIntro:
+        "Let your model search current sources and read the original pages.",
+      webSearchPackageDetail:
+        "Optional search, page reading, and PDF extraction through a Pi package.",
+      webSearchDefaultOff:
+        "Off by default. OpenPI adds no web tools until you choose to install and load the package.",
+      webSearchLoaded: "Package loaded in this Session",
+      webSearchNotLoaded: "Package not loaded in this Session",
+      webSearchSource: "Review plugin source",
+      webSearchProfile: "Search setup",
+      webSearchExa: "Exa — no API key required",
+      webSearchExisting: "Keep my existing search preferences",
+      webSearchProfileHint:
+        "Exa uses search queries with direct page reading. Existing preferences stay untouched. Other search services can be configured after installation.",
+      webSearchEnable: "Enable web search…",
+      webSearchDisable: "Disable web search…",
+      webSearchConfigure: "Change search service…",
+      webSearchExaRequest:
+        "Enable optional web search with Pi Web Access and Exa, which needs no API key. Let me review the installation confirmation, preserve other preferences, and do not reload automatically.",
+      webSearchExistingRequest:
+        "Enable optional web search with Pi Web Access and keep my existing search preferences unchanged. Let me review the installation confirmation, preserve other preferences, and do not reload automatically.",
+      webSearchDisableRequest:
+        "Disable Pi Web Access in my web search settings. Keep its files and preferences, and do not reload automatically.",
+      webSearchProviderRequest:
+        "Help me change the search service for my installed Pi Web Access plugin. Explain available services and permissions, preserve unrelated preferences, keep credentials with the search plugin, and do not reload automatically.",
       browserSettingsIntro:
         "Let OpenPI read pages, click, type and take screenshots.",
       browserControl: "Browser control",
@@ -2355,6 +2381,30 @@ const resources = {
       settingsNavigation: "设置导航",
       generalSettings: "常规",
       browserSettings: "浏览器",
+      webSearchSettings: "联网搜索",
+      webSearchIntro: "让模型搜索最新资料，并打开原始网页核实。",
+      webSearchPackageDetail: "通过可选 Pi 插件提供搜索、网页读取和 PDF 提取。",
+      webSearchDefaultOff:
+        "默认关闭。选择安装并加载插件后，模型才会获得联网工具。",
+      webSearchLoaded: "本会话已加载插件",
+      webSearchNotLoaded: "本会话尚未加载插件",
+      webSearchSource: "查看插件源码",
+      webSearchProfile: "搜索设置",
+      webSearchExa: "Exa — 无需 API 密钥",
+      webSearchExisting: "保留我已有的搜索偏好",
+      webSearchProfileHint:
+        "Exa 提供搜索，网页由本机直接读取。已有偏好会原样保留；安装后也可更换搜索服务。",
+      webSearchEnable: "启用联网搜索…",
+      webSearchDisable: "关闭联网搜索…",
+      webSearchConfigure: "更换搜索服务…",
+      webSearchExaRequest:
+        "启用可选联网搜索，使用 Pi Web Access 和无需 API 密钥的 Exa。让我审阅插件安装确认，保留其他偏好，不要自动重新加载。",
+      webSearchExistingRequest:
+        "启用可选联网搜索，使用 Pi Web Access，原样保留我已有的搜索偏好。让我审阅插件安装确认，保留其他偏好，不要自动重新加载。",
+      webSearchDisableRequest:
+        "关闭联网搜索设置中的 Pi Web Access 插件。保留它的文件和偏好，不要自动重新加载。",
+      webSearchProviderRequest:
+        "帮我更换已安装 Pi Web Access 插件的搜索服务。介绍可用服务与权限，保留无关偏好，密钥留在搜索插件中，不要自动重新加载。",
       browserSettingsIntro: "让 OpenPI 阅读网页、点击、输入和截图。",
       browserControl: "浏览器控制",
       browserControlHint: "关闭后，停止浏览器工具的访问。",

@@ -127,6 +127,63 @@ function providerReply() {
   });
 }
 
+it("offers optional web search without installing it or changing the default tool surface", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const configure = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi: configure });
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("webSearchSettings") }),
+  );
+  await screen.findByText(i18n.t("webSearchDefaultOff"));
+  expect(configure).not.toHaveBeenCalled();
+  expect(screen.getByText("npm:pi-web-access@0.38.0")).toBeTruthy();
+  expect(screen.getByText(i18n.t("webSearchNotLoaded"))).toBeTruthy();
+  fireEvent.change(
+    screen.getByRole("combobox", { name: i18n.t("webSearchProfile") }),
+    { target: { value: "existing" } },
+  );
+  const enable = screen.getByRole("button", {
+    name: i18n.t("webSearchEnable"),
+  });
+  await waitFor(() =>
+    expect((enable as HTMLButtonElement).disabled).toBe(false),
+  );
+  fireEvent.click(enable);
+  expect(configure).toHaveBeenCalledWith(i18n.t("webSearchExistingRequest"));
+});
+
+it("keeps configured web search separate from the current Session's loaded resources", async () => {
+  const payload = settingsPayload();
+  payload.resources.plugins.push({
+    id: "user:package:web",
+    source: "npm:pi-web-access@0.38.0",
+    scope: "user",
+    origin: "package",
+    baseDir: "/fixture/web",
+    extensions: [],
+    skills: [],
+    prompts: [],
+    themes: [],
+  });
+  Object.assign(payload.resources.plugins.at(-1)!, {
+    configured: true,
+    installed: true,
+    enabled: true,
+    name: "pi-web-access",
+  });
+  vi.stubGlobal("fetch", settingsFetcher(payload));
+  const configure = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi: configure });
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("webSearchSettings") }),
+  );
+  await screen.findByText(i18n.t("webSearchNotLoaded"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: i18n.t("webSearchDisable") }),
+  );
+  expect(configure).toHaveBeenCalledWith(i18n.t("webSearchDisableRequest"));
+});
+
 function settingsPayload() {
   return {
     sessionId: "session-a",
@@ -198,8 +255,7 @@ function settingsPayload() {
   };
 }
 
-function settingsFetcher() {
-  const payload = settingsPayload();
+function settingsFetcher(payload = settingsPayload()) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     if (path.includes("/api/settings/preferences")) {

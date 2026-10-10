@@ -16,6 +16,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_SEARCH_INTEGRATION_2026-10-10.md`](WEB_SEARCH_INTEGRATION_2026-10-10.md) — optional Pi search package comparison, default-off native setup, isolated original-image replay, transport/UI evidence, and ablation; provider-wide search quality remains unmeasured ([#169](https://github.com/openpi-dev/openpi/issues/169), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
+
 - [`PI_BROWSER_TOOLS_2026-10-09.md`](PI_BROWSER_TOOLS_2026-10-09.md) — native Pi package loading, standalone and iframe boundaries, and a locally validated browser-only pi-computer-use adaptation for OpenPI's bound embedded pages ([#169](https://github.com/openpi-dev/openpi/issues/169), [#597](https://github.com/openpi-dev/openpi/issues/597)).
 
 - [`WEB_CODEX_ACTIVITY_2026-10-08.md`](WEB_CODEX_ACTIVITY_2026-10-08.md) — Codex/Claude source comparisons, completed process folding with visible final answers, native execution ownership across steering, floating latest activity, chronological mixed thinking/tool groups, visited completion indicators, reader-owned running activity scrolling, latest native-answer keyboard focus, exact-anchor reading restoration, disconnected activity uncertainty, narrow-screen file targets, complete saved thinking, exact native retry projection, real threshold compaction with restored model configuration, restrained tool labels, matching compaction glyph, native Code Mode activation and ordinary presentation boundaries, repository gates and installed native cart/invoice evidence; numerical fidelity remains unverified ([#597](https://github.com/openpi-dev/openpi/issues/597)).

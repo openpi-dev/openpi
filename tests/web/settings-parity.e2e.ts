@@ -7,6 +7,93 @@ import {
   MOCK_SESSION_PATH,
 } from "./thinking-e2e-support.ts";
 
+test("optional web search stays off until native setup and separates configuration from loaded tools", async ({
+  page,
+}, testInfo) => {
+  await installThinkingFixture(page);
+  let configured = false;
+  const source = "npm:pi-web-access@0.38.0";
+  await page.route("**/api/settings/catalog?**", (route) =>
+    route.fulfill({
+      json: {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        setup: projectWebSetupConfig(DEFAULT_SETUP_CONFIG),
+        resources: {
+          skills: [],
+          plugins: configured
+            ? [
+                {
+                  id: "user:package:web-access",
+                  name: "pi-web-access",
+                  source,
+                  scope: "user",
+                  origin: "package",
+                  configured: true,
+                  enabled: true,
+                  installed: true,
+                  installedVersion: "0.38.0",
+                  extensions: [],
+                  skills: [],
+                  prompts: [],
+                  themes: [],
+                },
+              ]
+            : [],
+          totals: { extensions: 0, skills: 0, prompts: 0, themes: 0 },
+          diagnostics: { extensionErrors: 0, skillErrors: 0 },
+          truncation: {
+            truncated: false,
+            skillsOmitted: 0,
+            pluginsOmitted: 0,
+            resourcesOmitted: 0,
+          },
+        },
+      },
+    }),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+  await dialog.getByRole("tab", { name: "联网搜索", exact: true }).click();
+  await expect(
+    dialog.getByText("本会话尚未加载插件", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "启用联网搜索…", exact: true }),
+  ).toBeEnabled();
+  await dialog
+    .getByRole("combobox", { name: "搜索设置", exact: true })
+    .selectOption("existing");
+  await dialog.screenshot({
+    path: testInfo.outputPath("web-search-desktop.png"),
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    dialog.getByRole("combobox", { name: "设置导航", exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("combobox", { name: "搜索设置", exact: true }),
+  ).toHaveValue("existing");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await dialog.screenshot({
+    path: testInfo.outputPath("web-search-mobile.png"),
+  });
+  configured = true;
+  await dialog.getByRole("button", { name: "刷新状态", exact: true }).click();
+  await expect(
+    dialog.getByRole("button", { name: "关闭联网搜索…", exact: true }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByText("本会话尚未加载插件", { exact: true }),
+  ).toBeVisible();
+});
+
 test("resource settings preserve drafts, distinguish disabled and loaded state, and review reload on desktop and mobile", async ({
   page,
 }, testInfo) => {

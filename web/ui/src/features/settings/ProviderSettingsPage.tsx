@@ -7,10 +7,12 @@ import {
   Globe2,
   Layers3,
   Plug,
+  Search,
   SlidersHorizontal,
   X,
 } from "lucide-react";
 import { BrowserSettingsPanel } from "./BrowserSettingsPanel.tsx";
+import { WebSearchSettingsPanel } from "./WebSearchSettingsPanel.tsx";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
@@ -34,6 +36,7 @@ type SettingsSection =
   | "general"
   | "models"
   | "browser"
+  | "web-search"
   | "skills"
   | "subagents"
   | "plugins";
@@ -42,6 +45,7 @@ const settingsSections = [
   { id: "general", label: "generalSettings", Icon: SlidersHorizontal },
   { id: "models", label: "modelSettings", Icon: Cpu },
   { id: "browser", label: "browserSettings", Icon: Globe2 },
+  { id: "web-search", label: "webSearchSettings", Icon: Search },
   { id: "skills", label: "skillsSettings", Icon: Layers3 },
   { id: "subagents", label: "subagentsSettings", Icon: Bot },
   { id: "plugins", label: "pluginsSettings", Icon: Plug },
@@ -122,7 +126,10 @@ export function ProviderSettingsPage({
     setupPending || setupBusy || planBlocked || planSelectionPending;
   const currentOutcome =
     (setupSubmitted && setupSection !== section) ||
-    (!setupSubmitted && (section === "skills" || section === "plugins"))
+    (!setupSubmitted &&
+      (section === "skills" ||
+        section === "plugins" ||
+        section === "web-search"))
       ? undefined
       : !setupSubmitted || setupOutcome?.requestId !== setupBaseline.current
         ? setupOutcome
@@ -374,6 +381,23 @@ export function ProviderSettingsPage({
         )}
         <div className="provider-settings-main">
           <div
+            id="settings-panel-web-search"
+            aria-labelledby="settings-tab-web-search"
+            role="tabpanel"
+            hidden={section !== "web-search"}
+          >
+            {section === "web-search" && (
+              <WebSearchSettingsPanel
+                catalog={catalog}
+                error={catalogError}
+                pending={setupDisabled}
+                onConfigure={configureOpenPi}
+                onRefresh={refresh}
+                onReload={reloadResources}
+              />
+            )}
+          </div>
+          <div
             id="settings-panel-browser"
             aria-labelledby="settings-tab-browser"
             role="tabpanel"
@@ -512,7 +536,9 @@ export function ProviderSettingsPage({
             >
               {currentOutcome
                 ? t(
-                    (section === "skills" || section === "plugins") &&
+                    (section === "skills" ||
+                      section === "plugins" ||
+                      section === "web-search") &&
                       ["unconfirmed", "saved", "unchanged"].includes(
                         currentOutcome.status,
                       )
@@ -522,7 +548,9 @@ export function ProviderSettingsPage({
                 : t(
                     setupBusy
                       ? "setupRequestRunning"
-                      : section === "skills" || section === "plugins"
+                      : section === "skills" ||
+                          section === "plugins" ||
+                          section === "web-search"
                         ? "resourceRequestSubmitted"
                         : "setupRequestAccepted",
                   )}
