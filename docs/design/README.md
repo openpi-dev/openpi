@@ -1,8 +1,8 @@
 # Design archive
 
-- [`WEB_BROWSER_SETUP_2026-10-09.md`](WEB_BROWSER_SETUP_2026-10-09.md) — validated browser authorization, default/explicit selection and click-based setup, with separate real-provider, browser and UI evidence for #169 / #597 / #720.
+- [`WEB_BROWSER_SETUP_2026-10-09.md`](WEB_BROWSER_SETUP_2026-10-09.md) — validated browser authorization, default/explicit selection and scrollable setup, with separate real-provider, browser and UI evidence for #169 / #597 / #711 / #720.
 
-- [`WEB_MODEL_CONNECTIONS.md`](WEB_MODEL_CONNECTIONS.md) — Pi-owned account login, three connection entry points, native cancellation and reference comparison (#732 / #711).
+- [`WEB_MODEL_CONNECTIONS.md`](WEB_MODEL_CONNECTIONS.md) — Pi-owned account login, three connection entry points, current/default model selection, brand marks and native cancellation (#732 / #711).
 
 - [`WEB_WORKBAR_TOOLS.md`](WEB_WORKBAR_TOOLS.md) — scoped Files, Terminal and Changes refinement, labelled actions, native tool picker and reading-state preservation (#597 / #711).
 

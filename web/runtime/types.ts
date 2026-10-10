@@ -66,6 +66,12 @@ export interface WebModelConfigurations {
   providers?: WebProviderConfigurationSummary[];
 }
 
+/** Pi-owned global default; trusted project settings may override it. */
+export interface WebModelDefaults {
+  model: { provider: string; id: string } | null;
+  projectOverride?: { provider: string; id: string };
+}
+
 export interface WebProviderConfigurationSummary {
   provider: string;
   name: string;
@@ -262,7 +268,7 @@ export interface WebRuntimeController {
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   forkSession?(request: WebSessionForkRequest): Promise<WebSessionForkResult>;
   listModels(): WebModelSummary[];
-  searchModels(query: string, limit?: number): WebModelSearchResult;
+  searchModels(query: string, limit?: number, provider?: string): WebModelSearchResult;
   listCommands?(): WebCommandDiscoveryResult;
   listSettingsResources?(): WebSettingsResourceCatalog;
   applySetupConfiguration?(): Promise<void>;
@@ -275,6 +281,8 @@ export interface WebRuntimeController {
   cancelProviderLogin?(sessionId: string, id: string): WebProviderLogin;
   logoutProvider?(sessionId: string, provider: string): Promise<{ refreshRequired?: boolean }>;
   readModelConfigurations?(): Promise<WebModelConfigurations>;
+  readModelDefaults?(): WebModelDefaults;
+  saveModelDefault?(provider: string, modelId: string, options: WebModelSelectionOptions): Promise<WebModelDefaults>;
   saveModelConfiguration?(sessionId: string, revision: string, model: WebModelConfiguration): Promise<void>;
   saveModelConfigurations?(sessionId: string, revision: string, models: WebModelConfiguration[]): Promise<void>;
   changeProviderConfiguration?(sessionId: string, revision: string, change: WebProviderConfigurationChange): Promise<void>;

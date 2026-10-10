@@ -31,6 +31,7 @@ export default defineConfig({
     "tests/web/history-images.e2e.ts",
     "tests/web/settings-parity.e2e.ts",
     "tests/web/provider-account-login.e2e.ts",
+    "tests/web/model-connections.e2e.ts",
     "tests/web/conversation-reading.e2e.ts",
     "tests/web/workbench-polish.e2e.ts",
     "tests/web/message-rerun.e2e.ts",

@@ -1188,6 +1188,29 @@ export class WebHost {
         });
       }
     }
+    if (url.pathname === "/api/models/default" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 4 ||
+        typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 ||
+        !validSessionPath(body.sessionPath) ||
+        typeof body.provider !== "string" || !/^[a-zA-Z0-9._-]{1,160}$/u.test(body.provider) ||
+        typeof body.modelId !== "string" || !body.modelId || body.modelId.length > 256 || /[\u0000-\u001f]/u.test(body.modelId)) {
+        return this.json(response, 400, { error: "Invalid model default" });
+      }
+      if (!this.runtime.saveModelDefault) return this.json(response, 501, { error: "Model defaults unavailable" });
+      try {
+        const defaults = await this.runtime.saveModelDefault(body.provider, body.modelId, {
+          expectedSessionId: body.sessionId, expectedSessionPath: body.sessionPath,
+        });
+        this.publish("settings_changed", {});
+        return this.json(response, 200, defaults);
+      } catch (error) {
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
+          error: "Could not save the model default. Refresh status before retrying.",
+          ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}),
+        });
+      }
+    }
     if (url.pathname === "/api/models/configuration" && request.method === "POST") {
       const body = await this.readJson(request);
       if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.revision !== "string" || !validModelConfiguration(body.model)) return this.json(response, 400, { error: "Invalid model configuration" });
@@ -1821,7 +1844,7 @@ export class WebHost {
     const diagnosticSession = url.searchParams.get("sessionId");
     if (
       diagnosticSession !== null &&
-      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/models/configuration", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
+      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/models/configuration", "/api/models/default", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
       diagnosticSession !== this.runtime.sessionManager.getSessionId()
     ) {
       return this.json(response, 409, {
@@ -2109,6 +2132,10 @@ export class WebHost {
         const limitText = url.searchParams.get("limit");
         const limit = limitText === null ? WEB_MAX_MODEL_SEARCH_RESULTS : Number(limitText);
         const sessionId = url.searchParams.get("sessionId");
+        const provider = url.searchParams.get("provider") ?? undefined;
+        if (provider !== undefined && (!/^[a-zA-Z0-9._-]{1,160}$/u.test(provider) || url.searchParams.getAll("provider").length !== 1)) {
+          return this.json(response, 400, { error: "Invalid model provider" });
+        }
         if (query.length > WEB_MAX_MODEL_QUERY) {
           return this.json(response, 400, {
             code: "INVALID_MODEL_QUERY",
@@ -2130,7 +2157,7 @@ export class WebHost {
             error: "The active Session changed. Refresh the model list.",
           });
         }
-        const result = this.runtime.searchModels(query, limit);
+        const result = this.runtime.searchModels(query, limit, provider);
         return this.json(response, 200, result);
       }
     if (url.pathname === "/api/trust") {
@@ -2197,6 +2224,14 @@ export class WebHost {
         workspaceSelected: this.runtime.workspaceSelected,
         models: this.runtime.listModels().filter((model) => model.current),
       });
+    if (url.pathname === "/api/models/default") {
+      if (!this.runtime.readModelDefaults) return this.json(response, 501, { error: "Model defaults unavailable" });
+      try {
+        return this.json(response, 200, this.runtime.readModelDefaults());
+      } catch {
+        return this.json(response, 422, { error: "Could not read Pi model defaults" });
+      }
+    }
     if (url.pathname === "/api/models/configuration") {
       if (!this.runtime.readModelConfigurations) return this.json(response, 501, { error: "Model configuration unavailable" });
       try {

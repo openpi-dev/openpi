@@ -739,8 +739,9 @@ export class PiWebRuntime implements WebRuntimeController {
     }));
   }
 
-  searchModels(query: string, limit?: number) {
-    return projectWebModelSearch(this.listModels(), query, limit);
+  searchModels(query: string, limit?: number, provider?: string) {
+    const models = this.listModels().filter((model) => !provider || model.provider === provider);
+    return projectWebModelSearch(models, query, limit);
   }
 
   listCommands() {
@@ -952,6 +953,55 @@ export class PiWebRuntime implements WebRuntimeController {
 
   readModelConfigurations() {
     return readModelConfigurations(this.runtime.services.agentDir);
+  }
+
+  private modelDefaultSettings() {
+    // A fresh native manager reads shared settings without replacing the active
+    // Session's model or consuming its pending settings diagnostics.
+    const settings = SettingsManager.create(this.cwd, this.runtime.services.agentDir, {
+      projectTrusted: this.runtime.session.settingsManager.isProjectTrusted(),
+    });
+    if (settings.drainErrors().length) throw new Error("Pi model defaults could not be read");
+    for (const scope of [settings.getGlobalSettings(), settings.getProjectSettings()]) {
+      if (scope.defaultProvider !== undefined && (typeof scope.defaultProvider !== "string" || !/^[a-zA-Z0-9._-]{1,160}$/u.test(scope.defaultProvider))) throw new Error("Invalid Pi default provider");
+      if (scope.defaultModel !== undefined && (typeof scope.defaultModel !== "string" || !scope.defaultModel || scope.defaultModel.length > 256 || /[\u0000-\u001f]/u.test(scope.defaultModel))) throw new Error("Invalid Pi default model");
+    }
+    return settings;
+  }
+
+  readModelDefaults() {
+    const settings = this.modelDefaultSettings();
+    const global = settings.getGlobalSettings();
+    const project = settings.getProjectSettings();
+    const provider = settings.getDefaultProvider();
+    const id = settings.getDefaultModel();
+    return {
+      model: global.defaultProvider && global.defaultModel
+        ? { provider: global.defaultProvider, id: global.defaultModel } : null,
+      ...((project.defaultProvider || project.defaultModel) && provider && id
+        ? { projectOverride: { provider, id } } : {}),
+    };
+  }
+
+  saveModelDefault(provider: string, modelId: string, options: WebModelSelectionOptions) {
+    return this.serializeControllerMutation(() => this.mutateSettings(options.expectedSessionId ?? "", async () => {
+      if (!options.expectedSessionPath || !matchesSessionIdentity(this.sessionManager, options)) {
+        throw new WebRuntimeRequestError("The active Session changed", "SESSION_CONFLICT", 409);
+      }
+      if (!this.runtime.services.modelRuntime.getAvailableSnapshot().some((model) => model.provider === provider && model.id === modelId)) {
+        throw new WebRuntimeRequestError("Model is not available", "MODEL_NOT_AVAILABLE", 422);
+      }
+      const settings = this.modelDefaultSettings();
+      settings.setDefaultModelAndProvider(provider, modelId);
+      await settings.flush();
+      const errors = settings.drainErrors();
+      await settings.reload();
+      const saved = settings.getGlobalSettings();
+      if (errors.length || settings.drainErrors().length || saved.defaultProvider !== provider || saved.defaultModel !== modelId) {
+        throw new Error("Pi model default save was not confirmed");
+      }
+      return this.readModelDefaults();
+    }));
   }
 
   saveModelConfiguration(sessionId: string, revision: string, model: WebModelConfiguration) {
