@@ -82,7 +82,6 @@ import { useSessionHistory } from "./use-session-history.ts";
 import "./provider-outcomes.css";
 import "./conversation-navigation.css";
 import "./message-branch.css";
-import "./native-web-search.css";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -1734,7 +1733,7 @@ function TurnRun({
   for (const row of rows) {
     if (row.content === null) continue;
     const final = timing?.resultEntryId
-      ? row.responseEntryId === timing.resultEntryId
+      ? row.responseEntryId === timing.resultEntryId && row.final !== false
       : !active && row.final;
     const foldable = row.kind !== "prompt" && !final;
     const previous = blocks.at(-1);
@@ -2620,29 +2619,49 @@ export function Transcript(props: TranscriptProps) {
             .slice(0, 240)
             .join("");
         const detailRows: RenderRow[] = [];
-        for (const [searchIndex, search] of (
-          message.webSearch ?? []
-        ).entries()) {
-          detailRows.push({
-            key: `${entry.key}-native-search-${searchIndex}`,
-            turn,
-            kind: "process",
-            content: (
-              <div className="native-web-search" role="status">
-                <Globe size={16} aria-hidden="true" />
-                {t(
-                  search.status === "completed"
-                    ? "webSearchActivityCompleted"
-                    : search.status === "failed"
-                      ? "webSearchActivityFailed"
-                      : "webSearchActivityIncomplete",
-                )}
-                {search.query && <span>：{search.query}</span>}
-              </div>
-            ),
-          });
-        }
         const parts = message.parts ?? [];
+        const searches = message.webSearch ?? [];
+        const searchPosition = (search: (typeof searches)[number]) =>
+          Math.min(parts.length, search.beforePartIndex ?? 0);
+        const appendSearches = (beforePartIndex: number) => {
+          for (const [searchIndex, search] of searches.entries()) {
+            if (searchPosition(search) !== beforePartIndex) continue;
+            const status =
+              search.status === "completed"
+                ? "done"
+                : search.status === "failed"
+                  ? "error"
+                  : "warn";
+            detailRows.push({
+              key: `${entry.key}-native-search-${searchIndex}`,
+              turn,
+              kind: "process",
+              processType: "tool",
+              processToolName: "web_search",
+              processPreview: search.query,
+              processStatus: status,
+              error: search.status === "failed",
+              content: (
+                <article
+                  className="message-row assistant detail-only"
+                  data-history-entry={`${entry.entryId ?? entry.key}-native-search-${searchIndex}-body`}
+                  data-history-message={entry.entryId ?? entry.key}
+                  tabIndex={-1}
+                >
+                  <div className="message-content">
+                    <EvidenceDetails
+                      body={search.query}
+                      icon={<Globe />}
+                      name="web_search"
+                      summary={search.query}
+                      status={status}
+                    />
+                  </div>
+                </article>
+              ),
+            });
+          }
+        };
         const lastVisiblePart = parts.reduce(
           (last, part, partIndex) =>
             (part.type === "thinking" || part.type === "text") &&
@@ -2678,7 +2697,9 @@ export function Transcript(props: TranscriptProps) {
             kind: "response",
             responseEntryId: entry.entryId,
             final:
-              message.stopReason === "stop" || message.stopReason === "length",
+              actions &&
+              (message.stopReason === "stop" ||
+                message.stopReason === "length"),
             content: (
               <article
                 className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
@@ -2764,10 +2785,18 @@ export function Transcript(props: TranscriptProps) {
           });
         };
         message.parts?.forEach((part, partIndex) => {
-          if (part.type === "text" && parts[partIndex - 1]?.type !== "text") {
+          appendSearches(partIndex);
+          if (
+            part.type === "text" &&
+            (parts[partIndex - 1]?.type !== "text" ||
+              searches.some((search) => searchPosition(search) === partIndex))
+          ) {
             let text = part.text;
             let end = partIndex + 1;
-            while (parts[end]?.type === "text") {
+            while (
+              parts[end]?.type === "text" &&
+              !searches.some((search) => searchPosition(search) === end)
+            ) {
               const next = parts[end];
               if (next?.type === "text") text += next.text;
               end++;
@@ -2977,6 +3006,7 @@ export function Transcript(props: TranscriptProps) {
             });
           }
         });
+        appendSearches(parts.length);
         if (lastTextIndex < 0)
           appendText(message.content, `${entry.key}-answer`, true);
         if (

@@ -210,9 +210,110 @@ test("Responses persists and replays native output, keeps citations clickable, a
   );
   const projection = projectMessage(saved);
   assert.deepEqual(projection.webSearch, [
-    { id: "ws_fixture", status: "completed", query: ".si IANA" },
+    {
+      id: "ws_fixture",
+      status: "completed",
+      query: ".si IANA",
+      beforePartIndex: 0,
+    },
   ]);
   assert.equal(JSON.stringify(projection).includes('"output_text"'), false);
+});
+
+test("native activity projection preserves provider order among commentary, reasoning, local tools and the final answer", () => {
+  const intro = {
+    ...text,
+    id: "intro",
+    content: [{ type: "output_text", text: "Checking." }],
+  };
+  const thought = { type: "reasoning", id: "thinking", summary: [] };
+  const call = {
+    type: "function_call",
+    id: "local",
+    call_id: "read",
+    name: "read",
+    arguments: "{}",
+  };
+  const capture = createNativeSearchCapture("responses", model);
+  capture.observe({
+    type: "response.completed",
+    response: {
+      output: [
+        intro,
+        search,
+        thought,
+        call,
+        { ...search, id: "ws_second" },
+        text,
+      ],
+    },
+  });
+  const message = capture.finish(
+    assistant({
+      content: [
+        {
+          type: "text",
+          text: "Checking.",
+          textSignature: JSON.stringify({
+            v: 1,
+            id: "intro",
+            phase: "commentary",
+          }),
+        },
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: JSON.stringify(thought),
+        },
+        { type: "toolCall", id: "read|local", name: "read", arguments: {} },
+        ...assistant().content,
+      ],
+    }),
+  );
+  assert.ok(message);
+  const restored = JSON.parse(JSON.stringify(message));
+  assert.deepEqual(
+    projectMessage(restored).webSearch?.map(({ id, beforePartIndex }) => ({
+      id,
+      beforePartIndex,
+    })),
+    [
+      { id: "ws_fixture", beforePartIndex: 1 },
+      { id: "ws_second", beforePartIndex: 3 },
+    ],
+  );
+  assert.equal(
+    message.content.filter((part) => part.type === "toolCall").length,
+    1,
+  );
+  const anthropic = {
+    ...restored,
+    openpiWebSearch: {
+      ...readNativeSearchEvidence(restored),
+      adapter: "anthropic",
+      output: [
+        { type: "text", text: "Checking." },
+        { type: "server_tool_use", id: "ws_fixture", name: "web_search" },
+        {
+          type: "web_search_tool_result",
+          tool_use_id: "ws_fixture",
+          content: [],
+        },
+        { type: "thinking", thinking: "" },
+        { type: "tool_use", id: "read", name: "read" },
+        { type: "server_tool_use", id: "ws_second", name: "web_search" },
+        { type: "text", text: "Slovenia." },
+      ],
+    },
+  };
+  assert.deepEqual(
+    projectMessage(anthropic).webSearch,
+    projectMessage(restored).webSearch,
+  );
+  assert.equal(
+    JSON.stringify(projectMessage(restored)).includes('"output_text"'),
+    false,
+  );
 });
 
 test("native replay preserves ordinary tool pairing and citation-only followups", () => {

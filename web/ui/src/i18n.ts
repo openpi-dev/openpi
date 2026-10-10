@@ -713,9 +713,6 @@ const resources = {
         "Native search is unsupported or unconfirmed for this connection. No search tool is provided and no other provider is used.",
       webSearchNativeRequest:
         "Enable native web search using the current Session model and existing Pi credentials. Do not switch model, connection protocol, or search provider. Unsupported or unknown connections must receive no search tool.",
-      webSearchActivityCompleted: "Searched the web",
-      webSearchActivityFailed: "Web search failed",
-      webSearchActivityIncomplete: "Web search did not complete",
       webSearchIntro:
         "Let your model search current sources and read the original pages.",
       webSearchPackageDetail:
@@ -2402,9 +2399,6 @@ const resources = {
         "当前连接不支持或尚未确认支持原生搜索，不提供搜索工具，也不会切换到其他供应商。",
       webSearchNativeRequest:
         "开启联网搜索，使用当前会话模型的原生搜索和已有 Pi 凭据。不要切换模型、连接协议或搜索供应商；当前连接不支持或支持情况未知时，不提供搜索工具。",
-      webSearchActivityCompleted: "已搜索网页",
-      webSearchActivityFailed: "网页搜索失败",
-      webSearchActivityIncomplete: "网页搜索未完成",
       webSearchIntro: "让模型搜索最新资料，并打开原始网页核实。",
       webSearchPackageDetail: "通过可选 Pi 插件提供搜索、网页读取和 PDF 提取。",
       webSearchDefaultOff:

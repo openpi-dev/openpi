@@ -936,23 +936,75 @@ describe("OpenPI React transcript", () => {
   });
 });
 
-it("shows actual native search activity and clickable sources without local function-call artifacts", () => {
+it("folds saved native searches with ordinary tool groups while retaining provider order and the final answer", () => {
   const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  const message = {
+    role: "assistant",
+    stopReason: "stop" as const,
+    content:
+      "I will check.\nThe registry agrees.\nSlovenia. [IANA](https://www.iana.org/domains/root/db/si.html)",
+    parts: [
+      { type: "text" as const, text: "I will check." },
+      { type: "text" as const, text: "The registry agrees." },
+      {
+        type: "text" as const,
+        text: "Slovenia. [IANA](https://www.iana.org/domains/root/db/si.html)",
+      },
+    ],
+    webSearch: [
+      {
+        id: "ws",
+        query: ".si IANA",
+        status: "completed" as const,
+        beforePartIndex: 1,
+      },
+      {
+        id: "ws2",
+        query: ".si registry",
+        status: "completed" as const,
+        beforePartIndex: 1,
+      },
+      {
+        id: "ws3",
+        query: "ARNES official",
+        status: "completed" as const,
+        beforePartIndex: 2,
+      },
+    ],
+  };
   snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: "2026-10-10T00:00:00Z",
+      message: { role: "user", content: "Check this" },
+    },
     {
       id: "native-search",
       type: "message",
-      timestamp: "2026-10-10T00:00:00Z",
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content:
-          "Slovenia. [IANA](https://www.iana.org/domains/root/db/si.html)",
-        webSearch: [{ id: "ws", query: ".si IANA", status: "completed" }],
+      timestamp: "2026-10-10T00:00:39Z",
+      message,
+    },
+    {
+      id: "timing",
+      type: "custom",
+      timestamp: "2026-10-10T00:00:39Z",
+      turnTiming: {
+        version: 1,
+        sessionId: "session",
+        commandId: "run",
+        epoch: 1,
+        promptEntryId: "prompt",
+        resultEntryId: "native-search",
+        startedAt: 0,
+        finishedAt: 39000,
+        elapsedMs: 39000,
+        outcome: "completed",
       },
     },
   ];
-  renderWithI18n(
+  const { container } = renderWithI18n(
     createElement(Transcript, {
       snapshot,
       liveMessages: [],
@@ -965,9 +1017,57 @@ it("shows actual native search activity and clickable sources without local func
       onResend: async () => true,
     }),
   );
+  const intro = screen.getByText("I will check.");
+  const interim = screen.getByText("The registry agrees.");
+  const firstSearch = container.querySelector('[data-tool="web_search"]')!;
+  const elapsed = container.querySelector<HTMLButtonElement>(
+    ".turn-duration-toggle",
+  )!;
+  expect(elapsed.getAttribute("aria-expanded")).toBe("false");
+  expect(intro.closest<HTMLElement>("[hidden]")?.hidden).toBe(true);
+  expect(firstSearch.closest<HTMLElement>("[hidden]")?.hidden).toBe(true);
   expect(
-    screen.getByText(i18n.t("webSearchActivityCompleted"), { exact: false }),
+    screen.getByRole("link", { name: "IANA" }).closest("[hidden]"),
+  ).toBeNull();
+  fireEvent.click(elapsed);
+  expect(elapsed.getAttribute("aria-expanded")).toBe("true");
+  expect(intro.closest("[hidden]")).toBeNull();
+  const group = firstSearch.closest<HTMLDetailsElement>(".process-sequence")!;
+  expect(group.querySelector("summary")?.getAttribute("aria-label")).toContain(
+    i18n.t("processToolCount", { count: 2 }),
+  );
+  expect(group.dataset.status).toBe("done");
+  expect(group.open).toBe(false);
+  fireEvent.click(group.querySelector("summary")!);
+  expect(group.open).toBe(true);
+  expect(firstSearch.querySelector("summary")?.textContent).toContain(
+    i18n.t("toolActionDone_web"),
+  );
+  expect(
+    intro.compareDocumentPosition(firstSearch) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+  expect(
+    firstSearch.compareDocumentPosition(interim) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  const lastSearch = container.querySelectorAll('[data-tool="web_search"]')[2]!;
+  expect(
+    interim.compareDocumentPosition(lastSearch) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    lastSearch.compareDocumentPosition(
+      screen.getByRole("link", { name: "IANA" }),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  fireEvent.click(firstSearch.querySelector("summary")!);
+  expect((firstSearch as HTMLDetailsElement).open).toBe(true);
+  expect(firstSearch.querySelector(".details-body")?.textContent).toBe(
+    ".si IANA",
+  );
+  fireEvent.click(elapsed);
+  expect(intro.closest<HTMLElement>("[hidden]")?.hidden).toBe(true);
   expect(screen.getByRole("link", { name: "IANA" }).getAttribute("href")).toBe(
     "https://www.iana.org/domains/root/db/si.html",
   );

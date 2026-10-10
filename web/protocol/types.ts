@@ -362,7 +362,7 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
-  webSearch?: NativeSearchActivity[];
+  webSearch?: (NativeSearchActivity & { beforePartIndex?: number })[];
   timestamp?: number;
   commandId?: string;
   terminalReceipt?: ReturnType<typeof bashReceipt>;
@@ -840,13 +840,35 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
   };
 }
 
+function projectNativeSearch(message: unknown, partCount: number) {
+  const evidence = readNativeSearchEvidence(message);
+  if (!evidence?.activities.length) return undefined;
+  // Pi 0.99.1 emits one normalized content part for each of these provider
+  // blocks. Hosted calls/results are omitted by Pi, so retain their positions
+  // separately without inventing executable function calls.
+  const normalizedTypes = evidence.adapter === "responses"
+    ? ["message", "reasoning", "function_call", "custom_tool_call"]
+    : ["text", "thinking", "redacted_thinking", "tool_use"];
+  const positions = new Map<string, number>();
+  let beforePartIndex = 0;
+  for (const item of evidence.output) {
+    if (normalizedTypes.includes(String(item.type)))
+      beforePartIndex = Math.min(partCount, beforePartIndex + 1);
+    else if (typeof item.id === "string") positions.set(item.id, beforePartIndex);
+  }
+  return evidence.activities.slice(0, 32).map((item) => ({
+    id: item.id.slice(0, 128), status: item.status, query: item.query.slice(0, 500),
+    beforePartIndex: positions.get(item.id) ?? 0,
+  }));
+}
+
 export function projectMessage(message: unknown, resolvePath?: (path: string) => string | undefined): WebLiveMessage {
   const value =
     message && typeof message === "object"
       ? (message as Record<string, unknown>)
       : {};
   const content = projectContent(value, resolvePath);
-  const webSearch = readNativeSearchEvidence(value);
+  const webSearch = projectNativeSearch(value, content.parts.length);
   const details = detailsProjection(value.details);
   const role =
     typeof value.role === "string"
@@ -882,7 +904,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
-    ...(webSearch?.activities.length ? { webSearch: webSearch.activities.slice(0, 32).map((item) => ({ id: item.id.slice(0, 128), status: item.status, query: item.query.slice(0, 500) })) } : {}),
+    ...(webSearch ? { webSearch } : {}),
     ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
     ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,
