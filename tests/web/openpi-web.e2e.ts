@@ -904,6 +904,50 @@ test("side conversation shows one editor in narrow layouts and preserves both dr
   const workbar = await openWorkbarTool(page, "侧边对话");
   const sideInput = workbar.getByPlaceholder("提出一个侧边问题…");
   await sideInput.fill("Keep the side conversation draft");
+  const mainForm = mainInput.locator("..");
+  const sideForm = workbar.locator(".side-conversation-composer");
+  await page.addStyleTag({
+    content: ".composer { transition: none !important; }",
+  });
+  const surfaceStyle = (form: typeof sideForm) =>
+    form.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return Object.fromEntries(
+        [
+          "borderRadius",
+          "borderWidth",
+          "borderColor",
+          "backgroundColor",
+          "boxShadow",
+          "paddingTop",
+          "paddingRight",
+          "paddingBottom",
+          "paddingLeft",
+          "minHeight",
+        ].map((property) => [
+          property,
+          style[property as keyof CSSStyleDeclaration],
+        ]),
+      );
+    });
+  await mainInput.click();
+  const mainFocus = await surfaceStyle(mainForm);
+  await sideInput.click();
+  expect(await surfaceStyle(sideForm)).toEqual(mainFocus);
+  await workbar
+    .locator(".workbar-tab > button:first-child")
+    .filter({ hasText: "侧边对话" })
+    .click();
+  expect(await surfaceStyle(sideForm)).toEqual(await surfaceStyle(mainForm));
+  await sideForm
+    .getByRole("button", { name: "添加上下文", exact: true })
+    .click();
+  const fileReference = page.getByRole("dialog", { name: "引用工作区文件" });
+  await expect(fileReference).toBeVisible();
+  await fileReference
+    .getByRole("button", { name: "取消", exact: true })
+    .click();
+  await expect(sideInput).toHaveValue("Keep the side conversation draft");
 
   for (const width of [783, 320]) {
     await page.setViewportSize({ width, height: 900 });
@@ -914,6 +958,15 @@ test("side conversation shows one editor in narrow layouts and preserves both dr
     await sideInput.click();
     await expect(sideInput).toBeFocused();
     await expect(sideInput).toHaveCSS("outline-style", "none");
+    expect(
+      await sideForm.evaluate((element) => {
+        const toolbar = element.querySelector(".composer-toolbar")!;
+        return (
+          toolbar.getBoundingClientRect().right <=
+          element.getBoundingClientRect().right
+        );
+      }),
+    ).toBe(true);
   }
 
   await workbar.getByRole("button", { name: "打开工具", exact: true }).click();
@@ -1047,6 +1100,14 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
   await question.fill("Inspect this in isolation");
   await question.press("Enter");
   await expect(workbar.getByText("Side response")).toBeVisible();
+  await expect(workbar.locator(".model-picker-label")).toHaveText(
+    "fixture/model",
+  );
+  await workbar.getByRole("button", { name: "模型: fixture/model" }).click();
+  await expect(
+    page.getByText("这是当前侧边对话使用的模型。", { exact: true }),
+  ).toBeVisible();
+  await workbar.getByRole("button", { name: "模型: fixture/model" }).click();
   await expect(
     page.getByRole("button", { name: "停止当前轮次", exact: true }),
   ).toBeVisible();

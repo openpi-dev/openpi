@@ -1,16 +1,18 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
+import { ComplexSelector } from "@astryxdesign/core/ComplexSelector";
 import {
   ArrowLeft,
   ArrowUp,
   ChevronRight,
   FileDiff,
+  Folder,
   FolderOpen,
   Globe2,
   MessageCirclePlus,
   PanelLeftOpen,
   Plus,
   SquareTerminal,
-  StopCircle,
+  Square,
   X,
 } from "lucide-react";
 import {
@@ -28,8 +30,13 @@ import type {
   WebCapabilityProjection,
   WebCapabilitySnapshot,
   WebSubagentActivity,
+  WebSubagentDetail,
 } from "../../../../../extensions/shared/web-observer-registry.ts";
+import type { WebSnapshot } from "../../../../protocol/types.ts";
+import { formatSourceReference } from "../../../../protocol/session-sources.ts";
+import { workspaceName } from "../../lib/format.ts";
 import { WebClient } from "../../protocol/client.ts";
+import { FileReferenceDialog } from "../composer/FileReferenceDialog.tsx";
 import { FilesPanel } from "../files/FilesPanel.tsx";
 import type { DiffLineReference } from "../review/DiffCodePreview.tsx";
 import {
@@ -122,9 +129,13 @@ function WorkbarLauncher({
 
 function SideConversationPanel({
   sessionId,
+  cwd,
+  snapshot,
   activity,
 }: {
   sessionId: string;
+  cwd: string;
+  snapshot?: WebSnapshot;
   activity?: WebCapabilityProjection<WebSubagentActivity>;
 }) {
   const { t } = useTranslation();
@@ -141,6 +152,14 @@ function SideConversationPanel({
   }, [reading, selectedId, drafts]);
   const draft = drafts[selectedId ?? ""] ?? "";
   const navigation = useRef(0);
+  const [identity, setIdentity] = useState<Pick<
+    WebSubagentDetail,
+    "id" | "cwd" | "model"
+  > | null>(null);
+  const [fileReferenceOwner, setFileReferenceOwner] = useState<{
+    key: string;
+    generation: number;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,6 +172,24 @@ function SideConversationPanel({
   const items = (activity?.items ?? []).filter((item) => item.origin === "btw");
   const selected = items.find((item) => item.id === selectedId);
   const status = selected?.status ?? lastStatus;
+  const childIdentity = identity?.id === selectedId ? identity : null;
+  const model = snapshot?.models.find((model) =>
+    selectedId
+      ? `${model.provider}/${model.id}` === childIdentity?.model
+      : model.current,
+  );
+  const modelLabel = selectedId
+    ? childIdentity?.model
+    : model && `${model.provider}/${model.id}`;
+  const modelName = model?.name || model?.id || modelLabel || t("usageUnknown");
+  const thinkingLevel =
+    !selectedId && snapshot?.thinking?.supported
+      ? snapshot.thinking.level
+      : undefined;
+  const workspace = childIdentity?.cwd ?? cwd;
+  const workspaceLabel =
+    snapshot?.workspaces.find((item) => item.path === workspace)?.name ??
+    workspaceName(workspace);
   const inputLabel = t(
     selectedId ? "continueSideConversation" : "startSideConversation",
   );
@@ -164,6 +201,7 @@ function SideConversationPanel({
     setSelectedId(id);
     setLastStatus(null);
     setError(null);
+    setFileReferenceOwner(null);
   };
 
   const submit = async (event: FormEvent) => {
@@ -272,6 +310,13 @@ function SideConversationPanel({
             refreshRevision={detailRevision}
             fullView={false}
             readOnlyNote={false}
+            onDetail={(detail) =>
+              setIdentity({
+                id: detail.id,
+                cwd: detail.cwd,
+                model: detail.model,
+              })
+            }
           />
         </>
       ) : (
@@ -306,57 +351,153 @@ function SideConversationPanel({
           {error}
         </p>
       )}
-      <form
-        className="side-conversation-composer"
-        onSubmit={submit}
-        aria-busy={busy}
-      >
-        <textarea
-          value={draft}
-          disabled={busy}
-          aria-label={inputLabel}
-          placeholder={inputLabel}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            setDrafts((current) => ({ ...current, [selectedId ?? ""]: value }));
-          }}
-          onKeyDown={(event) => {
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.altKey &&
-              !event.ctrlKey &&
-              !event.metaKey &&
-              !event.defaultPrevented &&
-              !event.nativeEvent.isComposing &&
-              event.nativeEvent.keyCode !== 229
-            ) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-        />
-        <div>
-          {selectedId && status === "running" && (
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={() => void stop()}
-            >
-              <StopCircle aria-hidden="true" /> {t("stop")}
-            </button>
-          )}
-          <button
-            type="submit"
-            disabled={busy || !draft.trim()}
-            aria-label={submitLabel}
-            title={submitLabel}
-          >
-            <ArrowUp aria-hidden="true" />
-          </button>
-        </div>
-      </form>
+      <div className="composer-dock">
+        <form
+          className="composer composer-m02 side-conversation-composer"
+          onSubmit={submit}
+          aria-busy={busy}
+        >
+          <textarea
+            rows={1}
+            value={draft}
+            disabled={busy}
+            aria-label={inputLabel}
+            placeholder={inputLabel}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setDrafts((current) => ({
+                ...current,
+                [selectedId ?? ""]: value,
+              }));
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.altKey &&
+                !event.ctrlKey &&
+                !event.metaKey &&
+                !event.defaultPrevented &&
+                !event.nativeEvent.isComposing &&
+                event.nativeEvent.keyCode !== 229
+              ) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
+          <div className="composer-toolbar">
+            <div className="composer-toolbar-context">
+              <button
+                type="button"
+                className="composer-context-trigger icon-button"
+                aria-label={t("addContext")}
+                title={t("fileReference")}
+                disabled={busy}
+                onClick={() =>
+                  setFileReferenceOwner({
+                    key: selectedId ?? "",
+                    generation: navigation.current,
+                  })
+                }
+              >
+                <Plus aria-hidden="true" />
+              </button>
+              <span className="composer-workspace-label" title={workspace}>
+                <Folder aria-hidden="true" /> {workspaceLabel}
+              </span>
+            </div>
+            <div className="composer-toolbar-controls">
+              <div className="model-picker-wrap">
+                <ComplexSelector
+                  key={selectedId ?? "new"}
+                  className="model-selector model-picker"
+                  label={`${t("model")}: ${modelName}`}
+                  isLabelHidden
+                  value={modelLabel ?? ""}
+                  triggerLabel={
+                    <span
+                      className="model-thinking-label"
+                      title={modelLabel || modelName}
+                    >
+                      <span className="model-picker-label">{modelName}</span>
+                      {thinkingLevel && (
+                        <span className="model-picker-thinking">
+                          {thinkingLevel[0]!.toUpperCase() +
+                            thinkingLevel.slice(1)}
+                        </span>
+                      )}
+                    </span>
+                  }
+                  variant="ghost"
+                  size="sm"
+                  placement="above"
+                  alignment="end"
+                  isDisabled={!modelLabel}
+                >
+                  {() => (
+                    <div className="side-conversation-model-details">
+                      <strong>{modelName}</strong>
+                      <code>{modelLabel}</code>
+                      <p>
+                        {t(
+                          selectedId
+                            ? "sideConversationModelFixed"
+                            : "sideConversationModelInherited",
+                        )}
+                      </p>
+                    </div>
+                  )}
+                </ComplexSelector>
+              </div>
+              {selectedId && status === "running" && (
+                <button
+                  type="button"
+                  className="send-button"
+                  aria-label={t("stop")}
+                  title={t("stop")}
+                  disabled={busy}
+                  onClick={() => void stop()}
+                >
+                  <Square aria-hidden="true" />
+                </button>
+              )}
+              {(!selectedId ||
+                status !== "running" ||
+                Boolean(draft.trim())) && (
+                <button
+                  type="submit"
+                  className="send-button"
+                  disabled={busy || !draft.trim()}
+                  aria-label={submitLabel}
+                  title={submitLabel}
+                >
+                  <ArrowUp aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          </div>
+        </form>
+      </div>
+      <FileReferenceDialog
+        open={fileReferenceOwner !== null}
+        sessionId={sessionId}
+        onClose={() => setFileReferenceOwner(null)}
+        onInsert={(reference) => {
+          if (
+            !fileReferenceOwner ||
+            fileReferenceOwner.generation !== navigation.current ||
+            fileReferenceOwner.key !== (selectedId ?? "") ||
+            busyRef.current
+          )
+            return t("fileReferenceDraftChanged");
+          const key = fileReferenceOwner.key;
+          setDrafts((current) => ({
+            ...current,
+            [key]: `${current[key] ?? ""}${current[key] ? "\n" : ""}${formatSourceReference(reference)}`,
+          }));
+        }}
+      />
     </div>
   );
 }
@@ -422,6 +563,7 @@ export function WorkbarPanel({
   sessionId,
   sessionPath,
   cwd,
+  snapshot,
   capabilities,
   review,
   reviewInitialFilePath,
@@ -443,6 +585,7 @@ export function WorkbarPanel({
   sessionId: string;
   sessionPath: string;
   cwd: string;
+  snapshot?: WebSnapshot;
   capabilities: WebCapabilitySnapshot;
   review: GitReviewViewState;
   reviewInitialFilePath?: string;
@@ -897,6 +1040,8 @@ export function WorkbarPanel({
                   ) : kind === "side-conversation" ? (
                     <SideConversationPanel
                       sessionId={sessionId}
+                      cwd={cwd}
+                      snapshot={snapshot}
                       activity={capabilities.subagents}
                     />
                   ) : kind === "review" ? (

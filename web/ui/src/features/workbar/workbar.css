@@ -484,101 +484,14 @@
   color: var(--subtle);
 }
 
-.side-conversation-composer {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  width: calc(100% - 40px);
-  max-width: 840px;
-  min-height: 126px;
-  flex: none;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0 auto 20px;
-  padding: 14px 14px 12px;
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  background: var(--page);
-  box-shadow: 0 3px 14px #00000006;
-}
+.side-conversation-body > .composer-dock { flex: none; }
 
-.side-conversation-composer:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--border-strong) 28%, transparent), 0 3px 14px #00000006;
-}
-
-.side-conversation-composer textarea {
-  width: 100%;
-  min-width: 0;
-  min-height: 54px;
-  max-height: 180px;
-  field-sizing: content;
-  resize: none;
-  padding: 0 3px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.side-conversation-composer textarea:focus-visible {
-  outline: 0;
-}
-
-.side-conversation-composer textarea::placeholder {
-  color: var(--muted);
-}
-
-.side-conversation-composer > div {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: auto;
-}
-
-.side-conversation-composer button {
-  display: inline-flex;
-  height: 34px;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 17px;
-  background: var(--sidebar);
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.side-conversation-composer button[type="submit"] {
-  width: 34px;
-  padding: 0;
-  background: var(--text);
-  color: var(--page);
-}
-
-.side-conversation-composer button:hover:not(:disabled) {
-  opacity: .85;
-}
-
-.side-conversation-composer button.secondary {
-  color: var(--muted);
-}
-
-.side-conversation-composer button:disabled {
-  opacity: .45;
-  cursor: default;
-}
-
-.side-conversation-composer button svg {
-  width: 17px;
-  height: 17px;
-}
+.side-conversation-composer textarea { field-sizing: content; }
+.side-conversation-composer textarea:focus-visible { outline: 0; }
+.side-conversation-model-details { display: grid; gap: 6px; padding: 12px; color: var(--text); }
+.side-conversation-model-details strong { font-size: 13px; font-weight: 560; }
+.side-conversation-model-details code { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.side-conversation-model-details p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 
 .workbar-error {
   margin: 8px 16px;
@@ -961,12 +874,12 @@
     display: none;
   }
 
-  .with-workbar-panel .composer {
+  .with-workbar-panel > .conversation-shell .composer {
     min-height: 88px;
     padding: 9px 12px 8px;
   }
 
-  .with-workbar-panel .composer textarea {
+  .with-workbar-panel > .conversation-shell .composer textarea {
     min-height: 36px;
     max-height: min(140px, 25dvh);
   }

@@ -477,6 +477,10 @@ const resources = {
       backToSideConversations: "Back to side conversations",
       continueSideConversation: "Send a follow-up…",
       startSideConversation: "Ask a side question…",
+      sideConversationModelInherited:
+        "New side conversations use the main conversation’s model and thinking level.",
+      sideConversationModelFixed:
+        "This is the model used by this side conversation.",
       stop: "Stop",
       start: "Start",
       browserAddress: "Browser address",
@@ -1934,6 +1938,8 @@ const resources = {
       backToSideConversations: "返回侧边对话",
       continueSideConversation: "继续追问…",
       startSideConversation: "提出一个侧边问题…",
+      sideConversationModelInherited: "新侧边对话使用主会话的模型与思考等级。",
+      sideConversationModelFixed: "这是当前侧边对话使用的模型。",
       stop: "停止",
       start: "开始",
       browserAddress: "浏览器地址",

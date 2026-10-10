@@ -1196,6 +1196,7 @@ export function App() {
                 void actions.selectSession(selected.path)
               }
               cwd={selected.cwd}
+              snapshot={state.snapshot ?? undefined}
               capabilities={
                 isControlledSession(state.snapshot, selected)
                   ? (state.snapshot?.runtime.capabilities ?? {})
