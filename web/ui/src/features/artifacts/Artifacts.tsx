@@ -1,3 +1,7 @@
+import {
+  LayerDepthProvider,
+  useLayerDismissal,
+} from "@astryxdesign/core/Layer";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Check,
@@ -187,6 +191,7 @@ export const ArtifactProvider = forwardRef<
   const moreAbort = useRef<AbortController | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   const copyGeneration = useRef(0);
+  const panel = useRef<HTMLElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const editorInput = useRef<HTMLTextAreaElement>(null);
   const previewBody = useRef<HTMLDivElement>(null);
@@ -294,6 +299,12 @@ export const ArtifactProvider = forwardRef<
     },
     [onClose, request, requestInScope, scope],
   );
+  useLayerDismissal({
+    isActive: requestInScope && active,
+    onDismiss: close,
+    getContainer: () => panel.current,
+    isPresent: () => panel.current?.contains(document.activeElement) ?? false,
+  });
   useImperativeHandle(ref, () => ({ close }), [close]);
   useLayoutEffect(() => {
     if (editing) editorInput.current?.focus({ preventScroll: true });
@@ -530,376 +541,372 @@ export const ArtifactProvider = forwardRef<
     <ArtifactContext.Provider value={context}>
       {children}
       {request && requestInScope && (
-        <aside
-          className={`artifact-panel${embedded ? " artifact-panel-embedded" : ""}`}
-          aria-label={t("filePreview")}
-          onKeyDown={(event) => {
-            if (
-              embedded &&
-              (event.metaKey || event.ctrlKey) &&
-              event.key.toLowerCase() === "s"
-            ) {
-              event.preventDefault();
-              event.stopPropagation();
-              void editor.save();
-              return;
-            }
-            if (
-              event.key === "Escape" &&
-              !event.nativeEvent.isComposing &&
-              !event.defaultPrevented
-            ) {
-              event.preventDefault();
-              event.stopPropagation();
-              close();
-            }
-          }}
-        >
-          <header>
-            <div className="artifact-title">
-              <small title={path}>
-                {embedded
-                  ? path.split(/[\\/]/u).slice(0, -1).at(-1) || t("files")
-                  : `${t("filePreview")} · ${t("artifactReadOnly")}`}
-              </small>
-              {embedded && <ChevronRight aria-hidden="true" />}
-              <h2 title={path}>{name}</h2>
-              {editor.dirty && (
-                <span
-                  className="file-unsaved"
-                  role="img"
-                  title={t("filesUnsaved")}
-                  aria-label={t("filesUnsaved")}
-                >
-                  ●
-                </span>
-              )}
-            </div>
-            <div className="artifact-header-actions">
-              {embedded && preview?.text !== undefined && (
-                <>
-                  <fieldset
-                    className="file-mode-switch"
-                    aria-label={t("filesMode")}
-                  >
-                    <button
-                      type="button"
-                      aria-pressed={!editing}
-                      onClick={() => setEditing(false)}
-                    >
-                      {t("filesPreview")}
-                    </button>
-                    <button
-                      type="button"
-                      aria-pressed={editing}
-                      disabled={!editor.canEdit}
-                      title={t(
-                        preview.truncated
-                          ? "filesEditLoadFirst"
-                          : !preview.artifact.editable
-                            ? "filesEditUnavailable"
-                            : "filesEdit",
-                      )}
-                      onClick={() => {
-                        previewScroll.current =
-                          previewBody.current?.scrollTop ?? 0;
-                        setEditing(true);
-                      }}
-                    >
-                      {t("filesEdit")}
-                    </button>
-                  </fieldset>
-                  {(editing || editor.dirty || editor.saving) && (
-                    <button
-                      type="button"
-                      className="file-save-button"
-                      title={`${t("filesSave")} (Cmd/Ctrl+S)`}
-                      disabled={
-                        !editor.dirty || editor.saving || !editor.canEdit
-                      }
-                      onClick={() => void editor.save()}
-                    >
-                      <Save aria-hidden="true" />
-                      {t(
-                        editor.saving
-                          ? "filesSaving"
-                          : editor.dirty
-                            ? "filesSave"
-                            : "filesSaved",
-                      )}
-                    </button>
-                  )}
-                  {editor.dirty && (
-                    <button
-                      type="button"
-                      title={t("filesDiscard")}
-                      aria-label={t("filesDiscard")}
-                      disabled={editor.saving}
-                      onClick={() => {
-                        if (window.confirm(t("filesDiscardConfirm")))
-                          editor.discard();
-                      }}
-                    >
-                      <RotateCcw aria-hidden="true" />
-                    </button>
-                  )}
-                </>
-              )}
-              {!embedded &&
-                preview?.text !== undefined &&
-                hasVisualFilePreview(name) && (
-                  <button
-                    type="button"
-                    className="file-source-toggle"
-                    aria-pressed={source}
-                    onClick={() => setSource((value) => !value)}
-                  >
-                    {source ? (
-                      <Eye aria-hidden="true" />
-                    ) : (
-                      <Code2 aria-hidden="true" />
-                    )}
-                    {t(source ? "filesPreview" : "filesSource")}
-                  </button>
-                )}
-              <Tooltip content={t("copyFilePath")} placement="below">
-                <button
-                  className="artifact-icon-button"
-                  type="button"
-                  aria-label={t("copyFilePath")}
-                  onClick={() => {
-                    const generation = ++copyGeneration.current;
-                    void copyText(path).then((success) => {
-                      if (generation === copyGeneration.current)
-                        setCopyStatus(success ? "copied" : "failed");
-                    });
-                  }}
-                >
-                  {copyStatus === "copied" ? (
-                    <Check aria-hidden="true" />
-                  ) : (
-                    <Clipboard aria-hidden="true" />
-                  )}
-                </button>
-              </Tooltip>
-              <Tooltip content={t("refreshFile")} placement="below">
-                <button
-                  className="artifact-icon-button"
-                  type="button"
-                  aria-label={t("refreshFile")}
-                  onClick={() => {
-                    copyGeneration.current++;
-                    setCopyStatus(null);
-                    setError(null);
-                    setAccessDenied(false);
-                    setChanged(false);
-                    nextParent.current = undefined;
-                    setRequest((value) =>
-                      value
-                        ? {
-                            sessionId,
-                            sessionPath,
-                            reference: preview
-                              ? encodeURI(preview.artifact.path)
-                              : value.reference,
-                            ...(value.external ? { external: true } : {}),
-                            ...(preview ? {} : { parent: value.parent }),
-                          }
-                        : null,
-                    );
-                  }}
-                >
-                  <RefreshCw aria-hidden="true" /> {t("refreshFile")}
-                </button>
-              </Tooltip>
-              <Tooltip content={t("downloadFile")} placement="below">
-                <button
-                  className="artifact-icon-button"
-                  type="button"
-                  aria-label={t(busy ? "downloadingFile" : "downloadFile")}
-                  disabled={!preview || busy}
-                  onClick={() => void download()}
-                >
-                  <Download aria-hidden="true" />{" "}
-                  {busy ? t("downloadingFile") : t("downloadFile")}
-                </button>
-              </Tooltip>
-              <Tooltip content={t("closePreview")} placement="below">
-                <button
-                  className="artifact-icon-button"
-                  ref={closeButton}
-                  type="button"
-                  aria-label={t("closePreview")}
-                  onClick={() => close()}
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </Tooltip>
-            </div>
-          </header>
-          <div
-            className="artifact-panel-body"
-            ref={previewBody}
-            onScroll={(event) => {
-              if (restoringScroll.current) return;
-              previewScroll.current = event.currentTarget.scrollTop;
-              if (embedded && reading?.artifact)
-                reading.artifact.scroll = previewScroll.current;
+        <LayerDepthProvider>
+          <aside
+            ref={panel}
+            className={`artifact-panel${embedded ? " artifact-panel-embedded" : ""}`}
+            aria-label={t("filePreview")}
+            onKeyDown={(event) => {
+              if (
+                embedded &&
+                (event.metaKey || event.ctrlKey) &&
+                event.key.toLowerCase() === "s"
+              ) {
+                event.preventDefault();
+                event.stopPropagation();
+                void editor.save();
+                return;
+              }
             }}
           >
-            {!embedded && (
-              <div className="artifact-source">
-                <code title={path}>{path}</code>
+            <header>
+              <div className="artifact-title">
+                <small title={path}>
+                  {embedded
+                    ? path.split(/[\\/]/u).slice(0, -1).at(-1) || t("files")
+                    : `${t("filePreview")} · ${t("artifactReadOnly")}`}
+                </small>
+                {embedded && <ChevronRight aria-hidden="true" />}
+                <h2 title={path}>{name}</h2>
+                {editor.dirty && (
+                  <span
+                    className="file-unsaved"
+                    role="img"
+                    title={t("filesUnsaved")}
+                    aria-label={t("filesUnsaved")}
+                  >
+                    ●
+                  </span>
+                )}
               </div>
-            )}
-            {copyStatus && (
-              <p role="status">
-                {t(copyStatus === "copied" ? "filePathCopied" : "copyFailed")}
-              </p>
-            )}
-            {error && (
-              <p role="status" className="evidence-warning">
-                {preview ? t("artifactOlderPreview") : ""}
-                {error}
-              </p>
-            )}
-            {changed && (
-              <p className="evidence-warning" role="status">
-                {t("filesContentChanged")}
-              </p>
-            )}
-            {editor.message && (
-              <p
-                role="status"
-                className={
-                  editor.message.error ? "evidence-warning" : "file-save-status"
-                }
-              >
-                {editor.message.text}
-              </p>
-            )}
-            {editor.conflict && (
-              <div className="file-conflict">
-                <p>{t("filesSaveConflict")}</p>
-                <details>
-                  <summary>{t("filesDiskVersion")}</summary>
-                  <pre>{preview?.text}</pre>
-                </details>
-                <button
-                  type="button"
-                  disabled={!editor.canEdit || editor.saving}
-                  onClick={editor.reconcile}
-                >
-                  {t("filesReconcile")}
-                </button>
-              </div>
-            )}
-            {accessDenied &&
-              !request.external &&
-              /^(?:\/(?!\/)|[a-z]:[\\/])/iu.test(request.reference) && (
-                <div className="artifact-external-access">
-                  <p>{t("artifactExternalAccess")}</p>
+              <div className="artifact-header-actions">
+                {embedded && preview?.text !== undefined && (
+                  <>
+                    <fieldset
+                      className="file-mode-switch"
+                      aria-label={t("filesMode")}
+                    >
+                      <button
+                        type="button"
+                        aria-pressed={!editing}
+                        onClick={() => setEditing(false)}
+                      >
+                        {t("filesPreview")}
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={editing}
+                        disabled={!editor.canEdit}
+                        title={t(
+                          preview.truncated
+                            ? "filesEditLoadFirst"
+                            : !preview.artifact.editable
+                              ? "filesEditUnavailable"
+                              : "filesEdit",
+                        )}
+                        onClick={() => {
+                          previewScroll.current =
+                            previewBody.current?.scrollTop ?? 0;
+                          setEditing(true);
+                        }}
+                      >
+                        {t("filesEdit")}
+                      </button>
+                    </fieldset>
+                    {(editing || editor.dirty || editor.saving) && (
+                      <button
+                        type="button"
+                        className="file-save-button"
+                        title={`${t("filesSave")} (Cmd/Ctrl+S)`}
+                        disabled={
+                          !editor.dirty || editor.saving || !editor.canEdit
+                        }
+                        onClick={() => void editor.save()}
+                      >
+                        <Save aria-hidden="true" />
+                        {t(
+                          editor.saving
+                            ? "filesSaving"
+                            : editor.dirty
+                              ? "filesSave"
+                              : "filesSaved",
+                        )}
+                      </button>
+                    )}
+                    {editor.dirty && (
+                      <button
+                        type="button"
+                        title={t("filesDiscard")}
+                        aria-label={t("filesDiscard")}
+                        disabled={editor.saving}
+                        onClick={() => {
+                          if (window.confirm(t("filesDiscardConfirm")))
+                            editor.discard();
+                        }}
+                      >
+                        <RotateCcw aria-hidden="true" />
+                      </button>
+                    )}
+                  </>
+                )}
+                {!embedded &&
+                  preview?.text !== undefined &&
+                  hasVisualFilePreview(name) && (
+                    <button
+                      type="button"
+                      className="file-source-toggle"
+                      aria-pressed={source}
+                      onClick={() => setSource((value) => !value)}
+                    >
+                      {source ? (
+                        <Eye aria-hidden="true" />
+                      ) : (
+                        <Code2 aria-hidden="true" />
+                      )}
+                      {t(source ? "filesPreview" : "filesSource")}
+                    </button>
+                  )}
+                <Tooltip content={t("copyFilePath")} placement="below">
                   <button
+                    className="artifact-icon-button"
                     type="button"
+                    aria-label={t("copyFilePath")}
                     onClick={() => {
-                      focusClose.current = true;
-                      setError(null);
-                      setAccessDenied(false);
-                      setRequest({
-                        ...request,
-                        parent: undefined,
-                        external: true,
+                      const generation = ++copyGeneration.current;
+                      void copyText(path).then((success) => {
+                        if (generation === copyGeneration.current)
+                          setCopyStatus(success ? "copied" : "failed");
                       });
                     }}
                   >
-                    {t("artifactAuthorizeFile")}
+                    {copyStatus === "copied" ? (
+                      <Check aria-hidden="true" />
+                    ) : (
+                      <Clipboard aria-hidden="true" />
+                    )}
+                  </button>
+                </Tooltip>
+                <Tooltip content={t("refreshFile")} placement="below">
+                  <button
+                    className="artifact-icon-button"
+                    type="button"
+                    aria-label={t("refreshFile")}
+                    onClick={() => {
+                      copyGeneration.current++;
+                      setCopyStatus(null);
+                      setError(null);
+                      setAccessDenied(false);
+                      setChanged(false);
+                      nextParent.current = undefined;
+                      setRequest((value) =>
+                        value
+                          ? {
+                              sessionId,
+                              sessionPath,
+                              reference: preview
+                                ? encodeURI(preview.artifact.path)
+                                : value.reference,
+                              ...(value.external ? { external: true } : {}),
+                              ...(preview ? {} : { parent: value.parent }),
+                            }
+                          : null,
+                      );
+                    }}
+                  >
+                    <RefreshCw aria-hidden="true" /> {t("refreshFile")}
+                  </button>
+                </Tooltip>
+                <Tooltip content={t("downloadFile")} placement="below">
+                  <button
+                    className="artifact-icon-button"
+                    type="button"
+                    aria-label={t(busy ? "downloadingFile" : "downloadFile")}
+                    disabled={!preview || busy}
+                    onClick={() => void download()}
+                  >
+                    <Download aria-hidden="true" />{" "}
+                    {busy ? t("downloadingFile") : t("downloadFile")}
+                  </button>
+                </Tooltip>
+                <Tooltip content={t("closePreview")} placement="below">
+                  <button
+                    className="artifact-icon-button"
+                    ref={closeButton}
+                    type="button"
+                    aria-label={t("closePreview")}
+                    onClick={() => close()}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </Tooltip>
+              </div>
+            </header>
+            <div
+              className="artifact-panel-body"
+              ref={previewBody}
+              onScroll={(event) => {
+                if (restoringScroll.current) return;
+                previewScroll.current = event.currentTarget.scrollTop;
+                if (embedded && reading?.artifact)
+                  reading.artifact.scroll = previewScroll.current;
+              }}
+            >
+              {!embedded && (
+                <div className="artifact-source">
+                  <code title={path}>{path}</code>
+                </div>
+              )}
+              {copyStatus && (
+                <p role="status">
+                  {t(copyStatus === "copied" ? "filePathCopied" : "copyFailed")}
+                </p>
+              )}
+              {error && (
+                <p role="status" className="evidence-warning">
+                  {preview ? t("artifactOlderPreview") : ""}
+                  {error}
+                </p>
+              )}
+              {changed && (
+                <p className="evidence-warning" role="status">
+                  {t("filesContentChanged")}
+                </p>
+              )}
+              {editor.message && (
+                <p
+                  role="status"
+                  className={
+                    editor.message.error
+                      ? "evidence-warning"
+                      : "file-save-status"
+                  }
+                >
+                  {editor.message.text}
+                </p>
+              )}
+              {editor.conflict && (
+                <div className="file-conflict">
+                  <p>{t("filesSaveConflict")}</p>
+                  <details>
+                    <summary>{t("filesDiskVersion")}</summary>
+                    <pre>{preview?.text}</pre>
+                  </details>
+                  <button
+                    type="button"
+                    disabled={!editor.canEdit || editor.saving}
+                    onClick={editor.reconcile}
+                  >
+                    {t("filesReconcile")}
                   </button>
                 </div>
               )}
-            {!preview && !error && <p role="status">{t("readingFile")}</p>}
-            {preview && (
-              <>
-                {preview.truncated && (
-                  <p className="evidence-warning">
-                    {t("artifactPreviewTruncated")}
-                  </p>
+              {accessDenied &&
+                !request.external &&
+                /^(?:\/(?!\/)|[a-z]:[\\/])/iu.test(request.reference) && (
+                  <div className="artifact-external-access">
+                    <p>{t("artifactExternalAccess")}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        focusClose.current = true;
+                        setError(null);
+                        setAccessDenied(false);
+                        setRequest({
+                          ...request,
+                          parent: undefined,
+                          external: true,
+                        });
+                      }}
+                    >
+                      {t("artifactAuthorizeFile")}
+                    </button>
+                  </div>
                 )}
-                {/\.(?:png|jpe?g|gif|webp)$/iu.test(preview.artifact.name) ? (
-                  <ArtifactImagePreview
-                    key={JSON.stringify([
-                      preview.artifact.sessionId,
-                      preview.artifact.path,
-                      preview.artifact.handle,
-                      preview.artifact.revision,
-                    ])}
-                    artifact={preview.artifact}
-                    client={client}
-                  />
-                ) : (
-                  <ArtifactContext.Provider
-                    value={{
-                      open,
-                      disabled,
-                      parent: preview.artifact.handle,
-                      sessionId,
-                    }}
-                  >
-                    {embedded && editor.canEdit && (
-                      <textarea
-                        ref={editorInput}
-                        hidden={!editing}
-                        className="file-editor"
-                        aria-label={t("filesEditor")}
-                        spellCheck={false}
-                        autoCapitalize="off"
-                        autoCorrect="off"
-                        maxLength={1024 * 1024}
-                        value={editor.text}
-                        disabled={editor.saving}
-                        onChange={(event) =>
-                          editor.change(event.currentTarget.value)
-                        }
-                      />
-                    )}
-                    {!(embedded && editing && editor.canEdit) && (
-                      <FileContent
-                        key={`${preview.artifact.path}:${preview.artifact.revision}`}
-                        preview={
-                          editor.dirty
-                            ? { ...preview, text: editor.text }
-                            : preview
-                        }
-                        client={client}
-                        source={source}
-                      />
-                    )}
-                  </ArtifactContext.Provider>
-                )}
-                {preview.nextOffset !== undefined && (
-                  <button
-                    type="button"
-                    className="file-read-more"
-                    disabled={readingMore || changed}
-                    onClick={() => void readMore()}
-                  >
-                    {t(readingMore ? "readingFile" : "filesReadMore")}
-                  </button>
-                )}
-                <details className="artifact-file-details">
-                  <summary>{t("artifactFileDetails")}</summary>
-                  <p className="artifact-session">
-                    {t("artifactSession", { sessionId })}
-                  </p>
-                  <p className="artifact-revision">
-                    {t("artifactVersion")}:{" "}
-                    <code>{preview.artifact.revision}</code> ·{" "}
-                    {t("artifactBytes", { count: preview.artifact.bytes })}
-                  </p>
-                </details>
-              </>
-            )}
-          </div>
-        </aside>
+              {!preview && !error && <p role="status">{t("readingFile")}</p>}
+              {preview && (
+                <>
+                  {preview.truncated && (
+                    <p className="evidence-warning">
+                      {t("artifactPreviewTruncated")}
+                    </p>
+                  )}
+                  {/\.(?:png|jpe?g|gif|webp)$/iu.test(preview.artifact.name) ? (
+                    <ArtifactImagePreview
+                      key={JSON.stringify([
+                        preview.artifact.sessionId,
+                        preview.artifact.path,
+                        preview.artifact.handle,
+                        preview.artifact.revision,
+                      ])}
+                      artifact={preview.artifact}
+                      client={client}
+                    />
+                  ) : (
+                    <ArtifactContext.Provider
+                      value={{
+                        open,
+                        disabled,
+                        parent: preview.artifact.handle,
+                        sessionId,
+                      }}
+                    >
+                      {embedded && editor.canEdit && (
+                        <textarea
+                          ref={editorInput}
+                          hidden={!editing}
+                          className="file-editor"
+                          aria-label={t("filesEditor")}
+                          spellCheck={false}
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                          maxLength={1024 * 1024}
+                          value={editor.text}
+                          disabled={editor.saving}
+                          onChange={(event) =>
+                            editor.change(event.currentTarget.value)
+                          }
+                        />
+                      )}
+                      {!(embedded && editing && editor.canEdit) && (
+                        <FileContent
+                          key={`${preview.artifact.path}:${preview.artifact.revision}`}
+                          preview={
+                            editor.dirty
+                              ? { ...preview, text: editor.text }
+                              : preview
+                          }
+                          client={client}
+                          source={source}
+                        />
+                      )}
+                    </ArtifactContext.Provider>
+                  )}
+                  {preview.nextOffset !== undefined && (
+                    <button
+                      type="button"
+                      className="file-read-more"
+                      disabled={readingMore || changed}
+                      onClick={() => void readMore()}
+                    >
+                      {t(readingMore ? "readingFile" : "filesReadMore")}
+                    </button>
+                  )}
+                  <details className="artifact-file-details">
+                    <summary>{t("artifactFileDetails")}</summary>
+                    <p className="artifact-session">
+                      {t("artifactSession", { sessionId })}
+                    </p>
+                    <p className="artifact-revision">
+                      {t("artifactVersion")}:{" "}
+                      <code>{preview.artifact.revision}</code> ·{" "}
+                      {t("artifactBytes", { count: preview.artifact.bytes })}
+                    </p>
+                  </details>
+                </>
+              )}
+            </div>
+          </aside>
+        </LayerDepthProvider>
       )}
     </ArtifactContext.Provider>
   );

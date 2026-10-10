@@ -2,13 +2,7 @@ import { Dialog } from "@astryxdesign/core/Dialog";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { ArrowDown, RefreshCw, RotateCcw } from "lucide-react";
-import {
-  type KeyboardEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebInteractiveTerminalEvent } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
@@ -518,10 +512,6 @@ export function InteractiveTerminal({
         purpose="form"
         width={430}
         aria-label={t("restartTerminalTitle")}
-        onKeyDown={(event: KeyboardEvent<HTMLDialogElement>) => {
-          // Keep native dialog dismissal ahead of the workbar's outer close.
-          if (event.key === "Escape") event.stopPropagation();
-        }}
         onOpenChange={(open: boolean) => {
           if (!open && !restartInFlight.current) setRestartOpen(false);
         }}

@@ -167,6 +167,67 @@ async function open(tool: "files" | "browser" | "review") {
   );
 }
 
+it("dismisses only the focused Files tooltip before its preview and Workbar, leaving outside Settings Escape alone", async () => {
+  const current = snapshot("/workspace/tooltip-escape.jsonl", "tooltip-escape");
+  webStore.setState({
+    snapshot: current,
+    selectedPath: current.selectedSession!.path,
+  });
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+    this: Element,
+    selector: string,
+  ) {
+    // jsdom has no native Popover API; expose Astryx's visible fallback.
+    if (selector === ":popover-open")
+      return this instanceof HTMLElement && this.style.display === "block";
+    return matches.call(this, selector);
+  });
+  const view = render(
+    createElement(
+      Providers,
+      null,
+      createElement("input", { "aria-label": "Settings input" }),
+      createElement(App),
+    ),
+  );
+  await open("files");
+  fireEvent.click(await screen.findByRole("button", { name: "README.md" }));
+  await screen.findByRole("heading", { name: "Read me" });
+  const workbar = view.container.querySelector<HTMLElement>(".workbar-panel")!;
+  const preview = view.container.querySelector<HTMLElement>(".artifact-panel")!;
+  const copy = within(preview).getByRole("button", {
+    name: i18n.t("copyFilePath"),
+  });
+  fireEvent.keyDown(document.activeElement!, { key: "Tab" });
+  act(() => copy.focus());
+  expect(document.activeElement).toBe(copy);
+  fireEvent.mouseEnter(copy);
+  const tooltip = (await screen.findByText(i18n.t("copyFilePath"))).closest(
+    '[role="tooltip"]',
+  )!;
+  await waitFor(() => expect(tooltip.matches(":popover-open")).toBe(true));
+  expect(fireEvent.keyDown(copy, { key: "Escape" })).toBe(false);
+  expect(tooltip.isConnected && tooltip.matches(":popover-open")).toBe(false);
+  expect(view.container.querySelector(".artifact-panel")).toBe(preview);
+  expect(workbar.hidden).toBe(false);
+  const settings = screen.getByRole("textbox", { name: "Settings input" });
+  act(() => settings.focus());
+  fireEvent.keyDown(settings, { key: "Escape" });
+  expect(document.activeElement).toBe(settings);
+  expect(view.container.querySelector(".artifact-panel")).toBe(preview);
+  expect(workbar.hidden).toBe(false);
+  act(() => copy.focus());
+  fireEvent.pointerDown(copy, { pointerType: "mouse" });
+  expect(fireEvent.keyDown(copy, { key: "Escape" })).toBe(false);
+  expect(view.container.querySelector(".artifact-panel")).toBeNull();
+  expect(workbar.hidden).toBe(false);
+  const search = screen.getByRole("textbox", { name: i18n.t("filesSearch") });
+  act(() => search.focus());
+  expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+  expect(view.container.querySelector(".workbar-panel")).toBeNull();
+});
+
 it("restores a comparison source, filter and reading position after reloading the selected diff for the exact Session", async () => {
   const file: WebGitReviewFile = {
     path: "src/example.ts",

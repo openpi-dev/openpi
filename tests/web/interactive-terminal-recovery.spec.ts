@@ -402,6 +402,73 @@ it("renames a terminal tab and retains its title while new output changes its vi
   expect(client.create).toHaveBeenCalledOnce();
 });
 
+it("Escape cancels terminal renaming without closing its Workbar or changing the native terminal", async () => {
+  const client = fixture();
+  const reading: WorkbarReadingState = {};
+  const dismissWorkbar = vi.fn();
+  function Panel() {
+    const [visible, setVisible] = useState(true);
+    return createElement(WorkbarPanel, {
+      visible,
+      requestedTool: "terminal",
+      requestRevision: 0,
+      sessionId: "a",
+      sessionPath: "/workspace/a.jsonl",
+      cwd: "/workspace",
+      capabilities: {},
+      review: {
+        result: null,
+        loading: false,
+        error: null,
+        refresh: async () => {},
+      },
+      conversationCollapsed: false,
+      onRestoreConversation: () => {},
+      onClose: () => {
+        dismissWorkbar();
+        setVisible(false);
+      },
+      readingState: reading,
+    });
+  }
+  const view = render(createElement(Providers, null, createElement(Panel)));
+  await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+  const terminal = terminals.instances[0]!;
+  const workbar = view.container.querySelector<HTMLElement>(".workbar-panel")!;
+  const tab = within(screen.getByRole("toolbar")).getByRole("button", {
+    name: i18n.t("terminal"),
+  });
+  tab.focus();
+  fireEvent.keyDown(tab, { key: "F2" });
+  const dialog = await screen.findByRole("dialog", {
+    name: i18n.t("renameTerminal"),
+  });
+  const name = within(dialog).getByRole("textbox", {
+    name: i18n.t("terminalName"),
+  });
+  name.focus();
+  fireEvent.change(name, { target: { value: "Unsaved name" } });
+  expect(document.activeElement).toBe(name);
+  fireEvent.keyDown(name, { key: "Escape" });
+
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(tab));
+  expect(workbar.hidden).toBe(false);
+  expect(dismissWorkbar).not.toHaveBeenCalled();
+  expect(
+    within(screen.getByRole("toolbar")).getByRole("button", {
+      name: i18n.t("terminal"),
+    }),
+  ).toBe(tab);
+  expect(reading.terminals?.terminal?.title).toBeUndefined();
+  expect(reading.terminals?.terminal?.id).toBe("terminal-a");
+  expect(client.create).toHaveBeenCalledOnce();
+  expect(client.close).not.toHaveBeenCalled();
+  expect(terminals.instances).toEqual([terminal]);
+  expect(terminal.disposed).toBe(false);
+  expect(client.attempts[0]!.signal.aborted).toBe(false);
+});
+
 it("failed terminal close keeps its tab and native ID available for an explicit retry", async () => {
   const client = fixture();
   client.close.mockRejectedValueOnce(new Error("Close was not confirmed"));
