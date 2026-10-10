@@ -40,7 +40,7 @@ export function ProviderConfigurationCard({
   busy: boolean;
   onDirty: (dirty: boolean) => void;
   onSaving: (saving: boolean) => void;
-  onClose: (savedName?: string) => void;
+  onClose: (savedName?: string, savedProvider?: string) => void;
   onReload: () => void;
 }) {
   const { t } = useTranslation();
@@ -210,7 +210,7 @@ export function ProviderConfigurationCard({
       if (controller.signal.aborted) return;
       setApiKey("");
       callbacks.current.onDirty(false);
-      onClose(draft.name || draft.provider);
+      onClose(draft.name || draft.provider, draft.provider);
     } catch (reason) {
       if (!controller.signal.aborted)
         setError(
@@ -566,7 +566,9 @@ export function ProviderConfigurationCard({
             auth={auth}
             busy={busy || saving || dirty}
             onSaving={setAccountSaving}
-            onAuthenticated={() => onClose(draft.name || draft.provider)}
+            onAuthenticated={() =>
+              onClose(draft.name || draft.provider, draft.provider)
+            }
             onReload={onReload}
           />
           {dirty && <p className="models-hint">{t("accountLoginUnsaved")}</p>}

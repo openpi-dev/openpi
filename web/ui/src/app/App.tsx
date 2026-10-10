@@ -1314,7 +1314,8 @@ export function App() {
               : undefined
           }
           modelSelectionPending={state.modelSelectionPending}
-          onSelectModel={(value) => void actions.selectModel(value)}
+          sessionPath={providerSettings.sessionPath}
+          onSelectModel={(value) => actions.selectModel(value)}
           onConfigureOpenPi={configureOpenPiFromSettings}
           interaction={
             state.snapshot &&

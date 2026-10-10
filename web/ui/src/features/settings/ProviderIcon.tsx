@@ -62,13 +62,40 @@ const icons: Record<string, string> = {
   "z-ai": zai,
 };
 
+// Small brand accents only. Text, controls and connection status keep the theme.
+const colors: Record<string, string> = {
+  anthropic: "#c8795a",
+  deepseek: "#4d6bfe",
+  google: "#4285f4",
+  "google-gemini-cli": "#4285f4",
+  "google-vertex": "#4285f4",
+  "google-antigravity": "#6387ed",
+  meta: "#1685f8",
+  azure: "#168cda",
+  "azure-openai-responses": "#168cda",
+  "amazon-bedrock": "#e99b32",
+  alibaba: "#ed7d31",
+  "alibaba-cn": "#ed7d31",
+  mistral: "#ef8b31",
+  nvidia: "#76b900",
+  cohere: "#659a81",
+  groq: "#ef6847",
+};
+
 export function ProviderIcon({ id, name }: { id: string; name: string }) {
   const icon = Object.hasOwn(icons, id) ? icons[id] : undefined;
   return (
     <span
       className={`models-provider-icon${icon ? "" : " models-provider-monogram"}`}
       aria-hidden="true"
-      style={icon ? { maskImage: `url("${icon}")` } : undefined}
+      style={
+        icon
+          ? {
+              maskImage: `url("${icon}")`,
+              color: Object.hasOwn(colors, id) ? colors[id] : undefined,
+            }
+          : undefined
+      }
     >
       {!icon && name.trim().slice(0, 2)}
     </span>

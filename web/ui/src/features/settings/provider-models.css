@@ -17,6 +17,15 @@
 .models-provider-status { display: flex; align-items: center; gap: 6px; flex-basis: 100%; color: var(--muted); font-size: 12px; line-height: 18px; }
 .models-provider-name { font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
 .models-provider-tag { flex: none; padding: 1px 6px; border: 1px solid var(--models-border); border-radius: 4px; color: var(--muted); font-size: 11px; line-height: 16px; }
+.models-default-card { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; padding: 14px 16px; border-radius: 16px; background: var(--models-surface); }
+.models-default-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.models-default-copy { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.models-default-title { font-size: 12px; color: var(--muted); }
+.models-default-value { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.models-default-value small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.models-connection-choice { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 2px; border-top: 1px solid var(--models-border); min-width: 0; }
+.models-connection-choice .models-provider-picker { width: 100%; }
+.model-thinking-label > .models-provider-icon { width: 16px; height: 16px; }
 .models-credential-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .models-credential-dot.configured { background: var(--healthy); }
 .models-credential-dot.missing { background: var(--subtle); }
@@ -126,6 +135,9 @@
 @media (max-width: 640px) {
   .models-page { padding: 22px 16px 32px; }
   .models-provider-card { padding: 10px 12px; }
+  .models-provider-head { flex-wrap: wrap; }
+  .models-provider-actions { flex-wrap: wrap; margin-left: 0; }
+  .models-default-row { align-items: flex-start; flex-wrap: wrap; }
   .models-provider-identity { flex-wrap: wrap; gap: 5px; }
   .models-editor, .models-add-card { padding: 14px 12px; }
   .models-add-modes { width: 100%; }

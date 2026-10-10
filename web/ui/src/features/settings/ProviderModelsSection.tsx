@@ -6,30 +6,36 @@ import { useTranslation } from "react-i18next";
 import type { WebModelSummary } from "../../../../protocol/types.ts";
 import type {
   WebModelConfigurations,
+  WebModelDefaults,
   WebProviderAuthProjection,
 } from "../../../../runtime/types.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
 import { ProviderAccountLogin } from "./ProviderAccountLogin.tsx";
 import { ProviderConfigurationCard } from "./ProviderConfigurationCard.tsx";
 import { ProviderIcon } from "./ProviderIcon.tsx";
+import { ModelConnectionChoice } from "./ModelConnectionChoice.tsx";
 import "./provider-models.css";
 
 export function ProviderModelsSection({
   sessionId,
+  sessionPath,
   models,
   currentModel,
   busy,
   focusCredentials,
   onSaved,
+  onSelectModel,
   onDraftChange,
   onSavingChange,
 }: {
   sessionId: string;
+  sessionPath?: string;
   models: WebModelSummary[];
   currentModel?: WebModelSummary;
   busy: boolean;
   focusCredentials: boolean;
   onSaved: () => Promise<boolean>;
+  onSelectModel: (value: string) => Promise<boolean> | boolean;
   onDraftChange: (dirty: boolean) => void;
   onSavingChange: (saving: boolean) => void;
 }) {
@@ -50,7 +56,15 @@ export function ProviderModelsSection({
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const [removing, setRemoving] = useState(false);
   const [cardSaving, setCardSaving] = useState<Record<string, boolean>>({});
-  const saving = removing || Object.values(cardSaving).some(Boolean);
+  const [choosingSaving, setChoosingSaving] = useState(false);
+  const saving =
+    removing || choosingSaving || Object.values(cardSaving).some(Boolean);
+  const [defaults, setDefaults] = useState<WebModelDefaults | null>(null);
+  const [defaultError, setDefaultError] = useState(false);
+  const [choice, setChoice] = useState<{
+    purpose: "use" | "default";
+    provider?: string;
+  } | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [remove, setRemove] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -59,6 +73,7 @@ export function ProviderModelsSection({
   const returnFocus = useRef<string | null>(null);
   const editButtons = useRef(new Map<string, HTMLButtonElement>());
   const addButton = useRef<HTMLButtonElement>(null);
+  const choiceReturnFocus = useRef<HTMLButtonElement | null>(null);
   const callbacks = useRef({ onDraftChange, onSavingChange });
   callbacks.current = { onDraftChange, onSavingChange };
   useEffect(() => {
@@ -67,6 +82,12 @@ export function ProviderModelsSection({
   useEffect(() => {
     onSavingChange(saving);
   }, [saving, onSavingChange]);
+  useEffect(() => {
+    if (!choice && !saving && choiceReturnFocus.current) {
+      choiceReturnFocus.current.focus({ preventScroll: true });
+      choiceReturnFocus.current = null;
+    }
+  }, [choice, saving]);
   useEffect(() => {
     if (!returnFocus.current) return;
     const target = returnFocus.current;
@@ -117,6 +138,20 @@ export function ProviderModelsSection({
     );
     return () => controller.abort();
   }, [sessionId, revision, currentModel?.provider]);
+  useEffect(() => {
+    void revision;
+    const controller = new AbortController();
+    setDefaultError(false);
+    void new WebClient().modelDefaults(sessionId, controller.signal).then(
+      (result) => {
+        if (!controller.signal.aborted) setDefaults(result);
+      },
+      () => {
+        if (!controller.signal.aborted) setDefaultError(true);
+      },
+    );
+    return () => controller.abort();
+  }, [sessionId, revision]);
 
   const configuration = data?.configuration;
   const configuredIds = new Set([
@@ -187,6 +222,8 @@ export function ProviderModelsSection({
       );
   };
   const selectEditor = (id: string) => {
+    choiceReturnFocus.current = null;
+    setChoice(null);
     setSaved(null);
     setAdding(false);
     setEditing(editing === id ? null : id);
@@ -194,7 +231,8 @@ export function ProviderModelsSection({
       previous.includes(id) ? previous : [...previous, id],
     );
   };
-  const closeCard = (key: string, name?: string) => {
+  const closeCard = (key: string, name?: string, provider?: string) => {
+    choiceReturnFocus.current = null;
     returnFocus.current = key;
     const closing = (id: string) =>
       key.startsWith("add:") ? id.startsWith("add:") : id === key;
@@ -208,6 +246,7 @@ export function ProviderModelsSection({
     else setEditing(null);
     if (name) {
       setSaved(name);
+      setChoice({ purpose: "use", provider: provider ?? key });
       refresh((value) => value + 1);
       void onSaved().catch(() => false);
     }
@@ -233,7 +272,9 @@ export function ProviderModelsSection({
               auth={auth}
               busy={busy}
               onSaving={onSaving}
-              onAuthenticated={() => closeCard(key, auth.name || auth.id)}
+              onAuthenticated={() =>
+                closeCard(key, auth.name || auth.id, auth.id)
+              }
               onReload={onReload}
             />
             {!cardSaving[key] && (
@@ -272,11 +313,48 @@ export function ProviderModelsSection({
           )
         }
         onSaving={onSaving}
-        onClose={(name) => closeCard(key, name)}
+        onClose={(name, provider) => closeCard(key, name, provider)}
         onReload={onReload}
       />
     );
   };
+  const providerName = (id: string) =>
+    providers.find((item) => item.id === id)?.name ?? id;
+  const modelName = (model: { provider: string; id: string }) =>
+    models.find(
+      (item) => item.provider === model.provider && item.id === model.id,
+    )?.name || model.id;
+  const choose = (
+    purpose: "use" | "default",
+    trigger: HTMLButtonElement,
+    provider?: string,
+  ) => {
+    choiceReturnFocus.current = trigger;
+    setChoice({ purpose, provider });
+    setEditing(null);
+    setAdding(false);
+  };
+  const chooser = (purpose: "use" | "default", provider?: string) => (
+    <ModelConnectionChoice
+      key={`${purpose}:${provider ?? "all"}`}
+      sessionId={sessionId}
+      sessionPath={sessionPath}
+      provider={provider}
+      purpose={purpose}
+      initialModel={purpose === "default" ? defaults?.model : currentModel}
+      busy={busy}
+      onSelectModel={onSelectModel}
+      onDefaultSaved={(result) => {
+        setDefaults(result);
+        setDefaultError(false);
+        void onSaved().catch(() => false);
+      }}
+      onSaving={setChoosingSaving}
+      onClose={() => {
+        setChoice(null);
+      }}
+    />
+  );
 
   return (
     <div className="models-page">
@@ -322,6 +400,63 @@ export function ProviderModelsSection({
             {t("providerLoading")}
           </p>
         )}
+        <div className="models-default-card">
+          <div className="models-default-row">
+            <div className="models-default-copy">
+              <span className="models-default-title">
+                {t("modelDefaultTitle")}
+              </span>
+              {defaultError ? (
+                <span className="models-hint">
+                  {t("modelDefaultReadFailed")}
+                </span>
+              ) : defaults?.model ? (
+                <span className="models-default-value">
+                  <ProviderIcon
+                    id={defaults.model.provider}
+                    name={providerName(defaults.model.provider)}
+                  />
+                  <span>
+                    {modelName(defaults.model)}
+                    <small>{providerName(defaults.model.provider)}</small>
+                  </span>
+                </span>
+              ) : (
+                <span className="models-hint">
+                  {t(defaults ? "modelDefaultNotSet" : "loadingModels")}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="models-button"
+              disabled={
+                saving ||
+                busy ||
+                Object.values(dirty).some(Boolean) ||
+                !sessionPath
+              }
+              aria-expanded={choice?.purpose === "default"}
+              onClick={(event) =>
+                defaultError
+                  ? refresh((value) => value + 1)
+                  : choice?.purpose === "default"
+                    ? setChoice(null)
+                    : choose("default", event.currentTarget)
+              }
+            >
+              {t(defaultError ? "refreshStatus" : "modelDefaultChoose")}
+            </button>
+          </div>
+          {defaults?.projectOverride && (
+            <p className="models-hint">
+              {t("modelDefaultProjectOverride", {
+                model: `${providerName(defaults.projectOverride.provider)} / ${modelName(defaults.projectOverride)}`,
+              })}
+            </p>
+          )}
+          {choice?.purpose === "default" && chooser("default")}
+        </div>
         <ul className="models-provider-list">
           {providers.map((provider) => {
             const open = !adding && editing === provider.id;
@@ -341,6 +476,16 @@ export function ProviderModelsSection({
                       {custom && (
                         <span className="models-provider-tag">
                           {t("providerCustomTag")}
+                        </span>
+                      )}
+                      {defaults?.model?.provider === provider.id && (
+                        <span className="models-provider-tag">
+                          {t("modelDefaultBadge")}
+                        </span>
+                      )}
+                      {currentModel?.provider === provider.id && (
+                        <span className="models-provider-tag">
+                          {t("modelCurrentBadge")}
                         </span>
                       )}
                       {provider.auth && (
@@ -371,6 +516,33 @@ export function ProviderModelsSection({
                     </div>
                   </div>
                   <div className="models-provider-actions">
+                    {provider.auth?.configured && (
+                      <button
+                        type="button"
+                        className="models-button"
+                        disabled={
+                          saving ||
+                          busy ||
+                          Object.values(dirty).some(Boolean) ||
+                          !sessionPath
+                        }
+                        aria-label={t("modelConnectionChooseProvider", {
+                          provider: provider.name,
+                        })}
+                        aria-expanded={
+                          choice?.purpose === "use" &&
+                          choice.provider === provider.id
+                        }
+                        onClick={(event) =>
+                          choice?.purpose === "use" &&
+                          choice.provider === provider.id
+                            ? setChoice(null)
+                            : choose("use", event.currentTarget, provider.id)
+                        }
+                      >
+                        {t("selectModel")}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="models-button"
@@ -420,6 +592,9 @@ export function ProviderModelsSection({
                     )}
                   </div>
                 </div>
+                {choice?.purpose === "use" &&
+                  choice.provider === provider.id &&
+                  chooser("use", provider.id)}
                 {visited.includes(provider.id) && (
                   <div hidden={!open}>
                     {card(provider.id, provider.id, false, custom)}
@@ -585,6 +760,8 @@ export function ProviderModelsSection({
                 ref={addButton}
                 disabled={saving}
                 onClick={() => {
+                  choiceReturnFocus.current = null;
+                  setChoice(null);
                   setAdding(true);
                   setEditing(null);
                   setSaved(null);

@@ -45,6 +45,7 @@ import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type {
   WebModelConfiguration,
   WebModelConfigurations,
+  WebModelDefaults,
   WebProviderAuthProjection,
   WebSessionForkRequest,
   WebSessionForkResult,
@@ -977,6 +978,25 @@ export class WebClient {
     );
   }
 
+  modelDefaults(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebModelDefaults>(
+      `/api/models/default?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  saveModelDefault(
+    provider: string,
+    modelId: string,
+    sessionId: string,
+    sessionPath: string,
+  ) {
+    return this.request<WebModelDefaults>("/api/models/default", {
+      method: "POST",
+      body: JSON.stringify({ provider, modelId, sessionId, sessionPath }),
+    });
+  }
+
   selectModel(
     provider: string,
     modelId: string,
@@ -989,12 +1009,18 @@ export class WebClient {
     });
   }
 
-  searchModels(query: string, sessionId?: string, signal?: AbortSignal) {
+  searchModels(
+    query: string,
+    sessionId?: string,
+    signal?: AbortSignal,
+    provider?: string,
+  ) {
     const params = new URLSearchParams({
       query,
       limit: String(WEB_MAX_MODEL_SEARCH_RESULTS),
     });
     if (sessionId) params.set("sessionId", sessionId);
+    if (provider) params.set("provider", provider);
     return this.request<WebModelSearchResult>(`/api/models?${params}`, {
       signal,
     });

@@ -898,6 +898,34 @@ const resources = {
       providerDisplayName: "Provider name",
       providerCustomSettings: "Custom settings",
       providerSaved: "Saved {{provider}}.",
+      modelDefaultTitle: "Default for new chats",
+      modelDefaultChoose: "Choose model",
+      modelDefaultBadge: "Default",
+      modelCurrentBadge: "In use",
+      modelDefaultNotSet: "Not set · Pi chooses when a new chat starts",
+      modelDefaultHint:
+        "Choose the model for future chats. Existing chats keep their own model. This also updates Pi's default.",
+      modelDefaultReadFailed: "Could not read the default model.",
+      modelDefaultProjectOverride:
+        "This workspace has a Pi override: {{model}}.",
+      modelDefaultSave: "Save default",
+      modelMakeDefault: "Also make this the default for new chats",
+      modelDefaultSaveFailed:
+        "The default was not confirmed. Refresh status and try again.",
+      modelDefaultPartial:
+        "The chat model changed, but saving the default was not confirmed. Refresh status before retrying.",
+      modelConnectionNextHint:
+        "Choose a model from this connection to use in the current chat.",
+      modelConnectionSearch: "Search models…",
+      modelConnectionChooseProvider: "Choose a model from {{provider}}",
+      modelConnectionUse: "Use in this chat",
+      modelConnectionUseFailed:
+        "The model change was not confirmed. Refresh the model list and try again.",
+      modelConnectionLoadFailed: "Could not load models.",
+      modelConnectionNoModels:
+        "No selectable models yet. Check the connection or add a model definition.",
+      modelConnectionNoMatch: "No matching models.",
+      modelConnectionMore: "{{count}} more models. Search to narrow the list.",
       providerModelsEmpty:
         "No models yet. Fetch available models or add one manually.",
       providerModelsInherited: "Uses the provider’s built-in model catalog.",
@@ -2380,6 +2408,29 @@ const resources = {
       providerDisplayName: "提供商名称",
       providerCustomSettings: "自定义设置",
       providerSaved: "已保存 {{provider}}。",
+      modelDefaultTitle: "新会话默认模型",
+      modelDefaultChoose: "选择模型",
+      modelDefaultBadge: "默认",
+      modelCurrentBadge: "当前使用",
+      modelDefaultNotSet: "未设置 · 新会话启动时由 Pi 选择",
+      modelDefaultHint:
+        "选择以后新会话使用的模型，已有会话保留自己的选择。此设置也会更新 Pi 的默认模型。",
+      modelDefaultReadFailed: "暂时无法读取默认模型。",
+      modelDefaultProjectOverride: "此工作区有 Pi 独立设置：{{model}}。",
+      modelDefaultSave: "保存默认模型",
+      modelMakeDefault: "同时设为新会话默认模型",
+      modelDefaultSaveFailed: "默认模型保存尚未确认，请刷新状态后重试。",
+      modelDefaultPartial:
+        "当前模型已切换，但默认模型保存尚未确认，请刷新状态后再试。",
+      modelConnectionNextHint: "从此连接选择一个模型，用于当前会话。",
+      modelConnectionSearch: "搜索模型…",
+      modelConnectionChooseProvider: "选择 {{provider}} 的模型",
+      modelConnectionUse: "用于当前会话",
+      modelConnectionUseFailed: "模型切换尚未确认，请刷新模型列表后重试。",
+      modelConnectionLoadFailed: "暂时无法读取模型列表。",
+      modelConnectionNoModels: "暂无可选模型，请检查连接或添加模型定义。",
+      modelConnectionNoMatch: "没有匹配的模型。",
+      modelConnectionMore: "还有 {{count}} 个模型，可搜索缩小范围。",
       providerModelsEmpty: "还没有模型，获取可用模型或手动添加。",
       providerModelsInherited: "使用提供商的内置模型目录。",
       providerModelsReadOnly:

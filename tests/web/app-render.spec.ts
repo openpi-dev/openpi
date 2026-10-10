@@ -4306,7 +4306,7 @@ it("debounces bounded model search when the snapshot omitted models", async () =
   };
   const baseStore = createWebStore();
   const searchModels = vi.fn(async (_query: string) => {});
-  const selectModel = vi.fn(async (_value: string) => {});
+  const selectModel = vi.fn(async (_value: string) => true);
   const actions = {
     ...baseStore.getState().actions,
     searchModels,

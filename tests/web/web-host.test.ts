@@ -4599,6 +4599,84 @@ test("provider configuration edits validate their native scope and redact save f
   }
 });
 
+test("native model-default routes retain exact identity, validate input and sanitize persistence failures", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-model-default-"));
+  const runtime = testRuntime(cwd);
+  const defaults = { model: { provider: "fixture", id: "same-id" } };
+  let failure: Error | undefined;
+  let writes = 0;
+  runtime.readModelDefaults = () => defaults;
+  runtime.setModel = async () =>
+    assert.fail("saving a default must not switch the active model");
+  runtime.saveModelDefault = async (provider, id, options) => {
+    assert.equal(provider, "fixture");
+    assert.equal(id, "same-id");
+    assert.equal(
+      options.expectedSessionId,
+      runtime.sessionManager.getSessionId(),
+    );
+    assert.equal(
+      options.expectedSessionPath,
+      `current:${runtime.sessionManager.getSessionId()}`,
+    );
+    writes++;
+    if (failure) throw failure;
+    return defaults;
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const body = {
+    provider: "fixture",
+    modelId: "same-id",
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: `current:${runtime.sessionManager.getSessionId()}`,
+  };
+  const post = (value: unknown) =>
+    fetch(`${launched.origin}/api/models/default`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(value),
+    });
+  try {
+    const read = await fetch(
+      `${launched.origin}/api/models/default?sessionId=${body.sessionId}`,
+      { headers },
+    );
+    assert.deepEqual(await read.json(), defaults);
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/models/default?sessionId=stale`, {
+          headers,
+        })
+      ).status,
+      409,
+    );
+    for (const invalid of [
+      { ...body, extra: true },
+      { ...body, provider: "bad/provider" },
+      { ...body, modelId: "bad\nmodel" },
+      { ...body, sessionPath: "" },
+    ])
+      assert.equal((await post(invalid)).status, 400);
+    assert.equal(writes, 0);
+    assert.deepEqual(await (await post(body)).json(), defaults);
+    failure = new WebRuntimeRequestError(
+      "private-secret",
+      "SESSION_CONFLICT",
+      409,
+    );
+    const conflict = await post(body);
+    assert.equal(conflict.status, 409);
+    assert.doesNotMatch(await conflict.text(), /private-secret/);
+    failure = new Error("private-secret");
+    const failed = await post(body);
+    assert.equal(failed.status, 422);
+    assert.doesNotMatch(await failed.text(), /private-secret/);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("model configuration saves distinguish typed conflicts from sanitized save failures", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-model-write-"));
   const runtime = testRuntime(cwd);
