@@ -888,7 +888,9 @@ export function App() {
               </div>
               <SessionUsageBar
                 key={
-                  selected ? `${selected.id}:${selected.path}` : "no-session"
+                  selected
+                    ? `usage:${selected.id}:${selected.path}`
+                    : "usage:no-session"
                 }
                 usage={
                   selected && !state.sessionSwitching
@@ -902,7 +904,7 @@ export function App() {
               />
               {selected && !state.sessionSwitching && (
                 <SessionOverview
-                  key={`${selected.id}:${selected.path}`}
+                  key={`overview:${selected.id}:${selected.path}`}
                   sessionId={selected.id}
                   workspace={workspace?.name || workspaceName(selected.cwd)}
                   agents={overviewAgents}
