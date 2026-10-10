@@ -18,6 +18,7 @@ import {
   type WebQuestionRequest,
 } from "../../../protocol/questions.ts";
 import type { WebSessionSources } from "../../../protocol/session-sources.ts";
+import type { WebProviderLogin } from "../../../protocol/provider-login.ts";
 import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
@@ -182,7 +183,7 @@ export class WebClient {
           response.status,
           body.code,
         );
-      return body;
+      return body as T;
     } catch (error) {
       if (timedOut) throw new Error(timeoutMessage);
       throw error;
@@ -809,6 +810,47 @@ export class WebClient {
       body: JSON.stringify({ sessionId, provider, apiKey }),
       signal,
     });
+  }
+
+  providerLogin(sessionId: string, id?: string, signal?: AbortSignal) {
+    const query = new URLSearchParams({ sessionId, ...(id ? { id } : {}) });
+    return this.request<WebProviderLogin | null>(
+      `/api/providers/login?${query}`,
+      { signal },
+    );
+  }
+
+  startProviderLogin(sessionId: string, provider: string) {
+    return this.request<WebProviderLogin>("/api/providers/login", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, provider }),
+    });
+  }
+
+  respondProviderLogin(
+    sessionId: string,
+    id: string,
+    promptId: string,
+    value: string,
+  ) {
+    return this.request<WebProviderLogin>("/api/providers/login/respond", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, id, promptId, value }),
+    });
+  }
+
+  cancelProviderLogin(sessionId: string, id: string) {
+    return this.request<WebProviderLogin>("/api/providers/login/cancel", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, id }),
+    });
+  }
+
+  logoutProvider(sessionId: string, provider: string) {
+    return this.request<{ refreshRequired?: boolean }>(
+      "/api/providers/logout",
+      { method: "POST", body: JSON.stringify({ sessionId, provider }) },
+    );
   }
 
   modelConfigurations(sessionId: string, signal?: AbortSignal) {

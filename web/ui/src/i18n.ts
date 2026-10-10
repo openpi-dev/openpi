@@ -482,6 +482,10 @@ const resources = {
       backToSideConversations: "Back to side conversations",
       continueSideConversation: "Send a follow-up…",
       startSideConversation: "Ask a side question…",
+      sideConversationModelInherited:
+        "New side conversations use the main conversation’s model and thinking level.",
+      sideConversationModelFixed:
+        "This is the model used by this side conversation.",
       stop: "Stop",
       start: "Start",
       browserAddress: "Browser address",
@@ -816,7 +820,59 @@ const resources = {
       selectProvider: "Select a provider",
       gitReviewBaselineUnavailable:
         "No usable session baseline was retained (it may exceed the capture limit). Choose Unstaged, Staged or Branch to inspect Git changes, or open the session file records.",
-      modelsIntro: "Enter a provider’s API key to use its models.",
+      modelsIntro:
+        "Sign in with an account or add an API key. Your existing Pi connections are available here.",
+      accountLoginMethod: "Connection method",
+      accountLoginTab: "Account",
+      accountLoginChatGPT: "ChatGPT account",
+      accountLoginClaude: "Claude account",
+      accountLoginKeyTab: "API key",
+      accountLoginConfigured: "Account signed in",
+      accountLoginIntro: "Continue in your browser. No API key needed.",
+      accountLoginExisting: "Your account credential is saved in Pi.",
+      accountLoginStart: "Sign in",
+      accountLoginAgain: "Sign in again",
+      accountLoginUnsaved:
+        "Save or discard your other changes before signing in.",
+      accountLoginStarting: "Preparing sign-in…",
+      accountLoginWaiting: "Waiting for authorization",
+      accountLoginChoose: "Choose how to sign in",
+      accountLoginCancelling: "Cancelling sign-in…",
+      accountLoginBrowser: "Continue in browser",
+      accountLoginDevice: "Use a device code",
+      accountLoginBrowserOption:
+        "Sign in on this computer. Returns here automatically.",
+      accountLoginDeviceOption:
+        "For remote servers or when browser sign-in is unavailable.",
+      accountLoginBrowserHelp:
+        "Open the sign-in page and approve access. This page updates automatically.",
+      accountLoginDeviceHelp:
+        "Open the authorization page and enter this code. Keep this page open.",
+      accountLoginOpen: "Open sign-in page",
+      accountLoginCopyCode: "Copy device code",
+      accountLoginPaste: "Authorization code or callback URL",
+      accountLoginContinue: "Continue",
+      accountLoginFallback: "Signed in but still waiting?",
+      accountLoginRemoteHelp:
+        "If automatic return does not work, copy the final callback URL from your browser and paste it here.",
+      accountLoginCancel: "Cancel sign-in",
+      accountLogin_failed:
+        "Sign-in failed. Try again or choose another method.",
+      accountLogin_expired:
+        "Sign-in expired. Start again to get a new authorization link.",
+      accountLogin_cancelled: "Sign-in cancelled.",
+      accountLoginRequestFailed:
+        "The request did not complete. Refresh status before retrying.",
+      accountLoginStatusUnknown:
+        "Cannot check sign-in status. Your authorization may still be in progress.",
+      accountLoginRefreshRequired:
+        "The credential was saved, but Pi could not update its model list. Reload Pi before using this connection.",
+      accountLogout: "Sign out",
+      accountLogoutRefreshRequired:
+        "The saved credential was removed, but Pi could not update its model list. Reload Pi to refresh the status.",
+      accountLogoutTitle: "Sign out of {{provider}}?",
+      accountLogoutDetail:
+        "Removes this provider’s saved credential from Pi on this machine. Other Pi sessions using it will also need to sign in again. Environment credentials are unchanged.",
       providerInputTypes: "Input types",
       providerInputText: "Text",
       providerInputImage: "Images",
@@ -830,6 +886,8 @@ const resources = {
       providerAddMode: "How to add",
       providerAddCatalog: "Third-party providers",
       providerAddCustom: "Custom model API",
+      providerAccountHint:
+        "Use an existing account to connect. Choose a provider and continue in your browser.",
       providerCatalogHint:
         "Choose a provider from the built-in catalog and enter its API key.",
       providerCustomHint:
@@ -1947,6 +2005,8 @@ const resources = {
       backToSideConversations: "返回侧边对话",
       continueSideConversation: "继续追问…",
       startSideConversation: "提出一个侧边问题…",
+      sideConversationModelInherited: "新侧边对话使用主会话的模型与思考等级。",
+      sideConversationModelFixed: "这是当前侧边对话使用的模型。",
       stop: "停止",
       start: "开始",
       browserAddress: "浏览器地址",
@@ -2255,7 +2315,49 @@ const resources = {
       selectProvider: "选择服务商",
       gitReviewBaselineUnavailable:
         "未保留可用的会话基线，可能超出了捕获限额。请切换到未暂存、已暂存或分支查看 Git 变更，也可打开本会话文件记录。",
-      modelsIntro: "填入各提供商的 API 密钥即可使用其模型。",
+      modelsIntro: "登录账户或添加 API 密钥。已有的 Pi 连接也会显示在这里。",
+      accountLoginMethod: "连接方式",
+      accountLoginTab: "账户登录",
+      accountLoginChatGPT: "ChatGPT 账户",
+      accountLoginClaude: "Claude 账户",
+      accountLoginKeyTab: "API 密钥",
+      accountLoginConfigured: "账户已登录",
+      accountLoginIntro: "在浏览器中完成授权，无需填写 API 密钥。",
+      accountLoginExisting: "账户凭据已保存在 Pi 中。",
+      accountLoginStart: "登录",
+      accountLoginAgain: "重新登录",
+      accountLoginUnsaved: "请先保存或放弃其他修改，再登录账户。",
+      accountLoginStarting: "正在准备登录…",
+      accountLoginWaiting: "等待账户授权",
+      accountLoginChoose: "选择登录方式",
+      accountLoginCancelling: "正在取消登录…",
+      accountLoginBrowser: "在浏览器中继续",
+      accountLoginDevice: "使用设备码登录",
+      accountLoginBrowserOption: "在当前电脑上登录，完成后自动返回。",
+      accountLoginDeviceOption: "适合远程服务器，或无法自动返回的情况。",
+      accountLoginBrowserHelp: "打开登录页并完成授权，这里会自动更新。",
+      accountLoginDeviceHelp: "打开授权页并输入下方代码，请保持此页面打开。",
+      accountLoginOpen: "打开登录页",
+      accountLoginCopyCode: "复制设备码",
+      accountLoginPaste: "授权码或回调地址",
+      accountLoginContinue: "继续",
+      accountLoginFallback: "已登录，但这里没有更新？",
+      accountLoginRemoteHelp:
+        "如果无法自动返回，请复制浏览器最后的回调地址，并粘贴到下方。",
+      accountLoginCancel: "取消登录",
+      accountLogin_failed: "登录未完成，请重试或选择其他登录方式。",
+      accountLogin_expired: "登录已过期，请重新开始获取新的授权链接。",
+      accountLogin_cancelled: "已取消登录。",
+      accountLoginRequestFailed: "请求未完成，请先刷新状态再重试。",
+      accountLoginStatusUnknown: "暂时无法查询登录状态，账户授权可能仍在进行。",
+      accountLoginRefreshRequired:
+        "凭据已保存，但 Pi 未能更新模型列表。请重载 Pi 后使用此连接。",
+      accountLogout: "退出登录",
+      accountLogoutRefreshRequired:
+        "已移除保存的凭据，但 Pi 未能更新模型列表。请重载 Pi 刷新状态。",
+      accountLogoutTitle: "退出 {{provider}}？",
+      accountLogoutDetail:
+        "将移除此电脑上 Pi 保存的该服务凭据，其他使用它的 Pi 会话也需要重新登录。环境凭据不受影响。",
       providerInputTypes: "输入类型",
       providerInputText: "文本",
       providerInputImage: "图片",
@@ -2269,6 +2371,7 @@ const resources = {
       providerAddMode: "添加方式",
       providerAddCatalog: "第三方模型提供商",
       providerAddCustom: "自定义模型 API",
+      providerAccountHint: "使用已有账户连接模型，选择服务商后前往浏览器授权。",
       providerCatalogHint: "从内置目录中选择提供商，填入其 API 密钥即可使用。",
       providerCustomHint:
         "连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。",

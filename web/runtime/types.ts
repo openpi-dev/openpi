@@ -14,6 +14,7 @@ import type {
   WebHistoryAnchor,
 } from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
+import type { WebProviderLogin } from "../protocol/provider-login.ts";
 
 export type WebProviderAuthSource =
   | "stored"
@@ -34,6 +35,7 @@ export interface WebProviderAuthSummary {
   readonly custom?: boolean;
   readonly baseUrl?: string;
   readonly api?: WebModelConfiguration["api"];
+  readonly loginLabel?: string;
 }
 
 export interface WebProviderAuthProjection {
@@ -96,6 +98,7 @@ export type WebRuntimeRequestErrorCode =
   | "PLAN_CONTROL_UNAVAILABLE"
   | "MODEL_NOT_AVAILABLE"
   | "MODEL_CONFIGURATION_CONFLICT"
+  | "PROVIDER_LOGIN_CONFLICT"
   | "SESSION_CONFLICT"
   | "SESSION_FORK_UNAVAILABLE"
   | "SESSION_FORK_CAPACITY"
@@ -265,6 +268,11 @@ export interface WebRuntimeController {
   reloadSettingsResources?(sessionId: string, sessionPath: string): Promise<void>;
   listProviderAuth?(): WebProviderAuthProjection;
   saveProviderKey?(sessionId: string, provider: string, apiKey: string): Promise<void>;
+  startProviderLogin?(sessionId: string, provider: string): Promise<WebProviderLogin>;
+  readProviderLogin?(sessionId: string, id?: string): WebProviderLogin | null;
+  respondProviderLogin?(sessionId: string, id: string, promptId: string, value: string): WebProviderLogin;
+  cancelProviderLogin?(sessionId: string, id: string): WebProviderLogin;
+  logoutProvider?(sessionId: string, provider: string): Promise<{ refreshRequired?: boolean }>;
   readModelConfigurations?(): Promise<WebModelConfigurations>;
   saveModelConfiguration?(sessionId: string, revision: string, model: WebModelConfiguration): Promise<void>;
   saveModelConfigurations?(sessionId: string, revision: string, models: WebModelConfiguration[]): Promise<void>;
