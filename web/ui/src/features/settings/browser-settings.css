@@ -1,3 +1,4 @@
+#settings-panel-browser { overflow-y: auto; }
 .browser-settings { max-width: 760px; margin: 0 auto; padding: 12px 12px 24px; }
 .browser-settings-heading { margin: 0 0 28px; }
 .browser-settings-heading h2 { margin: 0 0 8px; font-size: 25px; font-weight: 650; letter-spacing: -.6px; }

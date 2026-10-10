@@ -22,6 +22,7 @@ import {
   type WebInteractiveTerminalEvent,
 } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
+import { WebProviderLoginService } from "../../web/runtime/provider-login.ts";
 import {
   type WebRuntimeController,
   type WebRuntimeEvent,
@@ -2586,6 +2587,131 @@ async function startTestHost(
   return { host, launched, headers };
 }
 
+test("account login routes require authenticated exact ownership, validate responses and redact native failures", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-login-host-"));
+  const runtime = testRuntime(cwd);
+  const service = new WebProviderLoginService();
+  const sessionId = runtime.sessionManager.getSessionId();
+  let starts = 0;
+  let logouts = 0;
+  runtime.startProviderLogin = async (owner, provider) => {
+    starts++;
+    return service.start(owner, provider, async (interaction) => {
+      interaction.notify({
+        type: "device_code",
+        userCode: "FIXTURE-CODE",
+        verificationUri: "https://accounts.example/device",
+      });
+      await interaction.prompt({ type: "secret", message: "Code" });
+      return {};
+    });
+  };
+  runtime.readProviderLogin = (owner, id) => service.read(owner, id);
+  runtime.respondProviderLogin = (owner, id, prompt, value) =>
+    service.respond(owner, id, prompt, value);
+  runtime.cancelProviderLogin = (owner, id) => service.cancel(owner, id);
+  runtime.logoutProvider = async () => {
+    logouts++;
+    return {};
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  t.after(async () => {
+    await service.dispose();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const post = (path: string, body: object, authenticated = true) =>
+    fetch(`${launched.origin}/api/providers/${path}`, {
+      method: "POST",
+      headers: {
+        ...(authenticated ? headers : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const read = (query: string, authenticated = true) =>
+    fetch(`${launched.origin}/api/providers/login?${query}`, {
+      headers: authenticated ? headers : {},
+    });
+  assert.equal(
+    (await post("login", { sessionId, provider: "fixture" }, false)).status,
+    401,
+  );
+  assert.equal((await read(`sessionId=${sessionId}`, false)).status, 401);
+  for (const body of [
+    { sessionId, provider: "fixture", injected: true },
+    { sessionId, provider: "invalid/provider" },
+    { sessionId: "", provider: "fixture" },
+  ])
+    assert.equal((await post("login", body)).status, 400);
+  assert.equal(
+    (await post("login", { sessionId: "stale", provider: "fixture" })).status,
+    409,
+  );
+  assert.equal(starts, 0);
+  assert.equal(
+    (await read(`sessionId=${sessionId}&sessionId=${sessionId}`)).status,
+    400,
+  );
+  assert.equal((await read(`sessionId=${sessionId}&value=secret`)).status, 400);
+  assert.equal((await read("sessionId=stale")).status, 409);
+  assert.equal(await (await read(`sessionId=${sessionId}`)).json(), null);
+  const response = await post("login", { sessionId, provider: "fixture" });
+  assert.equal(response.status, 200);
+  const flow = (await response.json()) as { id: string };
+  const current = (await (
+    await read(`sessionId=${sessionId}&id=${flow.id}`)
+  ).json()) as { device: { code: string }; prompt: { id: string } };
+  assert.equal(current.device.code, "FIXTURE-CODE");
+  assert.equal(
+    (
+      await post("login/respond", {
+        sessionId,
+        id: flow.id,
+        promptId: "stale",
+        value: "private-response",
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await post("login/respond", {
+        sessionId,
+        id: flow.id,
+        promptId: current.prompt.id,
+        value: "x".repeat(8193),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await post("login/cancel", { sessionId: "stale", id: flow.id })).status,
+    409,
+  );
+  assert.equal(
+    (await post("login/cancel", { sessionId, id: flow.id })).status,
+    200,
+  );
+  await service.dispose();
+  assert.equal(
+    (await post("logout", { sessionId: "stale", provider: "fixture" })).status,
+    409,
+  );
+  assert.equal(logouts, 0);
+  assert.equal(
+    (await post("logout", { sessionId, provider: "fixture" })).status,
+    200,
+  );
+  assert.equal(logouts, 1);
+  runtime.startProviderLogin = async () => {
+    throw new Error("private-native-credential-error");
+  };
+  const failure = await post("login", { sessionId, provider: "fixture" });
+  assert.equal(failure.status, 422);
+  assert.equal((await failure.text()).includes("private-native"), false);
+});
+
 test("compaction and queue endpoints require authenticated exact active ownership and bounded typed input", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-compact-"));
   const runtime = testRuntime(cwd);
@@ -3033,6 +3159,50 @@ test("serves Session-bound command discovery with fail-closed request validation
     const body = await response.text();
     assert.match(body, /"name":"review"/u);
     assert.doesNotMatch(body, /sourceInfo|\/private\/|private-fixture/u);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("resource reload validates its target and reports native conflicts without a success receipt", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-resource-reload-"));
+  const runtime = testRuntime(cwd);
+  const attempts: Array<{ sessionId: string; sessionPath: string }> = [];
+  let conflict = false;
+  runtime.reloadSettingsResources = async (sessionId, sessionPath) => {
+    attempts.push({ sessionId, sessionPath });
+    if (conflict)
+      throw new WebRuntimeRequestError("stale target", "SESSION_CONFLICT", 409);
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const target = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: "/fixture/current.jsonl",
+  };
+  const post = (body: unknown) =>
+    fetch(`${launched.origin}/api/settings/reload`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await post({ sessionId: target.sessionId })).status, 400);
+    assert.equal(
+      (await post({ ...target, source: "npm:unexpected" })).status,
+      400,
+    );
+    assert.equal(attempts.length, 0);
+    const success = await post(target);
+    assert.equal(success.status, 200);
+    assert.deepEqual(await success.json(), { reloaded: true });
+    assert.deepEqual(attempts, [target]);
+    conflict = true;
+    const rejected = await post(target);
+    assert.equal(rejected.status, 409);
+    const receipt = await rejected.json();
+    assert.equal(receipt.code, "SESSION_CONFLICT");
+    assert.equal(receipt.reloaded, undefined);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

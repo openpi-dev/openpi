@@ -85,8 +85,111 @@ async function nativeRuntime(
   ).startRuntimeSession();
   const events: WebRuntimeEvent[] = [];
   runtime.subscribe((event) => events.push(event));
-  return { runtime, session, events };
+  return {
+    runtime,
+    session,
+    events,
+    modelRuntime,
+    provider: provider.provider,
+  };
 }
+
+test("Web account login uses Pi's credential store, blocks competing mutations and clears through native logout", {
+  timeout: 15_000,
+}, async (t) => {
+  const { runtime, session, modelRuntime, provider } = await nativeRuntime(
+    t,
+    () => undefined,
+    [],
+  );
+  let logins = 0;
+  modelRuntime.registerNativeProvider({
+    ...provider,
+    auth: {
+      ...provider.auth,
+      oauth: {
+        name: "Fixture account",
+        isSubscription: true,
+        login: async (interaction) => {
+          logins++;
+          const method = await interaction.prompt({
+            type: "select",
+            message: "Choose",
+            options: [{ id: "browser", label: "Browser" }],
+          });
+          assert.equal(method, "browser");
+          interaction.notify({
+            type: "auth_url",
+            url: "https://accounts.example/authorize",
+          });
+          const code = await interaction.prompt({
+            type: "manual_code",
+            message: "Callback",
+          });
+          assert.equal(code, "fixture-code");
+          return {
+            type: "oauth",
+            access: "fixture-access",
+            refresh: "fixture-refresh",
+            expires: Date.now() + 3_600_000,
+          };
+        },
+        refresh: async (credential) => credential,
+        toAuth: async (credential) => ({ apiKey: credential.access }),
+      },
+    },
+  });
+  await modelRuntime.removeRuntimeApiKey(provider.id);
+  const sessionId = session.sessionManager.getSessionId();
+  await assert.rejects(
+    runtime.startProviderLogin("wrong-session", provider.id),
+    { code: "SESSION_CONFLICT" },
+  );
+  const flow = await runtime.startProviderLogin(sessionId, provider.id);
+  const waitFor = async (predicate: () => boolean) => {
+    for (let i = 0; i < 100; i++) {
+      if (predicate()) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    assert.fail("Native login did not settle");
+  };
+  await waitFor(() =>
+    Boolean(runtime.readProviderLogin(sessionId, flow.id)?.prompt),
+  );
+  await assert.rejects(runtime.setModel(provider.id, "fixture"), {
+    code: "PROVIDER_LOGIN_CONFLICT",
+  });
+  await assert.rejects(runtime.sendPrompt("must not start during login"), {
+    code: "PROVIDER_LOGIN_CONFLICT",
+  });
+  const select = runtime.readProviderLogin(sessionId, flow.id)!.prompt!;
+  runtime.respondProviderLogin(sessionId, flow.id, select.id, "browser");
+  await waitFor(
+    () =>
+      runtime.readProviderLogin(sessionId, flow.id)?.prompt?.type ===
+      "manual_code",
+  );
+  const prompt = runtime.readProviderLogin(sessionId, flow.id)!.prompt!;
+  runtime.respondProviderLogin(sessionId, flow.id, prompt.id, "fixture-code");
+  await waitFor(
+    () => runtime.readProviderLogin(sessionId, flow.id)?.status === "succeeded",
+  );
+  assert.equal(logins, 1);
+  assert.equal(modelRuntime.isUsingSubscription(provider.id), true);
+  assert.deepEqual(await modelRuntime.listCredentials(), [
+    { providerId: provider.id, type: "oauth" },
+  ]);
+  assert.equal(
+    JSON.stringify(runtime.readProviderLogin(sessionId, flow.id)).includes(
+      "fixture-access",
+    ),
+    false,
+  );
+  assert.equal(session.messages.length, 0);
+  await runtime.logoutProvider(sessionId, provider.id);
+  assert.deepEqual(await modelRuntime.listCredentials(), []);
+  assert.equal(modelRuntime.isUsingSubscription(provider.id), false);
+});
 
 test("handled input retains its native queued work until Pi settles", {
   timeout: 15_000,

@@ -151,6 +151,8 @@ export interface WebSettingsSkillSummary {
   scope: "user" | "project" | "temporary";
   origin: "package" | "top-level";
   disableModelInvocation: boolean;
+  /** False when a bounded projection cannot retain an exact operation target. */
+  canManage?: boolean;
 }
 
 export interface WebSettingsExtensionSummary {
@@ -166,6 +168,16 @@ export interface WebSettingsPluginSummary {
   scope: "user" | "project" | "temporary";
   origin: "package" | "top-level";
   baseDir?: string;
+  /** Native configuration on disk, distinct from this Session's loaded resources. */
+  configured?: boolean;
+  /** False when a bounded projection cannot retain an exact operation target. */
+  canManage?: boolean;
+  enabled?: boolean;
+  installed?: boolean;
+  name?: string;
+  installedVersion?: string;
+  configuredVersion?: string;
+  diagnostics?: string[];
   extensions: WebSettingsExtensionSummary[];
   skills: string[];
   prompts: string[];
@@ -182,6 +194,7 @@ export interface WebSettingsResourceCatalog {
     themes: number;
   };
   diagnostics: {
+    settingsErrors?: number;
     extensionErrors: number;
     skillErrors: number;
   };
@@ -237,6 +250,7 @@ export interface WebOpenPiSetupProjection {
 
 export interface WebSettingsCatalog {
   sessionId: string;
+  sessionPath?: string;
   setup: WebOpenPiSetupProjection;
   resources: WebSettingsResourceCatalog;
 }
@@ -378,7 +392,7 @@ export type WebMessagePart =
       previewUrl?: string;
       sourcePartIndex?: number;
     }
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; text: string; sourcePartIndex?: number; textTruncated?: true }
   | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
 
 export interface WebSnapshotTruncation {
@@ -750,7 +764,8 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       typeof typed.thinking === "string"
     ) {
       const text = boundedTextProjection(typed.thinking, WEB_MAX_TEXT);
-      projected = { type: "thinking", text: text.value };
+      projected = { type: "thinking", text: text.value, sourcePartIndex: index,
+        ...(text.truncated ? { textTruncated: true as const } : {}) };
       textTruncated ||= text.truncated;
     } else if (typed.type === "toolCall") {
       const argumentsBudget: StructuredBudget = {

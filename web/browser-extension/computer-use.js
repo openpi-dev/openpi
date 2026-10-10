@@ -304,11 +304,11 @@ export async function controlBrowser(
         throw new Error(
           "Show this browser page and close covering dialogs before requesting a screenshot.",
         );
-      // An explicit layout clip with captureBeyondViewport handles Chrome's
-      // native viewport differing from an emulated one without capturing the workbench.
+      // The clip is already bounded to the visible viewport. Capturing beyond
+      // it can resize the page during capture and include the workbench footer.
       const capture = await send("Page.captureScreenshot", {
         format: "png",
-        captureBeyondViewport: true,
+        captureBeyondViewport: false,
         clip: {
           ...clip,
           scale: Math.min(1, 1600 / Math.max(clip.width, clip.height)),

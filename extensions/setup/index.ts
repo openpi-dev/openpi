@@ -1,22 +1,21 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Text } from "@earendil-works/pi-tui";
-import { restorePlanModeState } from "../plan-mode/persisted-state.ts";
-import { applySetupConfiguration } from "../shared/setup-apply.ts";
-import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { restorePlanModeState } from "../plan-mode/persisted-state.ts";
+import { applySetupConfiguration } from "../shared/setup-apply.ts";
 import {
   applyFooterConfig,
   CAPABILITY_DISCOVERY_MODES,
   type CapabilityDiscoveryMode,
+  DEFAULT_WEB_AUXILIARY_WIDTH,
   DEFAULT_WEB_CHAT_FONT_SIZE,
   DEFAULT_WEB_CHAT_WIDTH,
   DEFAULT_WEB_SIDEBAR_WIDTH,
-  DEFAULT_WEB_AUXILIARY_WIDTH,
   DETAIL_DISPLAYS,
   FOOTER_ITEMS,
   FOOTER_LAYOUT_ITEMS,
@@ -28,17 +27,17 @@ import {
   formatSetupConfig,
   formatSetupDiagnostics,
   inspectSetupConfig,
+  MAX_SESSION_CHILD_EXECUTION_LIMIT,
+  MAX_WEB_AUXILIARY_WIDTH,
   MAX_WEB_CHAT_FONT_SIZE,
   MAX_WEB_CHAT_WIDTH,
   MAX_WEB_SIDEBAR_WIDTH,
-  MAX_WEB_AUXILIARY_WIDTH,
-  MAX_SESSION_CHILD_EXECUTION_LIMIT,
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
+  MIN_WEB_AUXILIARY_WIDTH,
   MIN_WEB_CHAT_FONT_SIZE,
   MIN_WEB_CHAT_WIDTH,
   MIN_WEB_SIDEBAR_WIDTH,
-  MIN_WEB_AUXILIARY_WIDTH,
   type MyPiSetupConfig,
   POST_EDIT_COMMAND_MAX_CHARS,
   REASONING_LEVELS,
@@ -56,6 +55,7 @@ import {
   type SubagentRoleModel,
   type SubagentRoleModels,
 } from "../shared/subagent-roles.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   isOwnedToolActive,
   isOwnedToolAvailable,
@@ -875,6 +875,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
           "Configure the installed OpenPI package according to this request:",
           request,
           "",
+          "Pi Skill and package requests use Pi's existing resource configuration and ordinary tools. Inspect native ownership and project trust, review a fixed package identity and installation permissions with the user through ask_user, preserve existing preferences and resource filters, and never reload this Session automatically. configure_my_pi_setup only writes OpenPI-owned choices; do not call it or change unrelated OpenPI settings for a resource-only request. Report native persistence separately from active Session loading. A resource-only episode may close without an OpenPI configuration receipt; inspect native state to confirm the result.",
           "Current configuration:",
           currentConfiguration,
           EXPLICIT_VALUE_GUIDANCE,

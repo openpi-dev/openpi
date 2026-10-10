@@ -12,15 +12,20 @@ export function useSettingsCatalog(sessionId: string) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly triggers a manual refresh.
   useEffect(() => {
     const controller = new AbortController();
-    setCatalog(null);
+    setCatalog((current) =>
+      current?.sessionId === sessionId ? current : null,
+    );
     setError(null);
-    void client
-      .settingsCatalog(sessionId, controller.signal)
-      .then(setCatalog, (reason) => {
+    void client.settingsCatalog(sessionId, controller.signal).then(
+      (result) => {
+        if (!controller.signal.aborted) setCatalog(result);
+      },
+      (reason) => {
         if (!controller.signal.aborted) {
           setError(reason instanceof Error ? reason.message : String(reason));
         }
-      });
+      },
+    );
     return () => controller.abort();
   }, [client, revision, sessionId]);
 

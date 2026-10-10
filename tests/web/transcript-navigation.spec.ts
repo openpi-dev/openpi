@@ -664,6 +664,180 @@ it("scrolls to and focuses the matched message, stays there during append, and c
   }
 });
 
+it("reveals the exact native receipt inside a bounded process group and preserves the reader on append", async () => {
+  const methods = new Map(
+    ["scrollTo", "scrollIntoView"].map((name) => [
+      name,
+      Object.getOwnPropertyDescriptor(HTMLElement.prototype, name),
+    ]),
+  );
+  const scroll = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
+    this.scrollTop = Math.max(
+      0,
+      Math.min(options.top ?? 0, this.scrollHeight - this.clientHeight),
+    );
+  });
+  const reveal = vi.fn(function (this: HTMLElement) {
+    const inner = this.closest<HTMLElement>(".process-sequence-scroll");
+    if (!inner) return;
+    const item = this.getBoundingClientRect();
+    const bounds = inner.getBoundingClientRect();
+    if (item.top < bounds.top) inner.scrollTop += item.top - bounds.top;
+    else if (item.bottom > bounds.bottom)
+      inner.scrollTop += item.bottom - bounds.bottom;
+  });
+  Object.defineProperties(HTMLElement.prototype, {
+    scrollTo: { configurable: true, value: scroll },
+    scrollIntoView: { configurable: true, value: reveal },
+  });
+  try {
+    const selected = session(0, 0);
+    const tools = Array.from({ length: 12 }, (_, index) => ({
+      type: "toolCall" as const,
+      id: `tool-${index}`,
+      name: "read",
+      arguments: JSON.stringify({ path: `/workspace/file-${index}.ts` }),
+    }));
+    selected.entries.push({
+      id: "assistant",
+      parentId: "e0",
+      type: "message",
+      timestamp: "2026-09-30T00:00:01Z",
+      message: { role: "assistant", content: "", parts: tools },
+    });
+    selected.entries.push(
+      ...tools.map((tool, index) => ({
+        id: `receipt-${index}`,
+        parentId: index ? `receipt-${index - 1}` : "assistant",
+        type: "message" as const,
+        timestamp: "2026-09-30T00:00:02Z",
+        message: {
+          role: "toolResult",
+          toolCallId: tool.id,
+          toolName: tool.name,
+          content: `Exact receipt ${index}`,
+          isError: false,
+        },
+      })),
+    );
+    selected.history = { leafEntryId: "receipt-11", beforeEntryId: null };
+    const cache: SessionReadingCache = new Map();
+    const view = render(node(snapshot(selected), null, cache));
+    const viewport =
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    const inner = view.container.querySelector<HTMLElement>(
+      ".process-sequence-scroll",
+    )!;
+    const sequence = inner.closest<HTMLDetailsElement>(".process-sequence")!;
+    let innerTop = 0;
+    Object.defineProperties(viewport, {
+      scrollHeight: { get: () => 2200 },
+      clientHeight: { get: () => 600 },
+    });
+    Object.defineProperties(inner, {
+      scrollHeight: { get: () => 900 },
+      clientHeight: { get: () => 360 },
+      scrollTop: {
+        get: () => innerTop,
+        set: (top: number) => {
+          innerTop = Math.max(0, Math.min(top, 540));
+        },
+      },
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this === viewport) return new DOMRect(0, 0, 1000, 600);
+        if (this === inner)
+          return new DOMRect(0, 600 - viewport.scrollTop, 800, 360);
+        if (this.dataset.historyResult) {
+          const index = Number(this.dataset.historyResult.slice(8));
+          return new DOMRect(
+            0,
+            600 - viewport.scrollTop + index * 64 - innerTop,
+            800,
+            40,
+          );
+        }
+        return new DOMRect();
+      },
+    );
+    const target: Navigation = {
+      sessionId: selected.id,
+      sessionPath: selected.path,
+      entryId: "receipt-9",
+      revision: 1,
+      session: {
+        ...selected,
+        history: {
+          ...selected.history,
+          anchorEntryId: "receipt-9",
+          anchorOnBranch: true,
+        },
+      },
+    };
+    view.rerender(node(snapshot(selected), target, cache));
+    await act(
+      () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
+    const matched = view.container.querySelector<HTMLElement>(
+      '[data-history-result="receipt-9"]',
+    )!;
+    expect(sequence.open).toBe(true);
+    expect(matched.textContent).toContain("Exact receipt 9");
+    expect(
+      matched.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
+    ).toBe("returned");
+    expect(inner.scrollTop).toBeGreaterThan(0);
+    expect(matched.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      inner.getBoundingClientRect().top,
+    );
+    expect(matched.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      inner.getBoundingClientRect().bottom,
+    );
+    expect(matched.getBoundingClientRect().top).toBe(24);
+    expect(document.activeElement).toBe(matched);
+    expect(matched.dataset.historyHighlighted).toBe("true");
+    inner.scrollTop = 180;
+    fireEvent.scroll(inner);
+    viewport.scrollTop = 700;
+    fireEvent.scroll(viewport);
+    scroll.mockClear();
+    reveal.mockClear();
+    const appended = {
+      ...selected,
+      entries: [
+        ...selected.entries,
+        {
+          id: "after",
+          parentId: "receipt-11",
+          type: "message" as const,
+          timestamp: "2026-09-30T00:00:03Z",
+          message: { role: "assistant", content: "Appended native response" },
+        },
+      ],
+      history: {
+        ...selected.history,
+        leafEntryId: "after",
+        anchorEntryId: "receipt-11",
+        anchorOnBranch: true,
+      },
+    };
+    view.rerender(node(snapshot(appended), target, cache));
+    expect(screen.getByText("Appended native response")).toBeTruthy();
+    expect(inner.scrollTop).toBe(180);
+    expect(viewport.scrollTop).toBe(700);
+    expect(scroll).not.toHaveBeenCalled();
+    expect(reveal).not.toHaveBeenCalled();
+  } finally {
+    for (const [name, descriptor] of methods) {
+      if (descriptor)
+        Object.defineProperty(HTMLElement.prototype, name, descriptor);
+      else Reflect.deleteProperty(HTMLElement.prototype, name);
+    }
+  }
+});
+
 it("keeps a smooth loaded-turn jump unpinned through its first frames without unpinning layout clamps, and follows again on a downward return", async () => {
   const originalScroll = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
@@ -745,7 +919,407 @@ it("keeps a smooth loaded-turn jump unpinned through its first frames without un
   }
 });
 
-it("follows new content after a prepended native page is clamped to the bottom without a navigation target", async () => {
+it.each(["wheel", "ArrowUp", "PageUp", "Home", "Shift+Space"])(
+  "pauses streamed bottom following on %s before scroll delivery and resumes on a downward return",
+  async (input) => {
+    const originalScroll = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollTo",
+    );
+    const scroll = vi.fn(function (
+      this: HTMLElement,
+      options: ScrollToOptions,
+    ) {
+      this.scrollTop = Math.min(
+        options.top ?? 0,
+        this.scrollHeight - this.clientHeight,
+      );
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scroll,
+    });
+    let height = 1530;
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+      () => height,
+    );
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(627);
+    try {
+      const selected = session(0, 1);
+      const state = snapshot(selected);
+      state.runtime.status = "running";
+      const cache: SessionReadingCache = new Map();
+      const stream = (content: string) =>
+        node(
+          state,
+          null,
+          cache,
+          [{ key: "stream", message: { role: "assistant", content } }],
+          { liveRunning: true, livePhase: "running" },
+        );
+      const view = render(stream("First streamed text"));
+      const viewport =
+        view.container.querySelector<HTMLElement>(".conversation")!;
+      expect(viewport.scrollTop).toBe(903);
+      scroll.mockClear();
+      if (input === "wheel") fireEvent.wheel(viewport, { deltaY: -3 });
+      else
+        fireEvent.keyDown(viewport, {
+          key: input === "Shift+Space" ? " " : input,
+          shiftKey: input === "Shift+Space",
+        });
+      // Streaming can render between the input and the browser's scroll event.
+      view.rerender(stream("Second streamed text"));
+      expect(screen.getByText("Second streamed text")).toBeTruthy();
+      expect(viewport.scrollTop).toBe(903);
+      expect(scroll).not.toHaveBeenCalled();
+      viewport.scrollTop = 900;
+      fireEvent.scroll(viewport);
+      expect(
+        screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+      ).toBeTruthy();
+      height = 1550;
+      view.rerender(stream("Third streamed text"));
+      expect(viewport.scrollTop).toBe(900);
+      expect(scroll).not.toHaveBeenCalled();
+      // Unchanged near-bottom frames must not undo the reader's pause.
+      fireEvent.scroll(viewport);
+      view.rerender(stream("Fourth streamed text"));
+      expect(screen.getByText("Fourth streamed text")).toBeTruthy();
+      expect(viewport.scrollTop).toBe(900);
+      expect(scroll).not.toHaveBeenCalled();
+      viewport.scrollTop = height - viewport.clientHeight;
+      fireEvent.scroll(viewport);
+      expect(
+        screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+      ).toBeNull();
+      height = 1600;
+      view.rerender(stream("Fifth streamed text"));
+      expect(viewport.scrollTop).toBe(973);
+      expect(scroll).toHaveBeenCalledWith({ top: 1600, behavior: "instant" });
+    } finally {
+      if (originalScroll)
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollTo",
+          originalScroll,
+        );
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+    }
+  },
+);
+
+it("returns keyboard focus to the latest native message when the latest button disappears", async () => {
+  const view = render(node(snapshot(session(0, 3)), null, new Map()));
+  const viewport = view.container.querySelector<HTMLElement>(".conversation")!;
+  Object.defineProperties(viewport, {
+    clientHeight: { get: () => 360 },
+    scrollHeight: { get: () => 900 },
+  });
+  viewport.scrollTo = vi.fn();
+  viewport.scrollTop = 100;
+  fireEvent.scroll(viewport);
+  const jump = screen.getByRole("button", { name: i18n.t("jumpToLatest") });
+  jump.focus();
+  expect(document.activeElement).toBe(jump);
+  const target = view.container.querySelector<HTMLElement>(
+    '[data-history-message="e3"]',
+  )!;
+  const focus = vi.spyOn(target, "focus");
+  await act(async () => fireEvent.click(jump));
+  expect(
+    screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+  ).toBeNull();
+  expect(document.activeElement).toBe(target);
+  expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  expect(viewport.scrollTo).toHaveBeenCalledWith({
+    top: 900,
+    behavior: "smooth",
+  });
+});
+
+it.each(["closed process", "folded turn"])(
+  "keeps latest focus inside this conversation and skips native rows in a %s",
+  async (kind) => {
+    const selected = session(0, 3);
+    selected.entries[2]!.message!.stopReason = "stop";
+    selected.entries[3]!.message = {
+      role: "assistant",
+      content: "",
+      parts: [
+        { type: "thinking", text: "Inspect a later file" },
+        {
+          type: "toolCall",
+          id: "late-read",
+          name: "read",
+          arguments: '{"path":"later.ts"}',
+        },
+      ],
+    };
+    selected.entries.push({
+      type: "message",
+      id: "receipt",
+      timestamp: "2026-10-09T00:00:01Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "late-read",
+        toolName: "read",
+        content: "Exact later receipt",
+        isError: false,
+      },
+    });
+    if (kind === "folded turn")
+      selected.entries.push({
+        type: "custom",
+        id: "timing",
+        timestamp: "2026-10-09T00:00:02Z",
+        turnTiming: {
+          version: 1,
+          sessionId: selected.id,
+          commandId: "run",
+          epoch: 1,
+          promptEntryId: "e0",
+          resultEntryId: "e2",
+          startedAt: 0,
+          finishedAt: 2000,
+          elapsedMs: 2000,
+          outcome: "completed",
+        },
+      });
+    const original = JSON.stringify(selected.entries);
+    const view = render(node(snapshot(selected), null, new Map()));
+    const group =
+      view.container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+    if (kind === "folded turn") {
+      group.open = true;
+      fireEvent(group, new Event("toggle"));
+      expect(group.closest<HTMLElement>(".turn-response-body")?.hidden).toBe(
+        true,
+      );
+    } else expect(group.open).toBe(false);
+    const outside = document.createElement("article");
+    outside.className = "message-row";
+    outside.tabIndex = -1;
+    outside.dataset.historyMessage = "unrelated-session";
+    document.body.append(outside);
+    try {
+      const viewport =
+        view.container.querySelector<HTMLElement>(".conversation")!;
+      Object.defineProperties(viewport, {
+        clientHeight: { get: () => 360 },
+        scrollHeight: { get: () => 900 },
+      });
+      viewport.scrollTo = vi.fn();
+      viewport.scrollTop = 100;
+      fireEvent.scroll(viewport);
+      await act(async () =>
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+        ),
+      );
+      const target = view.container.querySelector<HTMLElement>(
+        '[data-history-message="e2"]',
+      )!;
+      expect(document.activeElement).toBe(target);
+      expect(document.activeElement).not.toBe(outside);
+      expect(group.open).toBe(kind === "folded turn");
+      expect(JSON.stringify(selected.entries)).toBe(original);
+    } finally {
+      outside.remove();
+    }
+  },
+);
+
+it("falls back to the conversation when its only native rows are inside a closed process", async () => {
+  const selected = session(0, 2);
+  selected.entries[1]!.message = {
+    role: "assistant",
+    content: "",
+    parts: [
+      { type: "thinking", text: "Inspect the file" },
+      {
+        type: "toolCall",
+        id: "read-only",
+        name: "read",
+        arguments: '{"path":"file.ts"}',
+      },
+    ],
+  };
+  selected.entries[2]!.message = {
+    role: "toolResult",
+    toolCallId: "read-only",
+    toolName: "read",
+    content: "Exact receipt",
+    isError: false,
+  };
+  selected.entries = selected.entries.slice(1);
+  const view = render(node(snapshot(selected), null, new Map()));
+  const viewport = view.container.querySelector<HTMLElement>(".conversation")!;
+  Object.defineProperties(viewport, {
+    clientHeight: { get: () => 360 },
+    scrollHeight: { get: () => 900 },
+  });
+  viewport.scrollTo = vi.fn();
+  viewport.scrollTop = 100;
+  fireEvent.scroll(viewport);
+  await act(async () =>
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ),
+  );
+  expect(document.activeElement).toBe(viewport);
+  expect(
+    view.container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
+  ).toBe(false);
+});
+
+it("hands latest focus to the current native window after clearing an older reading window", async () => {
+  const latest = session(6, 7);
+  const cache: SessionReadingCache = new Map([
+    [
+      sessionReadingScope(latest),
+      {
+        window: {
+          session: session(0, 1, 7),
+          anchor: "e1",
+          validatedLeaf: "e7",
+        },
+      },
+    ],
+  ]);
+  const view = render(node(snapshot(latest), null, cache));
+  expect(
+    view.container.querySelector('[data-history-message="e1"]'),
+  ).toBeTruthy();
+  const viewport = view.container.querySelector<HTMLElement>(".conversation")!;
+  viewport.scrollTo = vi.fn();
+  await act(async () =>
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ),
+  );
+  const target = view.container.querySelector<HTMLElement>(
+    '[data-history-message="e7"]',
+  )!;
+  expect(target).toBeTruthy();
+  expect(document.activeElement).toBe(target);
+  expect(
+    view.container.querySelector('[data-history-message="e1"]'),
+  ).toBeNull();
+});
+
+it.each(
+  ["conversation", "process"].flatMap((owner) =>
+    ["summary", "button"].flatMap((control) =>
+      ["ArrowUp", "PageUp", "Home", "Shift+Space"].map((key) => ({
+        owner,
+        control,
+        key,
+      })),
+    ),
+  ),
+)(
+  "preserves $owner keyboard ownership for $key on a focused $control before scroll delivery",
+  ({ owner, control, key }) => {
+    const calls = ["first", "second"].map((id) => ({
+      type: "toolCall" as const,
+      id,
+      name: "bash",
+      arguments: '{"command":"printf test"}',
+    }));
+    const selected = session(0, 1);
+    selected.entries[1]!.message!.content = "";
+    selected.entries[1]!.message!.parts = calls;
+    const cache: SessionReadingCache = new Map();
+    const stream = (content: string) => {
+      const state = snapshot(selected);
+      state.preferences.bashToolDisplay = "full";
+      state.runtime.status = "running";
+      state.runtime.liveTools = calls.map((call, index) => ({
+        call,
+        state: index === 0 ? "returned" : "running",
+        result: {
+          role: "toolResult",
+          toolName: call.name,
+          toolCallId: call.id,
+          content: index === 0 ? "Completed first command" : content,
+          isError: false,
+        },
+      }));
+      return node(state, null, cache, [], {
+        liveRunning: true,
+        livePhase: "running",
+      });
+    };
+    const view = render(stream("First native output"));
+    const scroller = view.container.querySelector<HTMLElement>(
+      ".process-sequence-scroll",
+    )!;
+    scroller.style.overflowY = "auto";
+    scroller.style.overscrollBehaviorY = "contain";
+    const viewport =
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    const element = owner === "process" ? scroller : viewport;
+    let top = 0;
+    let height = 900;
+    const setTop = vi.fn((value: number) => {
+      top = Math.max(0, Math.min(value, height - 360));
+    });
+    Object.defineProperties(element, {
+      clientHeight: { get: () => 360 },
+      scrollHeight: { get: () => height },
+      scrollTop: { get: () => top, set: setTop },
+    });
+    if (owner === "conversation")
+      element.scrollTo = vi.fn(
+        (options?: ScrollToOptions | number, y?: number) => {
+          element.scrollTop =
+            typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+        },
+      );
+    view.rerender(stream("Second native output"));
+    expect(element.scrollTop).toBe(540);
+    const target = view.container.querySelector<HTMLElement>(
+      owner === "process"
+        ? control === "summary"
+          ? ".tool-evidence-card > summary"
+          : ".evidence-shell button"
+        : control === "summary"
+          ? ".process-sequence > summary"
+          : ".message-row.user .message-actions button",
+    )!;
+    expect(target).toBeTruthy();
+    target.focus();
+    expect(document.activeElement).toBe(target);
+    setTop.mockClear();
+    fireEvent.keyDown(target, {
+      key: key === "Shift+Space" ? " " : key,
+      shiftKey: key === "Shift+Space",
+    });
+    view.rerender(stream("Third native output"));
+    expect(view.container.textContent).toContain("Third native output");
+    if (key === "Shift+Space") {
+      expect(setTop).toHaveBeenCalledWith(height);
+      expect(element.scrollTop).toBe(540);
+      return;
+    }
+    expect(setTop).not.toHaveBeenCalled();
+    element.scrollTop = 533;
+    fireEvent.scroll(element);
+    setTop.mockClear();
+    height = 920;
+    view.rerender(stream("Fourth native output"));
+    expect(element.scrollTop).toBe(533);
+    expect(setTop).not.toHaveBeenCalled();
+    element.scrollTop = height - element.clientHeight;
+    fireEvent.scroll(element);
+    height = 1000;
+    view.rerender(stream("Fifth native output"));
+    expect(element.scrollTop).toBe(640);
+  },
+);
+
+it("preserves an upward reader through a prepended bottom clamp and resumes after a downward return", async () => {
   const originalScroll = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "scrollTo",
@@ -790,6 +1364,16 @@ it("follows new content after a prepended native page is clamped to the bottom w
     expect(viewport.scrollTop).toBe(300);
     fireEvent.scroll(viewport);
     scroll.mockClear();
+    view.rerender(node(snapshot(selected), null, cache));
+    expect(scroll).not.toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(300);
+    expect(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeTruthy();
+    viewport.scrollTop = 299;
+    fireEvent.scroll(viewport);
+    viewport.scrollTop = 300;
+    fireEvent.scroll(viewport);
     view.rerender(node(snapshot(selected), null, cache));
     expect(scroll).toHaveBeenCalledWith({ top: 800, behavior: "instant" });
     expect(
@@ -938,6 +1522,11 @@ it.each(["thinking", "tool"])(
     view.rerender(node(snapshot(persisted), null, cache, [live]));
     expect(view.container.querySelector(selector)).toBe(disclosure);
     expect(disclosure.open).toBe(true);
+    if (kind === "thinking")
+      expect(
+        disclosure.closest<HTMLElement>("[data-history-message]")?.dataset
+          .historyEntry,
+      ).toBe("e1-thinking-0-body");
     view.rerender(node(snapshot(persisted), null, cache));
     expect(view.container.querySelector(selector)).toBe(disclosure);
     expect(disclosure.open).toBe(true);

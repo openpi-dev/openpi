@@ -574,6 +574,208 @@
   padding: 24px 20px 40px;
 }
 
+.settings-resource-toolbar {
+  display: grid;
+  flex: none;
+  gap: 10px;
+  padding: 16px 12px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-resource-toolbar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.settings-resource-search {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--muted);
+}
+
+.settings-resource-search:focus-within {
+  border-color: var(--accent);
+}
+
+.settings-resource-search svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.settings-resource-search input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
+.settings-resource-toolbar select {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+}
+
+.settings-managed-panel .settings-resource-item {
+  min-height: 54px;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 6px;
+}
+
+.settings-managed-panel .settings-resource-item strong {
+  font-size: 12px;
+}
+
+.settings-managed-panel .settings-resource-item small {
+  margin-top: 3px;
+  font-size: 10px;
+}
+
+.settings-managed-panel .settings-resource-detail {
+  padding: 28px 28px 32px;
+}
+
+.settings-managed-panel .settings-detail-heading p {
+  max-width: 60ch;
+  line-height: 1.7;
+}
+
+.settings-resource-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.settings-resource-primary-actions {
+  margin-top: 20px;
+}
+
+.settings-resource-caption {
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.settings-resource-notice {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sidebar);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.settings-resource-management {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-resource-management > .settings-resource-actions {
+  margin: 0 0 18px;
+}
+
+.settings-resource-reload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-resource-reload > div {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.settings-resource-reload strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-resource-reload p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.settings-resource-advanced {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-resource-advanced summary {
+  padding: 14px 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.settings-resource-install .settings-edit-form {
+  margin-top: 24px;
+}
+
+.settings-resource-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.settings-resource-link svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-managed-panel .settings-empty-detail {
+  min-height: 240px;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.settings-managed-panel .settings-empty-detail h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.settings-managed-panel .settings-empty-detail p {
+  max-width: 42ch;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .settings-status-badge {
   display: inline-flex;
   min-height: 24px;
@@ -919,6 +1121,15 @@
 
   .settings-resource-detail {
     padding: 20px 16px 32px;
+  }
+
+  .settings-managed-panel .settings-resource-sidebar {
+    max-height: 280px;
+    flex: 0 0 auto;
+  }
+
+  .settings-managed-panel .settings-resource-detail {
+    padding: 20px 16px 28px;
   }
 
   .settings-subagent-summary {

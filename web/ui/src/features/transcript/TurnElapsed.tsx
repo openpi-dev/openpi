@@ -8,7 +8,13 @@ export function formatTurnDuration(elapsedMs: number, language: string) {
   const minutes = Math.floor(seconds / 60) % 60;
   const rest = seconds % 60;
   if (language.startsWith("zh")) {
-    return `${hours ? `${hours}小时` : ""}${minutes || hours ? `${minutes}分钟` : ""}${rest}秒`;
+    return [
+      hours ? `${hours}h` : "",
+      minutes || hours ? `${minutes}m` : "",
+      `${rest}s`,
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
   return `${hours ? `${hours}h` : ""}${minutes || hours ? `${minutes}m` : ""}${rest}s`;
 }

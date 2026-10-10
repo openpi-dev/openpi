@@ -3,6 +3,64 @@ import { AxeBuilder } from "@axe-core/playwright";
 import type { BrowserSettingsStatus } from "../../web/protocol/browser.ts";
 import { installThinkingFixture } from "./thinking-e2e-support.ts";
 
+test("browser installation remains reachable by wheel in short and narrow settings windows", async ({
+  page,
+}, info) => {
+  await installThinkingFixture(page);
+  const status: BrowserSettingsStatus = {
+    config: {
+      control: false,
+      embedded: true,
+      defaultBrowser: "embedded",
+      externalBrowsers: [],
+    },
+    profiles: [],
+    browsers: [{ id: "chrome", installed: true }],
+    extensionPath: "/Applications/OpenPI/browser-extension/",
+    extensionVersion: "0.4.0",
+  };
+  await page.route("**/api/settings/browser", (route) =>
+    route.fulfill({ json: status }),
+  );
+  for (const width of [1147, 390]) {
+    await page.setViewportSize({ width, height: 640 });
+    await page.goto("/?settings=browser");
+    const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+    const panel = dialog.locator("#settings-panel-browser");
+    await panel
+      .getByRole("button", { name: "设置 OpenPI 内置浏览器", exact: true })
+      .click();
+    const guide = panel.getByRole("region", {
+      name: "连接 OpenPI 内置浏览器",
+      exact: true,
+    });
+    await guide
+      .getByRole("button", { name: "第 3 步：添加扩展", exact: true })
+      .click();
+    const before = await panel.evaluate((element) => element.scrollTop);
+    const box = await panel.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.mouse.wheel(0, 2400);
+    await expect
+      .poll(() => panel.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(before + 20);
+    await expect(
+      guide.getByRole("button", { name: "已添加，连接 OpenPI", exact: true }),
+    ).toBeInViewport({ ratio: 1 });
+    await expect(
+      dialog.getByRole("button", { name: "关闭", exact: true }),
+    ).toBeInViewport({ ratio: 1 });
+    await page.screenshot({
+      path: info.outputPath(`browser-install-scroll-${width}.png`),
+    });
+    await page.mouse.wheel(0, -2400);
+    await expect(
+      panel.getByRole("heading", { name: "浏览器", exact: true }),
+    ).toBeInViewport({ ratio: 1 });
+  }
+});
+
 test("separate guide shares live connection state, native family steps and opener cleanup", async ({
   page,
 }, info) => {

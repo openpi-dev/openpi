@@ -78,7 +78,6 @@ export function BrowserSettingsPanel({
     if (guide) {
       guideElement.current?.scrollIntoView?.({
         block: "nearest",
-        behavior: "smooth",
       });
       stepHeading.current?.focus({ preventScroll: true });
     }

@@ -9,6 +9,8 @@ export interface WebTurnTiming {
   finishedAt: number;
   elapsedMs: number;
   outcome: "completed" | "cancelled" | "failed" | "uncertain";
+  /** Exact native input that began this execution, before any steering input. */
+  promptEntryId?: string;
   resultEntryId?: string;
 }
 
@@ -20,7 +22,7 @@ export function readTurnTiming(value: unknown): WebTurnTiming | undefined {
     record.version !== 1 ||
     typeof record.sessionId !== "string" || !record.sessionId || record.sessionId.length > 500 ||
     typeof record.commandId !== "string" || !record.commandId || record.commandId.length > 500 ||
-    (record.resultEntryId !== undefined && (typeof record.resultEntryId !== "string" || !record.resultEntryId || record.resultEntryId.length > 500 || /[\u0000-\u001f\u007f]/u.test(record.resultEntryId))) ||
+    [record.promptEntryId, record.resultEntryId].some((id) => id !== undefined && (typeof id !== "string" || !id || id.length > 500 || /[\u0000-\u001f\u007f]/u.test(id))) ||
     !Number.isSafeInteger(record.epoch) || Number(record.epoch) < 1 ||
     ![record.startedAt, record.finishedAt, record.elapsedMs].every((number) => typeof number === "number" && Number.isSafeInteger(number) && number >= 0) ||
     !["completed", "cancelled", "failed", "uncertain"].includes(String(record.outcome))
@@ -34,6 +36,7 @@ export function readTurnTiming(value: unknown): WebTurnTiming | undefined {
     finishedAt: Number(record.finishedAt),
     elapsedMs: Number(record.elapsedMs),
     outcome: record.outcome as WebTurnTiming["outcome"],
+    ...(typeof record.promptEntryId === "string" ? { promptEntryId: record.promptEntryId } : {}),
     ...(typeof record.resultEntryId === "string" ? { resultEntryId: record.resultEntryId } : {}),
   };
 }

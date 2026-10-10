@@ -1123,6 +1123,39 @@ export class WebHost {
       this.publish("session_selected", { sessionPath: session.path });
       return this.json(response, 200, result);
     }
+    if (["/api/providers/login", "/api/providers/login/respond", "/api/providers/login/cancel", "/api/providers/logout"].includes(url.pathname) && request.method === "POST") {
+      const body = await this.readJson(request);
+      const action = url.pathname.split("/").at(-1);
+      const fields = action === "respond" ? ["sessionId", "id", "promptId", "value"] : action === "cancel" ? ["sessionId", "id"] : ["sessionId", "provider"];
+      if (Object.keys(body).length !== fields.length || fields.some((field) => typeof body[field] !== "string") ||
+        typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 ||
+        ("provider" in body && (typeof body.provider !== "string" || !/^[a-zA-Z0-9._-]{1,160}$/u.test(body.provider))) ||
+        ("id" in body && (typeof body.id !== "string" || !body.id || body.id.length > 128)) ||
+        ("promptId" in body && (typeof body.promptId !== "string" || !body.promptId || body.promptId.length > 128)) ||
+        ("value" in body && (typeof body.value !== "string" || body.value.length > 8192 || /[\r\n\u0000]/u.test(body.value))))
+        return this.json(response, 400, { error: "Invalid account login request" });
+      if (body.sessionId !== this.runtime.sessionManager.getSessionId()) return this.json(response, 409, { code: "PROVIDER_LOGIN_CONFLICT", error: "The active Session changed. Refresh before continuing." });
+      try {
+        if (action === "respond" && typeof body.id === "string" && typeof body.promptId === "string" && typeof body.value === "string" && this.runtime.respondProviderLogin)
+          return this.json(response, 200, this.runtime.respondProviderLogin(body.sessionId, body.id, body.promptId, body.value));
+        if (action === "cancel" && typeof body.id === "string" && this.runtime.cancelProviderLogin)
+          return this.json(response, 200, this.runtime.cancelProviderLogin(body.sessionId, body.id));
+        if (action === "login" && typeof body.provider === "string" && this.runtime.startProviderLogin)
+          return this.json(response, 200, await this.runtime.startProviderLogin(body.sessionId, body.provider));
+        if (action === "logout" && typeof body.provider === "string" && this.runtime.logoutProvider) {
+          const result = await this.runtime.logoutProvider(body.sessionId, body.provider);
+          this.publish("settings_changed", {});
+          return this.json(response, 200, result);
+        }
+        return this.json(response, 501, { error: "Account login is unavailable" });
+      } catch (error) {
+        // Native errors may carry a committed credential or an authorization code.
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
+          error: "Could not complete account login. Refresh its status before retrying.",
+          ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}),
+        });
+      }
+    }
     if (url.pathname === "/api/providers/api-key" && request.method === "POST") {
       const body = await this.readJson(request);
       if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.provider !== "string" || body.provider.length > 160 || typeof body.apiKey !== "string" || !body.apiKey.trim() || body.apiKey.length > 8192 || /[\r\n\u0000]/u.test(body.apiKey)) {
@@ -1198,6 +1231,20 @@ export class WebHost {
         return this.json(response, 200, { saved: true });
       } catch (error) {
         return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, { error: "Could not save models. Refresh configuration before retrying.", ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}) });
+      }
+    }
+    if (url.pathname === "/api/settings/reload" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).some((key) => !["sessionId", "sessionPath"].includes(key)) || typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128 || typeof body.sessionPath !== "string" || !body.sessionPath || body.sessionPath.length > 4096) {
+        return this.json(response, 400, { error: "The active Session id and path are required" });
+      }
+      if (!this.runtime.reloadSettingsResources) return this.json(response, 501, { error: "Resource reload is unavailable" });
+      try {
+        await this.runtime.reloadSettingsResources(body.sessionId, body.sessionPath);
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { reloaded: true });
+      } catch (error) {
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, { error: "Could not reload Pi resources. Refresh and inspect diagnostics before retrying.", ...(error instanceof WebRuntimeRequestError ? { code: error.code } : {}) });
       }
     }
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
@@ -1843,6 +1890,7 @@ export class WebHost {
       }
       return this.json(response, 200, {
         sessionId: diagnosticSession,
+        sessionPath: this.runtime.sessionManager.getSessionFile(),
         setup: projectWebSetupConfig(loadSetupConfig()),
         resources: this.runtime.listSettingsResources(),
       });
@@ -2157,6 +2205,18 @@ export class WebHost {
         return this.json(response, 422, { error: "Cannot read models.json; check its JSON format" });
       }
     }
+    if (url.pathname === "/api/providers/login") {
+      const sessionId = url.searchParams.get("sessionId");
+      const id = url.searchParams.get("id");
+      if (!sessionId || sessionId.length > 128 || url.searchParams.getAll("sessionId").length !== 1 ||
+        (id !== null && (!id || id.length > 128 || url.searchParams.getAll("id").length !== 1)) ||
+        [...url.searchParams.keys()].some((key) => key !== "sessionId" && key !== "id"))
+        return this.json(response, 400, { error: "An exact Session and login identity are required" });
+      if (sessionId !== this.runtime.sessionManager.getSessionId()) return this.json(response, 409, { code: "PROVIDER_LOGIN_CONFLICT", error: "The active Session changed" });
+      if (!this.runtime.readProviderLogin) return this.json(response, 501, { error: "Account login is unavailable" });
+      try { return this.json(response, 200, this.runtime.readProviderLogin(sessionId, id ?? undefined)); }
+      catch { return this.json(response, 409, { code: "PROVIDER_LOGIN_CONFLICT", error: "This login has changed. Refresh its status." }); }
+    }
     if (url.pathname === "/api/providers/auth-status") {
       if (!this.runtime.listProviderAuth) {
         return this.json(response, 501, {
@@ -2303,7 +2363,7 @@ export class WebHost {
     }
     if (url.pathname === "/api/session/item") {
       if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
-      const keys = ["sessionId", "sessionPath", "entryId", "cursor", "purpose"] as const;
+      const keys = ["sessionId", "sessionPath", "entryId", "cursor", "purpose", "partIndex"] as const;
       const required = keys.slice(0, 4);
       if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
         required.some((key) => {
@@ -2311,14 +2371,18 @@ export class WebHost {
           return url.searchParams.getAll(key).length !== 1 || !value ||
             value.length > (key === "sessionPath" ? 4096 : 128) || /[\u0000-\u001f]/u.test(value);
         }) || !/^(0|[1-9]\d{0,9})$/u.test(url.searchParams.get("cursor") ?? "") ||
-        (url.searchParams.has("purpose") && (url.searchParams.getAll("purpose").length !== 1 || url.searchParams.get("purpose") !== "plan")))
+        (url.searchParams.has("purpose") && (url.searchParams.getAll("purpose").length !== 1 || !["plan", "thinking"].includes(url.searchParams.get("purpose")!))) ||
+        (url.searchParams.get("purpose") === "thinking"
+          ? url.searchParams.getAll("partIndex").length !== 1 || !/^(0|[1-9]\d{0,5})$/u.test(url.searchParams.get("partIndex") ?? "")
+          : url.searchParams.has("partIndex")))
         return this.json(response, 400, { code: "INVALID_SESSION_ITEM_REQUEST", error: "an exact Session item and bounded cursor are required" });
       const result = await this.adapter.getSessionItem(
         url.searchParams.get("sessionId")!,
         url.searchParams.get("sessionPath")!,
         url.searchParams.get("entryId")!,
         Number(url.searchParams.get("cursor")),
-        url.searchParams.get("purpose") === "plan" ? "plan" : undefined,
+        url.searchParams.get("purpose") === "thinking" ? "thinking" : url.searchParams.get("purpose") === "plan" ? "plan" : undefined,
+        url.searchParams.has("partIndex") ? Number(url.searchParams.get("partIndex")) : undefined,
       );
       if (result.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is not in the selected workspace" });
       if (result.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "Session item is no longer on this branch" });

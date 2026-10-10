@@ -5,7 +5,7 @@
 - Verified: 2026-10-09 (configuration, runtime, browser and UI acceptance); 2026-10-10 (guided installation and desktop-browser follow-ups below)
 - Source: implementation `f19f044263176ae948f42722783a29b944f14431` on `codex/browser-tools-probe`, containing upstream main `a18f457687b45c877bc8a15d689a7580c4f0659a`; Pi `0.99.1`, Browser Bridge `0.3.0`. `pi list` confirmed the sole OpenPI source was the tested checkout before the runtime was restarted. The frozen source tree, verifier and screenshot identities are retained in `acceptance-manifest.json`.
 - Issues: [#169](https://github.com/openpi-dev/openpi/issues/169), [#597](https://github.com/openpi-dev/openpi/issues/597)
-- Related PR: [#720](https://github.com/openpi-dev/openpi/pull/720)
+- Related PRs: [#720](https://github.com/openpi-dev/openpi/pull/720), integrated into [#711](https://github.com/openpi-dev/openpi/pull/711)
 - Supersedes: none; extends [the embedded-browser investigation](../research/PI_BROWSER_TOOLS_2026-10-09.md)
 
 ## User outcome
@@ -105,3 +105,11 @@ Validation and exact runtime identities are recorded in the `browser-multi-20261
 - `bun run check` passed. `VITEST_MAX_WORKERS=4 bun run test` passed 2,334 Node tests (nine skips) and 1,163 UI tests in 83 files. Final Edge E2E passed all five relevant cases: embedded same/cross-process documents, separate-window setup/lifecycle, settings shell, native CDP and the portable DOM mechanism. The portable E2E uses the same bundled code under a Chromium-compatible test manifest; it does not stand in for a Firefox/Safari physical test.
 - Earlier full-suite attempts exposed outdated expected browser/status strings (corrected), unrelated UI worker-contention timeouts (the four affected files passed separately), and an existing narrator sandbox timeout during concurrent load. The final repository checks ran sequentially with bounded UI workers and passed. Failed attempts remain archived.
 - Firefox real-browser testing was explicitly waived; its shared portable mechanism and installation UI are covered separately. Brave/Chromium physical installation, Windows/Linux launch helpers, non-local site permissions and permanent signed distribution were not validated in this iteration.
+
+## 2026-10-10: scrollable installation and PR #711 integration
+
+The browser panel lacked a scroll owner inside the settings shell's clipped content area. Long installation steps therefore hid their lower actions even though programmatic focus and test clicks could scroll hidden ancestors. The fix gives the existing browser tab panel native vertical scrolling. The settings header remains visible, and the separate guide window retains its document scrolling. Removing smooth automatic guide positioning also avoids a pending step animation undoing a user's wheel movement.
+
+The regression uses actual wheel input in 1147 × 640 and 390 × 640 viewports, requires the complete “Added. Connect to OpenPI” button inside the viewport, checks the fixed close button and scrolls back to the page heading. It failed before the scroll rule and passed after the rule and animation removal; no custom scroll controller, duplicate layout state or installer abstraction is needed.
+
+At the operator's request, browser source `fbd070b4f706db983421fa733501e6615a2f3188` is combined with PR #711 head `60ff9816e4a57cbc95bcfab2d6c3d8d9ea25d636`. Both native setup and resource reload hooks are retained, as are the existing account entry, side composer and workbar refinements. Generated assets are rebuilt from the combined source. Local evidence identity `browser-scroll-20261010` retains the failed pre-fix wheel run, final screenshots, integration gate logs and frozen source. Earlier provider acceptance above keeps its original source boundary.

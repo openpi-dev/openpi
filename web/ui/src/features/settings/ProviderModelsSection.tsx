@@ -1,4 +1,5 @@
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
+import { Selector } from "@astryxdesign/core/Selector";
 import { Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -8,7 +9,9 @@ import type {
   WebProviderAuthProjection,
 } from "../../../../runtime/types.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
+import { ProviderAccountLogin } from "./ProviderAccountLogin.tsx";
 import { ProviderConfigurationCard } from "./ProviderConfigurationCard.tsx";
+import { ProviderIcon } from "./ProviderIcon.tsx";
 import "./provider-models.css";
 
 export function ProviderModelsSection({
@@ -41,10 +44,13 @@ export function ProviderModelsSection({
   const [editing, setEditing] = useState<string | null>(null);
   const [visited, setVisited] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
-  const [mode, setMode] = useState("catalog");
+  const [mode, setMode] = useState("account");
+  const [accountId, setAccountId] = useState("");
   const [catalogId, setCatalogId] = useState("");
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [cardSaving, setCardSaving] = useState<Record<string, boolean>>({});
+  const saving = removing || Object.values(cardSaving).some(Boolean);
   const [saved, setSaved] = useState<string | null>(null);
   const [remove, setRemove] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -119,11 +125,11 @@ export function ProviderModelsSection({
   ]);
   const visibleIds = new Set([
     ...configuredIds,
-    ...visited.filter((id) => !id.startsWith("add:")),
     ...(data?.auth.providers
       .filter((provider) => provider.configured)
       .map((provider) => provider.id) ?? []),
     ...models.map((model) => model.provider),
+    ...visited.filter((id) => !id.startsWith("add:")),
   ]);
   const providers = [...visibleIds].map((id) => {
     const auth = data?.auth.providers.find((provider) => provider.id === id);
@@ -133,10 +139,53 @@ export function ProviderModelsSection({
     return { id, name: config?.name || auth?.name || id, auth };
   });
   const available =
-    data?.auth.providers.filter((provider) => !visibleIds.has(provider.id)) ??
-    [];
+    data?.auth.providers.filter(
+      (provider) =>
+        provider.authMethods.includes("api_key") &&
+        !visibleIds.has(provider.id),
+    ) ?? [];
+  const accounts =
+    data?.auth.providers.filter(
+      (provider) =>
+        provider.authMethods.includes("oauth") && !provider.subscription,
+    ) ?? [];
+  const selectedAccount =
+    accounts.find((provider) => provider.id === accountId) ?? accounts[0];
   const selectedCatalog =
     available.find((provider) => provider.id === catalogId) ?? available[0];
+  const addModes = [
+    {
+      id: "account",
+      label: "accountLoginTab",
+      hint: "providerAccountHint",
+      available: accounts.length > 0,
+    },
+    {
+      id: "catalog",
+      label: "providerAddCatalog",
+      hint: "providerCatalogHint",
+      available: available.length > 0,
+    },
+    {
+      id: "custom",
+      label: "providerAddCustom",
+      hint: "providerCustomHint",
+      available: true,
+    },
+  ];
+  const selectAddMode = (nextMode: string) => {
+    setMode(nextMode);
+    const key =
+      nextMode === "custom"
+        ? "add:custom"
+        : nextMode === "account"
+          ? selectedAccount && `add:account:${selectedAccount.id}`
+          : selectedCatalog && `add:${selectedCatalog.id}`;
+    if (key)
+      setVisited((previous) =>
+        previous.includes(key) ? previous : [...previous, key],
+      );
+  };
   const selectEditor = (id: string) => {
     setSaved(null);
     setAdding(false);
@@ -163,14 +212,51 @@ export function ProviderModelsSection({
       void onSaved().catch(() => false);
     }
   };
-  const card = (key: string, id: string, isNew: boolean, custom: boolean) =>
-    configuration && (
+  const card = (key: string, id: string, isNew: boolean, custom: boolean) => {
+    if (!configuration) return null;
+    const auth = data?.auth.providers.find((provider) => provider.id === id);
+    const onSaving = (value: boolean) =>
+      setCardSaving((previous) =>
+        previous[key] === value ? previous : { ...previous, [key]: value },
+      );
+    const onReload = () => {
+      closeCard(key);
+      refresh((value) => value + 1);
+      void onSaved().catch(() => false);
+    };
+    if (key.startsWith("add:account:"))
+      return (
+        auth && (
+          <div className="models-editor">
+            <ProviderAccountLogin
+              sessionId={sessionId}
+              auth={auth}
+              busy={busy}
+              onSaving={onSaving}
+              onAuthenticated={() => closeCard(key, auth.name || auth.id)}
+              onReload={onReload}
+            />
+            {!cardSaving[key] && (
+              <div className="models-editor-actions">
+                <button
+                  type="button"
+                  className="models-button"
+                  onClick={() => closeCard(key)}
+                >
+                  {t("cancel")}
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      );
+    return (
       <ProviderConfigurationCard
         key={key}
         sessionId={sessionId}
         providerId={id}
         configuration={configuration}
-        auth={data?.auth.providers.find((provider) => provider.id === id)}
+        auth={auth}
         isNew={isNew}
         custom={custom}
         taken={[
@@ -185,15 +271,12 @@ export function ProviderModelsSection({
             previous[key] === value ? previous : { ...previous, [key]: value },
           )
         }
-        onSaving={setSaving}
+        onSaving={onSaving}
         onClose={(name) => closeCard(key, name)}
-        onReload={() => {
-          closeCard(key);
-          refresh((value) => value + 1);
-          void onSaved().catch(() => false);
-        }}
+        onReload={onReload}
       />
     );
+  };
 
   return (
     <div className="models-page">
@@ -248,30 +331,44 @@ export function ProviderModelsSection({
               <li key={provider.id} className="models-provider-card">
                 <div className="models-provider-head">
                   <div className="models-provider-identity">
-                    <span className="models-provider-name">
-                      {provider.name}
+                    <span className="models-provider-avatar" aria-hidden="true">
+                      <ProviderIcon id={provider.id} name={provider.name} />
                     </span>
-                    {custom && (
-                      <span className="models-provider-tag">
-                        {t("providerCustomTag")}
+                    <div className="models-provider-label">
+                      <span className="models-provider-name">
+                        {provider.name}
                       </span>
-                    )}
-                    {provider.auth && (
-                      <span
-                        className={`models-credential-dot ${provider.auth.configured ? "configured" : "missing"}`}
-                        role="img"
-                        aria-label={t(
-                          provider.auth.configured
-                            ? "credentialConfigured"
-                            : "credentialMissing",
-                        )}
-                        title={t(
-                          provider.auth.configured
-                            ? "credentialConfigured"
-                            : "credentialMissing",
-                        )}
-                      />
-                    )}
+                      {custom && (
+                        <span className="models-provider-tag">
+                          {t("providerCustomTag")}
+                        </span>
+                      )}
+                      {provider.auth && (
+                        <span className="models-provider-status">
+                          <span
+                            className={`models-credential-dot ${provider.auth.configured ? "configured" : "missing"}`}
+                            role="img"
+                            aria-label={t(
+                              provider.auth.configured
+                                ? "credentialConfigured"
+                                : "credentialMissing",
+                            )}
+                            title={t(
+                              provider.auth.configured
+                                ? "credentialConfigured"
+                                : "credentialMissing",
+                            )}
+                          />
+                          {t(
+                            provider.auth.subscription
+                              ? "accountLoginConfigured"
+                              : provider.auth.configured
+                                ? "credentialConfigured"
+                                : "credentialMissing",
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="models-provider-actions">
                     <button
@@ -289,7 +386,12 @@ export function ProviderModelsSection({
                       disabled={saving}
                       onClick={() => selectEditor(provider.id)}
                     >
-                      {t("providerEdit")}
+                      {t(
+                        provider.auth?.authMethods.includes("oauth") &&
+                          !provider.auth.configured
+                          ? "accountLoginStart"
+                          : "providerEdit",
+                      )}
                     </button>
                     {configuredIds.has(provider.id) && (
                       <button
@@ -336,99 +438,130 @@ export function ProviderModelsSection({
                 onKeyDown={(event) => {
                   if (
                     saving ||
-                    !available.length ||
                     !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
                       event.key,
                     )
                   )
                     return;
                   event.preventDefault();
+                  const enabled = addModes.filter((item) => item.available);
+                  const index = enabled.findIndex((item) => item.id === mode);
                   const nextMode =
-                    event.key === "Home"
-                      ? "catalog"
-                      : event.key === "End"
-                        ? "custom"
-                        : mode === "catalog"
-                          ? "custom"
-                          : "catalog";
-                  setMode(nextMode);
-                  const key =
-                    nextMode === "custom"
-                      ? "add:custom"
-                      : `add:${selectedCatalog?.id}`;
-                  setVisited((previous) =>
-                    previous.includes(key) ? previous : [...previous, key],
-                  );
+                    enabled[
+                      event.key === "Home"
+                        ? 0
+                        : event.key === "End"
+                          ? enabled.length - 1
+                          : (index +
+                              (event.key === "ArrowRight" ? 1 : -1) +
+                              enabled.length) %
+                            enabled.length
+                    ].id;
+                  selectAddMode(nextMode);
                   event.currentTarget
                     .querySelectorAll("button")
-                    [nextMode === "custom" ? 1 : 0]?.focus();
+                    [
+                      addModes.findIndex((item) => item.id === nextMode)
+                    ]?.focus();
                 }}
               >
-                <button
-                  type="button"
-                  aria-pressed={mode === "catalog"}
-                  disabled={saving || !available.length}
-                  onClick={() => {
-                    setMode("catalog");
-                    const key = `add:${selectedCatalog?.id}`;
-                    setVisited((previous) =>
-                      previous.includes(key) ? previous : [...previous, key],
-                    );
-                  }}
-                >
-                  {t("providerAddCatalog")}
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={mode === "custom"}
-                  disabled={saving}
-                  onClick={() => {
-                    setMode("custom");
-                    setVisited((previous) =>
-                      previous.includes("add:custom")
-                        ? previous
-                        : [...previous, "add:custom"],
-                    );
-                  }}
-                >
-                  {t("providerAddCustom")}
-                </button>
+                {addModes.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-pressed={mode === item.id}
+                    disabled={saving || !item.available}
+                    onClick={() => selectAddMode(item.id)}
+                  >
+                    {t(item.label)}
+                  </button>
+                ))}
               </fieldset>
               <p className="models-hint">
                 {t(
-                  mode === "catalog"
-                    ? "providerCatalogHint"
-                    : "providerCustomHint",
+                  addModes.find((item) => item.id === mode)?.hint ??
+                    "providerCustomHint",
                 )}
               </p>
-              <div hidden={mode !== "catalog"}>
-                {selectedCatalog && (
-                  <label className="models-field models-provider-select">
-                    {t("provider")}
-                    <select
-                      value={selectedCatalog.id}
-                      disabled={saving}
-                      onChange={(event) => {
-                        setCatalogId(event.target.value);
-                        const key = `add:${event.target.value}`;
+              <div hidden={mode !== "account"}>
+                {selectedAccount && (
+                  <div className="models-provider-select">
+                    <Selector
+                      label={t("provider")}
+                      className="models-provider-picker"
+                      options={accounts.map((provider) => ({
+                        value: provider.id,
+                        label: provider.name || provider.id,
+                        icon: (
+                          <ProviderIcon
+                            id={provider.id}
+                            name={provider.name || provider.id}
+                          />
+                        ),
+                      }))}
+                      value={selectedAccount.id}
+                      isDisabled={saving}
+                      placement="below"
+                      onChange={(id: string) => {
+                        setAccountId(id);
+                        const key = `add:account:${id}`;
                         setVisited((previous) =>
                           previous.includes(key)
                             ? previous
                             : [...previous, key],
                         );
                       }}
+                    />
+                  </div>
+                )}
+                {visited
+                  .filter((key) => key.startsWith("add:account:"))
+                  .map((key) => (
+                    <div
+                      key={key}
+                      hidden={key !== `add:account:${selectedAccount?.id}`}
                     >
-                      {available.map((provider) => (
-                        <option key={provider.id} value={provider.id}>
-                          {provider.name || provider.id}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      {card(key, key.slice("add:account:".length), true, false)}
+                    </div>
+                  ))}
+              </div>
+              <div hidden={mode !== "catalog"}>
+                {selectedCatalog && (
+                  <div className="models-provider-select">
+                    <Selector
+                      label={t("provider")}
+                      className="models-provider-picker"
+                      options={available.map((provider) => ({
+                        value: provider.id,
+                        label: provider.name || provider.id,
+                        icon: (
+                          <ProviderIcon
+                            id={provider.id}
+                            name={provider.name || provider.id}
+                          />
+                        ),
+                      }))}
+                      value={selectedCatalog.id}
+                      isDisabled={saving}
+                      placement="below"
+                      onChange={(id: string) => {
+                        setCatalogId(id);
+                        const key = `add:${id}`;
+                        setVisited((previous) =>
+                          previous.includes(key)
+                            ? previous
+                            : [...previous, key],
+                        );
+                      }}
+                    />
+                  </div>
                 )}
                 {visited
                   .filter(
-                    (key) => key.startsWith("add:") && key !== "add:custom",
+                    (key) =>
+                      key.startsWith("add:") &&
+                      key !== "add:custom" &&
+                      !key.startsWith("add:account:"),
                   )
                   .map((key) => (
                     <div
@@ -455,14 +588,10 @@ export function ProviderModelsSection({
                   setAdding(true);
                   setEditing(null);
                   setSaved(null);
-                  const nextMode = available.length ? mode : "custom";
-                  setMode(nextMode);
-                  const key =
-                    nextMode === "custom"
-                      ? "add:custom"
-                      : `add:${selectedCatalog?.id}`;
-                  setVisited((previous) =>
-                    previous.includes(key) ? previous : [...previous, key],
+                  selectAddMode(
+                    addModes.find((item) => item.id === mode)?.available
+                      ? mode
+                      : addModes.find((item) => item.available)!.id,
                   );
                 }}
               >
@@ -497,7 +626,7 @@ export function ProviderModelsSection({
             if (saving || busy || !configuration) return;
             const controller = new AbortController();
             operation.current = controller;
-            setSaving(true);
+            setRemoving(true);
             setRemoveError(null);
             void new WebClient()
               .changeProviderConfiguration(
@@ -527,7 +656,7 @@ export function ProviderModelsSection({
                 },
               )
               .finally(() => {
-                if (!controller.signal.aborted) setSaving(false);
+                if (!controller.signal.aborted) setRemoving(false);
               });
           }}
         />

@@ -18,6 +18,7 @@ import {
   type WebQuestionRequest,
 } from "../../../protocol/questions.ts";
 import type { WebSessionSources } from "../../../protocol/session-sources.ts";
+import type { WebProviderLogin } from "../../../protocol/provider-login.ts";
 import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
@@ -182,7 +183,7 @@ export class WebClient {
           response.status,
           body.code,
         );
-      return body;
+      return body as T;
     } catch (error) {
       if (timedOut) throw new Error(timeoutMessage);
       throw error;
@@ -279,7 +280,8 @@ export class WebClient {
     entryId: string,
     cursor: number,
     signal: AbortSignal,
-    purpose?: "plan",
+    purpose?: "plan" | "thinking",
+    partIndex?: number,
   ) {
     return this.request<{
       entryId: string;
@@ -287,8 +289,9 @@ export class WebClient {
       nextCursor: number | null;
       totalChars: number;
       planStatus?: "ready";
+      partIndex?: number;
     }>(
-      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor), ...(purpose ? { purpose } : {}) })}`,
+      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor), ...(purpose ? { purpose } : {}), ...(partIndex !== undefined ? { partIndex: String(partIndex) } : {}) })}`,
       { signal, timeoutMessage: "Message request timed out. Please retry." },
     );
   }
@@ -809,6 +812,47 @@ export class WebClient {
     });
   }
 
+  providerLogin(sessionId: string, id?: string, signal?: AbortSignal) {
+    const query = new URLSearchParams({ sessionId, ...(id ? { id } : {}) });
+    return this.request<WebProviderLogin | null>(
+      `/api/providers/login?${query}`,
+      { signal },
+    );
+  }
+
+  startProviderLogin(sessionId: string, provider: string) {
+    return this.request<WebProviderLogin>("/api/providers/login", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, provider }),
+    });
+  }
+
+  respondProviderLogin(
+    sessionId: string,
+    id: string,
+    promptId: string,
+    value: string,
+  ) {
+    return this.request<WebProviderLogin>("/api/providers/login/respond", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, id, promptId, value }),
+    });
+  }
+
+  cancelProviderLogin(sessionId: string, id: string) {
+    return this.request<WebProviderLogin>("/api/providers/login/cancel", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, id }),
+    });
+  }
+
+  logoutProvider(sessionId: string, provider: string) {
+    return this.request<{ refreshRequired?: boolean }>(
+      "/api/providers/logout",
+      { method: "POST", body: JSON.stringify({ sessionId, provider }) },
+    );
+  }
+
   modelConfigurations(sessionId: string, signal?: AbortSignal) {
     return this.request<WebModelConfigurations>(
       `/api/models/configuration?sessionId=${encodeURIComponent(sessionId)}`,
@@ -854,6 +898,13 @@ export class WebClient {
       `/api/settings/catalog?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
+  }
+
+  reloadSettingsResources(sessionId: string, sessionPath: string) {
+    return this.request<{ reloaded: true }>("/api/settings/reload", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath }),
+    });
   }
 
   savePreferences(patch: WebSettingsPreferencesPatch) {

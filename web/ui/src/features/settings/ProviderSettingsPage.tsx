@@ -100,6 +100,7 @@ export function ProviderSettingsPage({
   const [modelsVisited, setModelsVisited] = useState(entry === "credentials");
   const [setupPending, setSetupPending] = useState(false);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
+  const [setupSection, setSetupSection] = useState<SettingsSection>("general");
   const setupRefreshPending = useRef(false);
   const setupObservedBusy = useRef(false);
   const setupRefreshTimer = useRef(0);
@@ -117,9 +118,12 @@ export function ProviderSettingsPage({
   const setupDisabled =
     setupPending || setupBusy || planBlocked || planSelectionPending;
   const currentOutcome =
-    !setupSubmitted || setupOutcome?.requestId !== setupBaseline.current
-      ? setupOutcome
-      : undefined;
+    (setupSubmitted && setupSection !== section) ||
+    (!setupSubmitted && (section === "skills" || section === "plugins"))
+      ? undefined
+      : !setupSubmitted || setupOutcome?.requestId !== setupBaseline.current
+        ? setupOutcome
+        : undefined;
   const {
     catalog,
     error: catalogError,
@@ -166,6 +170,7 @@ export function ProviderSettingsPage({
     setPreferencesSaved(false);
     if (setupDisabled) return false;
     setupBaseline.current = setupOutcome?.requestId;
+    setSetupSection(section);
     setSetupPending(true);
     setSetupSubmitted(false);
     setupRefreshPending.current = false;
@@ -199,6 +204,22 @@ export function ProviderSettingsPage({
     }
   };
 
+  const reloadResources = async () => {
+    if (setupDisabled || !catalog?.sessionPath)
+      throw new Error(t("resourceReloadFailed"));
+    setSetupPending(true);
+    try {
+      await new WebClient().reloadSettingsResources(
+        sessionId,
+        catalog.sessionPath,
+      );
+      refresh();
+      void onPreferencesChanged();
+    } finally {
+      setSetupPending(false);
+    }
+  };
+
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
     if (preferencePending || !catalog) return false;
     setPreferencePending(true);
@@ -219,6 +240,7 @@ export function ProviderSettingsPage({
   };
 
   const selectSection = (next: SettingsSection) => {
+    if (saving) return;
     setSection(next);
     if (next === "models") setModelsVisited(true);
     setSetupError(null);
@@ -256,6 +278,7 @@ export function ProviderSettingsPage({
           <select
             className="provider-settings-mobile-picker"
             aria-label={t("settingsNavigation")}
+            disabled={saving}
             value={section}
             onChange={(event) => {
               const next = settingsSections.find(
@@ -281,6 +304,7 @@ export function ProviderSettingsPage({
                 key={id}
                 type="button"
                 role="tab"
+                disabled={saving}
                 id={`settings-tab-${id}`}
                 tabIndex={section === id ? 0 : -1}
                 aria-selected={section === id}
@@ -410,11 +434,13 @@ export function ProviderSettingsPage({
             hidden={section !== "skills"}
           >
             <SkillsSettingsPanel
+              key={sessionId}
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
-              setupPending={setupPending || setupBusy}
+              setupPending={setupDisabled}
               onConfigure={configureOpenPi}
+              onReload={reloadResources}
             />
           </div>
 
@@ -444,11 +470,13 @@ export function ProviderSettingsPage({
             hidden={section !== "plugins"}
           >
             <PluginsSettingsPanel
+              key={sessionId}
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
-              setupPending={setupPending || setupBusy}
+              setupPending={setupDisabled}
               onConfigure={configureOpenPi}
+              onReload={reloadResources}
             />
           </div>
         </div>
@@ -467,7 +495,7 @@ export function ProviderSettingsPage({
         )}
         {!preferencePending &&
           !preferencesSaved &&
-          (setupSubmitted || currentOutcome) &&
+          ((setupSubmitted && setupSection === section) || currentOutcome) &&
           !setupError && (
             <div
               className={
@@ -478,8 +506,21 @@ export function ProviderSettingsPage({
               role={currentOutcome?.status === "failed" ? "alert" : "status"}
             >
               {currentOutcome
-                ? t(`setupOutcome_${currentOutcome.status}`)
-                : t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
+                ? t(
+                    (section === "skills" || section === "plugins") &&
+                      ["unconfirmed", "saved", "unchanged"].includes(
+                        currentOutcome.status,
+                      )
+                      ? "resourceRequestFinished"
+                      : `setupOutcome_${currentOutcome.status}`,
+                  )
+                : t(
+                    setupBusy
+                      ? "setupRequestRunning"
+                      : section === "skills" || section === "plugins"
+                        ? "resourceRequestSubmitted"
+                        : "setupRequestAccepted",
+                  )}
               {currentOutcome?.error && <p>{currentOutcome.error}</p>}
             </div>
           )}

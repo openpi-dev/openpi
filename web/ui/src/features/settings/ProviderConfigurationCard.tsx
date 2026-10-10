@@ -9,6 +9,7 @@ import type {
 } from "../../../../runtime/types.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
 import { ProviderModelPicker } from "./ProviderModelPicker.tsx";
+import { ProviderAccountLogin } from "./ProviderAccountLogin.tsx";
 import { formatModelCapacity, parseModelCapacity } from "./model-capacity.ts";
 
 export function ProviderConfigurationCard({
@@ -65,6 +66,14 @@ export function ProviderConfigurationCard({
   const [revision] = useState(configuration.revision);
   const [draft, setDraft] = useState(baseline);
   const [apiKey, setApiKey] = useState("");
+  const hasAccount = !isNew && Boolean(auth?.authMethods.includes("oauth"));
+  const hasKey = custom || Boolean(auth?.authMethods.includes("api_key"));
+  const [authMethod, setAuthMethod] = useState(
+    hasAccount && (!auth?.configured || auth?.subscription || !hasKey)
+      ? "oauth"
+      : "api_key",
+  );
+  const [accountSaving, setAccountSaving] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const discoveryButton = useRef<HTMLButtonElement>(null);
   const restorePickerFocus = useRef(false);
@@ -86,6 +95,9 @@ export function ProviderConfigurationCard({
     callbacks.current.onDirty(dirty);
   }, [dirty]);
   useEffect(() => {
+    callbacks.current.onSaving(saving || accountSaving);
+  }, [saving, accountSaving]);
+  useEffect(() => {
     if (pickerOpen) restorePickerFocus.current = true;
     else if (restorePickerFocus.current) {
       restorePickerFocus.current = false;
@@ -104,7 +116,7 @@ export function ProviderConfigurationCard({
     configuration.providers?.find(
       (provider) => provider.provider === providerId,
     )?.editable !== false;
-  const disabled = busy || saving;
+  const disabled = busy || saving || accountSaving;
   const profileDisabled = disabled || profileSaved || !editable;
   const idInvalid =
     !/^[a-zA-Z0-9._-]+$/.test(draft.provider) ||
@@ -155,7 +167,6 @@ export function ProviderConfigurationCard({
     const controller = new AbortController();
     operation.current = controller;
     setSaving(true);
-    onSaving(true);
     setError(null);
     let written = profileSaved;
     const client = new WebClient();
@@ -216,7 +227,6 @@ export function ProviderConfigurationCard({
     } finally {
       if (!controller.signal.aborted) {
         setSaving(false);
-        onSaving(false);
       }
     }
   };
@@ -509,7 +519,7 @@ export function ProviderConfigurationCard({
         void save();
       }}
     >
-      {!isNew && (
+      {!isNew && custom && (
         <div className="models-editor-heading">
           <span>{draft.name || draft.provider}</span>
           {draft.name !== draft.provider && <small>{draft.provider}</small>}
@@ -526,7 +536,43 @@ export function ProviderConfigurationCard({
           {apiField}
         </>
       )}
-      {custom || auth?.authMethods.includes("api_key") ? (
+      {hasAccount && hasKey && (
+        <fieldset
+          className="models-add-modes"
+          aria-label={t("accountLoginMethod")}
+        >
+          <button
+            type="button"
+            aria-pressed={authMethod === "oauth"}
+            disabled={disabled}
+            onClick={() => setAuthMethod("oauth")}
+          >
+            {t("accountLoginTab")}
+          </button>
+          <button
+            type="button"
+            aria-pressed={authMethod === "api_key"}
+            disabled={disabled}
+            onClick={() => setAuthMethod("api_key")}
+          >
+            {t("accountLoginKeyTab")}
+          </button>
+        </fieldset>
+      )}
+      {hasAccount && authMethod === "oauth" && auth && (
+        <>
+          <ProviderAccountLogin
+            sessionId={sessionId}
+            auth={auth}
+            busy={busy || saving || dirty}
+            onSaving={setAccountSaving}
+            onAuthenticated={() => onClose(draft.name || draft.provider)}
+            onReload={onReload}
+          />
+          {dirty && <p className="models-hint">{t("accountLoginUnsaved")}</p>}
+        </>
+      )}
+      {hasKey && authMethod === "api_key" ? (
         <label className="models-field">
           {t("providerApiKey")}
           <input
@@ -545,9 +591,9 @@ export function ProviderConfigurationCard({
             }}
           />
         </label>
-      ) : (
+      ) : !hasAccount ? (
         <p className="models-hint">{t("providerNativeAuth")}</p>
-      )}
+      ) : null}
       {isNew && custom ? (
         modelList
       ) : (
@@ -579,24 +625,28 @@ export function ProviderConfigurationCard({
           {t("providerReload")}
         </button>
       )}
-      <div className="models-editor-actions">
-        <button
-          type="button"
-          className="models-button"
-          disabled={saving}
-          onClick={() => (profileSaved ? onReload() : onClose())}
-        >
-          {t("cancel")}
-        </button>
-        <button
-          type="submit"
-          className="models-button primary"
-          disabled={disabled || !ready || error === "conflict"}
-          aria-busy={saving}
-        >
-          {t(saving ? "savingSettings" : "providerSave")}
-        </button>
-      </div>
+      {!accountSaving && (
+        <div className="models-editor-actions">
+          <button
+            type="button"
+            className="models-button"
+            disabled={saving}
+            onClick={() => (profileSaved ? onReload() : onClose())}
+          >
+            {t("cancel")}
+          </button>
+          {(authMethod === "api_key" || changed) && (
+            <button
+              type="submit"
+              className="models-button primary"
+              disabled={disabled || !ready || error === "conflict"}
+              aria-busy={saving}
+            >
+              {t(saving ? "savingSettings" : "providerSave")}
+            </button>
+          )}
+        </div>
+      )}
       {pickerOpen && (
         <ProviderModelPicker
           sessionId={sessionId}

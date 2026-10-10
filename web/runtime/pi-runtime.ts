@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readConfiguredPackages } from "./configured-packages.ts";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { createTurnChangeRecorder } from "./turn-changes.ts";
@@ -11,9 +12,11 @@ import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   type PromptOptions,
+  CredentialSynchronizationError,
   ProjectTrustStore,
   SessionManager,
   SettingsManager,
+  DefaultPackageManager,
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
@@ -71,6 +74,7 @@ import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
+import { WebProviderLoginService } from "./provider-login.ts";
 import { changeProviderConfiguration, readModelConfigurations, saveModelConfigurations } from "./model-configuration.ts";
 import { discoverProviderModels, type ProviderModelDiscovery } from "./provider-model-discovery.ts";
 import { matchesSessionIdentity } from "./session-identity.ts";
@@ -112,6 +116,7 @@ type PromptTrace = {
   userMessageObserved: boolean;
   epoch?: number;
   outcome?: "completed" | "cancelled" | "failed" | "uncertain";
+  promptMessage?: Extract<AgentSessionEvent, { type: "message_start" }>["message"];
   resultMessage?: Extract<AgentSessionEvent, { type: "message_end" }>["message"];
 };
 
@@ -120,6 +125,9 @@ type TurnSettlement = WebActiveTurn & {
 };
 
 function observePromptOutcome(trace: PromptTrace, event: AgentSessionEvent) {
+  if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "user") {
+    trace.promptMessage ??= event.message;
+  }
   // Cancelling Pi's retry backoff emits no aborted assistant message. This
   // native terminal event is the cancellation evidence retained at settlement.
   if (event.type === "auto_retry_end" && !event.success && event.finalError === "Retry cancelled") {
@@ -212,6 +220,7 @@ export class PiWebRuntime implements WebRuntimeController {
   >();
   private controllerMutation: Promise<void> = Promise.resolve();
   private promptAdmission: Promise<void> = Promise.resolve();
+  private providerLogin?: WebProviderLoginService;
   private thinkingMutationInFlight = false;
   private thinkingMutationPending?: {
     waiters: Array<{
@@ -227,6 +236,11 @@ export class PiWebRuntime implements WebRuntimeController {
   private endingSessions?: WeakSet<AgentSession>;
   private readonly pendingPromptTraces: PromptTrace[] = [];
   private suspendedPromptTraces?: WeakMap<AgentSession, { active?: PromptTrace; pending: PromptTrace[] }>;
+  private retryObservations?: WeakMap<AgentSession, {
+    sessionId: string;
+    sessionPath: string;
+    retry: NonNullable<WebSessionExecution["retry"]>;
+  }>;
   private compactionObservations?: WeakMap<AgentSession, {
     sessionId: string;
     sessionPath: string;
@@ -388,8 +402,12 @@ export class PiWebRuntime implements WebRuntimeController {
     const held = this.compactionQueues?.get(owner);
     const queued = [...followUps, ...(held?.items.map((item) => item.content) ?? [])];
     const trace = owner === this.runtime ? this.activePromptTrace : this.suspendedPromptTraces?.get(session)?.active;
-    const activeTurn = this.activeTurnFromTrace(trace);
+    const activeTurn = this.activeTurnFromTrace(trace, session.sessionManager);
     const compaction = this.getCompaction(session);
+    const observedRetry = this.retryObservations?.get(session);
+    const retry = observedRetry && matchesSessionIdentity(session.sessionManager, {
+      expectedSessionId: observedRetry.sessionId, expectedSessionPath: observedRetry.sessionPath,
+    }) ? observedRetry.retry : session.isRetrying ? {} : undefined;
     const branch = session.sessionManager.getBranch();
     const terminalEntry = branch.slice().reverse().find((entry) => entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY);
     const timing = terminalEntry?.type === "custom" ? readTurnTiming(terminalEntry.data) : undefined;
@@ -410,8 +428,26 @@ export class PiWebRuntime implements WebRuntimeController {
       ...(held?.blocked ? { promptQueueBlocked: true } : {}),
       ...executingTools(session),
       ...(activeTurn ? { activeTurn } : {}),
+      ...(retry ? { retry } : {}),
       ...(compaction ? { compaction } : {}),
     };
+  }
+
+  private observeRetry(session: AgentSession, event: AgentSessionEvent) {
+    if (event.type === "auto_retry_end" || event.type === "agent_settled") {
+      this.retryObservations?.delete(session);
+    } else if (event.type === "auto_retry_start") {
+      this.retryObservations ??= new WeakMap();
+      this.retryObservations.set(session, {
+        sessionId: session.sessionManager.getSessionId(),
+        sessionPath: session.sessionManager.getSessionFile() ?? `current:${session.sessionManager.getSessionId()}`,
+        retry: { attempt: event.attempt, maxAttempts: event.maxAttempts, errorMessage: projectAssistantError(event.errorMessage).value },
+      });
+    } else return;
+    if (event.type !== "agent_settled") this.emit("session_progress", {
+      sessionId: session.sessionManager.getSessionId(),
+      sessionPath: session.sessionManager.getSessionFile() ?? `current:${session.sessionManager.getSessionId()}`,
+    });
   }
 
   private getCompaction(session: AgentSession) {
@@ -716,7 +752,27 @@ export class PiWebRuntime implements WebRuntimeController {
   listSettingsResources() {
     this.assertActive();
     this.assertWorkspaceSelected();
-    return projectWebSettingsResources(this.runtime.services.resourceLoader);
+    return projectWebSettingsResources(this.runtime.services.resourceLoader,
+      readConfiguredPackages(this.cwd, this.runtime.services.agentDir, this.runtime.session.settingsManager.isProjectTrusted()));
+  }
+
+  reloadSettingsResources(sessionId: string, sessionPath: string) {
+    return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
+      if (this.sessionManager.getSessionFile() !== sessionPath) {
+        throw new WebRuntimeRequestError("The active Session changed. Refresh before reloading resources.", "SESSION_CONFLICT", 409);
+      }
+      const configured = readConfiguredPackages(this.cwd, this.runtime.services.agentDir, this.runtime.session.settingsManager.isProjectTrusted());
+      if (configured.errors.length || configured.packages.some((pkg) => !pkg.installed)) {
+        throw new Error("Resolve missing or version-mismatched packages through Pi setup before reloading.");
+      }
+      const agentDir = this.runtime.services.agentDir;
+      const settingsManager = SettingsManager.create(this.cwd, agentDir, { projectTrusted: this.runtime.session.settingsManager.isProjectTrusted() });
+      // Let Pi check its own version ranges without installing missing/mismatched sources.
+      await new DefaultPackageManager({ cwd: this.cwd, agentDir, settingsManager }).resolve(async () => {
+        throw new Error("Resolve missing or version-mismatched packages through Pi setup before reloading.");
+      });
+      await this.runtime.session.reload();
+    }));
   }
 
   listProviderAuth(): WebProviderAuthProjection {
@@ -761,6 +817,7 @@ export class PiWebRuntime implements WebRuntimeController {
           configured: status.configured,
           ...(source ? { source } : {}),
           subscription: modelRuntime.isUsingSubscription(id),
+          ...(provider.auth.oauth?.loginLabel || provider.auth.oauth?.name ? { loginLabel: boundedProviderName(provider.auth.oauth.loginLabel || provider.auth.oauth.name).value } : {}),
           nameTruncated: name.truncated,
           custom: !builtinProviders.has(id) && !modelRuntime.getRegisteredProviderIds().includes(id),
           ...(endpoint && ["http:", "https:"].includes(endpoint.protocol) && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash ? { baseUrl: endpoint.href } : {}),
@@ -789,7 +846,7 @@ export class PiWebRuntime implements WebRuntimeController {
     }
   }
 
-  private async mutateSettings(sessionId: string, operation: () => Promise<void>) {
+  private async mutateSettings<T>(sessionId: string, operation: () => Promise<T>) {
     // Reuse prompt admission: a second tab cannot begin a turn halfway through
     // a configuration write, and already-admitted turns are checked for idle.
     const previousAdmission = this.promptAdmission;
@@ -798,7 +855,7 @@ export class PiWebRuntime implements WebRuntimeController {
     try {
       await previousAdmission;
       this.assertSettingsWritable(sessionId);
-      await operation();
+      return await operation();
     } finally { release(); }
   }
 
@@ -823,6 +880,74 @@ export class PiWebRuntime implements WebRuntimeController {
         },
       });
     }));
+  }
+
+  startProviderLogin(sessionId: string, provider: string) {
+    return this.serializeControllerMutation(async () => {
+      this.assertSettingsWritable(sessionId);
+      const owner = this.runtime;
+      const models = owner.services.modelRuntime;
+      if (!models.getProvider(provider)?.auth.oauth?.login)
+        throw new WebRuntimeRequestError("Account login is unavailable for this provider", "PROVIDER_LOGIN_CONFLICT", 422);
+      this.providerLogin ??= new WebProviderLoginService();
+      return this.providerLogin.start(sessionId, provider, async (interaction) => {
+        const result = await this.mutateSettings(sessionId, async () => {
+          try {
+            await models.login(provider, "oauth", interaction, {
+              getDeviceId: () => owner.session.settingsManager.getOrCreateDeviceId(),
+            });
+            return {};
+          } catch (error) {
+            // Native Pi distinguishes a committed credential from a failed login.
+            // Never inspect, log or project the credential carried by this error.
+            if (error instanceof CredentialSynchronizationError && error.operation === "login" && error.providerId === provider)
+              return { refreshRequired: true };
+            throw error;
+          }
+        });
+        this.emit("settings_changed", {});
+        return result;
+      });
+    });
+  }
+
+  readProviderLogin(sessionId: string, id?: string) {
+    this.assertProviderLoginOwner(sessionId);
+    if (id && !this.providerLogin) throw this.providerLoginConflict();
+    return this.providerLogin?.read(sessionId, id) ?? null;
+  }
+
+  respondProviderLogin(sessionId: string, id: string, promptId: string, value: string) {
+    this.assertProviderLoginOwner(sessionId);
+    if (!this.providerLogin) throw new WebRuntimeRequestError("Login unavailable", "PROVIDER_LOGIN_CONFLICT", 409);
+    return this.providerLogin.respond(sessionId, id, promptId, value);
+  }
+
+  cancelProviderLogin(sessionId: string, id: string) {
+    this.assertProviderLoginOwner(sessionId);
+    if (!this.providerLogin) throw new WebRuntimeRequestError("Login unavailable", "PROVIDER_LOGIN_CONFLICT", 409);
+    return this.providerLogin.cancel(sessionId, id);
+  }
+
+  private assertProviderLoginOwner(sessionId: string) {
+    this.assertActive();
+    if (sessionId !== this.sessionManager.getSessionId()) throw new WebRuntimeRequestError("The active Session changed", "PROVIDER_LOGIN_CONFLICT", 409);
+  }
+
+  logoutProvider(sessionId: string, provider: string) {
+    return this.serializeControllerMutation(async () => {
+      let refreshRequired = false;
+      await this.mutateSettings(sessionId, async () => {
+        const models = this.runtime.services.modelRuntime;
+        if (!models.getProvider(provider)?.auth.oauth) throw new WebRuntimeRequestError("Account login is unavailable", "PROVIDER_LOGIN_CONFLICT", 422);
+        try { await models.logout(provider, { signal: AbortSignal.timeout(10_000) }); }
+        catch (error) {
+          if (error instanceof CredentialSynchronizationError && error.operation === "logout" && error.providerId === provider) refreshRequired = true;
+          else throw error;
+        }
+      });
+      return { ...(refreshRequired ? { refreshRequired: true } : {}) };
+    });
   }
 
   readModelConfigurations() {
@@ -1235,6 +1360,7 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   private async dispatchPrompt(agentRuntime: AgentSessionRuntime, content: string, options?: WebPromptOptions, fromCompactionQueue = false) {
+    this.assertNoProviderLogin();
     const session = agentRuntime.session;
     const sessionId = session.sessionManager.getSessionId();
     const previousAdmission = this.promptAdmission;
@@ -1739,6 +1865,7 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private async disposeInternal() {
     this.disposed = true;
+    await this.providerLogin?.dispose();
     this.compactionQueues?.clear();
     this.unsubscribeSession?.();
     this.unsubscribeSession = undefined;
@@ -1985,6 +2112,7 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private projectEvent(session: AgentSession, event: AgentSessionEvent) {
     if (session !== this.runtime.session) return;
+    this.observeRetry(session, event);
     this.observeCompaction(session, event);
     // A command can return before its native triggerTurn continuation starts.
     // Recover only that async invocation's unused origin, never the last HTTP
@@ -2076,15 +2204,21 @@ export class PiWebRuntime implements WebRuntimeController {
         break;
       case "auto_retry_start":
         this.emit(event.type, {
+          sessionId: session.sessionManager.getSessionId(),
+          sessionPath: session.sessionManager.getSessionFile() ?? `current:${session.sessionManager.getSessionId()}`,
           attempt: event.attempt,
           maxAttempts: event.maxAttempts,
           delayMs: event.delayMs,
+          errorMessage: projectAssistantError(event.errorMessage).value,
         });
         break;
       case "auto_retry_end":
         this.emit(event.type, {
+          sessionId: session.sessionManager.getSessionId(),
+          sessionPath: session.sessionManager.getSessionFile() ?? `current:${session.sessionManager.getSessionId()}`,
           attempt: event.attempt,
           success: event.success,
+          ...(event.finalError ? { finalError: projectAssistantError(event.finalError).value } : {}),
         });
         break;
       case "message_start":
@@ -2122,12 +2256,14 @@ export class PiWebRuntime implements WebRuntimeController {
     for (const listener of this.listeners) listener({ type, detail });
   }
 
-  private activeTurnFromTrace(trace?: PromptTrace): WebActiveTurn | undefined {
+  private activeTurnFromTrace(trace?: PromptTrace, sessionManager = this.sessionManager): WebActiveTurn | undefined {
     if (!trace?.started || trace.epoch === undefined) return undefined;
+    const prompt = trace.promptMessage && sessionManager.getBranch().find((entry) => entry.type === "message" && entry.message === trace.promptMessage && entry.message.role === "user");
     return {
       sessionId: trace.sessionId,
       commandId: trace.commandId,
       epoch: trace.epoch,
+      ...(prompt ? { promptEntryId: prompt.id } : {}),
       ...(trace.executionStartedAt !== undefined && trace.executionClock !== undefined
         ? {
             startedAt: trace.executionStartedAt,
@@ -2146,12 +2282,12 @@ export class PiWebRuntime implements WebRuntimeController {
     trace.sessionPath = sessionManager.getSessionFile?.() ?? `current:${trace.sessionId}`;
     this.completedSessionTurns?.delete(JSON.stringify([trace.sessionPath, trace.sessionId]));
     trace.epoch = ++this.nextTurnEpoch;
-    const activeTurn = this.activeTurnFromTrace(trace);
+    const activeTurn = this.activeTurnFromTrace(trace, sessionManager);
     if (activeTurn && publish) this.emit("turn_started", { ...activeTurn });
   }
 
   private settlePromptTrace(trace: PromptTrace, sessionManager = this.sessionManager, publish = true) {
-    const activeTurn = this.activeTurnFromTrace(trace);
+    const activeTurn = this.activeTurnFromTrace(trace, sessionManager);
     if (!activeTurn) return;
     const settlement: TurnSettlement = {
       ...activeTurn,
@@ -2171,6 +2307,7 @@ export class PiWebRuntime implements WebRuntimeController {
         finishedAt: Date.now(),
         elapsedMs: activeTurn.elapsedMs,
         outcome: settlement.outcome,
+        ...(activeTurn.promptEntryId ? { promptEntryId: activeTurn.promptEntryId } : {}),
       };
       const result = settlement.outcome === "completed" && trace.resultMessage ? sessionManager.getBranch().find((entry) => entry.type === "message" && entry.message === trace.resultMessage) : undefined;
       if (result) timing.resultEntryId = result.id;
@@ -2244,10 +2381,12 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   private serializeControllerMutation<T>(operation: () => Promise<T>, historyFork = false) {
+    if (this.providerLogin?.active) return Promise.reject(this.providerLoginConflict());
     if (!historyFork && this.historyForkPending)
       return Promise.reject(new WebRuntimeRequestError("Session fork is in progress. Keep your draft.", "SESSION_CONFLICT", 409));
     const result = (this.controllerMutation ?? Promise.resolve()).then(() => {
       this.assertActive();
+      this.assertNoProviderLogin();
       return operation();
     });
     this.controllerMutation = result.then(
@@ -2288,6 +2427,7 @@ export class PiWebRuntime implements WebRuntimeController {
       });
     };
     const unsubscribe = session.subscribe((event) => {
+      this.observeRetry(session, event);
       this.observeCompaction(session, event);
       const traces = this.suspendedPromptTraces?.get(session);
       if (traces) {
@@ -2386,6 +2526,14 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private assertActive() {
     if (this.disposed) throw new Error("Web runtime is stopped");
+  }
+
+  private providerLoginConflict() {
+    return new WebRuntimeRequestError("Finish or cancel the account login before changing the active Session.", "PROVIDER_LOGIN_CONFLICT", 409);
+  }
+
+  private assertNoProviderLogin() {
+    if (this.providerLogin?.active) throw this.providerLoginConflict();
   }
 
   private assertNoHistoryFork() {
