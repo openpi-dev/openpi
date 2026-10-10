@@ -10,10 +10,15 @@ import {
 import {
   createEventBus,
   CustomMessageComponent,
+  DefaultPackageManager,
   initTheme,
   type MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
 import { onSetupApply } from "../../../extensions/shared/setup-apply.ts";
+import {
+  registerWebQuestionBridge,
+  type WebQuestionOutcome,
+} from "../../../extensions/ask-user/web-bridge.ts";
 import { tmpdir } from "node:os";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -698,6 +703,101 @@ test("optional package setup rejects mixed changes, requires native UI, and pres
       : undefined,
     before,
   );
+});
+
+test("optional package setup reviews Web permissions through the owning Session and fails closed without an exact approval", async (t) => {
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const signal = new AbortController().signal;
+  const execute = () =>
+    tool.execute(
+      "web-setup-review",
+      { web_access_action: "install-exa" },
+      signal,
+      () => {},
+      h.ctx,
+    );
+  const before = existsSync(SETUP_CONFIG_PATH)
+    ? readFileSync(SETUP_CONFIG_PATH, "utf8")
+    : undefined;
+  const outcomes: WebQuestionOutcome[] = [
+    { kind: "dismissed" },
+    { kind: "cancelled" },
+    { kind: "expired" },
+    { kind: "unavailable" },
+    {
+      kind: "answered",
+      answers: [{ id: "web_access_review", selected: "取消" }],
+    },
+    {
+      kind: "answered",
+      answers: [{ id: "web_access_review", custom: "确认应用" }],
+    },
+    {
+      kind: "answered",
+      answers: [
+        { id: "web_access_review", selected: "确认应用", note: "先不要安装" },
+      ],
+    },
+  ];
+  let reviews = 0;
+  for (const outcome of outcomes) {
+    const unregister = registerWebQuestionBridge(
+      h.ctx.sessionManager,
+      async (id, questions, receivedSignal) => {
+        reviews++;
+        assert.equal(id, "web-setup-review");
+        assert.equal(receivedSignal, signal);
+        assert.equal(questions.length, 1);
+        assert.match(questions[0]!.question, /npm:pi-web-access@0\.38\.0/u);
+        assert.match(
+          questions[0]!.question,
+          /Third-party Pi packages execute local code/u,
+        );
+        assert.match(questions[0]!.question, /Search queries go to Exa/u);
+        assert.deepEqual(
+          questions[0]!.options.map((option) => option.label),
+          ["取消", "确认应用"],
+        );
+        return outcome;
+      },
+    );
+    try {
+      await assert.rejects(execute(), /cancelled/u);
+    } finally {
+      unregister();
+    }
+  }
+  assert.equal(reviews, outcomes.length);
+  assert.equal(existsSync(join(setupAgentDir, "web-search.json")), false);
+  assert.equal(
+    existsSync(SETUP_CONFIG_PATH)
+      ? readFileSync(SETUP_CONFIG_PATH, "utf8")
+      : undefined,
+    before,
+  );
+  await assert.rejects(execute(), /native confirmation UI/u);
+  const install = t.mock.method(
+    DefaultPackageManager.prototype,
+    "install",
+    async () => {
+      throw new Error("review approved before installation");
+    },
+  );
+  const unregister = registerWebQuestionBridge(
+    h.ctx.sessionManager,
+    async () => ({
+      kind: "answered",
+      answers: [{ id: "web_access_review", selected: "确认应用" }],
+    }),
+  );
+  try {
+    await assert.rejects(execute(), /review approved before installation/u);
+    assert.equal(install.mock.callCount(), 1);
+  } finally {
+    unregister();
+    rmSync(join(setupAgentDir, "web-search.json"), { force: true });
+  }
 });
 
 test("invalid explicit footer styles and presets list allowed values without writing or applying", async () => {

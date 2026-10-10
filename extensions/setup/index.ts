@@ -8,6 +8,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { configureWebAccessPackage } from "./web-access-package.ts";
+import { askWebQuestions } from "../ask-user/web-bridge.ts";
 import {
   WEB_ACCESS_ACTIONS,
   WEB_ACCESS_PACKAGE,
@@ -700,15 +701,50 @@ export default function openPiSetup(pi: ExtensionAPI) {
           throw new Error(
             "Use web_access_action alone; optional package setup does not change OpenPI preferences.",
           );
-        if (!ctx.hasUI)
-          throw new Error(
-            "Optional web search setup requires Pi's native confirmation UI.",
-          );
         const text = await configureWebAccessPackage({
           action: params.web_access_action,
           cwd: ctx.cwd,
           agentDir: getAgentDir(),
-          confirm: (title, detail) => ctx.ui.confirm(title, detail),
+          confirm: async (title, detail) => {
+            if (ctx.hasUI) return ctx.ui.confirm(title, detail);
+            // Web uses the same Session-owned, controller-bound review as ask_user.
+            const pending = askWebQuestions(
+              ctx.sessionManager,
+              _toolCallId,
+              [
+                {
+                  id: "web_access_review",
+                  header: "联网搜索",
+                  question: `${title}\n\n${detail}`,
+                  options: [
+                    {
+                      label: "取消",
+                      description: "保留当前设置，不安装或更改插件。",
+                    },
+                    {
+                      label: "确认应用",
+                      description: "按上面列出的插件来源和权限应用设置。",
+                    },
+                  ],
+                },
+              ],
+              _signal,
+            );
+            if (!pending)
+              throw new Error(
+                "Optional web search setup requires Pi's native confirmation UI.",
+              );
+            const result = await pending;
+            const answer =
+              result.kind === "answered" ? result.answers[0] : undefined;
+            return (
+              result.kind === "answered" &&
+              result.answers.length === 1 &&
+              answer?.id === "web_access_review" &&
+              answer.selected === "确认应用" &&
+              !answer.note
+            );
+          },
           signal: _signal,
         });
         return {
