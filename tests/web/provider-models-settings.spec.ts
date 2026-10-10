@@ -225,7 +225,18 @@ it("makes native account providers discoverable without adding a custom endpoint
   });
   vi.spyOn(WebClient.prototype, "providerLogin").mockResolvedValue(null);
   mount();
-  await edit("OpenAI");
+  fireEvent.click(
+    await screen.findByRole("button", { name: i18n.t("providerAdd") }),
+  );
+  expect(screen.queryByRole("button", { name: "Edit OpenAI" })).toBeNull();
+  expect(
+    screen
+      .getByRole("button", { name: i18n.t("accountLoginTab") })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(
+    screen.queryByRole("group", { name: i18n.t("accountLoginMethod") }),
+  ).toBeNull();
   expect(
     screen.getByRole("button", {
       name: i18n.t("accountLoginStart"),
@@ -235,9 +246,7 @@ it("makes native account providers discoverable without adding a custom endpoint
   expect(
     screen.queryByRole("button", { name: i18n.t("providerSave") }),
   ).toBeNull();
-  expect(
-    document.querySelector("details.models-customized")?.hasAttribute("open"),
-  ).toBe(false);
+  expect(document.querySelector("details.models-customized")).toBeNull();
   expect(
     WebClient.prototype.changeProviderConfiguration,
   ).not.toHaveBeenCalled();
@@ -310,7 +319,9 @@ it("keeps the active account flow visible until native cancellation settles", as
     cancellation.promise,
   );
   mount();
-  await edit("OpenAI");
+  fireEvent.click(
+    await screen.findByRole("button", { name: i18n.t("providerAdd") }),
+  );
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("accountLoginStart") }),
   );
@@ -319,6 +330,15 @@ it("keeps the active account flow visible until native cancellation settles", as
     name: i18n.t("skillsSettings"),
   });
   await waitFor(() => expect(skills.disabled).toBe(true));
+  for (const name of [
+    "accountLoginTab",
+    "providerAddCatalog",
+    "providerAddCustom",
+  ])
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: i18n.t(name) })
+        .disabled,
+    ).toBe(true);
   fireEvent.click(skills);
   expect(screen.getByText("FIXTURE-CODE")).toBeTruthy();
   fireEvent.click(
@@ -451,17 +471,54 @@ it("guards closing dirty settings and allows closing after every edit is reverte
   expect(props.onClose).toHaveBeenCalledOnce();
 });
 
-it("keeps both add-mode drafts and writes nothing when cancelled", async () => {
+it("keeps API drafts across all three add modes and writes nothing when cancelled", async () => {
+  vi.mocked(WebClient.prototype.providerAuth).mockResolvedValue({
+    ...auth,
+    providers: [
+      ...auth.providers,
+      {
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        authMethods: ["oauth"],
+        configured: false,
+        subscription: false,
+        nameTruncated: false,
+      },
+    ],
+  });
+  vi.spyOn(WebClient.prototype, "providerLogin").mockResolvedValue(null);
   mount();
   fireEvent.click(
     await screen.findByRole("button", { name: i18n.t("providerAdd") }),
   );
+  const account = screen.getByRole("button", {
+    name: i18n.t("accountLoginTab"),
+  });
+  fireEvent.keyDown(account, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", { name: i18n.t("providerAddCatalog") }),
+  );
+  const provider = screen.getByRole("combobox", { name: i18n.t("provider") });
+  fireEvent.click(provider);
+  expect(screen.queryByRole("option", { name: "GitHub Copilot" })).toBeNull();
+  fireEvent.keyDown(provider, { key: "Escape" });
   change("API key", "gamma-draft");
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("providerAddCustom") }),
   );
   change(i18n.t("modelConfig_provider"), "new-provider");
   change("Provider name", "New Provider");
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: i18n.t("providerAddCustom") }),
+    { key: "Home" },
+  );
+  expect(document.activeElement).toBe(account);
+  expect(
+    screen.getByText("GitHub Copilot", { selector: "strong" }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("providerSave") }),
+  ).toBeNull();
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("providerAddCatalog") }),
   );

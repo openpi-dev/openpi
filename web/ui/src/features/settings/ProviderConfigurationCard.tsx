@@ -66,7 +66,7 @@ export function ProviderConfigurationCard({
   const [revision] = useState(configuration.revision);
   const [draft, setDraft] = useState(baseline);
   const [apiKey, setApiKey] = useState("");
-  const hasAccount = Boolean(auth?.authMethods.includes("oauth"));
+  const hasAccount = !isNew && Boolean(auth?.authMethods.includes("oauth"));
   const hasKey = custom || Boolean(auth?.authMethods.includes("api_key"));
   const [authMethod, setAuthMethod] = useState(
     hasAccount && (!auth?.configured || auth?.subscription || !hasKey)

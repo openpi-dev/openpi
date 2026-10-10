@@ -886,6 +886,8 @@ const resources = {
       providerAddMode: "How to add",
       providerAddCatalog: "Third-party providers",
       providerAddCustom: "Custom model API",
+      providerAccountHint:
+        "Use an existing account to connect. Choose a provider and continue in your browser.",
       providerCatalogHint:
         "Choose a provider from the built-in catalog and enter its API key.",
       providerCustomHint:
@@ -2369,6 +2371,7 @@ const resources = {
       providerAddMode: "添加方式",
       providerAddCatalog: "第三方模型提供商",
       providerAddCustom: "自定义模型 API",
+      providerAccountHint: "使用已有账户连接模型，选择服务商后前往浏览器授权。",
       providerCatalogHint: "从内置目录中选择提供商，填入其 API 密钥即可使用。",
       providerCustomHint:
         "连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。",

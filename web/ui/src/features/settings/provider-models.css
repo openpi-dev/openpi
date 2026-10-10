@@ -9,7 +9,10 @@
 .models-provider-card { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border: 1px solid var(--models-border); border-radius: 16px; }
 .models-provider-head { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 .models-provider-identity { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
-.models-provider-avatar { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 12px; background: var(--models-surface); color: var(--muted); font-size: 12px; font-weight: 600; }
+.models-provider-avatar { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 12px; background: var(--models-surface); color: var(--text); }
+.models-provider-icon { display: inline-block; flex: none; width: 20px; height: 20px; background: currentcolor; mask-repeat: no-repeat; mask-position: center; mask-size: contain; }
+.models-provider-avatar .models-provider-icon { width: 22px; height: 22px; }
+.models-provider-monogram { display: inline-grid; place-items: center; background: transparent; font-size: 11px; line-height: 1; font-weight: 600; }
 .models-provider-label { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
 .models-provider-status { display: flex; align-items: center; gap: 6px; flex-basis: 100%; color: var(--muted); font-size: 12px; line-height: 18px; }
 .models-provider-name { font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
@@ -44,7 +47,9 @@
 .models-add-button { width: 100%; min-height: 44px; border: 1px dashed var(--models-border); border-radius: 12px; gap: 6px; }
 .models-add-button svg, .models-add-model svg { width: 14px; height: 14px; }
 .models-add-card .models-editor { padding: 0; background: transparent; }
-.models-provider-select { margin-bottom: 14px; }
+.models-provider-select { width: min(100%, 280px); margin-bottom: 14px; }
+.models-provider-picker { min-height: 36px; border-radius: 10px; background: var(--page); color: var(--text); font-size: 14px; }
+.models-provider-picker button:focus-visible { outline: none; }
 .models-add-modes { display: flex; width: fit-content; max-width: 100%; min-width: 0; margin: 0; padding: 3px; gap: 3px; border: 0; border-radius: 10px; background: var(--models-track); }
 .models-add-modes button { min-height: 30px; padding: 0 16px; border: 1px solid transparent; border-radius: 7px; background: transparent; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
 .models-add-modes button[aria-pressed="true"] { border-color: var(--models-border); background: var(--page); color: var(--text); box-shadow: 0 1px 3px rgb(0 0 0 / 6%); }

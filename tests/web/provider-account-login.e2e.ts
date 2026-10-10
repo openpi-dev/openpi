@@ -164,7 +164,7 @@ async function accountFixture(page: Page) {
   if (await navigation.isVisible()) await navigation.selectOption("models");
   else await page.getByRole("tab", { name: "模型", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "编辑 OpenAI", exact: true }),
+    page.getByRole("button", { name: "添加模型提供商", exact: true }),
   ).toBeVisible();
   return {
     responses,
@@ -190,14 +190,37 @@ test("account login stays in the provider card, recovers status and uses confirm
   await expect(
     page.getByRole("button", { name: "编辑 GitHub Copilot", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "编辑 OpenAI", exact: true }).click();
-  const card = page.locator(".models-provider-card").filter({
-    has: page.getByRole("button", { name: "编辑 OpenAI", exact: true }),
-  });
+  await expect(
+    page.getByRole("button", { name: "编辑 OpenAI", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "添加模型提供商", exact: true })
+    .click();
+  const card = page.locator(".models-add-card");
+  await expect(
+    card.getByRole("button", { name: "账户登录", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    card.getByRole("group", { name: "连接方式", exact: true }),
+  ).toHaveCount(0);
   await expect(card.getByText("ChatGPT 账户", { exact: true })).toBeVisible();
   await expect(
     card.getByRole("button", { name: "保存", exact: true }),
   ).toHaveCount(0);
+  const provider = card.getByRole("combobox", { name: "服务商", exact: true });
+  await provider.click();
+  const providers = page.getByRole("listbox");
+  await expect(providers.getByRole("option")).toHaveCount(3);
+  await expect(providers.locator(".models-provider-icon")).toHaveCount(3);
+  await provider.press("ArrowDown");
+  await provider.press("Enter");
+  await expect(provider).toContainText("Anthropic");
+  await expect(providers).toHaveCount(0);
+  await provider.click();
+  await page.getByRole("option", { name: "OpenAI", exact: true }).click();
+  await expect(provider).toContainText("OpenAI");
+  expect(fixture.starts).toBe(0);
+  expect(fixture.writes).toBe(0);
   await card.getByRole("button", { name: "登录", exact: true }).click();
   await card.getByRole("button", { name: /在浏览器中继续/ }).click();
   const link = card.getByRole("link", { name: "打开登录页", exact: true });
@@ -214,21 +237,26 @@ test("account login stays in the provider card, recovers status and uses confirm
   await expect(input).toHaveAttribute("type", "password");
   await input.fill("fixture-only-code");
   await card.getByRole("button", { name: "继续", exact: true }).click();
-  await expect(card).toContainText("账户已登录");
+  const connected = page.locator(".models-provider-card").filter({
+    has: page.getByRole("button", { name: "编辑 OpenAI", exact: true }),
+  });
+  await expect(connected).toContainText("账户已登录");
   expect(fixture.responses).toEqual([
     { promptId: "choose", value: "browser" },
     { promptId: "manual", value: "fixture-only-code" },
   ]);
   expect(fixture.writes).toBe(0);
   await page.getByRole("button", { name: "编辑 OpenAI", exact: true }).click();
-  await card.getByRole("button", { name: "退出登录", exact: true }).click();
+  await connected
+    .getByRole("button", { name: "退出登录", exact: true })
+    .click();
   const confirmation = page.getByRole("alertdialog");
   await expect(confirmation).toBeVisible();
   expect(fixture.logouts).toBe(0);
   await confirmation
     .getByRole("button", { name: "退出登录", exact: true })
     .click();
-  await expect(card).toContainText("未配置");
+  await expect(connected).toHaveCount(0);
   expect(fixture.logouts).toBe(1);
 });
 
@@ -237,21 +265,40 @@ test("account login device flow stays readable at 320px in light and dark themes
 }) => {
   await page.setViewportSize({ width: 320, height: 740 });
   const fixture = await accountFixture(page);
-  await page.getByRole("button", { name: "编辑 OpenAI", exact: true }).click();
-  const card = page.locator(".models-provider-card").filter({
-    has: page.getByRole("button", { name: "编辑 OpenAI", exact: true }),
-  });
+  await page
+    .getByRole("button", { name: "添加模型提供商", exact: true })
+    .click();
+  const card = page.locator(".models-add-card");
+  const provider = card.getByRole("combobox", { name: "服务商", exact: true });
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    await provider.click();
+    const menu = page.getByRole("listbox");
+    await expect(
+      menu.getByRole("option", { name: "GitHub Copilot" }),
+    ).toBeVisible();
+    const bounds = await menu.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+    const accessibility = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+    expect(accessibility.violations).toEqual([]);
+    await provider.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(provider).toBeFocused();
+  }
+  expect(fixture.starts).toBe(0);
   await card.getByRole("button", { name: "登录", exact: true }).click();
   await card.getByRole("button", { name: /使用设备码登录/ }).click();
   await expect(card.getByText("ABCD-1234", { exact: true })).toBeVisible();
   await expect(
     card.getByText("已登录，但这里没有更新？", { exact: true }),
   ).toHaveCount(0);
-  for (const theme of ["light", "dark"]) {
-    await page.evaluate(
-      (value) => document.documentElement.setAttribute("data-theme", value),
-      theme,
-    );
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     const overflow = await page.evaluate(() => ({
       page: document.documentElement.scrollWidth,
       viewport: window.innerWidth,
