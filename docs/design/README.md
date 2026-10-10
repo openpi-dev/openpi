@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_MODEL_CONNECTIONS.md`](WEB_MODEL_CONNECTIONS.md) — Pi-owned account login, three connection entry points, native cancellation and reference comparison (#732 / #711).
+
 - [`WEB_WORKBAR_TOOLS.md`](WEB_WORKBAR_TOOLS.md) — scoped Files, Terminal and Changes refinement, labelled actions, native tool picker and reading-state preservation (#597 / #711).
 
 - [`WEB_SIDE_CONVERSATION.md`](WEB_SIDE_CONVERSATION.md) — scoped side-chat appearance, centered empty state, unified composer and native Pi lifecycle preservation (#730).
