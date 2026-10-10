@@ -4,6 +4,8 @@ export const EXTERNAL_BROWSERS = [
   "edge",
   "brave",
   "chromium",
+  "safari",
+  "firefox",
 ] as const;
 export type ExternalBrowser = (typeof EXTERNAL_BROWSERS)[number];
 export const BROWSER_IDS = ["embedded", ...EXTERNAL_BROWSERS] as const;

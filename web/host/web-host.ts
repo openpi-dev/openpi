@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { registerWebBrowserBridge } from "../../extensions/browser/web-bridge.ts";
 import { WebBrowserBroker, validBrowserPages, validBrowserIdentity } from "./browser-control.ts";
 import { isBrowserId, isBrowserList, isExternalBrowser } from "../../extensions/shared/browser-config.ts";
-import { installedBrowsers, browserSetupAction, browserExtensionPath, BROWSER_EXTENSION_VERSION } from "./browser-setup.ts";
+import { installedBrowsers, browserSetupAction, browserExtensionPath, portableBrowserExtensionPath, BROWSER_EXTENSION_VERSION } from "./browser-setup.ts";
 import {
   createHash,
   randomBytes,
@@ -738,7 +738,7 @@ export class WebHost {
           return this.json(response, 422, { error: "Browser settings could not be fully applied. Refresh to inspect the saved state before retrying." });
         }
       } else if (request.method !== "GET") return this.json(response, 405, { error: "Use GET or POST" });
-      return this.json(response, 200, { config: loadSetupConfig().browser, profiles: this.browser.profiles(typeof controller === "string" ? controller : undefined), browsers: await installedBrowsers(), extensionPath: browserExtensionPath, extensionVersion: BROWSER_EXTENSION_VERSION });
+      return this.json(response, 200, { config: loadSetupConfig().browser, profiles: this.browser.profiles(typeof controller === "string" ? controller : undefined), browsers: await installedBrowsers(), extensionPath: browserExtensionPath, portableExtensionPath: portableBrowserExtensionPath, extensionVersion: BROWSER_EXTENSION_VERSION });
     }
     if (url.pathname === "/api/settings/browser/action" && request.method === "POST") {
       const body = await this.readJson(request);

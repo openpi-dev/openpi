@@ -33,6 +33,7 @@ export function useBrowserConnector() {
             browser: message.browser,
             profileId: message.profileId,
             extensionId: message.extensionId,
+            extensionOrigin: message.extensionOrigin,
             version: message.version,
           }),
         });

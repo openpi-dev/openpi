@@ -1,13 +1,18 @@
-import { controlBrowser, cancelBrowserControl } from "./computer-use.js";
+import {
+  controlBrowser,
+  cancelBrowserControl,
+  portableDocuments,
+} from "./browser-driver.js";
 
+const api = globalThis.browser ?? chrome;
 const owners = new Map();
-const profile = chrome.storage.local
+const profile = api.storage.local
   .get("profileId")
   .then(async ({ profileId }) => {
     if (typeof profileId === "string" && /^[\da-f-]{36}$/.test(profileId))
       return profileId;
     const id = crypto.randomUUID();
-    await chrome.storage.local.set({ profileId: id });
+    await api.storage.local.set({ profileId: id });
     return id;
   });
 const validUrl = (value, origin) => {
@@ -32,7 +37,7 @@ const post = (port, message) => {
   }
 };
 
-chrome.webNavigation.onCommitted.addListener(({ tabId, frameId }) => {
+api.webNavigation.onCommitted.addListener(({ tabId, frameId }) => {
   if (frameId !== 0) return;
   for (const owner of owners.values()) {
     for (const [nonce, peer] of owner.peers)
@@ -44,7 +49,7 @@ chrome.webNavigation.onCommitted.addListener(({ tabId, frameId }) => {
       }
   }
 });
-chrome.tabs.onRemoved.addListener((tabId) => {
+api.tabs.onRemoved.addListener((tabId) => {
   for (const owner of owners.values())
     for (const [nonce, peer] of owner.peers)
       if (peer.tabId === tabId) {
@@ -54,7 +59,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       }
 });
 
-chrome.runtime.onConnect.addListener((port) => {
+api.runtime.onConnect.addListener((port) => {
   if (port.name !== "openpi-native-workbench") return;
   const sender = port.sender;
   let url;
@@ -67,7 +72,7 @@ chrome.runtime.onConnect.addListener((port) => {
   if (
     !Number.isInteger(tabId) ||
     sender.frameId !== 0 ||
-    !sender.documentId ||
+    (api.debugger && !sender.documentId) ||
     url.protocol !== "http:" ||
     !["127.0.0.1", "localhost"].includes(url.hostname) ||
     url.pathname !== "/"
@@ -116,7 +121,7 @@ chrome.runtime.onConnect.addListener((port) => {
   }
   async function pages() {
     if (!connection || !enabled) return [];
-    const tabs = (await chrome.tabs.query({}))
+    const tabs = (await api.tabs.query({}))
       .filter(
         (tab) =>
           Number.isInteger(tab.id) &&
@@ -128,10 +133,12 @@ chrome.runtime.onConnect.addListener((port) => {
       await Promise.all(
         tabs.map(async (tab) => {
           try {
-            const frame = await chrome.webNavigation.getFrame({
-              tabId: tab.id,
-              frameId: 0,
-            });
+            const frame = api.debugger
+              ? await api.webNavigation.getFrame({
+                  tabId: tab.id,
+                  frameId: 0,
+                })
+              : { documentId: portableDocuments.get(tab.id)?.nonce };
             if (!frame?.documentId || frame.errorOccurred) return null;
             const id = `${connection.connectionId}/${tab.id}`;
             let peer = owner.peers.get(frame.documentId);
@@ -194,7 +201,7 @@ chrome.runtime.onConnect.addListener((port) => {
       if (pending.request.operation === "open") {
         if (!validUrl(pending.request.url, owner.origin))
           throw new Error("Invalid browser URL");
-        const tab = await chrome.tabs.create({
+        const tab = await api.tabs.create({
           url: pending.request.url,
           active: true,
         });
@@ -214,7 +221,7 @@ chrome.runtime.onConnect.addListener((port) => {
         if (!peer || peer.id !== pending.page.id)
           throw new Error("Browser document changed. Observe again.");
         if (pending.request.image)
-          await chrome.tabs.update(peer.tabId, { active: true });
+          await api.tabs.update(peer.tabId, { active: true });
         result = await controlBrowser(
           peer.tabId,
           owner,
@@ -270,13 +277,19 @@ chrome.runtime.onConnect.addListener((port) => {
     if (!current()) return;
     if (
       message?.type === "hello" &&
-      ["chrome", "edge", "brave", "chromium"].includes(message.browser)
+      ["chrome", "edge", "brave", "chromium", "safari", "firefox"].includes(
+        message.browser,
+      )
     ) {
       identity = {
         browser: message.browser,
         profileId: await profile,
-        extensionId: chrome.runtime.id,
-        version: chrome.runtime.getManifest().version,
+        extensionId: api.runtime.id,
+        extensionOrigin:
+          new URL(api.runtime.getURL("/")).origin === "null"
+            ? api.runtime.getURL("/").replace(/\/$/, "")
+            : new URL(api.runtime.getURL("/")).origin,
+        version: api.runtime.getManifest().version,
       };
       if (current())
         post(port, {

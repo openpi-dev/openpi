@@ -67,7 +67,14 @@
 .browser-settings-demo-toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 14px 20px; }
 .browser-settings-demo-toolbar > span { padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: 5px; font-size: 10px; }
 .browser-settings-demo-toolbar > i { width: 40px; height: 6px; border-radius: 3px; background: var(--border); }
-.browser-settings-demo .highlight { border-color: var(--text); outline: 3px solid color-mix(in srgb, var(--text) 10%, transparent); outline-offset: 2px; background: var(--page); font-weight: 600; }
+.browser-settings-demo .highlight { position: relative; border-color: #4285f4; outline: 3px solid color-mix(in srgb, #4285f4 25%, transparent); outline-offset: 2px; background: var(--page); font-weight: 600; }
+.browser-settings-target-number { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-right: 5px; border-radius: 50%; color: white; background: #2563eb; font-size: 10px; }
+.browser-settings-illustration.firefox .browser-settings-demo-heading, .browser-settings-illustration.safari .browser-settings-demo-heading { flex-direction: column; align-items: flex-start; }
+.browser-guide-window, .browser-guide-window body { height: auto; min-height: 100%; overflow: auto; background: var(--page); color: var(--text); }
+.browser-settings-detached { max-width: none; padding: 16px; }
+.browser-settings-detached .browser-settings-guide { margin-top: 0; }
+.browser-settings-guide-placeholder { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 26px; padding: 20px; border: 1px solid var(--border); border-radius: 12px; }
+.browser-settings-guide-placeholder p { width: 100%; margin: 0; color: var(--muted); font-size: 13px; }
 .browser-settings-illustration.edge .browser-settings-demo-heading { flex-direction: column; align-items: flex-start; }
 .browser-settings-folder { margin-top: 18px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
 .browser-settings-folder-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }

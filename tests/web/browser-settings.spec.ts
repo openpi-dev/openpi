@@ -15,10 +15,12 @@ import { i18n } from "../../web/ui/src/i18n.ts";
 
 beforeEach(async () => {
   await i18n.changeLanguage("en");
+  vi.spyOn(window, "open").mockReturnValue(null);
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 const initial = (): BrowserSettingsStatus => ({
   config: {

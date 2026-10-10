@@ -78,7 +78,7 @@ test("browser settings hot-apply without a model turn and native credentials can
     });
   try {
     for (const body of [
-      { externalBrowsers: ["safari"] },
+      { externalBrowsers: ["unknown-browser"] },
       { defaultBrowser: "shell" },
       { command: "open" },
       { control: "true" },

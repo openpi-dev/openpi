@@ -11,9 +11,8 @@ writeFileSync(
   join(directory, "my-pi-setup.json"),
   JSON.stringify({ browser: { control: true } }),
 );
-const { WebBrowserBroker, validBrowserPages } = await import(
-  "../../web/host/browser-control.ts"
-);
+const { WebBrowserBroker, validBrowserPages, validBrowserIdentity } =
+  await import("../../web/host/browser-control.ts");
 after(() => rmSync(directory, { force: true, recursive: true }));
 afterEach(() =>
   writeFileSync(
@@ -49,6 +48,58 @@ const identity = (
   browser: "chrome" | "edge" = "chrome",
   profileId = "795239cc-8ff9-49cb-9894-e16b3ba86afa",
 ) => ({ browser, profileId, extensionId: "a".repeat(32), version: "0.3.0" });
+
+test("portable browser identities bind credentials to the exact extension origin", () => {
+  for (const browser of ["safari", "firefox"] as const) {
+    const origin = `${browser === "safari" ? "safari-web-extension" : "moz-extension"}://795239cc-8ff9-49cb-9894-e16b3ba86afa`;
+    const data = {
+      ...identity(),
+      browser,
+      extensionId:
+        browser === "firefox"
+          ? "openpi-browser@openpi.dev"
+          : "795239cc-8ff9-49cb-9894-e16b3ba86afa",
+      extensionOrigin: origin,
+    };
+    assert.equal(validBrowserIdentity(data), true);
+    if (browser === "safari")
+      assert.equal(
+        validBrowserIdentity({
+          ...data,
+          extensionId: "com.apple.Safari.UnpackedExtensions.ABCDEF (UNSIGNED)",
+        }),
+        true,
+      );
+    assert.equal(
+      validBrowserIdentity({ ...data, extensionOrigin: "https://example.com" }),
+      false,
+    );
+    assert.equal(
+      validBrowserIdentity({ ...data, extensionOrigin: undefined }),
+      false,
+    );
+    const broker = new WebBrowserBroker(() => owner);
+    const connection = broker.connect(owner.controllerId, data);
+    assert.equal(
+      broker.authenticate(
+        connection.connectionId,
+        `Bearer ${connection.token}`,
+        origin,
+      ),
+      true,
+    );
+    assert.equal(
+      broker.authenticate(
+        connection.connectionId,
+        `Bearer ${connection.token}`,
+        `${origin}-other`,
+      ),
+      false,
+    );
+    assert.equal(broker.allowsOrigin(connection.connectionId, "null"), false);
+    broker.dispose();
+  }
+});
 
 test("default, explicit browser and an existing root preserve the user's exact browser selection", async () => {
   configure({
@@ -257,7 +308,7 @@ test("native open acknowledges only a newly advertised document in its exact tra
 test("invalid persisted permissions fail closed instead of selecting a different browser", async () => {
   const broker = new WebBrowserBroker(() => owner);
   for (const value of [
-    { defaultBrowser: "safari" },
+    { defaultBrowser: "unknown-browser" },
     { embedded: "true" },
     { externalBrowsers: ["chrome", "chrome"] },
   ]) {

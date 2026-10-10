@@ -734,6 +734,31 @@ const resources = {
       browserInstallIn: "Install in",
       browserInstallTitle: "Install OpenPI Browser Bridge",
       browserSetupSteps: "Setup steps",
+      browserGuidePopout: "Keep this guide in a separate window",
+      browserGuideDetached:
+        "Your guide is open in a separate window. Follow it alongside the browser settings.",
+      browserShowGuide: "Show guide",
+      browserGuideInline: "Return guide here",
+      browserGuideBlocked:
+        "The guide window could not open. Allow pop-ups and try again, or follow the steps here.",
+      browserSafariSettings: "Safari → Settings",
+      browserSafariDeveloper: "Developer settings",
+      browserSafariTemporary: "Add Temporary Extension…",
+      browserSafariOpenHint:
+        "Open Safari, then choose Safari → Settings. Keep this guide alongside it. Requires Safari 26 or later on macOS.",
+      browserSafariDeveloperTitle: "Show Safari’s developer settings",
+      browserSafariDeveloperHint:
+        "In Settings → Advanced, turn on Show features for web developers. Then select the Developer tab.",
+      browserSafariLoadHint:
+        "In Developer, click Add Temporary Extension and select the folder below. Enable OpenPI Browser Bridge and allow the websites you want to control, including the local OpenPI page. Temporary extensions need reloading after Safari quits.",
+      browserFirefoxThis: "This Firefox",
+      browserFirefoxTemporary: "Load Temporary Add-on…",
+      browserFirefoxDeveloperTitle: "Select This Firefox",
+      browserFirefoxDeveloperHint:
+        "On about:debugging, choose This Firefox in the left sidebar. Firefox does not need a Developer mode switch.",
+      browserFirefoxLoadHint:
+        "Click Load Temporary Add-on and select manifest.json in the folder below. This development installation lasts until Firefox restarts; a permanent installation requires a Mozilla-signed package.",
+      browserFirefoxDone: "Selected. Next",
       browserStepCount: "Step {{step}} of {{total}}",
       browserStepLabel: "Step {{step}}: {{label}}",
       browserStepOpen: "Open page",
@@ -783,7 +808,7 @@ const resources = {
       browserReloadHint:
         "Already installed? Reload OpenPI Browser Bridge in the extension manager and refresh OpenPI. Accept the browser’s permission prompt if shown.",
       browserSupportedHint:
-        "Chrome, Edge, Brave and Chromium 145+ are supported. Safari and Firefox are not supported by this extension.",
+        "Chrome, Edge, Brave and Chromium 145+ support embedded and native pages. Safari 26+ on macOS and Firefox 128+ use the portable extension for native tabs; nested frames must be opened separately. Temporary Safari/Firefox installations need reloading after browser restart.",
       browserCopyPath: "Copy extension folder path",
       browserLoading: "Checking browser connections…",
       browserSaved: "Saved. Browser permissions take effect immediately.",
@@ -2097,6 +2122,31 @@ const resources = {
       browserInstallIn: "安装到",
       browserInstallTitle: "安装 OpenPI Browser Bridge",
       browserSetupSteps: "设置步骤",
+      browserGuidePopout: "在独立窗口中跟随操作",
+      browserGuideDetached:
+        "引导已在独立窗口打开，可以对照浏览器设置逐步完成。",
+      browserShowGuide: "显示引导窗口",
+      browserGuideInline: "把引导放回这里",
+      browserGuideBlocked:
+        "未能打开引导窗口。可允许弹出式窗口后重试，也可继续查看这里的步骤。",
+      browserSafariSettings: "Safari → 设置",
+      browserSafariDeveloper: "开发者设置",
+      browserSafariTemporary: "添加临时扩展…",
+      browserSafariOpenHint:
+        "打开 Safari 后，在菜单栏选择「Safari → 设置」，对照此引导操作。需要 macOS 上的 Safari 26 或更新版本。",
+      browserSafariDeveloperTitle: "显示 Safari 开发者设置",
+      browserSafariDeveloperHint:
+        "在「设置 → 高级」中开启「显示网页开发者功能」，再进入「开发者」标签。",
+      browserSafariLoadHint:
+        "在「开发者」中点击「添加临时扩展」，选择下方文件夹。启用 OpenPI Browser Bridge，允许访问要控制的网站及本地 OpenPI 页面。退出 Safari 后需重新加载临时扩展。",
+      browserFirefoxThis: "此 Firefox",
+      browserFirefoxTemporary: "临时载入附加组件…",
+      browserFirefoxDeveloperTitle: "选择「此 Firefox」",
+      browserFirefoxDeveloperHint:
+        "在 about:debugging 左侧选择「此 Firefox」。Firefox 不需要开启「开发者模式」开关。",
+      browserFirefoxLoadHint:
+        "点击「临时载入附加组件」，选择下方文件夹中的 manifest.json。此安装在 Firefox 重启后失效；永久安装需要经过 Mozilla 签名的扩展包。",
+      browserFirefoxDone: "已选中，下一步",
       browserStepCount: "第 {{step}} 步，共 {{total}} 步",
       browserStepLabel: "第 {{step}} 步：{{label}}",
       browserStepOpen: "打开扩展页",
@@ -2144,7 +2194,7 @@ const resources = {
       browserReloadHint:
         "已安装旧版？在扩展页重新加载 OpenPI Browser Bridge，再刷新 OpenPI。如浏览器提示权限，请完成其原生确认。",
       browserSupportedHint:
-        "支持 Chrome、Edge、Brave、Chromium 145 及以上版本。此扩展暂不支持 Safari 和 Firefox。",
+        "Chrome、Edge、Brave、Chromium 145+ 可控制内置页面及普通标签。macOS Safari 26+、Firefox 128+ 通过兼容扩展控制普通标签，嵌套框架需单独打开。Safari、Firefox 的临时安装需在浏览器重启后重新加载。",
       browserCopyPath: "复制扩展文件夹路径",
       browserLoading: "正在检查浏览器连接…",
       browserSaved: "已保存，浏览器权限立即生效。",

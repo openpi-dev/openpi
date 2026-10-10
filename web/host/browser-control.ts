@@ -83,6 +83,7 @@ export interface BrowserConnectionIdentity {
   browser: ExternalBrowser;
   profileId: string;
   extensionId: string;
+  extensionOrigin?: string;
   version: string;
 }
 
@@ -90,9 +91,21 @@ export function validBrowserIdentity(value: unknown): value is BrowserConnection
   if (!value || typeof value !== "object") return false;
   const v = value as Partial<BrowserConnectionIdentity>;
   return isExternalBrowser(v.browser) && typeof v.profileId === "string" && /^[\da-f-]{36}$/.test(v.profileId) &&
-    typeof v.extensionId === "string" && /^[a-p]{32}$/.test(v.extensionId) &&
+    typeof v.extensionId === "string" && (v.browser === "safari"
+      ? /^[a-zA-Z0-9._-]{1,180}(?: \([A-Z0-9 -]{1,40}\))?$/.test(v.extensionId)
+      : v.browser === "firefox"
+      ? /^[a-zA-Z0-9@._{}-]{1,200}$/.test(v.extensionId)
+      : /^[a-p]{32}$/.test(v.extensionId)) && validExtensionOrigin(v) &&
     typeof v.version === "string" && /^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v.version);
 }
+
+function validExtensionOrigin(value: Partial<BrowserConnectionIdentity>) {
+  if (value.browser === "firefox") return typeof value.extensionOrigin === "string" && /^moz-extension:\/\/[\da-f-]{36}$/i.test(value.extensionOrigin);
+  if (value.browser === "safari") return typeof value.extensionOrigin === "string" && /^safari-web-extension:\/\/[\da-f-]{36}$/i.test(value.extensionOrigin);
+  return value.extensionOrigin === undefined || value.extensionOrigin === `chrome-extension://${value.extensionId}`;
+}
+
+const extensionOrigin = (connection: BrowserConnectionIdentity) => connection.extensionOrigin ?? `chrome-extension://${connection.extensionId}`;
 
 interface NativeConnection extends BrowserConnectionIdentity {
   id: string;
@@ -150,13 +163,13 @@ export class WebBrowserBroker {
     const connection = this.native.get(connectionId);
     if (connection && Date.now() - (connection.seen || connection.created) > 15_000) { this.disconnect(connectionId); return false; }
     if (!connection || !authorization?.match(/^Bearer [a-f0-9]{64}$/) ||
-      (origin !== undefined && origin !== `chrome-extension://${connection.extensionId}`)) return false;
+      (origin !== undefined && origin !== extensionOrigin(connection))) return false;
     return timingSafeEqual(connection.token, Buffer.from(authorization.slice(7), "hex"));
   }
 
   allowsOrigin(connectionId: string, origin: string | undefined) {
     const connection = this.native.get(connectionId);
-    return Boolean(connection && origin === `chrome-extension://${connection.extensionId}`);
+    return Boolean(connection && origin === extensionOrigin(connection));
   }
 
   disconnect(id: string) {

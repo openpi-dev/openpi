@@ -470,6 +470,8 @@ Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示�
 
 浏览器模型控制默认关闭。打开 Web「设置 → 浏览器」，可点击完成安装引导、连接检查、总开关、逐个浏览器授权和默认浏览器选择；也可用 `/openpi-setup` 自然语言设置 `browser_control`、`browser_embedded`、`browser_default`、`browser_external`。默认值依次为 `false`、`true`、`embedded`、`[]`：总开关关闭时所有模型浏览器操作都被拒绝，普通 iframe 浏览不受影响。设置中的授权变更通过同一配置写入器和 Pi 原生扩展事件生效，无需一次模型调用。
 
+普通浏览器可选择 `chrome`、`edge`、`brave`、`chromium`、`safari`、`firefox`。安装引导可打开独立窗口，在支持 Document Picture-in-Picture 的浏览器中浮动显示，其他浏览器使用普通弹窗。步骤中的圈选是操作示意；浏览器管理页仍由浏览器自身管理。Safari 26+（macOS）和 Firefox 128+ 使用随包提供的兼容扩展控制普通标签，内置控制仍需要 Chromium 系浏览器。开发安装为临时扩展，重启后需要重新加载；正式一键安装需要另行发布签名扩展。
+
 Web 保存终端页脚偏好不会重新配置另一份已打开的 Pi 界面；该界面在下次 Session 启动或原生 setup 应用时更新页脚。
 
 ```text
@@ -523,7 +525,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
 - GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
 
-浏览器控制使用可选的 [OpenPI Browser Bridge](web/browser-extension/README.md) 0.3.0（Chrome、Edge、Brave、Chromium 145+），需浏览器原生安装及权限确认。它适配 pi-computer-use 0.5.1 的 CDP 路径；无需修改 Pi 内核、fork 或安装完整桌面 pi-computer-use。模型使用一个父 Session 专属的 `openpi_browser`：未指定浏览器时使用用户默认值，明确指定 Chrome 等名称时只使用该浏览器；未授权、离线、多配置歧义均返回明确错误，不自动换浏览器。内置页面绑定发起 Turn 的 OpenPI 标签；普通浏览器使用已连接配置中的现有页面和登录状态，需在对应配置中保留 OpenPI 标签。授权不会复制 Cookie 或用户配置。关闭授权、取消 Turn 或更换文档后旧观察失效，已发送但未确认的效果按不确定报告。部分站点仍会限制嵌入，Safari 和 Firefox 暂不支持此扩展。
+浏览器控制使用可选的 [OpenPI Browser Bridge](web/browser-extension/README.md) 0.4.0，需浏览器原生安装及权限确认。Chromium 系继续适配 pi-computer-use 0.5.1 的 CDP 路径，Safari／Firefox 使用按文档绑定的 WebExtension 接口；无需修改 Pi 内核、fork 或安装完整桌面 pi-computer-use。模型使用一个父 Session 专属的 `openpi_browser`：未指定浏览器时使用用户默认值，明确指定 Chrome 等名称时只使用该浏览器；未授权、离线、多配置歧义均返回明确错误，不自动换浏览器。内置页面绑定发起 Turn 的 OpenPI 标签；普通浏览器使用已连接配置中的现有页面和登录状态，需在对应配置中保留 OpenPI 标签。授权不会复制 Cookie 或用户配置。关闭授权、取消 Turn 或更换文档后旧观察失效，已发送但未确认的效果按不确定报告。部分站点仍会限制嵌入；Safari／Firefox 的读取基于 DOM 语义，嵌套框架需单独打开。
 
 #### 开发运行时：区分 npm 与当前源码
 

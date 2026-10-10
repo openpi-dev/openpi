@@ -1,7 +1,7 @@
 // Browser-only adaptation of pi-computer-use 0.5.1's CDP operations.
 // See LICENSE.pi-computer-use. Chrome owns permission; the bound document owns every target.
 const attachments = new Map();
-chrome.debugger.onEvent.addListener((source, method, params) => {
+chrome.debugger?.onEvent.addListener((source, method, params) => {
   const operation = attachments.get(source.tabId);
   if (
     method === "Target.attachedToTarget" &&
@@ -33,7 +33,7 @@ function bounded(promise) {
     );
   });
 }
-chrome.debugger.onDetach.addListener((source) => {
+chrome.debugger?.onDetach.addListener((source) => {
   attachments.get(source.tabId)?.cancel();
 });
 

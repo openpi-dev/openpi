@@ -15,6 +15,7 @@ import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+  EXTERNAL_BROWSERS,
   type BrowserConfig,
   isBrowserId,
   isBrowserList,
@@ -1448,6 +1449,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
     `Browser control: ${config.browser.control ? "on" : "off"} · default ${config.browser.defaultBrowser} · embedded ${config.browser.embedded ? "allowed" : "blocked"} · external ${config.browser.externalBrowsers.join(", ") || "none"}`,
+    `Browser choices: embedded (Chromium host), ${EXTERNAL_BROWSERS.join(", ")}; Safari/Firefox use native tabs.`,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"

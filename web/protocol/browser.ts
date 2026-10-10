@@ -15,5 +15,6 @@ export interface BrowserSettingsStatus {
   profiles: BrowserProfile[];
   browsers: { id: ExternalBrowser; installed: boolean }[];
   extensionPath: string;
+  portableExtensionPath?: string;
   extensionVersion: string;
 }

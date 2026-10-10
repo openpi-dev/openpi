@@ -548,6 +548,8 @@ export default function openPiSetup(pi: ExtensionAPI) {
             Type.Literal("edge"),
             Type.Literal("brave"),
             Type.Literal("chromium"),
+            Type.Literal("safari"),
+            Type.Literal("firefox"),
           ],
           {
             description:
@@ -562,6 +564,8 @@ export default function openPiSetup(pi: ExtensionAPI) {
             Type.Literal("edge"),
             Type.Literal("brave"),
             Type.Literal("chromium"),
+            Type.Literal("safari"),
+            Type.Literal("firefox"),
           ]),
           {
             uniqueItems: true,

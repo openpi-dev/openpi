@@ -3,9 +3,157 @@ import { AxeBuilder } from "@axe-core/playwright";
 import type { BrowserSettingsStatus } from "../../web/protocol/browser.ts";
 import { installThinkingFixture } from "./thinking-e2e-support.ts";
 
+test("separate guide shares live connection state, native family steps and opener cleanup", async ({
+  page,
+}, info) => {
+  await page.addInitScript(() =>
+    Object.defineProperty(window, "documentPictureInPicture", {
+      value: undefined,
+    }),
+  );
+  await installThinkingFixture(page);
+  const status: BrowserSettingsStatus = {
+    config: {
+      control: false,
+      embedded: true,
+      defaultBrowser: "embedded",
+      externalBrowsers: [],
+    },
+    profiles: [],
+    browsers: ["chrome", "edge", "brave", "chromium", "safari", "firefox"].map(
+      (id) => ({
+        id: id as BrowserSettingsStatus["browsers"][number]["id"],
+        installed: true,
+      }),
+    ),
+    extensionPath: "/OpenPI/browser-extension/",
+    portableExtensionPath: "/OpenPI/browser-extension-portable/",
+    extensionVersion: "0.4.0",
+  };
+  const writes: unknown[] = [];
+  await page.route("**/api/settings/browser", async (route) => {
+    if (route.request().method() === "POST") {
+      const patch = route.request().postDataJSON();
+      writes.push(patch);
+      status.config = { ...status.config, ...patch };
+    }
+    await route.fulfill({ json: status });
+  });
+  await page.route("**/api/settings/browser/action", (route) =>
+    route.fulfill({ json: { opened: true } }),
+  );
+  await page.goto("/?settings=browser");
+  const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+  await dialog.getByText("更多浏览器", { exact: true }).click();
+  for (const browser of [
+    "Chrome",
+    "Microsoft Edge",
+    "Brave",
+    "Chromium",
+    "Safari",
+    "Firefox",
+  ])
+    await expect(
+      dialog.getByRole("button", { name: `设置 ${browser}`, exact: true }),
+    ).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "设置 Safari", exact: true })
+    .click();
+  const popupReady = page.waitForEvent("popup");
+  await dialog
+    .getByRole("button", { name: "打开 Safari 扩展页", exact: true })
+    .click();
+  const popup = await popupReady;
+  const guide = popup.getByRole("region", { name: "连接 Safari", exact: true });
+  await expect(guide).toHaveCSS("border-radius", "14px");
+  await expect(
+    guide.getByRole("heading", { name: "显示 Safari 开发者设置" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("引导已在独立窗口打开，可以对照浏览器设置逐步完成。"),
+  ).toBeVisible();
+  await popup.screenshot({ path: info.outputPath("safari-guide-step-2.png") });
+  await guide
+    .getByRole("button", { name: "已开启，下一步", exact: true })
+    .click();
+  await expect(
+    guide.getByText(status.portableExtensionPath!, { exact: true }),
+  ).toBeVisible();
+  await popup.screenshot({ path: info.outputPath("safari-guide-step-3.png") });
+  expect(
+    (
+      await new AxeBuilder({ page: popup })
+        .withTags(["wcag2a", "wcag2aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+  expect(writes).toEqual([]);
+  status.profiles.push({
+    id: "safari-test",
+    browser: "safari",
+    profileId: "test",
+    extensionId: "test",
+    version: "0.4.0",
+    current: true,
+    connected: true,
+  });
+  await expect(
+    guide.getByText("连接正常，可选择是否允许 OpenPI 使用。"),
+  ).toBeVisible({ timeout: 10_000 });
+  await guide
+    .getByRole("button", { name: "允许 OpenPI 使用", exact: true })
+    .click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]).toEqual({ control: true, externalBrowsers: ["safari"] });
+  await popup.close();
+  await expect(
+    dialog.getByRole("region", { name: "连接 Safari", exact: true }),
+  ).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "设置 Firefox", exact: true })
+    .click();
+  await dialog
+    .getByRole("button", { name: "第 2 步：此 Firefox", exact: true })
+    .click();
+  await expect(
+    dialog.getByRole("heading", { name: "选择「此 Firefox」" }),
+  ).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "已选中，下一步", exact: true })
+    .click();
+  await expect(
+    dialog.getByText("/OpenPI/browser-extension-portable/manifest.json", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  const secondReady = page.waitForEvent("popup");
+  await dialog
+    .getByRole("button", { name: "在独立窗口中跟随操作", exact: true })
+    .click();
+  const second = await secondReady;
+  await expect(
+    second.getByRole("heading", {
+      name: "安装 OpenPI Browser Bridge",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await second.screenshot({
+    path: info.outputPath("firefox-guide-step-3.png"),
+  });
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect.poll(() => second.isClosed()).toBe(true);
+});
+
 test("browser setup preserves the settings shell, works during a turn and explains installation before granting access", async ({
   page,
 }, info) => {
+  // The separate window is covered below; this case checks the blocked-popup fallback.
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "documentPictureInPicture", {
+      value: undefined,
+    });
+    window.open = () => null;
+  });
   await installThinkingFixture(page, { runtimeStatus: "running" });
   const status: BrowserSettingsStatus = {
     config: {

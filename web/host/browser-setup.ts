@@ -6,17 +6,21 @@ import { promisify } from "node:util";
 import { EXTERNAL_BROWSERS, type ExternalBrowser } from "../../extensions/shared/browser-config.ts";
 
 const exec = promisify(execFile);
-export const BROWSER_EXTENSION_VERSION = "0.3.0";
+export const BROWSER_EXTENSION_VERSION = "0.4.0";
 export const browserExtensionPath = fileURLToPath(new URL("../browser-extension/", import.meta.url));
+export const portableBrowserExtensionPath = fileURLToPath(new URL("../browser-extension-portable/", import.meta.url));
 const applications = {
   chrome: { mac: "Google Chrome", win: "Google/Chrome/Application/chrome.exe", linux: "google-chrome" },
   edge: { mac: "Microsoft Edge", win: "Microsoft/Edge/Application/msedge.exe", linux: "microsoft-edge" },
   brave: { mac: "Brave Browser", win: "BraveSoftware/Brave-Browser/Application/brave.exe", linux: "brave-browser" },
   chromium: { mac: "Chromium", win: "Chromium/Application/chrome.exe", linux: "chromium" },
+  safari: { mac: "Safari", win: "", linux: "" },
+  firefox: { mac: "Firefox", win: "Mozilla Firefox/firefox.exe", linux: "firefox" },
 } as const;
 
 async function application(browser: ExternalBrowser) {
   const info = applications[browser];
+  if (browser === "safari" && process.platform !== "darwin") return undefined;
   if (process.platform === "linux") {
     try { return (await exec("which", [info.linux], { timeout: 1000 })).stdout.trim() || undefined; }
     catch { return undefined; }
@@ -38,16 +42,16 @@ export async function installedBrowsers() {
 export async function browserSetupAction(browser: ExternalBrowser, action: "folder" | "manage" | "connect", origin: string) {
   if (action === "folder") {
     const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-    await exec(command, [browserExtensionPath], { timeout: 5000 });
+    await exec(command, [browser === "safari" || browser === "firefox" ? portableBrowserExtensionPath : browserExtensionPath], { timeout: 5000 });
     return { opened: true };
   }
   const app = await application(browser);
   if (!app) throw new Error("Browser not found in a standard installation location. Open OpenPI in that browser to connect it.");
-  const target = action === "connect" ? `${origin}/?settings=browser` : `${browser === "edge" ? "edge" : "chrome"}://extensions/`;
-  if (process.platform === "darwin") await exec("open", ["-a", app, target], { timeout: 5000 });
+  const target = action === "connect" ? `${origin}/?settings=browser` : browser === "safari" ? undefined : browser === "firefox" ? "about:debugging#/runtime/this-firefox" : `${browser === "edge" ? "edge" : browser === "brave" ? "brave" : "chrome"}://extensions/`;
+  if (process.platform === "darwin") await exec("open", ["-a", app, ...(target ? [target] : [])], { timeout: 5000 });
   else {
     // Existing browser processes handle this launch. Avoid killing a newly started browser on timeout.
-    const child = spawn(app, [target], { detached: true, stdio: "ignore" });
+    const child = spawn(app, target ? [target] : [], { detached: true, stdio: "ignore" });
     await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
     child.unref();
   }
