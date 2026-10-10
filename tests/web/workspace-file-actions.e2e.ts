@@ -126,9 +126,14 @@ test("workspace actions create, import and copy paths through the real Host on d
       })
       .click();
 
-    await actions
-      .getByRole("button", { name: /新建文件夹|New folder/u })
-      .click();
+    const toolbarAction = async (menu: RegExp, action: RegExp) => {
+      await actions.getByRole("button", { name: menu }).click();
+      await page
+        .getByRole("menuitem", { name: action })
+        .or(page.getByRole("menuitemcheckbox", { name: action }))
+        .click();
+    };
+    await toolbarAction(/^(新建|New)$/u, /新建文件夹|New folder/u);
     const directory = actions.getByRole("textbox", {
       name: /文件夹名称|Folder name/u,
     });
@@ -146,7 +151,7 @@ test("workspace actions create, import and copy paths through the real Host on d
     await expect(folder).toBeFocused();
     await folder.click();
 
-    await actions.getByRole("button", { name: /新建文件$|New file$/u }).click();
+    await toolbarAction(/^(新建|New)$/u, /新建文件$|New file$/u);
     await actions
       .getByRole("textbox", { name: /文件名称|File name/u })
       .fill("notes.md");
@@ -300,9 +305,7 @@ test("workspace actions create, import and copy paths through the real Host on d
       "preserve this original\n",
     );
 
-    await actions
-      .getByRole("button", { name: /多选文件|Select multiple files/u })
-      .click();
+    await toolbarAction(/^(更多|More)$/u, /多选文件|Select multiple files/u);
     await tree
       .getByRole("checkbox", { name: /^(选择 新目录|Select 新目录)$/u })
       .check();
@@ -367,17 +370,13 @@ test("workspace actions create, import and copy paths through the real Host on d
         ),
       )
       .toEqual({ open: true, active: "files", launcherOpen: false });
-    await actions
-      .getByRole("button", { name: /工作区回收站|Workspace trash/u })
-      .click();
+    await toolbarAction(/^(更多|More)$/u, /工作区回收站|Workspace trash/u);
     await actions
       .getByRole("button", { name: /^(恢复 empty.txt|Restore empty.txt)$/u })
       .click();
     await expect(tree.locator('[data-file-row="empty.txt"]')).toBeVisible();
     expect((await stat(join(cwd, "empty.txt"))).size).toBe(0);
-    await actions
-      .getByRole("button", { name: /工作区回收站|Workspace trash/u })
-      .click();
+    await toolbarAction(/^(更多|More)$/u, /工作区回收站|Workspace trash/u);
 
     await mkdir(join(importFolder, "nested"));
     await writeFile(
@@ -398,9 +397,9 @@ test("workspace actions create, import and copy paths through the real Host on d
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(
-      actions.getByRole("button", { name: /新建文件$|New file$/u }),
+      actions.getByRole("button", { name: /^(新建|New)$/u }),
     ).toBeVisible();
-    await actions.getByRole("button", { name: /新建文件$|New file$/u }).click();
+    await toolbarAction(/^(新建|New)$/u, /新建文件$|New file$/u);
     const mobileName = actions.getByRole("textbox", {
       name: /文件名称|File name/u,
     });

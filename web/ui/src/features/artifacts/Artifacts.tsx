@@ -7,6 +7,7 @@ import {
   Eye,
   RotateCcw,
   RefreshCw,
+  Save,
   X,
 } from "lucide-react";
 import {
@@ -607,21 +608,26 @@ export const ArtifactProvider = forwardRef<
                       {t("filesEdit")}
                     </button>
                   </fieldset>
-                  <button
-                    type="button"
-                    title={t(
-                      editor.saving
-                        ? "filesSaving"
-                        : editor.dirty
-                          ? "filesSave"
-                          : "filesSaved",
-                    )}
-                    aria-label={t(editor.saving ? "filesSaving" : "filesSave")}
-                    disabled={!editor.dirty || editor.saving || !editor.canEdit}
-                    onClick={() => void editor.save()}
-                  >
-                    <Check aria-hidden="true" />
-                  </button>
+                  {(editing || editor.dirty || editor.saving) && (
+                    <button
+                      type="button"
+                      className="file-save-button"
+                      title={`${t("filesSave")} (Cmd/Ctrl+S)`}
+                      disabled={
+                        !editor.dirty || editor.saving || !editor.canEdit
+                      }
+                      onClick={() => void editor.save()}
+                    >
+                      <Save aria-hidden="true" />
+                      {t(
+                        editor.saving
+                          ? "filesSaving"
+                          : editor.dirty
+                            ? "filesSave"
+                            : "filesSaved",
+                      )}
+                    </button>
+                  )}
                   {editor.dirty && (
                     <button
                       type="button"

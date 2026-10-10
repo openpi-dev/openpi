@@ -38,12 +38,14 @@ export function ToolEvidence({
   call,
   result,
   liveState,
+  observed = true,
   cwd,
   defaultOpen = false,
 }: {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
   result?: WebLiveMessage;
   liveState?: EvidenceState;
+  observed?: boolean;
   cwd?: string;
   defaultOpen?: boolean;
 }) {
@@ -54,6 +56,7 @@ export function ToolEvidence({
   } | null>(null);
   const artifacts = useContext(ArtifactContext);
   const view = projectToolEvidence(call, result, liveState);
+  const state = !observed && view.state === "running" ? "unknown" : view.state;
   const fileReference = view.resolvedPath ?? view.path;
   const path = view.path ?? "";
   const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
@@ -84,7 +87,7 @@ export function ToolEvidence({
   return (
     <details
       className={`tool-evidence-card evidence-${view.kind}`}
-      data-state={view.state}
+      data-state={state}
       data-tool={call.name}
       open={defaultOpen || undefined}
     >
@@ -97,7 +100,7 @@ export function ToolEvidence({
         )}
         <span className="evidence-target" title={view.path || target}>
           <span className="tool-action">
-            {toolActivityLabel(t, call.name, view.state)}
+            {toolActivityLabel(t, call.name, state)}
           </span>
           {path ? (
             artifacts && fileReference ? (
@@ -135,7 +138,7 @@ export function ToolEvidence({
           </span>
         )}
         <ChevronRight className="evidence-chevron" aria-hidden="true" />
-        <span className="evidence-status">{t(`toolState_${view.state}`)}</span>
+        <span className="evidence-status">{t(`toolState_${state}`)}</span>
       </summary>
       <div className="evidence-content">
         {view.path && (
@@ -187,7 +190,7 @@ export function ToolEvidence({
             </figcaption>
             <pre>{shellText || t("noOutput")}</pre>
             <div className="evidence-process-meta">
-              {t(`toolState_${view.state}`)}
+              {t(`toolState_${state}`)}
               {view.exitCode !== undefined
                 ? ` · exit ${view.exitCode}`
                 : view.signal

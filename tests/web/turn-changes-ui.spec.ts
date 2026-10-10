@@ -15,9 +15,9 @@ import type {
   WebTurnChangesDetail,
 } from "../../web/protocol/turn-changes.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
+import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { TurnChangesCard } from "../../web/ui/src/features/transcript/TurnChangesCard.tsx";
 import { WorkbarPanel } from "../../web/ui/src/features/workbar/WorkbarPanel.tsx";
-import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 
@@ -322,9 +322,12 @@ it("reads exact saved evidence into the shared workbar without reading live Git"
     expect.any(AbortSignal),
   );
   expect(git).not.toHaveBeenCalled();
-  expect(
-    container.querySelector(".review-file-context")?.textContent,
-  ).toContain("Saved workspace changes during this turn");
+  const savedScope = screen.getByText(i18n.t("turnChangesScope"));
+  expect(savedScope.closest(".review-source-picker")).toBeTruthy();
+  expect(savedScope.closest("[hidden], [inert]")).toBeNull();
+  expect(container.querySelector(".review-file-context")?.textContent).toBe(
+    i18n.t("gitFileStatus_modified"),
+  );
   fireEvent.keyDown(container.querySelector(".review-file-preview")!, {
     key: "Escape",
     isComposing: true,

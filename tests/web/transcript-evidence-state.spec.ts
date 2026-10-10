@@ -592,98 +592,114 @@ it("preserves expanded recovered thinking and its DOM when a singleton gains a s
   expect(JSON.stringify(next.selectedSession!.entries)).toBe(original);
 });
 
-it("transfers a singleton reasoning reader into the promoted group without jumping to live output", () => {
-  const text = `${"A complete reasoning line.\n".repeat(60)}Last reasoning line.`;
-  const thinking = { type: "thinking", text } satisfies WebMessagePart;
-  const stream = (content?: string) => {
-    const value: WebSnapshot = snapshot({
-      running: true,
-      liveTools:
-        content === undefined
-          ? []
-          : [
-              {
-                call,
-                state: "running",
-                result: {
-                  role: "toolResult",
-                  toolName: call.name,
-                  toolCallId: call.id,
-                  content,
+it.each([
+  { reader: "middle", position: 180, following: false },
+  { reader: "top return", position: 0, following: false },
+  { reader: "bottom return", position: 540, following: true },
+  { reader: "pending upward input", position: 540, following: false },
+])(
+  "preserves a singleton reasoning $reader through promotion and live output",
+  ({ reader, position, following }) => {
+    const text = `${"A complete reasoning line.\n".repeat(60)}Last reasoning line.`;
+    const thinking = { type: "thinking", text } satisfies WebMessagePart;
+    const stream = (content?: string) => {
+      const value: WebSnapshot = snapshot({
+        running: true,
+        liveTools:
+          content === undefined
+            ? []
+            : [
+                {
+                  call,
+                  state: "running",
+                  result: {
+                    role: "toolResult",
+                    toolName: call.name,
+                    toolCallId: call.id,
+                    content,
+                  },
                 },
-              },
-            ],
+              ],
+      });
+      value.preferences.expandThinking = true;
+      value.selectedSession!.entries[1]!.message!.parts =
+        content === undefined ? [thinking] : [thinking, call];
+      return view(value);
+    };
+    const rendered = render(stream());
+    const sequence =
+      rendered.container.querySelector<HTMLDetailsElement>(
+        ".process-sequence",
+      )!;
+    const disclosure =
+      sequence.querySelector<HTMLDetailsElement>(".thinking-line")!;
+    const body = disclosure.querySelector<HTMLElement>(".thinking-evidence")!;
+    const scroller = sequence.querySelector<HTMLElement>(
+      ".process-sequence-scroll",
+    )!;
+    let thoughtTop = 0;
+    let groupTop = 0;
+    let height = 1200;
+    Object.defineProperties(body, {
+      clientHeight: {
+        get: () => (sequence.classList.contains("single-process") ? 360 : 900),
+      },
+      scrollHeight: { get: () => 900 },
+      offsetTop: { get: () => 40 },
+      scrollTop: {
+        get: () => Math.min(thoughtTop, 900 - body.clientHeight),
+        set: (top: number) => {
+          thoughtTop = Math.max(0, Math.min(top, 900 - body.clientHeight));
+        },
+      },
     });
-    value.preferences.expandThinking = true;
-    value.selectedSession!.entries[1]!.message!.parts =
-      content === undefined ? [thinking] : [thinking, call];
-    return view(value);
-  };
-  const rendered = render(stream());
-  const sequence =
-    rendered.container.querySelector<HTMLDetailsElement>(".process-sequence")!;
-  const disclosure =
-    sequence.querySelector<HTMLDetailsElement>(".thinking-line")!;
-  const body = disclosure.querySelector<HTMLElement>(".thinking-evidence")!;
-  const scroller = sequence.querySelector<HTMLElement>(
-    ".process-sequence-scroll",
-  )!;
-  let thoughtTop = 0;
-  let groupTop = 0;
-  let height = 1200;
-  Object.defineProperties(body, {
-    clientHeight: {
-      get: () => (sequence.classList.contains("single-process") ? 360 : 900),
-    },
-    scrollHeight: { get: () => 900 },
-    offsetTop: { get: () => 40 },
-    scrollTop: {
-      get: () => Math.min(thoughtTop, 900 - body.clientHeight),
-      set: (top: number) => {
-        thoughtTop = Math.max(0, Math.min(top, 900 - body.clientHeight));
+    Object.defineProperties(scroller, {
+      clientHeight: { get: () => 360 },
+      scrollHeight: { get: () => height },
+      scrollTop: {
+        get: () => groupTop,
+        set: (top: number) => {
+          groupTop = Math.max(0, Math.min(top, height - 360));
+        },
       },
-    },
-  });
-  Object.defineProperties(scroller, {
-    clientHeight: { get: () => 360 },
-    scrollHeight: { get: () => height },
-    scrollTop: {
-      get: () => groupTop,
-      set: (top: number) => {
-        groupTop = Math.max(0, Math.min(top, height - 360));
-      },
-    },
-  });
-  vi.spyOn(scroller, "getBoundingClientRect").mockImplementation(
-    () => new DOMRect(0, 100, 800, 360),
-  );
-  vi.spyOn(body, "getBoundingClientRect").mockImplementation(
-    () => new DOMRect(0, 140 - groupTop, 800, 360),
-  );
-  expect(disclosure.open).toBe(true);
-  body.scrollTop = 540;
-  fireEvent.scroll(body);
-  fireEvent.wheel(body, { deltaY: -100 });
-  body.scrollTop = 180;
-  fireEvent.scroll(body);
-  rendered.rerender(stream("First native tool delta"));
-  expect(rendered.container.querySelector(".process-sequence")).toBe(sequence);
-  expect(sequence.classList.contains("single-process")).toBe(false);
-  expect(sequence.querySelector(".thinking-line")).toBe(disclosure);
-  expect(disclosure.querySelector(".thinking-evidence")).toBe(body);
-  expect(disclosure.open).toBe(true);
-  expect(body.textContent).toContain("Last reasoning line.");
-  // The body starts 40px below the group viewport: 40 + 180 preserves the line.
-  expect(scroller.scrollTop).toBe(220);
-  expect(body.scrollTop).toBe(0);
-  height = 1400;
-  rendered.rerender(stream("Second native tool delta"));
-  expect(scroller.scrollTop).toBe(220);
-  expect(body.scrollTop).toBe(0);
-  expect(
-    sequence.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
-  ).toBe("running");
-});
+    });
+    vi.spyOn(scroller, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 100, 800, 360),
+    );
+    vi.spyOn(body, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 140 - groupTop, 800, 360),
+    );
+    expect(disclosure.open).toBe(true);
+    body.scrollTop = 540;
+    fireEvent.scroll(body);
+    fireEvent.wheel(body, { deltaY: -100 });
+    if (reader !== "pending upward input") {
+      body.scrollTop = 180;
+      fireEvent.scroll(body);
+    }
+    body.scrollTop = position;
+    fireEvent.scroll(body);
+    rendered.rerender(stream("First native tool delta"));
+    expect(rendered.container.querySelector(".process-sequence")).toBe(
+      sequence,
+    );
+    expect(sequence.classList.contains("single-process")).toBe(false);
+    expect(sequence.querySelector(".thinking-line")).toBe(disclosure);
+    expect(disclosure.querySelector(".thinking-evidence")).toBe(body);
+    expect(disclosure.open).toBe(true);
+    expect(body.textContent).toContain("Last reasoning line.");
+    // The body starts 40px below the group viewport; only a bottom return follows.
+    expect(scroller.scrollTop).toBe(following ? height - 360 : 40 + position);
+    expect(body.scrollTop).toBe(0);
+    height = 1400;
+    rendered.rerender(stream("Second native tool delta"));
+    expect(scroller.scrollTop).toBe(following ? height - 360 : 40 + position);
+    expect(body.scrollTop).toBe(0);
+    expect(
+      sequence.querySelector(".tool-evidence-card")?.getAttribute("data-state"),
+    ).toBe("running");
+  },
+);
 
 it("retains an earlier phase's exact running tool status while only the current phase opens and follows", () => {
   const second = { ...call, id: "current-tool" };
@@ -728,7 +744,6 @@ it("retains an earlier phase's exact running tool status while only the current 
       scrollHeight: { get: () => height },
     });
   scrollers[0]!.scrollTop = 100;
-  scrollers[1]!.scrollTop = 100;
   height = 1100;
   rendered.rerender(view({ ...value, generatedAt: "2026-09-26T10:00:05Z" }));
   expect(scrollers[0]!.scrollTop).toBe(100);

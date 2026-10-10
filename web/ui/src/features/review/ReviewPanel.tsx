@@ -273,8 +273,6 @@ export function ReviewPanel({
     viewedState?.scope === scope && viewedState.revision === revision
       ? viewedState.paths
       : new Set<string>();
-  const viewedCount =
-    snapshot?.files.filter((file) => viewed.has(file.path)).length ?? 0;
   useEffect(() => {
     if (
       revision &&
@@ -520,6 +518,14 @@ export function ReviewPanel({
             onChange={review.setBaseRef}
           />
         )}
+        {comparison &&
+          (!review.setSource ||
+            review.historical ||
+            snapshot?.comparison === "branch") && (
+            <span className="review-source-summary" title={comparison}>
+              {comparison}
+            </span>
+          )}
         <div className="review-source-actions">
           {onOpenFiles && (
             <button type="button" onClick={onOpenFiles}>
@@ -642,7 +648,6 @@ export function ReviewPanel({
                 {selectedFile && (
                   <span>{t(`gitFileStatus_${selectedFile.status}`)}</span>
                 )}
-                <code>{comparison}</code>
               </div>
               <HStack gap={2} align="center" className="session-review-stats">
                 {selectedFile &&
@@ -670,9 +675,6 @@ export function ReviewPanel({
                     </Text>
                   )}
               </HStack>
-              <span className="review-file-mode" aria-current="true">
-                {t("diffView")}
-              </span>
             </div>
             <section
               ref={preview}
@@ -760,7 +762,6 @@ export function ReviewPanel({
                   <h2>
                     <FileDiff aria-hidden="true" /> {t("changeEvidence")}
                   </h2>
-                  <small>{t("changeEvidenceScope")}</small>
                 </div>
                 <div className="review-heading-actions">
                   {onOpenTools && (
@@ -809,8 +810,17 @@ export function ReviewPanel({
                         },
                       )}
                     </Text>
-                    {!snapshot.truncated &&
+                    {snapshot.nextOffset !== undefined && !partialList && (
+                      <Text type="supporting" color="secondary">
+                        {t("gitReviewLoadedCount", {
+                          count: snapshot.files.length,
+                        })}
+                      </Text>
+                    )}
+                    {!partialList &&
+                      !snapshot.truncated &&
                       snapshot.nextOffset === undefined &&
+                      (snapshot.additions > 0 || snapshot.deletions > 0) &&
                       !snapshot.files.some(
                         (file) =>
                           file.binary ||
@@ -824,42 +834,30 @@ export function ReviewPanel({
                           className="review-summary-counts"
                           aria-hidden="true"
                         >
-                          <Text
-                            type="supporting"
-                            hasTabularNumbers
-                            className="review-additions"
-                          >
-                            +{snapshot.additions}
-                          </Text>
-                          <Text
-                            type="supporting"
-                            hasTabularNumbers
-                            className="review-deletions"
-                          >
-                            -{snapshot.deletions}
-                          </Text>
+                          {snapshot.additions > 0 && (
+                            <Text
+                              type="supporting"
+                              hasTabularNumbers
+                              className="review-additions"
+                            >
+                              +{snapshot.additions}
+                            </Text>
+                          )}
+                          {snapshot.deletions > 0 && (
+                            <Text
+                              type="supporting"
+                              hasTabularNumbers
+                              className="review-deletions"
+                            >
+                              -{snapshot.deletions}
+                            </Text>
+                          )}
                         </HStack>
                       )}
                   </HStack>
-                  <Text type="supporting" color="secondary" maxLines={1}>
-                    {comparison}
-                  </Text>
-                  <Text type="supporting" color="secondary">
-                    {t("gitReviewViewedProgress", {
-                      viewed: viewedCount,
-                      loaded: snapshot.files.length,
-                    })}
-                  </Text>
                   {viewed.size >= VIEWED_FILE_LIMIT && (
                     <Text type="supporting" color="secondary">
                       {t("gitReviewViewedLimit", { count: VIEWED_FILE_LIMIT })}
-                    </Text>
-                  )}
-                  {snapshot.nextOffset !== undefined && (
-                    <Text type="supporting" color="secondary">
-                      {t("gitReviewLoadedCount", {
-                        count: snapshot.files.length,
-                      })}
                     </Text>
                   )}
                 </VStack>

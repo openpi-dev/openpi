@@ -1,7 +1,7 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
-import { RefreshCw, RotateCcw } from "lucide-react";
+import { ArrowDown, RefreshCw, RotateCcw } from "lucide-react";
 import {
   type KeyboardEvent,
   useEffect,
@@ -25,6 +25,7 @@ type TerminalStatus =
 type TerminalConnection = {
   reconnect: () => void;
   suspend: () => void;
+  scrollToBottom: () => void;
 };
 
 function terminalTheme() {
@@ -69,6 +70,11 @@ export function InteractiveTerminal({
   const client = useMemo(() => new WebClient(), []);
   const reading = useWorkbarReadingState();
   const saved = tabId ? reading?.terminals?.[tabId] : reading?.terminal;
+  const cwdName =
+    cwd
+      .replace(/[\\/]+$/u, "")
+      .split(/[\\/]/u)
+      .pop() || cwd;
   const activeRef = useRef(active);
   activeRef.current = active;
   const container = useRef<HTMLDivElement>(null);
@@ -81,6 +87,8 @@ export function InteractiveTerminal({
   const [status, setStatus] = useState<TerminalStatus>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [outputResynced, setOutputResynced] = useState(false);
   const [generation, setGeneration] = useState(0);
   const connection = useRef<TerminalConnection | null>(null);
   const restartInFlight = useRef<TerminalConnection | null>(null);
@@ -115,6 +123,8 @@ export function InteractiveTerminal({
     setStatus("connecting");
     setError(null);
     setExitCode(null);
+    setShowScrollToBottom(false);
+    setOutputResynced(false);
     setRestartOpen(false);
     setRestartPending(false);
     setRestartError(null);
@@ -123,7 +133,7 @@ export function InteractiveTerminal({
       cursorBlink: true,
       fontFamily:
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
+      fontSize: 13,
       lineHeight: 1.25,
       scrollback: 8_000,
       screenReaderMode: true,
@@ -225,16 +235,40 @@ export function InteractiveTerminal({
         fit.fit();
       } catch {}
     };
+    const syncReadingPosition = (
+      viewport = terminal.buffer.active.viewportY,
+    ) => {
+      const atBottom = viewport >= terminal.buffer.active.baseY;
+      setShowScrollToBottom(!atBottom);
+      const id = terminalId.current;
+      if (reading && id && !restoreViewport) {
+        const value = {
+          ...(tabId ? reading.terminals?.[tabId] : reading.terminal),
+          id,
+          viewport,
+          atBottom,
+        };
+        if (tabId) (reading.terminals ??= {})[tabId] = value;
+        else reading.terminal = value;
+      }
+    };
     const applyEvent = (event: WebInteractiveTerminalEvent) => {
       if (disposed) return;
       if (event.type === "output") {
-        if (event.reset) terminal.reset();
-        else if (offset !== undefined && event.offset <= offset) return;
+        if (event.reset) {
+          terminal.reset();
+          // Initial replay also resets a fresh display; only a reset after a
+          // known cursor means the existing output was resynchronized.
+          if (offset !== undefined) setOutputResynced(true);
+        } else if (offset !== undefined && event.offset <= offset) return;
         terminal.write(event.data, () => {
-          if (disposed || !restoreViewport) return;
-          if (restoreViewport.atBottom) terminal.scrollToBottom();
-          else terminal.scrollToLine(restoreViewport.viewport);
-          restoreViewport = undefined;
+          if (disposed) return;
+          if (restoreViewport) {
+            if (restoreViewport.atBottom) terminal.scrollToBottom();
+            else terminal.scrollToLine(restoreViewport.viewport);
+            restoreViewport = undefined;
+          }
+          syncReadingPosition();
         });
         offset = event.offset;
         return;
@@ -247,19 +281,7 @@ export function InteractiveTerminal({
       setStatus("exited");
     };
     const onData = terminal.onData(writeInput);
-    const onScroll = terminal.onScroll((viewport) => {
-      const id = terminalId.current;
-      if (reading && id && !restoreViewport) {
-        const value = {
-          ...(tabId ? reading.terminals?.[tabId] : reading.terminal),
-          id,
-          viewport,
-          atBottom: viewport >= terminal.buffer.active.baseY,
-        };
-        if (tabId) (reading.terminals ??= {})[tabId] = value;
-        else reading.terminal = value;
-      }
-    });
+    const onScroll = terminal.onScroll(syncReadingPosition);
     const onResize = terminal.onResize(({ cols, rows }) => resize(cols, rows));
     const observer =
       typeof ResizeObserver === "undefined"
@@ -339,6 +361,11 @@ export function InteractiveTerminal({
         void start();
       },
       suspend,
+      scrollToBottom: () => {
+        if (disposed) return;
+        terminal.scrollToBottom();
+        terminal.focus();
+      },
     };
     connection.current = scope;
     void start();
@@ -407,8 +434,16 @@ export function InteractiveTerminal({
     <section className="interactive-terminal" aria-label={t("terminal")}>
       <header className="interactive-terminal-status">
         <div>
-          <span className={`terminal-status-dot ${status}`} />
-          <span title={cwd}>{cwd}</span>
+          <span
+            className={`terminal-status-dot ${status}`}
+            aria-hidden="true"
+          />
+          <span className="terminal-cwd" title={cwd}>
+            {cwdName}
+          </span>
+          {status === "ready" && (
+            <span className="terminal-connection-state">{t("connected")}</span>
+          )}
         </div>
         <div className="interactive-terminal-actions">
           {status === "error" && (
@@ -416,10 +451,12 @@ export function InteractiveTerminal({
               type="button"
               aria-label={t("reconnectTerminal")}
               title={t("reconnectTerminal")}
+              className="terminal-reconnect-action"
               disabled={restartPending}
               onClick={() => connection.current?.reconnect()}
             >
               <RefreshCw aria-hidden="true" />
+              <span>{t("reconnectTerminal")}</span>
             </button>
           )}
           <button
@@ -456,9 +493,24 @@ export function InteractiveTerminal({
         ) : status === "restarting" ? (
           <span>{t("terminalRestarting")}</span>
         ) : null}
+        {outputResynced && (
+          <span className="terminal-output-resynced">
+            {t("terminalOutputResynced")}
+          </span>
+        )}
       </div>
       <div className="interactive-terminal-viewport">
         <div ref={container} className="interactive-terminal-host" />
+        {showScrollToBottom && (
+          <button
+            type="button"
+            className="terminal-scroll-bottom"
+            onClick={() => connection.current?.scrollToBottom()}
+          >
+            <ArrowDown aria-hidden="true" />
+            <span>{t("terminalScrollToBottom")}</span>
+          </button>
+        )}
       </div>
       <Dialog
         key={`${sessionId}:${cwd}`}

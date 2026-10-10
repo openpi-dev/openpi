@@ -560,11 +560,14 @@ function familyCard(
   onInspectSubagent?: (id: string) => void,
   liveState?: EvidenceState,
   defaultOpen = false,
+  observed = true,
 ) {
   const name = part.name || "";
   const args = parseArguments(part.arguments);
   const details = record(result?.details);
-  const status = resultStatus(result, liveState);
+  const nativeStatus = resultStatus(result, liveState);
+  const status =
+    !observed && nativeStatus === "running" ? "unknown" : nativeStatus;
   if (name === "subagent_spawn") {
     const meta = [args.agent_type, details.model || args.model]
       .filter(Boolean)
@@ -577,6 +580,7 @@ function familyCard(
         body={result?.content || String(args.prompt || part.arguments)}
         activity={subagents.find((item) => item.id === details.id)}
         spawnFailed={result?.isError === true}
+        observed={observed}
         defaultOpen={defaultOpen}
         onInspect={onInspectSubagent}
       />
@@ -646,6 +650,7 @@ function SubagentCard({
   spawnFailed,
   onInspect,
   defaultOpen = false,
+  observed = true,
 }: {
   id?: string;
   title: string;
@@ -655,17 +660,25 @@ function SubagentCard({
   spawnFailed: boolean;
   onInspect?: (id: string) => void;
   defaultOpen?: boolean;
+  observed?: boolean;
 }) {
   const { t } = useTranslation();
-  const state =
+  const nativeState =
     activity?.outcome === "interrupted" ? "interrupted" : activity?.status;
-  const label = state
-    ? t(`subagentState_${state}`)
-    : spawnFailed
-      ? t("subagentSpawnFailed")
-      : id
-        ? t("subagentStateUnavailable")
-        : t("subagentStarting");
+  const state =
+    !observed && (nativeState === "running" || (!nativeState && !spawnFailed))
+      ? "unknown"
+      : nativeState;
+  const label =
+    state === "unknown"
+      ? t("toolState_unknown")
+      : state
+        ? t(`subagentState_${state}`)
+        : spawnFailed
+          ? t("subagentSpawnFailed")
+          : id
+            ? t("subagentStateUnavailable")
+            : t("subagentStarting");
   return (
     <section className="message-details activity-card subagent">
       <button
@@ -697,7 +710,7 @@ function SubagentCard({
 function ThinkingEvidence({
   body,
   duration,
-  active,
+  status,
   level,
   defaultOpen,
   truncated,
@@ -705,31 +718,34 @@ function ThinkingEvidence({
 }: {
   body: string;
   duration?: number;
-  active: boolean;
+  status: "running" | "done" | "unknown";
   level?: string;
   defaultOpen: boolean;
   truncated?: boolean;
   source?: WebHistoryAnchor & { partIndex: number };
 }) {
   const { t } = useTranslation();
+  const active = status === "running";
   const [expanded, setExpanded] = useState(defaultOpen);
   const [fullText, setFullText] = useState<string>();
   useEffect(() => setExpanded(defaultOpen), [defaultOpen]);
   const settled = duration !== undefined ? formatElapsedMs(0, duration) : "";
   const preview = thinkingPreview(body);
   const name = [
-    active
-      ? level
-        ? t("thinkingActiveLevel", { level })
-        : t("thinkingActive")
-      : t("thinkingDone"),
+    status === "unknown"
+      ? t("toolState_unknown")
+      : active
+        ? level
+          ? t("thinkingActiveLevel", { level })
+          : t("thinkingActive")
+        : t("thinkingDone"),
     settled,
   ]
     .filter(Boolean)
     .join(" · ");
   return (
     <details
-      className={`message-details tool-line thinking-line ${active ? "running" : "done"}`}
+      className={`message-details tool-line thinking-line ${status}`}
       open={expanded}
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
@@ -1420,6 +1436,13 @@ function ProcessSequence({
     const promoted = previousSingle.current && !single;
     previousSingle.current = single;
     if (!element || single || !open || rows.length === 0) return;
+    // A native bookmark can move this scrollport before its scroll event arrives.
+    if (
+      !promoted &&
+      element.scrollTop !== lastScrollTop.current &&
+      element.scrollHeight - element.clientHeight - element.scrollTop > 24
+    )
+      following.current = false;
     if (promoted && !following.current)
       element.scrollTop = lastScrollTop.current;
     if (active && following.current) {
@@ -1555,14 +1578,18 @@ function ProcessSequence({
           if (
             single &&
             target instanceof HTMLElement &&
-            target.classList.contains("thinking-evidence") &&
-            target.scrollTop > 0
+            target.classList.contains("thinking-evidence")
           ) {
-            following.current = false;
-            lastScrollTop.current =
+            const top =
               target.getBoundingClientRect().top -
               event.currentTarget.getBoundingClientRect().top +
               target.scrollTop;
+            const downward = top > lastScrollTop.current;
+            lastScrollTop.current = top;
+            following.current =
+              (following.current || downward) &&
+              target.scrollHeight - target.clientHeight - target.scrollTop <=
+                24;
           }
         }}
         onScroll={(event) => {
@@ -1601,7 +1628,8 @@ function ProcessSequence({
               (event.key === " " && event.shiftKey)) &&
             target instanceof HTMLElement &&
             !target.isContentEditable &&
-            !target.closest("input, textarea, select, button, summary") &&
+            !target.closest("input, textarea, select") &&
+            !(event.key === " " && target.closest("button, summary")) &&
             (single ||
               upwardInputReachesConversation(
                 event.nativeEvent,
@@ -1685,8 +1713,14 @@ function TurnRun({
   const { t } = useTranslation();
   const id = useId();
   const [open, setOpen] = useState(timing?.outcome !== "completed");
+  const previousOutcome = useRef(timing?.outcome);
   useEffect(() => {
-    if (timing?.outcome === "completed") setOpen(false);
+    if (
+      previousOutcome.current !== timing?.outcome &&
+      timing?.outcome === "completed"
+    )
+      setOpen(false);
+    previousOutcome.current = timing?.outcome;
   }, [timing?.outcome]);
   const hasTiming = Boolean(timing || timedTurn);
   const blocks: Array<{ foldable: boolean; rows: RenderRow[] }> = [];
@@ -1768,6 +1802,7 @@ function ConversationTurn({
   id,
   rows,
   active,
+  observed = true,
   changes,
   session,
   timedTurn,
@@ -1776,6 +1811,7 @@ function ConversationTurn({
   id: number;
   rows: RenderRow[];
   active: boolean;
+  observed?: boolean;
   changes?: WebTurnChanges;
   session?: WebSessionProjection;
   timedTurn?: ActiveTurn;
@@ -1797,7 +1833,9 @@ function ConversationTurn({
       ),
   );
   const status = active
-    ? "running"
+    ? observed
+      ? "running"
+      : "unknown"
     : outcome === "failed"
       ? "failed"
       : outcome === "interrupted" || outcome === "cancelled"
@@ -1815,7 +1853,8 @@ function ConversationTurn({
           : status === "complete"
             ? "success"
             : "neutral";
-  const statusLabel = t(`turnState_${status}`);
+  const statusLabel =
+    status === "unknown" ? t("toolState_unknown") : t(`turnState_${status}`);
   // A settled snapshot can arrive before the run-status notification.
   const currentTimedTurn = rows.some(
     (row) =>
@@ -1892,6 +1931,7 @@ function renderTurns(
   session?: WebSessionProjection,
   timedTurn?: ActiveTurn,
   onReviewTurn?: OpenTurnReview,
+  observed = true,
 ) {
   const owners = new Map<RenderRow, number>();
   const attachRun = (promptEntryId: string | undefined, end: number) => {
@@ -1944,6 +1984,7 @@ function renderTurns(
       id={turn.id}
       rows={turn.rows}
       active={running && turn.id === activeTurn}
+      observed={observed}
       changes={changesByPrompt?.get(
         turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
           ?.promptEntryId ?? "",
@@ -1961,20 +2002,48 @@ function captureReadingPosition(
   pinned: boolean,
   session?: WebSessionProjection,
 ) {
-  const top = element.getBoundingClientRect().top;
-  const anchor = Array.from(
+  const viewportBounds = element.getBoundingClientRect();
+  const top = viewportBounds.top;
+  const candidates = Array.from(
     element.querySelectorAll<HTMLElement>(
       "[data-history-entry], [data-history-message], [data-history-result]",
     ),
-  ).find((item) => {
+  ).filter((item) => {
     const bounds = item.getBoundingClientRect();
-    return bounds.height > 0 && bounds.bottom > top;
+    let visibleTop = Math.max(bounds.top, viewportBounds.top);
+    let visibleBottom = Math.min(bounds.bottom, viewportBounds.bottom);
+    for (
+      let parent: HTMLElement | null = item;
+      parent && parent !== element;
+      parent = parent.parentElement
+    ) {
+      if (parent.hidden) return false;
+      if (
+        parent instanceof HTMLDetailsElement &&
+        !parent.open &&
+        parent !== item &&
+        !parent.querySelector(":scope > summary")?.contains(item)
+      )
+        return false;
+      if (parent === item) continue;
+      const style = getComputedStyle(parent);
+      if (!/^(auto|scroll|overlay|hidden|clip)$/.test(style.overflowY))
+        continue;
+      const clip = parent.getBoundingClientRect();
+      visibleTop = Math.max(visibleTop, clip.top);
+      visibleBottom = Math.min(visibleBottom, clip.bottom);
+    }
+    return visibleBottom > visibleTop;
   });
+  const anchor = candidates.find(
+    (item) =>
+      !candidates.some((child) => child !== item && item.contains(child)),
+  );
   const key =
+    anchor?.dataset.historyResult ??
     anchor?.dataset.historyEntry ??
-    anchor?.dataset.historyMessage ??
-    anchor?.dataset.historyResult;
-  const owner = anchor?.dataset.historyMessage ?? anchor?.dataset.historyResult;
+    anchor?.dataset.historyMessage;
+  const owner = anchor?.dataset.historyResult ?? anchor?.dataset.historyMessage;
   let entryId = session?.entries.find(
     (entry) => entry.id === owner || entry.id === key,
   )?.id;
@@ -1993,6 +2062,66 @@ function captureReadingPosition(
     scrollTop: element.scrollTop,
     pinned,
   };
+}
+
+function revealReadingAncestors(target: HTMLElement, root: HTMLElement) {
+  let deferred = false;
+  for (
+    let parent = target.parentElement;
+    parent && parent !== root;
+    parent = parent.parentElement
+  ) {
+    if (parent instanceof HTMLDetailsElement) parent.open = true;
+    if (parent.classList.contains("turn-response-body") && parent.hidden) {
+      const toggle = Array.from(
+        root.querySelectorAll<HTMLButtonElement>("button[aria-controls]"),
+      ).find((button) =>
+        button.getAttribute("aria-controls")?.split(" ").includes(parent!.id),
+      );
+      if (toggle) {
+        toggle.click();
+        deferred = true;
+      }
+    }
+  }
+  return deferred;
+}
+
+function readingAnchorTop(
+  target: HTMLElement,
+  root: HTMLElement,
+  position?: Pick<ReadingPosition, "offset" | "scrollTop">,
+) {
+  target.scrollIntoView?.({
+    block: "nearest",
+    inline: "nearest",
+    behavior: "instant",
+  });
+  if (position) {
+    root.scrollTop = position.scrollTop;
+    for (
+      let parent = target.parentElement;
+      parent && parent !== root;
+      parent = parent.parentElement
+    ) {
+      if (
+        !/^(auto|scroll|overlay)$/.test(getComputedStyle(parent).overflowY) ||
+        parent.scrollHeight <= parent.clientHeight
+      )
+        continue;
+      parent.scrollTop +=
+        target.getBoundingClientRect().top -
+        root.getBoundingClientRect().top -
+        position.offset;
+    }
+  }
+  return Math.max(
+    0,
+    root.scrollTop +
+      target.getBoundingClientRect().top -
+      root.getBoundingClientRect().top -
+      (position?.offset ?? 24),
+  );
 }
 
 function upwardInputReachesConversation(event: Event, root: HTMLElement) {
@@ -2623,23 +2752,30 @@ export function Transcript(props: TranscriptProps) {
           // Some providers return only an opaque reasoning signature. An
           // empty part is not a visible reasoning note or disclosure body.
           if (part.type === "thinking" && part.text.trim()) {
-            const isLive =
+            const current =
               !historyPaused &&
               !retry &&
+              !message.stopReason &&
               selectedExecution?.compaction?.state !== "running" &&
               running &&
               index === entries.length - 1 &&
               partIndex === lastVisiblePart;
+            const status = current
+              ? props.activityObserved === false
+                ? "unknown"
+                : "running"
+              : "done";
             detailRows.push({
               key: `${entry.key}-thinking-${partIndex}`,
               turn,
               kind: "process",
               processType: "thinking",
               processPreview: thinkingPreview(part.text),
-              processStatus: isLive ? "running" : "done",
+              processStatus: status,
               content: (
                 <article
                   className="message-row assistant detail-only"
+                  data-history-entry={`${entry.entryId ?? entry.key}-thinking-${partIndex}-body`}
                   data-history-message={entry.entryId ?? entry.key}
                   data-history-highlighted={
                     (highlightedEntry && entry.entryId === highlightedEntry) ||
@@ -2670,9 +2806,11 @@ export function Transcript(props: TranscriptProps) {
                             }
                           : undefined
                       }
-                      active={isLive}
+                      status={status}
                       level={
-                        isLive ? props.snapshot.thinking?.level : undefined
+                        status === "running"
+                          ? props.snapshot.thinking?.level
+                          : undefined
                       }
                       duration={
                         props.thinkingDurations[entry.timingKey ?? entry.key]
@@ -2702,6 +2840,12 @@ export function Transcript(props: TranscriptProps) {
               : undefined;
             const persistedResult = persistedResultEntry?.message;
             const result = persistedResult ?? live?.result;
+            const liveState = persistedResult ? undefined : live?.state;
+            const nativeStatus = resultStatus(result, liveState);
+            const status =
+              props.activityObserved === false && nativeStatus === "running"
+                ? "unknown"
+                : nativeStatus;
             const card =
               part.name === "plan_ready" &&
               result &&
@@ -2718,7 +2862,8 @@ export function Transcript(props: TranscriptProps) {
                   key={`${entry.key}-${part.id || partIndex}-evidence`}
                   call={part}
                   result={result}
-                  liveState={persistedResult ? undefined : live?.state}
+                  liveState={liveState}
+                  observed={props.activityObserved}
                   cwd={selectedCwd}
                   defaultOpen={defaultOpen}
                 />
@@ -2730,18 +2875,15 @@ export function Transcript(props: TranscriptProps) {
                     ? props.snapshot.runtime.capabilities.subagents?.items
                     : undefined,
                   props.onInspectSubagent,
-                  persistedResult ? undefined : live?.state,
+                  liveState,
                   defaultOpen,
+                  props.activityObserved !== false,
                 )
               );
             const args = parseArguments(part.arguments);
             const { Icon, action } = toolActivity(part.name);
             const toolIcon = (
               <Icon key={`${entry.key}-${part.id || partIndex}-icon`} />
-            );
-            const status = resultStatus(
-              result,
-              persistedResult ? undefined : live?.state,
             );
             detailRows.push({
               key: `${entry.key}-tool-${part.id || partIndex}`,
@@ -2919,7 +3061,11 @@ export function Transcript(props: TranscriptProps) {
           : message.toolName?.startsWith("workflow")
             ? "workflow"
             : null;
-        const status = resultStatus(message);
+        const nativeStatus = resultStatus(message);
+        const status =
+          props.activityObserved === false && nativeStatus === "running"
+            ? "unknown"
+            : nativeStatus;
         const toolName = message.toolName || "tool";
         const defaultOpen =
           family === "subagent"
@@ -2974,6 +3120,7 @@ export function Transcript(props: TranscriptProps) {
             content: (
               <article
                 className="message-row assistant detail-only"
+                data-history-entry={`${entry.entryId ?? entry.key}-body`}
                 data-history-message={entry.entryId ?? entry.key}
                 data-history-highlighted={
                   (highlightedEntry && entry.entryId === highlightedEntry) ||
@@ -3154,26 +3301,45 @@ export function Transcript(props: TranscriptProps) {
         : null);
     prependAnchor.current = null;
     if (saved && (!changed || restored) && !requested) {
-      const anchor = Array.from(
-        element.querySelectorAll<HTMLElement>("[data-history-entry]"),
-      ).find(
-        (item) =>
-          item.dataset.historyEntry === saved.key &&
-          item.getBoundingClientRect().height > 0,
+      const candidates = Array.from(
+        element.querySelectorAll<HTMLElement>(
+          "[data-history-entry], [data-history-message], [data-history-result]",
+        ),
       );
-      const top = anchor
-        ? element.scrollTop +
-          anchor.getBoundingClientRect().top -
-          element.getBoundingClientRect().top -
-          saved.offset
-        : saved.scrollTop + element.scrollHeight - saved.scrollHeight;
-      if (typeof element.scrollTo === "function")
-        element.scrollTo({ top, behavior: "instant" });
-      else element.scrollTop = top;
-      lastScrollTop.current = element.scrollTop;
+      const anchor =
+        saved.key === undefined
+          ? undefined
+          : (candidates.find(
+              (item) => item.dataset.historyEntry === saved.key,
+            ) ??
+            candidates
+              .reverse()
+              .find(
+                (item) =>
+                  item.dataset.historyMessage === saved.key ||
+                  item.dataset.historyResult === saved.key,
+              ));
       pinned.current = false;
       setReadingHistory(true);
       lastPath.current = identity;
+      const locate = () => {
+        if (anchor && !element.contains(anchor)) return;
+        if (prependAnchor.current === saved) prependAnchor.current = null;
+        const top = anchor
+          ? readingAnchorTop(anchor, element, saved)
+          : saved.scrollTop + element.scrollHeight - saved.scrollHeight;
+        if (typeof element.scrollTo === "function")
+          element.scrollTo({ top, behavior: "instant" });
+        else element.scrollTop = top;
+        lastScrollTop.current = element.scrollTop;
+      };
+      if (anchor && revealReadingAncestors(anchor, element)) {
+        // The elapsed disclosure is React-owned; measure after its native toggle.
+        prependAnchor.current = saved;
+        const frame = requestAnimationFrame(locate);
+        return () => cancelAnimationFrame(frame);
+      }
+      locate();
       return;
     }
     if (changed || requested || pinned.current) {
@@ -3222,52 +3388,41 @@ export function Transcript(props: TranscriptProps) {
         item.dataset.historyResult === navigation.entryId,
     );
     const restoredTarget = navigation.restorePosition?.key
-      ? candidates.find(
+      ? (candidates.find(
           (item) =>
-            item.dataset.historyEntry === navigation.restorePosition!.key ||
-            item.dataset.historyMessage === navigation.restorePosition!.key ||
-            item.dataset.historyResult === navigation.restorePosition!.key,
-        )
+            item.dataset.historyEntry === navigation.restorePosition!.key,
+        ) ??
+        [...candidates]
+          .reverse()
+          .find(
+            (item) =>
+              item.dataset.historyMessage === navigation.restorePosition!.key ||
+              item.dataset.historyResult === navigation.restorePosition!.key,
+          ))
       : undefined;
     const target =
       restoredTarget ??
       matches.find((item) => item.classList.contains("response")) ??
+      matches.find(
+        (item) =>
+          item.dataset.historyMessage === navigation.entryId ||
+          item.dataset.historyResult === navigation.entryId,
+      ) ??
       matches[0];
     if (!target) return;
     // Native details retain their disclosure state; reveal only the ancestors
     // needed to make this particular message reachable.
-    for (
-      let parent = target.parentElement;
-      parent && parent !== element;
-      parent = parent.parentElement
-    ) {
-      if (parent instanceof HTMLDetailsElement) parent.open = true;
-      if (parent.classList.contains("turn-response-body") && parent.hidden) {
-        const toggle = Array.from(
-          element.querySelectorAll<HTMLButtonElement>("button[aria-controls]"),
-        ).find((button) =>
-          button.getAttribute("aria-controls")?.split(" ").includes(parent!.id),
-        );
-        toggle?.click();
-      }
-    }
+    revealReadingAncestors(target, element);
     const locate = () => {
       if (
         !element.contains(target) ||
         (navigation.restorePosition && lastNavigation.current === navigationKey)
       )
         return;
-      const top = Math.max(
-        0,
-        element.scrollTop +
-          target.getBoundingClientRect().top -
-          element.getBoundingClientRect().top -
-          (navigation.restorePosition &&
-          (target.dataset.historyEntry === navigation.restorePosition.key ||
-            target.dataset.historyMessage === navigation.restorePosition.key ||
-            target.dataset.historyResult === navigation.restorePosition.key)
-            ? navigation.restorePosition.offset
-            : 24),
+      const top = readingAnchorTop(
+        target,
+        element,
+        restoredTarget ? navigation.restorePosition : undefined,
       );
       element.scrollTo?.({ top, behavior: "instant" });
       if (typeof element.scrollTo !== "function") element.scrollTop = top;
@@ -3448,7 +3603,8 @@ export function Transcript(props: TranscriptProps) {
               (event.key === " " && event.shiftKey)) &&
             target instanceof HTMLElement &&
             !target.isContentEditable &&
-            !target.closest("input, textarea, select, button, summary") &&
+            !target.closest("input, textarea, select") &&
+            !(event.key === " " && target.closest("button, summary")) &&
             upwardInputReachesConversation(
               event.nativeEvent,
               event.currentTarget,
@@ -3511,6 +3667,7 @@ export function Transcript(props: TranscriptProps) {
               ? timedTurn
               : undefined,
             props.onReviewTurn,
+            props.activityObserved !== false,
           )}
           {selectedExecution?.compaction &&
             selectedExecution.compaction.state !== "completed" && (
@@ -3527,27 +3684,29 @@ export function Transcript(props: TranscriptProps) {
                 }
               />
             )}
-          {running && selectedExecution?.compaction?.state !== "running" && (
-            <div
-              className="conversation-execution-status sr-only"
-              role="status"
-              aria-live="polite"
-            >
-              <span>{runningLabel}</span>
-              {observedRunningTools > 0 && (
-                <span>
-                  {t("observedSessionTools", { count: observedRunningTools })}
-                </span>
-              )}
-              {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
-                <span>
-                  {t("pendingFollowUpsHint", {
-                    count: selectedExecution!.pendingFollowUps,
-                  })}
-                </span>
-              )}
-            </div>
-          )}
+          {running &&
+            props.activityObserved !== false &&
+            selectedExecution?.compaction?.state !== "running" && (
+              <div
+                className="conversation-execution-status sr-only"
+                role="status"
+                aria-live="polite"
+              >
+                <span>{runningLabel}</span>
+                {observedRunningTools > 0 && (
+                  <span>
+                    {t("observedSessionTools", { count: observedRunningTools })}
+                  </span>
+                )}
+                {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
+                  <span>
+                    {t("pendingFollowUpsHint", {
+                      count: selectedExecution!.pendingFollowUps,
+                    })}
+                  </span>
+                )}
+              </div>
+            )}
         </div>
       </div>
       {(readingHistory || history.hasNewer) && rows.length > 0 && (
@@ -3564,9 +3723,21 @@ export function Transcript(props: TranscriptProps) {
             setHighlightedNavigation(null);
             history.resetToLatest();
             element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+            // Returning from a reading window can replace its rows in this commit.
+            queueMicrotask(() => {
+              if (viewport.current !== element) return;
+              const latest = Array.from(
+                element.querySelectorAll<HTMLElement>(
+                  '.message-row[tabindex="-1"]',
+                ),
+              )
+                .reverse()
+                .find((row) => !row.closest("[hidden], details:not([open])"));
+              (latest ?? element).focus({ preventScroll: true });
+            });
           }}
         >
-          {running ? (
+          {running && props.activityObserved !== false ? (
             <span className="latest-activity-dots" aria-hidden="true">
               <i />
               <i />

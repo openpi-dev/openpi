@@ -37,7 +37,7 @@ type TerminalRecord = {
   resets: number;
   disposed: boolean;
   send: (data: string) => void;
-  buffer: { active: { baseY: number } };
+  buffer: { active: { baseY: number; viewportY: number } };
   scroll: (viewport: number) => void;
   scrolls: number[];
 };
@@ -95,7 +95,7 @@ vi.mock("@xterm/xterm", () => ({
     resets = 0;
     disposed = false;
     send = (_data: string) => {};
-    buffer = { active: { baseY: 50 } };
+    buffer = { active: { baseY: 50, viewportY: 50 } };
     scroll = (_viewport: number) => {};
     scrolls: number[] = [];
     constructor() {
@@ -132,12 +132,16 @@ vi.mock("@xterm/xterm", () => ({
       return { dispose() {} };
     }
     onScroll(callback: (viewport: number) => void) {
-      this.scroll = callback;
+      this.scroll = (viewport) => {
+        this.buffer.active.viewportY = viewport;
+        callback(viewport);
+      };
       return { dispose() {} };
     }
     scrollToLine(viewport: number) {
-      this.scrolls.push(viewport);
-      this.scroll(viewport);
+      const clamped = Math.max(0, Math.min(viewport, this.buffer.active.baseY));
+      this.scrolls.push(clamped);
+      this.scroll(clamped);
     }
     scrollToBottom() {
       this.scrollToLine(this.buffer.active.baseY);
@@ -235,7 +239,7 @@ function tree(sessionId = "a", cwd = "/workspace") {
   );
 }
 
-it("the plus opens the full launcher and each Terminal selection creates an independent tab", async () => {
+it("the plus keeps the current terminal visible and its menu creates an independent terminal tab", async () => {
   const client = fixture();
   client.create
     .mockResolvedValueOnce(terminalInfo())
@@ -276,13 +280,17 @@ it("the plus opens the full launcher and each Terminal selection creates an inde
     }),
   );
   fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
-  const launcher = screen.getByRole("region", { name: i18n.t("openTools") });
-  expect(within(launcher).getAllByRole("button")).toHaveLength(5);
-  expect(screen.queryByRole("menu")).toBeNull();
+  const launcher = await screen.findByRole("menu", {
+    name: i18n.t("openTools"),
+  });
+  expect(within(launcher).getAllByRole("menuitem")).toHaveLength(5);
+  expect(screen.getByRole("textbox", { name: "Terminal input" })).toBe(
+    first.textarea,
+  );
   expect(client.attempts[0]!.signal.aborted).toBe(false);
   fireEvent.click(
-    within(launcher).getByRole("button", {
-      name: new RegExp(`^${i18n.t("terminal")}`),
+    within(launcher).getByRole("menuitem", {
+      name: new RegExp(`^${i18n.t("workbarNewTerminal")}`),
     }),
   );
   await waitFor(() => expect(client.stream).toHaveBeenCalledTimes(2));
@@ -316,7 +324,7 @@ it("the plus opens the full launcher and each Terminal selection creates an inde
     true,
   );
   const close = within(toolbar).getByRole("button", {
-    name: `${i18n.t("close")} ${i18n.t("terminal")}`,
+    name: i18n.t("workbarEndTerminal", { name: i18n.t("terminal") }),
   });
   await waitFor(() => expect(close.hasAttribute("disabled")).toBe(false));
   close.focus();
@@ -423,7 +431,7 @@ it("failed terminal close keeps its tab and native ID available for an explicit 
   );
   await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
   const close = within(screen.getByRole("toolbar")).getByRole("button", {
-    name: `${i18n.t("close")} ${i18n.t("terminal")}`,
+    name: i18n.t("workbarEndTerminal", { name: i18n.t("terminal") }),
   });
   await waitFor(() => expect(close.hasAttribute("disabled")).toBe(false));
   fireEvent.click(close);
@@ -1067,3 +1075,215 @@ it.each(["unmount", "scope"] as const)(
     }
   },
 );
+
+it.each([
+  ["/workspace/invoice-demo/", "invoice-demo"],
+  ["C:\\Projects\\invoice-demo\\", "invoice-demo"],
+  ["/", "/"],
+])(
+  "shows a readable native directory for %s with its full path available",
+  async (cwd, name) => {
+    const client = fixture();
+    client.create.mockResolvedValue(terminalInfo("a", "terminal-a", cwd));
+    render(tree("a", cwd));
+    await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+    const header = document.querySelector(".interactive-terminal-status")!;
+    const directory = within(header as HTMLElement).getByText(name, {
+      exact: true,
+    });
+    expect(directory.getAttribute("title")).toBe(cwd);
+    expect(
+      within(header as HTMLElement).getByText(i18n.t("connected")),
+    ).toBeTruthy();
+  },
+);
+
+it("labels reconnect visibly while keeping restart on the existing confirmation path", async () => {
+  const client = fixture();
+  render(tree());
+  await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+  await act(async () =>
+    client.attempts[0]!.reject(new Error("temporary transport failure")),
+  );
+  const reconnect = screen.getByRole("button", {
+    name: i18n.t("reconnectTerminal"),
+  });
+  expect(reconnect.textContent).toBe(i18n.t("reconnectTerminal"));
+  expect(screen.queryByText(i18n.t("connected"))).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("restartTerminal") }),
+  );
+  await screen.findByRole("dialog", { name: i18n.t("restartTerminalTitle") });
+  expect(client.close).not.toHaveBeenCalled();
+  expect(client.create).toHaveBeenCalledOnce();
+});
+
+it("derives return-to-bottom from the native viewport and keeps manual reading during new output", async () => {
+  const client = fixture();
+  const reading: WorkbarReadingState = {};
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(
+        WorkbarReadingContext.Provider,
+        { value: reading },
+        createElement(InteractiveTerminal, {
+          sessionId: "a",
+          cwd: "/workspace",
+        }),
+      ),
+    ),
+  );
+  await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+  const terminal = terminals.instances[0]!;
+  expect(
+    screen.queryByRole("button", { name: i18n.t("terminalScrollToBottom") }),
+  ).toBeNull();
+  act(() => terminal.scroll(12));
+  expect(reading.terminal).toMatchObject({
+    id: "terminal-a",
+    viewport: 12,
+    atBottom: false,
+  });
+  expect(
+    screen.getByRole("button", { name: i18n.t("terminalScrollToBottom") }),
+  ).toBeTruthy();
+  act(() => {
+    terminal.buffer.active.baseY = 65;
+    client.attempts[0]!.onEvent({
+      type: "output",
+      data: "more native output",
+      offset: 18,
+      reset: false,
+    });
+  });
+  expect(terminal.buffer.active.viewportY).toBe(12);
+  expect(terminal.scrolls).toEqual([]);
+  expect(reading.terminal?.atBottom).toBe(false);
+  const returnButton = screen.getByRole("button", {
+    name: i18n.t("terminalScrollToBottom"),
+  });
+  returnButton.focus();
+  fireEvent.click(returnButton);
+  expect(terminal.scrolls).toEqual([65]);
+  expect(reading.terminal).toMatchObject({
+    id: "terminal-a",
+    viewport: 65,
+    atBottom: true,
+  });
+  expect(
+    screen.queryByRole("button", { name: i18n.t("terminalScrollToBottom") }),
+  ).toBeNull();
+  expect(document.activeElement).toBe(terminal.textarea);
+  expect(client.create).toHaveBeenCalledOnce();
+  expect(client.read).not.toHaveBeenCalled();
+  expect(client.close).not.toHaveBeenCalled();
+  expect(client.write).not.toHaveBeenCalled();
+});
+
+it.each([8, 80])(
+  "reflects restored native reading at %s and later native scrolling without a separate follow owner",
+  async (viewport) => {
+    const client = fixture();
+    const reading: WorkbarReadingState = {
+      terminals: {
+        "terminal:notes": {
+          id: "terminal-a",
+          viewport,
+          atBottom: false,
+          title: "Notes",
+        },
+      },
+    };
+    render(
+      createElement(
+        Providers,
+        null,
+        createElement(
+          WorkbarReadingContext.Provider,
+          { value: reading },
+          createElement(InteractiveTerminal, {
+            sessionId: "a",
+            cwd: "/workspace",
+            tabId: "terminal:notes",
+          }),
+        ),
+      ),
+    );
+    await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+    const terminal = terminals.instances[0]!;
+    act(() =>
+      client.attempts[0]!.onEvent({
+        type: "output",
+        data: "saved output",
+        offset: 12,
+        reset: true,
+      }),
+    );
+    const restored = Math.min(viewport, terminal.buffer.active.baseY);
+    expect(terminal.scrolls).toEqual([restored]);
+    expect(
+      Boolean(
+        screen.queryByRole("button", {
+          name: i18n.t("terminalScrollToBottom"),
+        }),
+      ),
+    ).toBe(restored < terminal.buffer.active.baseY);
+    expect(reading.terminals?.["terminal:notes"]).toMatchObject({
+      viewport: restored,
+      atBottom: restored >= terminal.buffer.active.baseY,
+      title: "Notes",
+    });
+    act(() => terminal.scroll(terminal.buffer.active.baseY));
+    expect(
+      screen.queryByRole("button", { name: i18n.t("terminalScrollToBottom") }),
+    ).toBeNull();
+    expect(reading.terminals?.["terminal:notes"]?.atBottom).toBe(true);
+    expect(client.create).not.toHaveBeenCalled();
+    expect(client.close).not.toHaveBeenCalled();
+  },
+);
+
+it("announces an authoritative replay reset after a known cursor without treating initial replay as loss", async () => {
+  const client = fixture();
+  render(tree());
+  await waitFor(() => expect(client.stream).toHaveBeenCalledOnce());
+  const terminal = terminals.instances[0]!;
+  act(() =>
+    client.attempts[0]!.onEvent({
+      type: "output",
+      data: "initial replay",
+      offset: 14,
+      reset: true,
+    }),
+  );
+  expect(screen.queryByText(i18n.t("terminalOutputResynced"))).toBeNull();
+  await act(async () =>
+    client.attempts[0]!.reject(new Error("connection interrupted")),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("reconnectTerminal") }),
+  );
+  await waitFor(() => expect(client.stream).toHaveBeenCalledTimes(2));
+  expect(client.attempts[1]!.offset).toBe(14);
+  act(() =>
+    client.attempts[1]!.onEvent({
+      type: "output",
+      data: "current native backlog",
+      offset: 48,
+      reset: true,
+    }),
+  );
+  expect(screen.getByText(i18n.t("terminalOutputResynced"))).toBeTruthy();
+  expect(terminal.resets).toBe(2);
+  expect(terminal.writes).toEqual(["initial replay", "current native backlog"]);
+  expect(terminals.instances).toHaveLength(1);
+  expect(client.create).toHaveBeenCalledOnce();
+  expect(client.close).not.toHaveBeenCalled();
+  act(() => client.attempts[1]!.onEvent({ type: "exit", exitCode: 7 }));
+  expect(
+    screen.getByText(i18n.t("terminalExitCode", { code: 7 })),
+  ).toBeTruthy();
+  expect(screen.getByText(i18n.t("terminalOutputResynced"))).toBeTruthy();
+});

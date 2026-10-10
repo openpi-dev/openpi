@@ -31,6 +31,7 @@ import {
   sessionReadingScope,
 } from "../../web/ui/src/features/transcript/session-reading-state.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
+import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
@@ -947,6 +948,677 @@ it("marks only live execution evidence for shimmer styling", () => {
   ).toEqual(["done", "running"]);
 });
 
+it("freezes unobserved activity without changing terminal receipts and resumes on observation", () => {
+  const snapshot = activeSnapshot();
+  const finished = [
+    {
+      id: "read-returned",
+      name: "read",
+      content: "Exact source",
+      isError: false,
+    },
+    {
+      id: "bash-failed",
+      name: "bash",
+      content: "Command exited with code 2",
+      isError: true,
+    },
+    {
+      id: "bash-stopped",
+      name: "bash",
+      content: "Command aborted",
+      isError: true,
+    },
+    {
+      id: "bash-timeout",
+      name: "bash",
+      content: "Command timed out after 10 seconds",
+      isError: true,
+    },
+    {
+      id: "background-status",
+      name: "bg_status",
+      content: "Native background process is still running",
+      isError: false,
+      details: { status: "running" },
+    },
+  ];
+  const pending = [
+    { id: "read-live", name: "read" },
+    { id: "generic-live", name: "custom_tool" },
+    { id: "workflow-live", name: "workflow_status" },
+  ].map((tool) => ({
+    type: "toolCall" as const,
+    ...tool,
+    arguments: '{"path":"src/index.ts","command":"build"}',
+  }));
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "user", content: "Inspect it" },
+    },
+    {
+      id: "assistant",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [
+          ...finished.map((tool) => ({
+            type: "toolCall" as const,
+            id: tool.id,
+            name: tool.name,
+            arguments: '{"path":"src/index.ts","command":"build"}',
+          })),
+          ...pending,
+        ],
+      },
+    },
+    ...finished.map((tool) => ({
+      id: `${tool.id}-receipt`,
+      type: "message" as const,
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "toolResult",
+        toolCallId: tool.id,
+        toolName: tool.name,
+        content: tool.content,
+        isError: tool.isError,
+        details: tool.details,
+      },
+    })),
+    {
+      id: "current-thinking",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [{ type: "thinking", text: "Inspecting the current activity" }],
+      },
+    },
+  ];
+  snapshot.runtime.liveTools = pending.map((call) => ({
+    call,
+    state: "running",
+  }));
+  const original = JSON.stringify(snapshot);
+  const node = (observed: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: observed,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node(true));
+  const statuses = () =>
+    Array.from(view.container.querySelectorAll(".process-step"), (step) =>
+      step.getAttribute("data-status"),
+    );
+  const toolStates = () =>
+    Array.from(view.container.querySelectorAll(".tool-evidence-card"), (card) =>
+      card.getAttribute("data-state"),
+    );
+  expect(statuses()).toEqual([
+    "done",
+    "error",
+    "error",
+    "error",
+    "running",
+    "running",
+    "running",
+    "running",
+    "running",
+  ]);
+  expect(toolStates()).toEqual([
+    "returned",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "running",
+    "running",
+  ]);
+
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(statuses()).toEqual([
+    "done",
+    "error",
+    "error",
+    "error",
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+  ]);
+  expect(toolStates()).toEqual([
+    "returned",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "unknown",
+    "unknown",
+  ]);
+  expect(view.container.querySelector(".thinking-line.unknown")).toBeTruthy();
+  expect(view.container.querySelector(".process-step.running")).toBeNull();
+  expect(view.container.querySelector(".status-mark.running")).toBeNull();
+  for (const receipt of finished)
+    expect(view.container.textContent).toContain(receipt.content);
+  expect(JSON.stringify(snapshot)).toBe(original);
+
+  view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
+  expect(statuses().slice(4)).toEqual([
+    "running",
+    "running",
+    "running",
+    "running",
+    "running",
+  ]);
+  expect(view.container.querySelector(".thinking-line.running")).toBeTruthy();
+  expect(toolStates()).toEqual([
+    "returned",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "running",
+    "running",
+  ]);
+  expect(JSON.stringify(snapshot)).toBe(original);
+});
+
+it("freezes untimed turn and navigation presentation when native activity observation is lost", () => {
+  const snapshot = activeSnapshot();
+  const call = {
+    type: "toolCall" as const,
+    id: "read-live",
+    name: "read",
+    arguments: '{"path":"src/index.ts"}',
+  };
+  snapshot.runtime.liveTools = [{ call, state: "running" }];
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "user", content: "Inspect it" },
+    },
+    {
+      id: "current-assistant",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [{ type: "thinking", text: "Inspecting the file" }, call],
+      },
+    },
+  ];
+  const original = JSON.stringify(snapshot);
+  const node = (observed?: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node());
+  expect(snapshot.runtime.activeTurn).toBeUndefined();
+  expect(view.container.querySelector(".turn-state.running")).toBeTruthy();
+  expect(
+    view.container.querySelector(".conversation-execution-status")?.textContent,
+  ).toContain(i18n.t("modelRunning"));
+  fireEvent.wheel(view.container.querySelector(".conversation")!, {
+    deltaY: -20,
+  });
+  expect(view.container.querySelector(".latest-activity-dots")).toBeTruthy();
+  const sequence = view.container.querySelector<HTMLDetailsElement>(
+    ".process-sequence:not(.single-process)",
+  )!;
+  expect(sequence.open).toBe(true);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(
+    view.container.querySelector(".turn-state.unknown")?.textContent,
+  ).toContain(i18n.t("toolState_unknown"));
+  expect(view.container.querySelector(".turn-state.running")).toBeNull();
+  expect(
+    view.container.querySelector(".conversation-execution-status"),
+  ).toBeNull();
+  expect(view.container.querySelector(".latest-activity-dots")).toBeNull();
+  expect(
+    view.container.querySelector(".jump-to-latest .lucide-arrow-down"),
+  ).toBeTruthy();
+  expect(
+    view.container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBe(sequence);
+  expect(sequence.open).toBe(true);
+  expect(JSON.stringify(snapshot)).toBe(original);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
+  expect(view.container.querySelector(".turn-state.running")).toBeTruthy();
+  expect(
+    view.container.querySelector(".conversation-execution-status")?.textContent,
+  ).toContain(i18n.t("modelRunning"));
+  expect(view.container.querySelector(".latest-activity-dots")).toBeTruthy();
+  expect(JSON.stringify(snapshot)).toBe(original);
+});
+
+it("keeps background evidence observed by default and freezes only its nonterminal presentation", () => {
+  const call = {
+    type: "toolCall" as const,
+    id: "background-status",
+    name: "bg_status",
+    arguments: '{"id":"background-process"}',
+  };
+  const result = {
+    role: "toolResult",
+    toolName: call.name,
+    toolCallId: call.id,
+    content: "Exact native background receipt",
+    isError: false,
+    details: { status: "running" },
+  };
+  const original = JSON.stringify(result);
+  const view = renderWithI18n(createElement(ToolEvidence, { call, result }));
+  const state = () =>
+    view.container
+      .querySelector(".tool-evidence-card")
+      ?.getAttribute("data-state");
+  expect(state()).toBe("running");
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(ToolEvidence, { call, result, observed: false }),
+    ),
+  );
+  expect(state()).toBe("unknown");
+  expect(JSON.stringify(result)).toBe(original);
+  for (const [status, expected] of [
+    ["done", "returned"],
+    ["failed", "failed"],
+    ["killed", "cancelled"],
+    ["timed_out", "timed_out"],
+  ]) {
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(ToolEvidence, {
+          call,
+          result: { ...result, details: { status, exitCode: 2 } },
+          observed: false,
+        }),
+      ),
+    );
+    expect(state()).toBe(expected);
+  }
+  expect(view.container.textContent).toContain(result.content);
+  expect(JSON.stringify(result)).toBe(original);
+});
+
+it("freezes orphan native running receipts after observation loss without changing terminal evidence", () => {
+  const snapshot = activeSnapshot();
+  const states = [
+    "running",
+    "done",
+    "failed",
+    "killed",
+    "timed_out",
+    "uncertain",
+  ];
+  snapshot.selectedSession!.entries = states.map((status) => ({
+    id: `orphan-${status}`,
+    type: "message",
+    timestamp: snapshot.generatedAt,
+    message: {
+      role: "toolResult",
+      toolCallId: `trimmed-call-${status}`,
+      toolName: "bg_status",
+      content: `Exact orphan native receipt: ${status}`,
+      isError: false,
+      details: { status },
+    },
+  }));
+  const original = JSON.stringify(snapshot);
+  const node = (observed?: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node());
+  const statuses = () =>
+    Array.from(view.container.querySelectorAll(".process-step"), (step) =>
+      step.getAttribute("data-status"),
+    );
+  expect(statuses()).toEqual([
+    "running",
+    "done",
+    "error",
+    "error",
+    "error",
+    "warn",
+  ]);
+  expect(view.container.querySelector(".tool-evidence-card")).toBeNull();
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(statuses()).toEqual([
+    "unknown",
+    "done",
+    "error",
+    "error",
+    "error",
+    "warn",
+  ]);
+  expect(view.container.querySelector(".process-step.running")).toBeNull();
+  expect(view.container.querySelector(".status-mark.running")).toBeNull();
+  for (const status of states)
+    expect(view.container.textContent).toContain(
+      `Exact orphan native receipt: ${status}`,
+    );
+  expect(JSON.stringify(snapshot)).toBe(original);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
+  expect(statuses()).toEqual([
+    "running",
+    "done",
+    "error",
+    "error",
+    "error",
+    "warn",
+  ]);
+  expect(JSON.stringify(snapshot)).toBe(original);
+});
+
+it.each([
+  { status: "running", outcome: undefined, expected: "unknown" },
+  { status: "done", outcome: "completed", expected: "done" },
+  { status: "error", outcome: "failed", expected: "error" },
+  { status: "error", outcome: "interrupted", expected: "interrupted" },
+] as const)(
+  "preserves native child $status/$outcome evidence when observation is lost",
+  ({ status, outcome, expected }) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.capabilities = {
+      ...snapshot.runtime.capabilities,
+      subagents: {
+        items: [
+          { id: "child", title: "Inspect", status, outcome, createdAt: 1 },
+        ],
+        omitted: 0,
+        truncated: false,
+      },
+    };
+    snapshot.selectedSession!.entries = [
+      {
+        id: "spawn",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "spawn",
+              name: "subagent_spawn",
+              arguments: '{"name":"Inspect","prompt":"Inspect"}',
+            },
+          ],
+        },
+      },
+      {
+        id: "spawn-receipt",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "toolResult",
+          toolCallId: "spawn",
+          toolName: "subagent_spawn",
+          content: "Exact native spawn receipt",
+          isError: false,
+          details: { id: "child" },
+        },
+      },
+    ];
+    const original = JSON.stringify(snapshot);
+    const node = (observed?: boolean) =>
+      createElement(Transcript, {
+        snapshot,
+        activityObserved: observed,
+        liveMessages: [],
+        liveRunning: true,
+        livePhase: "running",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      });
+    const view = renderWithI18n(node());
+    expect(
+      view.container.querySelector(
+        `.subagent-state.${outcome === "interrupted" ? "interrupted" : status}`,
+      ),
+    ).toBeTruthy();
+    view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+    expect(
+      view.container.querySelector(`.subagent-state.${expected}`),
+    ).toBeTruthy();
+    expect(view.container.querySelector(".subagent-state.running")).toBeNull();
+    expect(view.container.textContent).toContain("Exact native spawn receipt");
+    expect(JSON.stringify(snapshot)).toBe(original);
+  },
+);
+
+it("shows an unobserved pending child as unknown while preserving a native failed spawn receipt", () => {
+  const snapshot = activeSnapshot();
+  snapshot.selectedSession!.entries = [
+    {
+      id: "spawns",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: ["pending", "failed"].map((id) => ({
+          type: "toolCall" as const,
+          id,
+          name: "subagent_spawn",
+          arguments: JSON.stringify({ name: id, prompt: "Inspect" }),
+        })),
+      },
+    },
+    {
+      id: "failed-spawn",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "toolResult",
+        toolCallId: "failed",
+        toolName: "subagent_spawn",
+        content: "Exact native failed spawn receipt",
+        isError: true,
+      },
+    },
+  ];
+  const original = JSON.stringify(snapshot);
+  const node = (observed?: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node());
+  const labels = () =>
+    Array.from(
+      view.container.querySelectorAll(".subagent-state"),
+      (item) => item.textContent,
+    );
+  expect(labels()).toEqual([
+    i18n.t("subagentStarting"),
+    i18n.t("subagentSpawnFailed"),
+  ]);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(labels()).toEqual([
+    i18n.t("toolState_unknown"),
+    i18n.t("subagentSpawnFailed"),
+  ]);
+  expect(view.container.textContent).toContain(
+    "Exact native failed spawn receipt",
+  );
+  expect(JSON.stringify(snapshot)).toBe(original);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
+  expect(labels()).toEqual([
+    i18n.t("subagentStarting"),
+    i18n.t("subagentSpawnFailed"),
+  ]);
+});
+
+it("freezes native running workflow cards while preserving their terminal and uncertain receipts", () => {
+  const snapshot = activeSnapshot();
+  const states = ["running", "completed", "failed", "aborted", "uncertain"];
+  snapshot.selectedSession!.entries = [
+    {
+      id: "workflow-calls",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "assistant",
+        content: "",
+        parts: states.map((id) => ({
+          type: "toolCall" as const,
+          id,
+          name: "workflow_status",
+          arguments: JSON.stringify({ runId: id }),
+        })),
+      },
+    },
+    ...states.map((status) => ({
+      id: `workflow-${status}`,
+      type: "message" as const,
+      timestamp: snapshot.generatedAt,
+      message: {
+        role: "toolResult",
+        toolCallId: status,
+        toolName: "workflow_status",
+        content: `Exact native workflow receipt: ${status}`,
+        isError: false,
+        details: { status },
+      },
+    })),
+  ];
+  const original = JSON.stringify(snapshot);
+  const node = (observed?: boolean) =>
+    createElement(Transcript, {
+      snapshot,
+      activityObserved: observed,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    });
+  const view = renderWithI18n(node());
+  const statuses = () =>
+    Array.from(
+      view.container.querySelectorAll(".activity-card.workflow"),
+      (card) =>
+        ["running", "done", "error", "warn"].find((status) =>
+          card.querySelector(".status-mark")?.classList.contains(status),
+        ) ?? "unknown",
+    );
+  expect(statuses()).toEqual(["running", "done", "error", "error", "warn"]);
+  view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
+  expect(statuses()).toEqual(["unknown", "done", "error", "error", "warn"]);
+  for (const status of states)
+    expect(view.container.textContent).toContain(
+      `Exact native workflow receipt: ${status}`,
+    );
+  expect(JSON.stringify(snapshot)).toBe(original);
+});
+
+it.each(["stop", "length"] as const)(
+  "keeps thinking settled after native %s even while the runtime remains busy",
+  (stopReason) => {
+    const snapshot = activeSnapshot();
+    snapshot.selectedSession!.entries = [
+      {
+        id: "prompt",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: { role: "user", content: "Inspect it" },
+      },
+      {
+        id: "finished-answer",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "Exact final answer",
+          stopReason,
+          parts: [{ type: "thinking", text: "Finished inspecting" }],
+        },
+      },
+    ];
+    const original = JSON.stringify(snapshot);
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [],
+        liveRunning: true,
+        livePhase: "running",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    );
+    expect(view.container.querySelector(".thinking-line.running")).toBeNull();
+    expect(view.container.querySelector(".thinking-line.done")).toBeTruthy();
+    expect(
+      view.container
+        .querySelector(".thinking-line")
+        ?.closest(".process-step")
+        ?.getAttribute("data-status"),
+    ).toBe("done");
+    expect(
+      screen.getByText("Exact final answer").closest("[hidden]"),
+    ).toBeNull();
+    expect(JSON.stringify(snapshot)).toBe(original);
+  },
+);
+
 it("folds legacy setup instructions while keeping results and subsequent task messages visible", () => {
   const snapshot = activeSnapshot();
   snapshot.selectedSession!.entries = [
@@ -1770,6 +2442,7 @@ it("keeps background Session files, trajectory and activity scoped to the select
     snapshot,
     selectedPath: "/tmp/b",
     selectedWorkspace: "/tmp",
+    connection: "connected",
     workspaceDraft: false,
     sessionSwitching: false,
     liveRunning: true,
@@ -2394,8 +3067,10 @@ it("restores the same native entry offset after leaving a Session, without shari
     .mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains("conversation"))
         return new DOMRect(0, 10, 300, 100);
-      if (this.dataset.historyEntry === "e2")
-        return new DOMRect(0, returned ? 200 : 5, 300, 50);
+      if (this.dataset.historyEntry === "e2") {
+        const scrollTop = this.closest(".conversation")?.scrollTop ?? 0;
+        return new DOMRect(0, (returned ? 200 : 155) - scrollTop, 300, 50);
+      }
       return new DOMRect();
     });
   const scrollHeight = vi

@@ -62,7 +62,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -152,7 +152,7 @@
   height: 100%;
   align-items: center;
   gap: 7px;
-  padding: 0 32px 0 11px;
+  padding: 0 36px 0 11px;
   border: 0;
   border-radius: inherit;
   background: transparent;
@@ -173,8 +173,8 @@
 .workbar-tab > button:first-child > span {
   overflow: hidden;
   max-width: 112px;
-  font-size: 11.5px;
-  font-weight: 560;
+  font-size: 12px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -183,8 +183,8 @@
   position: absolute;
   right: 4px;
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -193,6 +193,11 @@
   color: var(--subtle);
   cursor: pointer;
 }
+
+.workbar-tool-picker { width:min(300px,calc(100vw - 24px)); }
+.workbar-tool-picker[role="menu"] { max-height:calc(100dvh - 96px); }
+.workbar-tool-picker .astryx-dropdown-menu-item { min-width:0; }
+.workbar-tool-picker .astryx-dropdown-menu-item span { white-space:normal; overflow-wrap:anywhere; }
 
 .workbar-tab-close:hover { background: var(--sidebar-hover); color: var(--text); }
 .workbar-tab-close svg { width: 12px; height: 12px; }
@@ -299,7 +304,7 @@
 .side-conversation-list small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -563,6 +568,11 @@
   white-space: nowrap;
 }
 
+.interactive-terminal-status .terminal-cwd { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.interactive-terminal-status .terminal-connection-state { flex:none; color:#9da7b1; font:11px var(--font-sans, sans-serif); }
+.interactive-terminal-status .terminal-reconnect-action { display:flex; width:auto; min-height:32px; gap:5px; padding:0 8px; font:12px var(--font-sans, sans-serif); }
+.terminal-output-resynced { display:block; }
+
 .terminal-status-dot {
   width: 7px;
   height: 7px;
@@ -584,8 +594,8 @@
 
 .interactive-terminal-status button {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   place-items: center;
   padding: 0;
@@ -617,7 +627,7 @@
   min-height: 0;
   padding: 0 12px;
   color: #9da7b1;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .interactive-terminal-notice:not(:empty) {
@@ -629,11 +639,16 @@
 .interactive-terminal-notice .error { color: #ff9b93; }
 
 .interactive-terminal-viewport {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   padding: 8px 6px 6px 10px;
 }
+
+.terminal-scroll-bottom { position:absolute; z-index:2; right:12px; bottom:12px; display:flex; align-items:center; gap:6px; min-height:32px; padding:0 10px; border:1px solid #394149; border-radius:16px; background:#1c2228; color:#d7dde3; font-size:12px; cursor:pointer; }
+.terminal-scroll-bottom:hover { background:#292f36; }
+.terminal-scroll-bottom svg { width:14px; height:14px; }
 
 .interactive-terminal-host,
 .interactive-terminal-host .xterm {
@@ -898,4 +913,12 @@
     padding-right: 12px;
     padding-left: 12px;
   }
+}
+
+@media (pointer: coarse) {
+  .workbar-tab { height:44px; }
+  .workbar-tab > button:first-child { min-height:44px; padding-right:48px; }
+  .workbar-tab-close { width:40px; height:44px; right:0; }
+  .workbar-tabbar-actions .icon-button, .workbar-back-to-chat { min-width:44px; min-height:44px; }
+  .interactive-terminal-status button, .terminal-scroll-bottom { min-width:44px; min-height:44px; }
 }
