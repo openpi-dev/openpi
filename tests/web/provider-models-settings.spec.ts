@@ -207,6 +207,42 @@ it("starts with compact provider rows and only expands the requested card", asyn
   expect((control("Model 1 name") as HTMLInputElement).value).toBe("Model A");
 });
 
+it("makes native account providers discoverable without adding a custom endpoint", async () => {
+  vi.mocked(WebClient.prototype.providerAuth).mockResolvedValue({
+    ...auth,
+    providers: [
+      ...auth.providers,
+      {
+        id: "openai",
+        name: "OpenAI",
+        authMethods: ["api_key", "oauth"],
+        configured: false,
+        subscription: false,
+        nameTruncated: false,
+        custom: false,
+      },
+    ],
+  });
+  vi.spyOn(WebClient.prototype, "providerLogin").mockResolvedValue(null);
+  mount();
+  await edit("OpenAI");
+  expect(
+    screen.getByRole("button", {
+      name: i18n.t("accountLoginStart"),
+    }),
+  ).toBeTruthy();
+  expect(screen.queryByLabelText(i18n.t("providerApiKey"))).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("providerSave") }),
+  ).toBeNull();
+  expect(
+    document.querySelector("details.models-customized")?.hasAttribute("open"),
+  ).toBe(false);
+  expect(
+    WebClient.prototype.changeProviderConfiguration,
+  ).not.toHaveBeenCalled();
+});
+
 it("preserves per-provider credentials and model drafts across cards and settings tabs", async () => {
   mount();
   await edit();
@@ -228,6 +264,70 @@ it("preserves per-provider credentials and model drafts across cards and setting
     "alpha-private-draft",
   );
   expect(WebClient.prototype.modelConfigurations).toHaveBeenCalledOnce();
+});
+
+it("keeps the active account flow visible until native cancellation settles", async () => {
+  vi.mocked(WebClient.prototype.providerAuth).mockResolvedValue({
+    ...auth,
+    providers: [
+      ...auth.providers,
+      {
+        id: "openai",
+        name: "OpenAI",
+        authMethods: ["oauth"],
+        configured: false,
+        subscription: false,
+        nameTruncated: false,
+      },
+    ],
+  });
+  let state: Awaited<ReturnType<WebClient["startProviderLogin"]>> | null = null;
+  vi.spyOn(WebClient.prototype, "providerLogin").mockImplementation(
+    async () => state,
+  );
+  vi.spyOn(WebClient.prototype, "startProviderLogin").mockImplementation(
+    async () => {
+      state = {
+        id: "flow-a",
+        sessionId: "session-a",
+        provider: "openai",
+        status: "running",
+        expiresAt: Date.now() + 60_000,
+        messages: [],
+        device: {
+          code: "FIXTURE-CODE",
+          url: "https://accounts.example/device",
+        },
+      };
+      return state;
+    },
+  );
+  const cancellation =
+    Promise.withResolvers<
+      Awaited<ReturnType<WebClient["cancelProviderLogin"]>>
+    >();
+  vi.spyOn(WebClient.prototype, "cancelProviderLogin").mockReturnValue(
+    cancellation.promise,
+  );
+  mount();
+  await edit("OpenAI");
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("accountLoginStart") }),
+  );
+  await screen.findByText("FIXTURE-CODE");
+  const skills = screen.getByRole<HTMLButtonElement>("tab", {
+    name: i18n.t("skillsSettings"),
+  });
+  await waitFor(() => expect(skills.disabled).toBe(true));
+  fireEvent.click(skills);
+  expect(screen.getByText("FIXTURE-CODE")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("accountLoginCancel") }),
+  );
+  expect(skills.disabled).toBe(true);
+  state = { ...state!, status: "cancelled" };
+  await act(async () => cancellation.resolve(state!));
+  await waitFor(() => expect(skills.disabled).toBe(false));
 });
 
 it("edits K/M capacities without rewriting keystrokes and keeps independent expanded rows", async () => {

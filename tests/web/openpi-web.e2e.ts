@@ -970,7 +970,7 @@ test("side conversation shows one editor in narrow layouts and preserves both dr
   }
 
   await workbar.getByRole("button", { name: "打开工具", exact: true }).click();
-  await workbar.getByRole("button", { name: /^浏览器/u }).click();
+  await page.getByRole("menuitem", { name: /^浏览器/u }).click();
   await expect(mainInput).toBeVisible();
   await expect(mainInput).toHaveValue("Keep the main conversation draft");
   await expect(page.locator("textarea:visible")).toHaveCount(1);

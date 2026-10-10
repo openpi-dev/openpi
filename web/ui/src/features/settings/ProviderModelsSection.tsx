@@ -44,7 +44,9 @@ export function ProviderModelsSection({
   const [mode, setMode] = useState("catalog");
   const [catalogId, setCatalogId] = useState("");
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [cardSaving, setCardSaving] = useState<Record<string, boolean>>({});
+  const saving = removing || Object.values(cardSaving).some(Boolean);
   const [saved, setSaved] = useState<string | null>(null);
   const [remove, setRemove] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -119,11 +121,16 @@ export function ProviderModelsSection({
   ]);
   const visibleIds = new Set([
     ...configuredIds,
-    ...visited.filter((id) => !id.startsWith("add:")),
     ...(data?.auth.providers
-      .filter((provider) => provider.configured)
+      .filter(
+        (provider) =>
+          provider.configured ||
+          (provider.authMethods.includes("oauth") &&
+            ["openai", "anthropic"].includes(provider.id)),
+      )
       .map((provider) => provider.id) ?? []),
     ...models.map((model) => model.provider),
+    ...visited.filter((id) => !id.startsWith("add:")),
   ]);
   const providers = [...visibleIds].map((id) => {
     const auth = data?.auth.providers.find((provider) => provider.id === id);
@@ -185,7 +192,11 @@ export function ProviderModelsSection({
             previous[key] === value ? previous : { ...previous, [key]: value },
           )
         }
-        onSaving={setSaving}
+        onSaving={(value) =>
+          setCardSaving((previous) =>
+            previous[key] === value ? previous : { ...previous, [key]: value },
+          )
+        }
         onClose={(name) => closeCard(key, name)}
         onReload={() => {
           closeCard(key);
@@ -248,30 +259,44 @@ export function ProviderModelsSection({
               <li key={provider.id} className="models-provider-card">
                 <div className="models-provider-head">
                   <div className="models-provider-identity">
-                    <span className="models-provider-name">
-                      {provider.name}
+                    <span className="models-provider-avatar" aria-hidden="true">
+                      {provider.name.slice(0, 2)}
                     </span>
-                    {custom && (
-                      <span className="models-provider-tag">
-                        {t("providerCustomTag")}
+                    <div className="models-provider-label">
+                      <span className="models-provider-name">
+                        {provider.name}
                       </span>
-                    )}
-                    {provider.auth && (
-                      <span
-                        className={`models-credential-dot ${provider.auth.configured ? "configured" : "missing"}`}
-                        role="img"
-                        aria-label={t(
-                          provider.auth.configured
-                            ? "credentialConfigured"
-                            : "credentialMissing",
-                        )}
-                        title={t(
-                          provider.auth.configured
-                            ? "credentialConfigured"
-                            : "credentialMissing",
-                        )}
-                      />
-                    )}
+                      {custom && (
+                        <span className="models-provider-tag">
+                          {t("providerCustomTag")}
+                        </span>
+                      )}
+                      {provider.auth && (
+                        <span className="models-provider-status">
+                          <span
+                            className={`models-credential-dot ${provider.auth.configured ? "configured" : "missing"}`}
+                            role="img"
+                            aria-label={t(
+                              provider.auth.configured
+                                ? "credentialConfigured"
+                                : "credentialMissing",
+                            )}
+                            title={t(
+                              provider.auth.configured
+                                ? "credentialConfigured"
+                                : "credentialMissing",
+                            )}
+                          />
+                          {t(
+                            provider.auth.subscription
+                              ? "accountLoginConfigured"
+                              : provider.auth.configured
+                                ? "credentialConfigured"
+                                : "credentialMissing",
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="models-provider-actions">
                     <button
@@ -289,7 +314,12 @@ export function ProviderModelsSection({
                       disabled={saving}
                       onClick={() => selectEditor(provider.id)}
                     >
-                      {t("providerEdit")}
+                      {t(
+                        provider.auth?.authMethods.includes("oauth") &&
+                          !provider.auth.configured
+                          ? "accountLoginStart"
+                          : "providerEdit",
+                      )}
                     </button>
                     {configuredIds.has(provider.id) && (
                       <button
@@ -497,7 +527,7 @@ export function ProviderModelsSection({
             if (saving || busy || !configuration) return;
             const controller = new AbortController();
             operation.current = controller;
-            setSaving(true);
+            setRemoving(true);
             setRemoveError(null);
             void new WebClient()
               .changeProviderConfiguration(
@@ -527,7 +557,7 @@ export function ProviderModelsSection({
                 },
               )
               .finally(() => {
-                if (!controller.signal.aborted) setSaving(false);
+                if (!controller.signal.aborted) setRemoving(false);
               });
           }}
         />

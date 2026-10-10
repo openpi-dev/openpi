@@ -229,6 +229,7 @@ export function ProviderSettingsPage({
   };
 
   const selectSection = (next: SettingsSection) => {
+    if (saving) return;
     setSection(next);
     if (next === "models") setModelsVisited(true);
     setSetupError(null);
@@ -266,6 +267,7 @@ export function ProviderSettingsPage({
           <select
             className="provider-settings-mobile-picker"
             aria-label={t("settingsNavigation")}
+            disabled={saving}
             value={section}
             onChange={(event) => {
               const next = settingsSections.find(
@@ -291,6 +293,7 @@ export function ProviderSettingsPage({
                 key={id}
                 type="button"
                 role="tab"
+                disabled={saving}
                 id={`settings-tab-${id}`}
                 tabIndex={section === id ? 0 : -1}
                 aria-selected={section === id}
