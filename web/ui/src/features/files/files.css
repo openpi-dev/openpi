@@ -74,7 +74,7 @@
 .files-workspace .artifact-panel-embedded { display:grid; grid-column:1 / -1; grid-row:1 / -1; grid-template-columns:subgrid; grid-template-rows:subgrid; height:auto; border:0; }
 .artifact-panel > header { flex:none; }
 .artifact-panel .artifact-header-actions { display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
-.artifact-panel .artifact-header-actions > button:not(.file-source-toggle):not(.file-save-button) { width:32px; min-height:32px; padding:5px; font-size:0; gap:0; flex:none; }
+.artifact-panel .artifact-header-actions > button:not(.file-source-toggle):not(.file-save-button),.artifact-panel .artifact-header-actions .artifact-icon-button { width:32px; min-height:32px; padding:5px; font-size:0; gap:0; flex:none; }
 .artifact-panel .artifact-header-actions > .file-save-button { width:auto; min-height:32px; padding:5px 9px; font-size:12px; gap:5px; }
 .artifact-header-actions svg { flex:none; }
 .artifact-panel .artifact-header-actions .file-source-toggle { border-color:transparent; font-size:12px; white-space:nowrap; }
@@ -96,7 +96,7 @@
   .files-tree-toggle { width:44px; }
   .file-search button,.file-tree-item .file-path-actions { width:44px; min-width:44px; height:44px; }
   .file-write-actions .file-toolbar-button { min-height:44px; height:44px; }
-  .files-workspace .artifact-header-actions > button:not(.file-source-toggle):not(.file-save-button) { width:44px; }
+  .files-workspace .artifact-header-actions > button:not(.file-source-toggle):not(.file-save-button),.files-workspace .artifact-header-actions .artifact-icon-button { width:44px; min-height:44px; }
 }
 .file-unsaved { color:light-dark(#a16c16,#e5b65b); font-size:9px; flex:none; }
 .file-editor { display:block; width:100%; min-height:calc(100% - 48px); resize:vertical; padding:14px; border:1px solid var(--border); border-radius:6px; background:var(--page); color:var(--text); font:13px/1.7 var(--font-mono,monospace); tab-size:2; }

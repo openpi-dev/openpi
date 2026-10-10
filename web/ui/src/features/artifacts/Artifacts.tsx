@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Check,
   ChevronRight,
@@ -661,69 +662,79 @@ export const ArtifactProvider = forwardRef<
                     {t(source ? "filesPreview" : "filesSource")}
                   </button>
                 )}
-              <button
-                type="button"
-                aria-label={t("copyFilePath")}
-                title={t("copyFilePath")}
-                onClick={() => {
-                  const generation = ++copyGeneration.current;
-                  void copyText(path).then((success) => {
-                    if (generation === copyGeneration.current)
-                      setCopyStatus(success ? "copied" : "failed");
-                  });
-                }}
-              >
-                {copyStatus === "copied" ? (
-                  <Check aria-hidden="true" />
-                ) : (
-                  <Clipboard aria-hidden="true" />
-                )}
-              </button>
-              <button
-                type="button"
-                title={t("refreshFile")}
-                onClick={() => {
-                  copyGeneration.current++;
-                  setCopyStatus(null);
-                  setError(null);
-                  setAccessDenied(false);
-                  setChanged(false);
-                  nextParent.current = undefined;
-                  setRequest((value) =>
-                    value
-                      ? {
-                          sessionId,
-                          sessionPath,
-                          reference: preview
-                            ? encodeURI(preview.artifact.path)
-                            : value.reference,
-                          ...(value.external ? { external: true } : {}),
-                          ...(preview ? {} : { parent: value.parent }),
-                        }
-                      : null,
-                  );
-                }}
-              >
-                <RefreshCw aria-hidden="true" /> {t("refreshFile")}
-              </button>
-              <button
-                type="button"
-                title={t("downloadFile")}
-                disabled={!preview || busy}
-                onClick={() => void download()}
-              >
-                <Download aria-hidden="true" />{" "}
-                {busy ? t("downloadingFile") : t("downloadFile")}
-              </button>
-              <button
-                ref={closeButton}
-                type="button"
-                aria-label={t("closePreview")}
-                title={t("closePreview")}
-                onClick={() => close()}
-              >
-                <X aria-hidden="true" />
-              </button>
+              <Tooltip content={t("copyFilePath")} placement="below">
+                <button
+                  className="artifact-icon-button"
+                  type="button"
+                  aria-label={t("copyFilePath")}
+                  onClick={() => {
+                    const generation = ++copyGeneration.current;
+                    void copyText(path).then((success) => {
+                      if (generation === copyGeneration.current)
+                        setCopyStatus(success ? "copied" : "failed");
+                    });
+                  }}
+                >
+                  {copyStatus === "copied" ? (
+                    <Check aria-hidden="true" />
+                  ) : (
+                    <Clipboard aria-hidden="true" />
+                  )}
+                </button>
+              </Tooltip>
+              <Tooltip content={t("refreshFile")} placement="below">
+                <button
+                  className="artifact-icon-button"
+                  type="button"
+                  aria-label={t("refreshFile")}
+                  onClick={() => {
+                    copyGeneration.current++;
+                    setCopyStatus(null);
+                    setError(null);
+                    setAccessDenied(false);
+                    setChanged(false);
+                    nextParent.current = undefined;
+                    setRequest((value) =>
+                      value
+                        ? {
+                            sessionId,
+                            sessionPath,
+                            reference: preview
+                              ? encodeURI(preview.artifact.path)
+                              : value.reference,
+                            ...(value.external ? { external: true } : {}),
+                            ...(preview ? {} : { parent: value.parent }),
+                          }
+                        : null,
+                    );
+                  }}
+                >
+                  <RefreshCw aria-hidden="true" /> {t("refreshFile")}
+                </button>
+              </Tooltip>
+              <Tooltip content={t("downloadFile")} placement="below">
+                <button
+                  className="artifact-icon-button"
+                  type="button"
+                  aria-label={t(busy ? "downloadingFile" : "downloadFile")}
+                  disabled={!preview || busy}
+                  onClick={() => void download()}
+                >
+                  <Download aria-hidden="true" />{" "}
+                  {busy ? t("downloadingFile") : t("downloadFile")}
+                </button>
+              </Tooltip>
+              <Tooltip content={t("closePreview")} placement="below">
+                <button
+                  className="artifact-icon-button"
+                  ref={closeButton}
+                  type="button"
+                  aria-label={t("closePreview")}
+                  onClick={() => close()}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </Tooltip>
             </div>
           </header>
           <div

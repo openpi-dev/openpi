@@ -2,6 +2,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
 } from "@astryxdesign/core/DropdownMenu";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   ChevronDown,
   ChevronRight,
@@ -1712,20 +1713,24 @@ export function FilesPanel({
           setTreeVisible(true);
         }}
       >
-        <button
-          type="button"
-          className="files-tree-toggle icon-button"
-          aria-label={t(treeVisible ? "filesHideTree" : "filesShowTree")}
-          title={t(treeVisible ? "filesHideTree" : "filesShowTree")}
-          aria-pressed={treeVisible}
-          onClick={() => setTreeVisible((value) => !value)}
+        <Tooltip
+          content={t(treeVisible ? "filesHideTree" : "filesShowTree")}
+          placement="below"
         >
-          {treeVisible ? (
-            <FolderOpen aria-hidden="true" />
-          ) : (
-            <Folder aria-hidden="true" />
-          )}
-        </button>
+          <button
+            type="button"
+            className="files-tree-toggle icon-button"
+            aria-label={t(treeVisible ? "filesHideTree" : "filesShowTree")}
+            aria-pressed={treeVisible}
+            onClick={() => setTreeVisible((value) => !value)}
+          >
+            {treeVisible ? (
+              <FolderOpen aria-hidden="true" />
+            ) : (
+              <Folder aria-hidden="true" />
+            )}
+          </button>
+        </Tooltip>
         {!selected && (
           <div className="files-empty-header" title={cwd}>
             <FolderOpen aria-hidden="true" />
