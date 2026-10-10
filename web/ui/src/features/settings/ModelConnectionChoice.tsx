@@ -166,7 +166,7 @@ export function ModelConnectionChoice({
               value: `${item.provider}/${item.id}`,
               label: item.name || item.id,
               description: `${item.provider} · ${item.id}`,
-              icon: <ProviderIcon id={item.provider} name={item.provider} />,
+              icon: <ProviderIcon id={item.provider} />,
             })),
           }))}
           onChange={(value: string) => setSelected(value)}

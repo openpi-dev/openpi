@@ -1,3 +1,4 @@
+import { Server } from "lucide-react";
 import alibaba from "./provider-icons/alibaba.svg?inline";
 import bedrock from "./provider-icons/amazon-bedrock.svg?inline";
 import anthropic from "./provider-icons/anthropic.svg?inline";
@@ -82,11 +83,11 @@ const colors: Record<string, string> = {
   groq: "#ef6847",
 };
 
-export function ProviderIcon({ id, name }: { id: string; name: string }) {
+export function ProviderIcon({ id }: { id: string }) {
   const icon = Object.hasOwn(icons, id) ? icons[id] : undefined;
   return (
     <span
-      className={`models-provider-icon${icon ? "" : " models-provider-monogram"}`}
+      className={`models-provider-icon${icon ? "" : " models-provider-connection"}`}
       aria-hidden="true"
       style={
         icon
@@ -97,7 +98,7 @@ export function ProviderIcon({ id, name }: { id: string; name: string }) {
           : undefined
       }
     >
-      {!icon && name.trim().slice(0, 2)}
+      {!icon && <Server strokeWidth={1.75} />}
     </span>
   );
 }
