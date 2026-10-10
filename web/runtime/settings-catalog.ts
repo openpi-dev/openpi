@@ -217,6 +217,7 @@ export function projectWebSetupConfig(
 ): WebOpenPiSetupProjection {
   return {
     capabilities: { discovery: config.capabilities.discovery },
+    webSearch: { enabled: config.webSearch.enabled },
     suggestions: {
       enabled: config.suggestions.enabled,
       ...(config.suggestions.model

@@ -14,7 +14,10 @@ import {
 import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { WEB_ACCESS_PACKAGE } from "./web-access.ts";
+import {
+  isWebSearchModelSupport,
+  type WebSearchConfig,
+} from "../web-search/support.ts";
 import {
   EXTERNAL_BROWSERS,
   type BrowserConfig,
@@ -188,6 +191,7 @@ export interface MyPiSetupConfig {
     readonly maxActive?: number;
   };
   readonly browser: BrowserConfig;
+  readonly webSearch: WebSearchConfig;
   readonly ui: {
     readonly webTheme: WebTheme;
     readonly webChatWidth: number;
@@ -221,6 +225,7 @@ export interface MyPiSetupConfig {
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   capabilities: { discovery: "explicit" },
   suggestions: { enabled: false },
+  webSearch: { enabled: false, modelSupport: [] },
   workflows: {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
@@ -553,6 +558,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     : {};
   const ui = isRecord(value.ui) ? value.ui : {};
   const browser = isRecord(value.browser) ? value.browser : {};
+  const webSearch = isRecord(value.webSearch) ? value.webSearch : {};
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
@@ -560,6 +566,15 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       discovery: isCapabilityDiscoveryMode(capabilities.discovery)
         ? capabilities.discovery
         : "explicit",
+    },
+    webSearch: {
+      enabled:
+        webSearch.enabled === true &&
+        (webSearch.modelSupport === undefined ||
+          isWebSearchModelSupport(webSearch.modelSupport)),
+      modelSupport: isWebSearchModelSupport(webSearch.modelSupport)
+        ? webSearch.modelSupport
+        : [],
     },
     suggestions: {
       enabled: requestedEnabled && Boolean(model),
@@ -713,6 +728,7 @@ const setupShape: ConfigShape = {
     defaultBrowser: isBrowserId,
     externalBrowsers: isBrowserList,
   },
+  webSearch: { enabled: booleanValue, modelSupport: isWebSearchModelSupport },
   ui: {
     webTheme: isWebTheme,
     webChatWidth: integerBetween(MIN_WEB_CHAT_WIDTH, MAX_WEB_CHAT_WIDTH),
@@ -1451,7 +1467,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     suggestions,
     `Browser control: ${config.browser.control ? "on" : "off"} · default ${config.browser.defaultBrowser} · embedded ${config.browser.embedded ? "allowed" : "blocked"} · external ${config.browser.externalBrowsers.join(", ") || "none"}`,
     `Browser choices: embedded (Chromium host), ${EXTERNAL_BROWSERS.join(", ")}; Safari/Firefox use native tabs.`,
-    `Web search: optional ${WEB_ACCESS_PACKAGE.source} · not bundled or enabled by default · Pi owns package configuration and Session loading · /openpi-setup manages the reviewed integration`,
+    `Web search: ${config.webSearch.enabled ? "on" : "off"} · current Session model and Pi credentials · unsupported or unknown connections receive no search tool · ${config.webSearch.modelSupport.length} explicit model support declarations · no search-provider fallback`,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"

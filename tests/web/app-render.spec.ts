@@ -936,6 +936,44 @@ describe("OpenPI React transcript", () => {
   });
 });
 
+it("shows actual native search activity and clickable sources without local function-call artifacts", () => {
+  const snapshot = activeSnapshot();
+  snapshot.selectedSession!.entries = [
+    {
+      id: "native-search",
+      type: "message",
+      timestamp: "2026-10-10T00:00:00Z",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content:
+          "Slovenia. [IANA](https://www.iana.org/domains/root/db/si.html)",
+        webSearch: [{ id: "ws", query: ".si IANA", status: "completed" }],
+      },
+    },
+  ];
+  renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+  expect(
+    screen.getByText(i18n.t("webSearchActivityCompleted"), { exact: false }),
+  ).toBeTruthy();
+  expect(screen.getByRole("link", { name: "IANA" }).getAttribute("href")).toBe(
+    "https://www.iana.org/domains/root/db/si.html",
+  );
+  expect(screen.queryByText("function_call_output")).toBeNull();
+});
+
 it("marks only live execution evidence for shimmer styling", () => {
   const snapshot = activeSnapshot();
   snapshot.selectedSession!.entries = [

@@ -393,7 +393,6 @@ export function ProviderSettingsPage({
                 pending={setupDisabled}
                 onConfigure={configureOpenPi}
                 onRefresh={refresh}
-                onReload={reloadResources}
               />
             )}
           </div>

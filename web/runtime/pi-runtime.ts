@@ -82,6 +82,8 @@ import {
   projectWebSettingsResources,
 } from "./settings-catalog.ts";
 import { applySetupConfiguration } from "../../extensions/shared/setup-apply.ts";
+import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
+import { resolveWebSearchSupport } from "../../extensions/web-search/support.ts";
 
 const setupEvents = new WeakMap<object, ReturnType<typeof createEventBus>>();
 
@@ -755,6 +757,13 @@ export class PiWebRuntime implements WebRuntimeController {
     this.assertWorkspaceSelected();
     return projectWebSettingsResources(this.runtime.services.resourceLoader,
       readConfiguredPackages(this.cwd, this.runtime.services.agentDir, this.runtime.session.settingsManager.isProjectTrusted()));
+  }
+
+  getWebSearchSupport() {
+    const model = this.runtime.session.model;
+    const support = resolveWebSearchSupport(model, loadSetupConfig().webSearch,
+      model ? this.runtime.services.modelRuntime.isUsingOAuth(model.provider) : false);
+    return { ...support, ...(model ? { model: model.id, provider: model.provider } : {}) };
   }
 
   reloadSettingsResources(sessionId: string, sessionPath: string) {

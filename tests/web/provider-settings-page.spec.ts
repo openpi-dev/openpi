@@ -127,7 +127,7 @@ function providerReply() {
   });
 }
 
-it("offers optional web search without installing it or changing the default tool surface", async () => {
+it("offers current-model native search with no external provider installation", async () => {
   vi.stubGlobal("fetch", settingsFetcher());
   const configure = vi.fn(async () => true);
   renderSettings({ onConfigureOpenPi: configure });
@@ -136,12 +136,9 @@ it("offers optional web search without installing it or changing the default too
   );
   await screen.findByText(i18n.t("webSearchDefaultOff"));
   expect(configure).not.toHaveBeenCalled();
-  expect(screen.getByText("npm:pi-web-access@0.38.0")).toBeTruthy();
-  expect(screen.getByText(i18n.t("webSearchNotLoaded"))).toBeTruthy();
-  fireEvent.change(
-    screen.getByRole("combobox", { name: i18n.t("webSearchProfile") }),
-    { target: { value: "existing" } },
-  );
+  expect(screen.getAllByText(i18n.t("webSearchCurrentModel")).length).toBe(2);
+  expect(screen.getByText(i18n.t("webSearchSupported"))).toBeTruthy();
+  expect(screen.queryByText("npm:pi-web-access@0.38.0")).toBeNull();
   const enable = screen.getByRole("button", {
     name: i18n.t("webSearchEnable"),
   });
@@ -149,35 +146,20 @@ it("offers optional web search without installing it or changing the default too
     expect((enable as HTMLButtonElement).disabled).toBe(false),
   );
   fireEvent.click(enable);
-  expect(configure).toHaveBeenCalledWith(i18n.t("webSearchExistingRequest"));
+  expect(configure).toHaveBeenCalledWith(i18n.t("webSearchNativeRequest"));
 });
 
-it("keeps configured web search separate from the current Session's loaded resources", async () => {
+it("keeps the feature preference separate from current-model support and legacy packages", async () => {
   const payload = settingsPayload();
-  payload.resources.plugins.push({
-    id: "user:package:web",
-    source: "npm:pi-web-access@0.38.0",
-    scope: "user",
-    origin: "package",
-    baseDir: "/fixture/web",
-    extensions: [],
-    skills: [],
-    prompts: [],
-    themes: [],
-  });
-  Object.assign(payload.resources.plugins.at(-1)!, {
-    configured: true,
-    installed: true,
-    enabled: true,
-    name: "pi-web-access",
-  });
+  payload.setup.webSearch.enabled = true;
+  payload.webSearch.available = false;
   vi.stubGlobal("fetch", settingsFetcher(payload));
   const configure = vi.fn(async () => true);
   renderSettings({ onConfigureOpenPi: configure });
   fireEvent.click(
     screen.getByRole("tab", { name: i18n.t("webSearchSettings") }),
   );
-  await screen.findByText(i18n.t("webSearchNotLoaded"));
+  await screen.findByText(i18n.t("webSearchUnsupported"));
   fireEvent.click(
     await screen.findByRole("button", { name: i18n.t("webSearchDisable") }),
   );
@@ -187,7 +169,13 @@ it("keeps configured web search separate from the current Session's loaded resou
 function settingsPayload() {
   return {
     sessionId: "session-a",
+    webSearch: {
+      available: true,
+      provider: "codex-local",
+      model: "gpt-5.6-luna",
+    },
     setup: {
+      webSearch: { enabled: false },
       capabilities: { discovery: "explicit" },
       suggestions: { enabled: false },
       workflows: { concurrency: 6, maxAgentCalls: 64 },

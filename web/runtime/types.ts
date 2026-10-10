@@ -271,6 +271,7 @@ export interface WebRuntimeController {
   searchModels(query: string, limit?: number, provider?: string): WebModelSearchResult;
   listCommands?(): WebCommandDiscoveryResult;
   listSettingsResources?(): WebSettingsResourceCatalog;
+  getWebSearchSupport?(): { available: boolean; reason?: string; model?: string; provider?: string };
   applySetupConfiguration?(): Promise<void>;
   reloadSettingsResources?(sessionId: string, sessionPath: string): Promise<void>;
   listProviderAuth?(): WebProviderAuthProjection;

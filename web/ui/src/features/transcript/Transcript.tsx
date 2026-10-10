@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Clipboard,
   GitBranch,
+  Globe,
   Pencil,
   RotateCcw,
   Wifi,
@@ -81,6 +82,7 @@ import { useSessionHistory } from "./use-session-history.ts";
 import "./provider-outcomes.css";
 import "./conversation-navigation.css";
 import "./message-branch.css";
+import "./native-web-search.css";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -2618,6 +2620,28 @@ export function Transcript(props: TranscriptProps) {
             .slice(0, 240)
             .join("");
         const detailRows: RenderRow[] = [];
+        for (const [searchIndex, search] of (
+          message.webSearch ?? []
+        ).entries()) {
+          detailRows.push({
+            key: `${entry.key}-native-search-${searchIndex}`,
+            turn,
+            kind: "process",
+            content: (
+              <div className="native-web-search" role="status">
+                <Globe size={16} aria-hidden="true" />
+                {t(
+                  search.status === "completed"
+                    ? "webSearchActivityCompleted"
+                    : search.status === "failed"
+                      ? "webSearchActivityFailed"
+                      : "webSearchActivityIncomplete",
+                )}
+                {search.query && <span>：{search.query}</span>}
+              </div>
+            ),
+          });
+        }
         const parts = message.parts ?? [];
         const lastVisiblePart = parts.reduce(
           (last, part, partIndex) =>

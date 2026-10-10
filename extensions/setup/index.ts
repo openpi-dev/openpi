@@ -8,6 +8,10 @@ import { Text } from "@earendil-works/pi-tui";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { configureWebAccessPackage } from "./web-access-package.ts";
+import {
+  sameWebSearchConnection,
+  webSearchConnection,
+} from "../web-search/support.ts";
 import { askWebQuestions } from "../ask-user/web-bridge.ts";
 import {
   WEB_ACCESS_ACTIONS,
@@ -183,7 +187,7 @@ export function buildInteractiveSetupPrompt(options: {
     ...configurationState,
     "",
     "Before asking, briefly explain what can be configured and the practical impact:",
-    `- Web search: optional ${WEB_ACCESS_PACKAGE.source}, absent by default. Use web_access_action alone for this reviewed integration: install-exa explicitly selects Exa and creates a minimal private profile only if no preferences exist; install-existing preserves an existing web-search.json; disable changes only Pi's native user package resource selection. The tool requests native confirmation. Never reload automatically. Other web packages and provider preferences remain Pi-owned resource requests.`,
+    `- Web search: off by default. web_search_enabled toggles the repository-owned native search extension. It uses the current Session model, protocol and Pi credentials; unsupported or unknown connections receive no native search tool, and there is no fallback to Exa or another provider. web_search_model_support declares support only for the exact current provider/model/protocol/base URL, only when the user explicitly confirms capability or a real native search has been verified; null removes that declaration. Never infer support from a model name or an API-compatible gateway. Legacy web_access_action remains only for managing previously installed ${WEB_ACCESS_PACKAGE.source}; never install or activate it as a fallback.`,
     "- Capability discovery: explicit is the safe default and keeps OpenPI model tools absent until the user asks for a capability. adaptive is opt-in and keeps only the small openpi_load_tools gateway visible, allowing the model to load Subagents, Workflows, background terminals, structured search, or Session tracking when it judges them useful. Loaded groups remain session-stable, and normal permission, concurrency, and workflow limits still apply.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
@@ -468,8 +472,20 @@ export default function openPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure OpenPI",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (theme, chat width, font size, thinking expansion), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. web_access_action alone manages the reviewed optional Pi web-search package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
+      "Apply a user-requested configuration change for this Pi setup. Configures current-model native web search, capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (theme, chat width, font size, thinking expansion), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Native web search reuses the current Session connection and credentials; unknown or unsupported connections receive no search tool and never fall back to a search provider. Legacy web_access_action alone manages the reviewed optional Pi package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
     parameters: Type.Object({
+      web_search_enabled: Type.Optional(
+        Type.Boolean({
+          description:
+            "Enable native web search using the current Session model, protocol and existing Pi credentials. Off by default; unsupported/unknown connections get no search tool. No alternate provider, model or protocol is used.",
+        }),
+      ),
+      web_search_model_support: Type.Optional(
+        Type.Union([Type.Boolean(), Type.Null()], {
+          description:
+            "Explicit support declaration for the exact current connection (provider/model/API/base URL). true only after the user explicitly confirms native search capability or an actual native search was verified; false denies support; null removes the declaration. Never infer from a model name or OpenAI compatibility. Omit to preserve.",
+        }),
+      ),
       web_access_action: Type.Optional(
         StringEnum(WEB_ACCESS_ACTIONS, {
           description:
@@ -770,6 +786,26 @@ export default function openPiSetup(pi: ExtensionAPI) {
       }
 
       const buildConfig = (current: MyPiSetupConfig) => {
+        let modelSupport = current.webSearch.modelSupport;
+        if (params.web_search_model_support !== undefined) {
+          if (!ctx.model)
+            throw new Error(
+              "Select a current Session model before declaring native search support.",
+            );
+          const connection = webSearchConnection(ctx.model);
+          modelSupport = modelSupport.filter(
+            (entry) => !sameWebSearchConnection(entry, connection),
+          );
+          if (params.web_search_model_support !== null)
+            modelSupport = [
+              ...modelSupport,
+              { ...connection, supported: params.web_search_model_support },
+            ];
+          if (modelSupport.length > 64)
+            throw new Error(
+              "Remove an old native search declaration before adding another (maximum 64).",
+            );
+        }
         let model = current.suggestions.model;
         if (params.suggestion_provider && params.suggestion_model) {
           const resolved = ctx.modelRegistry.find(
@@ -820,6 +856,10 @@ export default function openPiSetup(pi: ExtensionAPI) {
         );
 
         const config: MyPiSetupConfig = {
+          webSearch: {
+            enabled: params.web_search_enabled ?? current.webSearch.enabled,
+            modelSupport,
+          },
           capabilities: {
             discovery:
               (params.capability_discovery as

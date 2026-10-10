@@ -5,6 +5,7 @@ import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK, WEB_COMMAND_HANDLED } from "..
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
+import { readNativeSearchEvidence, type NativeSearchActivity } from "../../extensions/web-search/native.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
@@ -207,6 +208,7 @@ export interface WebSettingsResourceCatalog {
 }
 
 export interface WebOpenPiSetupProjection {
+  webSearch?: { enabled: boolean };
   capabilities: {
     discovery: "explicit" | "adaptive";
   };
@@ -249,6 +251,7 @@ export interface WebOpenPiSetupProjection {
 }
 
 export interface WebSettingsCatalog {
+  webSearch?: { available: boolean; reason?: string; model?: string; provider?: string };
   sessionId: string;
   sessionPath?: string;
   setup: WebOpenPiSetupProjection;
@@ -359,6 +362,7 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  webSearch?: NativeSearchActivity[];
   timestamp?: number;
   commandId?: string;
   terminalReceipt?: ReturnType<typeof bashReceipt>;
@@ -842,6 +846,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
       ? (message as Record<string, unknown>)
       : {};
   const content = projectContent(value, resolvePath);
+  const webSearch = readNativeSearchEvidence(value);
   const details = detailsProjection(value.details);
   const role =
     typeof value.role === "string"
@@ -877,6 +882,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
+    ...(webSearch?.activities.length ? { webSearch: webSearch.activities.slice(0, 32).map((item) => ({ id: item.id.slice(0, 128), status: item.status, query: item.query.slice(0, 500) })) } : {}),
     ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
     ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,

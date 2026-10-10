@@ -556,21 +556,28 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
 ] as const;
 
 const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
-  (Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
-    .filter((owner) => {
-      const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
-      const toolNames = [...entry, ...deferred];
-      return (
-        toolNames.length > 0 &&
-        toolNames.every((name) =>
-          CHILD_EXCLUDED_TOOL_NAMES.includes(name as never),
-        )
-      );
-    })
-    .map((owner) => canonicalExistingPath(OPENPI_OWNER_SOURCE_PATHS[owner]))
-    .filter(
-      (extensionPath): extensionPath is string => extensionPath !== undefined,
+  [
+    canonicalExistingPath(
+      fileURLToPath(new URL("../web-search/index.ts", import.meta.url)),
     ),
+    ...(Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
+      .filter((owner) => {
+        const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
+        const toolNames = [...entry, ...deferred];
+        return (
+          toolNames.length > 0 &&
+          toolNames.every((name) =>
+            CHILD_EXCLUDED_TOOL_NAMES.includes(name as never),
+          )
+        );
+      })
+      .map((owner) => canonicalExistingPath(OPENPI_OWNER_SOURCE_PATHS[owner]))
+      .filter(
+        (extensionPath): extensionPath is string => extensionPath !== undefined,
+      ),
+  ].filter(
+    (extensionPath): extensionPath is string => extensionPath !== undefined,
+  ),
 );
 
 function isVerifiedParentOnlyOpenPiExtension(extension: {

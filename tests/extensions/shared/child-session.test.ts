@@ -489,6 +489,13 @@ test("child resources remove only verified parent-only OpenPI extensions", async
     const extensions = loader.getExtensions().extensions;
 
     assert.equal(
+      extensions.some((extension) =>
+        extension.path.endsWith("/web-search/index.ts"),
+      ),
+      false,
+      "native hosted search must not bypass child tool authority",
+    );
+    assert.equal(
       extensions.some((extension) => extension.tools.has("openpi_load_tools")),
       false,
       "parent-only OpenPI extension should not reach the child runtime",

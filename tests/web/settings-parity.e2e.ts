@@ -7,39 +7,25 @@ import {
   MOCK_SESSION_PATH,
 } from "./thinking-e2e-support.ts";
 
-test("optional web search stays off until native setup and separates configuration from loaded tools", async ({
+test("native web search follows the current Session model with an on/off preference on desktop and mobile", async ({
   page,
 }, testInfo) => {
   await installThinkingFixture(page);
-  let configured = false;
-  const source = "npm:pi-web-access@0.38.0";
+  let enabled = false;
+  let available = true;
   await page.route("**/api/settings/catalog?**", (route) =>
     route.fulfill({
       json: {
         sessionId: MOCK_SESSION_ID,
         sessionPath: MOCK_SESSION_PATH,
-        setup: projectWebSetupConfig(DEFAULT_SETUP_CONFIG),
+        setup: projectWebSetupConfig({
+          ...DEFAULT_SETUP_CONFIG,
+          webSearch: { enabled, modelSupport: [] },
+        }),
+        webSearch: { available, provider: "fixture", model: "current" },
         resources: {
           skills: [],
-          plugins: configured
-            ? [
-                {
-                  id: "user:package:web-access",
-                  name: "pi-web-access",
-                  source,
-                  scope: "user",
-                  origin: "package",
-                  configured: true,
-                  enabled: true,
-                  installed: true,
-                  installedVersion: "0.38.0",
-                  extensions: [],
-                  skills: [],
-                  prompts: [],
-                  themes: [],
-                },
-              ]
-            : [],
+          plugins: [],
           totals: { extensions: 0, skills: 0, prompts: 0, themes: 0 },
           diagnostics: { extensionErrors: 0, skillErrors: 0 },
           truncation: {
@@ -58,39 +44,46 @@ test("optional web search stays off until native setup and separates configurati
   const dialog = page.getByRole("dialog", { name: "设置", exact: true });
   await dialog.getByRole("tab", { name: "联网搜索", exact: true }).click();
   await expect(
-    dialog.getByText("本会话尚未加载插件", { exact: true }),
+    dialog.getByText("fixture / current", { exact: true }),
   ).toBeVisible();
   await expect(
     dialog.getByRole("button", { name: "启用联网搜索…", exact: true }),
   ).toBeEnabled();
-  await dialog
-    .getByRole("combobox", { name: "搜索设置", exact: true })
-    .selectOption("existing");
+  await expect(
+    dialog.getByText("当前连接支持原生搜索。开启后，由模型决定何时联网。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(dialog.getByText("Exa", { exact: true })).toHaveCount(0);
   await dialog.screenshot({
-    path: testInfo.outputPath("web-search-desktop.png"),
+    path: testInfo.outputPath("native-search-desktop.png"),
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     dialog.getByRole("combobox", { name: "设置导航", exact: true }),
   ).toBeVisible();
   await expect(
-    dialog.getByRole("combobox", { name: "搜索设置", exact: true }),
-  ).toHaveValue("existing");
+    dialog.getByRole("button", { name: "启用联网搜索…", exact: true }),
+  ).toBeEnabled();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
   await dialog.screenshot({
-    path: testInfo.outputPath("web-search-mobile.png"),
+    path: testInfo.outputPath("native-search-mobile.png"),
   });
-  configured = true;
+  enabled = true;
+  available = false;
   await dialog.getByRole("button", { name: "刷新状态", exact: true }).click();
   await expect(
     dialog.getByRole("button", { name: "关闭联网搜索…", exact: true }),
   ).toBeVisible();
   await expect(
-    dialog.getByText("本会话尚未加载插件", { exact: true }),
+    dialog.getByText(
+      "当前连接不支持或尚未确认支持原生搜索，不提供搜索工具，也不会切换到其他供应商。",
+      { exact: true },
+    ),
   ).toBeVisible();
 });
 

@@ -93,7 +93,11 @@ pi install npm:@tt-a1i/openpi
 
 Skill 使用 Pi 原生机制：模型根据名称、描述和路径按需用 `read` 读取；用户明确调用时，在输入开头使用 `/skill:code-review 审查这个 PR`（前提是 Pi 已加载该 Skill）。候选补全、正文展开和运行中追加输入均由 Pi 处理。OpenPI 不提供专门的 `$skill` 语法或独立的 Skill 加载通道。
 
-联网搜索是可选集成，默认不安装插件、不增加工具或能力组。Web **设置 → 联网搜索** 或 `/openpi-setup 开启联网搜索，使用 Exa` 可选择经审阅的 [`pi-web-access@0.38.0`](https://github.com/nicobailon/pi-web-access)。`web_access_action` 仅在 setup episode 中提供 `install-exa`、`install-existing`、`disable` 三种固定包操作，并再次通过 Pi 原生确认审阅安装权限。Exa 由用户明确选择，首次创建的私有 `web-search.json` 限定 Exa 搜索、直接网页/PDF 读取和插件原生动态工具加载，默认返回原始搜索结果；不启用浏览器 Cookie、Git 克隆、视频或第三方网页提取。插件仍支持模型逐次选择摘要工作流。已有文件绝不覆盖，可选择原样保留其搜索服务与权限。密钥留在插件/Pi 配置中。安装和关闭只修改 Pi 原生 package 资源配置，当前 Session 的加载状态单独显示；用户在空闲时明确重新加载或新建 Session 后生效。整个插件在 Direct/Workflow 子会话导入前排除。其他搜索服务继续通过 `/openpi-setup` 审阅插件原生配置，不增加 OpenPI 的搜索 Provider 栈。
+联网搜索由仓库内独立的 `extensions/web-search/` Pi 扩展提供，默认关闭，不增加 OpenPI 工具组。Web **设置 → 联网搜索** 或 `/openpi-setup 开启联网搜索` 通过 `web_search_enabled` 开关启用。默认只使用当前会话模型、实际连接协议和 Pi 原有凭据，在同一次模型请求里声明供应商原生搜索；不另选搜索模型、不发送独立摘要请求，也不自动切换 Exa 或其他供应商。
+
+当前实现适配 OpenAI Responses/Codex Responses 和 Anthropic Messages；官方已知支持的模型可直接启用，未知网关或不支持的协议不提供搜索工具。自定义连接经真实原生搜索验证或用户明确确认支持后，可在 setup 中用 `web_search_model_support` 声明当前 provider/model/API/base URL 的能力（true 支持、false 禁用、null 恢复自动判断）；切换连接不会沿用别的连接的声明。设置页分别显示开关与当前模型支持状态。DeepSeek 官方 Responses 会忽略原生搜索，不能通过声明强行启用；GPT-5 的 minimal 推理模式也不提供搜索工具。
+
+历史保留原生搜索终态、供应商输出和可点击引用；关闭不删历史，恢复只回放仍在 Pi 上下文中的同一连接输出。取消和用量归 Pi 管理，Direct/Workflow 子会话不加载该扩展。单次原生输出及一次请求的原生回放上限为 256 KiB，超限要求压缩会话；Anthropic 的 `pause_turn` 明确报告错误，当前适配器尚未实现自动协议续接。旧 `web_access_action` 仅保留兼容既有可选 Pi 插件的显式管理，不是原生搜索的回退路径。
 
 Skill 正文通过原生用户消息或工具结果进入正常 Session 历史，压缩也交给 Pi。OpenPI 不另存正文快照，不叠加隐藏正文，也不在压缩后自动补回。压缩后不保证全文仍在模型上下文中；需要时可重新读取或显式调用。普通 `read` 的输出限制和模型总上下文限制仍然适用。设计边界见 [Decision 0002](docs/decisions/0002-native-skill-lifecycle.md)。
 
@@ -468,7 +472,7 @@ Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px�
 
 Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。有可靠耗时记录的回合，执行时展开整个过程，完成后“用时”默认收起中间说明、思考和工具，最终回答继续显示在下方；可点击“用时”查看完整过程，不折叠用户问题或最终回答。连续的思考、工具和活动按原生顺序组成同一组，遇到说明文字或其他消息就分开；单行活动直接显示，不再套一层分组。活动组运行时展开，结束后收起为图标、操作摘要与计数；思考保留在实际发生的位置，使用独立的一行文字预览，展开后使用 Markdown 排版。工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: webSearch.enabled webSearch.modelSupport capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 浏览器模型控制默认关闭。打开 Web「设置 → 浏览器」，可点击完成安装引导、连接检查、总开关、逐个浏览器授权和默认浏览器选择；也可用 `/openpi-setup` 自然语言设置 `browser_control`、`browser_embedded`、`browser_default`、`browser_external`。默认值依次为 `false`、`true`、`embedded`、`[]`：总开关关闭时所有模型浏览器操作都被拒绝，普通 iframe 浏览不受影响。设置中的授权变更通过同一配置写入器和 Pi 原生扩展事件生效，无需一次模型调用。
 

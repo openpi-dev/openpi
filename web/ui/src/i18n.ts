@@ -704,12 +704,24 @@ const resources = {
       generalSettings: "General",
       browserSettings: "Browser",
       webSearchSettings: "Web search",
+      webSearchCurrentModel: "Current Session model",
+      webSearchNativeDetail:
+        "Use your current model provider's native search with the existing connection and credentials.",
+      webSearchSupported:
+        "This connection supports native search. When enabled, the model decides when to search.",
+      webSearchUnsupported:
+        "Native search is unsupported or unconfirmed for this connection. No search tool is provided and no other provider is used.",
+      webSearchNativeRequest:
+        "Enable native web search using the current Session model and existing Pi credentials. Do not switch model, connection protocol, or search provider. Unsupported or unknown connections must receive no search tool.",
+      webSearchActivityCompleted: "Searched the web",
+      webSearchActivityFailed: "Web search failed",
+      webSearchActivityIncomplete: "Web search did not complete",
       webSearchIntro:
         "Let your model search current sources and read the original pages.",
       webSearchPackageDetail:
         "Optional search, page reading, and PDF extraction through a Pi package.",
       webSearchDefaultOff:
-        "Off by default. OpenPI adds no web tools until you choose to install and load the package.",
+        "Off by default. This optional extension follows the current Session model; it needs no separate search key or plugin installation.",
       webSearchLoaded: "Package loaded in this Session",
       webSearchNotLoaded: "Package not loaded in this Session",
       webSearchSource: "Review plugin source",
@@ -726,7 +738,7 @@ const resources = {
       webSearchExistingRequest:
         "Enable optional web search with Pi Web Access and keep my existing search preferences unchanged. Let me review the installation confirmation, preserve other preferences, and do not reload automatically.",
       webSearchDisableRequest:
-        "Disable Pi Web Access in my web search settings. Keep its files and preferences, and do not reload automatically.",
+        "Disable native web search. Preserve other settings and Session history.",
       webSearchProviderRequest:
         "Help me change the search service for my installed Pi Web Access plugin. Explain available services and permissions, preserve unrelated preferences, keep credentials with the search plugin, and do not reload automatically.",
       browserSettingsIntro:
@@ -2382,10 +2394,21 @@ const resources = {
       generalSettings: "常规",
       browserSettings: "浏览器",
       webSearchSettings: "联网搜索",
+      webSearchCurrentModel: "当前会话模型",
+      webSearchNativeDetail:
+        "调用当前模型供应商的原生搜索，复用现有连接和凭据。",
+      webSearchSupported: "当前连接支持原生搜索。开启后，由模型决定何时联网。",
+      webSearchUnsupported:
+        "当前连接不支持或尚未确认支持原生搜索，不提供搜索工具，也不会切换到其他供应商。",
+      webSearchNativeRequest:
+        "开启联网搜索，使用当前会话模型的原生搜索和已有 Pi 凭据。不要切换模型、连接协议或搜索供应商；当前连接不支持或支持情况未知时，不提供搜索工具。",
+      webSearchActivityCompleted: "已搜索网页",
+      webSearchActivityFailed: "网页搜索失败",
+      webSearchActivityIncomplete: "网页搜索未完成",
       webSearchIntro: "让模型搜索最新资料，并打开原始网页核实。",
       webSearchPackageDetail: "通过可选 Pi 插件提供搜索、网页读取和 PDF 提取。",
       webSearchDefaultOff:
-        "默认关闭。选择安装并加载插件后，模型才会获得联网工具。",
+        "默认关闭。可选扩展跟随当前会话模型，无需另填搜索密钥或安装插件。",
       webSearchLoaded: "本会话已加载插件",
       webSearchNotLoaded: "本会话尚未加载插件",
       webSearchSource: "查看插件源码",
@@ -2401,8 +2424,7 @@ const resources = {
         "启用可选联网搜索，使用 Pi Web Access 和无需 API 密钥的 Exa。让我审阅插件安装确认，保留其他偏好，不要自动重新加载。",
       webSearchExistingRequest:
         "启用可选联网搜索，使用 Pi Web Access，原样保留我已有的搜索偏好。让我审阅插件安装确认，保留其他偏好，不要自动重新加载。",
-      webSearchDisableRequest:
-        "关闭联网搜索设置中的 Pi Web Access 插件。保留它的文件和偏好，不要自动重新加载。",
+      webSearchDisableRequest: "关闭原生联网搜索。保留其他设置和会话记录。",
       webSearchProviderRequest:
         "帮我更换已安装 Pi Web Access 插件的搜索服务。介绍可用服务与权限，保留无关偏好，密钥留在搜索插件中，不要自动重新加载。",
       browserSettingsIntro: "让 OpenPI 阅读网页、点击、输入和截图。",

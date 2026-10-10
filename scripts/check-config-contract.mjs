@@ -8,6 +8,20 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CONFIG_FIELD_CONTRACT = [
   {
+    path: "webSearch.enabled",
+    writerTokens: ["params.web_search_enabled"],
+    statusTokens: ["config.webSearch.enabled"],
+    readmeTerms: ["web_search_enabled"],
+    setupTerms: ["web_search_enabled"],
+  },
+  {
+    path: "webSearch.modelSupport",
+    writerTokens: ["params.web_search_model_support"],
+    statusTokens: ["config.webSearch.modelSupport"],
+    readmeTerms: ["web_search_model_support"],
+    setupTerms: ["web_search_model_support"],
+  },
+  {
     path: "browser.embedded",
     writerTokens: ["params.browser_embedded"],
     statusTokens: ["config.browser.embedded"],

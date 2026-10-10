@@ -340,6 +340,58 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   );
 });
 
+test("native search setup defaults off, preserves preferences, and binds support to the current connection", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const apply = (params: Record<string, unknown>) =>
+    tool.execute(
+      "search-setup",
+      params,
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+  assert.equal(loadSetupConfig().webSearch.enabled, false);
+  await apply({ web_search_enabled: true });
+  assert.equal(loadSetupConfig().webSearch.enabled, true);
+  await apply({ ui_web_theme: "dark" });
+  assert.equal(loadSetupConfig().webSearch.enabled, true);
+  await assert.rejects(
+    apply({ web_search_model_support: true }),
+    /Select a current Session model/u,
+  );
+  h.ctx.model = {
+    id: "current",
+    name: "Current",
+    provider: "gateway",
+    api: "openai-responses",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 128000,
+    maxTokens: 2048,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  await apply({ web_search_model_support: true });
+  assert.deepEqual(loadSetupConfig().webSearch.modelSupport, [
+    {
+      provider: "gateway",
+      model: "current",
+      api: "openai-responses",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      supported: true,
+    },
+  ]);
+  await apply({ web_search_model_support: null, web_search_enabled: false });
+  assert.deepEqual(loadSetupConfig().webSearch, {
+    enabled: false,
+    modelSupport: [],
+  });
+  assert.equal(loadSetupConfig().ui.webTheme, "dark");
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+});
+
 test("post-edit stays off or preserved unless the setup request changes it", async () => {
   rmSync(SETUP_CONFIG_PATH, { force: true });
   const h = visibilityHarness();
