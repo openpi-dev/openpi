@@ -189,6 +189,8 @@ export function buildInteractiveSetupPrompt(options: {
     '- "let the model discover OpenPI capabilities when useful" → capability_discovery=adaptive',
     '- "only use OpenPI capabilities when I ask" → capability_discovery=explicit',
     '- "use dark theme in OpenPI Web" → ui_web_theme=dark',
+    '- "allow the model to use the embedded browser" → browser_control=true (off by default; Browser Bridge debugger permission is reviewed in Chrome/Edge)',
+    '- "allow Chrome and use it by default" → browser_control=true, browser_external=["chrome"], browser_default="chrome"; preserve other existing grants unless the user asks to revoke them. Installation and connection remain native browser steps in Settings → Browser.',
     '- "set OpenPI Web chat width to 960px" → ui_web_chat_width=960',
     `- Web sidebar width defaults to ${DEFAULT_WEB_SIDEBAR_WIDTH}px (${MIN_WEB_SIDEBAR_WIDTH}-${MAX_WEB_SIDEBAR_WIDTH}); tool pane width defaults to ${DEFAULT_WEB_AUXILIARY_WIDTH}px (${MIN_WEB_AUXILIARY_WIDTH}-${MAX_WEB_AUXILIARY_WIDTH}). Dragging a pane saves the same canonical preferences; small viewports temporarily clamp the visible width.`,
     '- "use a 320px sidebar and 600px tool pane" → ui_web_sidebar_width=320, ui_web_auxiliary_width=600',
@@ -526,6 +528,48 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "Canonical OpenPI Web theme: system follows the browser/OS color scheme; light, dark, mist, rose, and pine force that appearance. Stored in package setup rather than browser storage. Omit to preserve the current value.",
         }),
       ),
+      browser_control: Type.Optional(
+        Type.Boolean({
+          description:
+            "Allow model browser control. Off by default; requires Browser Bridge and a per-browser grant. Omit to preserve the current value.",
+        }),
+      ),
+      browser_embedded: Type.Optional(
+        Type.Boolean({
+          description:
+            "Allow the embedded browser when browser_control is on. Defaults to true.",
+        }),
+      ),
+      browser_default: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("embedded"),
+            Type.Literal("chrome"),
+            Type.Literal("edge"),
+            Type.Literal("brave"),
+            Type.Literal("chromium"),
+          ],
+          {
+            description:
+              "Browser used when the user does not name one. Does not grant access. Defaults to embedded.",
+          },
+        ),
+      ),
+      browser_external: Type.Optional(
+        Type.Array(
+          Type.Union([
+            Type.Literal("chrome"),
+            Type.Literal("edge"),
+            Type.Literal("brave"),
+            Type.Literal("chromium"),
+          ]),
+          {
+            uniqueItems: true,
+            description:
+              "Explicitly allowed regular browsers. Empty by default. Replaces the existing grant list; requires installed, connected Browser Bridge.",
+          },
+        ),
+      ),
       ui_web_chat_width: Type.Optional(
         Type.Integer({
           minimum: MIN_WEB_CHAT_WIDTH,
@@ -717,6 +761,14 @@ export default function openPiSetup(pi: ExtensionAPI) {
               : params.child_execution_limit === null
                 ? {}
                 : { maxActive: params.child_execution_limit },
+          browser: {
+            control: params.browser_control ?? current.browser.control,
+            embedded: params.browser_embedded ?? current.browser.embedded,
+            defaultBrowser:
+              params.browser_default ?? current.browser.defaultBrowser,
+            externalBrowsers:
+              params.browser_external ?? current.browser.externalBrowsers,
+          },
           ui: {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??

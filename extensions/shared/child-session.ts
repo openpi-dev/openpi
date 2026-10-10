@@ -499,6 +499,8 @@ async function createChildSettingsManager(options: {
  * drift test in child-session.test.ts).
  */
 export const CHILD_EXCLUDED_TOOL_NAMES = [
+  // embedded browser — authority belongs to the initiating parent Web tab
+  "openpi_browser",
   // capability discovery mutates the parent model-facing tool surface
   "openpi_load_tools",
   // runtime inspection includes parent configuration and resource summaries

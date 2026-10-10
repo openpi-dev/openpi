@@ -17,6 +17,7 @@ import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
+  createEventBus,
   getAgentDir,
   hasTrustRequiringProjectResources,
 } from "@earendil-works/pi-coding-agent";
@@ -76,6 +77,9 @@ import { matchesSessionIdentity } from "./session-identity.ts";
 import {
   projectWebSettingsResources,
 } from "./settings-catalog.ts";
+import { applySetupConfiguration } from "../../extensions/shared/setup-apply.ts";
+
+const setupEvents = new WeakMap<object, ReturnType<typeof createEventBus>>();
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS = 10_000;
@@ -1807,6 +1811,14 @@ export class PiWebRuntime implements WebRuntimeController {
     }
   }
 
+  async applySetupConfiguration() {
+    await Promise.all([this.runtime, ...this.retainedRuntimes].map(async (runtime) => {
+      const events = setupEvents.get(runtime.services);
+      if (!events) throw new Error("Native setup event bus unavailable");
+      await applySetupConfiguration({ events });
+    }));
+  }
+
   private static async createRuntime(
     cwd: string,
     sessionManager: SessionManager,
@@ -1836,12 +1848,14 @@ export class PiWebRuntime implements WebRuntimeController {
       }
       const commandDiscovery = createCommandDiscoveryBridge();
       const turnChanges = createTurnChangeRecorder(options.sessionManager, options.cwd);
+      const eventBus = createEventBus();
       const services = await createAgentSessionServices({
         cwd: options.cwd,
         agentDir: options.agentDir,
         settingsManager,
         modelRuntimeSignal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
         resourceLoaderOptions: {
+          eventBus,
           extensionFactories: [
             ...createPiBuiltinExtensionFactories(),
             commandDiscovery.extension,
@@ -1849,6 +1863,7 @@ export class PiWebRuntime implements WebRuntimeController {
           ],
         },
       });
+      setupEvents.set(services, eventBus);
       registerCommandDiscoveryBridge(services, commandDiscovery);
       const extensionErrors = services.resourceLoader
         .getExtensions()

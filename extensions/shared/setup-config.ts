@@ -15,6 +15,11 @@ import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+  type BrowserConfig,
+  isBrowserId,
+  isBrowserList,
+} from "./browser-config.ts";
+import {
   SUBAGENT_ROLE_NAMES,
   type SubagentRoleModel,
   type SubagentRoleModels,
@@ -180,6 +185,7 @@ export interface MyPiSetupConfig {
   readonly childExecutions: {
     readonly maxActive?: number;
   };
+  readonly browser: BrowserConfig;
   readonly ui: {
     readonly webTheme: WebTheme;
     readonly webChatWidth: number;
@@ -218,6 +224,12 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
   },
   childExecutions: {},
+  browser: {
+    control: false,
+    embedded: true,
+    defaultBrowser: "embedded",
+    externalBrowsers: [],
+  },
   ui: {
     webTheme: "system",
     webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
@@ -538,6 +550,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     ? value.childExecutions
     : {};
   const ui = isRecord(value.ui) ? value.ui : {};
+  const browser = isRecord(value.browser) ? value.browser : {};
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
@@ -569,6 +582,23 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       childExecutions.maxActive <= MAX_SESSION_CHILD_EXECUTION_LIMIT
         ? { maxActive: childExecutions.maxActive }
         : {}),
+    },
+    browser: {
+      control:
+        browser.control === true &&
+        (browser.embedded === undefined ||
+          typeof browser.embedded === "boolean") &&
+        (browser.defaultBrowser === undefined ||
+          isBrowserId(browser.defaultBrowser)) &&
+        (browser.externalBrowsers === undefined ||
+          isBrowserList(browser.externalBrowsers)),
+      embedded: browser.embedded === undefined || browser.embedded === true,
+      defaultBrowser: isBrowserId(browser.defaultBrowser)
+        ? browser.defaultBrowser
+        : "embedded",
+      externalBrowsers: isBrowserList(browser.externalBrowsers)
+        ? [...browser.externalBrowsers]
+        : [],
     },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
@@ -674,6 +704,12 @@ const setupShape: ConfigShape = {
   },
   childExecutions: {
     maxActive: integerBetween(1, MAX_SESSION_CHILD_EXECUTION_LIMIT),
+  },
+  browser: {
+    control: booleanValue,
+    embedded: booleanValue,
+    defaultBrowser: isBrowserId,
+    externalBrowsers: isBrowserList,
   },
   ui: {
     webTheme: isWebTheme,
@@ -1411,6 +1447,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
   return [
     `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
+    `Browser control: ${config.browser.control ? "on" : "off"} · default ${config.browser.defaultBrowser} · embedded ${config.browser.embedded ? "allowed" : "blocked"} · external ${config.browser.externalBrowsers.join(", ") || "none"}`,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"

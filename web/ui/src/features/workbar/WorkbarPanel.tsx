@@ -431,6 +431,7 @@ export function WorkbarPanel({
   onActivateSession,
   readingState: cachedReading,
   onReferenceLine,
+  onBrowserReady,
 }: {
   visible: boolean;
   requestedTool: WorkbarTool;
@@ -452,6 +453,9 @@ export function WorkbarPanel({
   onActivateSession?: () => void;
   readingState?: WorkbarReadingState;
   onReferenceLine?: (reference: DiffLineReference) => void;
+  onBrowserReady?: (
+    open: ((url: string) => string | undefined) | undefined,
+  ) => void;
 }) {
   const { t } = useTranslation();
   const localReading = useRef<WorkbarReadingState>({});
@@ -871,7 +875,7 @@ export function WorkbarPanel({
                   visible &&
                   canControl &&
                   (browserActive || retainedBrowser === browserScope) ? (
-                  <BrowserPanel key={browserScope} />
+                  <BrowserPanel key={browserScope} onReady={onBrowserReady} />
                 ) : visible && !tabs.launcherOpen && tabs.active === tool ? (
                   !canControl &&
                   ["side-conversation", "terminal", "browser"].includes(

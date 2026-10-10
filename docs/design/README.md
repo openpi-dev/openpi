@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_BROWSER_SETUP_2026-10-09.md`](WEB_BROWSER_SETUP_2026-10-09.md) — validated browser authorization, default/explicit selection and click-based setup, with separate real-provider, browser and UI evidence for #169 / #597 / #720.
+
 - [`WEB_CHANGE_REVIEW.md`](WEB_CHANGE_REVIEW.md) — validated turn/workspace scopes, unified review navigation, Codex-style cards and bounded pagination for #597 / #598
 
 - [`WEB_SUBAGENT_OVERVIEW.md`](WEB_SUBAGENT_OVERVIEW.md) — source- and UI-validated session summary popover, grouped child list and reference comparison for #597 / #598

@@ -1,0 +1,85 @@
+# Browser setup and explicit browser selection
+
+- Status: validated implementation design at the evidence boundary below; not an accepted architectural Decision
+- Created: 2026-10-09
+- Verified: 2026-10-09 (configuration, runtime, browser and UI acceptance); 2026-10-10 (guided installation follow-up below)
+- Source: implementation `f19f044263176ae948f42722783a29b944f14431` on `codex/browser-tools-probe`, containing upstream main `a18f457687b45c877bc8a15d689a7580c4f0659a`; Pi `0.99.1`, Browser Bridge `0.3.0`. `pi list` confirmed the sole OpenPI source was the tested checkout before the runtime was restarted. The frozen source tree, verifier and screenshot identities are retained in `acceptance-manifest.json`.
+- Issues: [#169](https://github.com/openpi-dev/openpi/issues/169), [#597](https://github.com/openpi-dev/openpi/issues/597)
+- Related PR: [#720](https://github.com/openpi-dev/openpi/pull/720)
+- Supersedes: none; extends [the embedded-browser investigation](../research/PI_BROWSER_TOOLS_2026-10-09.md)
+
+## User outcome
+
+Add one Browser page to the existing settings surface. Users choose whether to set up browser control, whether to allow the embedded browser or their regular browser, and which authorized browser is the default. A request naming Chrome, Edge or another supported browser selects that browser; an unnamed request uses the configured default. Setup should consist of visible buttons and native browser permission steps, without terminal commands. Preserve screenshots and a browsable HTML acceptance report.
+
+## Investigation and design choices
+
+[OpenAI's extension guide](https://learn.chatgpt.com/docs/chrome-extension) separates installation, connection, visibility and website permissions, and directs users to the profile containing the extension. Its [browser guide](https://learn.chatgpt.com/docs/browser) distinguishes an embedded browser from a regular signed-in profile. These are useful interaction references, not evidence of OpenPI behavior. OpenPI's iframe shares the containing browser's web storage rules; it must not claim an isolated desktop-browser profile.
+
+[Playwright's extension](https://github.com/microsoft/playwright/blob/main/packages/extension/README.md) reuses existing tabs and logged-in state. [Issue 1589](https://github.com/microsoft/playwright-mcp/issues/1589) documents a browser selection silently falling back to Chrome. Our runtime must reject an unavailable explicit target instead of redirecting it. [pi-computer-use configuration](https://github.com/injaneity/pi-computer-use/blob/main/docs/configuration.md) distinguishes browser permission from managed browser launch and dedicated profiles. The OpenPI adaptation continues to use the existing Browser Bridge; full desktop control is outside this request.
+
+Problems considered together before implementation:
+
+1. Installed is not authorized; authorized is not connected. Each state needs real evidence and a clear next action.
+2. A browser name is not a profile identity. Multiple connected profiles must be distinguishable and must not silently replace one another.
+3. Disabling access must stop pending work and invalidate observations even during a model turn.
+4. A model must not bypass a disabled/default browser by omitting or changing its browser argument. Named selections cannot silently fall back.
+5. Installing a browser extension requires the browser's native interaction. Do not fake completion or claim that a download is installation.
+6. Opening an external tab backgrounds the workbench. Native-browser transport must keep working without depending on a foreground UI polling timer.
+7. Settings must be usable without a model request. The user's explicit request for click-based browser authorization is implemented through the existing typed shared configuration writer, with native Pi extension application; `/openpi-setup` remains the natural-language alternative and shares the same data.
+8. Embedded pages and external tabs need distinct document identities, screenshot scope and cleanup, while reusing one Pi tool and the existing observation/ref contract.
+
+## Ownership and mechanism
+
+Pi owns the Session, tool surface, provider/model and extension lifecycle. The model chooses strategy and reads an optional `browser` argument; no prompt keyword router selects browsers. The runtime resolves the omitted default, checks grants, enforces a precise connected profile, binds observations to the turn/document/transport, and rejects cancellation or stale targets.
+
+The browser extension owns native tab and document identity and the browser's debugger permission. A host-issued connection credential is limited to browser transport, separate from workbench API credentials. Native requests/results are ephemeral, bounded and attributable to the initiating Pi turn. Revocation cancels pending work; native debugger attachments are detached in `finally`. No browser cookies or profile files are copied.
+
+The settings surface uses a restrained heading, a master switch, a default-browser choice, browser rows with concise status, and an inline setup guide. Additional browser rows remain under More browsers. Primary actions reflect missing prerequisites. Diagnostics and directory details stay behind secondary disclosure. English and Chinese, keyboard navigation, small screens and light/dark themes use the existing UI foundations.
+
+## Acceptance evidence required
+
+- Shared defaults, validation, `/openpi-setup`, child exclusion and README/SETUP remain consistent.
+- Native Pi tool exposure updates after a settings click; disabled access fails at execution and cancels pending work.
+- Omitted browser uses the default; explicit browser names use the named connected browser; unavailable, unauthorized and ambiguous targets fail clearly.
+- Real embedded and external Chrome read, exact Chinese input, click and screenshot; a second supported browser exercises independent selection when installed.
+- Settings installation/connection states use real handshake evidence; install actions open the actual bundled extension and native manager.
+- Browser transport credentials cannot authorize workbench APIs; sibling/forged/stale results, navigation, cancellation and cleanup have focused runtime tests.
+- The existing iframe navigation behavior remains intact.
+- Full `bun run check` and `bun run test`, focused native-browser tests, actual UI inspection, screenshots and a standalone HTML report.
+- Simplification/ablation removes unnecessary abstractions only when the original acceptance criteria still pass.
+
+## Validated results and boundaries
+
+The implementation is confined to OpenPI's existing Pi extension, Web runtime, Browser Bridge and settings surface. Pi core and the upstream pi-computer-use package are unchanged. One `openpi_browser` tool covers both embedded and native targets; the existing parent-only child boundary remains in force. Native configuration application uses Pi's event bus, with the shared configuration writer as the sole persisted source.
+
+`bun run check` passed. The full `bun run test` run passed 2,328 Node tests with nine skips and 1,161 UI tests across 83 files. The complete local Chrome suite passed all 107 cases. Focused Chrome and Edge runs verified native document binding, exact Chinese input/button output, actual PNG pixels, stale-state rejection, permission revocation and debugger cleanup. Embedded same-process and cross-process tests also verified that a covering dialog prevents a screenshot and that a fresh observation works after dismissal. The existing navigation-enhancement regression passed. Settings tests checked installation without authorization, typed permission/default writes during a turn, light/dark/mobile layouts and zero WCAG 2 A/AA violations in the tested view.
+
+The authorized local provider was exercised through a real Pi Web Session with `gpt-6.1-sol`, thinking `medium`, using isolated native Chrome `154.0.8037.98` and Edge `154.0.4258.62` profiles. The four cases—unnamed request with embedded default, explicit Chrome, unnamed request with Chrome default, and explicit Edge—all completed read → Chinese input → save → screenshot. Final `live-run-05`, on the clean implementation revision above, contains 12 successful browser calls and eight returned images, with zero tool errors. The verifier independently checked the selected browser's input and saved DOM output, retained provider-reported usage, and confirmed the master switch was off at the end. `live-run-04` preserves the earlier 16-call/six-image pass on `0af87f36`; the model chose input/click batches in the final run. The initial failed attempts remain in the archive: strict tool serialization supplied an empty optional browser string, and Chrome supplied a 32-hex-character document identity. Both now have regression coverage; the runtime normalizes only omitted/empty browser selection and accepts the two exact supported document identity formats.
+
+The [first expanded CI run](https://github.com/openpi-dev/openpi/actions/runs/37936171999) exposed a native-test isolation problem: another spec had already frozen the setup path before the fixture changed its agent directory. The test now owns a worker and verifies the actual setup path. It also repeated two failures present in the [pre-iteration run](https://github.com/openpi-dev/openpi/actions/runs/37884429973): ordinary iframe browsing produced unnecessary control polling, and a message-rerun UI expectation failed. The browser polling is now gated by extension presence; this is only a traffic gate, not a second permission/status authority. The message-rerun code was not changed. The complete 107-case local rerun, including all three previously failing cases, passed.
+
+A [subsequent cross-platform run](https://github.com/openpi-dev/openpi/actions/runs/37937595272) passed those three cases but exposed a cancellation verifier assumption. Posting a cancellation message from the workbench is not evidence that the native extension has processed it; an already-dispatched input can complete while the page thread is blocked. The runtime already reports this as revoked/uncertain, rather than success. The verifier now accepts only the two bounded possible values before that receipt, then attempts another write with the consumed observation and requires stale-state rejection with the exact settled value unchanged. This preserves the runtime's documented partial-effect semantics and verifies the meaningful post-receipt invariant without a timing delay or a new cancellation protocol.
+
+The Mac desktop was locked during this iteration. Therefore these are real-browser automated acceptance results, not a claim that installation or permission dialogs were manually completed in the user's everyday Chrome profile. Screenshot views using synthetic connection fixtures are identified separately from the actual live-provider screenshots. Chrome/Edge on macOS are the physically tested browsers; Brave/Chromium and Windows/Linux launch helpers are outside that physical validation boundary. Safari/Firefox are unsupported. Native browser extension installation still requires the browser's Developer mode, Load unpacked and permission review; the UI opens the relevant manager and bundled folder but cannot silently grant browser permissions.
+
+Local evidence identity: `browser-setup-20261009` under the operator's `openpi-evidence` archive. It retains harnesses, logs, screenshots, failed runs, private Session receipts and a standalone `browser-setup-report.html`. This is an acceptance record, not a formal Benchmark or a release/deployment claim. Credentials and raw private Session data remain outside Git.
+
+## Simplification and ablation
+
+- Removed a duplicate browser-default constant. The canonical defaults remain in `DEFAULT_SETUP_CONFIG`, checked by the existing configuration contract; setup and UI behavior still pass.
+- Removed a second connection-status projection in DOM flags/messages. The extension's port now carries only the handshake and keepalive; settings use the host's bounded heartbeat as connection evidence. Real Chrome/Edge connection and UI checks still pass.
+- Removed a generic five-point screenshot hit test after it rejected a visible iframe in native debugger geometry. Retained the exact iframe clip and explicit visible-dialog check, independently verified by fixture pixels and the cover/dismiss test. This keeps the required screenshot boundary without a general UI occlusion subsystem.
+- Kept the transport identity and observation bindings: removing them would allow another profile, document or turn to consume a pending operation. Their stale/replay/revocation tests define why that complexity is necessary.
+
+## 2026-10-10: one-step installation guide
+
+The follow-up in [#720](https://github.com/openpi-dev/openpi/pull/720), based on `97d04d2c1ca749e375285a53bb5d914a46a1bfd3`, replaces the long installation paragraph with four navigable steps: open the selected browser's extension page, enable Developer mode using an illustration, select the bundled extension directory, then connect. Installation titles, waiting messages and help consistently use **OpenPI Browser Bridge**, matching the existing manifest name. This is a settings/launch-helper change; Pi core, the extension implementation and upstream pi-computer-use are unchanged in this follow-up.
+
+[Chrome's unpacked-installation guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked) and [Edge's sideloading guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions-chromium/getting-started/extension-sideloading) confirm the browser-owned Developer mode and Load unpacked steps. The UI opens the manager or bundled directory separately and supplies a copyable path, including macOS's folder-picker shortcut. A future marketplace distribution could use the browser's [Add to Chrome / Add extension flow](https://support.google.com/chrome_webstore/answer/2664769); no store listing or one-click install is claimed here.
+
+Step position is local presentation state, not installation evidence. Forward/back navigation and “already installed” never write browser grants. A failed native launch stays on the same step and permits retry. Existing heartbeat/version/profile checks alone determine connection, including the initiating-profile restriction for embedded browsing; authorization remains a separate explicit action. The obsolete combined `install` launch action and `opened` state were removed. Reusing `manage`, adding only a fixed-path `folder` action and keeping the existing status poll passed the same acceptance criteria without an installer service, stored wizard progress or a second connection authority.
+
+Validation: `bun run check` and `bun run test` passed (2,328 Node tests, nine skips; 1,163 UI tests in 83 files). The focused Chrome settings E2E passed all four stages, actual clipboard contents, pre-grant isolation, automatic connection projection, dark/narrow layouts and zero tested WCAG 2 A/AA violations. Unit tests also cover native-launch failure/retry, old extension versions and a different embedded profile. Host checks reject arbitrary paths/URLs, unknown actions and native-transport credentials at the setup-action endpoint. The actual settings page was opened in the everyday Chrome profile, but native extension installation and new permissions were not completed there during this follow-up. No new provider call was needed for this UI-only iteration; the earlier provider results retain their original source boundary.
+
+Evidence identity: `browser-setup-20261010` in the operator's `openpi-evidence` archive, retaining the source diff/manifest, logs, screenshots and `browser-setup-preview.html`. Screenshots of connection states use explicit UI fixtures, not fabricated live-provider receipts. The 2026-10-09 archive remains unchanged.

@@ -1,20 +1,22 @@
 {
   "manifest_version": 3,
   "name": "OpenPI Browser Bridge",
-  "version": "0.1.0",
-  "description": "Native browser navigation and X-Frame-Options support inside the local OpenPI workbench.",
+  "version": "0.3.0",
+  "description": "Connect authorized browser pages to OpenPI, with embedded navigation and browser control.",
   "minimum_chrome_version": "145",
   "permissions": [
     "declarativeNetRequestWithHostAccess",
     "webNavigation",
-    "scripting"
+    "scripting",
+    "debugger",
+    "storage"
   ],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [
     {
       "matches": ["http://127.0.0.1/*", "http://localhost/*"],
-      "js": ["workbench.js"],
+      "js": ["workbench.js", "connector.js"],
       "run_at": "document_idle"
     },
     {
