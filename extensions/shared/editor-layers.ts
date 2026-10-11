@@ -82,6 +82,7 @@ function ensureCoordinator(pi: ExtensionAPI) {
   if (claim.claimed) return;
 
   let ctx: ExtensionContext | undefined;
+  let baseEditorFactory: EditorFactory | undefined;
   let installTimer: ReturnType<typeof setTimeout> | undefined;
   const layers = new Map<string, EditorLayer>();
 
@@ -99,7 +100,7 @@ function ensureCoordinator(pi: ExtensionAPI) {
         left.order - right.order || left.id.localeCompare(right.id),
     );
     current.ui.setEditorComponent(
-      composeEditorFactory(current.ui.getEditorComponent(), ordered),
+      composeEditorFactory(baseEditorFactory, ordered),
     );
   };
 
@@ -118,6 +119,7 @@ function ensureCoordinator(pi: ExtensionAPI) {
       cancelInstall();
       layers.clear();
       ctx = registration.ctx;
+      baseEditorFactory = ctx.ui.getEditorComponent();
     }
     layers.set(registration.layer.id, registration.layer);
     scheduleInstall();
@@ -129,6 +131,7 @@ function ensureCoordinator(pi: ExtensionAPI) {
     if (layers.size > 0) return;
     cancelInstall();
     ctx = undefined;
+    baseEditorFactory = undefined;
   });
 }
 

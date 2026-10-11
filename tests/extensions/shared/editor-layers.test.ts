@@ -9,6 +9,10 @@ import imagePaste from "../../../extensions/image-paste/index.ts";
 import subagents from "../../../extensions/subagents/index.ts";
 import suggestions from "../../../extensions/suggestions/index.ts";
 import workflows from "../../../extensions/workflows/index.ts";
+import {
+  registerEditorLayer,
+  type EditorLayer,
+} from "../../../extensions/shared/editor-layers.ts";
 
 type EditorFactory = NonNullable<
   ReturnType<ExtensionContext["ui"]["getEditorComponent"]>
@@ -130,4 +134,44 @@ test("one session binds all OpenPI editor layers with one UI write", async () =>
   assert.equal(resumed.editorWrites(), 1);
   assert.equal(typeof resumed.editorFactory(), "function");
   assert.notEqual(resumed.editorFactory(), first.editorFactory());
+});
+
+test("re-registering a layer for one TUI context does not stack prior wrappers", async () => {
+  const events = createEventBus();
+  let editorFactory: EditorFactory | undefined = (() => ({
+    layers: [],
+  })) as unknown as EditorFactory;
+  const api = { events } as unknown as ExtensionAPI;
+  const ctx = {
+    mode: "tui",
+    ui: {
+      getEditorComponent: () => editorFactory,
+      setEditorComponent(factory: EditorFactory | undefined) {
+        editorFactory = factory;
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const layer = {
+    id: "test-layer",
+    order: 1,
+    wrap: (base: { layers: string[] }) => ({
+      ...base,
+      layers: [...base.layers, "test-layer"],
+    }),
+  } as unknown as EditorLayer;
+
+  registerEditorLayer(api, ctx, layer);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  registerEditorLayer(api, ctx, layer);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const editor = editorFactory!(
+    {} as never,
+    {} as never,
+    {} as never,
+  ) as unknown as { layers: string[] };
+  assert.deepEqual(editor, {
+    layers: ["test-layer"],
+  });
 });
