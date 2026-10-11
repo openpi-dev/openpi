@@ -210,3 +210,50 @@ test("reports native no-history failures without a UI", async () => {
     "Context pivot could not run: this session has no discardable history to compact. Continue in the current session, or use /sessions to choose another session; to begin cleanly, start a new Session in Pi.",
   ]);
 });
+
+test("a new session can start a pivot while the previous session is pending", async () => {
+  let tool: ToolDefinition | undefined;
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const pi = {
+    registerTool(candidate: ToolDefinition) {
+      tool = candidate;
+    },
+    getActiveTools: () => [],
+    setActiveTools() {},
+    on(event: string, handler: (...args: unknown[]) => unknown) {
+      handlers.set(event, handler);
+    },
+    registerCommand() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: false,
+    getContextUsage: () => ({
+      tokens: MIN_CONTEXT_PIVOT_TOKENS,
+      contextWindow: 200_000,
+      percent: 15,
+    }),
+    compact() {},
+  } as unknown as ExtensionContext;
+
+  contextPivot(pi);
+  assert.ok(tool);
+  await tool.execute(
+    "first-session-pivot",
+    { brief: "First session pivot." },
+    undefined,
+    undefined,
+    ctx,
+  );
+
+  handlers.get("session_start")?.({}, ctx);
+
+  await assert.doesNotReject(
+    tool.execute(
+      "second-session-pivot",
+      { brief: "Second session pivot." },
+      undefined,
+      undefined,
+      ctx,
+    ),
+  );
+});

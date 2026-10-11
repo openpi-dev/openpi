@@ -102,6 +102,9 @@ export default function contextPivot(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", () => {
+    generation += 1;
+    pending = undefined;
+    compacting = false;
     setVisibleForContext();
   });
 
