@@ -10,7 +10,7 @@ interface Counter extends ProtoMessage {
 }
 
 const Counter = pb<Counter>("test.Counter", [
-  { kind: "scalar", no: 1, name: "count", T: "uint32" },
+  { kind: "uint32", no: 1, name: "count" },
 ]);
 
 test("uint32 rejects a terminating fifth byte that exceeds 32 bits", () => {
