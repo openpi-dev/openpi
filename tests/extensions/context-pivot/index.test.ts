@@ -242,7 +242,7 @@ test("a new session can start a pivot while the previous session is pending", as
     { brief: "First session pivot." },
     undefined,
     undefined,
-    ctx,
+    toolExecutionContext(ctx),
   );
 
   handlers.get("session_start")?.({}, ctx);
@@ -253,7 +253,7 @@ test("a new session can start a pivot while the previous session is pending", as
       { brief: "Second session pivot." },
       undefined,
       undefined,
-      ctx,
+      toolExecutionContext(ctx),
     ),
   );
 });
