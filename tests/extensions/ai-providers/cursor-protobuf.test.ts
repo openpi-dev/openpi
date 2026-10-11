@@ -15,8 +15,7 @@ const Counter = pb<Counter>("test.Counter", [
 
 test("uint32 rejects a terminating fifth byte that exceeds 32 bits", () => {
   assert.equal(
-    Counter.decode(Uint8Array.from([0x08, 0xff, 0xff, 0xff, 0xff, 0x0f]))
-      .count,
+    Counter.decode(Uint8Array.from([0x08, 0xff, 0xff, 0xff, 0xff, 0x0f])).count,
     0xffff_ffff,
   );
   assert.throws(
