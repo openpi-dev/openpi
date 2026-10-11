@@ -119,7 +119,7 @@ function ensureCoordinator(pi: ExtensionAPI) {
       cancelInstall();
       layers.clear();
       ctx = registration.ctx;
-      baseEditorFactory = ctx.ui.getEditorComponent();
+      baseEditorFactory = ctx.ui?.getEditorComponent?.();
     }
     layers.set(registration.layer.id, registration.layer);
     scheduleInstall();
