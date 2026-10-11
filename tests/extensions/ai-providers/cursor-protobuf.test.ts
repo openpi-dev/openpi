@@ -19,7 +19,7 @@ test("uint32 rejects a terminating fifth byte that exceeds 32 bits", () => {
     0xffff_ffff,
   );
   assert.throws(
-    () => Counter.decode(Uint8Array.from([0x08, 0x80, 0x80, 0x80, 0x80, 0x7f])),
+    () => Counter.decode(Uint8Array.from([0x08, 0x80, 0x80, 0x80, 0x80, 0x10])),
     /Varint exceeds 32 bits/,
   );
 });
