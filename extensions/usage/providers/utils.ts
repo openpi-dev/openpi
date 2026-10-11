@@ -82,6 +82,7 @@ export async function waitForUsage<T>(
   promise: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
+  signal.throwIfAborted();
   let onAbort: (() => void) | undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
     onAbort = () => reject(signal.reason);

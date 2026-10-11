@@ -11,6 +11,7 @@ import { DEFAULT_ADAPTERS } from "../../../extensions/usage/providers/registry.t
 import {
   computeUsageStatus,
   parseTimestamp,
+  waitForUsage,
 } from "../../../extensions/usage/providers/utils.ts";
 
 function jwt(payload: Record<string, unknown>) {
@@ -24,6 +25,17 @@ const antiAuth = {
 function payloadFetch(payload: unknown): typeof fetch {
   return async () => Response.json(payload);
 }
+
+test("a pre-cancelled quota wait cannot return an already-fulfilled result", async () => {
+  const controller = new AbortController();
+  const reason = new Error("cancelled fixture");
+  controller.abort(reason);
+
+  await assert.rejects(
+    waitForUsage(Promise.resolve("stale quota"), controller.signal),
+    (error: unknown) => error === reason,
+  );
+});
 
 test("Cursor uses its session cookie, authoritative percentages and independent account metadata", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
