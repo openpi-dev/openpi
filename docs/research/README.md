@@ -4,7 +4,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Source-verified designs
 
-- [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection ([#446](https://github.com/openpi-dev/openpi/issues/446)).
+- [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection; Oct12 adds grouped/searchable records and responsive evidence details ([#446](https://github.com/openpi-dev/openpi/issues/446)).
 
 ## Draft investigations
 

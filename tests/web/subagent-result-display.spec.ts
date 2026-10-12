@@ -223,7 +223,9 @@ it("keeps visible reasoning evidence while ignoring whitespace-only provider par
   expect(
     container.querySelector(".thinking-line summary")?.textContent,
   ).toContain("Checked the tools.");
-  expect(container.querySelector(".thinking-line .tool-icon")).toBeNull();
+  expect(
+    container.querySelector(".thinking-line .tool-icon .lucide-lightbulb"),
+  ).not.toBeNull();
   expect(container.querySelector(".thinking-line .tool-name")).toBeNull();
   expect(
     container.querySelector(".process-sequence:not(.single-process)"),

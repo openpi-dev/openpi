@@ -3145,6 +3145,201 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
   await expect(view).toHaveCount(0);
 });
 
+for (const theme of ["light", "dark"] as const) {
+  test(`trajectory keeps native evidence searchable and adapts to panel width in ${theme}`, async ({
+    page,
+  }, testInfo) => {
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = (await response.json()) as WebSnapshot;
+      snapshot.preferences = {
+        ...snapshot.preferences,
+        theme,
+        sidebarWidth: 420,
+      };
+      snapshot.runtime = { status: "idle", capabilities: {} };
+      snapshot.currentSessionId = "trajectory-reading";
+      snapshot.selectedSession = {
+        id: "trajectory-reading",
+        path: "/trajectory/reading.jsonl",
+        cwd: "/trajectory",
+        bytes: 1000,
+        truncation: {
+          truncated: false,
+          entriesOmitted: 0,
+          messagesTruncated: 0,
+          messagePartsOmitted: 0,
+          maxBytes: 2097152,
+        },
+        entries: [
+          {
+            id: "model",
+            type: "model_change",
+            timestamp: "2026-10-12T08:00:00Z",
+          },
+          {
+            id: "effort",
+            type: "thinking_level_change",
+            timestamp: "2026-10-12T08:00:00Z",
+          },
+          {
+            id: "question",
+            type: "message",
+            timestamp: "2026-10-12T08:00:01Z",
+            message: { role: "user", content: "检查项目配置，再运行检查。" },
+          },
+          {
+            id: "inspect",
+            type: "message",
+            timestamp: "2026-10-12T08:00:02Z",
+            message: {
+              role: "assistant",
+              content: "",
+              parts: [
+                { type: "thinking", text: "先读取配置，再核对检查结果。" },
+                {
+                  type: "toolCall",
+                  id: "read-config",
+                  name: "read",
+                  arguments: '{"path":"package.json"}',
+                },
+              ],
+            },
+          },
+          {
+            id: "config",
+            type: "message",
+            timestamp: "2026-10-12T08:00:03Z",
+            message: {
+              role: "toolResult",
+              toolCallId: "read-config",
+              toolName: "read",
+              content: "项目使用 bun run check 校验配置。",
+              isError: false,
+              details: { lines: 42 },
+            },
+          },
+          {
+            id: "verify",
+            type: "message",
+            timestamp: "2026-10-12T08:00:04Z",
+            message: {
+              role: "assistant",
+              content: "",
+              parts: [
+                {
+                  type: "toolCall",
+                  id: "run-checks",
+                  name: "bash",
+                  arguments: '{"command":"bun run check"}',
+                },
+              ],
+            },
+          },
+          {
+            id: "verified",
+            type: "message",
+            timestamp: "2026-10-12T08:00:05Z",
+            message: {
+              role: "toolResult",
+              toolCallId: "run-checks",
+              toolName: "bash",
+              content: "配置与类型检查通过。",
+              isError: false,
+              details: { exitCode: 0 },
+            },
+          },
+          {
+            id: "answer",
+            type: "message",
+            timestamp: "2026-10-12T08:00:06Z",
+            message: {
+              role: "assistant",
+              content: "已核对项目配置，检查通过。",
+              stopReason: "stop",
+            },
+          },
+        ],
+      };
+      alignControlledSessionFixture(snapshot);
+      snapshot.sessions[0]!.name = "核对项目配置";
+      snapshot.workspaces[0]!.name = "openpi";
+      await route.fulfill({ response, json: snapshot });
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await openWorkbench(page);
+    await page.getByRole("button", { name: "执行轨迹", exact: true }).click();
+    const view = page.getByRole("region", { name: "执行轨迹", exact: true });
+    const ledger = view.locator(".trajectory-ledger");
+    const inspector = view.getByRole("region", {
+      name: "记录详情",
+      exact: true,
+    });
+    const changes = view.locator(".trajectory-event-group details");
+    await expect(changes).toHaveJSProperty("open", false);
+    await changes.locator("summary").click();
+    await view.getByRole("button", { name: /切换模型/ }).click();
+    await inspector.getByText("记录信息", { exact: true }).click();
+    await expect(inspector).toContainText("model_change");
+    await changes.locator("summary").click();
+    await view
+      .locator(".trajectory-record.call")
+      .filter({ hasText: "read" })
+      .click();
+    await inspector.getByRole("tab", { name: "输入", exact: true }).click();
+    await expect(inspector.getByRole("tabpanel")).toContainText("package.json");
+    await expect(inspector.getByRole("tabpanel")).not.toContainText("项目使用");
+    await inspector
+      .getByRole("tab", { name: "输入", exact: true })
+      .press("ArrowRight");
+    await expect(
+      inspector.getByRole("tab", { name: "结果", exact: true }),
+    ).toBeFocused();
+    await expect(inspector.getByRole("tabpanel")).toContainText("项目使用");
+    await expect(inspector.getByRole("tabpanel")).not.toContainText(
+      "package.json",
+    );
+    const search = view.getByRole("searchbox", { name: "搜索已加载记录" });
+    await search.fill("配置与类型检查通过");
+    await expect(view.locator(".trajectory-record")).toHaveCount(1);
+    await expect(inspector).toContainText("bun run check");
+    await search.fill("");
+    for (const width of [1440, 900, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await view
+        .locator(".trajectory-record.call")
+        .filter({ hasText: "read" })
+        .click();
+      await expect(inspector).toBeVisible();
+      const left = (await ledger.boundingBox())!;
+      const right = (await inspector.boundingBox())!;
+      if (width === 1440)
+        expect(right.x).toBeGreaterThan(left.x + left.width - 1);
+      else expect(right.y).toBeGreaterThanOrEqual(left.y + left.height);
+      expect(
+        await view.evaluate((node) => node.scrollWidth <= node.clientWidth),
+      ).toBe(true);
+      expect(
+        (
+          await new AxeBuilder({ page })
+            .include(".conversation-shell")
+            .analyze()
+        ).violations,
+      ).toEqual([]);
+      await page.screenshot({
+        path: testInfo.outputPath(`trajectory-${theme}-${width}.png`),
+        animations: "disabled",
+      });
+    }
+  });
+}
+
 test("fresh browser contexts open the bare address and can request workspace selection", async ({
   browser,
 }) => {

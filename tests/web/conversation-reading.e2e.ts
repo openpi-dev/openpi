@@ -253,6 +253,7 @@ for (const touch of [false, true]) {
       const thinkingArrow = thinkingSummary.locator(".tool-disclosure");
       await expect(thinking).toHaveJSProperty("open", false);
       await expect(thinkingSummary).toHaveText("Inspecting implementation");
+      await expect(thinkingSummary.locator(".lucide-lightbulb")).toBeVisible();
       await expect(group.locator(".thought-tool-step")).toHaveCount(2);
       await expect(group.locator(".thought-tool-step").first()).toHaveCSS(
         "border-left-width",

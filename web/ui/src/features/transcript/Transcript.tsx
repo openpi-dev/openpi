@@ -7,6 +7,7 @@ import {
   Clipboard,
   GitBranch,
   Globe,
+  Lightbulb,
   Pencil,
   RotateCcw,
   Wifi,
@@ -754,6 +755,9 @@ function ThinkingEvidence({
         aria-label={[name, preview].filter(Boolean).join(" · ")}
         title={preview}
       >
+        <span className="tool-icon" aria-hidden="true">
+          <Lightbulb />
+        </span>
         <span className="details-title">
           <span className="tool-summary">{preview || name}</span>
         </span>
