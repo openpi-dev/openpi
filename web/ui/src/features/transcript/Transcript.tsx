@@ -3,7 +3,6 @@ import {
   ArrowDown,
   Bot,
   Check,
-  ChevronDown,
   ChevronRight,
   Clipboard,
   GitBranch,
@@ -150,6 +149,7 @@ interface RenderRow {
   processPreview?: string;
   processToolName?: string;
   processStatus?: Status;
+  processMessageKey?: string;
   error?: boolean;
   outcome?: "completed" | "failed" | "interrupted";
   pendingPrompt?: boolean;
@@ -757,7 +757,7 @@ function ThinkingEvidence({
         <span className="details-title">
           <span className="tool-summary">{preview || name}</span>
         </span>
-        <ChevronDown className="tool-disclosure" aria-hidden="true" />
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
       </summary>
       {expanded && (
         <div className="details-body thinking-evidence">
@@ -1416,6 +1416,7 @@ function ProcessSequence({
   active: boolean;
 }) {
   const { t } = useTranslation();
+  let thinkingMessageKey: string | undefined;
   const [open, setOpen] = useState(active);
   const single = rows.length === 1;
   const previousSingle = useRef(single);
@@ -1664,15 +1665,26 @@ function ProcessSequence({
         }}
       >
         <div className="process-sequence-body">
-          {rows.map((row) => (
-            <div
-              className={`process-step ${single ? "single-tool-step " : ""}${row.processStatus ?? "unknown"}`}
-              data-status={row.processStatus ?? "unknown"}
-              key={row.key}
-            >
-              {row.content}
-            </div>
-          ))}
+          {rows.map((row) => {
+            // Native message order establishes this visual association;
+            // chronological proximity across messages does not.
+            if (row.processType === "thinking")
+              thinkingMessageKey = row.processMessageKey;
+            else if (row.processMessageKey !== thinkingMessageKey)
+              thinkingMessageKey = undefined;
+            const followsThinking =
+              thinkingMessageKey !== undefined &&
+              row.processType !== "thinking";
+            return (
+              <div
+                className={`process-step ${single ? "single-tool-step " : ""}${followsThinking ? "thought-tool-step " : ""}${row.processStatus ?? "unknown"}`}
+                data-status={row.processStatus ?? "unknown"}
+                key={row.key}
+              >
+                {row.content}
+              </div>
+            );
+          })}
         </div>
       </section>
     </details>
@@ -2637,6 +2649,7 @@ export function Transcript(props: TranscriptProps) {
               turn,
               kind: "process",
               processType: "tool",
+              processMessageKey: entry.key,
               processToolName: "web_search",
               processPreview: search.query,
               processStatus: status,
@@ -2828,6 +2841,7 @@ export function Transcript(props: TranscriptProps) {
               turn,
               kind: "process",
               processType: "thinking",
+              processMessageKey: entry.key,
               processPreview: thinkingPreview(part.text),
               processStatus: status,
               content: (
@@ -2953,6 +2967,7 @@ export function Transcript(props: TranscriptProps) {
               processType: /^(subagent|workflow)/u.test(part.name)
                 ? "activity"
                 : "tool",
+              processMessageKey: entry.key,
               processToolName: part.name,
               processPreview: toolActivityTarget(part.name, args)
                 .split("\n")

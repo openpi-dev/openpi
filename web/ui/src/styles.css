@@ -407,7 +407,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .thinking-line > summary { padding-inline:0; }
 .thinking-line .details-title { flex:0 1 auto; min-width:0; }
 .thinking-line .tool-summary { font-family:inherit; line-height:1.5; color:var(--subtle); }
-.thinking-line[open] > summary .tool-disclosure { transform:rotate(180deg); }
 .thinking-line .details-body { margin-left:0; }
 .tool-line:not(.thinking-line):not([data-tool="read"]):not([data-tool="write"]):not([data-tool="edit"]) .tool-name { color:var(--muted); background:var(--sidebar-hover); }
 .thinking-evidence { max-height:360px; overflow:auto; padding:5px 0 5px 12px; border-left:1px solid var(--border); color:var(--muted); white-space:normal; }
@@ -435,6 +434,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .process-step .message-details { width:100%; margin:0; }
 .process-step .message-details > summary { min-height:30px; font-size:var(--conversation-font-size); }
 .process-step { position:relative; min-width:0; }
+.process-step.thought-tool-step { margin-left:6px; padding-left:12px; border-left:1px solid var(--border); }
 .single-tool-step .tool-evidence-card > summary { padding-inline:0; }
 .process-sequence.single-process { width:100%; margin:0; }
 .single-process > summary { display:none; }
@@ -1013,13 +1013,13 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .evidence-filename.artifact-link:is(:hover, :focus-visible) { text-decoration-style:solid; text-decoration-color:currentColor; color:var(--accent); }
 .evidence-chevron { width:13px; height:13px; flex:none; color:var(--subtle); transition:transform 140ms ease; }
 .tool-evidence-card[open] > summary .evidence-chevron { transform:rotate(90deg); }
-:is(.tool-evidence-card, .tool-line:not(.thinking-line), .process-sequence) > summary :is(.evidence-chevron, .tool-disclosure) { opacity:0; transition:opacity 140ms ease, transform 140ms ease; }
-:is(.tool-evidence-card, .tool-line:not(.thinking-line), .process-sequence) > summary:is(:hover, :focus-visible, :has(:focus-visible)) :is(.evidence-chevron, .tool-disclosure) { opacity:1; }
+:is(.tool-evidence-card, .tool-line, .process-sequence) > summary :is(.evidence-chevron, .tool-disclosure, .process-sequence-counts) { opacity:0; transition:opacity 140ms ease, transform 140ms ease; }
+:is(.tool-evidence-card, .tool-line, .process-sequence) > summary:is(:hover, :focus-visible, :has(:focus-visible)) :is(.evidence-chevron, .tool-disclosure, .process-sequence-counts) { opacity:1; }
 @media (hover: none) {
-  :is(.tool-evidence-card, .tool-line:not(.thinking-line), .process-sequence) > summary :is(.evidence-chevron, .tool-disclosure) { opacity:1; }
+  :is(.tool-evidence-card, .tool-line, .process-sequence) > summary :is(.evidence-chevron, .tool-disclosure, .process-sequence-counts) { opacity:1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  :is(.tool-evidence-card, .tool-line:not(.thinking-line), .process-sequence) > summary :is(.evidence-chevron, .tool-disclosure) { transition:none; }
+  :is(.tool-evidence-card, .tool-line, .process-sequence) > summary :is(.evidence-chevron, .tool-disclosure, .process-sequence-counts) { transition:none; }
 }
 .tool-evidence-card[data-state="failed"] .tool-name,
 .tool-evidence-card[data-state="cancelled"] .tool-name,

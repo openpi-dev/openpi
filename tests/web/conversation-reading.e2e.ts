@@ -97,10 +97,9 @@ test("conversation text stays readable and file links retain their exact target"
         { exact: true },
       ),
     ).toBeInViewport({ ratio: 1 });
-    const link = page.getByRole("button", {
-      name: "session-history.ts",
-      exact: true,
-    });
+    const link = page
+      .locator(".message-row.response .markdown")
+      .getByRole("button", { name: "session-history.ts", exact: true });
     await expect(link).toHaveAttribute("title", `Open read-only file: ${path}`);
     await expect(link.locator(".artifact-link-path")).toBeHidden();
     await expect(page.locator(".process-sequence")).toBeVisible();
@@ -116,3 +115,181 @@ test("conversation text stays readable and file links retain their exact target"
     });
   }
 });
+
+for (const touch of [false, true]) {
+  test.describe(touch ? "touch activity" : "desktop activity", () => {
+    test.use({
+      hasTouch: touch,
+      isMobile: touch,
+      viewport: { width: touch ? 390 : 1200, height: 900 },
+    });
+
+    test("keeps thinking folded and reveals activity details at the input boundary", async ({
+      page,
+    }, testInfo) => {
+      await page.route("**/events?**", (route) =>
+        route.fulfill({
+          contentType: "text/event-stream",
+          body: ": heartbeat\n\n",
+        }),
+      );
+      await page.route("**/api/snapshot**", async (route) => {
+        const response = await route.fetch();
+        const snapshot = (await response.json()) as WebSnapshot;
+        if (!snapshot.selectedSession)
+          throw new Error("Missing real Session fixture");
+        snapshot.preferences = {
+          ...snapshot.preferences,
+          expandThinking: false,
+          theme: touch ? "light" : "dark",
+        };
+        snapshot.runtime = {
+          ...snapshot.runtime,
+          status: "idle",
+          activeTurn: undefined,
+        };
+        snapshot.selectedSession.entries = [
+          {
+            id: "activity-question",
+            timestamp: "2026-10-12T08:00:00Z",
+            type: "message",
+            message: { role: "user", content: "检查配置与实现。" },
+          },
+          {
+            id: "activity-assistant",
+            timestamp: "2026-10-12T08:00:01Z",
+            type: "message",
+            message: {
+              role: "assistant",
+              content: "",
+              stopReason: "toolUse",
+              parts: [
+                {
+                  type: "thinking",
+                  text: "Inspecting implementation\n\n先读取配置，再核对检查结果。",
+                },
+                {
+                  type: "toolCall",
+                  id: "activity-read",
+                  name: "read",
+                  arguments: '{"path":"README.md"}',
+                },
+                {
+                  type: "toolCall",
+                  id: "activity-command",
+                  name: "bash",
+                  arguments: '{"command":"bun run check"}',
+                },
+              ],
+            },
+          },
+          {
+            id: "activity-read-result",
+            timestamp: "2026-10-12T08:00:02Z",
+            type: "message",
+            message: {
+              role: "toolResult",
+              toolCallId: "activity-read",
+              toolName: "read",
+              content: "Configuration verified.",
+              isError: false,
+            },
+          },
+          {
+            id: "activity-command-result",
+            timestamp: "2026-10-12T08:00:03Z",
+            type: "message",
+            message: {
+              role: "toolResult",
+              toolCallId: "activity-command",
+              toolName: "bash",
+              content: "Checks passed.",
+              isError: false,
+            },
+          },
+          {
+            id: "activity-answer",
+            timestamp: "2026-10-12T08:00:04Z",
+            type: "message",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: "配置与检查结果已核对。",
+            },
+          },
+        ];
+        await route.fulfill({ response, json: snapshot });
+      });
+      await page.goto("/");
+      const group = page.locator(".process-sequence:not(.single-process)");
+      const summary = group.locator(":scope > summary");
+      const counts = summary.locator(".process-sequence-counts");
+      const arrow = summary.locator(".tool-disclosure");
+      await expect(group).toHaveJSProperty("open", false);
+      await expect(summary).toHaveAccessibleName(/2.*工具调用/);
+      if (!touch) {
+        await page.mouse.move(0, 0);
+        await expect(counts).toHaveCSS("opacity", "0");
+        await expect(arrow).toHaveCSS("opacity", "0");
+        const before = await summary.boundingBox();
+        await summary.hover();
+        await expect(counts).toHaveCSS("opacity", "1");
+        await expect(arrow).toHaveCSS("opacity", "1");
+        expect(await summary.boundingBox()).toEqual(before);
+        await page.mouse.move(0, 0);
+        await expect(counts).toHaveCSS("opacity", "0");
+        await page.keyboard.press("Tab");
+        await summary.focus();
+        await expect(counts).toHaveCSS("opacity", "1");
+        await page.keyboard.press("Enter");
+      } else {
+        await expect(counts).toHaveCSS("opacity", "1");
+        await expect(arrow).toHaveCSS("opacity", "1");
+        await summary.tap();
+      }
+      await expect(group).toHaveJSProperty("open", true);
+      const thinking = group.locator(".thinking-line");
+      const thinkingSummary = thinking.locator(":scope > summary");
+      const thinkingArrow = thinkingSummary.locator(".tool-disclosure");
+      await expect(thinking).toHaveJSProperty("open", false);
+      await expect(thinkingSummary).toHaveText("Inspecting implementation");
+      await expect(group.locator(".thought-tool-step")).toHaveCount(2);
+      await expect(group.locator(".thought-tool-step").first()).toHaveCSS(
+        "border-left-width",
+        "1px",
+      );
+      if (!touch) {
+        await expect(thinkingArrow).toHaveCSS("opacity", "0");
+        await thinkingSummary.hover();
+        await expect(thinkingArrow).toHaveCSS("opacity", "1");
+        await page.mouse.move(0, 0);
+        await expect(thinkingArrow).toHaveCSS("opacity", "0");
+        await page.keyboard.press("Tab");
+        await thinkingSummary.focus();
+        await expect(thinkingArrow).toHaveCSS("opacity", "1");
+        await page.keyboard.press("Enter");
+      } else {
+        await expect(thinkingArrow).toHaveCSS("opacity", "1");
+        await thinkingSummary.tap();
+      }
+      await expect(thinking).toHaveJSProperty("open", true);
+      await expect(thinkingArrow).toHaveCSS(
+        "transform",
+        "matrix(0, 1, -1, 0, 0, 0)",
+      );
+      await expect(thinking.locator(".thinking-evidence")).toContainText(
+        "先读取配置，再核对检查结果。",
+      );
+      await thinkingSummary.click();
+      await expect(thinking).toHaveJSProperty("open", false);
+      await page.getByText("配置与检查结果已核对。", { exact: true }).click();
+      await page.mouse.move(0, 0);
+      await expect(thinkingArrow).toHaveCSS("opacity", touch ? "1" : "0");
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await expect(thinkingArrow).toHaveCSS("transition-duration", "0s");
+      await page.screenshot({
+        path: testInfo.outputPath("activity-disclosure.png"),
+      });
+    });
+  });
+}
