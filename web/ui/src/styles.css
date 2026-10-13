@@ -20,6 +20,10 @@
 @import "./features/transcript/conversation-reading.css";
 @import "./features/transcript/history-controls.css";
 
+.session-fork-progress { display: flex; align-items: center; gap: 8px; padding: 8px 20px; color: var(--muted); font-size: 13px; }
+.session-fork-progress-spinner { width: 14px; height: 14px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: session-spin 1.1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .session-fork-progress-spinner { animation: none; } }
+
 :root {
   color-scheme: light;
   --page: #fff;
@@ -170,8 +174,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .workspace-button:hover { background: var(--sidebar-hover); color: var(--text); }
 .workspace-label { @apply flex h-full min-w-0 flex-1 items-center border-0 bg-transparent text-left; }
 .workspace-toggle { @apply grid h-full w-7 shrink-0 place-items-center border-0 bg-transparent; }
-.workspace-chevron { display: block; font-size: 15px; transform: rotate(0); transition: transform 140ms ease; }
-.workspace-group.collapsed .workspace-chevron { transform: rotate(-90deg); }
 .workspace-button strong { @apply min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap; font-size: 12.5px; font-weight: 600; }
 .workspace-row-actions { @apply flex items-center; }
 .workspace-action { width: 27px; height: 27px; }
@@ -185,10 +187,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .session:hover { background: var(--sidebar-hover); color: var(--text); }
 .session.active { background: var(--sidebar-active); color: var(--text); }
 .session-title { @apply min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap; font-size: 12.5px; }
-.session-time { flex: 0 0 auto; color: inherit; font-size: 10.5px; }
-.session-row > .astryx-menu-trigger { @apply absolute right-1 opacity-0; pointer-events: none; }
-.session-row:hover > .astryx-menu-trigger, .session-row:focus-within > .astryx-menu-trigger { opacity: 1; pointer-events: auto; }
-.session-row:hover .session-time, .session-row:focus-within .session-time { visibility: hidden; }
 .empty { min-height: 32px; padding: 7px 10px 7px 29px; color: var(--muted); font-size: 12px; }
 .sidebar-expand { @apply fixed left-2 top-2 z-30; width: 40px; height: 40px; }
 .sidebar-expand svg { width: 19px; height: 19px; }
@@ -753,6 +751,24 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .notice-success { border-color: var(--healthy); color: var(--healthy); }
 .notice button { @apply grid size-6 place-items-center border-0 bg-transparent; }
 .notice svg { width: 14px; height: 14px; }
+.archive-notifications { position: absolute; top: 16px; left: 50%; z-index: 45; display: flex; flex-direction: column; gap: 10px; width: min(500px, calc(100% - 24px)); transform: translateX(-50%); pointer-events: none; }
+.archive-notification { pointer-events: auto; }
+.archive-notification [role="status"] { display: flex; align-items: center; gap: 12px; width: 100%; max-width: none; padding: 14px 12px 14px 16px; border: 1px solid var(--border); border-radius: 18px; background: var(--page); color: var(--text); box-shadow: 0 8px 28px #00000018; }
+.archive-notification-icon { width: 20px; height: 20px; flex-shrink: 0; }
+.archive-notification-copy { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.archive-notification-copy strong { font-size: 14px; font-weight: 600; }
+.archive-notification-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
+.archive-notification-copy > .archive-notification-error { color: var(--error); white-space: normal; }
+.archive-notification button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex-shrink: 0; min-height: 32px; padding: 6px 10px; border: 0; border-radius: 10px; background: var(--sidebar); color: var(--text); font-size: 13px; cursor: pointer; }
+.archive-notification button:hover { background: var(--sidebar-hover); }
+.archive-notification button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.archive-notification button:disabled { opacity: .55; cursor: wait; }
+.archive-notification button.archive-notification-undo { background: var(--text); color: var(--page); }
+.archive-notification button.archive-notification-close { width: 28px; padding: 4px; background: transparent; }
+.archive-notification button svg { width: 15px; height: 15px; }
+.archive-notification-spinner { animation: session-spin 1.1s linear infinite; }
+@media (max-width: 420px) { .archive-notification [role="status"] { gap: 7px; padding: 12px 8px; } .archive-notification button { padding: 6px 8px; } }
+@media (prefers-reduced-motion: reduce) { .archive-notification-spinner { animation: none; } }
 .mobile-header { display: none; }
 .connection-state { @apply items-center gap-1.5; color: var(--healthy); font-size: 11px; }
 .connection-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -818,7 +834,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-shell, .session-sidebar, .workspace-chevron, .message-actions, .turn-rail, .details-mark { transition: none; }
+  .app-shell, .session-sidebar, .message-actions, .turn-rail, .details-mark { transition: none; }
   .conversation { scroll-behavior: auto; }
   .landing-brand .brand-lockup, .landing-brand .brand-word, .landing-brand .pixel-mark, .landing-brand .pixel-mark i, .landing-brand .pixel-mark i::after { animation: none; }
   .landing-brand .brand-word { opacity: 1; }

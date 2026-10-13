@@ -665,9 +665,9 @@ it("keeps a resized width when save completes with a stale refreshed snapshot", 
     screen.getByRole("separator", { name: i18n.t("resizeSidebar") }),
     { key: "Enter" },
   );
-  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("340px");
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("340px");
 });
 
 it("keeps the latest operator width when later snapshots contain an older saved choice", async () => {
@@ -707,7 +707,7 @@ it("keeps the latest operator width when later snapshots contain an older saved 
   fireEvent.keyDown(handle, { key: "Enter" });
   await waitFor(() =>
     expect(save).toHaveBeenLastCalledWith({
-      sidebarWidth: 280,
+      sidebarWidth: 340,
       auxiliaryWidth: 520,
     }),
   );
@@ -720,6 +720,6 @@ it("keeps the latest operator width when later snapshots contain an older saved 
       },
     });
   });
-  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("340px");
   expect(save).toHaveBeenCalledTimes(2);
 });

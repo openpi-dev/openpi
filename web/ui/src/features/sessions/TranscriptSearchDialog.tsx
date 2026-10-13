@@ -1,22 +1,61 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
-import { LoaderCircle, MessageSquare, Search } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Circle, LoaderCircle } from "lucide-react";
+import {
+  type KeyboardEvent,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
-import type { WebHistoryAnchor } from "../../../../protocol/types.ts";
+import type {
+  WebHistoryAnchor,
+  WebSessionSummary,
+  WebWorkspaceSummary,
+} from "../../../../protocol/types.ts";
 import type { WebTranscriptSearchResponse } from "../../../../search/transcript-search.ts";
+import { sessionTitle, workspaceName } from "../../lib/format.ts";
 import { WebClient } from "../../protocol/client.ts";
+import "./transcript-search.css";
+
+const sessionOptionKey = (session: WebSessionSummary) =>
+  JSON.stringify(["session", session.id, session.path]);
+const messageOptionKey = (
+  match: WebTranscriptSearchResponse["matches"][number],
+) =>
+  JSON.stringify([
+    "message",
+    match.sessionId,
+    match.sessionPath,
+    match.messageId,
+    match.source,
+    match.lineOffset,
+  ]);
 
 export function TranscriptSearchDialog({
   open,
   initialQuery,
   initialIncludeArchived,
+  sessions,
+  workspaces,
   onClose,
+  onCreateSession,
+  onOpenSession,
   onOpenMessage,
 }: {
   open: boolean;
   initialQuery: string;
   initialIncludeArchived: boolean;
+  sessions?: readonly WebSessionSummary[];
+  workspaces?: readonly WebWorkspaceSummary[];
   onClose: () => void;
+  onCreateSession?: () => void;
+  onOpenSession?: (
+    path: string,
+    signal?: AbortSignal,
+  ) => Promise<boolean | void>;
   onOpenMessage: (
     anchor: WebHistoryAnchor,
     signal?: AbortSignal,
@@ -25,9 +64,7 @@ export function TranscriptSearchDialog({
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const [query, setQuery] = useState(initialQuery);
-  const [includeArchived, setIncludeArchived] = useState(
-    initialIncludeArchived,
-  );
+  const includeArchived = initialIncludeArchived;
   const [result, setResult] = useState<{
     query: string;
     revision: number;
@@ -36,51 +73,100 @@ export function TranscriptSearchDialog({
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchRevision, setSearchRevision] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [searchFailed, setSearchFailed] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+  const [activeOption, setActiveOption] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
-  const results = useRef<HTMLUListElement>(null);
-  const mounted = useRef(false);
-  const openRequest = useRef(0);
+  const listId = useId();
   const openingController = useRef<AbortController | null>(null);
   useEffect(() => {
-    mounted.current = open;
     if (open) {
       setQuery(initialQuery);
-      setIncludeArchived(initialIncludeArchived);
       setResult(null);
-      setError(null);
+      setSearchFailed(false);
+      setOpenError(null);
       setOpening(null);
-      input.current?.focus();
     }
     return () => {
-      mounted.current = false;
-      openRequest.current += 1;
       openingController.current?.abort();
       openingController.current = null;
     };
-  }, [open, initialQuery, initialIncludeArchived]);
+  }, [open, initialQuery]);
   const trimmed = query.trim();
+  const workspaceNames = useMemo(
+    () =>
+      new Map(workspaces?.map((workspace) => [workspace.path, workspace.name])),
+    [workspaces],
+  );
+  const localSessions = useMemo(() => {
+    if (!open || !onOpenSession) return [];
+    const needle = trimmed.toLocaleLowerCase();
+    return (sessions ?? [])
+      .filter((session) => {
+        if (session.archived && !includeArchived) return false;
+        return (
+          !needle ||
+          `${sessionTitle(session, t("untitledSession"))} ${session.cwd} ${workspaceNames.get(session.cwd) ?? ""}`
+            .toLocaleLowerCase()
+            .includes(needle)
+        );
+      })
+      .sort(
+        (a, b) =>
+          b.modified.localeCompare(a.modified) || a.path.localeCompare(b.path),
+      );
+  }, [
+    open,
+    sessions,
+    workspaceNames,
+    trimmed,
+    includeArchived,
+    onOpenSession,
+    t,
+  ]);
+  const sessionGroups = trimmed
+    ? [
+        {
+          name: "transcriptSearchSessions",
+          sessions: localSessions.slice(0, 9),
+        },
+      ]
+    : [
+        {
+          name: "pinnedConversations",
+          sessions: localSessions
+            .filter((session) => session.pinOrder !== undefined)
+            .sort((a, b) => (a.pinOrder ?? 0) - (b.pinOrder ?? 0)),
+        },
+        {
+          name: "transcriptSearchRecent",
+          sessions: localSessions
+            .filter((session) => session.pinOrder === undefined)
+            .slice(0, 10),
+        },
+      ];
   useLayoutEffect(() => {
     // A different result set cannot retain its predecessor's pending reveal.
     void open;
     void trimmed;
     void includeArchived;
     void searchRevision;
-    openRequest.current += 1;
     openingController.current?.abort();
     openingController.current = null;
     setOpening(null);
+    setOpenError(null);
+    setActiveOption(null);
   }, [open, trimmed, includeArchived, searchRevision]);
   useEffect(() => {
     if (!open || !trimmed) {
       setLoading(false);
-      setError(null);
+      setSearchFailed(false);
       return;
     }
     const controller = new AbortController();
     setLoading(true);
-    setError(null);
+    setSearchFailed(false);
     const timer = window.setTimeout(() => {
       void client
         .searchTranscripts(trimmed, {
@@ -97,7 +183,7 @@ export function TranscriptSearchDialog({
             });
         })
         .catch(() => {
-          if (!controller.signal.aborted) setError("transcriptSearchFailed");
+          if (!controller.signal.aborted) setSearchFailed(true);
         })
         .finally(() => {
           if (!controller.signal.aborted) setLoading(false);
@@ -114,198 +200,332 @@ export function TranscriptSearchDialog({
     result.includeArchived === includeArchived
       ? result.response
       : null;
-  const openMessage = async (anchor: WebHistoryAnchor) => {
-    if (opening) return;
+  const optionKeys = [
+    ...sessionGroups.flatMap((group) => group.sessions.map(sessionOptionKey)),
+    ...(trimmed ? (response?.matches.map(messageOptionKey) ?? []) : []),
+  ];
+  const selectedKey =
+    activeOption !== null && optionKeys.includes(activeOption)
+      ? activeOption
+      : optionKeys[0];
+  const optionId = (key: string) => `${listId}-${encodeURIComponent(key)}`;
+  const selectedId = selectedKey ? optionId(selectedKey) : undefined;
+  useLayoutEffect(() => {
+    if (open && selectedId)
+      document
+        .getElementById(selectedId)
+        ?.scrollIntoView?.({ block: "nearest" });
+  }, [open, selectedId]);
+  const openResult = async (
+    key: string,
+    navigate: (signal: AbortSignal) => Promise<boolean | void>,
+    failure: "transcriptSearchOpenFailed" | "transcriptSearchSessionOpenFailed",
+  ) => {
+    if (openingController.current) return;
+    setActiveOption(key);
+    input.current?.focus({ preventScroll: true });
     const controller = new AbortController();
     openingController.current = controller;
-    const request = ++openRequest.current;
-    setOpening(anchor.entryId);
-    setError(null);
+    setOpening(key);
+    setOpenError(null);
     try {
-      const opened = await onOpenMessage(anchor, controller.signal);
-      if (
-        controller.signal.aborted ||
-        !mounted.current ||
-        request !== openRequest.current
-      )
-        return;
-      if (opened) onClose();
-      else setError("transcriptSearchOpenFailed");
+      const opened = await navigate(controller.signal);
+      if (controller.signal.aborted) return;
+      if (opened !== false) onClose();
+      else setOpenError(failure);
     } catch {
-      if (
-        !controller.signal.aborted &&
-        mounted.current &&
-        request === openRequest.current
-      )
-        setError("transcriptSearchOpenFailed");
+      if (!controller.signal.aborted) setOpenError(failure);
     } finally {
-      if (openingController.current === controller)
+      if (openingController.current === controller) {
         openingController.current = null;
-      if (mounted.current && request === openRequest.current) setOpening(null);
+        setOpening(null);
+      }
     }
+  };
+  const navigateResults = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
+      return;
+    if (
+      !["ArrowDown", "ArrowUp", "Home", "End", "Enter"].includes(event.key) ||
+      opening !== null
+    )
+      return;
+    if (!selectedKey || !selectedId) {
+      if (event.key === "Enter" && !trimmed && onCreateSession) {
+        event.preventDefault();
+        onClose();
+        onCreateSession();
+      }
+      return;
+    }
+    event.preventDefault();
+    const index = optionKeys.indexOf(selectedKey);
+    if (event.key === "Enter") {
+      document.getElementById(selectedId)?.click();
+      return;
+    }
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? optionKeys.length - 1
+          : event.key === "ArrowDown"
+            ? Math.min(index + 1, optionKeys.length - 1)
+            : Math.max(index - 1, 0);
+    setActiveOption(optionKeys[next] ?? null);
   };
   return (
     <Dialog
       isOpen={open}
       onOpenChange={(next: boolean) => !next && onClose()}
-      purpose="form"
-      width={680}
+      purpose="info"
+      width="min(520px, 92vw)"
+      maxHeight="calc(var(--transcript-search-list-height) + 64px)"
+      padding={0}
+      className="transcript-search-modal"
       aria-label={t("transcriptSearch")}
     >
-      <div className="openpi-dialog transcript-search-dialog">
-        <div className="transcript-search-heading">
-          <Search aria-hidden="true" />
-          <strong>{t("transcriptSearch")}</strong>
-        </div>
-        <label className="transcript-search-input">
-          <Search aria-hidden="true" />
+      {open && (
+        <div className="transcript-search-dialog">
+          <h2 className="transcript-search-sr-only">{t("transcriptSearch")}</h2>
           <input
             ref={input}
+            className="transcript-search-input"
+            data-autofocus
             type="search"
             maxLength={200}
             value={query}
             aria-label={t("transcriptSearch")}
+            aria-autocomplete="list"
+            aria-controls={listId}
+            aria-activedescendant={selectedId}
             placeholder={t("transcriptSearchPlaceholder")}
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
             onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown" && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                results.current
-                  ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-                  ?.focus();
-              }
-            }}
+            onKeyDown={navigateResults}
           />
-        </label>
-        <label className="transcript-search-scope">
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(event) => setIncludeArchived(event.target.checked)}
-          />
-          {t("transcriptSearchIncludeArchived")}
-        </label>
-        <div className="transcript-search-feedback" role="status">
-          {loading ? (
-            <>
-              <LoaderCircle className="is-spinning" aria-hidden="true" />
-              {t("transcriptSearching")}
-            </>
-          ) : response && !response.matches.length ? (
-            t("transcriptSearchEmpty")
-          ) : null}
-        </div>
-        {error && (
-          <p className="transcript-search-error" role="alert">
-            {t(error)}
-            {error === "transcriptSearchFailed" && (
-              <button
-                type="button"
-                onClick={() => setSearchRevision((value) => value + 1)}
-              >
-                {t("transcriptSearchRetry")}
-              </button>
-            )}
-          </p>
-        )}
-        {response && (
-          <>
-            <ul
-              ref={results}
-              className="transcript-search-results"
-              aria-label={t("transcriptSearch")}
-              onKeyDown={(event) => {
-                if (
-                  !["ArrowDown", "ArrowUp", "Home", "End"].includes(
-                    event.key,
-                  ) ||
-                  event.nativeEvent.isComposing
+          <span className="transcript-search-sr-only" role="status">
+            {loading ? t("transcriptSearching") : null}
+          </span>
+          <div className="transcript-search-groups">
+            <div id={listId} role="listbox" aria-label={t("transcriptSearch")}>
+              {sessionGroups
+                .filter(
+                  (group) =>
+                    group.sessions.length > 0 ||
+                    (trimmed && response?.matches.length),
                 )
-                  return;
-                const buttons = Array.from(
-                  results.current?.querySelectorAll<HTMLButtonElement>(
-                    "button:not(:disabled)",
-                  ) ?? [],
-                );
-                if (!buttons.length) return;
-                event.preventDefault();
-                const index = buttons.indexOf(
-                  document.activeElement as HTMLButtonElement,
-                );
-                const next =
-                  event.key === "Home"
-                    ? 0
-                    : event.key === "End"
-                      ? buttons.length - 1
-                      : event.key === "ArrowDown"
-                        ? Math.min(index + 1, buttons.length - 1)
-                        : Math.max(index - 1, 0);
-                buttons[next]?.focus();
-              }}
-            >
-              {response.matches.map((match) => {
-                const name = match.sessionName || t("untitledSession");
-                const source = t(`transcriptSearchSource_${match.source}`);
-                return (
-                  <li
-                    key={JSON.stringify([
-                      match.sessionId,
-                      match.sessionPath,
-                      match.messageId,
-                      match.source,
-                      match.lineOffset,
-                    ])}
-                  >
-                    <button
-                      type="button"
-                      disabled={opening !== null}
-                      aria-label={t("transcriptSearchResult", {
-                        session: name,
-                        source,
-                      })}
-                      onClick={() =>
-                        void openMessage({
-                          sessionId: match.sessionId,
-                          sessionPath: match.sessionPath,
-                          entryId: match.messageId,
-                        })
-                      }
-                    >
-                      <MessageSquare aria-hidden="true" />
-                      <span>
-                        <strong>{name}</strong>
-                        <small>
-                          {source}
-                          {match.toolName ? ` · ${match.toolName}` : ""}
-                        </small>
-                        <span className="transcript-search-snippet">
-                          {match.snippet}
-                        </span>
-                      </span>
-                      {opening === match.messageId && (
+                .map((group) => (
+                  <fieldset key={group.name} aria-label={t(group.name)}>
+                    <h3>
+                      {t(group.name)}
+                      {loading && (
                         <LoaderCircle
                           className="is-spinning"
                           aria-hidden="true"
                         />
                       )}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            {response.partial && (
+                    </h3>
+                    <ul
+                      className="transcript-search-results"
+                      role="presentation"
+                    >
+                      {onOpenSession &&
+                        group.sessions.map((session) => {
+                          const name = sessionTitle(
+                            session,
+                            t("untitledSession"),
+                          );
+                          const key = sessionOptionKey(session);
+                          const project = session.ungrouped
+                            ? t("ungrouped")
+                            : workspaceNames.get(session.cwd) ||
+                              workspaceName(session.cwd);
+                          return (
+                            <li key={key} role="presentation">
+                              <button
+                                id={optionId(key)}
+                                role="option"
+                                aria-selected={key === selectedKey}
+                                tabIndex={-1}
+                                type="button"
+                                disabled={opening !== null}
+                                aria-label={t("transcriptSearchSessionResult", {
+                                  session: name,
+                                })}
+                                onPointerMove={() => setActiveOption(key)}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() =>
+                                  void openResult(
+                                    key,
+                                    (signal) =>
+                                      onOpenSession(session.path, signal),
+                                    "transcriptSearchSessionOpenFailed",
+                                  )
+                                }
+                              >
+                                <span
+                                  className="transcript-search-accessory"
+                                  aria-hidden="true"
+                                >
+                                  {opening === key ? (
+                                    <LoaderCircle className="is-spinning" />
+                                  ) : session.unread ? (
+                                    <Circle className="transcript-search-unread" />
+                                  ) : null}
+                                </span>
+                                <span className="transcript-search-result-body">
+                                  <span className="transcript-search-result-line">
+                                    <span
+                                      className="transcript-search-title"
+                                      title={name}
+                                    >
+                                      {name}
+                                    </span>
+                                    <span
+                                      className="transcript-search-project"
+                                      title={session.cwd}
+                                    >
+                                      {project}
+                                    </span>
+                                  </span>
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      {trimmed &&
+                        response?.matches.map((match) => {
+                          const name =
+                            match.sessionName || t("untitledSession");
+                          const source = t(
+                            `transcriptSearchSource_${match.source}`,
+                          );
+                          const key = messageOptionKey(match);
+                          return (
+                            <li key={key} role="presentation">
+                              <button
+                                id={optionId(key)}
+                                role="option"
+                                aria-selected={key === selectedKey}
+                                tabIndex={-1}
+                                type="button"
+                                disabled={opening !== null}
+                                aria-label={t("transcriptSearchResult", {
+                                  session: name,
+                                  source,
+                                })}
+                                onPointerMove={() => setActiveOption(key)}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() =>
+                                  void openResult(
+                                    key,
+                                    (signal) =>
+                                      onOpenMessage(
+                                        {
+                                          sessionId: match.sessionId,
+                                          sessionPath: match.sessionPath,
+                                          entryId: match.messageId,
+                                        },
+                                        signal,
+                                      ),
+                                    "transcriptSearchOpenFailed",
+                                  )
+                                }
+                              >
+                                <span
+                                  className="transcript-search-accessory"
+                                  aria-hidden="true"
+                                >
+                                  {opening === key && (
+                                    <LoaderCircle className="is-spinning" />
+                                  )}
+                                </span>
+                                <span className="transcript-search-result-body">
+                                  <span className="transcript-search-result-line">
+                                    <span
+                                      className="transcript-search-title"
+                                      title={name}
+                                    >
+                                      {name}
+                                    </span>
+                                    <span
+                                      className="transcript-search-project"
+                                      title={match.workspace ?? source}
+                                    >
+                                      {match.workspace
+                                        ? workspaceNames.get(match.workspace) ||
+                                          workspaceName(match.workspace)
+                                        : source}
+                                    </span>
+                                  </span>
+                                  <span className="transcript-search-snippet">
+                                    {match.snippet}
+                                  </span>
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                    </ul>
+                  </fieldset>
+                ))}
+            </div>
+            {!trimmed && !localSessions.length && (
+              <div className="transcript-search-empty-history">
+                <p>{t("noConversations")}</p>
+                {onCreateSession && (
+                  <button
+                    className="transcript-search-create"
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onCreateSession();
+                    }}
+                  >
+                    {t("newSession")}
+                  </button>
+                )}
+              </div>
+            )}
+            {trimmed &&
+              !localSessions.length &&
+              !response?.matches.length &&
+              (loading ? (
+                <div className="transcript-search-feedback" aria-hidden="true">
+                  <LoaderCircle className="is-spinning" />
+                </div>
+              ) : response && !searchFailed ? (
+                <div className="transcript-search-feedback" role="status">
+                  {t("transcriptSearchEmpty")}
+                </div>
+              ) : null)}
+            {searchFailed && (
+              <p className="transcript-search-error" role="alert">
+                {t("transcriptSearchFailed")}
+                <button
+                  type="button"
+                  onClick={() => setSearchRevision((value) => value + 1)}
+                >
+                  {t("transcriptSearchRetry")}
+                </button>
+              </p>
+            )}
+            {openError && (
+              <p className="transcript-search-error" role="alert">
+                {t(openError)}
+              </p>
+            )}
+            {response?.partial && (
               <p className="transcript-search-partial">
                 {t("transcriptSearchPartial")}
               </p>
             )}
-          </>
-        )}
-        <div className="dialog-actions">
-          <button type="button" onClick={onClose}>
-            {t("close")}
-          </button>
+          </div>
         </div>
-      </div>
+      )}
     </Dialog>
   );
 }

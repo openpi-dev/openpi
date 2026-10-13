@@ -88,6 +88,7 @@ type PersistedEntry = NonNullable<
 >["entries"][number];
 interface DisplayEntry {
   compaction?: true;
+  forkSnapshotBoundary?: true;
   key: string;
   entryId?: string;
   timingKey?: string;
@@ -159,6 +160,7 @@ interface RenderRow {
   responseEntryId?: string;
   commandHandledInputId?: string;
   commandHandledCommandId?: string;
+  forkSnapshotBoundary?: true;
   timing?: WebTurnTiming;
 }
 
@@ -196,6 +198,7 @@ function resultStatus(
   message?: WebLiveMessage,
   liveState?: EvidenceState,
 ): Status {
+  if (message?.forkSnapshotToolResult) return "unknown";
   if (liveState === "running") return "running";
   if (liveState === "unknown") return "unknown";
   if (!message) return "unknown";
@@ -375,13 +378,20 @@ function providerFailures(entries: DisplayEntry[], running: boolean) {
   >();
   let failures: number[] = [];
   let lastAssistant = -1;
-  const finishRun = (timing?: WebTurnTiming, live = false) => {
+  const finishRun = (
+    timing?: WebTurnTiming,
+    live = false,
+    forkSnapshot = false,
+  ) => {
     if (failures.length > 0) {
       const terminal = entries[lastAssistant]?.message.stopReason;
       const interrupted =
         timing?.outcome === "cancelled" || terminal === "aborted";
       const finalError =
-        terminal === "error" && !interrupted && !(live && running);
+        terminal === "error" &&
+        !interrupted &&
+        !(live && running) &&
+        !forkSnapshot;
       if (finalError) finalErrors.add(lastAssistant);
       const collapsed = finalError ? failures.slice(0, -1) : failures;
       const groupIndex = collapsed.at(-1);
@@ -406,6 +416,7 @@ function providerFailures(entries: DisplayEntry[], running: boolean) {
   entries.forEach((entry, index) => {
     if (entry.optimistic) return;
     if (entry.timing) finishRun(entry.timing);
+    else if (entry.forkSnapshotBoundary) finishRun(undefined, false, true);
     else if (
       entry.message.role === "user" ||
       (entry.message.role === "custom" &&
@@ -452,6 +463,7 @@ function EvidenceDetails({
   status,
   summary,
   output,
+  snapshotMissingResult = false,
   defaultOpen = false,
 }: {
   body: string;
@@ -460,6 +472,7 @@ function EvidenceDetails({
   status: Status;
   summary?: string;
   output?: string;
+  snapshotMissingResult?: boolean;
   defaultOpen?: boolean;
 }) {
   const { t } = useTranslation();
@@ -494,6 +507,11 @@ function EvidenceDetails({
           </span>
           {summary && <span className="tool-summary">{summary}</span>}
         </span>
+        {snapshotMissingResult && (
+          <span className="evidence-status">
+            {t("toolSnapshotMissingResult")}
+          </span>
+        )}
         <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
@@ -564,6 +582,7 @@ function familyCard(
   defaultOpen = false,
   observed = true,
 ) {
+  if (result?.forkSnapshotToolResult) return null;
   const name = part.name || "";
   const args = parseArguments(part.arguments);
   const details = record(result?.details);
@@ -1150,6 +1169,16 @@ function buildEntries(
     ]),
   );
   const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] => {
+    if (entry.forkSnapshotBoundary)
+      return [
+        {
+          key: entry.id,
+          entryId: entry.id,
+          timestamp: entry.timestamp,
+          forkSnapshotBoundary: true,
+          message: { role: "custom", content: "" },
+        },
+      ];
     if (entry.type === "compaction")
       return [
         {
@@ -1854,17 +1883,20 @@ function ConversationTurn({
           row.commandHandledCommandId === prompt.promptCommandId,
       ),
   );
-  const status = active
-    ? observed
-      ? "running"
-      : "unknown"
-    : outcome === "failed"
-      ? "failed"
-      : outcome === "interrupted" || outcome === "cancelled"
-        ? "interrupted"
-        : outcome === "completed" || answered || commandHandled
-          ? "complete"
-          : "waiting";
+  const forkSnapshotBoundary = rows.some((row) => row.forkSnapshotBoundary);
+  const status = forkSnapshotBoundary
+    ? "forked"
+    : active
+      ? observed
+        ? "running"
+        : "unknown"
+      : outcome === "failed"
+        ? "failed"
+        : outcome === "interrupted" || outcome === "cancelled"
+          ? "interrupted"
+          : outcome === "completed" || answered || commandHandled
+            ? "complete"
+            : "waiting";
   const variant =
     status === "failed"
       ? "error"
@@ -1915,24 +1947,28 @@ function ConversationTurn({
       className={`conversation-turn${id === 0 ? " prelude" : ""}`}
       data-turn={id}
     >
-      {id > 0 && status !== "complete" && !hasTiming && (
-        <header className="turn-heading">
-          <span className="sr-only">{t("turnLabel", { number: id })}</span>
-          <span className={`turn-state ${status}`}>
-            <StatusDot
-              variant={variant}
-              label={statusLabel}
-              isPulsing={status === "running"}
-              icon={
-                status === "failed" || status === "interrupted" ? (
-                  <X aria-hidden="true" />
-                ) : undefined
-              }
-            />
-            {statusLabel}
-          </span>
-        </header>
-      )}
+      {id > 0 &&
+        status !== "complete" &&
+        (!hasTiming || forkSnapshotBoundary) && (
+          <header className="turn-heading">
+            <span className="sr-only">{t("turnLabel", { number: id })}</span>
+            <span className={`turn-state ${status}`}>
+              <StatusDot
+                variant={variant}
+                label={statusLabel}
+                isPulsing={status === "running"}
+                icon={
+                  status === "failed" || status === "interrupted" ? (
+                    <X aria-hidden="true" />
+                  ) : status === "forked" ? (
+                    <GitBranch aria-hidden="true" />
+                  ) : undefined
+                }
+              />
+              {statusLabel}
+            </span>
+          </header>
+        )}
       {content}
       {changes && session && (
         <TurnChangesCard
@@ -1962,7 +1998,12 @@ function renderTurns(
       (row) => row.kind === "prompt" && row.promptEntryId === promptEntryId,
     );
     if (start < 0 || start >= end) return;
-    if (rows.slice(start + 1, end).some((row) => row.timing)) return;
+    if (
+      rows
+        .slice(start + 1, end)
+        .some((row) => row.timing || row.forkSnapshotBoundary)
+    )
+      return;
     for (let index = start; index <= end; index++) {
       const row = rows[index]!;
       if (!row.pendingPrompt) owners.set(row, rows[start]!.turn);
@@ -2005,14 +2046,24 @@ function renderTurns(
     <ConversationTurn
       id={turn.id}
       rows={turn.rows}
-      active={running && turn.id === activeTurn}
+      active={
+        running &&
+        turn.id === activeTurn &&
+        !turn.rows.some((row) => row.forkSnapshotBoundary)
+      }
       observed={observed}
       changes={changesByPrompt?.get(
         turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
           ?.promptEntryId ?? "",
       )}
       session={session}
-      timedTurn={running && turn.id === activeTurn ? timedTurn : undefined}
+      timedTurn={
+        running &&
+        turn.id === activeTurn &&
+        !turn.rows.some((row) => row.forkSnapshotBoundary)
+          ? timedTurn
+          : undefined
+      }
       onReviewTurn={onReviewTurn}
       key={`turn-group-${turn.rows[0]?.key}`}
     />
@@ -2420,6 +2471,16 @@ export function Transcript(props: TranscriptProps) {
 
     const rendered = entries.flatMap((entry, index): RenderRow[] => {
       const message = entry.message;
+      if (entry.forkSnapshotBoundary)
+        return [
+          {
+            key: entry.key,
+            turn,
+            kind: "custom",
+            forkSnapshotBoundary: true,
+            content: null,
+          },
+        ];
       if (entry.timing)
         return [
           {
@@ -2977,7 +3038,7 @@ export function Transcript(props: TranscriptProps) {
                 .split("\n")
                 .find(Boolean),
               processStatus: status,
-              error: Boolean(result?.isError),
+              error: status === "error",
               content: (
                 <article
                   className="message-row assistant detail-only"
@@ -3016,6 +3077,7 @@ export function Transcript(props: TranscriptProps) {
                             : undefined
                         }
                         status={status}
+                        snapshotMissingResult={result?.forkSnapshotToolResult}
                         defaultOpen={defaultOpen}
                       />
                     )}
@@ -3155,33 +3217,36 @@ export function Transcript(props: TranscriptProps) {
                 : false;
         const { Icon } = toolActivity(toolName);
         const icon = <Icon key={`${entry.key}-icon`} />;
-        const content = family ? (
-          <ActivityCard
-            key={`${entry.key}-card`}
-            family={family}
-            title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content)}`}
-            body={message.content}
-            status={status}
-            defaultOpen={defaultOpen}
-          />
-        ) : isEmptyToolOutput(message.content) ? (
-          <div className="tool-line-empty" key={`${entry.key}-empty`}>
-            <span className="tool-icon">{icon}</span>
-            <span className="tool-name">{toolName}</span>
-            <span className="tool-summary">{t("noOutput")}</span>
-            <StatusMark status={status} />
-          </div>
-        ) : (
-          <EvidenceDetails
-            key={`${entry.key}-evidence`}
-            body={message.content}
-            icon={icon}
-            name={toolName}
-            summary={compactSummary(message.content)}
-            status={status}
-            defaultOpen={defaultOpen}
-          />
-        );
+        const content =
+          family && !message.forkSnapshotToolResult ? (
+            <ActivityCard
+              key={`${entry.key}-card`}
+              family={family}
+              title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content)}`}
+              body={message.content}
+              status={status}
+              defaultOpen={defaultOpen}
+            />
+          ) : isEmptyToolOutput(message.content) &&
+            !message.forkSnapshotToolResult ? (
+            <div className="tool-line-empty" key={`${entry.key}-empty`}>
+              <span className="tool-icon">{icon}</span>
+              <span className="tool-name">{toolName}</span>
+              <span className="tool-summary">{t("noOutput")}</span>
+              <StatusMark status={status} />
+            </div>
+          ) : (
+            <EvidenceDetails
+              key={`${entry.key}-evidence`}
+              body={message.content}
+              icon={icon}
+              name={toolName}
+              summary={compactSummary(message.content)}
+              status={status}
+              snapshotMissingResult={message.forkSnapshotToolResult}
+              defaultOpen={defaultOpen}
+            />
+          );
         return [
           {
             key: entry.key,

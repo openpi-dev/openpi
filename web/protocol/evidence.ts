@@ -71,6 +71,7 @@ export function isEvidenceTool(name: string) {
 }
 
 function terminalOutcome(name: string, result?: WebLiveMessage) {
+  if (result?.forkSnapshotToolResult) return { state: "unknown" as const };
   if (name === "bash" && result?.terminalReceipt) return result.terminalReceipt;
   const details = evidenceRecord(result?.details);
   if (name.startsWith("bg_")) {
@@ -139,7 +140,7 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
   const output = evidenceText(result?.content ?? "", isTerminal);
   const readFooter = call.name === "read" ? /\n\n(\[(?:\d+ more lines in file\. Use offset=\d+ to continue\.|Showing lines [^\n]+)\])$/u.exec(output.text) : null;
   const truncated = output.truncated || Boolean(result?.truncation) || evidenceRecord(details.truncation).truncated === true || call.evidenceTruncated === true;
-  const tests = isTerminal ? testSummary(output.text) : undefined;
+  const tests = isTerminal && !result?.forkSnapshotToolResult ? testSummary(output.text) : undefined;
   const kind = call.name === "read" ? "file" : ["write", "edit"].includes(call.name) ? "change" : tests ? "test" : "terminal";
   const diff = ["write", "edit"].includes(call.name) && result?.isError === false && typeof details.diff === "string" ? evidenceText(details.diff) : undefined;
   const offset = typeof args.offset === "number" && Number.isSafeInteger(args.offset) && args.offset > 0 ? args.offset : 1;

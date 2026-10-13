@@ -89,9 +89,9 @@ export type WebTheme = (typeof WEB_THEMES)[number];
 export const DEFAULT_WEB_CHAT_WIDTH = 820;
 export const MIN_WEB_CHAT_WIDTH = 820;
 export const MAX_WEB_CHAT_WIDTH = 2_000;
-export const DEFAULT_WEB_SIDEBAR_WIDTH = 280;
+export const DEFAULT_WEB_SIDEBAR_WIDTH = 340;
 export const MIN_WEB_SIDEBAR_WIDTH = 220;
-export const MAX_WEB_SIDEBAR_WIDTH = 420;
+export const MAX_WEB_SIDEBAR_WIDTH = 520;
 export const DEFAULT_WEB_AUXILIARY_WIDTH = 520;
 export const MIN_WEB_AUXILIARY_WIDTH = 360;
 export const MAX_WEB_AUXILIARY_WIDTH = 720;
@@ -200,6 +200,9 @@ export interface MyPiSetupConfig {
     readonly webChatFontSize: number;
     readonly webExpandThinking: boolean;
     readonly webPinnedSort: "manual" | "updated";
+    readonly webSidebarGrouping: "project" | "list";
+    readonly webChatsSort: "manual" | "updated";
+    readonly webProjectsInRecents: boolean;
     readonly showHeader: boolean;
     readonly customFooter: boolean;
     readonly footerStyle: FooterStyle;
@@ -245,6 +248,9 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     webChatFontSize: DEFAULT_WEB_CHAT_FONT_SIZE,
     webExpandThinking: false,
     webPinnedSort: "manual",
+    webSidebarGrouping: "project",
+    webChatsSort: "updated",
+    webProjectsInRecents: true,
     showHeader: false,
     customFooter: true,
     footerStyle: DEFAULT_FOOTER_STYLE,
@@ -620,6 +626,9 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
       webPinnedSort: ui.webPinnedSort === "updated" ? "updated" : "manual",
+      webSidebarGrouping: ui.webSidebarGrouping === "list" ? "list" : "project",
+      webChatsSort: ui.webChatsSort === "manual" ? "manual" : "updated",
+      webProjectsInRecents: ui.webProjectsInRecents !== false,
       webChatWidth: boundedIntegerRange(
         ui.webChatWidth,
         DEFAULT_WEB_CHAT_WIDTH,
@@ -746,6 +755,9 @@ const setupShape: ConfigShape = {
     ),
     webExpandThinking: booleanValue,
     webPinnedSort: (value) => value === "manual" || value === "updated",
+    webSidebarGrouping: (value) => value === "project" || value === "list",
+    webChatsSort: (value) => value === "manual" || value === "updated",
+    webProjectsInRecents: booleanValue,
     showHeader: booleanValue,
     customFooter: booleanValue,
     footerStyle: isFooterStyle,
@@ -1472,7 +1484,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"
       : `Session child executions: ${config.childExecutions.maxActive} active slots shared by Workflow, Direct Subagent, and BTW`,
-    `UI: Web theme ${config.ui.webTheme} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · pinned ${config.ui.webPinnedSort} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
+    `UI: Web theme ${config.ui.webTheme} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · sidebar ${config.ui.webSidebarGrouping} / chats ${config.ui.webChatsSort} / pinned ${config.ui.webPinnedSort} / projects in recents ${config.ui.webProjectsInRecents ? "on" : "off"} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,

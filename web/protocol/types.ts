@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { isForkSnapshotToolBoundary, readForkSnapshotBoundary, WEB_SESSION_FORK_SNAPSHOT, type WebSessionForkWorktree } from "./session-fork.ts";
 import { readTurnTiming, WEB_TURN_TIMING_ENTRY } from "./turn-timing.ts";
 import { readTurnChangesDetail, summarizeTurnChanges, WEB_TURN_CHANGES_ENTRY, type WebTurnChanges } from "./turn-changes.ts";
 import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK, WEB_COMMAND_HANDLED } from "../../extensions/shared/web-command-feedback.ts";
@@ -55,11 +56,27 @@ export interface WebEvent {
   detail?: Record<string, unknown>;
 }
 
+export type WebSidebarPinTarget =
+  | { kind: "workspace"; path: string }
+  | { kind: "session"; path: string; id: string };
+
 export interface WebSessionSummary {
   pinOrder?: number;
+  order?: number;
+  /** Operator reading state; independent of execution success or input ownership. */
+  unread?: boolean;
+  /** Opaque equality token for the observed result and concurrent reading edits. */
+  readRevision?: string;
+  /** Earliest unacknowledged native result, or an explicit whole-Session mark. */
+  firstUnread?:
+    | { type: "sessionStart" }
+    | { type: "turn"; commandId: string; finishedAt: number; outcome: "completed" | "failed"; resultEntryId?: string };
   id: string;
   path: string;
   cwd: string;
+  /** Sidebar project ancestry; execution and file access always use cwd. */
+  workspacePath?: string;
+  worktree?: WebSessionForkWorktree;
   /** Classification of this Web directory projection, not original creation history. */
   source: "web-session";
   origin: "web";
@@ -86,6 +103,7 @@ export interface WebSessionSummary {
 }
 
 export interface WebWorkspaceSummary {
+  pinOrder?: number;
   path: string;
   name: string;
   current: boolean;
@@ -232,6 +250,9 @@ export interface WebOpenPiSetupProjection {
     webChatFontSize: number;
     webExpandThinking: boolean;
     webPinnedSort?: "manual" | "updated";
+    webSidebarGrouping?: "project" | "list";
+    webChatsSort?: "manual" | "updated";
+    webProjectsInRecents?: boolean;
     showHeader: boolean;
     customFooter: boolean;
     footerStyle: string;
@@ -265,6 +286,9 @@ export interface WebSettingsPreferencesPatch {
   customFooter?: boolean;
   footerStyle?: "plain" | "powerline" | "powerline-mono";
   pinnedSort?: "manual" | "updated";
+  sidebarGrouping?: "project" | "list";
+  chatsSort?: "manual" | "updated";
+  projectsInRecents?: boolean;
   theme?: WebThemePreference;
   chatWidth?: number;
   sidebarWidth?: number;
@@ -372,6 +396,8 @@ export interface WebLiveMessage {
   parts?: WebMessagePart[];
   toolCallId?: string;
   isError?: boolean;
+  /** Validated native snapshot boundary; isError remains model transport, not a failure receipt. */
+  forkSnapshotToolResult?: true;
   stopReason?: "stop" | "length" | "toolUse" | "aborted" | "error";
   /** Bounded, redacted provider failure text; not a substitute for the terminal reason. */
   errorMessage?: string;
@@ -515,6 +541,9 @@ export interface WebSnapshot {
     bashToolDisplay?: "full" | "compact";
     fileMutationDisplay?: "full" | "compact";
     pinnedSort?: "manual" | "updated";
+    sidebarGrouping?: "project" | "list";
+    chatsSort?: "manual" | "updated";
+    projectsInRecents?: boolean;
   };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;
@@ -892,6 +921,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
   const errorMessage = stopReason === "error" && typeof value.errorMessage === "string"
     ? projectAssistantError(value.errorMessage)
     : undefined;
+  const forkSnapshotToolResult = isForkSnapshotToolBoundary(value);
   const metadataTruncated =
     role?.truncated === true ||
     toolName?.truncated === true ||
@@ -906,12 +936,13 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     role: role?.value,
     ...(webSearch ? { webSearch } : {}),
     ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
-    ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
+    ...(value.toolName === "bash" && value.isError === true && !forkSnapshotToolResult ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,
     content: content.content,
     ...(content.parts.length > 0 ? { parts: content.parts } : {}),
     ...(toolCallId ? { toolCallId: toolCallId.value } : {}),
     ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
+    ...(forkSnapshotToolResult ? { forkSnapshotToolResult: true } : {}),
     ...(stopReason ? { stopReason } : {}),
     ...(errorMessage ? { errorMessage: errorMessage.value } : {}),
     ...(customType ? { customType: customType.value } : {}),
@@ -945,6 +976,7 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
   message?: WebLiveMessage;
   turnTiming?: ReturnType<typeof readTurnTiming>;
   turnChanges?: WebTurnChanges;
+  forkSnapshotBoundary?: NonNullable<ReturnType<typeof readForkSnapshotBoundary>>;
 } {
   const metadata = { id: entry.id, timestamp: entry.timestamp, ...(entry.parentId === undefined ? {} : { parentId: entry.parentId }) };
   if (entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY) {
@@ -977,6 +1009,10 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
     }
   }
   if (entry.type === "custom_message") {
+    if (entry.customType === WEB_SESSION_FORK_SNAPSHOT) {
+      const forkSnapshotBoundary = readForkSnapshotBoundary(entry);
+      return { type: entry.type, ...metadata, ...(forkSnapshotBoundary ? { forkSnapshotBoundary } : {}) };
+    }
     return {
       type: "message" as const,
       ...metadata,

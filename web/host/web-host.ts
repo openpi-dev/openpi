@@ -10,7 +10,9 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { listenBrowserPort } from "./browser-port.ts";
+import { openSessionDirectory, sessionOpenTargets } from "./session-open.ts";
 import { validProviderDiscovery } from "../runtime/provider-model-discovery.ts";
 import {
   createServer,
@@ -35,6 +37,7 @@ import { projectSetupOutcome } from "../protocol/setup-outcome.ts";
 import { registerWebCommandFeedback, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import {
   PiWebAdapter,
+  WEB_SESSION_MARKDOWN_MAX_BYTES,
   WebReadOnlySessionError,
 } from "../adapter/pi-adapter.ts";
 import {
@@ -55,6 +58,7 @@ import {
   type WebEvent,
   type WebInteractiveTerminalEvent,
   type WebPromptImage,
+  type WebSidebarPinTarget,
   type WebSnapshot,
 } from "../protocol/types.ts";
 import {
@@ -108,6 +112,10 @@ const execFileAsync = promisify(execFile);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function boundedIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 const promptImageMimeTypes = new Set<WebPromptImage["mimeType"]>([
@@ -238,6 +246,17 @@ function validSessionPath(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && !value.includes("\u0000");
 }
 
+function validSidebarIdentity(value: unknown): value is Record<string, unknown> & { path: string; id: string } {
+  return Boolean(value && typeof value === "object" && "path" in value && "id" in value && validSessionPath(value.path) && value.path.length <= 4096 && typeof value.id === "string" && value.id.length > 0 && value.id.length <= 500 && !/[\u0000-\u001f\u007f]/u.test(value.id));
+}
+
+function validSidebarPinTarget(value: unknown): value is WebSidebarPinTarget {
+  if (!isRecord(value)) return false;
+  return value.kind === "workspace"
+    ? validSessionPath(value.path) && value.path.length <= 4096 && Object.keys(value).every((key) => ["kind", "path"].includes(key))
+    : value.kind === "session" && validSidebarIdentity(value) && Object.keys(value).every((key) => ["kind", "path", "id"].includes(key));
+}
+
 type WebRequestErrorCode =
   | "INVALID_REQUEST_BODY"
   | "REQUEST_BODY_TOO_LARGE";
@@ -305,6 +324,7 @@ export class WebHost {
   private readonly chooserAbort = new AbortController();
   private readonly leaseSensitiveRequests = new Set<Promise<void>>();
   private readonly leaseSensitiveMessages = new Set<IncomingMessage>();
+  private sessionFileMutation: Promise<unknown> = Promise.resolve();
   private readonly promptAdmissions = new Map<
     string,
     PromptAdmission
@@ -574,6 +594,7 @@ export class WebHost {
       if (response.destroyed || response.writableEnded) return;
       if (error instanceof PromptFileError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
       if (error instanceof ArtifactError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
+      if (error instanceof WebRuntimeRequestError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
       if (error instanceof WebRequestError) {
         return this.json(response, error.statusCode, {
           code: error.code,
@@ -602,6 +623,7 @@ export class WebHost {
     if (pathname.startsWith("/api/plan")) return true;
     if (pathname === "/api/compact" || pathname === "/api/prompt-queue") return true;
     return pathname.startsWith("/api/workspaces") ||
+      pathname.startsWith("/api/sidebar/") ||
       pathname.startsWith("/api/sessions") ||
       pathname.startsWith("/api/terminal") ||
       pathname === "/api/model" ||
@@ -1074,9 +1096,99 @@ export class WebHost {
           error: "session path and name are required",
         });
       }
-      const name = await this.adapter.renameSession(body.path, body.name);
+      const path = body.path;
+      const requestedName = body.name;
+      const name = await this.serializeSessionFileMutation(() => this.adapter.renameSession(path, requestedName));
       this.publish("session_renamed", { sessionPath: body.path, name });
       return this.json(response, 200, { path: body.path, name });
+    }
+    if (url.pathname === "/api/sessions/delete" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || !Object.keys(body).every((key) => ["commandId", "sessionId", "sessionPath"].includes(key)) ||
+        !boundedIdentity(body.commandId) || !boundedIdentity(body.sessionId) || !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096)
+        return this.json(response, 400, { code: "INVALID_SESSION_DELETE", error: "An exact Session and command identity are required" });
+      if (!this.runtime.deleteSession) return this.json(response, 501, { code: "SESSION_DELETE_UNAVAILABLE", error: "Native Session deletion is unavailable" });
+      const exact = { commandId: body.commandId, sessionId: body.sessionId, sessionPath: body.sessionPath };
+      try {
+        const result = await this.serializeSessionFileMutation(async () => {
+          // Runtime validates the actual file and owns quiescence, cancellation
+          // and retry receipts, including retries after the file is gone.
+          const deleted = await this.runtime.deleteSession!(exact);
+          if (deleted.state !== "deleted") return deleted;
+          let metadataCleanupPending = false;
+          try { await this.adapter.forgetDeletedSession(exact.sessionPath, exact.sessionId); }
+          catch { metadataCleanupPending = true; }
+          this.publish("session_deleted", { sessionPath: exact.sessionPath, sessionId: exact.sessionId });
+          return { ...deleted, ...(metadataCleanupPending ? { metadataCleanupPending } : {}) };
+        });
+        return this.json(response, 200, result);
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "SESSION_DELETE_FAILED", "The Session could not be deleted");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
+    }
+    if (["/api/sessions/markdown", "/api/sessions/open-targets", "/api/sessions/fork-options"].includes(url.pathname) && request.method === "GET") {
+      const path = url.searchParams.get("sessionPath");
+      const id = url.searchParams.get("sessionId");
+      if (!validSessionPath(path) || path.length > 4096 || !boundedIdentity(id) || url.searchParams.size !== 2)
+        return this.json(response, 400, { error: "An exact Session identity is required" });
+      try {
+        const session = await this.adapter.requireSession(path).catch(() => undefined);
+        if (!session || session.id !== id) throw new WebRuntimeRequestError("The exact Session is unavailable", "SESSION_CONFLICT", 409);
+        if (url.pathname === "/api/sessions/fork-options") {
+          if (session.archived || !this.runtime.sessionForkOptions) return this.json(response, 200, { local: false, worktree: false, reason: session.archived ? "archived" : "unavailable" });
+          return this.json(response, 200, await this.runtime.sessionForkOptions({ sessionPath: path, sessionId: id }));
+        }
+        return url.pathname === "/api/sessions/markdown"
+          ? this.json(response, 200, await this.adapter.sessionMarkdown(path, id), WEB_SESSION_MARKDOWN_MAX_BYTES)
+          : this.json(response, 200, { targets: await sessionOpenTargets() });
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "SESSION_READ_FAILED", "The Session could not be read");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
+    }
+    if (url.pathname === "/api/sessions/open" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || !Object.keys(body).every((key) => ["sessionId", "sessionPath", "target"].includes(key)) ||
+        !boundedIdentity(body.sessionId) || !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096 || !boundedIdentity(body.target))
+        return this.json(response, 400, { error: "An exact Session identity and application are required" });
+      try {
+        const session = await this.adapter.requireSession(body.sessionPath).catch(() => undefined);
+        if (!session || session.id !== body.sessionId) throw new WebRuntimeRequestError("The exact Session is unavailable", "SESSION_CONFLICT", 409);
+        return this.json(response, 200, await openSessionDirectory(session.cwd, body.target));
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "SESSION_OPEN_FAILED", "The project directory could not be opened");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
+    }
+    if (url.pathname === "/api/sidebar/pin" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).some((key) => !["target", "pinned", "before"].includes(key)) || !validSidebarPinTarget(body.target) || typeof body.pinned !== "boolean" || (body.before !== undefined && body.before !== null && !validSidebarPinTarget(body.before))) return this.json(response, 400, { error: "An exact sidebar target, pin state and optional pin anchor are required" });
+      await this.adapter.setSidebarPin(body.target, body.pinned, body.before as WebSidebarPinTarget | null | undefined);
+      this.publish("sidebar_pins_changed", {});
+      return this.json(response, 200, { saved: true });
+    }
+    if (url.pathname === "/api/workspaces/order" && request.method === "POST") {
+      const body = await this.readJson(request);
+      const validPath = (path: unknown): path is string => typeof path === "string" && isAbsolute(path) && path.length <= 4096 && !/[\u0000-\u001f\u007f]/u.test(path);
+      if (Object.keys(body).some((key) => !["path", "before"].includes(key)) || !validPath(body.path) || body.before !== undefined && body.before !== null && !validPath(body.before)) return this.json(response, 400, { error: "A project path and optional project order anchor are required" });
+      await this.adapter.setWorkspaceOrder(body.path, body.before as string | null | undefined);
+      this.publish("workspace_order_changed", {});
+      return this.json(response, 200, { saved: true });
+    }
+    if (url.pathname === "/api/sessions/order" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).some((key) => !["path", "id", "before"].includes(key)) || !validSidebarIdentity(body) || (body.before !== undefined && body.before !== null && (!validSidebarIdentity(body.before) || Object.keys(body.before).some((key) => !["path", "id"].includes(key))))) return this.json(response, 400, { error: "An exact Session identity and optional order anchor are required" });
+      await this.adapter.setSessionOrder(body.path, body.id, body.before as { path: string; id: string } | null | undefined);
+      this.publish("session_order_changed", {});
+      return this.json(response, 200, { saved: true });
+    }
+    if (url.pathname === "/api/sessions/read" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).some((key) => !["path", "id", "read", "expectedRevision"].includes(key)) || !validSidebarIdentity(body) || typeof body.read !== "boolean" || typeof body.expectedRevision !== "string" || !body.expectedRevision || body.expectedRevision.length > 200 || /[\u0000-\u001f\u007f]/u.test(body.expectedRevision)) return this.json(response, 400, { error: "An exact Session identity, reading state and observed read revision are required" });
+      await this.adapter.setSessionRead(body.path, body.id, body.read, body.expectedRevision);
+      this.publish("session_read_state_changed", { sessionPath: body.path, sessionId: body.id });
+      return this.json(response, 200, { saved: true });
     }
     if (url.pathname === "/api/sessions/pin" && request.method === "POST") {
       const body = await this.readJson(request);
@@ -1112,10 +1224,12 @@ export class WebHost {
     }
     if (url.pathname === "/api/sessions/select" && request.method === "POST") {
       const body = await this.readJson(request);
-      if (typeof body.path !== "string" || body.path.trim().length === 0) {
+      if (typeof body.path !== "string" || body.path.trim().length === 0 || body.expectedSessionId !== undefined && !boundedIdentity(body.expectedSessionId)) {
         return this.json(response, 400, { error: "session path is required" });
       }
       const session = await this.adapter.requireSession(body.path);
+      if (body.expectedSessionId !== undefined && session.id !== body.expectedSessionId)
+        return this.json(response, 409, { code: "SESSION_CONFLICT", error: "The exact Session is no longer available" });
       const result =
         this.adapter.isCurrentSession(session)
           ? { cancelled: false }
@@ -1273,19 +1387,22 @@ export class WebHost {
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
-      const { theme, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, pinnedSort, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
+      const { theme, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, pinnedSort, sidebarGrouping, chatsSort, projectsInRecents, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
       // Browser appearance is package-wide and independent of agent execution.
       // Keep this surface restricted to presentation fields, including on Plan turns.
-      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "pinnedSort", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
+      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "pinnedSort", "sidebarGrouping", "chatsSort", "projectsInRecents", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
         (subagentResultDisplay !== undefined && !isDetailDisplay(subagentResultDisplay)) ||
         (bashToolDisplay !== undefined && !isDetailDisplay(bashToolDisplay)) ||
         (fileMutationDisplay !== undefined && !isDetailDisplay(fileMutationDisplay)) ||
         (customFooter !== undefined && typeof customFooter !== "boolean") ||
         (footerStyle !== undefined && !isFooterStyle(footerStyle)) ||
         (pinnedSort !== undefined && pinnedSort !== "manual" && pinnedSort !== "updated") ||
+        (sidebarGrouping !== undefined && sidebarGrouping !== "project" && sidebarGrouping !== "list") ||
+        (chatsSort !== undefined && chatsSort !== "manual" && chatsSort !== "updated") ||
+        (projectsInRecents !== undefined && typeof projectsInRecents !== "boolean") ||
         (theme !== undefined && !isWebTheme(theme)) ||
         (chatWidth !== undefined && (typeof chatWidth !== "number" || !Number.isInteger(chatWidth) || chatWidth < 820 || chatWidth > 2000)) ||
-        (sidebarWidth !== undefined && (typeof sidebarWidth !== "number" || !Number.isInteger(sidebarWidth) || sidebarWidth < 220 || sidebarWidth > 420)) ||
+        (sidebarWidth !== undefined && (typeof sidebarWidth !== "number" || !Number.isInteger(sidebarWidth) || sidebarWidth < 220 || sidebarWidth > 520)) ||
         (auxiliaryWidth !== undefined && (typeof auxiliaryWidth !== "number" || !Number.isInteger(auxiliaryWidth) || auxiliaryWidth < 360 || auxiliaryWidth > 720)) ||
         (chatFontSize !== undefined && (typeof chatFontSize !== "number" || !Number.isInteger(chatFontSize) || chatFontSize < 12 || chatFontSize > 24)) ||
         (expandThinking !== undefined && typeof expandThinking !== "boolean")) {
@@ -1303,6 +1420,9 @@ export class WebHost {
             ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
             ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
             ...(pinnedSort !== undefined ? { webPinnedSort: pinnedSort } : {}),
+            ...(sidebarGrouping !== undefined ? { webSidebarGrouping: sidebarGrouping } : {}),
+            ...(chatsSort !== undefined ? { webChatsSort: chatsSort } : {}),
+            ...(projectsInRecents !== undefined ? { webProjectsInRecents: projectsInRecents } : {}),
             ...(isDetailDisplay(subagentResultDisplay) ? { subagentResultDisplay } : {}),
             ...(isDetailDisplay(bashToolDisplay) ? { bashToolDisplay } : {}),
             ...(isDetailDisplay(fileMutationDisplay) ? { fileMutationDisplay } : {}),
@@ -1630,6 +1750,19 @@ export class WebHost {
         return this.json(response, failure.status, { code: failure.code, error: failure.error });
       }
     }
+    if (url.pathname === "/api/session/fork/cancel" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || !Object.keys(body).every((key) => ["commandId", "sessionId", "sessionPath"].includes(key)) ||
+        !boundedIdentity(body.commandId) || !boundedIdentity(body.sessionId) || !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096)
+        return this.json(response, 400, { code: "INVALID_SESSION_FORK", error: "An exact fork command and source Session are required" });
+      if (!this.runtime.cancelSessionFork) return this.json(response, 501, { error: "Fork cancellation is unavailable" });
+      try {
+        return this.json(response, 200, await this.runtime.cancelSessionFork({ commandId: body.commandId, sessionId: body.sessionId, sessionPath: body.sessionPath }));
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "SESSION_FORK_CANCEL_FAILED", "The fork cancellation could not be confirmed");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
+    }
     if (url.pathname === "/api/session/fork" && request.method === "POST") {
       const body = await this.readJson(request, WEB_PROMPT_MAX_TEXT_LENGTH * 6 + 8192);
       const keys = Object.keys(body);
@@ -1638,10 +1771,12 @@ export class WebHost {
         rerun.mode === "regenerate" && Object.keys(rerun).length === 1 ||
         rerun.mode === "edit" && Object.keys(rerun).length === 2 && typeof rerun.content === "string" && rerun.content.trim().length > 0 && rerun.content.length <= WEB_PROMPT_MAX_TEXT_LENGTH
       );
-      if ((keys.length !== 4 && keys.length !== 5) || !keys.every((key) => ["commandId", "sessionId", "sessionPath", "entryId", "rerun"].includes(key)) || !validRerun ||
-          ![body.commandId, body.sessionId, body.entryId].every((value) => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/u.test(value)) ||
-          !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096 ||
-          typeof body.commandId !== "string" || typeof body.sessionId !== "string" || typeof body.entryId !== "string") {
+      const conversation = body.scope === "conversation";
+      const validScope = conversation
+        ? (keys.length === 4 || keys.length === 5) && keys.every((key) => ["scope", "commandId", "sessionId", "sessionPath", "environment"].includes(key)) && (body.environment === undefined || body.environment === "local" || body.environment === "worktree")
+        : (body.scope === undefined || body.scope === "message") && keys.every((key) => ["scope", "commandId", "sessionId", "sessionPath", "entryId", "rerun"].includes(key)) && boundedIdentity(body.entryId) && validRerun;
+      if (!validScope || !boundedIdentity(body.commandId) || !boundedIdentity(body.sessionId) ||
+          !validSessionPath(body.sessionPath) || body.sessionPath.length > 4096) {
         return this.json(response, 400, { code: "INVALID_SESSION_FORK", error: "An exact Session, saved message, and command identity are required" });
       }
       if (!this.runtime.forkSession) return this.json(response, 501, { code: "SESSION_FORK_UNAVAILABLE", error: "Native Session forking is unavailable" });
@@ -1649,7 +1784,9 @@ export class WebHost {
         const source = await this.adapter.requireSession(body.sessionPath).catch(() => undefined);
         if (!source || source.id !== body.sessionId) throw new WebRuntimeRequestError("The exact source Session is unavailable", "SESSION_CONFLICT", 409);
         if (source.source !== "web-session") throw new WebRuntimeRequestError("Only a Web-owned Session can fork", "SESSION_FORK_UNAVAILABLE", 409);
-        const result = await this.runtime.forkSession({ commandId: body.commandId, sessionId: body.sessionId, sessionPath: body.sessionPath, entryId: body.entryId,
+        if (source.archived) throw new WebRuntimeRequestError("Restore this Session before forking", "SESSION_FORK_UNAVAILABLE", 409);
+        const identity = { commandId: body.commandId, sessionId: body.sessionId, sessionPath: body.sessionPath };
+        const result = await this.runtime.forkSession(conversation ? { ...identity, scope: "conversation", ...(body.environment === "worktree" ? { environment: "worktree" as const } : {}) } : { ...identity, entryId: body.entryId as string,
           ...(isRecord(rerun) && rerun.mode === "edit" && typeof rerun.content === "string" ? { rerun: { mode: "edit" as const, content: rerun.content } } : rerun !== undefined ? { rerun: { mode: "regenerate" as const } } : {}),
         });
         if (result.state === "forked" && result.sessionPath && result.sessionId) {
@@ -1995,7 +2132,7 @@ export class WebHost {
       );
     }
     if (url.pathname === "/api/sessions") {
-      const projection = await this.adapter.listSessionProjection();
+      const projection = await this.adapter.listSessionProjection(undefined, loadSetupConfig().ui.webChatsSort);
       return this.json(response, 200, {
         sessions: projection.sessions,
         truncation: {
@@ -2289,6 +2426,10 @@ export class WebHost {
       }
     }
     if (url.pathname === "/api/snapshot") {
+      const expectedSessionId = url.searchParams.get("sessionId");
+      const linkedPath = url.searchParams.get("path");
+      if (expectedSessionId !== null && (!boundedIdentity(expectedSessionId) || !validSessionPath(linkedPath) || linkedPath.length > 4096 || url.searchParams.getAll("sessionId").length !== 1 || url.searchParams.getAll("path").length !== 1))
+        return this.json(response, 400, { error: "An exact Session link is required" });
       const historyEntry = url.searchParams.get("historyAnchor");
       const historySession = url.searchParams.get("historySessionId");
       if ((historyEntry !== null || historySession !== null) &&
@@ -2297,11 +2438,14 @@ export class WebHost {
          url.searchParams.getAll("historySessionId").length !== 1))
         return this.json(response, 400, { error: "a bounded history Session and entry anchor are required" });
       const cursor = this.sequence;
+      const setup = loadSetupConfig();
       const projection = await this.adapter.getSnapshot(
         url.searchParams.get("path") ?? undefined,
         historyEntry && historySession ? { sessionId: historySession, entryId: historyEntry } : undefined,
+        setup.ui.webChatsSort,
       );
-      const setup = loadSetupConfig();
+      if (expectedSessionId !== null && (projection.selectedSession?.id !== expectedSessionId || projection.selectedSession.path !== url.searchParams.get("path")))
+        return this.json(response, 409, { code: "SESSION_CONFLICT", error: "The linked Session is no longer available" });
       const snapshot: WebSnapshot = {
         protocolVersion: WEB_PROTOCOL_VERSION,
         generatedAt: new Date().toISOString(),
@@ -2314,6 +2458,9 @@ export class WebHost {
           chatFontSize: setup.ui.webChatFontSize,
           expandThinking: setup.ui.webExpandThinking,
           pinnedSort: setup.ui.webPinnedSort,
+          sidebarGrouping: setup.ui.webSidebarGrouping,
+          chatsSort: setup.ui.webChatsSort,
+          projectsInRecents: setup.ui.webProjectsInRecents,
           subagentResultDisplay: setup.ui.subagentResultDisplay,
           bashToolDisplay: setup.ui.bashToolDisplay,
           fileMutationDisplay: setup.ui.fileMutationDisplay,
@@ -2999,6 +3146,13 @@ export class WebHost {
       code: fallbackCode,
       error: error instanceof Error ? error.message : fallbackMessage,
     };
+  }
+
+  private serializeSessionFileMutation<T>(mutation: () => Promise<T>) {
+    // Rename must not recreate a Session file after native deletion finishes.
+    const operation = this.sessionFileMutation.then(mutation);
+    this.sessionFileMutation = operation.catch(() => undefined);
+    return operation;
   }
 
   private json(response: ServerResponse, status: number, value: unknown, maxBytes = WEB_MAX_SNAPSHOT_BYTES) {
