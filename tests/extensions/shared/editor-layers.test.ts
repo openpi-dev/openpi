@@ -12,6 +12,7 @@ import suggestions from "../../../extensions/suggestions/index.ts";
 import workflows from "../../../extensions/workflows/index.ts";
 import {
   registerEditorLayer,
+  removeEditorLayer,
   type EditorLayer,
 } from "../../../extensions/shared/editor-layers.ts";
 
@@ -180,4 +181,171 @@ test("re-registering a layer for one TUI context does not stack prior wrappers",
   assert.deepEqual(editor, {
     layers: ["test-layer"],
   });
+});
+
+function ownershipHarness() {
+  const api = { events: createEventBus() } as unknown as ExtensionAPI;
+  const ui = (name: string) => {
+    let baseCalls = 0;
+    let factory = (() => {
+      baseCalls += 1;
+      return { layers: [name] };
+    }) as unknown as EditorFactory;
+    return {
+      baseCalls: () => baseCalls,
+      getEditorComponent: () => factory,
+      setEditorComponent(next: EditorFactory | undefined) {
+        factory = next!;
+      },
+    };
+  };
+  const context = (owner: ReturnType<typeof ui>) =>
+    ({ mode: "tui", ui: owner }) as unknown as ExtensionContext;
+  const layer = (id: string, order = 1) =>
+    ({
+      id,
+      order,
+      wrap: (base: { layers: string[] }) => ({ layers: [...base.layers, id] }),
+    }) as unknown as EditorLayer;
+  const rendered = (owner: ReturnType<typeof ui>) =>
+    owner.getEditorComponent()(
+      {} as never,
+      {} as never,
+      {} as never,
+    ) as unknown as { layers: string[] };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+  return { api, ui, context, layer, rendered, settle };
+}
+
+test("fresh contexts sharing one UI retain distinct layers and replace matching IDs", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  registerEditorLayer(h.api, h.context(ui), h.layer("two", 2));
+  await h.settle();
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  assert.deepEqual(h.rendered(ui).layers, ["native", "one", "two"]);
+  assert.equal(ui.baseCalls(), 1);
+});
+
+test("removing all layers and registering again preserves the original base", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  const base = ui.getEditorComponent();
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  removeEditorLayer(h.api, "one");
+  assert.equal(ui.getEditorComponent(), base);
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  assert.deepEqual(h.rendered(ui).layers, ["native", "one"]);
+});
+
+test("switching and revisiting UIs retains their own base without stale layers", async () => {
+  const h = ownershipHarness();
+  const first = h.ui("first");
+  const second = h.ui("second");
+  registerEditorLayer(h.api, h.context(first), h.layer("old"));
+  await h.settle();
+  registerEditorLayer(h.api, h.context(second), h.layer("new"));
+  await h.settle();
+  assert.deepEqual(h.rendered(second).layers, ["second", "new"]);
+  registerEditorLayer(h.api, h.context(first), h.layer("returned"));
+  await h.settle();
+  assert.deepEqual(h.rendered(first).layers, ["first", "returned"]);
+});
+
+test("native factory replacement becomes the base on the next registration", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  ui.setEditorComponent(h.ui("replacement").getEditorComponent());
+  registerEditorLayer(h.api, h.context(ui), h.layer("two", 2));
+  await h.settle();
+  assert.deepEqual(h.rendered(ui).layers, ["replacement", "one", "two"]);
+});
+
+test("queued installation and removal do not overwrite a foreign editor owner", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  const replacement = h.ui("replacement").getEditorComponent();
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  ui.setEditorComponent(replacement);
+  await h.settle();
+  assert.equal(ui.getEditorComponent(), replacement);
+  removeEditorLayer(h.api, "one");
+  assert.equal(ui.getEditorComponent(), replacement);
+});
+
+test("queued UI switches and last removal cancel stale installation", async () => {
+  const h = ownershipHarness();
+  const first = h.ui("first");
+  const second = h.ui("second");
+  const base = first.getEditorComponent();
+  registerEditorLayer(h.api, h.context(first), h.layer("old"));
+  registerEditorLayer(h.api, h.context(second), h.layer("new"));
+  removeEditorLayer(h.api, "new");
+  await h.settle();
+  assert.equal(first.getEditorComponent(), base);
+  assert.deepEqual(h.rendered(second).layers, ["second"]);
+});
+
+test("removing one layer reprojects remaining layers without stacking", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  registerEditorLayer(h.api, h.context(ui), h.layer("two", 2));
+  await h.settle();
+  removeEditorLayer(h.api, "one");
+  await h.settle();
+  assert.deepEqual(h.rendered(ui).layers, ["native", "two"]);
+});
+
+test("last removal preserves an external replacement of an installed projection", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  const replacement = h.ui("replacement").getEditorComponent();
+  ui.setEditorComponent(replacement);
+  removeEditorLayer(h.api, "one");
+  assert.equal(ui.getEditorComponent(), replacement);
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  assert.deepEqual(h.rendered(ui).layers, ["replacement", "one"]);
+});
+
+test("a native default-editor reset after removal remains the next base", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  removeEditorLayer(h.api, "one");
+  ui.setEditorComponent(undefined);
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  await h.settle();
+  removeEditorLayer(h.api, "one");
+  assert.equal(ui.getEditorComponent(), undefined);
+});
+
+test("contexts without a UI do not acquire editor ownership", async () => {
+  const h = ownershipHarness();
+  const ctx = { mode: "tui" } as unknown as ExtensionContext;
+  assert.doesNotThrow(() => registerEditorLayer(h.api, ctx, h.layer("one")));
+  assert.doesNotThrow(() => removeEditorLayer(h.api, "one"));
+  await h.settle();
+});
+
+test("last removal before installation preserves a native default reset", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  registerEditorLayer(h.api, h.context(ui), h.layer("one"));
+  ui.setEditorComponent(undefined);
+  removeEditorLayer(h.api, "one");
+  assert.equal(ui.getEditorComponent(), undefined);
+  await h.settle();
+  assert.equal(ui.getEditorComponent(), undefined);
 });

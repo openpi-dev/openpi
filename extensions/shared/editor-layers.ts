@@ -82,7 +82,14 @@ function ensureCoordinator(pi: ExtensionAPI) {
   if (claim.claimed) return;
 
   let ctx: ExtensionContext | undefined;
-  let baseEditorFactory: EditorFactory | undefined;
+  const owners = new WeakMap<
+    ExtensionContext["ui"],
+    { base: EditorFactory | undefined; installed: EditorFactory | undefined }
+  >();
+  let owner:
+    | { base: EditorFactory | undefined; installed: EditorFactory | undefined }
+    | undefined;
+  let expectedFactory: EditorFactory | undefined;
   let installTimer: ReturnType<typeof setTimeout> | undefined;
   const layers = new Map<string, EditorLayer>();
 
@@ -94,14 +101,18 @@ function ensureCoordinator(pi: ExtensionAPI) {
   const install = () => {
     installTimer = undefined;
     const current = ctx;
-    if (!current || current.mode !== "tui" || layers.size === 0) return;
+    if (!current || !owner || current.mode !== "tui" || layers.size === 0)
+      return;
+    // A queued projection cannot take ownership from a newer native editor.
+    if (current.ui.getEditorComponent() !== expectedFactory) return;
     const ordered = [...layers.values()].sort(
       (left, right) =>
         left.order - right.order || left.id.localeCompare(right.id),
     );
-    current.ui.setEditorComponent(
-      composeEditorFactory(baseEditorFactory, ordered),
-    );
+    const factory = composeEditorFactory(owner.base, ordered);
+    current.ui.setEditorComponent(factory);
+    owner.installed = factory;
+    expectedFactory = factory;
   };
 
   const scheduleInstall = () => {
@@ -115,12 +126,23 @@ function ensureCoordinator(pi: ExtensionAPI) {
   pi.events.on(REGISTER_CHANNEL, (value) => {
     const registration = readRegistration(value);
     if (!registration || registration.ctx.mode !== "tui") return;
-    if (ctx !== registration.ctx) {
+    const ui = registration.ctx.ui;
+    if (!ui) return;
+    if (ctx?.ui !== ui) {
       cancelInstall();
       layers.clear();
-      ctx = registration.ctx;
-      baseEditorFactory = ctx.ui?.getEditorComponent?.();
     }
+    ctx = registration.ctx;
+    const currentFactory = ui.getEditorComponent();
+    owner = owners.get(ui);
+    if (!owner) {
+      owner = { base: currentFactory, installed: undefined };
+      owners.set(ui, owner);
+    } else if (!owner.installed || currentFactory !== owner.installed) {
+      owner.base = currentFactory;
+      owner.installed = undefined;
+    }
+    expectedFactory = currentFactory;
     layers.set(registration.layer.id, registration.layer);
     scheduleInstall();
   });
@@ -128,10 +150,22 @@ function ensureCoordinator(pi: ExtensionAPI) {
     const id = readLayerId(value);
     if (!id) return;
     layers.delete(id);
-    if (layers.size > 0) return;
+    if (layers.size > 0) {
+      scheduleInstall();
+      return;
+    }
     cancelInstall();
+    if (
+      ctx &&
+      owner?.installed &&
+      ctx.ui.getEditorComponent() === owner.installed
+    ) {
+      ctx.ui.setEditorComponent(owner.base);
+      owner.installed = undefined;
+    }
     ctx = undefined;
-    baseEditorFactory = undefined;
+    owner = undefined;
+    expectedFactory = undefined;
   });
 }
 
