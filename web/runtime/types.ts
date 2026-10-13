@@ -274,6 +274,7 @@ export interface WebRuntimeController {
   listCommands?(): WebCommandDiscoveryResult;
   listSettingsResources?(): WebSettingsResourceCatalog;
   getWebSearchSupport?(): { available: boolean; reason?: string; model?: string; provider?: string };
+  getResponseSupport?(): { verbosity: boolean; reasoningSummary: boolean };
   applySetupConfiguration?(): Promise<void>;
   reloadSettingsResources?(sessionId: string, sessionPath: string): Promise<void>;
   listProviderAuth?(): WebProviderAuthProjection;

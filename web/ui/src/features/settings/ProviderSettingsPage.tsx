@@ -8,10 +8,12 @@ import {
   Layers3,
   Plug,
   Search,
+  Shield,
   SlidersHorizontal,
   X,
 } from "lucide-react";
 import { BrowserSettingsPanel } from "./BrowserSettingsPanel.tsx";
+import { ConfigurationSettingsPanel } from "./ConfigurationSettingsPanel.tsx";
 import { WebSearchSettingsPanel } from "./WebSearchSettingsPanel.tsx";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -34,6 +36,7 @@ import { useSettingsCatalog } from "./useSettingsCatalog.ts";
 
 type SettingsSection =
   | "general"
+  | "configuration"
   | "models"
   | "browser"
   | "web-search"
@@ -46,6 +49,7 @@ const settingsSections = [
   { id: "models", label: "modelSettings", Icon: Cpu },
   { id: "browser", label: "browserSettings", Icon: Globe2 },
   { id: "web-search", label: "webSearchSettings", Icon: Search },
+  { id: "configuration", label: "configurationSettings", Icon: Shield },
   { id: "skills", label: "skillsSettings", Icon: Layers3 },
   { id: "subagents", label: "subagentsSettings", Icon: Bot },
   { id: "plugins", label: "pluginsSettings", Icon: Plug },
@@ -139,7 +143,13 @@ export function ProviderSettingsPage({
     error: catalogError,
     refresh,
     updateSetup,
-  } = useSettingsCatalog(sessionId);
+  } = useSettingsCatalog(
+    sessionId,
+    currentModel ? `${currentModel.provider}/${currentModel.id}` : "",
+  );
+  const setupNeedsAttention =
+    currentOutcome !== undefined &&
+    ["failed", "cancelled", "unconfirmed"].includes(currentOutcome.status);
   useEffect(() => {
     closeButton.current?.focus();
   }, []);
@@ -381,6 +391,30 @@ export function ProviderSettingsPage({
         )}
         <div className="provider-settings-main">
           <div
+            id="settings-panel-configuration"
+            aria-labelledby="settings-tab-configuration"
+            role="tabpanel"
+            hidden={section !== "configuration"}
+          >
+            {section === "configuration" && (
+              <ConfigurationSettingsPanel
+                catalog={catalog}
+                error={catalogError}
+                pending={
+                  setupDisabled ||
+                  (setupSubmitted &&
+                    setupSection === "configuration" &&
+                    (!currentOutcome || currentOutcome.status === "pending"))
+                }
+                preferencePending={preferencePending}
+                onConfigure={configureOpenPi}
+                onUpdatePreferences={updateWebPreferences}
+                onRefresh={refresh}
+                onOpenRuntimeStatus={() => navigate({ kind: "runtime" })}
+              />
+            )}
+          </div>
+          <div
             id="settings-panel-web-search"
             aria-labelledby="settings-tab-web-search"
             role="tabpanel"
@@ -447,7 +481,10 @@ export function ProviderSettingsPage({
                 currentModel={currentModel}
                 busy={setupBusy}
                 focusCredentials={entry === "credentials"}
-                onSaved={onPreferencesChanged}
+                onSaved={async () => {
+                  refresh();
+                  return onPreferencesChanged();
+                }}
                 onSelectModel={onSelectModel}
                 onDraftChange={setModelDraftDirty}
                 onSavingChange={setModelSaving}
@@ -514,15 +551,19 @@ export function ProviderSettingsPage({
             {setupError}
           </div>
         )}
-        {(preferencePending || preferencesSaved) && !setupError && (
-          <div className="settings-global-status" role="status">
-            {t(
-              preferencePending ? "savingSettings" : "settingsPreferencesSaved",
-            )}
-          </div>
-        )}
+        {(preferencePending || preferencesSaved) &&
+          !setupError &&
+          !setupNeedsAttention && (
+            <div className="settings-global-status" role="status">
+              {t(
+                preferencePending
+                  ? "savingSettings"
+                  : "settingsPreferencesSaved",
+              )}
+            </div>
+          )}
         {!preferencePending &&
-          !preferencesSaved &&
+          (!preferencesSaved || setupNeedsAttention) &&
           ((setupSubmitted && setupSection === section) || currentOutcome) &&
           !setupError && (
             <div

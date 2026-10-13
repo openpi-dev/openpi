@@ -3307,6 +3307,187 @@ test("serves a Session-bound settings catalog and rejects unsupported preference
   }
 });
 
+test("thinking filters persist as presentation only and catalog capabilities remain native Session projections", async () => {
+  const path = join(hostAgentDirectory, "my-pi-setup.json");
+  const before = await readFile(path, "utf8").catch(() => undefined);
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-filter-"));
+  const runtime = testRuntime(cwd);
+  runtime.isIdle = () => false;
+  let prompted = 0;
+  let changedEffort = 0;
+  runtime.sendPrompt = async () => {
+    prompted++;
+    return { pendingFollowUps: 0 };
+  };
+  runtime.getThinkingState = () => ({
+    level: "high",
+    available: ["off", "minimal", "high"],
+    supported: true,
+  });
+  runtime.setThinkingLevel = async () => {
+    changedEffort++;
+    return runtime.getThinkingState!();
+  };
+  runtime.getResponseSupport = () => ({
+    verbosity: true,
+    reasoningSummary: true,
+  });
+  runtime.listSettingsResources = () => ({
+    skills: [],
+    plugins: [],
+    totals: { extensions: 0, skills: 0, prompts: 0, themes: 0 },
+    diagnostics: { extensionErrors: 0, skillErrors: 0 },
+    truncation: {
+      truncated: false,
+      skillsOmitted: 0,
+      pluginsOmitted: 0,
+      resourcesOmitted: 0,
+    },
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const post = (body: unknown) =>
+    fetch(`${launched.origin}/api/settings/preferences`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    await writeFile(
+      path,
+      JSON.stringify({
+        configVersion: 1,
+        response: { verbosity: "high", reasoningSummary: "concise" },
+        ui: { webTheme: "pine" },
+        future: { keep: true },
+      }),
+    );
+    for (const hiddenThinkingLevels of [
+      ["unknown"],
+      ["high", "high"],
+      "high",
+      null,
+      Array(8).fill("high"),
+    ]) {
+      assert.equal((await post({ hiddenThinkingLevels })).status, 400);
+    }
+    assert.equal((await post({ response: { verbosity: "low" } })).status, 400);
+    const saved = await post({
+      hiddenThinkingLevels: ["minimal", "high", "max"],
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual((await saved.json()).setup.ui.webHiddenThinkingLevels, [
+      "minimal",
+      "high",
+      "max",
+    ]);
+    const canonical = await readFile(path, "utf8");
+    assert.equal(JSON.parse(canonical).future.keep, true);
+    assert.deepEqual(loadSetupConfig().response, {
+      verbosity: "high",
+      reasoningSummary: "concise",
+    });
+    assert.equal(loadSetupConfig().ui.webTheme, "pine");
+    const snapshot = await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json();
+    assert.deepEqual(snapshot.preferences.hiddenThinkingLevels, [
+      "minimal",
+      "high",
+      "max",
+    ]);
+    const catalog = await (
+      await fetch(
+        `${launched.origin}/api/settings/catalog?sessionId=${runtime.sessionManager.getSessionId()}`,
+        { headers },
+      )
+    ).json();
+    assert.deepEqual(catalog.responseSupport, {
+      verbosity: true,
+      reasoningSummary: true,
+    });
+    assert.deepEqual(catalog.setup.response, {
+      verbosity: "high",
+      reasoningSummary: "concise",
+    });
+    assert.equal(catalog.thinking.level, "high");
+    assert.deepEqual(catalog.thinking.available, ["off", "minimal", "high"]);
+    assert.equal(catalog.thinking.supported, true);
+    assert.equal(catalog.setupWritable, true);
+    assert.equal(prompted, 0);
+    assert.equal(changedEffort, 0);
+    await writeFile(path, "{invalid fixture");
+    const damagedCatalog = await (
+      await fetch(
+        `${launched.origin}/api/settings/catalog?sessionId=${runtime.sessionManager.getSessionId()}`,
+        { headers },
+      )
+    ).json();
+    assert.equal(damagedCatalog.setupWritable, false);
+    assert.deepEqual(damagedCatalog.setupDiagnostics, [
+      { severity: "error", path: "", message: "Malformed JSON" },
+    ]);
+    assert.equal(damagedCatalog.resources.diagnostics.settingsErrors, 1);
+    assert.doesNotMatch(JSON.stringify(damagedCatalog), /invalid fixture/);
+    assert.equal((await post({ hiddenThinkingLevels: [] })).status, 422);
+    assert.equal(await readFile(path, "utf8"), "{invalid fixture");
+    await writeFile(
+      path,
+      JSON.stringify({
+        configVersion: 1,
+        response: { verbosity: "private-invalid-value" },
+      }),
+    );
+    const invalidCatalog = await (
+      await fetch(
+        `${launched.origin}/api/settings/catalog?sessionId=${runtime.sessionManager.getSessionId()}`,
+        { headers },
+      )
+    ).json();
+    assert.equal(invalidCatalog.setupWritable, false);
+    assert.deepEqual(invalidCatalog.setupDiagnostics, [
+      {
+        severity: "error",
+        path: "response.verbosity",
+        message: "Invalid or unsupported value",
+      },
+    ]);
+    assert.doesNotMatch(
+      JSON.stringify(invalidCatalog),
+      /private-invalid-value/,
+    );
+    await writeFile(path, canonical);
+    const repairedCatalog = await (
+      await fetch(
+        `${launched.origin}/api/settings/catalog?sessionId=${runtime.sessionManager.getSessionId()}`,
+        { headers },
+      )
+    ).json();
+    assert.equal(repairedCatalog.setupWritable, true);
+    assert.equal(repairedCatalog.resources.diagnostics.settingsErrors, 0);
+    assert.deepEqual(repairedCatalog.setup.response, {
+      verbosity: "high",
+      reasoningSummary: "concise",
+    });
+    const refreshed = await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json();
+    assert.deepEqual(refreshed.preferences.hiddenThinkingLevels, [
+      "minimal",
+      "high",
+      "max",
+    ]);
+    assert.equal((await post({ hiddenThinkingLevels: [] })).status, 200);
+    assert.deepEqual(loadSetupConfig().ui.webHiddenThinkingLevels, []);
+    assert.equal(prompted, 0);
+    assert.equal(changedEffort, 0);
+  } finally {
+    await host.stop();
+    if (before === undefined) await rm(path, { force: true });
+    else await writeFile(path, before);
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("classifies invalid and oversized JSON bodies as client errors", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-body-"));
   const { host, launched, headers } = await startTestHost(testRuntime(cwd));

@@ -3174,6 +3174,52 @@ test("thinking state projects the Pi supported flag", () => {
   });
 });
 
+test("response support follows the current native API and reasoning capability without model-name guessing", () => {
+  const cases = [
+    {
+      api: "openai-responses",
+      reasoning: true,
+      expected: { verbosity: true, reasoningSummary: true },
+    },
+    {
+      api: "openai-codex-responses",
+      reasoning: false,
+      expected: { verbosity: true, reasoningSummary: false },
+    },
+    {
+      api: "openai-completions",
+      reasoning: true,
+      expected: { verbosity: false, reasoningSummary: false },
+    },
+    {
+      api: "azure-openai-responses",
+      reasoning: true,
+      expected: { verbosity: false, reasoningSummary: false },
+    },
+    {
+      api: "anthropic-messages",
+      reasoning: true,
+      expected: { verbosity: false, reasoningSummary: false },
+    },
+  ];
+  for (const { api, reasoning, expected } of cases) {
+    assert.deepEqual(
+      PiWebRuntime.prototype.getResponseSupport.call({
+        assertActive() {},
+        runtime: { session: { model: { id: "same-name", api, reasoning } } },
+      } as unknown as PiWebRuntime),
+      expected,
+    );
+  }
+  assert.deepEqual(
+    PiWebRuntime.prototype.getResponseSupport.call({
+      assertActive() {},
+      runtime: { session: { model: undefined } },
+    } as unknown as PiWebRuntime),
+    { verbosity: false, reasoningSummary: false },
+  );
+});
+
 test("setThinkingLevel applies and confirms an available level without retaining", async () => {
   const fixture = thinkingSession();
   const { harness, retained } = thinkingHarness(fixture.session);

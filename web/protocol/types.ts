@@ -4,6 +4,7 @@ import { readTurnChangesDetail, summarizeTurnChanges, WEB_TURN_CHANGES_ENTRY, ty
 import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK, WEB_COMMAND_HANDLED } from "../../extensions/shared/web-command-feedback.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
+import type { MyPiSetupConfig, ReasoningLevel } from "../../extensions/shared/setup-config.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
 import { readNativeSearchEvidence, type NativeSearchActivity } from "../../extensions/web-search/native.ts";
 
@@ -209,6 +210,7 @@ export interface WebSettingsResourceCatalog {
 
 export interface WebOpenPiSetupProjection {
   webSearch?: { enabled: boolean };
+  response?: MyPiSetupConfig["response"];
   capabilities: {
     discovery: "explicit" | "adaptive";
   };
@@ -231,6 +233,7 @@ export interface WebOpenPiSetupProjection {
     webAuxiliaryWidth?: number;
     webChatFontSize: number;
     webExpandThinking: boolean;
+    webHiddenThinkingLevels?: readonly ReasoningLevel[];
     webPinnedSort?: "manual" | "updated";
     showHeader: boolean;
     customFooter: boolean;
@@ -252,6 +255,11 @@ export interface WebOpenPiSetupProjection {
 
 export interface WebSettingsCatalog {
   webSearch?: { available: boolean; reason?: string; model?: string; provider?: string };
+  responseSupport?: { verbosity: boolean; reasoningSummary: boolean };
+  thinking?: WebThinkingState;
+  setupWritable?: boolean;
+  setupDiagnostics?: readonly { severity: "error" | "warning"; path: string; message: string }[];
+  setupDiagnosticsOmitted?: number;
   sessionId: string;
   sessionPath?: string;
   setup: WebOpenPiSetupProjection;
@@ -259,6 +267,7 @@ export interface WebSettingsCatalog {
 }
 
 export interface WebSettingsPreferencesPatch {
+  hiddenThinkingLevels?: readonly ReasoningLevel[];
   subagentResultDisplay?: "full" | "compact";
   bashToolDisplay?: "full" | "compact";
   fileMutationDisplay?: "full" | "compact";
@@ -511,6 +520,7 @@ export interface WebSnapshot {
     auxiliaryWidth?: number;
     chatFontSize?: number;
     expandThinking?: boolean;
+    hiddenThinkingLevels?: readonly ReasoningLevel[];
     subagentResultDisplay?: "full" | "compact";
     bashToolDisplay?: "full" | "compact";
     fileMutationDisplay?: "full" | "compact";

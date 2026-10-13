@@ -20,6 +20,7 @@ const defaultUi = {
   webSidebarWidth: 280,
   webAuxiliaryWidth: 520,
   webExpandThinking: false,
+  webHiddenThinkingLevels: [],
   webPinnedSort: "manual" as const,
   showHeader: false,
   customFooter: true,
@@ -34,7 +35,7 @@ test("setup defaults to disabled next-action suggestions", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    `Capability discovery: explicit\nNext-action suggestions: disabled\nBrowser control: off · default embedded · embedded allowed · external none\nBrowser choices: embedded (Chromium host), chrome, edge, brave, chromium, safari, firefox; Safari/Firefox use native tabs.\nWeb search: off · current Session model and Pi credentials · unsupported or unknown connections receive no search tool · 0 explicit model support declarations · no search-provider fallback\nWorkflows: 8 concurrent agents · 128 total calls\nSession child executions: unbounded (disabled)\nUI: Web theme system · chat 820px / 14px / thinking collapsed · panes 280px / 520px · pinned manual · large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nPi Skills and packages: native configuration · Web setup requests review changes · explicit idle Session reload\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Capability discovery: explicit\nNext-action suggestions: disabled\nBrowser control: off · default embedded · embedded allowed · external none\nBrowser choices: embedded (Chromium host), chrome, edge, brave, chromium, safari, firefox; Safari/Firefox use native tabs.\nWeb search: off · current Session model and Pi credentials · unsupported or unknown connections receive no search tool · 0 explicit model support declarations · no search-provider fallback\nResponse preferences: verbosity default · reasoning summary default · Responses APIs only; default preserves Pi's request\nHidden Web thinking levels: none · presentation only; native support and current effort are unchanged\nWorkflows: 8 concurrent agents · 128 total calls\nSession child executions: unbounded (disabled)\nUI: Web theme system · chat 820px / 14px / thinking collapsed · panes 280px / 520px · pinned manual · large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nPi Skills and packages: native configuration · Web setup requests review changes · explicit idle Session reload\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 });
 
@@ -52,6 +53,7 @@ test("setup config accepts suggestion models and migrates the recap key", () => 
   assert.deepEqual(configured, {
     capabilities: { discovery: "explicit" },
     webSearch: { enabled: false, modelSupport: [] },
+    response: { verbosity: "default", reasoningSummary: "default" },
     suggestions: {
       enabled: true,
       model: {
@@ -74,7 +76,7 @@ test("setup config accepts suggestion models and migrates the recap key", () => 
   });
   assert.equal(
     formatSetupConfig(configured),
-    `Capability discovery: explicit\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nBrowser control: off · default embedded · embedded allowed · external none\nBrowser choices: embedded (Chromium host), chrome, edge, brave, chromium, safari, firefox; Safari/Firefox use native tabs.\nWeb search: off · current Session model and Pi credentials · unsupported or unknown connections receive no search tool · 0 explicit model support declarations · no search-provider fallback\nWorkflows: 8 concurrent agents · 128 total calls\nSession child executions: unbounded (disabled)\nUI: Web theme system · chat 820px / 14px / thinking collapsed · panes 280px / 520px · pinned manual · large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nPi Skills and packages: native configuration · Web setup requests review changes · explicit idle Session reload\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Capability discovery: explicit\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nBrowser control: off · default embedded · embedded allowed · external none\nBrowser choices: embedded (Chromium host), chrome, edge, brave, chromium, safari, firefox; Safari/Firefox use native tabs.\nWeb search: off · current Session model and Pi credentials · unsupported or unknown connections receive no search tool · 0 explicit model support declarations · no search-provider fallback\nResponse preferences: verbosity default · reasoning summary default · Responses APIs only; default preserves Pi's request\nHidden Web thinking levels: none · presentation only; native support and current effort are unchanged\nWorkflows: 8 concurrent agents · 128 total calls\nSession child executions: unbounded (disabled)\nUI: Web theme system · chat 820px / 14px / thinking collapsed · panes 280px / 520px · pinned manual · large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nPi Skills and packages: native configuration · Web setup requests review changes · explicit idle Session reload\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 
   assert.deepEqual(
@@ -87,6 +89,7 @@ test("setup config accepts suggestion models and migrates the recap key", () => 
     {
       capabilities: { discovery: "explicit" },
       webSearch: { enabled: false, modelSupport: [] },
+      response: { verbosity: "default", reasoningSummary: "default" },
       suggestions: { enabled: false },
       workflows: { concurrency: 8, maxAgentCalls: 128 },
       childExecutions: {},
@@ -155,6 +158,7 @@ test("UI defaults to a compact header and one-line plain footer", () => {
       webSidebarWidth: 280,
       webAuxiliaryWidth: 520,
       webExpandThinking: false,
+      webHiddenThinkingLevels: [],
       webPinnedSort: "manual" as const,
       showHeader: true,
       customFooter: false,

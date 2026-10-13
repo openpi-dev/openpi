@@ -42,6 +42,35 @@ export const REASONING_LEVELS = [
 
 export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
 
+export const RESPONSE_VERBOSITIES = [
+  "default",
+  "low",
+  "medium",
+  "high",
+] as const;
+export const RESPONSE_REASONING_SUMMARIES = [
+  "default",
+  "auto",
+  "concise",
+  "detailed",
+  "none",
+] as const;
+
+export type ResponseVerbosity = (typeof RESPONSE_VERBOSITIES)[number];
+export type ResponseReasoningSummary =
+  (typeof RESPONSE_REASONING_SUMMARIES)[number];
+
+export function isHiddenThinkingLevels(
+  value: unknown,
+): value is ReasoningLevel[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= REASONING_LEVELS.length &&
+    Array.from(value).every(isReasoningLevel) &&
+    new Set(value).size === value.length
+  );
+}
+
 export const FOOTER_ITEMS = [
   "cwd",
   "model",
@@ -192,6 +221,10 @@ export interface MyPiSetupConfig {
   };
   readonly browser: BrowserConfig;
   readonly webSearch: WebSearchConfig;
+  readonly response: {
+    readonly verbosity: ResponseVerbosity;
+    readonly reasoningSummary: ResponseReasoningSummary;
+  };
   readonly ui: {
     readonly webTheme: WebTheme;
     readonly webChatWidth: number;
@@ -199,6 +232,7 @@ export interface MyPiSetupConfig {
     readonly webAuxiliaryWidth: number;
     readonly webChatFontSize: number;
     readonly webExpandThinking: boolean;
+    readonly webHiddenThinkingLevels: readonly ReasoningLevel[];
     readonly webPinnedSort: "manual" | "updated";
     readonly showHeader: boolean;
     readonly customFooter: boolean;
@@ -226,6 +260,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   capabilities: { discovery: "explicit" },
   suggestions: { enabled: false },
   webSearch: { enabled: false, modelSupport: [] },
+  response: { verbosity: "default", reasoningSummary: "default" },
   workflows: {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
@@ -244,6 +279,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     webAuxiliaryWidth: DEFAULT_WEB_AUXILIARY_WIDTH,
     webChatFontSize: DEFAULT_WEB_CHAT_FONT_SIZE,
     webExpandThinking: false,
+    webHiddenThinkingLevels: [],
     webPinnedSort: "manual",
     showHeader: false,
     customFooter: true,
@@ -559,6 +595,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   const ui = isRecord(value.ui) ? value.ui : {};
   const browser = isRecord(value.browser) ? value.browser : {};
   const webSearch = isRecord(value.webSearch) ? value.webSearch : {};
+  const response = isRecord(value.response) ? value.response : {};
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
@@ -575,6 +612,14 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       modelSupport: isWebSearchModelSupport(webSearch.modelSupport)
         ? webSearch.modelSupport
         : [],
+    },
+    response: {
+      verbosity: isResponseVerbosity(response.verbosity)
+        ? response.verbosity
+        : "default",
+      reasoningSummary: isResponseReasoningSummary(response.reasoningSummary)
+        ? response.reasoningSummary
+        : "default",
     },
     suggestions: {
       enabled: requestedEnabled && Boolean(model),
@@ -648,6 +693,11 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         typeof ui.webExpandThinking === "boolean"
           ? ui.webExpandThinking
           : false,
+      webHiddenThinkingLevels: isHiddenThinkingLevels(
+        ui.webHiddenThinkingLevels,
+      )
+        ? [...ui.webHiddenThinkingLevels]
+        : [],
       showHeader: typeof ui.showHeader === "boolean" ? ui.showHeader : false,
       customFooter:
         typeof ui.customFooter === "boolean" ? ui.customFooter : true,
@@ -699,6 +749,12 @@ const nonemptyString = (value: unknown) =>
   typeof value === "string" && value.trim().length > 0;
 const oneOf = (values: readonly unknown[]) => (value: unknown) =>
   values.includes(value);
+const isResponseVerbosity = (value: unknown): value is ResponseVerbosity =>
+  RESPONSE_VERBOSITIES.includes(value as ResponseVerbosity);
+const isResponseReasoningSummary = (
+  value: unknown,
+): value is ResponseReasoningSummary =>
+  RESPONSE_REASONING_SUMMARIES.includes(value as ResponseReasoningSummary);
 const integerBetween = (minimum: number, maximum: number) => (value: unknown) =>
   typeof value === "number" &&
   Number.isInteger(value) &&
@@ -729,6 +785,10 @@ const setupShape: ConfigShape = {
     externalBrowsers: isBrowserList,
   },
   webSearch: { enabled: booleanValue, modelSupport: isWebSearchModelSupport },
+  response: {
+    verbosity: isResponseVerbosity,
+    reasoningSummary: isResponseReasoningSummary,
+  },
   ui: {
     webTheme: isWebTheme,
     webChatWidth: integerBetween(MIN_WEB_CHAT_WIDTH, MAX_WEB_CHAT_WIDTH),
@@ -745,6 +805,7 @@ const setupShape: ConfigShape = {
       MAX_WEB_CHAT_FONT_SIZE,
     ),
     webExpandThinking: booleanValue,
+    webHiddenThinkingLevels: isHiddenThinkingLevels,
     webPinnedSort: (value) => value === "manual" || value === "updated",
     showHeader: booleanValue,
     customFooter: booleanValue,
@@ -1468,6 +1529,8 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Browser control: ${config.browser.control ? "on" : "off"} · default ${config.browser.defaultBrowser} · embedded ${config.browser.embedded ? "allowed" : "blocked"} · external ${config.browser.externalBrowsers.join(", ") || "none"}`,
     `Browser choices: embedded (Chromium host), ${EXTERNAL_BROWSERS.join(", ")}; Safari/Firefox use native tabs.`,
     `Web search: ${config.webSearch.enabled ? "on" : "off"} · current Session model and Pi credentials · unsupported or unknown connections receive no search tool · ${config.webSearch.modelSupport.length} explicit model support declarations · no search-provider fallback`,
+    `Response preferences: verbosity ${config.response.verbosity} · reasoning summary ${config.response.reasoningSummary} · Responses APIs only; default preserves Pi's request`,
+    `Hidden Web thinking levels: ${config.ui.webHiddenThinkingLevels.join(", ") || "none"} · presentation only; native support and current effort are unchanged`,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"
