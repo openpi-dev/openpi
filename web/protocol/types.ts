@@ -280,6 +280,7 @@ export interface WebArchivedSessionQuery {
 
 export interface WebSettingsPreferencesPatch {
   hiddenThinkingLevels?: readonly ReasoningLevel[];
+  thinkingLevelVisibility?: { level: ReasoningLevel; visible: boolean };
   subagentResultDisplay?: "full" | "compact";
   bashToolDisplay?: "full" | "compact";
   fileMutationDisplay?: "full" | "compact";
@@ -287,7 +288,7 @@ export interface WebSettingsPreferencesPatch {
   footerStyle?: "plain" | "powerline" | "powerline-mono";
   pinnedSort?: "manual" | "updated";
   theme?: WebThemePreference;
-  appearance?: WebAppearancePreference;
+  appearance?: Partial<WebAppearancePreference>;
   chatWidth?: number;
   sidebarWidth?: number;
   auxiliaryWidth?: number;

@@ -150,6 +150,7 @@ export function ProviderSettingsPage({
   currentModel,
   thinkingLevel,
   theme,
+  preferences,
   workspaces = [],
   onRestoreSession,
   capabilities,
@@ -174,6 +175,7 @@ export function ProviderSettingsPage({
   currentModel?: WebModelSummary;
   thinkingLevel: string;
   theme: WebThemePreference;
+  preferences?: WebSnapshot["preferences"];
   workspaces?: WebWorkspaceSummary[];
   onRestoreSession?: (path: string) => Promise<boolean>;
   capabilities?: WebCapabilitySnapshot;
@@ -240,6 +242,7 @@ export function ProviderSettingsPage({
   } = useSettingsCatalog(
     sessionId,
     currentModel ? `${currentModel.provider}/${currentModel.id}` : "",
+    JSON.stringify(preferences),
   );
   const setupNeedsAttention =
     currentOutcome !== undefined &&

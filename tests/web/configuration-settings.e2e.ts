@@ -73,7 +73,10 @@ async function configurationFixture(page: Page) {
       });
       return;
     }
-    preferences.hiddenThinkingLevels = patch.hiddenThinkingLevels;
+    const { level, visible } = patch.thinkingLevelVisibility;
+    preferences.hiddenThinkingLevels = visible
+      ? preferences.hiddenThinkingLevels.filter((item) => item !== level)
+      : [...preferences.hiddenThinkingLevels, level];
     state.setup = {
       ...state.setup,
       ui: {

@@ -197,7 +197,7 @@ test("uploaded screenshots reach the real Host and provider without preview meta
   const provider = await startFakeProvider();
   const workspace = await mkdtemp(join(tmpdir(), "openpi-image-provider-"));
   const imageData =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/2uoAAAAASUVORK5CYII=";
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=";
   try {
     const imported = await page.request.post("/api/workspaces", {
       headers: authHeaders,

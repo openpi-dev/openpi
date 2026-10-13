@@ -98,7 +98,6 @@ async function installSettingsFixture(page: Page) {
     }
     for (const [key, field] of Object.entries({
       theme: "webTheme",
-      appearance: "webAppearance",
       chatWidth: "webChatWidth",
       chatFontSize: "webChatFontSize",
       expandThinking: "webExpandThinking",
@@ -106,6 +105,10 @@ async function installSettingsFixture(page: Page) {
       if (patch[key] !== undefined)
         Object.assign(config.ui, { [field]: patch[key] });
     }
+    if (patch.appearance !== undefined)
+      Object.assign(config.ui, {
+        webAppearance: { ...config.ui.webAppearance, ...patch.appearance },
+      });
     await route.fulfill({
       json: { saved: true, setup: projectWebSetupConfig(config) },
     });

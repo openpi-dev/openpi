@@ -96,9 +96,9 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
   expect(screen.getAllByText(i18n.t("toolRawEvidence"))).toHaveLength(4);
 });
 
-it("opens resolved file evidence through the active artifact context", () => {
+it("expands a file summary without nested controls and opens the resolved file through the active artifact context", () => {
   const open = vi.fn();
-  render(
+  const { container } = render(
     createElement(
       ArtifactContext.Provider,
       { value: { open } },
@@ -117,7 +117,11 @@ it("opens resolved file evidence through the active artifact context", () => {
     ),
   );
 
-  fireEvent.click(screen.getByText("read"));
+  const summary = container.querySelector(".tool-evidence-card > summary")!;
+  expect(summary.textContent).toContain("report.md");
+  expect(summary.querySelector("button, a, input, [tabindex]")).toBeNull();
+  fireEvent.click(summary);
+  expect(open).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "/workspace/report.md" }));
   expect(open).toHaveBeenCalledWith("/workspace/report.md");
 });

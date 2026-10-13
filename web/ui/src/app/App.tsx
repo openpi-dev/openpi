@@ -1396,6 +1396,7 @@ export function App() {
             t("unknownState")
           }
           theme={state.snapshot?.preferences.theme ?? "system"}
+          preferences={state.snapshot?.preferences}
           workspaces={state.snapshot?.workspaces ?? []}
           onRestoreSession={(path) => actions.unarchiveSession(path)}
           plan={state.snapshot?.runtime.plan}

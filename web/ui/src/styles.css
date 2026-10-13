@@ -66,6 +66,8 @@ body {
 [data-astryx-theme] {
   --font-family-body: var(--openpi-interface-font, ui-sans-serif);
   --font-family-heading: var(--openpi-interface-font, ui-sans-serif);
+  --color-text-primary: var(--text);
+  --color-background-popover: var(--page);
   font-family: var(--openpi-interface-font, ui-sans-serif);
 }
 ::selection { background: oklch(51.6% 0.151 253 / 18%); }
@@ -1044,7 +1046,7 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .evidence-content pre { max-height:360px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:10px; background:var(--sidebar-hover); line-height:1.65; }
 .evidence-content h4 { margin:12px 0 6px; }
 .evidence-content details > summary { cursor:pointer; padding:8px 0; }
-.evidence-content > details { margin-top:6px; color:var(--subtle); font-size:11.5px; }
+.evidence-content > details { margin-top:6px; color:var(--muted); font-size:11.5px; }
 .evidence-shell { overflow:hidden; margin:0; border:1px solid var(--border); border-radius:10px; background:var(--sidebar); }
 .evidence-shell figcaption { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 12px; color:var(--muted); font-size:12px; }
 .evidence-shell figcaption button { display:grid; width:24px; height:24px; place-items:center; border:0; border-radius:4px; background:transparent; color:var(--muted); cursor:pointer; }

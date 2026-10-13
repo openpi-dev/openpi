@@ -103,22 +103,7 @@ export function ToolEvidence({
             {toolActivityLabel(t, call.name, state)}
           </span>
           {path ? (
-            artifacts && fileReference ? (
-              <button
-                type="button"
-                className="evidence-filename artifact-link"
-                title={fileReference}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  artifacts.open(fileReference);
-                }}
-              >
-                {filename}
-              </button>
-            ) : (
-              <span className="evidence-filename">{filename}</span>
-            )
+            <span className="evidence-filename">{filename}</span>
           ) : target ? (
             <span className="evidence-command">{target}</span>
           ) : null}

@@ -347,11 +347,17 @@ async function listTerminalSessionInfo(workspace: string, signal?: AbortSignal) 
 
 export type ArchivedSessionQuery = WebArchivedSessionQuery;
 
-interface ArchivedSessionCursor {
-  readonly version: 1;
-  readonly sessionPath: string;
-  readonly queryHash: string;
-}
+type ArchivedSessionCursor =
+  | {
+      readonly version: 1;
+      readonly sessionPath: string;
+      readonly queryHash: string;
+    }
+  | {
+      readonly version: 2;
+      readonly sessionPathHash: string;
+      readonly queryHash: string;
+    };
 
 function encodeArchivedSessionCursor(cursor: ArchivedSessionCursor) {
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
@@ -374,14 +380,27 @@ function decodeArchivedSessionCursor(value: string) {
     if (
       !parsed ||
       typeof parsed !== "object" ||
-      Array.isArray(parsed) ||
-      (parsed as { version?: unknown }).version !== 1 ||
-      typeof (parsed as { sessionPath?: unknown }).sessionPath !== "string" ||
-      (parsed as { sessionPath: string }).sessionPath.length === 0 ||
-      (parsed as { sessionPath: string }).sessionPath.length > 320 ||
-      typeof (parsed as { queryHash?: unknown }).queryHash !== "string" ||
-      !/^[0-9a-f]{64}$/u.test((parsed as { queryHash: string }).queryHash)
+      Array.isArray(parsed)
     ) {
+      return undefined;
+    }
+    const cursor = parsed as Record<string, unknown>;
+    if (
+      typeof cursor.queryHash !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(cursor.queryHash)
+    ) return undefined;
+    if (cursor.version === 1) {
+      if (
+        typeof cursor.sessionPath !== "string" ||
+        cursor.sessionPath.length === 0 ||
+        cursor.sessionPath.length > 320
+      ) return undefined;
+    } else if (cursor.version === 2) {
+      if (
+        typeof cursor.sessionPathHash !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(cursor.sessionPathHash)
+      ) return undefined;
+    } else {
       return undefined;
     }
     return parsed as ArchivedSessionCursor;
@@ -426,6 +445,7 @@ export class PiWebAdapter {
     if (this.workspaceStateLoaded) return;
     if (!this.workspaceStateLoading) {
       this.workspaceStateLoading = (async () => {
+        const draft = this.captureWorkspaceState();
         try {
           const parsed: unknown = JSON.parse(
             await readFile(this.workspaceStateFile, "utf8"),
@@ -434,12 +454,12 @@ export class PiWebAdapter {
             throw new Error("Workspace metadata must be an object");
           }
           const state = parsed as Record<string, unknown>;
-          if (state.sessionPins !== undefined) {
-            if (!Array.isArray(state.sessionPins) || state.sessionPins.length > 100 ||
-              !state.sessionPins.every((pin) => pin && typeof pin.path === "string" && typeof pin.id === "string")) {
+          const sessionPins = state.sessionPins;
+          if (sessionPins !== undefined) {
+            if (!Array.isArray(sessionPins) || sessionPins.length > 100 ||
+              !sessionPins.every((pin) => pin && typeof pin.path === "string" && typeof pin.id === "string")) {
               throw new Error("Session pins have an invalid shape");
             }
-            this.sessionPins = state.sessionPins.map((pin) => ({ path: pin.path, id: pin.id }));
           }
           if (
             !Array.isArray(state.hiddenWorkspaces) ||
@@ -455,25 +475,35 @@ export class PiWebAdapter {
           ) {
             throw new Error("Workspace metadata has an invalid shape");
           }
+          if (sessionPins !== undefined) {
+            draft.sessionPins = sessionPins.map((pin) => ({ path: pin.path, id: pin.id }));
+          }
           for (const path of state.hiddenWorkspaces) {
-            this.hiddenWorkspaces.add(resolve(path));
+            draft.hiddenWorkspaces.add(resolve(path));
           }
           for (const path of state.ungroupedSessions) {
-            this.ungroupedSessions.add(resolve(path));
+            draft.ungroupedSessions.add(resolve(path));
           }
           for (const [path, name] of Object.entries(state.workspaceNames)) {
-            this.workspaceNames.set(resolve(path), name as string);
+            draft.workspaceNames.set(resolve(path), name as string);
           }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-        this.restoreInitialWorkspace =
+        draft.restoreInitialWorkspace =
           this.runtime.workspaceSelected === true &&
-          this.hiddenWorkspaces.has(resolve(this.runtime.cwd));
+          draft.hiddenWorkspaces.has(resolve(this.runtime.cwd));
+        this.restoreWorkspaceState(draft);
         this.workspaceStateLoaded = true;
       })();
     }
-    await this.workspaceStateLoading;
+    const loading = this.workspaceStateLoading;
+    try {
+      await loading;
+    } catch (error) {
+      if (this.workspaceStateLoading === loading) this.workspaceStateLoading = undefined;
+      throw error;
+    }
   }
 
   private enqueueWorkspaceMutation<T>(
@@ -523,7 +553,14 @@ export class PiWebAdapter {
         this.archivesLoaded = true;
       })();
     }
-    await this.archivesLoading;
+    const loading = this.archivesLoading;
+    try {
+      await loading;
+    } catch (error) {
+      // A failed read must remain fail-closed without poisoning later retries.
+      if (this.archivesLoading === loading) this.archivesLoading = undefined;
+      throw error;
+    }
   }
 
   private enqueueArchiveMutation<T>(
@@ -668,7 +705,8 @@ export class PiWebAdapter {
     });
   }
 
-  async listArchivedSessions(options: ArchivedSessionQuery = {}) {
+  async listArchivedSessions(options: ArchivedSessionQuery = {}, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     await this.ensureWorkspaceStateLoaded();
     await this.ensureArchivesLoaded();
     const limit = options.limit ?? 25;
@@ -691,17 +729,34 @@ export class PiWebAdapter {
       return { status: "invalid" as const };
     }
 
-    const allSessions = await SessionManager.listAll(
-      this.runtime.sessionDirectory,
-    );
-    if (sort === "created") allSessions.sort((left, right) => right.created.getTime() - left.created.getTime() || right.path.localeCompare(left.path));
-    const scanned = allSessions.slice(0, WEB_MAX_ARCHIVED_SESSION_SCAN);
     const cwd = options.cwd === undefined ? undefined : resolve(options.cwd);
     const normalizedQuery = query.normalize("NFKC").toLocaleLowerCase();
     if (normalizedQuery.length > WEB_MAX_ARCHIVED_SESSION_QUERY) {
       return { status: "invalid" as const };
     }
-    const matches = scanned.filter((session) => {
+    const queryHash = archivedQueryHash(normalizedQuery, sort, cwd);
+    const cursor = options.cursor === undefined
+      ? undefined
+      : decodeArchivedSessionCursor(options.cursor);
+    if (options.cursor !== undefined && !cursor) {
+      return { status: "invalid" as const };
+    }
+    if (cursor && cursor.queryHash !== queryHash) {
+      return { status: "stale_cursor" as const };
+    }
+    const allSessions = await SessionManager.listAll(
+      this.runtime.sessionDirectory,
+      undefined,
+      signal,
+    );
+    signal?.throwIfAborted();
+    // Order the complete Pi catalog before locating the continuation window.
+    if (sort === "created") {
+      allSessions.sort((left, right) =>
+        right.created.getTime() - left.created.getTime() ||
+        right.path.localeCompare(left.path));
+    }
+    const matchesArchive = (session: (typeof allSessions)[number]) => {
       if (!this.archivedSessions.has(resolve(session.path))) return false;
       if (cwd !== undefined && resolve(session.cwd) !== cwd) return false;
       if (!normalizedQuery) return true;
@@ -715,22 +770,26 @@ export class PiWebAdapter {
         .normalize("NFKC")
         .toLocaleLowerCase();
       return source.includes(normalizedQuery);
-    });
-    const queryHash = archivedQueryHash(normalizedQuery, sort, cwd);
+    };
     let start = 0;
-    if (options.cursor !== undefined) {
-      const cursor = decodeArchivedSessionCursor(options.cursor);
-      if (!cursor) return { status: "invalid" as const };
-      if (cursor.queryHash !== queryHash) {
-        return { status: "stale_cursor" as const };
-      }
-      const cursorIndex = matches.findIndex(
-        (session) => session.path === cursor.sessionPath,
+    if (cursor) {
+      const cursorIndex = allSessions.findIndex(
+        (session) => cursor.version === 1
+          ? session.path === cursor.sessionPath
+          : createHash("sha256").update(session.path).digest("hex") === cursor.sessionPathHash,
       );
       if (cursorIndex < 0) return { status: "stale_cursor" as const };
+      if (cursor.version === 1 && !matchesArchive(allSessions[cursorIndex]!)) {
+        return { status: "stale_cursor" as const };
+      }
       start = cursorIndex + 1;
     }
-    const selected = matches.slice(start, start + limit);
+    const scanned = allSessions.slice(
+      start,
+      start + WEB_MAX_ARCHIVED_SESSION_SCAN,
+    );
+    const matches = scanned.filter(matchesArchive);
+    const selected = matches.slice(0, limit);
     const sessions = selected.map((session) => ({
       id: session.id,
       path: session.path,
@@ -750,24 +809,32 @@ export class PiWebAdapter {
         ? { ungrouped: true }
         : {}),
     }));
-    const pageEnd = start + sessions.length;
-    const hasMoreMatches = pageEnd < matches.length;
-    const recordsUnscanned = Math.max(0, allSessions.length - scanned.length);
+    const hasMoreMatches = sessions.length < matches.length;
+    const recordsUnscanned = Math.max(
+      0,
+      allSessions.length - start - scanned.length,
+    );
+    // Advance past nonmatching rows too, including an entirely empty window.
+    const anchor = hasMoreMatches
+      ? selected.at(-1)
+      : recordsUnscanned > 0 ? scanned.at(-1) : undefined;
     return {
       status: "ok" as const,
       sessions,
-      ...(hasMoreMatches && sessions.length > 0
+      ...(anchor
         ? {
             nextCursor: encodeArchivedSessionCursor({
-              version: 1,
-              sessionPath: sessions.at(-1)!.path,
+              version: 2,
+              sessionPathHash: createHash("sha256")
+                .update(anchor.path)
+                .digest("hex"),
               queryHash,
             }),
           }
         : {}),
       truncation: {
         truncated: hasMoreMatches || recordsUnscanned > 0,
-        matchesOmitted: Math.max(0, matches.length - pageEnd),
+        matchesOmitted: Math.max(0, matches.length - sessions.length),
         recordsUnscanned,
         maxPageSize: WEB_MAX_ARCHIVED_SESSION_PAGE,
         maxScanned: WEB_MAX_ARCHIVED_SESSION_SCAN,

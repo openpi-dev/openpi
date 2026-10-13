@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { WebSettingsCatalog } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
 
-export function useSettingsCatalog(sessionId: string, modelIdentity = "") {
+export function useSettingsCatalog(
+  sessionId: string,
+  modelIdentity = "",
+  preferencesIdentity?: string,
+) {
   const client = useMemo(() => new WebClient(), []);
   const [revision, setRevision] = useState(0);
   const owner = JSON.stringify([sessionId, modelIdentity]);
+  const currentOwner = useRef(owner);
+  currentOwner.current = owner;
+  const generation = useRef(0);
   const [state, setState] = useState<{
     owner: string;
     catalog: WebSettingsCatalog | null;
@@ -16,6 +23,7 @@ export function useSettingsCatalog(sessionId: string, modelIdentity = "") {
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly triggers a manual refresh.
   useEffect(() => {
     const controller = new AbortController();
+    const requestGeneration = ++generation.current;
     setState((current) => ({
       owner,
       catalog: current?.owner === owner ? current.catalog : null,
@@ -23,11 +31,17 @@ export function useSettingsCatalog(sessionId: string, modelIdentity = "") {
     }));
     void client.settingsCatalog(sessionId, controller.signal).then(
       (result) => {
-        if (!controller.signal.aborted)
+        if (
+          !controller.signal.aborted &&
+          generation.current === requestGeneration
+        )
           setState({ owner, catalog: result, error: null });
       },
       (reason) => {
-        if (!controller.signal.aborted) {
+        if (
+          !controller.signal.aborted &&
+          generation.current === requestGeneration
+        ) {
           setState((current) => ({
             owner,
             catalog: current?.owner === owner ? current.catalog : null,
@@ -37,17 +51,21 @@ export function useSettingsCatalog(sessionId: string, modelIdentity = "") {
       },
     );
     return () => controller.abort();
-  }, [client, revision, sessionId, owner]);
+  }, [client, revision, sessionId, owner, preferencesIdentity]);
 
   return {
     catalog: state?.owner === owner ? state.catalog : null,
     error: state?.owner === owner ? state.error : null,
     refresh,
-    updateSetup: (setup: WebSettingsCatalog["setup"]) =>
+    updateSetup: (setup: WebSettingsCatalog["setup"]) => {
+      if (currentOwner.current !== owner) return;
+      // A catalog read begun before this confirmed write must not roll it back.
+      generation.current++;
       setState((current) =>
         current?.owner === owner && current.catalog
           ? { ...current, catalog: { ...current.catalog, setup } }
           : current,
-      ),
+      );
+    },
   };
 }

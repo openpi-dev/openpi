@@ -60,7 +60,24 @@ function planProviderConnection(page: Page, baseUrl: string) {
       // than writing against the test's earlier Session identity or revision.
       const snapshot = await page.request.get("/api/snapshot", { headers });
       expect(snapshot.status()).toBe(200);
-      const { currentSessionId } = await snapshot.json();
+      const { currentSessionId, runtime } = await snapshot.json();
+      // Failed streaming assertions still own a native turn. Stop it before
+      // restoring the model or closing the provider so later tests stay isolated.
+      if (runtime.activeTurn) {
+        const { sessionId, commandId, epoch } = runtime.activeTurn;
+        const cancelled = await page.request.post("/api/turns/cancel", {
+          headers,
+          data: { sessionId, commandId, epoch },
+        });
+        expect([200, 202]).toContain(cancelled.status());
+      }
+      await expect
+        .poll(async () => {
+          const response = await page.request.get("/api/snapshot", { headers });
+          expect(response.status()).toBe(200);
+          return (await response.json()).runtime.status;
+        })
+        .toBe("idle");
       const current = await configuration(currentSessionId);
       await save(currentSessionId, current.revision, original);
       const restored = await configuration(currentSessionId);
@@ -78,11 +95,9 @@ async function closePlanProvider(
   provider: Awaited<ReturnType<typeof startPlanProvider>>,
   workspace: string,
 ) {
-  // A restore rejection must fail the test, while never leaking its listener.
-  const outcomes = await Promise.allSettled([
-    connection.restore(),
-    provider.close(),
-  ]);
+  // Retire native work before closing its listener; retain both cleanup errors.
+  const outcomes = await Promise.allSettled([connection.restore()]);
+  outcomes.push(...(await Promise.allSettled([provider.close()])));
   deferPlanWorkspaceCleanup(workspace);
   const failures = outcomes.flatMap((outcome) =>
     outcome.status === "rejected" ? [outcome.reason] : [],
@@ -195,6 +210,7 @@ test("Plan switch changes only owner state; first message gets planning context 
     await expect(page.locator(".message-row.user")).toHaveCount(0);
     await page.getByRole("button", { name: "设置", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "设置" });
+    await settings.getByRole("tab", { name: "外观", exact: true }).click();
     // Theme is a direct UI preference; model-driven setup remains blocked.
     await expect(
       settings.getByRole("radio", { name: "深色", exact: true }),
@@ -253,13 +269,11 @@ test("Plan switch changes only owner state; first message gets planning context 
     await expect(input).toHaveValue("下一条草稿");
     expect(provider.requests).toHaveLength(2);
     await page.getByRole("button", { name: "设置", exact: true }).click();
+    await settings.getByRole("tab", { name: "外观", exact: true }).click();
     await expect(
       settings.getByRole("radio", { name: "深色", exact: true }),
     ).toBeEnabled();
-    await settings
-      .locator(".settings-theme-option")
-      .filter({ hasText: "深色" })
-      .click();
+    await settings.getByRole("radio", { name: "深色", exact: true }).click();
     await expect(
       settings.getByText("显示设置已保存。", { exact: true }),
     ).toBeVisible();
@@ -268,7 +282,8 @@ test("Plan switch changes only owner state; first message gets planning context 
     ).toBeChecked();
     expect(provider.requests).toHaveLength(2);
     await page.reload();
-    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await expect(settings).toBeVisible();
+    await settings.getByRole("tab", { name: "外观", exact: true }).click();
     await expect(
       settings.getByRole("radio", { name: "深色", exact: true }),
     ).toBeChecked();
@@ -470,7 +485,13 @@ for (const theme of ["light", "dark"] as const) {
         },
       });
       expect(model.status()).toBe(200);
+      const appearance = await page.request.post("/api/settings/preferences", {
+        headers,
+        data: { theme },
+      });
+      expect(appearance.status()).toBe(200);
       await page.goto("/");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       const input = page.getByRole("textbox", { name: "描述任务" });
       if (theme === "light") await togglePlan(page);
       const prompt = `${theme === "dark" ? "/plan " : ""}规划会话导出，先询问 Markdown 或 JSON，不修改代码。`;
@@ -491,14 +512,29 @@ for (const theme of ["light", "dark"] as const) {
         element.setAttribute("data-stream-check", "stable");
       });
       releaseArguments();
-      await expect(
-        page.locator(".tool-name").filter({ hasText: "plan_ready" }),
-      ).toBeVisible();
+      const planEvidence = page.locator(
+        '.message-details.tool-line[data-tool="plan_ready"]',
+      );
+      await expect(planEvidence).toBeVisible();
+      await planEvidence.locator(":scope > summary").click();
+      await expect(planEvidence.locator("pre")).toBeVisible();
       await expect(answer).toHaveAttribute("data-stream-check", "stable");
       const evidence = page.locator(".message-details.tool-line").filter({
         has: page.locator(".tool-summary", { hasText: "User answered:" }),
       });
       await expect(evidence).toHaveCount(1);
+      await expect(evidence).toBeVisible();
+      // Inspect the earlier answer while later tool arguments stream. Upward
+      // reading intent pauses the transcript's normal following of the bottom.
+      const conversation = page.getByRole("log", { name: "Conversation" });
+      const previousScroll = await conversation.evaluate(
+        (element) => element.scrollTop,
+      );
+      await evidence.hover();
+      await page.mouse.wheel(0, -80);
+      await expect
+        .poll(() => conversation.evaluate((element) => element.scrollTop))
+        .toBeLessThan(previousScroll);
       await evidence.evaluate((element) => {
         element.setAttribute("data-stream-check", "answer-evidence");
       });
@@ -512,9 +548,6 @@ for (const theme of ["light", "dark"] as const) {
         };
         frame = requestAnimationFrame(sample);
         return { samples, stop: () => cancelAnimationFrame(frame) };
-      });
-      const planEvidence = page.locator(".message-details.tool-line").filter({
-        has: page.locator(".tool-name", { hasText: "plan_ready" }),
       });
       for (const step of streamSteps) {
         const previous = await planEvidence.locator("pre").textContent();
@@ -548,9 +581,7 @@ for (const theme of ["light", "dark"] as const) {
       }
       expect(
         await answer.evaluate((element) => {
-          const tool = [...document.querySelectorAll(".tool-name")].find(
-            (node) => node.textContent === "plan_ready",
-          );
+          const tool = document.querySelector('[data-tool="plan_ready"]');
           return Boolean(
             tool &&
               element.compareDocumentPosition(tool) &

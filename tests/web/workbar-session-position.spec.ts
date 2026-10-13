@@ -451,7 +451,13 @@ it("hydrates saved widths, clamps small windows without saving, and saves explic
       webStore.setState({
         snapshot: {
           ...current,
-          preferences: { ...current.preferences, ...patch },
+          preferences: {
+            ...current.preferences,
+            sidebarWidth:
+              patch.sidebarWidth ?? current.preferences.sidebarWidth,
+            auxiliaryWidth:
+              patch.auxiliaryWidth ?? current.preferences.auxiliaryWidth,
+          },
         },
       });
     });
@@ -688,7 +694,13 @@ it("keeps the latest operator width when later snapshots contain an older saved 
       webStore.setState({
         snapshot: {
           ...current,
-          preferences: { ...current.preferences, ...patch },
+          preferences: {
+            ...current.preferences,
+            sidebarWidth:
+              patch.sidebarWidth ?? current.preferences.sidebarWidth,
+            auxiliaryWidth:
+              patch.auxiliaryWidth ?? current.preferences.auxiliaryWidth,
+          },
         },
       });
     });

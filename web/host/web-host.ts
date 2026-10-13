@@ -27,7 +27,7 @@ import {
   webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
-import { inspectSetupConfig, isDetailDisplay, isFooterStyle, isHiddenThinkingLevels, isWebAppearancePreference, isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
+import { DEFAULT_WEB_APPEARANCE, inspectSetupConfig, isDetailDisplay, isFooterStyle, isHiddenThinkingLevels, isWebAppearancePreference, isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig, projectWebSetupInspection } from "../runtime/settings-catalog.ts";
 import { validModelConfiguration, validProviderConfigurationChange } from "../runtime/model-configuration.ts";
 import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
@@ -53,6 +53,8 @@ import {
   WEB_PROMPT_MAX_TEXT_LENGTH,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
+  type WebAppearancePreference,
+  type WebSettingsPreferencesPatch,
   type WebInteractiveTerminalEvent,
   type WebPromptImage,
   type WebSnapshot,
@@ -108,6 +110,18 @@ const execFileAsync = promisify(execFile);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isWebAppearancePatch(value: unknown): value is Partial<WebAppearancePreference> {
+  return isRecord(value) && Object.keys(value).length > 0 &&
+    Object.keys(value).every((key) => Object.hasOwn(DEFAULT_WEB_APPEARANCE, key)) &&
+    isWebAppearancePreference({ ...DEFAULT_WEB_APPEARANCE, ...value });
+}
+
+function isThinkingLevelVisibility(value: unknown): value is NonNullable<WebSettingsPreferencesPatch["thinkingLevelVisibility"]> {
+  return isRecord(value) && Object.keys(value).length === 2 &&
+    typeof value.level === "string" && THINKING_LEVELS.has(value.level) &&
+    typeof value.visible === "boolean";
 }
 
 const promptImageMimeTypes = new Set<WebPromptImage["mimeType"]>([
@@ -1273,11 +1287,12 @@ export class WebHost {
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
-      const { theme, appearance, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, hiddenThinkingLevels, pinnedSort, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
+      const { theme, appearance, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, hiddenThinkingLevels, thinkingLevelVisibility, pinnedSort, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
       // Browser appearance is package-wide and independent of agent execution.
       // Keep this surface restricted to presentation fields, including on Plan turns.
-      if (!keys.length || keys.some((key) => !["theme", "appearance", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "hiddenThinkingLevels", "pinnedSort", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
+      if (!keys.length || keys.some((key) => !["theme", "appearance", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "hiddenThinkingLevels", "thinkingLevelVisibility", "pinnedSort", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
         (hiddenThinkingLevels !== undefined && !isHiddenThinkingLevels(hiddenThinkingLevels)) ||
+        (thinkingLevelVisibility !== undefined && (!isThinkingLevelVisibility(thinkingLevelVisibility) || hiddenThinkingLevels !== undefined)) ||
         (subagentResultDisplay !== undefined && !isDetailDisplay(subagentResultDisplay)) ||
         (bashToolDisplay !== undefined && !isDetailDisplay(bashToolDisplay)) ||
         (fileMutationDisplay !== undefined && !isDetailDisplay(fileMutationDisplay)) ||
@@ -1285,7 +1300,7 @@ export class WebHost {
         (footerStyle !== undefined && !isFooterStyle(footerStyle)) ||
         (pinnedSort !== undefined && pinnedSort !== "manual" && pinnedSort !== "updated") ||
         (theme !== undefined && !isWebTheme(theme)) ||
-        (appearance !== undefined && !isWebAppearancePreference(appearance)) ||
+        (appearance !== undefined && !isWebAppearancePatch(appearance)) ||
         (chatWidth !== undefined && (typeof chatWidth !== "number" || !Number.isInteger(chatWidth) || chatWidth < 820 || chatWidth > 2000)) ||
         (sidebarWidth !== undefined && (typeof sidebarWidth !== "number" || !Number.isInteger(sidebarWidth) || sidebarWidth < 220 || sidebarWidth > 420)) ||
         (auxiliaryWidth !== undefined && (typeof auxiliaryWidth !== "number" || !Number.isInteger(auxiliaryWidth) || auxiliaryWidth < 360 || auxiliaryWidth > 720)) ||
@@ -1294,26 +1309,35 @@ export class WebHost {
         return this.json(response, 400, { error: "Invalid Web appearance preferences" });
       }
       try {
-        const result = await updateSetupConfig((current) => ({
-          ...current,
-          ui: {
-            ...current.ui,
-            ...(theme !== undefined ? { webTheme: theme } : {}),
-            ...(isWebAppearancePreference(appearance) ? { webAppearance: appearance } : {}),
-            ...(chatWidth !== undefined ? { webChatWidth: chatWidth } : {}),
-            ...(sidebarWidth !== undefined ? { webSidebarWidth: sidebarWidth } : {}),
-            ...(auxiliaryWidth !== undefined ? { webAuxiliaryWidth: auxiliaryWidth } : {}),
-            ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
-            ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
-            ...(isHiddenThinkingLevels(hiddenThinkingLevels) ? { webHiddenThinkingLevels: hiddenThinkingLevels } : {}),
-            ...(pinnedSort !== undefined ? { webPinnedSort: pinnedSort } : {}),
-            ...(isDetailDisplay(subagentResultDisplay) ? { subagentResultDisplay } : {}),
-            ...(isDetailDisplay(bashToolDisplay) ? { bashToolDisplay } : {}),
-            ...(isDetailDisplay(fileMutationDisplay) ? { fileMutationDisplay } : {}),
-            ...(typeof customFooter === "boolean" ? { customFooter } : {}),
-            ...(isFooterStyle(footerStyle) ? { footerStyle } : {}),
-          },
-        }));
+        const result = await updateSetupConfig((current) => {
+          const appearancePatch = isWebAppearancePatch(appearance) ? appearance : undefined;
+          const visibility = isThinkingLevelVisibility(thinkingLevelVisibility) ? thinkingLevelVisibility : undefined;
+          const legacyPalette = (["mist", "rose", "pine"] as const).find((palette) => palette === current.ui.webTheme);
+          const migratePalette = legacyPalette && (theme !== undefined || appearancePatch?.palette !== undefined);
+          return {
+            ...current,
+            ui: {
+              ...current.ui,
+              ...(theme !== undefined ? { webTheme: theme } : migratePalette ? { webTheme: legacyPalette === "pine" ? "dark" : "light" } : {}),
+              ...(appearancePatch || migratePalette ? { webAppearance: { ...current.ui.webAppearance, ...(migratePalette ? { palette: legacyPalette } : {}), ...appearancePatch } } : {}),
+              ...(chatWidth !== undefined ? { webChatWidth: chatWidth } : {}),
+              ...(sidebarWidth !== undefined ? { webSidebarWidth: sidebarWidth } : {}),
+              ...(auxiliaryWidth !== undefined ? { webAuxiliaryWidth: auxiliaryWidth } : {}),
+              ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
+              ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
+              ...(isHiddenThinkingLevels(hiddenThinkingLevels) ? { webHiddenThinkingLevels: hiddenThinkingLevels } : {}),
+              ...(visibility ? { webHiddenThinkingLevels: visibility.visible
+                ? current.ui.webHiddenThinkingLevels.filter((level) => level !== visibility.level)
+                : [...new Set([...current.ui.webHiddenThinkingLevels, visibility.level])] } : {}),
+              ...(pinnedSort !== undefined ? { webPinnedSort: pinnedSort } : {}),
+              ...(isDetailDisplay(subagentResultDisplay) ? { subagentResultDisplay } : {}),
+              ...(isDetailDisplay(bashToolDisplay) ? { bashToolDisplay } : {}),
+              ...(isDetailDisplay(fileMutationDisplay) ? { fileMutationDisplay } : {}),
+              ...(typeof customFooter === "boolean" ? { customFooter } : {}),
+              ...(isFooterStyle(footerStyle) ? { footerStyle } : {}),
+            },
+          };
+        });
         this.publish("settings_changed", {});
         return this.json(response, 200, { saved: true, setup: projectWebSetupConfig(result.config) });
       } catch {
@@ -2095,9 +2119,10 @@ export class WebHost {
       }
     }
     if (url.pathname === "/api/sessions/archived") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "Archived Sessions require GET" });
       const sort = url.searchParams.get("sort");
       if ((sort !== null && sort !== "updated" && sort !== "created") ||
-        url.searchParams.getAll("sort").length > 1 || url.searchParams.getAll("cwd").length > 1) {
+        [...url.searchParams.keys()].some((key) => !["sort", "cwd", "cursor", "limit", "q"].includes(key) || url.searchParams.getAll(key).length > 1)) {
         return this.json(response, 400, { code: "INVALID_ARCHIVED_SESSION_QUERY", error: "archived Session sort and project must be unambiguous" });
       }
       const rawLimit = url.searchParams.get("limit");
@@ -2114,34 +2139,43 @@ export class WebHost {
           error: "archived Session limit must be a bounded positive integer",
         });
       }
-      const result = await this.adapter.listArchivedSessions({
-        ...(sort !== null ? { sort } : {}),
-        ...(url.searchParams.has("cwd") ? { cwd: url.searchParams.get("cwd") ?? "" } : {}),
-        ...(url.searchParams.has("cursor")
-          ? { cursor: url.searchParams.get("cursor") ?? "" }
-          : {}),
-        ...(limit !== undefined ? { limit } : {}),
-        ...(url.searchParams.has("q")
-          ? { query: url.searchParams.get("q") ?? "" }
-          : {}),
-      });
-      if (result.status === "invalid") {
-        return this.json(response, 400, {
-          code: "INVALID_ARCHIVED_SESSION_QUERY",
-          error: "archived Session query is invalid or exceeds its bounds",
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      try {
+        const result = await this.adapter.listArchivedSessions({
+          ...(sort !== null ? { sort } : {}),
+          ...(url.searchParams.has("cwd") ? { cwd: url.searchParams.get("cwd") ?? "" } : {}),
+          ...(url.searchParams.has("cursor")
+            ? { cursor: url.searchParams.get("cursor") ?? "" }
+            : {}),
+          ...(limit !== undefined ? { limit } : {}),
+          ...(url.searchParams.has("q")
+            ? { query: url.searchParams.get("q") ?? "" }
+            : {}),
+        }, AbortSignal.any([controller.signal, this.chooserAbort.signal]));
+        if (result.status === "invalid") {
+          return this.json(response, 400, {
+            code: "INVALID_ARCHIVED_SESSION_QUERY",
+            error: "archived Session query is invalid or exceeds its bounds",
+          });
+        }
+        if (result.status === "stale_cursor") {
+          return this.json(response, 409, {
+            code: "ARCHIVED_SESSION_CURSOR_STALE",
+            error: "archived Session cursor is stale for this query",
+          });
+        }
+        return this.json(response, 200, {
+          sessions: result.sessions,
+          ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+          truncation: result.truncation,
         });
+      } finally {
+        request.off("aborted", abort);
+        response.off("close", abort);
       }
-      if (result.status === "stale_cursor") {
-        return this.json(response, 409, {
-          code: "ARCHIVED_SESSION_CURSOR_STALE",
-          error: "archived Session cursor is stale for this query",
-        });
-      }
-      return this.json(response, 200, {
-        sessions: result.sessions,
-        ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
-        truncation: result.truncation,
-      });
     }
     if (url.pathname === "/api/models")
       {

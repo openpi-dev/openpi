@@ -1119,6 +1119,285 @@ test("archived Session listing is queryable, cursor-bounded, and stale-safe", as
   }
 });
 
+test("archive scan continuations reach old matches after an empty bounded window in global sort order", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-scan-next-"));
+  const project = join(root, "old-project");
+  try {
+    const active = Array.from({ length: 5_000 }, (_, index) => ({
+      id: `active-${index}`,
+      path: join(root, `active-${index}.jsonl`),
+      cwd: root,
+      created: new Date(100_000 - index),
+      modified: new Date(100_000 - index),
+      messageCount: 1,
+      firstMessage: "active fixture",
+      allMessagesText: "active fixture",
+    }));
+    const older = [
+      {
+        ...active[0]!,
+        id: "older-a",
+        path: join(root, "older-a.jsonl"),
+        cwd: project,
+        created: new Date(200),
+        modified: new Date(300),
+        firstMessage: "old needle A",
+      },
+      {
+        ...active[0]!,
+        id: "older-b",
+        path: join(root, "older-b.jsonl"),
+        cwd: project,
+        created: new Date(300),
+        modified: new Date(200),
+        firstMessage: "old needle B",
+      },
+    ];
+    const listing = t.mock.method(SessionManager, "listAll", async () => [
+      ...active,
+      ...older,
+    ]);
+    await writeFile(
+      join(root, "archived-sessions.json"),
+      JSON.stringify(older.map((session) => session.path)),
+    );
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, root, SessionManager.inMemory(root)),
+    );
+    for (const options of [
+      { sort: "updated" as const },
+      { sort: "created" as const },
+      { query: "old needle", sort: "updated" as const },
+      { cwd: project, sort: "created" as const },
+    ]) {
+      const first = await adapter.listArchivedSessions({
+        ...options,
+        limit: 1,
+      });
+      assert.equal(first.status, "ok");
+      if (first.status !== "ok") return;
+      assert.deepEqual(first.sessions, []);
+      assert.equal(first.truncation.recordsUnscanned, 2);
+      assert.ok(
+        first.nextCursor,
+        "an empty scan window must still expose continuation",
+      );
+      const next = await adapter.listArchivedSessions({
+        ...options,
+        limit: 1,
+        cursor: first.nextCursor,
+      });
+      assert.equal(next.status, "ok");
+      if (next.status !== "ok") return;
+      assert.ok(next.nextCursor);
+      const last = await adapter.listArchivedSessions({
+        ...options,
+        limit: 1,
+        cursor: next.nextCursor,
+      });
+      assert.equal(last.status, "ok");
+      if (last.status !== "ok") return;
+      assert.deepEqual(
+        [...next.sessions, ...last.sessions].map((session) => session.id),
+        options.sort === "created"
+          ? ["older-b", "older-a"]
+          : ["older-a", "older-b"],
+      );
+      assert.equal(last.nextCursor, undefined);
+      assert.equal(last.truncation.recordsUnscanned, 0);
+    }
+    listing.mock.mockImplementation(async () => [
+      ...active,
+      { ...older[0]!, created: new Date(200_000) },
+      older[1]!,
+    ]);
+    const globallyNewest = await adapter.listArchivedSessions({
+      sort: "created",
+      limit: 1,
+    });
+    assert.equal(globallyNewest.status, "ok");
+    if (globallyNewest.status !== "ok") return;
+    assert.deepEqual(
+      globallyNewest.sessions.map((session) => session.id),
+      ["older-a"],
+      "created ordering must happen before the bounded scan window",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archive cursors produced for long valid Session paths remain bounded and replayable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-long-path-"));
+  const directory = join(root, "a".repeat(140), "b".repeat(140));
+  try {
+    const paths: string[] = [];
+    for (let index = 0; index < 2; index++) {
+      const manager = SessionManager.create(root, directory);
+      persistSession(manager, `long path archive ${index}`, index + 1);
+      paths.push(manager.getSessionFile()!);
+    }
+    await writeFile(
+      join(directory, "archived-sessions.json"),
+      JSON.stringify(paths),
+    );
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, directory, SessionManager.inMemory(root)),
+    );
+    const first = await adapter.listArchivedSessions({ limit: 1 });
+    assert.equal(first.status, "ok");
+    if (first.status !== "ok") return;
+    assert.ok(first.sessions[0]!.path.length > 320);
+    assert.ok(first.nextCursor);
+    assert.ok(
+      first.nextCursor.length <= 512,
+      "an emitted cursor must fit its input bound",
+    );
+    const second = await adapter.listArchivedSessions({
+      limit: 1,
+      cursor: first.nextCursor,
+    });
+    assert.equal(second.status, "ok");
+    if (second.status !== "ok") return;
+    assert.deepEqual(
+      new Set(
+        [...first.sessions, ...second.sessions].map((session) => session.path),
+      ),
+      new Set(paths),
+    );
+    assert.equal(second.nextCursor, undefined);
+    assert.deepEqual(
+      await adapter.listArchivedSessions({
+        cursor: `${first.nextCursor}${"x".repeat(513)}`,
+      }),
+      { status: "invalid" },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archived listing rejects pre-cancelled admission and forwards in-progress cancellation to Pi", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-cancel-"));
+  const controller = new AbortController();
+  const reason = new Error("archive query cancelled");
+  let admit: () => void = () => {};
+  const admitted = new Promise<void>((resolve) => {
+    admit = resolve;
+  });
+  let receivedSignal: AbortSignal | undefined;
+  const listing = t.mock.method(
+    SessionManager,
+    "listAll",
+    async (
+      ...[_directory, _progress, signal]: Parameters<
+        typeof SessionManager.listAll
+      >
+    ) => {
+      receivedSignal = signal;
+      admit();
+      signal?.throwIfAborted();
+      if (!signal) throw new Error("Pi catalog requires the query signal");
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      });
+    },
+  );
+  try {
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, root, SessionManager.inMemory(root)),
+    );
+    const preCancelled = AbortSignal.abort(reason);
+    await assert.rejects(
+      adapter.listArchivedSessions({}, preCancelled),
+      (error) => error === reason,
+    );
+    assert.equal(listing.mock.callCount(), 0);
+    const outcome = adapter.listArchivedSessions({}, controller.signal).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await admitted;
+    assert.equal(listing.mock.callCount(), 1);
+    assert.equal(receivedSignal, controller.signal);
+    controller.abort(reason);
+    assert.equal(await outcome, reason);
+  } finally {
+    controller.abort(reason);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed archive metadata initialization can retry after repair in the same adapter", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-repair-"));
+  const file = join(root, "archived-sessions.json");
+  try {
+    await writeFile(file, "{invalid archive metadata\n");
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, root, SessionManager.inMemory(root)),
+    );
+    const failures = await Promise.allSettled([
+      adapter.listArchivedSessions(),
+      adapter.listArchivedSessions(),
+    ]);
+    assert.ok(failures.every((result) => result.status === "rejected"));
+    assert.equal(await readFile(file, "utf8"), "{invalid archive metadata\n");
+    await writeFile(file, "[]\n");
+    const retried = await adapter.listArchivedSessions();
+    assert.equal(retried.status, "ok");
+    if (retried.status !== "ok") return;
+    assert.deepEqual(retried.sessions, []);
+    assert.equal(await readFile(file, "utf8"), "[]\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed workspace metadata initialization retries without leaking partially validated pins", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-workspace-repair-"));
+  const file = join(root, "workspace-state.json");
+  try {
+    const manager = SessionManager.create(root, root);
+    persistSession(manager, "metadata recovery fixture", 1);
+    const path = manager.getSessionFile()!;
+    const corrupt = JSON.stringify({
+      version: 1,
+      sessionPins: [{ path, id: manager.getSessionId() }],
+      hiddenWorkspaces: "invalid shape",
+      ungroupedSessions: [],
+      workspaceNames: {},
+    });
+    await writeFile(file, corrupt);
+    const adapter = new PiWebAdapter(runtimeFor(root, root, manager));
+    const failures = await Promise.allSettled([
+      adapter.listArchivedSessions(),
+      adapter.listArchivedSessions(),
+    ]);
+    assert.ok(failures.every((result) => result.status === "rejected"));
+    assert.equal(await readFile(file, "utf8"), corrupt);
+    const repaired = `${JSON.stringify({
+      version: 1,
+      hiddenWorkspaces: [],
+      ungroupedSessions: [],
+      workspaceNames: {},
+    })}\n`;
+    await writeFile(file, repaired);
+    const retried = await adapter.listArchivedSessions();
+    assert.equal(retried.status, "ok");
+    assert.equal(
+      (await adapter.listSessions()).find((session) => session.path === path)
+        ?.pinOrder,
+      undefined,
+      "pins from rejected metadata must never become visible after recovery",
+    );
+    assert.equal(await readFile(file, "utf8"), repaired);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("archived cursors bind duplicate IDs to their file and stay replayable", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-archived-cursor-"));
   const sessionDirectory = join(root, "sessions");

@@ -246,7 +246,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
       { theme: ["dark"] },
       { theme: null },
       { appearance: null },
-      { appearance: { palette: "rose" } },
+      { appearance: {} },
       {
         theme: "light",
         appearance: { ...DEFAULT_WEB_APPEARANCE, unknown: true },
@@ -350,6 +350,76 @@ test("appearance writes preserve package config, reject extra authority, and nev
     assert.equal(preferences.subagentResultDisplay, "full");
     assert.equal(preferences.bashToolDisplay, "full");
     assert.equal(preferences.fileMutationDisplay, "full");
+    // Each browser sends its field intent, so an older view cannot resend
+    // another window's accent, mode or hidden-level snapshot.
+    const partial = await Promise.all([
+      post({ appearance: { accent: "#112233" } }),
+      post({ appearance: { font: "serif" } }),
+      post({ theme: "light" }),
+      post({ thinkingLevelVisibility: { level: "low", visible: false } }),
+      post({ thinkingLevelVisibility: { level: "high", visible: false } }),
+    ]);
+    assert.ok(partial.every((response) => response.status === 200));
+    assert.deepEqual(loadSetupConfig().ui.webAppearance, {
+      ...appearance,
+      accent: "#112233",
+      font: "serif",
+    });
+    assert.equal(loadSetupConfig().ui.webTheme, "light");
+    assert.deepEqual(
+      new Set(loadSetupConfig().ui.webHiddenThinkingLevels),
+      new Set(["low", "high"]),
+    );
+    assert.equal(
+      (await post({ thinkingLevelVisibility: { level: "low", visible: true } }))
+        .status,
+      200,
+    );
+    assert.deepEqual(loadSetupConfig().ui.webHiddenThinkingLevels, ["high"]);
+    for (const body of [
+      { thinkingLevelVisibility: null },
+      { thinkingLevelVisibility: { level: "unknown", visible: false } },
+      { thinkingLevelVisibility: { level: "high", visible: "false" } },
+      {
+        thinkingLevelVisibility: { level: "high", visible: false, extra: true },
+      },
+      {
+        thinkingLevelVisibility: { level: "high", visible: false },
+        hiddenThinkingLevels: [],
+      },
+    ])
+      assert.equal((await post(body)).status, 400);
+    // Legacy palettes migrate under the same lock when mode/palette changes.
+    for (const legacy of ["mist", "rose", "pine"] as const) {
+      assert.equal(
+        (await post({ theme: legacy, appearance: DEFAULT_WEB_APPEARANCE }))
+          .status,
+        200,
+      );
+      assert.equal((await post({ appearance: { font: "mono" } })).status, 200);
+      assert.equal(loadSetupConfig().ui.webTheme, legacy);
+      assert.equal((await post({ theme: "dark" })).status, 200);
+      assert.equal(loadSetupConfig().ui.webTheme, "dark");
+      assert.deepEqual(loadSetupConfig().ui.webAppearance, {
+        ...DEFAULT_WEB_APPEARANCE,
+        palette: legacy,
+        font: "mono",
+      });
+      assert.equal(
+        (await post({ theme: legacy, appearance: DEFAULT_WEB_APPEARANCE }))
+          .status,
+        200,
+      );
+      assert.equal(
+        (await post({ appearance: { palette: "rose" } })).status,
+        200,
+      );
+      assert.equal(
+        loadSetupConfig().ui.webTheme,
+        legacy === "pine" ? "dark" : "light",
+      );
+      assert.equal(loadSetupConfig().ui.webAppearance.palette, "rose");
+    }
     await writeFile(path, "{invalid-private-config");
     const blocked = await post({
       theme: "light",
@@ -3465,6 +3535,78 @@ test("serves a Session-bound settings catalog and rejects unsupported preference
       error: "Invalid Web appearance preferences",
     });
   } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("archived queries stop native discovery on browser disconnect and reject ambiguous inputs", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-archive-cancel-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  let started!: (signal: AbortSignal) => void;
+  const ready = new Promise<AbortSignal>((resolve) => {
+    started = resolve;
+  });
+  const listing = t.mock.method(
+    PiWebAdapter.prototype,
+    "listArchivedSessions",
+    async (_options: unknown, signal?: AbortSignal) => {
+      assert.ok(signal);
+      started(signal);
+      await new Promise<void>((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        }),
+      );
+      throw new Error("Cancelled listing must never complete");
+    },
+  );
+  try {
+    for (const query of [
+      "q=one&q=two",
+      "cursor=a&cursor=b",
+      "limit=1&limit=2",
+      "unexpected=true",
+    ]) {
+      assert.equal(
+        (
+          await fetch(`${launched.origin}/api/sessions/archived?${query}`, {
+            headers,
+          })
+        ).status,
+        400,
+      );
+    }
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/sessions/archived`, {
+          method: "POST",
+          headers,
+        })
+      ).status,
+      405,
+    );
+    assert.equal(listing.mock.callCount(), 0);
+    const controller = new AbortController();
+    const pending = fetch(`${launched.origin}/api/sessions/archived`, {
+      headers,
+      signal: controller.signal,
+    });
+    const cancelled = assert.rejects(pending, { name: "AbortError" });
+    const nativeSignal = await ready;
+    const stopped = new Promise<void>((resolve) =>
+      nativeSignal.addEventListener("abort", () => resolve(), { once: true }),
+    );
+    controller.abort();
+    await cancelled;
+    await stopped;
+    assert.equal(nativeSignal.aborted, true);
+    assert.equal(
+      (await fetch(`${launched.origin}/api/snapshot`, { headers })).status,
+      200,
+    );
+  } finally {
+    listing.mock.restore();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }

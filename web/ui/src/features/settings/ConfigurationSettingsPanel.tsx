@@ -302,9 +302,10 @@ export function ConfigurationSettingsPanel({
                         }
                         onChange={(checked: boolean) => {
                           void onUpdatePreferences({
-                            hiddenThinkingLevels: checked
-                              ? hidden.filter((item) => item !== level)
-                              : [...hidden, level],
+                            thinkingLevelVisibility: {
+                              level,
+                              visible: checked,
+                            },
                           });
                         }}
                       />
