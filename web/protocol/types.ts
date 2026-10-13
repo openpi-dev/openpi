@@ -409,6 +409,8 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  /** Pi's bounded native child ledger. Child result bodies are not persisted by Pi. */
+  nestedCalls?: { calls: WebNestedToolCall[]; complete: boolean };
   webSearch?: (NativeSearchActivity & { beforePartIndex?: number })[];
   timestamp?: number;
   commandId?: string;
@@ -428,6 +430,14 @@ export interface WebLiveMessage {
   display?: boolean;
   details?: unknown;
   truncation?: WebMessageTruncation;
+}
+
+export interface WebNestedToolCall {
+  call: Extract<WebMessagePart, { type: "toolCall" }>;
+  status: "ok" | "error" | "unfinished";
+  argumentsOmitted?: true;
+  error?: string;
+  durationMs?: number;
 }
 
 export interface WebPromptImage {
@@ -916,6 +926,38 @@ function projectNativeSearch(message: unknown, partCount: number) {
   }));
 }
 
+function projectNestedCalls(input: unknown, resolvePath?: (path: string) => string | undefined) {
+  if (!input || typeof input !== "object") return undefined;
+  const raw = input as Record<string, unknown>;
+  if (!Array.isArray(raw.calls) || typeof raw.complete !== "boolean") return undefined;
+  const calls: WebNestedToolCall[] = [];
+  const ids = new Set<string>();
+  let complete = raw.complete && raw.calls.length <= 256;
+  let bytes = 0;
+  for (const item of raw.calls.slice(0, 256)) {
+    if (!item || typeof item !== "object") { complete = false; continue; }
+    const value = item as Record<string, unknown>;
+    if (typeof value.id !== "string" || !value.id || value.id.length > 500 || ids.has(value.id) ||
+      typeof value.name !== "string" || !value.name || value.name.length > 500 ||
+      !["ok", "error", "unfinished"].includes(String(value.status))) { complete = false; continue; }
+    ids.add(value.id);
+    const call = projectContent({ content: [{ type: "toolCall", id: value.id, name: value.name, arguments: value.arguments ?? {} }] }, resolvePath).parts[0];
+    if (call?.type !== "toolCall") { complete = false; continue; }
+    const argumentsOmitted = value.arguments === undefined || call.evidenceTruncated === true;
+    complete &&= !argumentsOmitted && value.status !== "unfinished";
+    const projected: WebNestedToolCall = {
+      call, status: value.status as WebNestedToolCall["status"],
+      ...(argumentsOmitted ? { argumentsOmitted: true } : {}),
+      ...(typeof value.error === "string" ? { error: value.error.slice(0, 500) } : {}),
+      ...(typeof value.durationMs === "number" && Number.isFinite(value.durationMs) && value.durationMs >= 0 ? { durationMs: value.durationMs } : {}),
+    };
+    bytes += jsonByteLength(projected);
+    if (bytes > 64 * 1024) { complete = false; break; }
+    calls.push(projected);
+  }
+  return { calls, complete };
+}
+
 export function projectMessage(message: unknown, resolvePath?: (path: string) => string | undefined): WebLiveMessage {
   const value =
     message && typeof message === "object"
@@ -924,6 +966,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
   const content = projectContent(value, resolvePath);
   const webSearch = projectNativeSearch(value, content.parts.length);
   const details = detailsProjection(value.details);
+  const nestedCalls = value.role === "toolResult" ? projectNestedCalls(value.nestedCalls, resolvePath) : undefined;
   const role =
     typeof value.role === "string"
       ? boundedTextProjection(value.role, WEB_MAX_METADATA_TEXT)
@@ -959,6 +1002,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
+    ...(nestedCalls ? { nestedCalls } : {}),
     ...(webSearch ? { webSearch } : {}),
     ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
     ...(value.toolName === "bash" && value.isError === true && !forkSnapshotToolResult ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),

@@ -8,6 +8,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Draft investigations
 
+- [`WEB_TOOL_GROUP_DETAILS_2026-10-13.md`](WEB_TOOL_GROUP_DETAILS_2026-10-13.md) — 工具组摘要、图标、对齐和动态的 Codex 安装包 / PR #711 状态对照；保留 OpenPI 分组的可选精修，原生 Codex 动态仍未验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #711](https://github.com/openpi-dev/openpi/pull/711)）。
 - [`WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md`](WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md) — Codex 侧栏多轮返工的原因、REA 证据边界、视觉验收遗漏与追加差距审计（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #711](https://github.com/openpi-dev/openpi/pull/711)）。
 - [`WEB_SUBAGENTS_2026-10-13.md`](WEB_SUBAGENTS_2026-10-13.md) — Codex local subagent activity, parent/child lifecycle, state matrix and Pi-native Web parity; native Codex runtime observation remains unavailable ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 

@@ -1959,6 +1959,13 @@ const resources = {
       toolRequestedFile: "File:",
       toolWorkspace: "Workspace",
       toolRawEvidence: "Arguments and original result",
+      toolCodemodeDetails: "Script and original result",
+      toolNestedOutputMissing:
+        "This session records the call and its status, but not the nested tool output.",
+      toolNestedArgumentsMissing:
+        "This session omits the full arguments and nested tool output.",
+      toolNestedIncomplete:
+        "The nested-call record is incomplete; some calls, arguments or final states are unavailable.",
       toolPartialEvidence:
         "Partial output: a byte, line or item limit was reached. The original result may also be truncated.",
       toolFileChange_created: "File created",
@@ -3769,6 +3776,12 @@ const resources = {
       toolRequestedFile: "文件：",
       toolWorkspace: "工作区",
       toolRawEvidence: "参数与原始结果",
+      toolCodemodeDetails: "脚本与原始结果",
+      toolNestedOutputMissing:
+        "会话记录保留了调用和状态，未保存此子工具的输出。",
+      toolNestedArgumentsMissing: "会话记录未保留完整参数和此子工具的输出。",
+      toolNestedIncomplete:
+        "子调用记录不完整，部分调用、参数或最终状态不可用。",
       toolPartialEvidence:
         "输出未完整显示：已达到字节、行数或条目上限。原始结果也可能被截断。",
       toolFileChange_created: "已创建文件",

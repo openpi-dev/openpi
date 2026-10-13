@@ -182,7 +182,10 @@ export function createTurnChangeRecorder(manager: SessionManager, cwd: string) {
     },
   };
 
-  function operations(turn: PendingTurn | undefined) {
+  function operations(
+    turn: PendingTurn | undefined,
+    onWrite?: (evidence: EditEvidence) => void,
+  ) {
     let readObservation: Observation | undefined;
     return {
       access: (path: string) => access(path, constants.R_OK | constants.W_OK),
@@ -276,6 +279,7 @@ export function createTurnChangeRecorder(manager: SessionManager, cwd: string) {
             after,
             uncertain: latest?.uncertain ?? uncertain,
           });
+          onWrite?.({ path: displayPath, before, after, uncertain });
         } catch {
           turn.incomplete = true;
         }
@@ -293,10 +297,47 @@ export function createTurnChangeRecorder(manager: SessionManager, cwd: string) {
   const nativeWrite = createEvidenceWriteTool(cwd);
   const writeTool = {
     ...nativeWrite,
-    execute: (...args: Parameters<typeof nativeWrite.execute>) =>
-      createEvidenceWriteTool(cwd, { operations: operations(pending) }).execute(
-        ...args,
-      ),
+    execute: async (...args: Parameters<typeof nativeWrite.execute>) => {
+      let write: EditEvidence | undefined;
+      const result = await createEvidenceWriteTool(cwd, {
+        operations: operations(pending, (evidence) => {
+          write = evidence;
+        }),
+      }).execute(...args);
+      if (
+        !write ||
+        write.uncertain ||
+        write.before?.binary ||
+        write.after.binary ||
+        write.before?.text === undefined ||
+        write.after.text === undefined
+      )
+        return result;
+      try {
+        return {
+          ...result,
+          details: {
+            diff:
+              write.before.text === write.after.text
+                ? ""
+                : generateUnifiedPatch(
+                    write.path,
+                    write.before.text,
+                    write.after.text,
+                  ),
+            change:
+              write.before.hash === "absent"
+                ? "created" as const
+                : write.before.hash === write.after.hash
+                  ? "unchanged" as const
+                  : "overwritten" as const,
+          },
+        };
+      } catch {
+        // A successful native operation stays successful when optional evidence fails.
+        return result;
+      }
+    },
   };
   return { extension, editTool, writeTool };
 }
