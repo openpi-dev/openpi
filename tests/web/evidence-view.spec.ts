@@ -372,3 +372,56 @@ it("polls metadata with backoff, retains changed text until refresh, and stops o
     vi.useRealTimers();
   }
 });
+
+it("keeps oversized evidence references non-actionable in projected and legacy calls", () => {
+  const huge = "x".repeat(1024 * 1024);
+  const open = vi.fn();
+  for (const evidenceArguments of [
+    undefined,
+    { path: huge, resolvedPath: "small.txt" },
+    { path: "small.txt", resolvedPath: huge },
+  ]) {
+    const { container, unmount } = render(
+      createElement(
+        ArtifactContext.Provider,
+        { value: { open } },
+        createElement(ToolEvidence, {
+          call: {
+            type: "toolCall",
+            name: "read",
+            arguments: JSON.stringify({ path: huge }),
+            evidenceArguments,
+          },
+          defaultOpen: true,
+        }),
+      ),
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(
+      screen.getByText("File reference exceeds the evidence byte limit."),
+    ).toBeTruthy();
+    expect(container.textContent!.length).toBeLessThan(64 * 1024);
+    expect(open).not.toHaveBeenCalled();
+    unmount();
+  }
+});
+
+it("opens admitted exact identities even when their display label is empty", () => {
+  const open = vi.fn();
+  render(
+    createElement(
+      ArtifactContext.Provider,
+      { value: { open } },
+      createElement(ToolEvidence, {
+        call: {
+          type: "toolCall",
+          name: "read",
+          arguments: JSON.stringify({ path: "\u200b" }),
+        },
+        defaultOpen: true,
+      }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "File reference" }));
+  expect(open).toHaveBeenCalledWith("\u200b");
+});

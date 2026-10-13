@@ -42,7 +42,8 @@ export function ToolEvidence({
   const artifacts = useContext(ArtifactContext);
   const view = projectToolEvidence(call, result, liveState);
   const fileReference = view.resolvedPath ?? view.path;
-  const fileLabel = view.displayResolvedPath ?? view.displayPath;
+  const fileLabel =
+    view.displayResolvedPath || view.displayPath || "File reference";
   const lines = (view.diff ?? view.output)
     .split("\n")
     .map((text, index) => ({ text, number: view.offset + index }));
@@ -62,7 +63,7 @@ export function ToolEvidence({
         <span className="evidence-status">{view.state}</span>
       </summary>
       <div className="evidence-content">
-        {view.path && (
+        {(fileReference || view.displayPath || view.pathUnavailable) && (
           <p>
             <strong>Requested file:</strong>{" "}
             {artifacts && fileReference ? (
@@ -83,6 +84,9 @@ export function ToolEvidence({
               </>
             )}
           </p>
+        )}
+        {view.pathUnavailable && (
+          <p className="evidence-warning">{view.pathUnavailable}</p>
         )}
         {view.command && (
           <EvidenceBlock aria-label="Command">{view.command}</EvidenceBlock>

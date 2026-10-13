@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -151,9 +151,19 @@ test("file evidence keeps artifact identities separate from sanitized display la
       "zero-width identity",
     );
 
+    await writeFile(join(root, "a\tb.txt"), "tab identity");
     const tabView = projectToolEvidence(call("read", { path: "a\tb.txt" }));
     assert.equal(tabView.path, "a\tb.txt");
     assert.equal(tabView.displayPath, "a  b.txt");
+    assert.equal(
+      await readFile(join(root, tabView.path!), "utf8"),
+      "tab identity",
+    );
+    // Artifact policy still rejects controls; evidence must not silently retarget
+    // the sanitized label to another real file to bypass that boundary.
+    await assert.rejects(reader.resolveFile("s", tabView.path!), {
+      code: "ARTIFACT_DENIED",
+    });
   } finally {
     reader.dispose();
     await rm(root, { recursive: true, force: true });
@@ -336,5 +346,121 @@ test("background process outcomes require literal status identities and integral
       }).exitCode,
       undefined,
     );
+  }
+});
+
+test("evidence admits exact UTF-8 path bytes and rejects oversized identities without fallback", () => {
+  const budget = 4096;
+  for (const exact of [
+    "x".repeat(budget),
+    "中".repeat(1365) + "x",
+    "😀".repeat(1024),
+  ]) {
+    for (const path of [exact.slice(0, -2), exact]) {
+      assert.equal(projectToolEvidence(call("read", { path })).path, path);
+    }
+    const path = exact + "x";
+    const view = projectToolEvidence(call("read", { path }));
+    assert.equal(view.path, undefined);
+    assert.equal(view.resolvedPath, undefined);
+    assert.equal(
+      view.pathUnavailable,
+      "File reference exceeds the evidence byte limit.",
+    );
+    assert.equal(view.truncated, true);
+    for (const legacy of [
+      {
+        type: "toolCall" as const,
+        name: "read",
+        arguments: JSON.stringify({ path }),
+      },
+      {
+        type: "toolCall" as const,
+        name: "read",
+        arguments: "{}",
+        evidenceArguments: { path, resolvedPath: "short.txt" },
+      },
+      {
+        type: "toolCall" as const,
+        name: "read",
+        arguments: "{}",
+        evidenceArguments: { path: "short.txt", resolvedPath: path },
+      },
+    ]) {
+      const projected = projectToolEvidence(legacy);
+      assert.equal(projected.path, undefined);
+      assert.equal(projected.resolvedPath, undefined);
+    }
+  }
+});
+
+test("production evidence serialization bounds raw and resolved 1 MiB paths", () => {
+  const huge = "x".repeat(1024 * 1024);
+  let resolutions = 0;
+  for (const path of [huge, "short.txt"]) {
+    const message = projectMessage(
+      { content: [{ type: "toolCall", name: "read", arguments: { path } }] },
+      () => {
+        resolutions++;
+        return huge;
+      },
+    );
+    const part = message.parts?.[0];
+    assert.ok(part?.type === "toolCall");
+    const view = projectToolEvidence(part);
+    assert.equal(view.path, undefined);
+    assert.equal(view.resolvedPath, undefined);
+    assert.ok(view.pathUnavailable);
+    assert.ok(Buffer.byteLength(JSON.stringify(message)) < 64 * 1024);
+    assert.ok(Buffer.byteLength(JSON.stringify(view)) < 64 * 1024);
+    assert.ok(Buffer.byteLength(view.displayPath ?? "") <= 12 * 1024);
+  }
+  assert.equal(resolutions, 1);
+  const exact = "中".repeat(1365) + "x";
+  const projected = projectMessage(
+    {
+      content: [{ type: "toolCall", name: "read", arguments: { path: "ok" } }],
+    },
+    () => exact,
+  );
+  const part = projected.parts?.[0];
+  assert.ok(part?.type === "toolCall");
+  assert.equal(projectToolEvidence(part).resolvedPath, exact);
+});
+
+test("raw tool arguments cannot supply the trusted resolved evidence identity", () => {
+  for (const path of ["~/.note", "@named/path", "report.md"]) {
+    let resolverCalls = 0;
+    const message = projectMessage(
+      {
+        content: [
+          {
+            type: "toolCall",
+            name: "read",
+            arguments: { path, resolvedPath: "different.txt" },
+          },
+        ],
+      },
+      () => {
+        resolverCalls++;
+        return "/workspace/report.md";
+      },
+    );
+    const part = message.parts?.[0];
+    assert.ok(part?.type === "toolCall");
+    const view = projectToolEvidence(part);
+    assert.equal(view.path, path);
+    assert.equal(
+      view.resolvedPath,
+      path === "report.md" ? "/workspace/report.md" : undefined,
+    );
+    assert.equal(resolverCalls, path === "report.md" ? 1 : 0);
+    const legacy = projectToolEvidence({
+      type: "toolCall",
+      name: "read",
+      arguments: JSON.stringify({ path, resolvedPath: "different.txt" }),
+    });
+    assert.equal(legacy.path, path);
+    assert.equal(legacy.resolvedPath, undefined);
   }
 });

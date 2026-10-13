@@ -3,6 +3,7 @@ import { sanitizeTerminalText } from "../../extensions/shared/terminal-text.ts";
 
 export const EVIDENCE_MAX_BYTES = 12 * 1024;
 export const EVIDENCE_MAX_LINES = 300;
+const EVIDENCE_PATH_MAX_BYTES = 4096;
 export const LIVE_TOOL_LIMIT = 32;
 
 export function evidenceRecord(value: unknown): Record<string, unknown> {
@@ -11,15 +12,30 @@ export function evidenceRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export function projectEvidenceArguments(input: unknown) {
+export function projectEvidenceArguments(input: unknown, projected = false) {
   const source = evidenceRecord(input);
   const result: Record<string, string | number> = {};
-  for (const key of ["path", "command", "offset", "limit", "id"]) {
-    const value = Object.getOwnPropertyDescriptor(source, key)?.value;
-    // Paths are later resolved by the artifact reader. Keep their exact identity
-    // here; display projections are sanitized separately below.
-    if (typeof value === "string")
-      result[key] = key === "path" ? value : evidenceText(value).text;
+  const own = (key: string) => Object.getOwnPropertyDescriptor(source, key)?.value;
+  let unavailable = projected && typeof own("pathUnavailable") === "string";
+  for (const key of projected ? ["path", "resolvedPath"] : ["path"]) {
+    const value = own(key);
+    const displayKey = key === "path" ? "displayPath" : "displayResolvedPath";
+    const display = typeof value === "string" ? value : projected ? own(displayKey) : undefined;
+    if (typeof display === "string") result[displayKey] = evidenceText(display).text;
+    if (typeof value !== "string") continue;
+    // Cheap rejection bounds the temporary UTF-8 buffer. Identity is admitted
+    // whole or omitted; display sanitization must never rewrite a file target.
+    if (value.length > EVIDENCE_PATH_MAX_BYTES || new TextEncoder().encode(value).length > EVIDENCE_PATH_MAX_BYTES) unavailable = true;
+    else result[key] = value;
+  }
+  if (unavailable) {
+    delete result.path;
+    delete result.resolvedPath;
+    result.pathUnavailable = "File reference exceeds the evidence byte limit.";
+  }
+  for (const key of ["command", "offset", "limit", "id"]) {
+    const value = own(key);
+    if (typeof value === "string") result[key] = evidenceText(value).text;
     else if (typeof value === "number" && Number.isSafeInteger(value)) result[key] = value;
   }
   return result;
@@ -63,8 +79,8 @@ export function bashReceipt(content: unknown, isError: unknown) {
 }
 
 export function toolArguments(call: Extract<WebMessagePart, { type: "toolCall" }>) {
-  if (call.evidenceArguments) return call.evidenceArguments;
-  try { return evidenceRecord(JSON.parse(call.arguments)); } catch { return {}; }
+  if (call.evidenceArguments) return projectEvidenceArguments(call.evidenceArguments, true);
+  try { return projectEvidenceArguments(JSON.parse(call.arguments)); } catch { return {}; }
 }
 
 export function isEvidenceTool(name: string) {
@@ -139,7 +155,7 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
   const isTerminal = ["bash", "bg_start", "bg_status"].includes(call.name);
   const output = evidenceText(result?.content ?? "", isTerminal);
   const readFooter = call.name === "read" ? /\n\n(\[(?:\d+ more lines in file\. Use offset=\d+ to continue\.|Showing lines [^\n]+)\])$/u.exec(output.text) : null;
-  const truncated = output.truncated || Boolean(result?.truncation) || evidenceRecord(details.truncation).truncated === true || call.evidenceTruncated === true;
+  const truncated = output.truncated || Boolean(result?.truncation) || evidenceRecord(details.truncation).truncated === true || call.evidenceTruncated === true || typeof args.pathUnavailable === "string";
   const tests = isTerminal ? testSummary(output.text) : undefined;
   const kind = call.name === "read" ? "file" : ["write", "edit"].includes(call.name) ? "change" : tests ? "test" : "terminal";
   const diff = ["write", "edit"].includes(call.name) && result?.isError === false && typeof details.diff === "string" ? evidenceText(details.diff) : undefined;
@@ -149,9 +165,10 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
     readRecovery: readFooter?.[1],
     numberLines: call.name === "read" && result?.isError === false && evidenceRecord(details.truncation).firstLineExceedsLimit !== true && Boolean(output.text),
     path: typeof args.path === "string" ? args.path : undefined,
-    displayPath: typeof args.path === "string" ? evidenceText(args.path).text : undefined,
+    displayPath: typeof args.displayPath === "string" ? args.displayPath : undefined,
     resolvedPath: typeof args.resolvedPath === "string" ? args.resolvedPath : undefined,
-    displayResolvedPath: typeof args.resolvedPath === "string" ? evidenceText(args.resolvedPath).text : undefined,
+    displayResolvedPath: typeof args.displayResolvedPath === "string" ? args.displayResolvedPath : undefined,
+    pathUnavailable: typeof args.pathUnavailable === "string" ? args.pathUnavailable : undefined,
     command: typeof args.command === "string" ? evidenceText(args.command).text : undefined,
     offset, diff: diff?.text, tests,
     change: result?.isError === false && ["created", "overwritten", "unchanged"].includes(String(details.change)) ? String(details.change) : undefined,
