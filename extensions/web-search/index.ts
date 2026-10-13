@@ -118,7 +118,7 @@ export default function webSearch(pi: ExtensionAPI) {
       event.api === ctx.model.api &&
       event.model === ctx.model.id
     )
-      capture?.observe(event.data);
+      if (capture?.observe(event.data)) ctx.abort();
   });
   pi.on("message_end", (event) => {
     if (event.message.role === "assistant" && failure) {

@@ -454,7 +454,7 @@ test("Anthropic replays opaque server blocks with citations, and distinguishes f
         messages: [
           {
             role: "assistant",
-            content: [{ type: "text", text: "unrelated" }, ...content],
+            content,
           },
         ],
       },
@@ -465,7 +465,7 @@ test("Anthropic replays opaque server blocks with citations, and distinguishes f
     [
       {
         role: "assistant",
-        content: [{ type: "text", text: "unrelated" }, ...evidence.output],
+        content: evidence.output,
       },
     ],
   );
@@ -496,4 +496,673 @@ test("native replay is bounded without counting ordinary images or making unsafe
     citedText("text", [{ url: "https://user:secret@example.org" }]),
     "text",
   );
+});
+
+test("Anthropic replay binds repeated answers to every surviving assistant ordinal", () => {
+  const claude = { ...model, api: "anthropic-messages" as const };
+  const ordinary = assistant({
+    api: claude.api,
+    content: [{ type: "text", text: "Done." }],
+  });
+  const searched = {
+    ...ordinary,
+    openpiWebSearch: {
+      version: 1,
+      connection: webSearchConnection(claude),
+      adapter: "anthropic",
+      output: [
+        {
+          type: "server_tool_use",
+          id: "second",
+          name: "web_search",
+          input: {},
+        },
+        { type: "text", text: "Done." },
+      ],
+      activities: [],
+    },
+  };
+  const payload = {
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "Done." }] },
+      { role: "user", content: "next" },
+      { role: "assistant", content: [{ type: "text", text: "Done." }] },
+    ],
+  };
+  const replayed = replayNativeSearch(
+    payload,
+    [ordinary, searched],
+    claude,
+    "anthropic",
+  );
+  assert.ok(Array.isArray(replayed.messages));
+  assert.deepEqual(replayed.messages[0], payload.messages[0]);
+  assert.deepEqual(
+    replayed.messages[2]?.content,
+    searched.openpiWebSearch.output,
+  );
+  assert.deepEqual(payload.messages[2]?.content, ordinary.content);
+});
+
+test("optional capture overflow is terminal only for hosted evidence, including late evidence", () => {
+  for (const adapter of ["responses", "anthropic"] as const) {
+    const capture = createNativeSearchCapture(adapter, model);
+    const huge = '界\\"'.repeat(MAX_NATIVE_SEARCH_BYTES);
+    capture.observe(
+      adapter === "responses"
+        ? {
+            type: "response.output_item.done",
+            item: {
+              type: "message",
+              content: [{ type: "output_text", text: huge }],
+            },
+          }
+        : {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: huge },
+          },
+    );
+    assert.equal(capture.finish(assistant()), undefined);
+    capture.observe(
+      adapter === "responses"
+        ? { type: "response.output_item.done", item: search }
+        : {
+            type: "content_block_start",
+            index: 1,
+            content_block: {
+              type: "server_tool_use",
+              name: "web_search",
+              id: "late",
+            },
+          },
+    );
+    assert.equal(capture.finish(assistant())?.stopReason, "error");
+    assert.equal(
+      readNativeSearchEvidence(capture.finish(assistant())),
+      undefined,
+    );
+    assert.equal(
+      capture.finish(assistant({ stopReason: "aborted" }))?.stopReason,
+      "aborted",
+    );
+  }
+});
+
+test("Anthropic ordinal replay survives saved v1 history, empty/error predecessors and compaction", () => {
+  const claude = { ...model, api: "anthropic-messages" as const };
+  const done = assistant({
+    api: claude.api,
+    content: [{ type: "text", text: "Done." }],
+  });
+  const saved = (id: string) =>
+    JSON.parse(
+      JSON.stringify({
+        ...done,
+        openpiWebSearch: {
+          version: 1,
+          connection: webSearchConnection(claude),
+          adapter: "anthropic",
+          output: [
+            {
+              type: "server_tool_use",
+              id,
+              name: "web_search",
+              input: { query: id },
+            },
+            { type: "text", text: "Done." },
+          ],
+          activities: [],
+        },
+      }),
+    ) as AssistantMessage;
+  const first = saved("first"),
+    second = saved("second");
+  const row = { role: "assistant", content: [{ type: "text", text: "Done." }] };
+  const history = [
+    assistant({ content: [] }),
+    assistant({ stopReason: "error" }),
+    assistant({ stopReason: "aborted" }),
+    done,
+    first,
+    second,
+  ];
+  const result = replayNativeSearch(
+    { messages: [row, row, row] },
+    history,
+    claude,
+    "anthropic",
+  );
+  assert.ok(Array.isArray(result.messages));
+  assert.equal(result.messages[0], row);
+  assert.deepEqual(
+    result.messages[1]?.content,
+    readNativeSearchEvidence(first)?.output,
+  );
+  assert.deepEqual(
+    result.messages[2]?.content,
+    readNativeSearchEvidence(second)?.output,
+  );
+  const compacted = replayNativeSearch(
+    { messages: [row] },
+    [second],
+    claude,
+    "anthropic",
+  );
+  assert.ok(Array.isArray(compacted.messages));
+  assert.deepEqual(
+    compacted.messages[0]?.content,
+    readNativeSearchEvidence(second)?.output,
+  );
+  assert.throws(
+    () =>
+      replayNativeSearch(
+        {
+          messages: [
+            {
+              ...row,
+              content: [...row.content, { type: "text", text: "extra" }],
+            },
+          ],
+        },
+        [second],
+        claude,
+        "anthropic",
+      ),
+    /altered/u,
+  );
+  assert.throws(
+    () => replayNativeSearch({ messages: [] }, [second], claude, "anthropic"),
+    /altered/u,
+  );
+});
+
+test("capture admits exact escaped UTF8 boundary and opaque values before terminal replacement", () => {
+  const opaque = { ...search, extra: '界\\"\n😀'.repeat(1000) };
+  const overhead = Buffer.byteLength(JSON.stringify([opaque]));
+  opaque.extra += "x".repeat(MAX_NATIVE_SEARCH_BYTES - overhead);
+  assert.equal(
+    Buffer.byteLength(JSON.stringify([opaque])),
+    MAX_NATIVE_SEARCH_BYTES,
+  );
+  const capture = createNativeSearchCapture("responses", model);
+  capture.observe({ type: "response.output_item.done", item: search });
+  capture.observe({
+    type: "response.completed",
+    response: { output: [opaque] },
+  });
+  assert.deepEqual(
+    readNativeSearchEvidence(capture.finish(assistant()))?.output,
+    [opaque],
+  );
+  const overflow = createNativeSearchCapture("responses", model);
+  overflow.observe({
+    type: "response.output_item.done",
+    item: { ...opaque, extra: opaque.extra + "x" },
+  });
+  overflow.observe({
+    type: "response.completed",
+    response: { output: [search] },
+  });
+  assert.equal(
+    readNativeSearchEvidence(overflow.finish(assistant())),
+    undefined,
+  );
+});
+
+test("Anthropic incremental overflow and malformed input cannot recover into partial replay", () => {
+  for (const field of [
+    "text",
+    "thinking",
+    "signature",
+    "partial_json",
+  ] as const) {
+    const capture = createNativeSearchCapture("anthropic", model);
+    capture.observe({
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "server_tool_use",
+        id: "search",
+        name: "web_search",
+        input: {},
+        [field]: "",
+      },
+    });
+    for (let i = 0; i < 280; i++)
+      capture.observe({
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type:
+            field === "partial_json" ? "input_json_delta" : `${field}_delta`,
+          [field]: "x".repeat(1024),
+        },
+      });
+    capture.observe({
+      type: "message_delta",
+      delta: { stop_reason: "end_turn" },
+    });
+    capture.observe({ type: "message_stop" });
+    assert.equal(capture.finish(assistant())?.stopReason, "error");
+    assert.equal(
+      readNativeSearchEvidence(capture.finish(assistant())),
+      undefined,
+    );
+  }
+  const capture = createNativeSearchCapture("anthropic", model);
+  capture.observe({
+    type: "content_block_start",
+    index: 0,
+    content_block: {
+      type: "server_tool_use",
+      id: "search",
+      name: "web_search",
+      input: {},
+    },
+  });
+  capture.observe({
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "input_json_delta", partial_json: "{" },
+  });
+  capture.observe({ type: "content_block_stop", index: 0 });
+  capture.observe({
+    type: "message_delta",
+    delta: { stop_reason: "end_turn" },
+  });
+  assert.equal(capture.finish(assistant())?.stopReason, "error");
+  assert.equal(
+    readNativeSearchEvidence(capture.finish(assistant())),
+    undefined,
+  );
+});
+
+test("capture accounts for a UTF16 pair split across deltas at the exact JSON limit", () => {
+  const searchBlock = {
+    type: "server_tool_use",
+    id: "search",
+    name: "web_search",
+    input: {},
+  };
+  const textBlock = { type: "text", text: "\ud83d" };
+  textBlock.text =
+    "x".repeat(
+      MAX_NATIVE_SEARCH_BYTES -
+        Buffer.byteLength(JSON.stringify([searchBlock, textBlock])),
+    ) + textBlock.text;
+  const capture = createNativeSearchCapture("anthropic", model);
+  capture.observe({
+    type: "content_block_start",
+    index: 0,
+    content_block: searchBlock,
+  });
+  capture.observe({
+    type: "content_block_start",
+    index: 1,
+    content_block: textBlock,
+  });
+  capture.observe({
+    type: "content_block_delta",
+    index: 1,
+    delta: { type: "text_delta", text: "\ude00" },
+  });
+  const evidence = readNativeSearchEvidence(capture.finish(assistant()));
+  assert.ok(evidence);
+  assert.equal(evidence.output[1]?.text, textBlock.text + "\ude00");
+});
+
+test("capture latches duplicate indices, cyclic items and many small output items", () => {
+  const capture = createNativeSearchCapture("anthropic", model);
+  const content_block = {
+    type: "server_tool_use",
+    id: "search",
+    name: "web_search",
+    input: {},
+  };
+  capture.observe({ type: "content_block_start", index: 0, content_block });
+  assert.equal(
+    capture.observe({ type: "content_block_start", index: 0, content_block }),
+    true,
+  );
+  assert.equal(capture.observe({ type: "message_stop" }), false);
+  assert.equal(
+    readNativeSearchEvidence(capture.finish(assistant())),
+    undefined,
+  );
+  const cyclic: Record<string, unknown> = { ...search };
+  cyclic.self = cyclic;
+  const responses = createNativeSearchCapture("responses", model);
+  assert.equal(
+    responses.observe({ type: "response.output_item.done", item: cyclic }),
+    true,
+  );
+  const many = createNativeSearchCapture("responses", model);
+  for (let i = 0; i < 10000; i++)
+    many.observe({
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        content: [{ type: "output_text", text: "x".repeat(30) }],
+      },
+    });
+  assert.equal(many.finish(assistant()), undefined);
+  assert.equal(
+    many.observe({ type: "response.web_search_call.in_progress" }),
+    true,
+  );
+  assert.equal(readNativeSearchEvidence(many.finish(assistant())), undefined);
+});
+
+test("matching restored malformed or oversized evidence is rejected before replay cloning", () => {
+  const base = {
+    ...assistant(),
+    openpiWebSearch: {
+      version: 1,
+      connection: webSearchConnection(model),
+      adapter: "responses",
+      output: [search],
+      activities: [],
+    },
+  };
+  const malformed = {
+    ...base,
+    openpiWebSearch: { ...base.openpiWebSearch, output: [null] },
+  };
+  const oversized = {
+    ...base,
+    openpiWebSearch: {
+      ...base.openpiWebSearch,
+      output: [{ ...search, extra: "x".repeat(MAX_NATIVE_SEARCH_BYTES) }],
+    },
+  };
+  assert.throws(
+    () => replayNativeSearch({ input: [] }, [malformed], model, "responses"),
+    /invalid/u,
+  );
+  assert.throws(
+    () =>
+      replayNativeSearch({ input: [text] }, [oversized], model, "responses"),
+    /budget/u,
+  );
+  const capture = createNativeSearchCapture("responses", model);
+  assert.equal(
+    capture.observe({ type: "response.completed", response: { output: {} } }),
+    true,
+  );
+  assert.equal(capture.finish(assistant())?.stopReason, "error");
+  assert.equal(
+    readNativeSearchEvidence(capture.finish(assistant())),
+    undefined,
+  );
+});
+
+test("aborted and errored evidence alone never activates replay validation", () => {
+  const claude = { ...model, api: "anthropic-messages" as const };
+  const payload = { messages: [{ role: "user", content: "retry" }] };
+  for (const stopReason of ["aborted", "error"] as const) {
+    const source = {
+      ...assistant({ stopReason }),
+      openpiWebSearch: {
+        version: 1,
+        connection: webSearchConnection(claude),
+        adapter: "anthropic",
+        output: [{ type: "server_tool_use", name: "web_search" }],
+        activities: [],
+      },
+    };
+    assert.equal(
+      replayNativeSearch(payload, [source], claude, "anthropic"),
+      payload,
+    );
+  }
+});
+
+test("malformed stream marker values are never string-coerced after optional capture discard", () => {
+  const hostile = {
+    toString() {
+      throw new Error("must not coerce provider markers");
+    },
+  };
+  const responses = createNativeSearchCapture("responses", model);
+  assert.equal(responses.observe({ type: hostile }), false);
+  const anthropic = createNativeSearchCapture("anthropic", model);
+  anthropic.observe({
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "text", text: "x".repeat(MAX_NATIVE_SEARCH_BYTES) },
+  });
+  assert.equal(
+    anthropic.observe({
+      type: "message_delta",
+      delta: { stop_reason: hostile },
+    }),
+    false,
+  );
+  assert.equal(anthropic.finish(assistant()), undefined);
+});
+
+test("Responses terminal envelope validation survives prior capture discard and never restores a prefix", () => {
+  for (const response of [
+    null,
+    "invalid",
+    { output: {} },
+    { output: [null] },
+  ]) {
+    const ordinary = createNativeSearchCapture("responses", model);
+    ordinary.observe({
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        content: [
+          { type: "output_text", text: "x".repeat(MAX_NATIVE_SEARCH_BYTES) },
+        ],
+      },
+    });
+    assert.equal(ordinary.finish(assistant()), undefined);
+    assert.equal(
+      ordinary.observe({ type: "response.completed", response }),
+      true,
+    );
+    assert.equal(ordinary.finish(assistant())?.stopReason, "error");
+    assert.equal(
+      ordinary.finish(assistant({ stopReason: "aborted" }))?.stopReason,
+      "aborted",
+    );
+    const hosted = createNativeSearchCapture("responses", model);
+    hosted.observe({ type: "response.output_item.done", item: search });
+    hosted.observe({ type: "response.completed", response });
+    hosted.observe({
+      type: "response.completed",
+      response: { output: [search] },
+    });
+    assert.equal(hosted.finish(assistant())?.stopReason, "error");
+    assert.equal(
+      readNativeSearchEvidence(hosted.finish(assistant())),
+      undefined,
+    );
+  }
+  const validOrdinary = createNativeSearchCapture("responses", model);
+  validOrdinary.observe({
+    type: "response.completed",
+    response: {
+      output: [
+        {
+          type: "message",
+          content: [
+            { type: "output_text", text: "x".repeat(MAX_NATIVE_SEARCH_BYTES) },
+          ],
+        },
+      ],
+    },
+  });
+  assert.equal(validOrdinary.finish(assistant()), undefined);
+});
+
+test("Anthropic assignment distinguishes duplicate retained message references by occurrence", () => {
+  const claude = { ...model, api: "anthropic-messages" as const };
+  const searched = {
+    ...assistant({
+      api: claude.api,
+      content: [{ type: "text" as const, text: "Done." }],
+    }),
+    openpiWebSearch: {
+      version: 1,
+      connection: webSearchConnection(claude),
+      adapter: "anthropic",
+      output: [
+        { type: "server_tool_use", id: "same", name: "web_search", input: {} },
+        { type: "text", text: "Done." },
+      ],
+      activities: [],
+    },
+  };
+  const row = { role: "assistant", content: [{ type: "text", text: "Done." }] };
+  const result = replayNativeSearch(
+    { messages: [row, row] },
+    [searched, searched],
+    claude,
+    "anthropic",
+  );
+  assert.ok(Array.isArray(result.messages));
+  for (const item of result.messages)
+    assert.deepEqual(item.content, searched.openpiWebSearch.output);
+});
+
+test("marker inspection bounds expanded graphs while preserving known ordinary output and late search", () => {
+  const part = { type: "output_text", text: "ordinary" };
+  const ordinary = { type: "message", content: Array(10000).fill(part) };
+  const shared = createNativeSearchCapture("responses", model);
+  assert.equal(
+    shared.observe({
+      type: "response.completed",
+      response: { output: Array(10000).fill(ordinary) },
+    }),
+    false,
+  );
+  assert.equal(shared.finish(assistant()), undefined);
+  assert.equal(
+    shared.observe({ type: "response.web_search_call.in_progress" }),
+    true,
+  );
+  assert.equal(readNativeSearchEvidence(shared.finish(assistant())), undefined);
+  const uncertain = createNativeSearchCapture("responses", model);
+  const distinct = Array.from({ length: 1000 }, () => ({
+    type: "message",
+    content: Array(1000).fill(part),
+  }));
+  assert.equal(
+    uncertain.observe({
+      type: "response.completed",
+      response: { output: distinct },
+    }),
+    true,
+  );
+  assert.equal(uncertain.finish(assistant())?.stopReason, "error");
+  assert.equal(
+    readNativeSearchEvidence(uncertain.finish(assistant())),
+    undefined,
+  );
+});
+
+test("many single-character deltas preserve complete opaque text and trailing surrogate accounting", () => {
+  const capture = createNativeSearchCapture("anthropic", model);
+  capture.observe({
+    type: "content_block_start",
+    index: 0,
+    content_block: {
+      type: "server_tool_use",
+      id: "search",
+      name: "web_search",
+      input: {},
+    },
+  });
+  capture.observe({
+    type: "content_block_start",
+    index: 1,
+    content_block: { type: "text", text: "" },
+  });
+  for (let index = 0; index < 250000; index++)
+    capture.observe({
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "text_delta", text: "x" },
+    });
+  capture.observe({
+    type: "content_block_delta",
+    index: 1,
+    delta: { type: "text_delta", text: "\ud83d" },
+  });
+  capture.observe({
+    type: "content_block_delta",
+    index: 1,
+    delta: { type: "text_delta", text: "\ude00" },
+  });
+  assert.equal(
+    readNativeSearchEvidence(capture.finish(assistant()))?.output[1]?.text,
+    "x".repeat(250000) + "😀",
+  );
+});
+
+test("marker inspection bounds deep and cyclic content before cloning or retaining evidence", () => {
+  let deep: Record<string, unknown> = { type: "output_text", text: "ordinary" };
+  for (let index = 0; index < 10000; index++)
+    deep = { type: "message", content: [deep] };
+  const cyclic: Record<string, unknown> = { type: "message" };
+  cyclic.content = [cyclic];
+  for (const item of [deep, cyclic]) {
+    const capture = createNativeSearchCapture("responses", model);
+    assert.equal(
+      capture.observe({ type: "response.output_item.done", item }),
+      true,
+    );
+    assert.equal(capture.finish(assistant())?.stopReason, "error");
+    assert.equal(
+      readNativeSearchEvidence(capture.finish(assistant())),
+      undefined,
+    );
+  }
+});
+
+test("malformed nonterminal output remains relevant after optional capture discard", () => {
+  for (const adapter of ["responses", "anthropic"] as const) {
+    const capture = createNativeSearchCapture(adapter, model);
+    capture.observe(
+      adapter === "responses"
+        ? {
+            type: "response.output_item.done",
+            item: {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: "x".repeat(MAX_NATIVE_SEARCH_BYTES),
+                },
+              ],
+            },
+          }
+        : {
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "text",
+              text: "x".repeat(MAX_NATIVE_SEARCH_BYTES),
+            },
+          },
+    );
+    assert.equal(capture.finish(assistant()), undefined);
+    assert.equal(
+      capture.observe(
+        adapter === "responses"
+          ? { type: "response.output_item.done", item: null }
+          : { type: "content_block_start", index: 1, content_block: null },
+      ),
+      true,
+    );
+    assert.equal(capture.finish(assistant())?.stopReason, "error");
+    assert.equal(
+      readNativeSearchEvidence(capture.finish(assistant())),
+      undefined,
+    );
+  }
 });

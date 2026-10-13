@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test, { after } from "node:test";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readNativeSearchEvidence } from "../../../extensions/web-search/native.ts";
@@ -255,4 +257,382 @@ test("native Pi requests use the current model/auth, gate search, persist/reload
   });
   assert.equal(hasNativeTool(requests.at(-1)!), false);
   assert.ok(auth.every((header) => header === "Bearer fixture-key"));
+});
+
+test("Pi Anthropic conversion assigns repeated saved answers by retained order", async (t) => {
+  const { streamSimple } = await import(
+    "@earendil-works/pi-ai/api/anthropic-messages"
+  );
+  const { normalizeContext } = await import(
+    "@earendil-works/pi-ai/utils/transcript"
+  );
+  const { replayNativeSearch } = await import(
+    "../../../extensions/web-search/native.ts"
+  );
+  const requests: Record<string, unknown>[] = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += String(chunk);
+    requests.push(JSON.parse(body));
+    const events = [
+      {
+        type: "message_start",
+        message: {
+          id: "reply",
+          type: "message",
+          role: "assistant",
+          content: [],
+          model: "fixture",
+          stop_reason: null,
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Done." },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ];
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(
+      events
+        .map(
+          (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        )
+        .join(""),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const model = {
+    api: "anthropic-messages" as const,
+    id: "fixture",
+    name: "fixture",
+    provider: "anthropic",
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    reasoning: false,
+    input: ["text" as const],
+    contextWindow: 128000,
+    maxTokens: 1024,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const message = {
+    role: "assistant" as const,
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    content: [{ type: "text" as const, text: "Done." }],
+    stopReason: "stop" as const,
+    timestamp: 1,
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  };
+  const searched = (id: string) =>
+    JSON.parse(
+      JSON.stringify({
+        ...message,
+        openpiWebSearch: {
+          version: 1,
+          adapter: "anthropic",
+          connection: webSearchConnection(model),
+          output: [
+            {
+              type: "server_tool_use",
+              id,
+              name: "web_search",
+              input: { query: id },
+            },
+            { type: "text", text: "Done." },
+          ],
+          activities: [],
+        },
+      }),
+    ) as typeof message;
+  const first = searched("first"),
+    second = searched("second");
+  const messages = [
+    { ...message, content: [{ type: "text" as const, text: " " }] },
+    { ...message, stopReason: "error" as const },
+    message,
+    first,
+    second,
+  ];
+  for (const retained of [messages, [second]]) {
+    const stream = streamSimple(
+      model,
+      normalizeContext({ messages: retained }),
+      {
+        apiKey: "fixture",
+
+        onPayload(payload) {
+          assert.ok(
+            payload && typeof payload === "object" && !Array.isArray(payload),
+          );
+          return replayNativeSearch(
+            payload as Record<string, unknown>,
+            retained,
+            model,
+            "anthropic",
+          );
+        },
+      },
+    );
+    const reply = await stream.result();
+    assert.equal(reply.stopReason, "stop");
+    const rows = requests.at(-1)!.messages as {
+      role: string;
+      content: unknown[];
+    }[];
+    if (retained.length > 1) {
+      assert.deepEqual(rows[0]?.content, message.content);
+      assert.deepEqual(
+        rows[1]?.content,
+        readNativeSearchEvidence(first)?.output,
+      );
+      assert.deepEqual(
+        rows[2]?.content,
+        readNativeSearchEvidence(second)?.output,
+      );
+    } else
+      assert.deepEqual(
+        rows[0]?.content,
+        readNativeSearchEvidence(second)?.output,
+      );
+  }
+
+  const variants: {
+    content: AssistantMessage["content"];
+    patch?: Partial<AssistantMessage>;
+    expected: unknown[];
+  }[] = [
+    {
+      content: [
+        {
+          type: "thinking",
+          thinking: "signed",
+          thinkingSignature: "opaque-signature",
+        },
+      ],
+      expected: [
+        { type: "thinking", thinking: "signed", signature: "opaque-signature" },
+      ],
+    },
+    {
+      content: [
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: "encrypted-redacted",
+          redacted: true,
+        },
+      ],
+      expected: [{ type: "redacted_thinking", data: "encrypted-redacted" }],
+    },
+    {
+      content: [{ type: "thinking", thinking: "unsigned" }],
+      expected: [{ type: "text", text: "unsigned" }],
+    },
+    {
+      content: [
+        { type: "thinking", thinking: "cross", thinkingSignature: "ignored" },
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: "dropped",
+          redacted: true,
+        },
+      ],
+      patch: { model: "other" },
+      expected: [{ type: "text", text: "cross" }],
+    },
+    {
+      content: [
+        {
+          type: "toolCall",
+          id: "native-call",
+          name: "read",
+          arguments: { path: "file", nested: [1, true] },
+        },
+      ],
+      expected: [
+        {
+          type: "tool_use",
+          id: "native-call",
+          name: "read",
+          input: { path: "file", nested: [1, true] },
+        },
+      ],
+    },
+    {
+      content: [
+        { type: "toolCall", id: "cross|call", name: "read", arguments: {} },
+      ],
+      patch: { provider: "other" },
+      expected: [
+        { type: "tool_use", id: "cross_call", name: "read", input: {} },
+      ],
+    },
+    {
+      content: [{ type: "text", text: "x".repeat(270000) }],
+      expected: [{ type: "text", text: "x".repeat(270000) }],
+    },
+    {
+      content: [{ type: "text", text: "Unicode\ud800😀" }],
+      expected: [{ type: "text", text: "Unicode😀" }],
+    },
+  ];
+  const boundedFirst = JSON.parse(JSON.stringify(first)) as AssistantMessage;
+  readNativeSearchEvidence(boundedFirst)!.output.splice(1, 0, {
+    type: "web_search_tool_result",
+    tool_use_id: "first",
+    content: [{ encrypted_content: "opaque".repeat(39000) }],
+  });
+  for (const variant of variants) {
+    const retained: AssistantMessage[] = [
+      { ...message, ...variant.patch, content: variant.content },
+      boundedFirst,
+      second,
+    ];
+    const reply = await streamSimple(
+      model,
+      normalizeContext({ messages: retained }),
+      {
+        apiKey: "fixture",
+        onPayload(payload) {
+          return replayNativeSearch(
+            payload as Record<string, unknown>,
+            retained,
+            model,
+            "anthropic",
+          );
+        },
+      },
+    ).result();
+    assert.equal(reply.stopReason, "stop");
+    const rows = (
+      requests.at(-1)!.messages as { role: string; content: unknown[] }[]
+    ).filter((row) => row.role === "assistant");
+    assert.deepEqual(rows[0]?.content, variant.expected);
+    assert.deepEqual(
+      rows[1]?.content,
+      readNativeSearchEvidence(boundedFirst)?.output,
+    );
+    assert.deepEqual(
+      rows[2]?.content,
+      readNativeSearchEvidence(second)?.output,
+    );
+  }
+  // Load the real extension through Pi/Jiti, rather than importing its factory.
+  const modelRuntime = await ModelRuntime.create({
+    authPath: join(root, "anthropic-auth.json"),
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerProvider("anthropic", {
+    api: "anthropic-messages",
+    baseUrl: model.baseUrl,
+    models: [
+      {
+        id: model.id,
+        name: model.name,
+        reasoning: false,
+        input: ["text"],
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+        cost: model.cost,
+      },
+    ],
+  });
+  await modelRuntime.setRuntimeApiKey("anthropic", "fixture");
+  const nativeModel = modelRuntime.getModel("anthropic", "fixture")!;
+  writeFileSync(
+    join(root, "my-pi-setup.json"),
+    JSON.stringify({ webSearch: { enabled: false } }),
+  );
+  const mutator = join(root, "altered-native-history.ts");
+  writeFileSync(
+    mutator,
+    'export default function(pi) { pi.on("before_provider_request", ({payload}) => ({...payload, messages: payload.messages.map((row) => row.role === "assistant" ? {...row, content: [...row.content, {type:"text", text:"altered"}]} : row)})); }',
+  );
+  for (const altered of [false, true]) {
+    const settingsManager = SettingsManager.inMemory(
+      { retry: { enabled: false }, compaction: { enabled: false } },
+      { projectTrusted: false },
+    );
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir: root,
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      additionalExtensionPaths: [
+        ...(altered ? [mutator] : []),
+        fileURLToPath(
+          new URL("../../../extensions/web-search/index.ts", import.meta.url),
+        ),
+      ],
+    });
+    await loader.reload();
+    assert.deepEqual(loader.getExtensions().errors, []);
+    const manager = SessionManager.inMemory(root);
+    for (const item of messages) manager.appendMessage(item);
+    const { session } = await createAgentSession({
+      cwd: root,
+      agentDir: root,
+      settingsManager,
+      resourceLoader: loader,
+      sessionManager: manager,
+      modelRuntime,
+      model: nativeModel,
+    });
+    t.after(() => session.dispose());
+    await session.bindExtensions({ mode: "print" });
+    const before = requests.length;
+    await session.prompt("repeat after restoring disabled search");
+    if (altered) {
+      assert.equal(requests.length, before);
+      const last = session.messages.at(-1);
+      assert.ok(last?.role === "assistant");
+      assert.equal(last.stopReason, "error");
+      assert.match(last.errorMessage ?? "", /altered/u);
+    } else {
+      assert.equal(requests.length, before + 1);
+      const rows = (
+        requests.at(-1)!.messages as { role: string; content: unknown[] }[]
+      ).filter((row) => row.role === "assistant");
+      assert.deepEqual(rows[0]?.content, message.content);
+      assert.deepEqual(
+        rows[1]?.content,
+        readNativeSearchEvidence(first)?.output,
+      );
+      assert.deepEqual(
+        rows[2]?.content,
+        readNativeSearchEvidence(second)?.output,
+      );
+    }
+  }
 });
