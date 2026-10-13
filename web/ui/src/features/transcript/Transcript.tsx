@@ -60,12 +60,12 @@ import {
   formatTurnTime,
 } from "../../lib/format.ts";
 import { isControlledSession } from "../../lib/session-control.ts";
+import type { LiveEntry } from "../../store/web-store.ts";
 import {
-  recordedSubagents,
   type RecordedSubagent,
+  recordedSubagents,
 } from "../subagents/recorded-subagents.ts";
 import { SubagentTaskRow } from "../subagents/SubagentTaskRow.tsx";
-import type { LiveEntry } from "../../store/web-store.ts";
 import { CompactionStatus } from "./CompactionStatus.tsx";
 import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
@@ -3848,10 +3848,14 @@ export function Transcript(props: TranscriptProps) {
           lastScrollTop.current = element.scrollTop;
           // Keep an explicit reveal unpinned through its first smooth frames.
           // An older page restored at the bottom may resume normal following.
-          pinned.current =
-            (pinned.current || downward) &&
+          const nearBottom =
             element.scrollTop + element.clientHeight >=
-              element.scrollHeight - 48;
+            element.scrollHeight - 48;
+          // A shrinking viewport can emit scroll before ResizeObserver.
+          // Only upward movement should interrupt an existing bottom follow.
+          pinned.current = pinned.current
+            ? !upward || nearBottom
+            : downward && nearBottom;
           if (!pinned.current) history.retainReading();
           setReadingHistory(!pinned.current);
           window.clearTimeout(savePositionTimer.current);

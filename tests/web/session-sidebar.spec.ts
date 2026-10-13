@@ -247,7 +247,7 @@ it("offers an empty pin drop area during a project drag and suppresses the trail
     screen.queryByRole("region", { name: i18n.t("pinnedConversations") }),
   ).toBeNull();
   dragPointer(source.querySelector(".workspace-button")!, "dragstart");
-  const pinned = screen.getByRole("region", {
+  const pinned = await screen.findByRole("region", {
     name: i18n.t("pinnedConversations"),
   });
   expect(within(pinned).getByText(i18n.t("sidebarDropPin"))).toBeTruthy();
@@ -271,14 +271,21 @@ it("offers an empty pin drop area during a project drag and suppresses the trail
   expect(toggle).toHaveBeenCalledTimes(2);
 });
 
-it("cancels project dragging with Escape without persisting a later drop", () => {
+it("cancels project dragging with Escape without reviving a delayed frame or persisting a later drop", async () => {
   const { actions } = mount(catalog(2, 1));
+  let frame: FrameRequestCallback | undefined;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frame = callback;
+    return 1;
+  });
   const order = vi.spyOn(actions, "setWorkspaceOrder").mockResolvedValue();
   const source = screen.getByRole("region", { name: "Project 1" });
   const destination = screen.getByRole("region", { name: "Project 2" });
   dragPointer(source.querySelector(".workspace-button")!, "dragstart");
   dragPointer(destination, "dragover");
   fireEvent.keyDown(window, { key: "Escape" });
+  expect(frame).toBeDefined();
+  await act(async () => frame!(0));
   expect(destination.classList.contains("is-pin-drop-target")).toBe(false);
   expect(
     screen.queryByRole("region", { name: i18n.t("sidebarDropProjectLast") }),
@@ -295,7 +302,7 @@ it("moves a pinned project to the ordinary project tail in one atomic order acti
   const pin = vi.spyOn(actions, "setSidebarPin").mockResolvedValue();
   const source = screen.getByRole("region", { name: "Project 1" });
   dragPointer(source.querySelector(".workspace-button")!, "dragstart");
-  const tail = screen.getByRole("region", {
+  const tail = await screen.findByRole("region", {
     name: i18n.t("sidebarDropProjectLast"),
   });
   dragPointer(tail, "dragover");

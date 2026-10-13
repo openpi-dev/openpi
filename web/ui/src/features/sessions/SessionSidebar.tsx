@@ -927,19 +927,25 @@ export function SessionSidebar(props: SessionSidebarProps) {
     setWorkspaceDrop(null);
   }, []);
   useEffect(() => {
-    if (!draggingSidebar) return;
     const cancel = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (
+        event.key !== "Escape" ||
+        (!draggedPin.current && !draggedChat.current)
+      )
+        return;
       event.preventDefault();
       endDrag();
     };
+    const blur = () => {
+      if (draggedPin.current || draggedChat.current) endDrag();
+    };
     window.addEventListener("keydown", cancel, true);
-    window.addEventListener("blur", endDrag);
+    window.addEventListener("blur", blur);
     return () => {
       window.removeEventListener("keydown", cancel, true);
-      window.removeEventListener("blur", endDrag);
+      window.removeEventListener("blur", blur);
     };
-  }, [draggingSidebar, endDrag]);
+  }, [endDrag]);
   const movePin = (index: number, down: boolean) => {
     const target = sidebarPins[index];
     if (!target) return;
@@ -1577,7 +1583,12 @@ export function SessionSidebar(props: SessionSidebarProps) {
               return;
             }
             draggedPin.current = target;
-            setDraggingSidebar(true);
+            // Chromium captures the native drag before new drop areas move
+            // the source. Ignore a delayed frame after drop/cancellation.
+            requestAnimationFrame(() => {
+              if (mounted.current && draggedPin.current === target)
+                setDraggingSidebar(true);
+            });
             suppressDragClickUntil.current = Number.POSITIVE_INFINITY;
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", group.path);

@@ -304,9 +304,19 @@ test("native sidebar project drag survives Host restart while ordinary project a
         new URL(response.url()).pathname === "/api/workspaces/order" &&
         response.request().method() === "POST",
     );
-    await gamma
-      .locator(".workspace-button")
-      .dragTo(alpha, { targetPosition: { x: 60, y: 4 } });
+    const source = await gamma.locator(".workspace-button").boundingBox();
+    expect(source).not.toBeNull();
+    const start = { x: source!.x + 60, y: source!.y + source!.height / 2 };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 12, start.y, { steps: 4 });
+    await expect(sidebar.locator(".pinned-section")).toBeVisible();
+    // Native dragstart reveals a pin drop area. Measure the ordinary project
+    // target afterwards, rather than using its previous screen position.
+    const target = await alpha.boundingBox();
+    expect(target).not.toBeNull();
+    await page.mouse.move(target!.x + 60, target!.y + 4, { steps: 12 });
+    await page.mouse.up();
     expect((await saved).ok()).toBe(true);
     await expect(labels).toHaveText(["Gamma", "Alpha", "Beta"]);
     await expect

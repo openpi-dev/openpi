@@ -418,6 +418,8 @@ test("archived chats query project/sort before paging and restore without activa
   });
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await expect(
-    page.locator(".session-sidebar").getByText("Active chat", { exact: true }),
+    page
+      .getByRole("region", { name: "OpenPI", exact: true })
+      .getByText("Active chat", { exact: true }),
   ).toBeVisible();
 });

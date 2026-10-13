@@ -13,8 +13,8 @@ import {
 } from "@playwright/test";
 import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
-import type { WebProviderAuthProjection } from "../../web/runtime/types.ts";
 import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
+import type { WebProviderAuthProjection } from "../../web/runtime/types.ts";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
@@ -2226,7 +2226,7 @@ for (const width of [320, 390]) {
     await sessionOptions.focus();
     await page.keyboard.press("Enter");
     await expect(
-      page.getByRole("menuitem", { name: "置顶会话" }),
+      page.getByRole("menuitem", { name: "重命名", exact: true }),
     ).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(archived).toBeFocused();
@@ -2323,7 +2323,7 @@ test("mobile sidebar releases focus isolation when resized to desktop", async ({
   await expect(trigger).toBeFocused();
 });
 
-test("mobile sidebar recovers focus when archived and restored rows disappear", async ({
+test("mobile sidebar keeps keyboard focus inside when archived and restored rows disappear", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -2346,9 +2346,8 @@ test("mobile sidebar recovers focus when archived and restored rows disappear", 
     await page.reload();
     const trigger = page.getByRole("button", { name: "打开侧边栏" });
     const sidebar = page.locator(".session-sidebar");
-    const close = sidebar.getByRole("button", { name: "收起侧边栏" });
     await trigger.click();
-    for (const action of ["归档会话", "恢复会话"]) {
+    for (const action of ["归档", "恢复"]) {
       const rows = sidebar.locator(".workspace-sessions .session-row");
       await expect(rows.first()).toBeVisible();
       const count = await rows.count();
@@ -2360,11 +2359,17 @@ test("mobile sidebar recovers focus when archived and restored rows disappear", 
       await page.keyboard.press("Enter");
       await page.getByRole("menuitem", { name: action }).click();
       await expect(rows).toHaveCount(count - 1);
-      await expect(close).toBeFocused();
+      // The shared conversation menu returns focus to a surviving neighbor.
+      // Removal must not strand focus on body or outside the mobile drawer.
+      const focusInside = () =>
+        sidebar.evaluate(
+          (element) =>
+            element.contains(document.activeElement) &&
+            document.activeElement !== element,
+        );
+      await expect.poll(focusInside).toBe(true);
       await page.keyboard.press("Tab");
-      await expect(
-        sidebar.getByRole("button", { name: "新建会话", exact: true }),
-      ).toBeFocused();
+      await expect.poll(focusInside).toBe(true);
       await page.keyboard.press("Escape");
       await expect(sidebar).not.toBeVisible();
       await expect(trigger).toBeFocused();
@@ -3066,7 +3071,7 @@ test("restores archived history without switching the active Session", async ({
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.getByText("Saved browser work", { exact: true }).hover();
     await page.getByRole("button", { name: "会话选项" }).click();
-    await page.getByRole("menuitem", { name: "恢复会话" }).click();
+    await page.getByRole("menuitem", { name: "恢复", exact: true }).click();
     if (!attempt)
       await expect(
         page.getByText("暂时无法确认恢复结果，请刷新后重试。"),
@@ -3430,7 +3435,12 @@ test("fresh browser contexts open the bare address and can request workspace sel
       await page.goto("http://127.0.0.1:57109/");
       await snapshot;
       await expect(page.locator(".notice")).toHaveCount(0);
-      await page.locator(".workspace-heading button").last().click();
+      const addWorkspace = page.getByRole("button", {
+        name: /添加工作区|Add workspace/u,
+        exact: true,
+      });
+      await addWorkspace.focus();
+      await addWorkspace.click();
       await expect.poll(() => selections).toBe(1);
       await page.reload();
       await expect(page.locator(".notice")).toHaveCount(0);

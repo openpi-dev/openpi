@@ -7,9 +7,8 @@ import type {
 async function installSidebarActionsFixture(page: Page) {
   let selected = "first";
   const selections: string[] = [];
-  await page.route("**/events?**", (route) =>
-    route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }),
-  );
+  // Keep the owned Host's real event stream open: a fulfilled finite stream
+  // disconnects and legitimately disables menu actions during recovery.
   await page.route("**/api/sessions/select", async (route) => {
     const path = route.request().postDataJSON().path;
     expect(path).toMatch(/^\/preview\/sidebar-(first|second)\.jsonl$/u);
@@ -125,7 +124,7 @@ test("session actions stay quiet until hover or keyboard focus, and remain avail
     path: testInfo.outputPath("sidebar-actions-open-menu.png"),
     animations: "disabled",
   });
-  await page.getByRole("menuitem", { name: "重命名会话", exact: true }).click();
+  await page.getByRole("menuitem", { name: "重命名", exact: true }).click();
   await expect(
     page.getByRole("dialog", { name: "重命名会话", exact: true }),
   ).toBeVisible();
@@ -157,7 +156,7 @@ test.describe("touch sidebar actions", () => {
     await expect(actions).toHaveCSS("opacity", "1");
     await trigger.tap();
     await expect(
-      page.getByRole("menuitem", { name: "置顶会话", exact: true }),
+      page.getByRole("menuitem", { name: "置顶", exact: true }),
     ).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.locator(".app-shell")).toHaveClass(/sidebar-open/u);
@@ -189,7 +188,7 @@ test.describe("touch sidebar actions", () => {
       path: testInfo.outputPath("sidebar-actions-touch-menu.png"),
       animations: "disabled",
     });
-    await page.getByRole("menuitem", { name: "重命名会话", exact: true }).tap();
+    await page.getByRole("menuitem", { name: "重命名", exact: true }).tap();
     await expect(
       page.getByRole("dialog", { name: "重命名会话", exact: true }),
     ).toBeVisible();
@@ -207,9 +206,11 @@ test("conversation pin persists through browser reload and unpin returns it to i
   await row.hover();
   const title = await row.locator(".session-title").textContent();
   await row.getByRole("button", { name: "会话选项" }).click();
-  await expect(page.getByRole("menuitem", { name: "置顶会话" })).toBeVisible();
   await expect(
-    page.getByRole("menuitem", { name: "重命名会话" }),
+    page.getByRole("menuitem", { name: "置顶", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "重命名", exact: true }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await row.getByRole("button", { name: "置顶会话", exact: true }).click();

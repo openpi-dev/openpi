@@ -233,10 +233,10 @@ test("a readonly observer keeps its pending messages and native progress, then r
   try {
     await page.goto(fixture.host.origin);
     const sidebarA = page
-      .locator(".session-sidebar .session")
+      .locator(".session-sidebar .workspace-tree > .workspace-group .session")
       .filter({ hasText: "Observer A" });
     const sidebarB = page
-      .locator(".session-sidebar .session")
+      .locator(".session-sidebar .workspace-tree > .workspace-group .session")
       .filter({ hasText: "Observer B" });
     await expect(sidebarA).toHaveAttribute(
       "aria-label",
