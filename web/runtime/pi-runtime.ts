@@ -59,7 +59,7 @@ import { WEB_MESSAGE_RERUN } from "../protocol/message-rerun.ts";
 import { WEB_SESSION_FORK, readSessionFork, type WebSessionForkMetadata, type WebSessionForkSnapshot, type WebSessionForkToolBoundary } from "../protocol/session-fork.ts";
 import { LIVE_TOOL_LIMIT, type LiveToolEvidence } from "../protocol/evidence.ts";
 import { elapsed, traceWeb } from "../trace.ts";
-import { WEB_TURN_TIMING_ENTRY, readSessionTurnEvidence, type WebTurnTiming } from "../protocol/turn-timing.ts";
+import { WEB_TURN_TIMING_ENTRY, readSessionTurnEvidence, readTurnTiming, type WebTurnTiming } from "../protocol/turn-timing.ts";
 import {
   applyHttpProxySettings,
   configureHttpDispatcher,
@@ -1435,6 +1435,8 @@ export class PiWebRuntime implements WebRuntimeController {
     this.assertActive();
     this.assertWorkspaceSelected();
     this.assertNoSessionMutation();
+    if (options?.retryEntryId !== undefined && content.trim())
+      throw new WebRuntimeRequestError("Provider retry cannot also submit a new user message", "PROMPT_REJECTED", 422);
     const owner = this.runtime;
     if (!matchesSessionIdentity(owner.session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
@@ -1444,6 +1446,7 @@ export class PiWebRuntime implements WebRuntimeController {
       );
     }
     this.assertSteeringTarget(owner.session, options);
+    this.providerRetryPrompt(owner.session, options);
     const sessionId = owner.session.sessionManager.getSessionId();
     const exact = { ...options, expectedSessionId: sessionId, expectedSessionPath: owner.session.sessionManager.getSessionFile() ?? `current:${sessionId}` };
     if (options?.streamingBehavior !== "steer" && (owner.session.isCompacting || this.manualCompactionOwner === owner || this.compactionQueues?.has(owner)))
@@ -1469,6 +1472,29 @@ export class PiWebRuntime implements WebRuntimeController {
         "TURN_CONFLICT",
         409,
       );
+  }
+
+  private providerRetryPrompt(session: AgentSession, options?: WebPromptOptions) {
+    if (options?.retryEntryId === undefined) return;
+    const branch = [...session.sessionManager.getBranch()].reverse();
+    const failure = branch.find((entry) => entry.type === "message");
+    // The failed run may include steering. Its persisted owner remains the
+    // original input, even when a later user message is last in the context.
+    const timingEntry = failure && branch.slice(0, branch.indexOf(failure)).find((entry) => entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY);
+    const timing = timingEntry?.type === "custom" ? readTurnTiming(timingEntry.data) : undefined;
+    const prompt = timing?.promptEntryId
+      ? branch.find((entry) => entry.id === timing.promptEntryId)
+      : branch.find((entry) => entry.type === "message" && entry.message.role === "user");
+    if (
+      !options.commandId || !options.expectedSessionId || !options.expectedSessionPath ||
+      typeof options.retryEntryId !== "string" || !options.retryEntryId || options.retryEntryId.length > 128 ||
+      options.streamingBehavior === "steer" || options.planRevision !== undefined || options.images?.length ||
+      !session.isIdle || session.pendingMessageCount || session.getFollowUpMessages().length || session.getSteeringMessages().length ||
+      failure?.id !== options.retryEntryId || failure?.type !== "message" || failure.message.role !== "assistant" || failure.message.stopReason !== "error" ||
+      timingEntry && (!timing || timing.sessionId !== session.sessionId || timing.outcome !== "failed" || timing.resultEntryId !== undefined && timing.resultEntryId !== failure.id) ||
+      prompt?.type !== "message" || prompt.message.role !== "user"
+    ) throw new WebRuntimeRequestError("The failed response is no longer the latest idle response in this Session", "PROMPT_REJECTED", 422);
+    return prompt.message;
   }
 
   private async dispatchPrompt(agentRuntime: AgentSessionRuntime, content: string, options?: WebPromptOptions, fromCompactionQueue = false) {
@@ -1539,6 +1565,8 @@ export class PiWebRuntime implements WebRuntimeController {
           );
         }
         this.assertSteeringTarget(session, options);
+        const retryPrompt = this.providerRetryPrompt(session, options);
+        if (promptTrace && retryPrompt) promptTrace.promptMessage = retryPrompt;
         assertWebCommandSupported(agentRuntime.services, content);
         if (agentRuntime !== this.runtime && submittedExtensionCommand(agentRuntime.services, content)) {
           throw new WebRuntimeRequestError("Return to this Session to retry its queued command.", "SESSION_CONFLICT", 409);
@@ -1572,7 +1600,11 @@ export class PiWebRuntime implements WebRuntimeController {
           });
         }
         unsubscribePromptLifecycle = session.subscribe((event) => {
-          if (event.type === "agent_start") agentLifecycleStarted = true;
+          if (event.type === "agent_start") {
+            agentLifecycleStarted = true;
+            if (options?.retryEntryId && admissionDisposition === undefined)
+              preflightResult("started");
+          }
         });
         this.promptOrigins ??= new AsyncLocalStorage<PromptTrace | undefined>();
         const extensionCommand = submittedExtensionCommand(agentRuntime.services, content);
@@ -1668,7 +1700,17 @@ export class PiWebRuntime implements WebRuntimeController {
               } : {}),
             });
           };
-        if (options?.streamingBehavior === "steer") {
+        if (options?.retryEntryId) {
+          // Pi owns custom-message preparation, provider retry, compaction and
+          // settlement. Record the user's explicit retry action without
+          // inserting their text/images again or replaying completed tools.
+          await this.promptOrigins.run(promptTrace, () => session.sendCustomMessage({
+            customType: "openpi-web-provider-retry",
+            content: "The user requested retrying the interrupted response. Continue from the existing conversation.",
+            display: false,
+            details: { failedEntryId: options.retryEntryId },
+          }, { triggerTurn: true }));
+        } else if (options?.streamingBehavior === "steer") {
           // Native steer never starts a fresh prompt. Pi 0.99 also runs input
           // hooks here, so preserve its handled/queued admission disposition.
           const disposition = await this.promptOrigins.run(promptTrace, () => session.steer(content, promptImages, { source: "rpc" }));

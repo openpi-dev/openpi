@@ -67,7 +67,7 @@ body {
   margin: 0;
   background-color: var(--sidebar);
   color: var(--text);
-  font: 14px/1.5 var(--openpi-interface-font);
+  font: 430 14px/1.5 var(--openpi-interface-font);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }

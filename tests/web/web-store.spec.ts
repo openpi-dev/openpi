@@ -551,6 +551,7 @@ class FakeClient extends WebClient {
     _retry = false,
     _images: readonly WebPromptImage[] = [],
     _planRevision?: string,
+    _delivery?: Parameters<WebClient["prompt"]>[7],
   ) {
     this.prompts.push({ sessionId, content });
     return this.promptResult;
@@ -4195,6 +4196,106 @@ describe("OpenPI Web store", () => {
     expect(store.getState().activeTurn).toEqual(running.runtime.activeTurn);
   });
 
+  it("does not erase or resurrect a live turn with a snapshot older than its native event", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const turn = {
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+      commandId: "new-turn",
+      epoch: 1,
+      startedAt: 1000,
+      elapsedMs: 0,
+    };
+    const beforeStart = deferred<WebSnapshot>();
+    client.snapshots.push(beforeStart.promise);
+    const refresh = store.getState().actions.refreshSnapshot();
+    stream.emit(runtimeEvent(5, "turn_started", turn));
+    beforeStart.resolve(snapshot());
+    await refresh;
+    expect(store.getState().activeTurn).toEqual(turn);
+    expect(store.getState().liveRunning).toBe(true);
+    expect(store.getState().livePhase).toBe("running");
+
+    const beforeEnd = deferred<WebSnapshot>();
+    client.snapshots.push(beforeEnd.promise);
+    const settlingRefresh = store.getState().actions.refreshSnapshot();
+    stream.emit(
+      runtimeEvent(6, "turn_settled", { ...turn, outcome: "completed" }),
+    );
+    const staleRunning = snapshot();
+    staleRunning.cursor = 5;
+    staleRunning.runtime = {
+      ...staleRunning.runtime,
+      status: "running",
+      activeTurn: turn,
+    };
+    beforeEnd.resolve(staleRunning);
+    await settlingRefresh;
+    expect(store.getState().activeTurn).toBeNull();
+    expect(store.getState().liveRunning).toBe(false);
+    expect(store.getState().livePhase).toBe("idle");
+
+    // A new stream after a host restart can legitimately have a lower cursor.
+    client.snapshots.push(Promise.resolve({ ...staleRunning, cursor: 1 }));
+    await store.getState().actions.refreshSnapshot({ resetCursor: true });
+    expect(store.getState().activeTurn).toEqual(turn);
+    expect(store.getState().liveRunning).toBe(true);
+    store.getState().actions.stop();
+  });
+
+  it("submits a provider retry without projecting another user bubble", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const pending = deferred<CommandReceipt>();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(pending.promise);
+    const delivery = {
+      streamingBehavior: "followUp" as const,
+      retryEntryId: "failed-entry",
+    };
+    const sending = store
+      .getState()
+      .actions.sendPrompt("", [], undefined, delivery);
+    expect(store.getState().liveMessages).toEqual([]);
+    expect(store.getState().promptAdmissionPending).toBe(true);
+    expect(prompt.mock.calls[0]?.[7]).toEqual(delivery);
+    pending.resolve({ id: prompt.mock.calls[0]![2], accepted: true });
+    expect(await sending).toBe(true);
+    expect(store.getState().liveMessages).toEqual([]);
+    store.setState({
+      promptAdmissionRecovery: {
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+        commandId: "lost-receipt",
+        optimisticKey: "lost-preview",
+        content: "",
+        delivery,
+        phase: "ready",
+      },
+    });
+    stream.emit(
+      runtimeEvent(5, "prompt_accepted", {
+        sessionId: "session-1",
+        commandId: "lost-receipt",
+      }),
+    );
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().liveMessages).toEqual([]);
+    store.getState().actions.stop();
+  });
+
   it("cancels the exact active turn without optimistically ending it", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));
@@ -4208,8 +4309,17 @@ describe("OpenPI Web store", () => {
     });
     await store.getState().actions.refreshSnapshot();
     store.getState().actions.start();
-    const turn = { sessionId: "session-1", commandId: "turn", epoch: 4 };
+    const turn = {
+      sessionId: "session-1",
+      commandId: "turn",
+      epoch: 4,
+      sessionPath: "/tmp/ws/session.jsonl",
+      promptEntryId: "input",
+      startedAt: 10000,
+      elapsedMs: 1234,
+    };
     stream.emit(runtimeEvent(5, "turn_started", turn));
+    expect(store.getState().activeTurn).toEqual(turn);
     const stopping = store.getState().actions.cancelActiveTurn();
     expect(cancel).toHaveBeenCalledWith(turn);
     expect(store.getState().turnCancellationPending).toBe(true);
@@ -4484,6 +4594,86 @@ describe("draft model selection", () => {
     expect(client.creations).toHaveLength(0);
     expect(client.prompts).toHaveLength(0);
   });
+
+  it.each([false, true])(
+    "prepares the exact viewed conversation for explicit sending (copied id: %s)",
+    async (copiedId) => {
+      const client = new FakeClient();
+      const store = createWebStore(client);
+      const viewed = snapshot();
+      const observer = structuredClone(viewed);
+      observer.currentSessionId = copiedId ? "session-1" : "other";
+      observer.currentSessionPath = "/tmp/ws/other.jsonl";
+      observer.sessions[0]!.controller = "none";
+      const select = vi.spyOn(client, "selectSession");
+      store.setState({
+        snapshot: observer,
+        selectedPath: viewed.selectedSession!.path,
+        selectedWorkspace: "/tmp/ws",
+      });
+      expect(select).not.toHaveBeenCalled();
+      client.snapshots.push(Promise.resolve(viewed));
+      const target = await store.getState().actions.prepareSession();
+      expect(select).toHaveBeenCalledExactlyOnceWith(
+        "/tmp/ws/session.jsonl",
+        "session-1",
+      );
+      expect(target).toMatchObject({
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+        workspacePath: "/tmp/ws",
+      });
+      expect(client.creations).toHaveLength(0);
+      expect(client.prompts).toHaveLength(0);
+      expect(
+        await store
+          .getState()
+          .actions.sendPrompt(
+            "Continue the viewed conversation",
+            [],
+            undefined,
+            undefined,
+            target!,
+          ),
+      ).toBe(true);
+      expect(client.prompts).toEqual([
+        { sessionId: "session-1", content: "Continue the viewed conversation" },
+      ]);
+    },
+  );
+
+  it.each(["rejected", "control-lost", "navigated"])(
+    "does not prepare a stale target when reactivation is %s",
+    async (outcome) => {
+      const client = new FakeClient();
+      const store = createWebStore(client);
+      const viewed = snapshot();
+      const observer = structuredClone(viewed);
+      observer.currentSessionId = "other";
+      observer.currentSessionPath = "/tmp/ws/other.jsonl";
+      observer.sessions[0]!.controller = "none";
+      store.setState({
+        snapshot: observer,
+        selectedPath: viewed.selectedSession!.path,
+        selectedWorkspace: "/tmp/ws",
+      });
+      vi.spyOn(client, "selectSession").mockImplementation(async () => {
+        if (outcome === "rejected")
+          throw new WebApiError(
+            "Session is unavailable",
+            409,
+            "SESSION_CONFLICT",
+          );
+        if (outcome === "navigated")
+          store.getState().actions.setWorkspace("/tmp/other");
+        return {};
+      });
+      client.snapshots.push(Promise.resolve(observer));
+      expect(await store.getState().actions.prepareSession()).toBeNull();
+      expect(client.creations).toHaveLength(0);
+      expect(client.prompts).toHaveLength(0);
+    },
+  );
 
   it("rejects files prepared for an older Session selection, including a same-ID switch", async () => {
     const client = new FakeClient();

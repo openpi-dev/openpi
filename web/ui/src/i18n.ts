@@ -1560,7 +1560,7 @@ const resources = {
         "Switch to this session to use interactive tools.",
       activateViewedSession: "Switch to this session",
       activateViewedSessionHint:
-        "Switch to this session to continue the conversation.",
+        "Send a message to continue this conversation.",
       addWorkspace: "Add workspace",
       addWorkspaceMenu: "Add workspace...",
       archiveConversation: "Archive conversation",
@@ -3391,7 +3391,7 @@ const resources = {
       observedSessionTools: "{{count}} 个正在执行的工具",
       toolsRequireCurrentSession: "切换到此会话后可使用交互工具。",
       activateViewedSession: "切换到此会话",
-      activateViewedSessionHint: "切换到此会话后可继续对话。",
+      activateViewedSessionHint: "发送消息即可继续此会话。",
       acceptedHint: "OpenPI Web 已接收消息。",
       promptAdmissionUnknown: "无法确认上次发送的消息是否已被接收。",
       promptAdmissionUnknownDetail:

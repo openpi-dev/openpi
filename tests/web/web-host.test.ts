@@ -4641,6 +4641,60 @@ test("prompt delivery binds steering to one turn and replays only the same admis
   }
 });
 
+test("provider retry admissions bind the exact failed entry without requiring a second user prompt", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-provider-retry-"));
+  const calls: Parameters<WebRuntimeController["sendPrompt"]>[] = [];
+  const runtime = testRuntime(cwd, async (...args) => {
+    calls.push(args);
+    return { pendingFollowUps: 0 };
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const body = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: mutationSessionPath(runtime.sessionManager),
+    commandId: "retry-failure",
+    content: "",
+    retryEntryId: "failed-entry",
+  };
+  const post = (data: unknown) =>
+    fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  try {
+    for (const invalid of [
+      { ...body, retryEntryId: "" },
+      { ...body, retryEntryId: "x".repeat(129) },
+      { ...body, streamingBehavior: "steer", expectedTurnCommandId: "turn" },
+      { ...body, planRevision: "plan" },
+      { ...body, content: "A different task" },
+    ])
+      assert.equal((await post(invalid)).status, 400);
+    const admitted = await post(body);
+    assert.equal(admitted.status, 202);
+    const receipt = await admitted.json();
+    assert.deepEqual(
+      await (await post({ ...body, retry: true })).json(),
+      receipt,
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]![0], "");
+    assert.equal(calls[0]![1]?.retryEntryId, "failed-entry");
+    const conflict = await post({
+      ...body,
+      retryEntryId: "other-entry",
+      retry: true,
+    });
+    assert.equal(conflict.status, 409);
+    assert.equal((await conflict.json()).code, "COMMAND_CONFLICT");
+    assert.equal(calls.length, 1);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("fork endpoint authenticates an exact Web-owned source and rejects extra authority", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-fork-host-"));
   const runtime = testRuntime(cwd);

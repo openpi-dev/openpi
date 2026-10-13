@@ -2435,7 +2435,7 @@ it.each(["openpi-setup", "my-pi-setup"])(
         screen.getByRole("button", { name: i18n.t("retryPrompt") }),
       );
     });
-    expect(resend).toHaveBeenCalledWith(content);
+    expect(resend).toHaveBeenCalledWith(content, "answer");
   },
 );
 
@@ -2820,7 +2820,7 @@ it("refreshes background Session Git review while a different Session runs", asy
   }
 });
 
-it("keeps the reader mounted across an external controller change and revokes input until refreshed", async () => {
+it("keeps the reader and editable draft across an external controller change without direct prompt admission", async () => {
   const original = webStore.getState();
   const snapshot = activeSnapshot();
   snapshot.runtime.status = "idle";
@@ -2948,7 +2948,7 @@ it("keeps the reader mounted across an external controller change and revokes in
     expect(
       view.container.querySelector<HTMLTextAreaElement>(".composer textarea")
         ?.disabled,
-    ).toBe(true);
+    ).toBe(false);
     expect(
       await store.getState().actions.sendPrompt("Must not reach old A"),
     ).toBe(false);

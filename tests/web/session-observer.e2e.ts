@@ -42,9 +42,12 @@ async function observerFixture() {
   await mkdir(workspace);
   const gates = [gate(), gate(), gate(), gate()];
   const aborts = { A: 0, B: 0 };
-  const makeRuntime = async (name: "A" | "B") => {
+  const makeRuntime = async (
+    name: "A" | "B",
+    sessionManager?: SessionManager,
+  ) => {
     const agentDir = join(directory, `agent-${name}`);
-    await mkdir(agentDir);
+    await mkdir(agentDir, { recursive: true });
     const provider = `observer-fixture-${name}`;
     const faux = fauxProvider({
       api: provider,
@@ -171,10 +174,9 @@ async function observerFixture() {
     return createAgentSessionRuntime(create, {
       cwd: workspace,
       agentDir,
-      sessionManager: SessionManager.create(
-        workspace,
-        join(directory, "sessions"),
-      ),
+      sessionManager:
+        sessionManager ??
+        SessionManager.create(workspace, join(directory, "sessions")),
     });
   };
   const a = await makeRuntime("A");
@@ -198,6 +200,22 @@ async function observerFixture() {
   await internal.replaceRuntime(a);
   const host = new WebHost({ runtime: web });
   await host.start();
+  // Idle sessions are disposed when control moves away. Reopening the saved
+  // fixture must recreate its native fake provider, not load operator models.
+  const runtimeConstructor = PiWebRuntime as unknown as {
+    createRuntime: (
+      cwd: string,
+      manager: SessionManager,
+    ) => Promise<{ runtime: AgentSessionRuntime }>;
+  };
+  const originalCreateRuntime = runtimeConstructor.createRuntime;
+  runtimeConstructor.createRuntime = async (_cwd, manager) => {
+    const name =
+      manager.getSessionId() === a.session.sessionManager.getSessionId()
+        ? "A"
+        : "B";
+    return { runtime: await makeRuntime(name, manager) };
+  };
   return {
     host,
     web,
@@ -206,6 +224,7 @@ async function observerFixture() {
     gates,
     aborts,
     async close() {
+      runtimeConstructor.createRuntime = originalCreateRuntime;
       for (const item of gates) item.release();
       await host.stop();
       await rm(directory, { recursive: true, force: true });
@@ -213,7 +232,7 @@ async function observerFixture() {
   };
 }
 
-test("a readonly observer keeps its pending messages and native progress, then retakes control and stops only its Session", async ({
+test("an observer keeps its editable draft, pending messages and native progress, then stops only its Session", async ({
   browser,
 }, testInfo) => {
   const fixture = await observerFixture();
@@ -356,7 +375,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
       exact: true,
     });
     await expect(activate).toBeVisible();
-    await expect(input).toBeDisabled();
+    await expect(input).toBeEnabled();
     await expect(sidebarA).toHaveAttribute(
       "aria-label",
       `Observer A · ${aPath} · 执行中 · 2 条消息正在排队`,
@@ -365,7 +384,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
       "aria-label",
       `Observer B · ${bPath} · 执行中`,
     );
-    await expect(toolbar).toBeHidden();
+    await expect(toolbar).toBeVisible();
     await expect(hint).toHaveAttribute("data-visible", "false");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(
       "Observer A",
@@ -398,7 +417,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
       conversation.getByText("2 条消息正在排队", { exact: true }),
     ).toBeVisible();
     await expect(timer).not.toHaveText(beforeTimer);
-    await expect(toolbar).toBeHidden();
+    await expect(toolbar).toBeVisible();
     await expect(hint).toHaveAttribute("data-visible", "false");
     expect(
       fixture.web
@@ -483,6 +502,36 @@ test("a readonly observer keeps its pending messages and native progress, then r
     ).toHaveCount(0);
     await page.screenshot({
       path: testInfo.outputPath("observer-A-stopped-B-still-running.png"),
+    });
+    const selectedB = await context.request.post(
+      `${fixture.host.origin}/api/sessions/select`,
+      { headers, data: { path: bPath } },
+    );
+    expect(selectedB.ok()).toBe(true);
+    await expect(activate).toBeVisible();
+    await expect(input).toBeEnabled();
+    await input.fill("Continue observer A directly");
+    const resumedPrompt = page.waitForRequest(
+      (request) =>
+        new URL(request.url()).pathname === "/api/prompt" &&
+        request.method() === "POST",
+    );
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    expect((await resumedPrompt).postDataJSON()).toMatchObject({
+      sessionId: aId,
+      sessionPath: aPath,
+      content: "Continue observer A directly",
+    });
+    expect((await (await resumedPrompt).response())?.status()).toBe(202);
+    await expect(input).toHaveValue("");
+    await expect(activate).toHaveCount(0);
+    await expect(
+      conversation.getByText("Continue observer A directly", { exact: true }),
+    ).toHaveCount(1);
+    expect(fixture.aborts.B).toBe(0);
+    expect(fixture.b.session.isStreaming).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath("observer-A-send-reactivates-own-session.png"),
     });
   } finally {
     await context.close();

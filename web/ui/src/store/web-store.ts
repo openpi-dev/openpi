@@ -426,6 +426,7 @@ export function createWebStore(
   let forkRequest: WebSessionForkRequest | null = null;
   let deletingSession = false;
   let snapshotGeneration = 0;
+  let liveTurnSequence = 0;
   let snapshotFailureNotice: string | null = null;
   let promptAdmissionSequence = 0;
   let promptAdmissionToken: number | null = null;
@@ -838,6 +839,7 @@ export function createWebStore(
           liveMessages:
             restoreInputPreview &&
             recovery &&
+            !recovery.delivery?.retryEntryId &&
             !current.liveMessages.some(
               (entry) => entry.key === recovery.optimisticKey,
             )
@@ -1033,11 +1035,24 @@ export function createWebStore(
             : current.pendingSteeringReceipt,
         });
       } else if (event.type === "turn_started") {
+        liveTurnSequence = event.sequence;
         set({
           activeTurn: {
             sessionId: String(detail.sessionId),
             commandId: String(detail.commandId),
             epoch: Number(detail.epoch),
+            ...(typeof detail.sessionPath === "string"
+              ? { sessionPath: detail.sessionPath }
+              : {}),
+            ...(typeof detail.promptEntryId === "string"
+              ? { promptEntryId: detail.promptEntryId }
+              : {}),
+            ...(typeof detail.startedAt === "number"
+              ? { startedAt: detail.startedAt }
+              : {}),
+            ...(typeof detail.elapsedMs === "number"
+              ? { elapsedMs: detail.elapsedMs }
+              : {}),
           },
           liveRunning: true,
           livePhase: "running",
@@ -1045,6 +1060,7 @@ export function createWebStore(
           turnTerminalStatus: null,
         });
       } else if (event.type === "agent_start") {
+        liveTurnSequence = event.sequence;
         set({
           ...(detail.activeTurn
             ? { activeTurn: detail.activeTurn as WebStoreState["activeTurn"] }
@@ -1061,6 +1077,7 @@ export function createWebStore(
           turn?.commandId === detail.commandId &&
           turn?.epoch === detail.epoch
         ) {
+          liveTurnSequence = event.sequence;
           set({
             activeTurn: null,
             liveRunning: false,
@@ -1071,6 +1088,7 @@ export function createWebStore(
           });
         }
       } else if (event.type === "agent_settled") {
+        if (!current.activeTurn) liveTurnSequence = event.sequence;
         set({
           pendingFollowUpsReceipt: null,
           pendingSteeringReceipt: null,
@@ -1443,6 +1461,9 @@ export function createWebStore(
             snapshotFailureNotice !== null &&
             get().notice === snapshotFailureNotice;
           snapshotFailureNotice = null;
+          if (shouldReset || controllerChanged || selectionChanged)
+            liveTurnSequence = 0;
+          const preserveLiveTurn = liveTurnSequence > snapshot.cursor;
           set({
             ...(recoveredSnapshotNotice ? { notice: null } : {}),
             ...(shouldReset || controllerChanged || selectionChanged
@@ -1462,21 +1483,26 @@ export function createWebStore(
               shouldReset || get().cursor === null
                 ? snapshot.cursor
                 : Math.max(get().cursor ?? 0, snapshot.cursor),
-            activeTurn: snapshot.runtime.activeTurn ?? null,
-            livePhase:
-              snapshot.runtime.status === "running"
+            activeTurn: preserveLiveTurn
+              ? get().activeTurn
+              : (snapshot.runtime.activeTurn ?? null),
+            livePhase: preserveLiveTurn
+              ? get().livePhase
+              : snapshot.runtime.status === "running"
                 ? "running"
                 : !get().promptAdmissionPending && !promptAdmission
                   ? "idle"
                   : get().livePhase,
             liveRetry:
+              !preserveLiveTurn &&
               snapshot.runtime.status !== "running" &&
               !get().promptAdmissionPending &&
               !promptAdmission
                 ? null
                 : get().liveRetry,
-            liveRunning:
-              snapshot.runtime.status === "running"
+            liveRunning: preserveLiveTurn
+              ? get().liveRunning
+              : snapshot.runtime.status === "running"
                 ? true
                 : !get().promptAdmissionPending && !promptAdmission
                   ? false
@@ -1579,20 +1605,22 @@ export function createWebStore(
         if (!workspace || state.sessionSwitching || state.modelSelectionPending)
           return null;
         const session = state.snapshot?.selectedSession;
-        if (
-          !state.workspaceDraft &&
-          isControlledSession(state.snapshot) &&
-          session?.id === state.snapshot?.currentSessionId &&
-          session?.cwd === workspace
-        ) {
-          return {
+        if (!state.workspaceDraft && session) {
+          if (state.selectedPath !== session.path || session.cwd !== workspace)
+            return null;
+          const target = {
             epoch: sessionEpoch,
             sessionId: session.id,
             sessionPath: session.path,
             workspacePath: workspace,
           };
+          if (
+            !isControlledSession(state.snapshot) &&
+            !(await actions.selectSession(session.path, session.id))
+          )
+            return null;
+          return targetMatchesSnapshot(target) ? target : null;
         }
-        if (!state.workspaceDraft && session) return null;
         return actions.createSession(workspace);
       },
       async createSession(workspacePath) {
@@ -2726,7 +2754,7 @@ export function createWebStore(
         const workspace = initial.selectedWorkspace;
         if (
           !workspace ||
-          (!content && images.length === 0) ||
+          (!content && images.length === 0 && !delivery?.retryEntryId) ||
           initial.sessionSwitching ||
           initial.promptAdmissionPending ||
           (recovery && !replacement) ||
@@ -2807,7 +2835,8 @@ export function createWebStore(
           (promptAdmission.delivery?.streamingBehavior ?? "followUp") ===
             (delivery?.streamingBehavior ?? "followUp") &&
           promptAdmission.delivery?.expectedTurnCommandId ===
-            delivery?.expectedTurnCommandId;
+            delivery?.expectedTurnCommandId &&
+          promptAdmission.delivery?.retryEntryId === delivery?.retryEntryId;
         const commandId = retrying
           ? promptAdmission!.commandId
           : (globalThis.crypto?.randomUUID?.() ??
@@ -2838,36 +2867,37 @@ export function createWebStore(
         };
         promptAdmissionToken = admission;
         set({
-          liveMessages: retrying
-            ? get().liveMessages
-            : trimLiveMessages([
-                ...get().liveMessages,
-                {
-                  key: optimisticKey,
-                  timestamp,
-                  optimistic: {
-                    sessionId,
-                    sessionPath,
-                    commandId,
-                    afterEntryId,
-                    admitted: false,
+          liveMessages:
+            retrying || delivery?.retryEntryId
+              ? get().liveMessages
+              : trimLiveMessages([
+                  ...get().liveMessages,
+                  {
+                    key: optimisticKey,
+                    timestamp,
+                    optimistic: {
+                      sessionId,
+                      sessionPath,
+                      commandId,
+                      afterEntryId,
+                      admitted: false,
+                    },
+                    message: {
+                      role: "user",
+                      content,
+                      ...(images.length > 0
+                        ? {
+                            parts: images.map((image) => ({
+                              type: "image" as const,
+                              mimeType: image.mimeType,
+                              ...(image.name ? { name: image.name } : {}),
+                              previewUrl: `data:${image.mimeType};base64,${image.data}`,
+                            })),
+                          }
+                        : {}),
+                    },
                   },
-                  message: {
-                    role: "user",
-                    content,
-                    ...(images.length > 0
-                      ? {
-                          parts: images.map((image) => ({
-                            type: "image" as const,
-                            mimeType: image.mimeType,
-                            ...(image.name ? { name: image.name } : {}),
-                            previewUrl: `data:${image.mimeType};base64,${image.data}`,
-                          })),
-                        }
-                      : {}),
-                  },
-                },
-              ]),
+                ]),
           notice: null,
           pendingFollowUpsReceipt: null,
           pendingSteeringReceipt: null,

@@ -43,8 +43,8 @@ export const WEB_PROMPT_IMAGE_MAX_BASE64_CHARS = 4 * Math.ceil(WEB_PROMPT_IMAGE_
 export const WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 
 export type WebPromptDelivery =
-  | { streamingBehavior: "followUp"; expectedTurnCommandId?: never }
-  | { streamingBehavior: "steer"; expectedTurnCommandId: string };
+  | { streamingBehavior: "followUp"; expectedTurnCommandId?: never; retryEntryId?: string }
+  | { streamingBehavior: "steer"; expectedTurnCommandId: string; retryEntryId?: never };
 export const WEB_MAX_GIT_REVIEW_FILES = 200;
 export const WEB_MAX_GIT_REVIEW_DIFF_BYTES = 3 * 1024 * 1024;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;

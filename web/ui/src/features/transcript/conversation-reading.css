@@ -14,9 +14,8 @@
 }
 
 .conversation .message-row.response .markdown {
-  font-weight: 450;
-  line-height: 1.8;
-  letter-spacing: .005em;
+  line-height: 1.625;
+  letter-spacing: 0;
 }
 
 .conversation .message-row.response .message-content,
@@ -58,5 +57,5 @@
   border-radius: 22px;
   background: color-mix(in srgb, var(--text) 5%, var(--page));
   box-shadow: none;
-  line-height: 1.75;
+  line-height: 1.625;
 }

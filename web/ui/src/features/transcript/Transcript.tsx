@@ -112,6 +112,7 @@ interface TranscriptProps {
   snapshot: WebSnapshot;
   liveMessages: LiveEntry[];
   liveRunning: boolean;
+  liveActiveTurn?: ActiveTurn | null;
   livePhase: "idle" | "preparing" | "running";
   liveRetry: { attempt: number; maxAttempts: number } | null;
   thinkingStarts: Record<string, number>;
@@ -126,7 +127,7 @@ interface TranscriptProps {
         restorePosition?: ReadingPosition;
       })
     | null;
-  onResend: (content: string) => Promise<boolean>;
+  onResend: (content: string, retryEntryId?: string) => Promise<boolean>;
   onEdit?: (anchor: WebHistoryAnchor, content: string) => Promise<boolean>;
   onRegenerate?: (anchor: WebHistoryAnchor) => Promise<boolean>;
   onOpenOriginal?: (anchor: WebHistoryAnchor) => Promise<boolean>;
@@ -275,14 +276,16 @@ function ProviderOutcome({
   failed,
   error,
   retryPrompt,
+  retryEntryId,
   canRetry,
   onRetry,
 }: {
   failed: boolean;
   error?: string;
   retryPrompt?: string;
+  retryEntryId?: string;
   canRetry: boolean;
-  onRetry: (content: string) => Promise<boolean>;
+  onRetry: (content: string, retryEntryId?: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
@@ -297,14 +300,16 @@ function ProviderOutcome({
       label={t("modelRequestFailed")}
       message={error || t("modelFailureUnknown")}
     >
-      {retryPrompt && (
+      {retryPrompt !== undefined && retryEntryId && (
         <div className="provider-outcome-actions">
           <button
             type="button"
             disabled={!canRetry || retrying}
             onClick={() => {
               setRetrying(true);
-              void onRetry(retryPrompt).finally(() => setRetrying(false));
+              void onRetry(retryPrompt, retryEntryId).finally(() =>
+                setRetrying(false),
+              );
             }}
           >
             <RotateCcw aria-hidden="true" />
@@ -2464,10 +2469,12 @@ export function Transcript(props: TranscriptProps) {
       ? props.snapshot.selectedExecution
       : undefined;
   const running =
-    (active && props.liveRunning) ||
-    (selectedExecution
-      ? selectedExecution.status === "running"
-      : active && props.snapshot.runtime.status === "running");
+    active && props.liveActiveTurn !== undefined
+      ? props.liveRunning
+      : (active && props.liveRunning) ||
+        (selectedExecution
+          ? selectedExecution.status === "running"
+          : active && props.snapshot.runtime.status === "running");
   const retry =
     !historyPaused && running
       ? selectedExecution
@@ -2527,6 +2534,13 @@ export function Transcript(props: TranscriptProps) {
     const records = recordedSubagents(entries.map((entry) => entry.message));
     const failures = providerFailures(entries, running && !historyPaused);
     const lastFinalError = [...failures.finalErrors].at(-1);
+    let lastAssistantIndex = -1;
+    for (let index = entries.length - 1; index >= 0; index--) {
+      if (entries[index]!.message.role === "assistant") {
+        lastAssistantIndex = index;
+        break;
+      }
+    }
     const attemptContents = new Map<string, RenderRow[]>();
     let retryRowKey: string | undefined;
     const results = new Map<string, DisplayEntry>();
@@ -3251,7 +3265,9 @@ export function Transcript(props: TranscriptProps) {
         ) {
           const failed = message.stopReason === "error";
           const retryPrompt =
-            latestUserIndex === lastUserIndex && index === lastFinalError
+            latestUserIndex === lastUserIndex &&
+            index === lastFinalError &&
+            index === lastAssistantIndex
               ? latestUserPrompt
               : undefined;
           detailRows.push({
@@ -3266,6 +3282,7 @@ export function Transcript(props: TranscriptProps) {
                   failed={failed}
                   error={message.errorMessage}
                   retryPrompt={retryPrompt}
+                  retryEntryId={entry.entryId}
                   canRetry={active && !historyPaused && !running}
                   onRetry={props.onResend}
                 />
@@ -3773,11 +3790,14 @@ export function Transcript(props: TranscriptProps) {
     ? (selectedExecution?.liveTools.filter((tool) => tool.state === "running")
         .length ?? 0)
     : 0;
-  const activeTurn = selectedExecution
-    ? selectedExecution.activeTurn
-    : active
-      ? props.snapshot.runtime.activeTurn
-      : undefined;
+  const activeTurn =
+    active && props.liveActiveTurn !== undefined
+      ? props.liveActiveTurn
+      : selectedExecution
+        ? selectedExecution.activeTurn
+        : active
+          ? props.snapshot.runtime.activeTurn
+          : undefined;
   const timedTurn =
     running &&
     activeTurn &&
@@ -3790,6 +3810,17 @@ export function Transcript(props: TranscriptProps) {
     Number.isFinite(activeTurn.elapsedMs) &&
     activeTurn.elapsedMs >= 0
       ? activeTurn
+      : undefined;
+  // Reading a verified earlier window does not end the native run. Keep its
+  // clock only when that exact owning prompt is present; never time an older
+  // turn merely because it is the last visible one.
+  const visibleTimedTurn =
+    !history.verifying &&
+    timedTurn &&
+    (!historyPaused ||
+      (timedTurn.promptEntryId &&
+        rows.some((row) => row.promptEntryId === timedTurn.promptEntryId)))
+      ? timedTurn
       : undefined;
 
   const readEarlierNearTop = (element: HTMLElement) => {
@@ -3972,14 +4003,12 @@ export function Transcript(props: TranscriptProps) {
           {renderTurns(
             rows,
             running &&
-              !historyPaused &&
+              (!historyPaused || Boolean(visibleTimedTurn)) &&
               selectedExecution?.compaction?.state !== "running",
             activeTurn?.commandId,
             changesByPrompt,
             selected,
-            props.activityObserved !== false && !historyPaused
-              ? timedTurn
-              : undefined,
+            props.activityObserved !== false ? visibleTimedTurn : undefined,
             props.onReviewTurn,
             props.activityObserved !== false,
           )}

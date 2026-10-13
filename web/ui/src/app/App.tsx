@@ -835,7 +835,13 @@ export function App() {
           state.snapshot.selectedExecution.compaction
         )));
   const resend = useCallback(
-    (content: string) => actions.sendPrompt(content),
+    (content: string, retryEntryId?: string) =>
+      retryEntryId
+        ? actions.sendPrompt("", [], undefined, {
+            streamingBehavior: "followUp",
+            retryEntryId,
+          })
+        : actions.sendPrompt(content),
     [actions],
   );
 
@@ -1091,6 +1097,7 @@ export function App() {
                 snapshot={state.snapshot}
                 liveMessages={state.liveMessages}
                 liveRunning={state.liveRunning}
+                liveActiveTurn={state.activeTurn}
                 livePhase={state.livePhase}
                 activityObserved={state.connection === "connected"}
                 liveRetry={state.liveRetry}

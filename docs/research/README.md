@@ -19,6 +19,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_DOCUMENT_FEEDBACK_2026-10-13.md`](WEB_DOCUMENT_FEEDBACK_2026-10-13.md) — document-reported timing, retry, conversation continuation and typography symptoms; current Codex artifact evidence, Pi-native fixes and local validation ([#763](https://github.com/openpi-dev/openpi/issues/763), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
+
 - [`CODEX_DEFAULT_FONT_2026-10-13.md`](CODEX_DEFAULT_FONT_2026-10-13.md) — shipped Codex font defaults, bounded REA evidence, actual Mac glyphs, legacy preference compatibility and browser validation ([#767](https://github.com/openpi-dev/openpi/issues/767), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 
 - [`PI_1_2_COMPATIBILITY_2026-10-13.md`](PI_1_2_COMPATIBILITY_2026-10-13.md) — managed Web host dependency resolution, Pi 1.2.0 custom runs, cancellation, Plan admission and terminal cursor compatibility, with isolated package/native/browser evidence ([#765](https://github.com/openpi-dev/openpi/issues/765)).

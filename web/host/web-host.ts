@@ -252,6 +252,7 @@ type PromptAdmission = {
   readonly controllerId?: string;
   readonly streamingBehavior: "followUp" | "steer";
   readonly expectedTurnCommandId?: string;
+  readonly retryEntryId?: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
 };
@@ -1532,7 +1533,7 @@ export class WebHost {
           error: parsedImages.error,
         });
       }
-      if ((!content && parsedImages.images.length === 0) || content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
+      if ((!content && parsedImages.images.length === 0 && body.retryEntryId === undefined) || content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
         return this.json(response, 400, {
           code: "INVALID_PROMPT",
           error: `prompt must contain text or images and at most ${WEB_PROMPT_MAX_TEXT_LENGTH} characters`,
@@ -1576,6 +1577,9 @@ export class WebHost {
         return this.json(response, 400, { code: "INVALID_PROMPT_DELIVERY", error: "streamingBehavior must be followUp or steer" });
       }
       const streamingBehavior = body.streamingBehavior === "steer" ? "steer" : "followUp";
+      if (body.retryEntryId !== undefined && (typeof body.retryEntryId !== "string" || !body.retryEntryId || body.retryEntryId.length > 128 || /[\u0000-\u001f\u007f]/u.test(body.retryEntryId) || content || streamingBehavior === "steer" || body.planRevision !== undefined || parsedImages.images.length > 0)) {
+        return this.json(response, 400, { code: "INVALID_PROMPT", error: "Provider retry requires an exact failed entry and cannot include images, steering, or plan approval" });
+      }
       if (streamingBehavior === "steer") {
         if (typeof body.expectedTurnCommandId !== "string" || body.expectedTurnCommandId.length === 0 || body.expectedTurnCommandId.length > 128 || /[\u0000-\u001f]/u.test(body.expectedTurnCommandId) || body.planRevision !== undefined) {
           return this.json(response, 400, { code: "INVALID_PROMPT_DELIVERY", error: "steering requires an exact active turn and cannot approve a plan" });
@@ -1593,7 +1597,8 @@ export class WebHost {
           existing.planRevision !== body.planRevision ||
           existing.controllerId !== body.controllerId ||
           existing.streamingBehavior !== streamingBehavior ||
-          existing.expectedTurnCommandId !== body.expectedTurnCommandId
+          existing.expectedTurnCommandId !== body.expectedTurnCommandId ||
+          existing.retryEntryId !== body.retryEntryId
         ) {
           return this.json(response, 409, {
             code: "COMMAND_CONFLICT",
@@ -1647,6 +1652,7 @@ export class WebHost {
         streamingBehavior,
         body.expectedTurnCommandId,
         body.streamingBehavior !== undefined,
+        body.retryEntryId,
       );
       const result = await admission.completion;
       return this.json(response, result.status, result.body);
@@ -2722,6 +2728,7 @@ export class WebHost {
     streamingBehavior: "followUp" | "steer" = "followUp",
     expectedTurnCommandId?: string,
     explicitDelivery = false,
+    retryEntryId?: string,
   ) {
     let settle!: (result: PromptAdmissionResponse) => void;
     const admission: PromptAdmission = {
@@ -2733,6 +2740,7 @@ export class WebHost {
       controllerId,
       streamingBehavior,
       expectedTurnCommandId,
+      retryEntryId,
       completion: new Promise<PromptAdmissionResponse>((resolve) => {
         settle = resolve;
       }),
@@ -2757,6 +2765,7 @@ export class WebHost {
           ...(planRevision !== undefined ? { planRevision } : {}),
           ...(explicitDelivery || streamingBehavior === "steer" ? { streamingBehavior } : {}),
           ...(expectedTurnCommandId !== undefined ? { expectedTurnCommandId } : {}),
+          ...(retryEntryId !== undefined ? { retryEntryId } : {}),
         }),
       )
       .then(

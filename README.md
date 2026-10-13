@@ -631,7 +631,7 @@ pi install npm:pi-intercom
 
 ### 独立 Web 工作台
 
-Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的 Pi `AgentSessionRuntime`、独立 `~/.pi/agent/web-sessions` 持久化目录和生命周期；浏览器发送消息、新建 Session 或切换工作区，不会写入或切换任何已经运行的终端 Pi Session，Web Session 也不会出现在终端的默认 Session 列表中。在侧栏选择 Session 会把它激活为 Web 进程的当前 Pi Session；Prompt 只会投递到请求时仍匹配的活动 Web Session。其他页面切换活动会话时，本页保留正在看的会话及其后台进度；需要继续对话或使用交互工具时，点击“切换到此会话”。读取与刷新不会自动抢占活动会话。
+Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的 Pi `AgentSessionRuntime`、独立 `~/.pi/agent/web-sessions` 持久化目录和生命周期；浏览器发送消息、新建 Session 或切换工作区，不会写入或切换任何已经运行的终端 Pi Session，Web Session 也不会出现在终端的默认 Session 列表中。在侧栏选择 Session 会把它激活为 Web 进程的当前 Pi Session；Prompt 只会投递到请求时仍匹配的活动 Web Session。其他页面切换活动会话时，本页保留正在看的会话及其后台进度，并可继续编辑草稿；发送消息时会先激活正在查看的同一会话，确认身份后再投递，失败时保留草稿。使用交互工具仍可点击“切换到此会话”。读取与刷新不会自动抢占活动会话。
 
 同一 Pi agent 目录一次只允许一个 Web Host 持有该 Session/元数据目录。第二个 `openpi web` 会明确拒绝启动；正常关停会先排空共享目录变更再释放租约，进程崩溃后仅在确认原 owner 的 PID 与进程启动身份不再匹配时恢复。一个 Host 可在侧栏管理多个工作区，因此不需要为每个仓库启动一个进程。
 
