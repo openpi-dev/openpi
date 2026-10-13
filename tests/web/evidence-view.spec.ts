@@ -14,8 +14,9 @@ import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
 import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.tsx";
 import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts";
 import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
-import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import * as clipboard from "../../web/ui/src/lib/clipboard.ts";
+import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
 
 installCheckVisibilityFixture();
@@ -80,7 +81,7 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
   ).toContain("9line one");
   expect(
     screen.getByRole("figure", { name: "Change diff" }).textContent,
-  ).toContain("+9 new");
+  ).toContain("9+new");
   expect(
     screen.getByRole("figure", { name: "Test evidence" }).textContent,
   ).toContain("1 failed");
@@ -95,6 +96,146 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
   expect(container.querySelectorAll(".diff-added").length).toBe(1);
   expect(screen.getAllByText(i18n.t("toolRawEvidence"))).toHaveLength(4);
 });
+
+it("shows confirmed created-file counts in both disclosures and copies the exact patch", async () => {
+  const diff =
+    "--- a/new.ts\n+++ b/new.ts\n@@ -0,0 +1,3 @@\n+const value = 1;\n+++value;\n+export { value };\n";
+  const copy = vi.spyOn(clipboard, "copyText").mockResolvedValue(true);
+  const open = vi.fn();
+  const { container } = render(
+    createElement(
+      ArtifactContext.Provider,
+      {
+        value: { open },
+      },
+      createElement(ToolEvidence, {
+        call: {
+          type: "toolCall",
+          id: "write-created",
+          name: "write",
+          arguments: '{"path":"new.ts"}',
+        },
+        result: {
+          content: "Successfully wrote",
+          isError: false,
+          details: { change: "created", diff },
+        },
+        defaultOpen: true,
+      }),
+    ),
+  );
+  const summary = container.querySelector(".tool-evidence-card > summary")!;
+  expect(summary.textContent).toContain("File created");
+  expect(summary.textContent).toContain("new.ts+3−0");
+  expect(summary.querySelector("button, a")).toBeNull();
+  const figure = screen.getByRole("figure", { name: "Change diff" });
+  expect(figure.querySelector("figcaption")?.textContent).toContain(
+    "new.ts+3−0",
+  );
+  expect(
+    [...figure.querySelectorAll(".diff-added .evidence-line-number")].map(
+      (node) => node.textContent,
+    ),
+  ).toEqual(["1", "2", "3"]);
+  expect(figure.textContent).toContain("++value;");
+  fireEvent.click(screen.getByRole("button", { name: "new.ts" }));
+  expect(open).toHaveBeenCalledWith("new.ts");
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("copyCode") }));
+  await waitFor(() => expect(copy).toHaveBeenCalledWith(diff));
+  expect(
+    screen.getByRole("button", { name: i18n.t("copiedCode") }),
+  ).toBeTruthy();
+});
+
+it("keeps native edit line numbers separate from code and counts every changed line", () => {
+  const { container } = render(
+    createElement(ToolEvidence, {
+      call: {
+        type: "toolCall",
+        name: "edit",
+        arguments: '{"path":"counter.ts"}',
+      },
+      result: {
+        content: "Edited",
+        isError: false,
+        details: {
+          diff: "  40 before\n- 41 old\n+ 41 new\n+ 42 ++counter\n  42 after\n    ...",
+        },
+      },
+      defaultOpen: true,
+    }),
+  );
+  expect(container.querySelector("summary")?.textContent).toContain("+2−1");
+  const rows = [...container.querySelectorAll(".evidence-diff-row")];
+  expect(
+    rows.map((row) => row.querySelector(".evidence-line-number")?.textContent),
+  ).toEqual(["40", "41", "41", "42", "42", ""]);
+  expect(rows[3]?.textContent).toContain("++counter");
+  expect(rows.at(-1)?.textContent).toContain("...");
+});
+
+it("labels truncated diff counts as partial and exposes copy failures without losing the patch", async () => {
+  vi.spyOn(clipboard, "copyText").mockResolvedValue(false);
+  const diff =
+    "--- a/large.ts\n+++ b/large.ts\n@@ -0,0 +1,400 @@\n" +
+    "+new\n".repeat(400);
+  const { container } = render(
+    createElement(ToolEvidence, {
+      call: {
+        type: "toolCall",
+        name: "write",
+        arguments: '{"path":"large.ts"}',
+      },
+      result: {
+        content: "Written",
+        isError: false,
+        details: { diff, change: "created" },
+      },
+      defaultOpen: true,
+    }),
+  );
+  expect(
+    container.querySelector("summary .evidence-summary-meta")?.textContent,
+  ).toContain(i18n.t("gitReviewPartialLabel"));
+  expect(container.querySelectorAll(".diff-added").length).toBeLessThan(400);
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("copyCode") }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe(
+      i18n.t("copyCodeFailed"),
+    ),
+  );
+  expect(screen.getByRole("figure", { name: "Change diff" })).toBeTruthy();
+});
+
+it.each(["failed", "cancelled", "unknown", "running"] as const)(
+  "does not present a successful diff for %s evidence",
+  (state) => {
+    const { container } = render(
+      createElement(ToolEvidence, {
+        call: {
+          type: "toolCall",
+          name: "write",
+          arguments:
+            '{"path":"private.txt","content":"requested new contents"}',
+        },
+        result: {
+          content: "No confirmed change",
+          isError: state === "failed" || state === "cancelled",
+          ...(state === "unknown"
+            ? { forkSnapshotToolResult: true as const }
+            : {}),
+          details: { change: "created", diff: "+1 requested new contents" },
+        },
+        liveState: state,
+      }),
+    );
+    expect(container.querySelector(".evidence-summary-meta")).toBeNull();
+    expect(container.querySelector(".evidence-diff")).toBeNull();
+    expect(container.querySelector("details")?.getAttribute("data-state")).toBe(
+      state,
+    );
+  },
+);
 
 it("expands a file summary without nested controls and opens the resolved file through the active artifact context", () => {
   const open = vi.fn();

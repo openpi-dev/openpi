@@ -2,8 +2,8 @@
 
 - Status: validated
 - Created: 2026-10-13
-- Last verified: 2026-10-13
-- Source boundary: PR #711 at `b31a3dd86da71cee9a169b1c5a81a3c5dcb3bfa1`, Pi 1.2.0, plus the scoped changes described below.
+- Last verified: 2026-10-14
+- Source boundary: PR #711 at `444cdd2fd5030800cfc1674a307a208b06c64371`, Pi 1.2.0, integrated with the scoped fixes in `4a2f5af8` described below.
 - Related Issue: [#763](https://github.com/openpi-dev/openpi/issues/763).
 - Related PR: [#711](https://github.com/openpi-dev/openpi/pull/711).
 - Supersedes: none; earlier activity and configuration investigations retain their original boundaries.
@@ -39,8 +39,10 @@ The large slice has partial semantic graph coverage. Exact source receipts and f
 
 ## Validation
 
-After integration of the concurrent font change, `bun run check` passed; `bun run test` passed 2,504 Node tests (nine platform skips) and 1,435 UI tests. Native Pi 1.2.0 tests exercise a text/image prompt, completed tool result, provider failure, manual retry and cancellation. They verify one original user entry, no repeated completed tool, preserved steering owner, stale retry rejection and native terminal outcomes. Host and UI tests separately cover receipt identity, delayed snapshots, history clocks and hidden retry submission.
+After integration of the concurrent font and tool-display changes, `bun run check` passed; `bun run test` passed 2,516 Node tests (nine platform skips) and 1,453 UI tests. Native Pi 1.2.0 tests exercise a text/image prompt, completed tool result, provider failure, manual retry and cancellation. They verify one original user entry, no repeated completed tool, preserved steering owner, stale retry rejection and native terminal outcomes. Host and UI tests separately cover receipt identity, delayed snapshots, history clocks and hidden retry submission.
 
 The integrated real Chrome conversation/settings/Session checks passed all 11 cases, including the concurrent legacy-font import case. The native two-Session continuation case passed after correcting its isolated provider/auth fixture. It verifies that explicit Send reaches the viewed Session while the other Session continues, with draft clearing only after accepted submission. Thinking preference and browser inspection confirmed collapsed details. These checks use isolated local Sessions and deterministic providers; they do not measure provider latency or claim the original 21-minute task became faster.
+
+After integrating `444cdd2f`, the six affected conversation/Session browser cases passed again. The font/settings source did not change in that integration, so its five already-passing browser cases were not repeated.
 
 Simplification removed a redundant retry lifecycle listener in favor of the existing native listener, and removed a redundant response font-weight override in favor of body inheritance. A composer ablation removed viewed-Session running/queue guards; its regression then exposed another Session's queued-message state, so those guards were restored. No new orchestration layer, font setting or retry configuration was added by this change. Integration gates and resident deployment receipts are retained with the private evidence archive.

@@ -16,6 +16,7 @@ import type {
   WebMessagePart,
   WebSnapshot,
 } from "../../web/protocol/types.ts";
+import { projectMessage } from "../../web/protocol/types.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
@@ -138,7 +139,415 @@ function view(value: WebSnapshot, activityObserved = true) {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("renders persisted Code Mode children as ordinary tools and preserves script evidence", () => {
+  const tool = {
+    ...call,
+    id: "code",
+    name: "codemode",
+    arguments: '{"code":"await tools.read({path:\"file.ts\"})"}',
+  };
+  const result = projectMessage({
+    role: "toolResult",
+    toolName: "codemode",
+    toolCallId: tool.id,
+    isError: false,
+    content: "script output",
+    nestedCalls: {
+      complete: true,
+      calls: [
+        {
+          id: "code/1",
+          name: "read",
+          arguments: { path: "file.ts" },
+          status: "ok",
+        },
+        {
+          id: "code/2",
+          name: "bash",
+          arguments: { command: "bun run check" },
+          status: "ok",
+        },
+        {
+          id: "code/3",
+          name: "edit",
+          arguments: { path: "styles.css" },
+          status: "error",
+          error: "Missing text",
+        },
+      ],
+    },
+  });
+  const { container, getByText } = render(
+    view(snapshot({ tool, results: [result] })),
+  );
+  expect(
+    [...container.querySelectorAll("details[data-tool]")].map((element) =>
+      element.getAttribute("data-tool"),
+    ),
+  ).toEqual(["read", "bash", "edit"]);
+  expect(
+    container.querySelector('[data-tool="read"] .lucide-book-open'),
+  ).toBeTruthy();
+  expect(
+    container.querySelector('[data-tool="bash"] .tool-summary')?.textContent,
+  ).toContain("bun run check");
+  expect(
+    container.querySelector('[data-tool="edit"]')?.classList.contains("error"),
+  ).toBe(true);
+  expect(container.querySelectorAll(".evidence-note")).toHaveLength(3);
+  expect(getByText(i18n.t("toolCodemodeDetails"))).toBeTruthy();
+  expect(getByText("script output")).toBeTruthy();
+  expect(container.querySelector(".evidence-diff")).toBeNull();
+});
+
+it("keeps ledger-only model failures inspectable alongside normal Code Mode tools", () => {
+  const tool = { ...call, id: "code", name: "codemode" };
+  const result = projectMessage({
+    role: "toolResult",
+    toolName: "codemode",
+    toolCallId: tool.id,
+    isError: false,
+    content: "script handled model failure",
+    nestedCalls: {
+      complete: true,
+      calls: [
+        {
+          id: "code/1",
+          name: "read",
+          arguments: { path: "file.ts" },
+          status: "ok",
+        },
+      ],
+    },
+    details: {
+      calls: [
+        { id: "code/1", name: "read", status: "ok" },
+        {
+          id: "code/models.classify/1",
+          name: "models.classify",
+          status: "error",
+          error: "provider failed",
+        },
+      ],
+    },
+  });
+  const { container, getByText } = render(
+    view(snapshot({ tool, results: [result] })),
+  );
+  expect(container.querySelector('[data-tool="read"]')).toBeTruthy();
+  const carrier = container.querySelector('[data-tool="codemode"]');
+  expect(carrier).toBeTruthy();
+  expect(carrier?.querySelector(".evidence-raw pre")?.textContent).toContain(
+    "provider failed",
+  );
+  expect(getByText(i18n.t("toolNestedIncomplete"))).toBeTruthy();
+});
+
+it("renders real nested live results without duplicating the carrier and settles from persisted facts", () => {
+  const tool = {
+    ...call,
+    id: "code",
+    name: "codemode",
+    arguments: '{"code":"Promise.all"}',
+  };
+  const nested = {
+    ...call,
+    id: "code/1",
+    name: "read",
+    arguments: '{"path":"file.ts"}',
+  };
+  const liveTools: LiveToolEvidence[] = [
+    { call: tool, state: "running" },
+    {
+      call: nested,
+      parentToolCallId: "code",
+      state: "running",
+      result: { content: "streamed output" },
+    },
+  ];
+  const { container, rerender } = render(
+    view(snapshot({ tool, liveTools, running: true })),
+  );
+  expect(container.querySelector('[data-tool="codemode"]')).toBeNull();
+  expect(
+    container.querySelector('[data-tool="read"]')?.getAttribute("data-state"),
+  ).toBe("running");
+  expect(container.textContent).toContain("streamed output");
+  const result = projectMessage({
+    role: "toolResult",
+    toolName: "codemode",
+    toolCallId: tool.id,
+    isError: false,
+    content: "done",
+    nestedCalls: {
+      complete: true,
+      calls: [
+        {
+          id: nested.id,
+          name: nested.name,
+          arguments: { path: "file.ts" },
+          status: "ok",
+        },
+      ],
+    },
+  });
+  rerender(view(snapshot({ tool, results: [result], liveTools })));
+  expect(
+    container.querySelector('[data-tool="read"]')?.getAttribute("data-state"),
+  ).not.toBe("running");
+  expect(container.querySelector('[data-tool="codemode"]')).toBeNull();
+});
+
+it("retains Code Mode wrapper failures and distinguishes cancelled child evidence after refresh", () => {
+  const tool = { ...call, id: "code", name: "codemode" };
+  const result = projectMessage({
+    role: "toolResult",
+    toolName: "codemode",
+    toolCallId: tool.id,
+    isError: true,
+    content: "Script aborted",
+    nestedCalls: {
+      complete: true,
+      calls: [
+        {
+          id: "code/1",
+          name: "bash",
+          arguments: { command: "long job" },
+          status: "error",
+        },
+      ],
+    },
+    details: { calls: [{ id: "code/1", name: "bash", status: "cancelled" }] },
+  });
+  const { container } = render(view(snapshot({ tool, results: [result] })));
+  const child = container.querySelector('[data-tool="bash"]');
+  expect(child?.classList.contains("warn")).toBe(true);
+  expect(child?.querySelector(".tool-action")?.textContent).toBe(
+    i18n.t("toolActivity_cancelled", { action: i18n.t("toolAction_command") }),
+  );
+  expect(
+    container
+      .querySelector('[data-tool="codemode"]')
+      ?.classList.contains("error"),
+  ).toBe(true);
+  expect(container.textContent).toContain("Script aborted");
+});
+
+it.each([false, true])(
+  "shows incomplete nested evidence outside the raw disclosure (wrapper failure %s)",
+  (isError) => {
+    const tool = { ...call, id: "code", name: "codemode" };
+    const result = projectMessage({
+      role: "toolResult",
+      toolName: "codemode",
+      toolCallId: tool.id,
+      isError,
+      content: "partial record",
+      nestedCalls: {
+        complete: false,
+        calls: [
+          {
+            id: "code/1",
+            name: "read",
+            arguments: { path: "file.ts" },
+            status: "unfinished",
+          },
+        ],
+      },
+    });
+    const { getByText } = render(view(snapshot({ tool, results: [result] })));
+    const notice = getByText(i18n.t("toolNestedIncomplete"));
+    expect(notice.getAttribute("role")).toBe("status");
+    expect(notice.closest(".evidence-raw")).toBeNull();
+    expect(notice.closest("[data-tool]")).toBeNull();
+  },
+);
+
+it.each([
+  ["bash", "lucide-square-terminal"],
+  ["read", "lucide-book-open"],
+  ["edit", "lucide-pencil"],
+])(
+  "matches a completed %s-first summary to its icon without reordering evidence",
+  (first, icon) => {
+    const tools = [
+      first,
+      ...["bash", "read", "edit"].filter((name) => name !== first),
+    ].map((name) => ({
+      ...call,
+      id: name,
+      name,
+      arguments:
+        name === "bash" ? call.arguments : '{"path":"/workspace/a.ts"}',
+    }));
+    const value = snapshot({
+      results: tools.map((tool) => ({
+        role: "toolResult",
+        toolName: tool.name,
+        toolCallId: tool.id,
+        content: "Exact receipt",
+        isError: false,
+      })),
+    });
+    value.selectedSession.entries[1]!.message!.parts = tools;
+    const { container } = render(view(value));
+    const sequence =
+      container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+    expect(sequence.open).toBe(false);
+    expect(sequence.querySelector(`:scope > summary .${icon}`)).toBeTruthy();
+    expect(sequence.querySelector(".process-sequence-title")?.textContent).toBe(
+      i18n.t("toolGroup_done", {
+        actions: tools
+          .map((tool) =>
+            i18n.t(
+              `toolActionGroup_${tool.name === "bash" ? "command" : tool.name}`,
+            ),
+          )
+          .join(i18n.t("toolGroupSeparator")),
+      }),
+    );
+    expect(
+      Array.from(sequence.querySelectorAll(".tool-evidence-card"), (card) =>
+        card.getAttribute("data-tool"),
+      ),
+    ).toEqual(tools.map((tool) => tool.name));
+    expect(
+      sequence.querySelector(".tool-evidence-card > summary .tool-name"),
+    ).toBeNull();
+    expect(
+      sequence.querySelector(
+        '.tool-evidence-card[data-tool="read"] .evidence-content details code',
+      )?.textContent,
+    ).toBe("read");
+  },
+);
+
+it("holds rapid active headlines together, updates the same call directly and settles immediately", () => {
+  vi.useFakeTimers();
+  const reader = {
+    ...call,
+    id: "reader",
+    name: "read",
+    arguments: '{"path":"/workspace/a.ts"}',
+  };
+  const editor = { ...reader, id: "editor", name: "edit" };
+  const calls = [call, reader, editor];
+  const frame = (active: number | undefined) => {
+    const value = snapshot({
+      running: active !== undefined,
+      liveTools: calls.map((tool, index) => ({
+        call: tool,
+        state: active === index ? "running" : "returned",
+        result: {
+          role: "toolResult",
+          toolName: tool.name,
+          toolCallId: tool.id,
+          content: "Exact receipt",
+          isError: false,
+        },
+      })),
+    });
+    value.selectedSession.entries[1]!.message!.parts = calls;
+    return view(value);
+  };
+  const rendered = render(frame(0));
+  const sequence =
+    rendered.container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+  const title = () =>
+    sequence.querySelector(".process-sequence-title")?.textContent;
+  expect(sequence.open).toBe(true);
+  act(() => vi.advanceTimersByTime(100));
+  rendered.rerender(frame(1));
+  act(() => vi.advanceTimersByTime(100));
+  rendered.rerender(frame(2));
+  expect(title()).toBe(
+    i18n.t("toolActivity_running", { action: i18n.t("toolAction_command") }),
+  );
+  expect(
+    sequence.querySelector(":scope > summary .lucide-square-terminal"),
+  ).toBeTruthy();
+  expect(
+    sequence
+      .querySelector('.tool-evidence-card[data-tool="edit"]')
+      ?.getAttribute("data-state"),
+  ).toBe("running");
+  act(() => vi.advanceTimersByTime(800));
+  expect(title()).toBe(
+    i18n.t("toolActivity_running", { action: i18n.t("toolAction_edit") }),
+  );
+  expect(
+    sequence.querySelector(":scope > summary .lucide-pencil"),
+  ).toBeTruthy();
+  editor.arguments = '{"path":"/workspace/b.ts"}';
+  rendered.rerender(frame(2));
+  expect(sequence.querySelector(".process-sequence-preview")?.textContent).toBe(
+    "b.ts",
+  );
+  rendered.rerender(frame(1));
+  rendered.rerender(frame(undefined));
+  expect(sequence.open).toBe(false);
+  expect(sequence.getAttribute("data-status")).toBe("done");
+  expect(title()).not.toContain(
+    i18n.t("toolActivity_running", { action: i18n.t("toolAction_edit") }),
+  );
+  const settled = title();
+  act(() => vi.advanceTimersByTime(1000));
+  expect(title()).toBe(settled);
+});
+
+it("labels reading, searching, listing, editing, writing, browsing and commands consistently", () => {
+  const tools = [
+    "read",
+    "grep",
+    "ls",
+    "edit",
+    "write",
+    "web_search",
+    "bash",
+  ].map((name) => ({
+    ...call,
+    id: name,
+    name,
+    arguments:
+      '{"path":"/workspace/a.ts","query":"reference","command":"rg needle ."}',
+  }));
+  const value = snapshot({
+    results: tools.map((tool) => ({
+      role: "toolResult",
+      toolName: tool.name,
+      toolCallId: tool.id,
+      content: "Exact receipt",
+      isError: false,
+    })),
+  });
+  value.selectedSession.entries[1]!.message!.parts = tools;
+  const { container } = render(view(value));
+  const tags = Array.from(
+    container.querySelectorAll(".process-sequence-body .tool-kind"),
+  );
+  expect(tags.map((tag) => tag.textContent)).toEqual([
+    "read",
+    "search",
+    "list",
+    "edit",
+    "write",
+    "web",
+    "run",
+  ]);
+  expect(tags.every((tag) => tag.getAttribute("aria-hidden") === "true")).toBe(
+    true,
+  );
+  // A shell command remains a command, even when its contents invoke rg.
+  expect(
+    tags.at(-1)?.closest("summary")?.querySelector(".tool-action")?.textContent,
+  ).toBe(i18n.t("toolActionDone_command"));
+  expect(tags.map((tag) => tag.getAttribute("title"))).toEqual(
+    tools.map((tool) => tool.name),
+  );
 });
 
 it("expands Bash and file evidence from canonical display preferences without changing results or their state", () => {

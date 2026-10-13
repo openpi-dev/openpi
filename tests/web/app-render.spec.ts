@@ -921,7 +921,7 @@ describe("OpenPI React transcript", () => {
     expect(container.querySelectorAll(".tool-evidence-card")).toHaveLength(4);
     expect(
       container.querySelectorAll(".tool-evidence-card .tool-name"),
-    ).toHaveLength(4);
+    ).toHaveLength(0);
     expect(container.querySelectorAll(".activity-card.subagent")).toHaveLength(
       1,
     );
