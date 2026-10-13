@@ -16,6 +16,9 @@ async function connectionsFixture(page: Page) {
     current: provider === "openai",
   }));
   await installThinkingFixture(page, { models });
+  // This scenario needs the owned Host's stable event stream. A finite SSE
+  // fixture repeatedly reconnects and can invalidate model confirmation.
+  await page.unroute("**/events?**");
   let defaultModel: { provider: string; id: string } | null = null;
   const writes: string[] = [];
   await page.route("**/api/providers/auth-status**", (route) =>
