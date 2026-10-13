@@ -7,6 +7,7 @@
 - Published reproduction: `@tt-a1i/openpi@0.10.0`; npm release provenance identifies `d96b9fcc7ed4116b090c300b103b612056e34fc3`
 - Host boundary: official Pi 1.2.0 packages; Pi 0.99.1 is a separate startup control
 - Issue: [#765](https://github.com/openpi-dev/openpi/issues/765)
+- Fix PR: [#766](https://github.com/openpi-dev/openpi/pull/766)
 - Integration base: [PR #711](https://github.com/openpi-dev/openpi/pull/711)
 - Supersedes: none; the [0.99.1 investigation](PI_0_99_COMPATIBILITY_2026-09-30.md) retains its historical boundary
 
@@ -58,11 +59,14 @@ remains 0.99.1: raising it would not repair this installation-layout defect.
 - Real native Session regressions cover custom-message startup and cancellation
   during startup. Unit tests independently cover child terminal evidence,
   prompt-bound Plan approval, and native editor marker preservation.
-- Removing the provider alias, custom-message guard, native abort receipt, or
-  fake-cursor handling reproduces the corresponding failure. Each necessary
+- Removing the provider alias, custom-message guard, native abort receipt,
+  fake-cursor handling, or admitted Plan busy exception reproduces the corresponding failure. Each necessary
   change was restored without adding a compatibility framework.
-- Full repository and browser gate results are recorded in the linked Issue/PR.
-  Browser provider tests use local HTTP fixtures, not a remote model service.
+- `bun run check` passed. `bun run test` passed with 2,494 Node tests, nine
+  platform skips, and 1,421 UI tests. Native browser acceptance covers 18
+  scenarios: 17 passed in the full run; the corrected Plan case passed in the
+  five-case Plan rerun. Provider tests use local HTTP fixtures, not a remote
+  model service. CI results are recorded on the linked PR.
 - Local validation uses macOS, Node 24.20.0 and Bun 1.3.14. The older host control
   proves startup, not every feature on 0.99.1. Remote provider credentials,
   externally configured MCP servers, and Windows behavior are outside the local
