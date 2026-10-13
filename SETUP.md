@@ -1,6 +1,6 @@
 # Setup
 
-Use Pi 0.99.1 or newer and Node.js 22.19.0 or newer. Upgrade Pi before installing this OpenPI version. Install the public Pi package:
+Use Pi 0.99.1 or newer and Node.js 22.19.0 or newer. Development dependencies and CI use Pi 1.2.0. Upgrade Pi before installing this OpenPI version. Install the public Pi package:
 
 ```sh
 pi install npm:@tt-a1i/openpi

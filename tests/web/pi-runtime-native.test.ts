@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import type { WebRuntimeEvent } from "../../web/runtime/types.ts";
+import { createCapabilitiesExtension } from "../../extensions/capabilities/index.ts";
 
 async function nativeRuntime(
   t: TestContext,
@@ -97,6 +98,78 @@ async function nativeRuntime(
     provider: provider.provider,
   };
 }
+
+test("Pi 1.2 custom-message runs pass capability hooks without a user prompt", async (t) => {
+  const entered = Promise.withResolvers<void>();
+  const settled = Promise.withResolvers<void>();
+  let trigger = () => {};
+  const { session } = await nativeRuntime(
+    t,
+    (pi) => {
+      createCapabilitiesExtension()(pi);
+      pi.on("before_agent_start", (event, ctx) => {
+        assert.equal(event.messageType, "custom");
+        assert.equal("prompt" in event, false);
+        assert.equal(ctx.isIdle(), false);
+        entered.resolve();
+      });
+      pi.on("agent_settled", () => {
+        settled.resolve();
+      });
+      trigger = () =>
+        pi.sendMessage(
+          {
+            customType: "compatibility-fixture",
+            content: "Continue this extension run",
+            display: false,
+          },
+          { triggerTurn: true },
+        );
+    },
+    [fauxAssistantMessage("Custom run completed.")],
+  );
+  trigger();
+  await entered.promise;
+  await settled.promise;
+  assert.ok(
+    session.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        contentText(message.content) === "Custom run completed.",
+    ),
+  );
+});
+
+test("Web preserves Pi 1.2 cancellation during before_agent_start", async (t) => {
+  let providerCalls = 0;
+  const { runtime, session, events } = await nativeRuntime(
+    t,
+    (pi) => {
+      pi.on("before_agent_start", (_event, ctx) => {
+        ctx.abort();
+      });
+    },
+    [
+      () => {
+        providerCalls++;
+        return fauxAssistantMessage("Unexpected answer");
+      },
+    ],
+  );
+  await runtime.sendPrompt("cancel before generation", {
+    commandId: "abort-before-start",
+  });
+  await session.waitForIdle();
+  assert.equal(providerCalls, 0);
+  // The faux provider may emit an error message on abort; the native run's
+  // terminal flag, rather than that intermediate message, owns the outcome.
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn_settled")
+      .map((event) => event.detail?.outcome),
+    ["cancelled"],
+  );
+});
 
 test("Web saves a Pi default without changing the active model; a fresh native Session uses it", async (t) => {
   const { runtime, session, modelRuntime, agentDir, cwd, services } =

@@ -293,6 +293,7 @@ const makePiSession = (
       cancelled: boolean;
       lifecycleStarted: boolean;
       lifecycleSettled: boolean;
+      lifecycleAborted: boolean;
       promptSettled: boolean;
       promptError?: string;
       lastAssistant?: AssistantMessage;
@@ -405,7 +406,7 @@ const makePiSession = (
       const partialText = prompt.liveText || prompt.finalText || undefined;
       const errorText =
         prompt.promptError ??
-        (last?.stopReason === "error"
+        (!prompt.lifecycleAborted && last?.stopReason === "error"
           ? (last.errorMessage ?? "Run failed")
           : undefined);
       if (errorText !== undefined) {
@@ -420,7 +421,7 @@ const makePiSession = (
         });
         return;
       }
-      if (last?.stopReason === "aborted") {
+      if (prompt.lifecycleAborted || last?.stopReason === "aborted") {
         emit({
           _tag: "RunSettled",
           evidence: evidenceFor(prompt),
@@ -638,6 +639,7 @@ const makePiSession = (
           break;
         case "agent_settled":
           activePrompt.lifecycleSettled = true;
+          activePrompt.lifecycleAborted ||= event.aborted === true;
           maybeSettle(activePrompt);
           break;
       }
@@ -728,6 +730,7 @@ const makePiSession = (
         cancelled: false,
         lifecycleStarted: false,
         lifecycleSettled: false,
+        lifecycleAborted: false,
         promptSettled: false,
         finalText: "",
         liveText: "",
