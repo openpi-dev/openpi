@@ -184,6 +184,64 @@ test("message projection keeps tool result correlation and details", () => {
   });
 });
 
+test("structured tool details preserve special own JSON keys without changing prototypes", () => {
+  const details = JSON.parse(
+    '{"__proto__":{"evidence":"retained"},"constructor":"literal","prototype":{"__proto__":{"nested":true}}}',
+  );
+  const projected = projectMessage({
+    role: "toolResult",
+    content: "done",
+    details,
+  });
+  assert.equal(JSON.stringify(projected.details), JSON.stringify(details));
+  assert.ok(projected.details && typeof projected.details === "object");
+  assert.equal(Object.getPrototypeOf(projected.details), Object.prototype);
+  assert.equal(Object.hasOwn(projected.details, "__proto__"), true);
+  assert.equal(Object.hasOwn(Object.prototype, "evidence"), false);
+  assert.equal(Object.hasOwn(Object.prototype, "nested"), false);
+  assert.equal(projected.truncation?.details, undefined);
+});
+
+test("structured detail node exhaustion reports omitted array elements", () => {
+  const projected = projectMessage({
+    role: "toolResult",
+    content: "done",
+    details: Array.from({ length: 4 }, () => Array(128).fill(1)),
+  });
+  assert.equal(projected.details, undefined);
+  assert.equal(projected.truncation?.details, true);
+});
+
+test("structured detail node exhaustion reports omitted object properties", () => {
+  const projected = projectMessage({
+    role: "toolResult",
+    content: "done",
+    details: {
+      first: Array.from({ length: 3 }, () => Array(128).fill(1)),
+      last: Array(122).fill(1),
+      omitted: true,
+    },
+  });
+  assert.equal(projected.details, undefined);
+  assert.equal(projected.truncation?.details, true);
+});
+
+test("structured details exactly at the node boundary remain complete", () => {
+  const details = [
+    Array(128).fill(1),
+    Array(128).fill(1),
+    Array(128).fill(1),
+    Array(123).fill(1),
+  ];
+  const projected = projectMessage({
+    role: "toolResult",
+    content: "done",
+    details,
+  });
+  assert.deepEqual(projected.details, details);
+  assert.equal(projected.truncation?.details, undefined);
+});
+
 test("native subagent display receipts survive projection while model follow-ups stay hidden", () => {
   const details = {
     results: [
