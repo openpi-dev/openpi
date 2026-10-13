@@ -611,9 +611,12 @@ function boundedStructuredValue(
     if (value.length > length) budget.truncated = true;
     const projected: unknown[] = [];
     for (let index = 0; index < length; index++) {
+      if (budget.nodes <= 0 || budget.bytes <= 0) {
+        budget.truncated = true;
+        break;
+      }
       const item = boundedStructuredValue(value[index], budget, depth + 1);
       if (item !== undefined) projected.push(item);
-      if (budget.nodes <= 0 || budget.bytes <= 0) break;
     }
     return projected;
   }
@@ -625,6 +628,10 @@ function boundedStructuredValue(
       break;
     }
     if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    if (budget.nodes <= 0 || budget.bytes <= 0) {
+      budget.truncated = true;
+      break;
+    }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor || !("value" in descriptor)) {
       budget.truncated = true;
@@ -632,8 +639,14 @@ function boundedStructuredValue(
     }
     const boundedKey = consumeStructuredText(key, budget);
     const item = boundedStructuredValue(descriptor.value, budget, depth + 1);
-    if (item !== undefined) projected[boundedKey] = item;
-    if (budget.nodes <= 0 || budget.bytes <= 0) break;
+    if (item !== undefined) {
+      Object.defineProperty(projected, boundedKey, {
+        value: item,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
   }
   return projected;
 }

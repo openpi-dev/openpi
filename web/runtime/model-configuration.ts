@@ -21,7 +21,7 @@ export function validModelConfiguration(value: unknown): value is WebModelConfig
   if (value.input !== undefined && (!Array.isArray(value.input) || !value.input.length || value.input.length > 2 || new Set(value.input).size !== value.input.length || !value.input.every((item) => item === "text" || item === "image"))) return false;
   if (!validProvider(value.provider) ||
     !text(value.id, 256) || !text(value.name, 256) || !text(value.baseUrl, 2048) ||
-    !apis.has(String(value.api)) || typeof value.reasoning !== "boolean") return false;
+    typeof value.api !== "string" || !apis.has(value.api) || typeof value.reasoning !== "boolean") return false;
   if (![value.contextWindow, value.maxTokens].every((n) => n === undefined || (typeof n === "number" && Number.isSafeInteger(n) && n > 0 && n <= 100_000_000))) return false;
   return validUrl(value.baseUrl);
 }
@@ -31,7 +31,7 @@ export function validProviderConfigurationChange(value: unknown): value is WebPr
   if (value.action === "remove") return validProvider(value.provider);
   const config = value.configuration;
   return value.action === "save" && record(config) && Object.keys(config).length === 5 &&
-    validProvider(config.provider) && text(config.name, 160) && validUrl(config.baseUrl) && apis.has(String(config.api)) &&
+    validProvider(config.provider) && text(config.name, 160) && validUrl(config.baseUrl) && typeof config.api === "string" && apis.has(config.api) &&
     Array.isArray(config.models) && (config.models.length > 0 || getBuiltinProviders().some((provider) => provider === config.provider)) && config.models.length <= 100 &&
     config.models.every((model) => validModelConfiguration(model) && model.provider === config.provider) &&
     new Set(config.models.map((model) => model.id)).size === config.models.length;

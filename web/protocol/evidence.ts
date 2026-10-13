@@ -76,10 +76,10 @@ function terminalOutcome(name: string, result?: WebLiveMessage) {
   if (name.startsWith("bg_")) {
     const status = details.status;
     if (status === "running") return { state: "running" as const };
-    if (["done", "failed", "killed", "timed_out"].includes(String(status))) {
+    if (typeof status === "string" && ["done", "failed", "killed", "timed_out"].includes(status)) {
       return {
         state: status === "killed" ? "cancelled" as const : status === "timed_out" ? "timed_out" as const : status === "failed" ? "failed" as const : "returned" as const,
-        exitCode: typeof details.exitCode === "number" ? details.exitCode : undefined,
+        exitCode: typeof details.exitCode === "number" && Number.isSafeInteger(details.exitCode) ? details.exitCode : undefined,
         signal: typeof details.signal === "string" ? evidenceText(details.signal).text : undefined,
       };
     }

@@ -51,7 +51,7 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
     (record.version === 2 && record.source !== "file-tools") ||
     !boundedId(record.sessionId) ||
     !boundedId(record.promptEntryId) ||
-    !["complete", "partial", "unavailable"].includes(String(record.state)) ||
+    typeof record.state !== "string" || !["complete", "partial", "unavailable"].includes(record.state) ||
     !count(record.additions) || !count(record.deletions) ||
     !Array.isArray(record.files) || record.files.length > WEB_MAX_TURN_CHANGE_FILES ||
     !(record.fileCount === null || count(record.fileCount))
@@ -64,15 +64,16 @@ export function readTurnChangesDetail(value: unknown): WebTurnChangesDetail | un
     const file = item as Record<string, unknown>;
     if (
       typeof file.path !== "string" || !file.path || file.path.length > 2_000 || file.path.includes("\0") ||
-      !(file.previousPath === undefined || (typeof file.previousPath === "string" && file.previousPath.length <= 2_000)) ||
+      !(file.previousPath === undefined || (typeof file.previousPath === "string" && file.previousPath.length > 0 && file.previousPath.length <= 2_000 && !file.previousPath.includes("\0"))) ||
       !fileStatuses.has(file.status as WebGitReviewFileStatus) ||
       typeof file.diff !== "string" ||
       typeof file.diffTruncated !== "boolean" ||
       !(file.binary === undefined || typeof file.binary === "boolean") ||
-      !(file.statsUnavailable === undefined || ["before_unavailable", "content_limit", "concurrent_change"].includes(String(file.statsUnavailable))) ||
+      !(file.statsUnavailable === undefined || (typeof file.statsUnavailable === "string" && ["before_unavailable", "content_limit", "concurrent_change"].includes(file.statsUnavailable))) ||
       !count(file.additions) || !count(file.deletions)
     ) return undefined;
-    bytes += new TextEncoder().encode(file.path).byteLength + new TextEncoder().encode(file.diff).byteLength;
+    bytes += new TextEncoder().encode(file.path).byteLength + new TextEncoder().encode(file.diff).byteLength +
+      (typeof file.previousPath === "string" ? new TextEncoder().encode(file.previousPath).byteLength : 0);
     if (bytes > WEB_MAX_TURN_CHANGE_RECORD_BYTES) return undefined;
     files.push({
       path: file.path,
