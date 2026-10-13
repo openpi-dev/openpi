@@ -145,9 +145,9 @@ function observePromptOutcome(trace: PromptTrace, event: AgentSessionEvent) {
   if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "user") {
     trace.promptMessage ??= event.message;
   }
-  // Cancelling Pi's retry backoff emits no aborted assistant message. This
-  // native terminal event is the cancellation evidence retained at settlement.
-  if (event.type === "auto_retry_end" && !event.success && event.finalError === "Retry cancelled") {
+  // Pi 1.1+ reports aborts even without an assistant message. Keep the retry
+  // cancellation receipt for hosts predating that terminal flag.
+  if (event.type === "agent_settled" && event.aborted || event.type === "auto_retry_end" && !event.success && event.finalError === "Retry cancelled") {
     trace.outcome = "cancelled";
     trace.resultMessage = undefined;
     return;

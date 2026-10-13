@@ -547,7 +547,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 
 ### 安装要求与来源
 
-- Pi `0.99.1` 或更新版本；
+- Pi `0.99.1` 或更新版本；开发依赖与 CI 验证基线为 `1.2.0`；
 - Node.js `22.19.0` 或更新版本；
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
 - GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。

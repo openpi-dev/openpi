@@ -359,10 +359,10 @@ test("returning to a real running Pi Session preserves the original cancel ident
     "the restored identity must reach the owning native abort",
   );
   assert.equal(a.session.isIdle, true);
-  // The faux provider reports the aborted stream as an error. Preserve the
-  // actual terminal classification instead of treating abort() as evidence.
-  assert.equal(cancelled.state, "failed");
-  assert.match(cancelled.error ?? "", /active turn failed/);
+  // Pi's aborted settlement is authoritative even when the faux provider
+  // reports its interrupted stream as an error message.
+  assert.equal(cancelled.state, "accepted");
+  assert.equal(cancelled.error, undefined);
 });
 
 test("background settlement records timing in the owning Pi Session, never the currently selected one", {
