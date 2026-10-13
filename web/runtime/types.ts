@@ -179,6 +179,8 @@ export interface WebSessionExecution {
   /** Native compaction observation; completion history remains in Pi entries. */
   compaction?: {
     state: "running" | "completed" | "failed" | "cancelled" | "unchanged";
+    /** Bounded, sanitized detail from the native compaction end event. */
+    errorMessage?: string;
     startedAt?: number;
     elapsedMs?: number;
   };

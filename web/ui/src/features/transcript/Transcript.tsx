@@ -4,6 +4,7 @@ import {
   Bot,
   Check,
   ChevronRight,
+  CircleAlert,
   Clipboard,
   GitBranch,
   Globe,
@@ -239,6 +240,26 @@ function StatusMark({ status }: { status: Status }) {
   return null;
 }
 
+function ErrorNotice({
+  label,
+  message,
+  children,
+}: {
+  label: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="execution-error" role="alert" aria-label={label}>
+      <CircleAlert aria-hidden="true" />
+      <div className="execution-error-content">
+        <p>{message}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function ProviderOutcome({
   failed,
   error,
@@ -254,17 +275,18 @@ function ProviderOutcome({
 }) {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
+  if (!failed)
+    return (
+      <div className="provider-outcome aborted" role="status">
+        {t("modelRequestStopped")}
+      </div>
+    );
   return (
-    <div
-      className={`provider-outcome ${failed ? "failed" : "aborted"}`}
-      role={failed ? "alert" : "status"}
+    <ErrorNotice
+      label={t("modelRequestFailed")}
+      message={error || t("modelFailureUnknown")}
     >
-      <strong>
-        {t(failed ? "modelRequestFailed" : "modelRequestStopped")}
-      </strong>
-      {failed && <p>{error || t("modelFailureUnknown")}</p>}
-      {failed && <small>{t("modelFailureNextStep")}</small>}
-      {failed && retryPrompt && (
+      {retryPrompt && (
         <div className="provider-outcome-actions">
           <button
             type="button"
@@ -279,7 +301,7 @@ function ProviderOutcome({
           </button>
         </div>
       )}
-    </div>
+    </ErrorNotice>
   );
 }
 
@@ -2366,7 +2388,7 @@ export function Transcript(props: TranscriptProps) {
     const failures = providerFailures(entries, running && !historyPaused);
     const lastFinalError = [...failures.finalErrors].at(-1);
     const attemptContents = new Map<string, RenderRow[]>();
-    let retryRendered = false;
+    let retryRowKey: string | undefined;
     const results = new Map<string, DisplayEntry>();
     const pairedToolIds = new Set<string>();
     const liveTools = historyPaused
@@ -3037,7 +3059,8 @@ export function Transcript(props: TranscriptProps) {
         }
         const attempts = failures.groups.get(index);
         if (attempts) {
-          if (attempts.state === "retrying" && retry) retryRendered = true;
+          if (attempts.state === "retrying" && retry)
+            retryRowKey = `${attempts.attempts[0]!.key}-attempts`;
           detailRows.push({
             key: `${attempts.attempts[0]!.key}-attempts`,
             turn,
@@ -3214,10 +3237,15 @@ export function Transcript(props: TranscriptProps) {
       }
       return [];
     });
-    if (retry && !retryRendered)
-      rendered.push({
+    let nativeEnd = rendered.length;
+    while (nativeEnd > 0 && rendered[nativeEnd - 1]!.pendingPrompt) nativeEnd--;
+    const pendingPreviews = rendered.length - nativeEnd;
+    const nativeTurn = rendered[nativeEnd - 1]?.turn ?? 0;
+    if (retry && !retryRowKey) {
+      retryRowKey = "native-retry";
+      rendered.splice(nativeEnd, 0, {
         key: "native-retry",
-        turn,
+        turn: nativeTurn,
         kind: "outcome",
         content: (
           <article className="message-row assistant outcome-row">
@@ -3233,6 +3261,46 @@ export function Transcript(props: TranscriptProps) {
           </article>
         ),
       });
+    }
+    const compaction = !historyPaused && selectedExecution?.compaction;
+    if (compaction && compaction.state !== "completed") {
+      const retryIndex = rendered.findIndex((row) => row.key === retryRowKey);
+      const compactionRow: RenderRow = {
+        key: `native-compaction-${compaction.startedAt ?? compaction.state}`,
+        turn: rendered[retryIndex]?.turn ?? nativeTurn,
+        kind: "custom",
+        content: (
+          <CompactionStatus
+            compaction={compaction}
+            observed={
+              props.activityObserved !== false &&
+              selectedExecution?.status !== "unknown"
+            }
+          />
+        ),
+      };
+      // Keep the current compaction before the observed reconnect status.
+      // Completed compactions continue to use Pi's chronological entries.
+      rendered.splice(
+        retryIndex < 0 ? nativeEnd : retryIndex,
+        0,
+        compactionRow,
+      );
+      if (compaction.state === "failed" && compaction.errorMessage)
+        rendered.splice(rendered.length - pendingPreviews, 0, {
+          key: "native-compaction-error",
+          turn: compactionRow.turn,
+          kind: "custom",
+          content: (
+            <article className="message-row assistant outcome-row">
+              <ErrorNotice
+                label={t("compactionFailed")}
+                message={compaction.errorMessage}
+              />
+            </article>
+          ),
+        });
+    }
     return { rows: rendered, turns: turnItems };
   }, [
     active,
@@ -3747,21 +3815,6 @@ export function Transcript(props: TranscriptProps) {
             props.onReviewTurn,
             props.activityObserved !== false,
           )}
-          {selectedExecution?.compaction &&
-            selectedExecution.compaction.state !== "completed" && (
-              <CompactionStatus
-                key={JSON.stringify([
-                  selected?.id,
-                  selected?.path,
-                  selectedExecution.compaction.startedAt,
-                ])}
-                compaction={selectedExecution.compaction}
-                observed={
-                  props.activityObserved !== false &&
-                  selectedExecution.status !== "unknown"
-                }
-              />
-            )}
           {running &&
             props.activityObserved !== false &&
             selectedExecution?.compaction?.state !== "running" && (

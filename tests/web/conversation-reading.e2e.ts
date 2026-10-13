@@ -1,6 +1,113 @@
 import { expect, test } from "@playwright/test";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 
+for (const theme of ["light", "dark"] as const) {
+  test(`compaction interruption and reconnect notices stay aligned in ${theme}`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({
+      width: theme === "light" ? 1280 : 390,
+      height: 900,
+    });
+    const reason =
+      "Error running remote compact task: unexpected status 503 Service Unavailable: Service temporarily unavailable";
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = (await response.json()) as WebSnapshot;
+      const session = snapshot.selectedSession;
+      if (!session) throw new Error("Missing real Session fixture");
+      snapshot.preferences = {
+        ...snapshot.preferences,
+        theme,
+        chatFontSize: 16,
+      };
+      snapshot.runtime = {
+        ...snapshot.runtime,
+        status: "running",
+        activeTurn: undefined,
+      };
+      session.entries = [
+        {
+          id: "status-prompt",
+          type: "message",
+          timestamp: "2026-10-13T00:00:00Z",
+          message: { role: "user", content: "核对压缩中断和重新连接的展示。" },
+        },
+        {
+          id: "status-error",
+          type: "message",
+          timestamp: "2026-10-13T00:00:01Z",
+          message: {
+            role: "assistant",
+            content: "",
+            stopReason: "error",
+            errorMessage: "response stream closed",
+          },
+        },
+      ];
+      snapshot.selectedExecution = {
+        sessionId: session.id,
+        sessionPath: session.path,
+        status: "running",
+        liveTools: [],
+        liveToolsOmitted: 0,
+        compaction: { state: "failed", errorMessage: reason },
+        retry: {
+          attempt: 2,
+          maxAttempts: 2,
+          errorMessage: "response stream closed",
+        },
+      };
+      await route.fulfill({ response, json: snapshot });
+    });
+    await page.goto("/");
+    const conversation = page.locator(".conversation");
+    const compaction = conversation.getByText("压缩已中断", { exact: true });
+    const reconnect = conversation.getByText("正在重新连接 2/2", {
+      exact: true,
+    });
+    const notice = conversation.getByRole("alert", { name: "上下文压缩失败" });
+    await expect(compaction).toBeVisible();
+    await expect(reconnect).toBeVisible();
+    await expect(notice).toHaveText(reason);
+    await expect(notice.locator("p")).toHaveCSS("font-size", "16px");
+    await expect(notice.locator("svg.lucide-circle-alert")).toBeVisible();
+    await expect(notice).toHaveCSS("border-top-style", "solid");
+    const compactBounds = (await compaction.boundingBox())!;
+    const retryBounds = (await reconnect.boundingBox())!;
+    const errorBounds = (await notice.boundingBox())!;
+    expect(Math.abs(compactBounds.x - retryBounds.x)).toBeLessThanOrEqual(1);
+    expect(compactBounds.y + compactBounds.height).toBeLessThan(retryBounds.y);
+    expect(retryBounds.y + retryBounds.height).toBeLessThan(errorBounds.y);
+    expect(
+      await conversation.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    const disclosure = conversation.locator(".provider-attempts > summary");
+    const arrow = disclosure.locator(".reconnect-chevron");
+    await page.mouse.move(0, 0);
+    await expect(arrow).toHaveCSS("opacity", "0");
+    await disclosure.focus();
+    await expect(arrow).toHaveCSS("opacity", "1");
+    await page.keyboard.press("Enter");
+    await expect(conversation.locator(".provider-attempts")).toHaveJSProperty(
+      "open",
+      true,
+    );
+    await expect(
+      conversation.getByText("response stream closed", { exact: true }),
+    ).toBeVisible();
+    await page.keyboard.press("Enter");
+    await page.mouse.click(0, 0);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(arrow).toHaveCSS("transition-duration", "0s");
+    await page.screenshot({
+      path: testInfo.outputPath(`compaction-reconnect-${theme}.png`),
+    });
+  });
+}
+
 test("conversation text stays readable and file links retain their exact target", async ({
   page,
 }, testInfo) => {
