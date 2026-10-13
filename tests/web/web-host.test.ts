@@ -15,6 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { WEB_TURN_TIMING_ENTRY } from "../../web/protocol/turn-timing.ts";
 import {
   registerWebCapability,
   registerWebCapabilityActions,
@@ -3083,17 +3085,34 @@ test("project order API validates exact paths and atomically moves pinned projec
 test("sidebar metadata APIs authenticate mixed pins and exact Session read receipts without a model turn", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-sidebar-host-"));
   let prompts = 0;
-  const runtime = testRuntime(cwd, async () => {
-    prompts++;
-    return { pendingFollowUps: 0 };
-  });
+  const manager = SessionManager.create(cwd, cwd);
+  manager.appendMessage({ role: "user", content: "Fixture", timestamp: 1 });
+  manager.appendMessage(fauxAssistantMessage("Fixture result"));
+  const runtime = {
+    ...testRuntime(cwd, async () => {
+      prompts++;
+      return { pendingFollowUps: 0 };
+    }),
+    sessionManager: manager,
+  };
   const id = runtime.sessionManager.getSessionId();
-  const path = `current:${id}`;
+  const path = manager.getSessionFile()!;
   let turn = {
     commandId: "first",
     finishedAt: 100,
     outcome: "completed" as const,
   };
+  const publish = () =>
+    manager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
+      version: 1,
+      unreadEligible: true,
+      sessionId: id,
+      epoch: 1,
+      startedAt: turn.finishedAt - 1,
+      elapsedMs: 1,
+      ...turn,
+    });
+  publish();
   runtime.getSessionExecution = (sessionId, sessionPath) => ({
     sessionId,
     sessionPath,
@@ -3260,6 +3279,7 @@ test("sidebar metadata APIs authenticate mixed pins and exact Session read recei
       409,
     );
     turn = { ...turn, commandId: "second", finishedAt: 200 };
+    publish();
     const stale = await post("/api/sessions/read", {
       path,
       id,
@@ -3276,7 +3296,7 @@ test("sidebar metadata APIs authenticate mixed pins and exact Session read recei
     assert.equal(snapshot.sessions[0].order, 0);
     assert.equal(snapshot.sessions[0].unread, true);
     assert.equal(prompts, 0);
-    assert.equal(runtime.sessionManager.getEntries().length, 0);
+    assert.equal(runtime.sessionManager.getEntries().length, 4);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

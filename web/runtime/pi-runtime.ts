@@ -2745,6 +2745,7 @@ export class PiWebRuntime implements WebRuntimeController {
         finishedAt: Date.now(),
         elapsedMs: activeTurn.elapsedMs,
         outcome: settlement.outcome,
+        ...(["completed", "failed"].includes(settlement.outcome) ? { unreadEligible: true as const } : {}),
         ...(activeTurn.promptEntryId ? { promptEntryId: activeTurn.promptEntryId } : {}),
       };
       const result = settlement.outcome === "completed" && trace.resultMessage ? sessionManager.getBranch().find((entry) => entry.type === "message" && entry.message === trace.resultMessage) : undefined;
@@ -2757,6 +2758,9 @@ export class PiWebRuntime implements WebRuntimeController {
       try {
         sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, timing);
       } catch {
+        // Pi appends to memory before persisting. Keep the execution fact, but
+        // explicitly deny attention even when legacy read receipts are present.
+        timing.unreadEligible = false;
         // Optional display evidence must never change Pi's terminal outcome.
         traceWeb("turn_timing_persistence_failed", { commandId: activeTurn.commandId });
       }

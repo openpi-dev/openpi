@@ -3052,6 +3052,131 @@ test("Session order and manual unread markers bind copied IDs to their exact fil
   }
 });
 
+test("legacy history stays read without migration writes, while explicit marks and published results survive restart", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-sidebar-read-migration-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, "sessions");
+  const manager = SessionManager.create(root, directory);
+  const finish = (
+    commandId: string,
+    finishedAt: number,
+    unreadEligible = false,
+  ) => {
+    persistSession(manager, commandId, finishedAt);
+    manager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
+      version: 1,
+      sessionId: manager.getSessionId(),
+      commandId,
+      epoch: 1,
+      startedAt: finishedAt - 1,
+      finishedAt,
+      elapsedMs: 1,
+      outcome: "completed",
+      ...(unreadEligible ? { unreadEligible: true } : {}),
+      resultEntryId: manager.getLeafId(),
+    });
+  };
+  finish("before-upgrade", 100);
+  const path = manager.getSessionFile()!;
+  const id = manager.getSessionId();
+  const explicit = SessionManager.create(root, directory);
+  persistSession(explicit, "Manually unread", 1);
+  const metadata = join(directory, "workspace-state.json");
+  await writeFile(
+    metadata,
+    JSON.stringify({
+      version: 1,
+      hiddenWorkspaces: [],
+      ungroupedSessions: [],
+      workspaceNames: {},
+      sessionReadStates: [
+        {
+          path: explicit.getSessionFile(),
+          id: explicit.getSessionId(),
+          read: false,
+          revision: "manual",
+        },
+      ],
+    }),
+  );
+  const sourceBytes = await readFile(path);
+  const metadataBytes = await readFile(metadata);
+  const runtime = runtimeFor(root, directory, manager);
+  let adapter = new PiWebAdapter(runtime);
+  const before = (await adapter.requireSession(path)).readRevision!;
+  await adapter.initialize();
+  assert.equal((await adapter.requireSession(path)).unread, false);
+  assert.equal(
+    (await adapter.requireSession(explicit.getSessionFile()!)).unread,
+    true,
+  );
+  assert.deepEqual(await readFile(path), sourceBytes);
+  assert.deepEqual(await readFile(metadata), metadataBytes);
+  assert.equal(
+    (await adapter.requireSession(path)).execution?.lastTurn?.commandId,
+    "before-upgrade",
+  );
+
+  // Native branch order remains authoritative even if the wall clock moves back.
+  finish("after-upgrade", 50, true);
+  const unread = await adapter.requireSession(path);
+  assert.equal(unread.unread, true);
+  await assert.rejects(adapter.setSessionRead(path, id, true, before), {
+    code: "SESSION_READ_STATE_CHANGED",
+  });
+  assert.equal(
+    unread.firstUnread?.type === "turn" && unread.firstUnread.commandId,
+    "after-upgrade",
+  );
+  const saved = await readFile(metadata, "utf8");
+  adapter = new PiWebAdapter(runtime);
+  await adapter.initialize();
+  assert.deepEqual(await adapter.requireSession(path), unread);
+  assert.equal(await readFile(metadata, "utf8"), saved);
+  await adapter.setSessionRead(path, id, true, unread.readRevision!);
+  assert.equal((await adapter.requireSession(path)).unread, false);
+});
+
+test("legacy or unpersisted execution projections cannot seed unread state or create metadata on discovery", async (t) => {
+  const root = await mkdtemp(
+    join(tmpdir(), "openpi-sidebar-read-migration-failure-"),
+  );
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, "sessions");
+  const manager = SessionManager.create(root, directory);
+  persistSession(manager, "Historical result", 1);
+  manager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
+    version: 1,
+    sessionId: manager.getSessionId(),
+    commandId: "legacy",
+    epoch: 1,
+    startedAt: 1,
+    finishedAt: 2,
+    elapsedMs: 1,
+    outcome: "completed",
+    resultEntryId: manager.getLeafId(),
+  });
+  const runtime = runtimeFor(root, directory, manager);
+  runtime.getSessionExecution = (sessionId, sessionPath) => ({
+    sessionId,
+    sessionPath,
+    status: "idle",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    lastTurn: { commandId: "unpersisted", finishedAt: 3, outcome: "completed" },
+  });
+  const adapter = new PiWebAdapter(runtime);
+  const path = manager.getSessionFile()!;
+  const metadata = join(directory, "workspace-state.json");
+  await adapter.initialize();
+  assert.equal((await adapter.requireSession(path)).unread, false);
+  assert.equal(
+    (await adapter.requireSession(path)).execution?.lastTurn?.commandId,
+    "unpersisted",
+  );
+  await assert.rejects(readFile(metadata), { code: "ENOENT" });
+});
+
 test("native last-turn evidence survives restart without inventing idle, and stale read receipts cannot clear a new result", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-sidebar-native-read-"));
   const directory = join(root, "sessions");
@@ -3064,10 +3189,12 @@ test("native last-turn evidence survives restart without inventing idle, and sta
       finishedAt: number,
       outcome = "completed",
       sessionId = manager.getSessionId(),
+      unreadEligible = true,
     ) => {
       persistSession(manager, commandId, finishedAt);
       manager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
         version: 1,
+        ...(unreadEligible ? { unreadEligible: true } : {}),
         sessionId,
         commandId,
         epoch: 1,
@@ -3102,7 +3229,8 @@ test("native last-turn evidence survives restart without inventing idle, and sta
     );
     adapter = new PiWebAdapter(runtime);
     assert.equal((await summary()).unread, false);
-    finish("second", 200);
+    // An existing exact read receipt preserves older unmarked results after it.
+    finish("second", 200, "completed", manager.getSessionId(), false);
     assert.equal((await summary()).unread, true);
     await assert.rejects(
       adapter.setSessionRead(identity.path, identity.id, true, firstRevision),
@@ -3163,6 +3291,7 @@ test("the first unread native result survives running, cancellation and later re
       persistSession(manager, commandId, finishedAt);
       manager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
         version: 1,
+        unreadEligible: true,
         sessionId: manager.getSessionId(),
         commandId,
         epoch: 1,
@@ -3350,6 +3479,7 @@ test("a native fork does not turn inherited timing into a new unread result", as
       version: 1,
       sessionId: manager.getSessionId(),
       commandId: "source-turn",
+      unreadEligible: true,
       epoch: 1,
       startedAt: 0,
       finishedAt: 1,
@@ -3458,6 +3588,17 @@ test("an acknowledgement already writing cannot clear a turn that finishes durin
       finishedAt: 100,
       outcome: "completed" as const,
     };
+    const publish = () =>
+      manager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, {
+        version: 1,
+        unreadEligible: true,
+        sessionId: id,
+        epoch: 1,
+        startedAt: turn.finishedAt - 1,
+        elapsedMs: 1,
+        ...turn,
+      });
+    publish();
     runtime.getSessionExecution = (sessionId, sessionPath) => ({
       sessionId,
       sessionPath,
@@ -3498,6 +3639,7 @@ test("an acknowledgement already writing cannot clear a turn that finishes durin
     );
     await writing;
     turn = { ...turn, commandId: "second", finishedAt: 200 };
+    publish();
     assert.equal((await adapter.listSessions())[0]!.unread, true);
     release();
     await pending;

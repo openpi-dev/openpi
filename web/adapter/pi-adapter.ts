@@ -1052,8 +1052,8 @@ export class PiWebAdapter {
     return this.enqueueWorkspaceMutation(async (draft) => {
       const session = await this.requireSession(path);
       if (session.id !== id) throw new WebRuntimeRequestError("Session identity changed; refresh before marking it read", "SESSION_CONFLICT", 409);
-      const lastTurn = this.sessionTurnEvidence(session).results.at(-1);
       const reading = draft.sessionReadStates.find((item) => item.path === path && item.id === id);
+      const lastTurn = this.sessionTurnEvidence(session, reading?.lastReadTurn).results.at(-1);
       if (expectedRevision !== sessionReadRevision(session, reading, lastTurn)) throw new WebRuntimeRequestError("Session reading state changed; refresh before marking it again", "SESSION_READ_STATE_CHANGED", 409);
       const record: SessionReadState = { path, id, read, revision: randomUUID(), ...(read && lastTurn ? { lastReadTurn: { commandId: lastTurn.commandId, finishedAt: lastTurn.finishedAt } } : {}) };
       draft.sessionReadStates = draft.sessionReadStates.filter((item) => item.path !== path || item.id !== id);
@@ -1071,13 +1071,15 @@ export class PiWebAdapter {
       try {
         const manager = this.runtime.getSessionManagerForRead?.(session.id, session.path) ?? (this.isCurrentSession(session) ? this.runtime.sessionManager : SessionManager.open(session.path, this.runtime.sessionDirectory));
         if (matchesSessionIdentity(manager, { expectedSessionId: session.id, expectedSessionPath: session.path })) {
-          native = readSessionTurnEvidence(manager.getBranch(), session.id);
+          // An existing exact read position can still distinguish older unread
+          // results. Without it, history discovery is not a live publication.
+          native = readSessionTurnEvidence(manager.getBranch(), session.id, Boolean(acknowledged));
           if (acknowledged) {
             const readEntry = manager.getEntries().find((entry) => {
               const timing = entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY ? readTurnTiming(entry.data) : undefined;
               return timing?.sessionId === session.id && sameReadTurn(timing, acknowledged);
             });
-            if (readEntry) acknowledgedResults = readSessionTurnEvidence(manager.getBranch(readEntry.id), session.id).results;
+            if (readEntry) acknowledgedResults = readSessionTurnEvidence(manager.getBranch(readEntry.id), session.id, true).results;
           }
         }
       } catch {
@@ -1085,7 +1087,8 @@ export class PiWebAdapter {
       }
     }
     const lastTurn = exact?.lastTurn ?? native.lastTurn;
-    if (exact?.lastTurn && (exact.lastTurn.outcome === "completed" || exact.lastTurn.outcome === "failed") && !native.results.some((turn) => sameReadTurn(turn, exact.lastTurn))) native.results.push({ ...exact.lastTurn, outcome: exact.lastTurn.outcome });
+    // Execution can recover historical or unpersisted terminal facts. Only
+    // durable live-publication records may seed automatic unread activity.
     return { exact, lastTurn, results: native.results, acknowledgedResults };
   }
 

@@ -218,6 +218,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     const acknowledge = () => {
       if (
         document.visibilityState !== "visible" ||
+        !document.hasFocus() ||
         document.querySelector("dialog[open]")
       )
         return;
@@ -237,10 +238,12 @@ export function SessionSidebar(props: SessionSidebarProps) {
     };
     acknowledge();
     document.addEventListener("visibilitychange", acknowledge);
+    window.addEventListener("focus", acknowledge);
     document.addEventListener("close", acknowledge, true);
     return () => {
       active = false;
       document.removeEventListener("visibilitychange", acknowledge);
+      window.removeEventListener("focus", acknowledge);
       document.removeEventListener("close", acknowledge, true);
     };
   }, [

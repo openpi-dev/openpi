@@ -207,6 +207,9 @@ appear unread on first discovery; this intentionally differs from Codex's
 live-publication-only unread seed. Bounded snapshots disclose omitted history,
 so bulk actions apply only to loaded, eligible conversations.
 
+The legacy-first-discovery choice above is superseded by the Oct13 upgrade
+correction below; the earlier validation receipts retain their original scope.
+
 Display preferences use the existing validated configuration writer and are
 also available through `/openpi-setup`: grouping, conversation sort, pin sort
 and project inclusion in Recents. Defaults, status output, setup schema and
@@ -423,3 +426,57 @@ shown, deduplicated by path. Astryx's existing Toast handles eight-second expiry
 pointer/focus pause and touch dismissal. Pending or failed actions stay available
 for completion or retry. The cards are transient presentation state, not persisted
 Session state, and failed archive writes never show a success card.
+
+## 2026-10-13: historical unread markers after an upgrade
+
+- Status: source-validated correction; local and CI validation are recorded in
+  PR [#711](https://github.com/openpi-dev/openpi/pull/711).
+- Source boundary: OpenPI `c0c176221826288430798a8ad75180eafa62dd28` plus this
+  correction; Codex App Server `a9b0815167c27ab13719dd12d13b63e02b70d221` and
+  the same desktop ASAR identity recorded above. Related tracking: [#763](https://github.com/openpi-dev/openpi/issues/763).
+- Verified: 2026-10-13. Supersedes the legacy-first-discovery behavior above.
+
+The upgrade exposed old completion records as blue unread dots because OpenPI
+treated history discovery as new attention. The App Server reference instead
+returns a default read receipt without writing on history lookup
+(`state/src/runtime/thread_read_state.rs:110`); its live event processor seeds
+attention only after flushing the native rollout
+(`app-server/src/request_processors/thread_read_state.rs:91`). Each eligible
+publication and explicit read/unread edit advances its revision. These public
+backend facts are separate from the desktop build's host/account-scoped saved
+unread IDs; this investigation does not establish that desktop build's use of
+the experimental App Server revision API.
+
+OpenPI now records automatic unread eligibility on new native turn-timing
+entries. Unanchored old history stays quiet without a catalog migration or
+rewriting Sessions. Explicit unread marks remain, and an existing exact
+`lastReadTurn` retains older pending results after that acknowledged position.
+Execution's recovered `lastTurn` remains available but cannot itself seed
+attention. If Pi appends in memory before persistence fails, the failed record
+is explicitly ineligible, including through legacy compatibility. Acknowledging
+one revision still cannot clear a result published during the write. Native
+branch order, first unread position, fork identity and terminal distinctions
+retain their existing owners.
+
+The desktop `local-conversation-thread-faa16cd8ed14.js` watcher at Unicode
+offsets 314472–315249 requires the app focus signal and a changed activity
+identity; a manual unread edit alone does not trigger another automatic read.
+OpenPI retains its confirmed conversation-view and explicit reselect guards and
+now also requires `document.hasFocus()`, retrying on window focus. Hidden,
+unfocused, disconnected, dialog-blocked and trajectory-only views do not
+automatically acknowledge. Explicit sidebar read/unread actions remain separate.
+
+Limits: no-receipt old history cannot distinguish a genuine old pending result
+from replay. A copied native file carrying a new eligibility marker retains
+that fact; this is not a second Codex receipt database. Codex settings import
+has its own explicit mark-unread path (desktop `app-initial` offsets
+5356210–5357900), so no universal import parity is claimed. Codex's goal-specific
+and `DONT_NOTIFY` publication rules are not adopted as Pi runtime rules.
+Desktop findings are bounded static observations, not native UI execution.
+The detailed identity and source ledger is retained outside Git at
+`/Users/admin/.local/share/openpi/evidence/pr711-ci-unread-2026-10-13/codex-read-state-reference.md`.
+
+Simplification: removed the proposed startup baseline scan and its persisted
+flag; removing the publication gate instead reproduces the legacy blue-dot
+regression. The implementation uses existing Pi timing and presentation
+receipts, with no new settings, model-facing tool or independent activity store.

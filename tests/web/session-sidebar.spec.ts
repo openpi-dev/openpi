@@ -1204,6 +1204,7 @@ it("acknowledges the exact loaded revision and waits for backend read state whil
   };
   const actions = createWebStore().getState().actions;
   const read = vi.spyOn(actions, "setSessionRead").mockResolvedValue();
+  const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
   const view = mount(data, {
     actions,
     selectedPath: completed.path,
@@ -1215,6 +1216,11 @@ it("acknowledges the exact loaded revision and waits for backend read state whil
   view.rerender({ sessionViewVisible: true, selectedPath: "/not-loaded" });
   expect(read).not.toHaveBeenCalled();
   view.rerender({ selectedPath: completed.path });
+  expect(read).not.toHaveBeenCalled();
+  fireEvent(window, new Event("focus"));
+  expect(read).not.toHaveBeenCalled();
+  focus.mockReturnValue(true);
+  fireEvent(window, new Event("focus"));
   await waitFor(() =>
     expect(read).toHaveBeenCalledExactlyOnceWith(
       completed.path,
