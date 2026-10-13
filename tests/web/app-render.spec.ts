@@ -3212,6 +3212,7 @@ it("keeps a pinned transcript at the bottom on viewport resize without moving a 
     act(() => resized?.([], {} as ResizeObserver));
     expect(scroll).toHaveBeenCalledWith({ top: 1000, behavior: "instant" });
     scroll.mockClear();
+    fireEvent.wheel(viewport, { deltaY: -100 });
     viewport.scrollTop = 100;
     fireEvent.scroll(viewport);
     act(() => resized?.([], {} as ResizeObserver));
@@ -3262,6 +3263,7 @@ it("follows same-key streamed growth, preserves reading position, and honors exp
   rerender(node("hello\nmore streamed content"));
   expect(scroll).toHaveBeenCalledOnce();
   scroll.mockClear();
+  fireEvent.wheel(viewport, { deltaY: -100 });
   viewport.scrollTop = 0;
   fireEvent.scroll(viewport);
   rerender(node("still more streamed content"));
