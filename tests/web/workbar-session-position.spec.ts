@@ -507,6 +507,8 @@ it("hydrates saved widths, clamps small windows without saving, and saves explic
   expect(save).toHaveBeenCalledOnce();
 });
 
+// More than 32 full-App selections already take ~19 seconds on Windows CI.
+// Budget for that workload without changing the default for ordinary UI cases.
 it("bounds remembered tools to 32 exact Session identities while keeping a recently revisited position", async () => {
   const view = render(createElement(Providers, null, createElement(App)));
   await open("browser");
@@ -538,7 +540,7 @@ it("bounds remembered tools to 32 exact Session identities while keeping a recen
   ).toBe("https://example.com/remembered");
   await select("/workspace/a.jsonl", "replacement-session");
   expect(view.container.querySelector(".workbar-panel")).toBeNull();
-}, 20_000);
+}, 60_000);
 
 it("reattaches a Session's file position after a copied same-ID Session, releasing the old preview", async () => {
   const view = render(createElement(Providers, null, createElement(App)));

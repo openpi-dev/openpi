@@ -127,7 +127,8 @@ test("forks source HEAD detached and copies final tracked, untracked, binary, ex
     "fork-dirty",
   );
   assert.equal(result.cwd, path.join(result.worktree.path, "packages", "app"));
-  assert.equal(result.worktree.sourceRoot, fs.realpathSync(repo));
+  // Native realpath expands Windows 8.3 aliases such as RUNNER~1.
+  assert.equal(result.worktree.sourceRoot, fs.realpathSync.native(repo));
   assert.equal(result.worktree.baseSha, head);
   assert.equal("branch" in result.worktree, false);
   assert.equal(
@@ -313,10 +314,10 @@ test("forking an existing linked checkout uses the common repository and remaps 
     path.join(linked, "packages", "app"),
     "linked-source",
   );
-  assert.equal(result.worktree.sourceRoot, fs.realpathSync(linked));
+  assert.equal(result.worktree.sourceRoot, fs.realpathSync.native(linked));
   assert.equal(
     path.dirname(result.worktree.path),
-    path.join(fs.realpathSync(repo), ".git", "pi-worktrees"),
+    path.join(fs.realpathSync.native(repo), ".git", "pi-worktrees"),
   );
   assert.equal(
     fs.readFileSync(path.join(result.cwd, "file.txt"), "utf8"),
