@@ -392,6 +392,17 @@ test("prefetched native history loads on upward reading without moving the visib
     await expect
       .poll(async () => Math.abs((await anchored.boundingBox())!.y - before!.y))
       .toBeLessThanOrEqual(2);
+    await conversation.hover();
+    await page.mouse.wheel(0, 100_000);
+    await expect
+      .poll(() =>
+        conversation.evaluate((element) =>
+          Math.abs(
+            element.scrollTop + element.clientHeight - element.scrollHeight,
+          ),
+        ),
+      )
+      .toBeLessThanOrEqual(2);
     const stableScroll = await conversation.evaluate(
       (element) => element.scrollTop,
     );
@@ -440,8 +451,8 @@ test("prefetched native history loads on upward reading without moving the visib
       body: JSON.stringify({ beforeLive, afterLive }, null, 2),
       contentType: "application/json",
     });
-    // The long single-turn fixture reaches the bottom while restoring its
-    // prepended process. At the bottom, new content must remain followed.
+    // The reader explicitly scrolled to the bottom after restoring history.
+    // At the bottom, new content must remain followed.
     expect(
       Math.abs(
         beforeLive.scrollTop +
