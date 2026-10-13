@@ -375,9 +375,12 @@ test("C08-C09 failed display saves retain canonical checks; retry and refresh pr
   ).toContainText("已选择 2 个");
   expect(thinking.posts).toEqual([]);
   await page.reload();
-  await page.getByRole("button", { name: "设置", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "设置", exact: true });
-  await dialog.getByRole("tab", { name: "配置", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole("tab", { name: "配置", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/\?settings=configuration$/);
   await dialog
     .getByRole("button", { name: "可用推理强度", exact: true })
     .click();
