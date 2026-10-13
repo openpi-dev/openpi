@@ -151,14 +151,17 @@ test("file evidence keeps artifact identities separate from sanitized display la
       "zero-width identity",
     );
 
-    await writeFile(join(root, "a\tb.txt"), "tab identity");
     const tabView = projectToolEvidence(call("read", { path: "a\tb.txt" }));
     assert.equal(tabView.path, "a\tb.txt");
     assert.equal(tabView.displayPath, "a  b.txt");
-    assert.equal(
-      await readFile(join(root, tabView.path!), "utf8"),
-      "tab identity",
-    );
+    if (process.platform !== "win32") {
+      // Windows filenames cannot contain tab characters.
+      await writeFile(join(root, "a\tb.txt"), "tab identity");
+      assert.equal(
+        await readFile(join(root, tabView.path!), "utf8"),
+        "tab identity",
+      );
+    }
     // Artifact policy still rejects controls; evidence must not silently retarget
     // the sanitized label to another real file to bypass that boundary.
     await assert.rejects(reader.resolveFile("s", tabView.path!), {
