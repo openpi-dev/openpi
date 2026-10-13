@@ -4,7 +4,7 @@
 - Created: 2026-10-13; source verification: 2026-10-13.
 - OpenPI source: PR [#711](https://github.com/openpi-dev/openpi/pull/711), `ad069f841cec26421834b39715af60ac9a2c1a11`; related work: Issue [#597](https://github.com/openpi-dev/openpi/issues/597).
 - Supersedes: none. This scoped settings work does not revise the earlier sidebar validation receipts.
-- Publication: local record; no new public Issue comment or reverse link has been published.
+- Publication: PR [#711](https://github.com/openpi-dev/openpi/pull/711) links this record; Issue [#597 follow-up](https://github.com/openpi-dev/openpi/issues/597#issuecomment-6139870927) supplies the reverse research/acceptance link. The publication does not adopt this draft as a Decision.
 
 ## Sources and coverage
 
