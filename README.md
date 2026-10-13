@@ -169,6 +169,8 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 
 Code Mode 的终端视图由 OpenPI 通过 Pi 原生工具渲染接口提供：默认收起脚本、长参数、结果正文及完整输出路径，仅展示运行状态，并按原顺序逐条展示全部已记录的子调用摘要，不折叠调用数量；Bash 命令预览最多显示 80 个终端列，超出部分用省略号隐藏，窄终端会进一步截断；子调用沿用普通工具的线框图标，执行中只用灰色表示，不重复显示运行标记；失败与取消保留明显提示。`Ctrl+O` 展开脚本、子调用参数、原始输出与完整输出路径。该呈现增强需要 Pi 提供 `registerToolRenderer`（已核对 Pi 1.0.2）；旧版本保留原生显示。它不改变 Code Mode 执行、权限、模型可见结果或默认启用设置。
 
+CLI 和 Web 普通父会话默认启用 Pi 原生 `codemode`，与 `read`、`bash`、`edit`、`write` 并存，由模型决定是否组合调用。`/openpi-setup 关闭 Code Mode 默认启用` 通过 `code_mode_enabled=false` 保存 `codeMode.enabled`；默认值为 `true`，无参数状态会显示该默认策略。已有 Pi `defaultTools` 选择和 CLI/SDK 工具限制优先，不自动改写原生设置或发起模型请求；显式选择 `+codemode` 的原生配置也不受此包默认开关覆盖。子会话沿用已有的受限工具继承，不额外获得父级能力。Web 使用独立 agent 目录，其配置与 CLI 分开保存。
+
 OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ---
@@ -480,7 +482,7 @@ Web 侧栏宽度默认 340px（配置兼容范围 220–520px），工具面板�
 
 Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。有可靠耗时记录的回合，执行时展开整个过程，完成后“用时”默认收起中间说明、思考和工具，最终回答继续显示在下方；可点击“用时”查看完整过程，不折叠用户问题或最终回答。连续的思考、工具和活动按原生顺序组成同一组，遇到说明文字或其他消息就分开；单行活动直接显示，不再套一层分组。活动组运行时展开，结束后收起为图标、操作摘要与计数；思考保留在实际发生的位置，使用独立的一行文字预览，展开后使用 Markdown 排版。工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
-<!-- config-contract: webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webHiddenThinkingLevels ui.webPinnedSort ui.webSidebarGrouping ui.webChatsSort ui.webProjectsInRecents ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: codeMode.enabled webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webHiddenThinkingLevels ui.webPinnedSort ui.webSidebarGrouping ui.webChatsSort ui.webProjectsInRecents ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 浏览器模型控制默认关闭。打开 Web「设置 → 浏览器」，可点击完成安装引导、连接检查、总开关、逐个浏览器授权和默认浏览器选择；也可用 `/openpi-setup` 自然语言设置 `browser_control`、`browser_embedded`、`browser_default`、`browser_external`。默认值依次为 `false`、`true`、`embedded`、`[]`：总开关关闭时所有模型浏览器操作都被拒绝，普通 iframe 浏览不受影响。设置中的授权变更通过同一配置写入器和 Pi 原生扩展事件生效，无需一次模型调用。
 

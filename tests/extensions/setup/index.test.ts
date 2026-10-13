@@ -366,6 +366,35 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   );
 });
 
+test("Code Mode setup persists only its preference and rejects invalid values", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const apply = (params: Record<string, unknown>) =>
+    tool.execute(
+      "code-mode-setup",
+      params,
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+  try {
+    await apply({ code_mode_enabled: false, ui_web_theme: "pine" });
+    assert.equal(loadSetupConfig().codeMode.enabled, false);
+    await apply({ workflow_concurrency: 4 });
+    assert.equal(loadSetupConfig().codeMode.enabled, false);
+    const before = readFileSync(SETUP_CONFIG_PATH, "utf8");
+    await assert.rejects(apply({ code_mode_enabled: "on" }));
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), before);
+    await apply({ code_mode_enabled: true });
+    assert.equal(loadSetupConfig().codeMode.enabled, true);
+    assert.equal(loadSetupConfig().ui.webTheme, "pine");
+    assert.equal(loadSetupConfig().workflows.concurrency, 4);
+  } finally {
+    rmSync(SETUP_CONFIG_PATH, { force: true });
+  }
+});
+
 test("response and picker preferences persist through setup without changing unrelated choices", async () => {
   rmSync(SETUP_CONFIG_PATH, { force: true });
   const h = visibilityHarness();
@@ -1590,7 +1619,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Code Mode, Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);

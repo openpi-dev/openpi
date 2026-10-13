@@ -111,6 +111,14 @@ async function runSetupConfigChildScenario({
   });
 }
 
+test("Code Mode defaults on for old documents and preserves an explicit opt-out", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.codeMode.enabled, true);
+  assert.equal(parseSetupConfig({ configVersion: 1 }).codeMode.enabled, true);
+  const config = parseSetupConfig({ codeMode: { enabled: false } });
+  assert.equal(config.codeMode.enabled, false);
+  assert.match(formatSetupConfig(config), /Code Mode default: off/);
+});
+
 test("capability discovery defaults to explicit and accepts adaptive opt-in", () => {
   assert.equal(DEFAULT_SETUP_CONFIG.capabilities.discovery, "explicit");
   assert.equal(
