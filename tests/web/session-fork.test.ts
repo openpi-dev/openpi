@@ -254,6 +254,7 @@ async function gitFixture(root: string) {
   const git = (...args: string[]) =>
     run("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd: root });
   await git("init", "--quiet");
+  await git("config", "core.autocrlf", "false");
   await writeFile(join(root, ".gitignore"), "agent/\n");
   await writeFile(join(root, "tracked.txt"), "committed\n");
   await git("add", ".gitignore", "tracked.txt");

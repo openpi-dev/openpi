@@ -1,17 +1,41 @@
 import { strict as assert } from "node:assert";
-import { execFileSync } from "node:child_process";
+import childProcess, {
+  execFileSync,
+  type ExecFileOptions,
+} from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { syncBuiltinESMExports } from "node:module";
 import { type TestContext, test } from "node:test";
-import {
+import { promisify } from "node:util";
+
+// Launch boundary scripts through Node on every platform. Windows execFile
+// cannot execute a POSIX shebang, and Git Bash's `which` returns /cmd/git.
+const originalExecFile = childProcess.execFile;
+const execFileAsync = promisify(originalExecFile);
+let gitWrapper: string | undefined;
+childProcess.execFile = Object.assign(originalExecFile.bind(childProcess), {
+  [promisify.custom]: (
+    file: string,
+    args: string[],
+    options: ExecFileOptions,
+  ) =>
+    file === "git" && gitWrapper
+      ? execFileAsync(process.execPath, [gitWrapper, ...args], options)
+      : execFileAsync(file, args, options),
+});
+syncBuiltinESMExports();
+const {
   cleanupSessionWorktree,
   createSessionWorktree,
   inspectSessionWorktree,
   SessionWorktreeError,
-} from "../../web/runtime/session-worktree.ts";
+} = await import("../../web/runtime/session-worktree.ts");
+childProcess.execFile = originalExecFile;
+syncBuiltinESMExports();
 
-const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+const realGit = "git";
 const identity = {
   GIT_AUTHOR_NAME: "Worktree test",
   GIT_AUTHOR_EMAIL: "worktree@example.test",
@@ -37,7 +61,8 @@ function fixture(t: TestContext) {
   fs.mkdirSync(repo);
   git(repo, "init", "--quiet", "--initial-branch=main");
   git(repo, "config", "core.autocrlf", "false");
-  git(repo, "config", "core.filemode", "true");
+  git(repo, "config", "core.filemode", String(process.platform !== "win32"));
+  git(repo, "config", "core.symlinks", "true");
   fs.mkdirSync(path.join(repo, "packages", "app"), { recursive: true });
   fs.writeFileSync(
     path.join(repo, "packages", "app", "file.txt"),
@@ -63,17 +88,14 @@ function gitBoundary(
   root: string,
   code: string,
 ) {
-  const wrapper = path.join(root, "bin");
-  fs.mkdirSync(wrapper);
+  const wrapper = path.join(root, "git-boundary.cjs");
   fs.writeFileSync(
-    path.join(wrapper, "git"),
-    `#!${process.execPath}\nconst fs=require('node:fs'); const cp=require('node:child_process'); const args=process.argv.slice(2); const isAdd=args.includes('worktree')&&args.includes('add'); const isApply=args.includes('apply'); const realGit=${JSON.stringify(realGit)}; ${code}\n`,
-    { mode: 0o755 },
+    wrapper,
+    `const fs=require('node:fs'); const cp=require('node:child_process'); const args=process.argv.slice(2); const isAdd=args.includes('worktree')&&args.includes('add'); const isApply=args.includes('apply'); const realGit=${JSON.stringify(realGit)}; ${code}\n`,
   );
-  const previous = process.env.PATH;
-  process.env.PATH = `${wrapper}${path.delimiter}${previous ?? ""}`;
+  gitWrapper = wrapper;
   t.after(() => {
-    process.env.PATH = previous;
+    gitWrapper = undefined;
   });
 }
 
@@ -121,12 +143,15 @@ test("forks source HEAD detached and copies final tracked, untracked, binary, ex
     fs.readFileSync(path.join(result.worktree.path, "binary.bin")),
     binary,
   );
+  if (process.platform !== "win32")
+    assert.equal(
+      fs.statSync(path.join(result.worktree.path, "run.sh")).mode & 0o111,
+      0o111,
+    );
   assert.equal(
-    fs.statSync(path.join(result.worktree.path, "run.sh")).mode & 0o111,
-    0o111,
-  );
-  assert.equal(
-    fs.readlinkSync(path.join(result.worktree.path, "link")),
+    fs
+      .readlinkSync(path.join(result.worktree.path, "link"))
+      .replaceAll("\\", "/"),
     "packages/app/file.txt",
   );
   assert.equal(
