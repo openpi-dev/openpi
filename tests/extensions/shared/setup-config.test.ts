@@ -128,6 +128,86 @@ test("capability discovery defaults to explicit and accepts adaptive opt-in", ()
   );
 });
 
+test("response preferences preserve native defaults and bounded Web thinking filters are canonical", async () => {
+  assert.deepEqual(parseSetupConfig({}).response, {
+    verbosity: "default",
+    reasoningSummary: "default",
+  });
+  assert.deepEqual(parseSetupConfig({}).ui.webHiddenThinkingLevels, []);
+  assert.deepEqual(
+    parseSetupConfig({
+      response: { verbosity: "invalid", reasoningSummary: "off" },
+      ui: { webHiddenThinkingLevels: ["high", "high"] },
+    }).response,
+    DEFAULT_SETUP_CONFIG.response,
+  );
+  assert.deepEqual(
+    parseSetupConfig({ ui: { webHiddenThinkingLevels: ["unknown"] } }).ui
+      .webHiddenThinkingLevels,
+    [],
+  );
+  const before = JSON.stringify({
+    configVersion: 1,
+    response: {
+      verbosity: "medium",
+      reasoningSummary: "concise",
+      futurePreference: true,
+    },
+    ui: { webHiddenThinkingLevels: ["minimal"] },
+  });
+  writeFileSync(SETUP_CONFIG_PATH, before);
+  await updateSetupConfig((config) => ({
+    ...config,
+    response: { ...config.response, verbosity: "high" },
+    ui: { ...config.ui, webHiddenThinkingLevels: [] },
+  }));
+  const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal(saved.response.futurePreference, true);
+  assert.deepEqual(loadSetupConfig().response, {
+    verbosity: "high",
+    reasoningSummary: "concise",
+  });
+  assert.deepEqual(loadSetupConfig().ui.webHiddenThinkingLevels, []);
+  assert.match(
+    formatSetupConfig(loadSetupConfig()),
+    /verbosity high.*reasoning summary concise/,
+  );
+  assert.match(
+    formatSetupConfig(loadSetupConfig()),
+    /Hidden Web thinking levels: none/,
+  );
+  const canonical = readFileSync(SETUP_CONFIG_PATH, "utf8");
+  const controller = new AbortController();
+  await assert.rejects(
+    updateSetupConfig(
+      (config) => ({
+        ...config,
+        response: { verbosity: "low", reasoningSummary: "none" },
+      }),
+      async () => controller.abort(),
+      controller.signal,
+    ),
+    /restored/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), canonical);
+  for (const invalid of [
+    { response: { verbosity: "verbose" } },
+    { response: { reasoningSummary: "off" } },
+    { ui: { webHiddenThinkingLevels: ["max", "max"] } },
+    { ui: { webHiddenThinkingLevels: ["unsupported"] } },
+  ]) {
+    const raw = JSON.stringify({ configVersion: 1, ...invalid });
+    writeFileSync(SETUP_CONFIG_PATH, raw);
+    assert.equal(inspectSetupConfig().writable, false);
+    await assert.rejects(
+      updateSetupConfig((config) => config),
+      /Refusing to overwrite/,
+    );
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  }
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+});
+
 test("FAIL: session child execution admission is opt-in and bounded", () => {
   assert.equal(DEFAULT_SETUP_CONFIG.childExecutions.maxActive, undefined);
   assert.equal(

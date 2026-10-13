@@ -282,6 +282,300 @@ function settingsFetcher(payload = settingsPayload()) {
   });
 }
 
+function configurationPayload() {
+  const base = settingsPayload();
+  return {
+    ...base,
+    responseSupport: { verbosity: true, reasoningSummary: true },
+    thinking: {
+      supported: true,
+      level: "medium",
+      available: ["off", "low", "medium", "high", "max"],
+    },
+    setup: {
+      ...base.setup,
+      response: { verbosity: "default", reasoningSummary: "default" },
+      ui: { ...base.setup.ui, webHiddenThinkingLevels: [] as string[] },
+    },
+  };
+}
+
+it("C12 aborts a previous model's catalog and rejects its late capabilities in the same Session", async () => {
+  const first = configurationPayload();
+  const second = configurationPayload();
+  second.responseSupport = { verbosity: false, reasoningSummary: false };
+  let release = (_reply: Response) => {};
+  const held = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  const firstRequest: { signal?: AbortSignal | null } = {};
+  let reads = 0;
+  const fetcher = settingsFetcher();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/settings/catalog")) {
+        if (++reads === 1) {
+          firstRequest.signal = init?.signal;
+          return held;
+        }
+        return Promise.resolve(reply(second));
+      }
+      return fetcher(input, init);
+    }),
+  );
+  const view = renderSettings();
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+  );
+  view.rerender(settingsElement({ currentModel: models[1] }));
+  const verbosity = await screen.findByRole<HTMLButtonElement>("combobox", {
+    name: i18n.t("configurationVerbosity"),
+  });
+  expect(firstRequest.signal?.aborted).toBe(true);
+  expect(verbosity.disabled).toBe(true);
+  await act(async () => release(reply(first)));
+  expect(verbosity.disabled).toBe(true);
+  expect(
+    screen.getByText(i18n.t("configurationResponsesUnavailable")),
+  ).toBeTruthy();
+});
+
+it("C01-C08 surfaces unreadable canonical configuration and recovers only after a successful refresh", async () => {
+  const payload = {
+    ...configurationPayload(),
+    setupWritable: false,
+    setupDiagnostics: [
+      {
+        severity: "error",
+        path: "response.verbosity",
+        message: "Invalid persisted value",
+      },
+    ],
+  };
+  vi.stubGlobal("fetch", settingsFetcher(payload));
+  renderSettings();
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+  );
+  await screen.findByText("response.verbosity: Invalid persisted value");
+  expect(
+    screen.queryByRole("combobox", { name: i18n.t("configurationVerbosity") }),
+  ).toBeNull();
+  payload.setupWritable = true;
+  payload.setupDiagnostics = [];
+  fireEvent.click(
+    within(screen.getByRole("tabpanel")).getByRole("button", {
+      name: i18n.t("refreshStatus"),
+    }),
+  );
+  expect(
+    (
+      await screen.findByRole<HTMLButtonElement>("combobox", {
+        name: i18n.t("configurationVerbosity"),
+      })
+    ).disabled,
+  ).toBe(false);
+});
+
+it("C01 shows configuration loading without claiming defaults or sandbox capability", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>(() => {})),
+  );
+  const configure = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi: configure });
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+  );
+  expect(screen.getByRole("status").textContent).toBe(
+    i18n.t("settingsCatalogLoading"),
+  );
+  expect(
+    screen.queryByRole("combobox", { name: i18n.t("configurationVerbosity") }),
+  ).toBeNull();
+  expect(
+    screen.queryByText(i18n.t("configurationSandboxUnavailable")),
+  ).toBeNull();
+  expect(configure).not.toHaveBeenCalled();
+});
+
+it("C06 keeps accepted response setup distinct from a saved canonical value and blocks duplicate submission", async () => {
+  vi.stubGlobal("fetch", settingsFetcher(configurationPayload()));
+  const configure = vi.fn(async () => true);
+  const view = renderSettings({ onConfigureOpenPi: configure });
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+  );
+  const verbosity = await screen.findByRole<HTMLButtonElement>("combobox", {
+    name: i18n.t("configurationVerbosity"),
+  });
+  fireEvent.click(verbosity);
+  fireEvent.click(
+    await screen.findByRole("option", {
+      name: i18n.t("configurationVerbosity_high"),
+    }),
+  );
+  await waitFor(() =>
+    expect(configure).toHaveBeenCalledWith(
+      i18n.t("configurationVerbosityRequest", { value: "high" }),
+    ),
+  );
+  expect(verbosity.textContent).toContain(
+    i18n.t("configurationVerbosity_default"),
+  );
+  expect(verbosity.disabled).toBe(true);
+  expect(screen.getByText(i18n.t("setupRequestAccepted"))).toBeTruthy();
+  expect(screen.queryByText(i18n.t("setupOutcome_saved"))).toBeNull();
+  view.rerender(
+    settingsElement({
+      onConfigureOpenPi: configure,
+      setupOutcome: {
+        requestId: "new-configuration",
+        status: "failed",
+        error: "Fixture setup canceled",
+      },
+    }),
+  );
+  await screen.findByText("Fixture setup canceled");
+  await waitFor(() => expect(verbosity.disabled).toBe(false));
+  expect(verbosity.textContent).toContain(
+    i18n.t("configurationVerbosity_default"),
+  );
+  expect(configure).toHaveBeenCalledTimes(1);
+});
+
+it("C08 retains a failed reasoning display preference and retries through the presentation endpoint", async () => {
+  const payload = configurationPayload();
+  const fetcher = settingsFetcher(payload);
+  let fail = true;
+  const patches: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/settings/preferences")) {
+        const patch = JSON.parse(String(init?.body));
+        patches.push(patch);
+        if (fail)
+          return new Response(
+            JSON.stringify({ error: "Fixture save failure" }),
+            { status: 500 },
+          );
+        payload.setup.ui.webHiddenThinkingLevels = patch.hiddenThinkingLevels;
+        return reply({ saved: true, setup: payload.setup });
+      }
+      return fetcher(input, init);
+    }),
+  );
+  const configure = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi: configure });
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: i18n.t("configurationReasoningLevels"),
+    }),
+  );
+  const max = await screen.findByRole<HTMLInputElement>("checkbox", {
+    name: "max",
+  });
+  fireEvent.click(max);
+  await screen.findByText(i18n.t("settingsPreferencesSaveFailed"));
+  expect(max.checked).toBe(true);
+  expect(payload.setup.ui.webHiddenThinkingLevels).toEqual([]);
+  fail = false;
+  fireEvent.click(max);
+  await screen.findByText(i18n.t("settingsPreferencesSaved"));
+  expect(max.checked).toBe(false);
+  expect(patches).toEqual([
+    { hiddenThinkingLevels: ["max"] },
+    { hiddenThinkingLevels: ["max"] },
+  ]);
+  expect(configure).not.toHaveBeenCalled();
+});
+
+it("C10 disables unsupported response controls and never offers editable permission or installer policies", async () => {
+  const payload = configurationPayload();
+  payload.responseSupport = { verbosity: false, reasoningSummary: false };
+  vi.stubGlobal("fetch", settingsFetcher(payload));
+  const runtime = vi.fn();
+  renderSettings({ onOpenRuntimeStatus: runtime });
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+  );
+  expect(
+    (
+      await screen.findByRole<HTMLButtonElement>("combobox", {
+        name: i18n.t("configurationVerbosity"),
+      })
+    ).disabled,
+  ).toBe(true);
+  expect(
+    screen.getByRole<HTMLButtonElement>("combobox", {
+      name: i18n.t("configurationSummary"),
+    }).disabled,
+  ).toBe(true);
+  expect(screen.getByText(i18n.t("configurationPiPermissions"))).toBeTruthy();
+  expect(
+    screen.getByText(i18n.t("configurationSandboxUnavailable")),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("combobox", { name: i18n.t("configurationApproval") }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole("switch", { name: i18n.t("configurationDependencies") }),
+  ).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("configurationRuntimeStatus") }),
+  );
+  expect(runtime).toHaveBeenCalledOnce();
+});
+
+it.each(["failed", "cancelled", "unconfirmed"] as const)(
+  "C07-C08 displays a %s setup receipt ahead of an unrelated presentation success",
+  async (status) => {
+    vi.stubGlobal("fetch", settingsFetcher(configurationPayload()));
+    const configure = vi.fn(async () => true);
+    const view = renderSettings({ onConfigureOpenPi: configure });
+    fireEvent.click(
+      screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+    );
+    fireEvent.click(
+      await screen.findByRole("combobox", {
+        name: i18n.t("configurationVerbosity"),
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("option", {
+        name: i18n.t("configurationVerbosity_high"),
+      }),
+    );
+    await screen.findByText(i18n.t("setupRequestAccepted"));
+    fireEvent.click(
+      screen.getByRole("tab", { name: i18n.t("generalSettings") }),
+    );
+    fireEvent.click(screen.getByRole("radio", { name: i18n.t("themeDark") }));
+    await screen.findByText(i18n.t("settingsPreferencesSaved"));
+    fireEvent.click(
+      screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+    );
+    view.rerender(
+      settingsElement({
+        onConfigureOpenPi: configure,
+        setupOutcome: { requestId: "configuration-terminal", status },
+      }),
+    );
+    await screen.findByText(i18n.t(`setupOutcome_${status}`));
+    expect(screen.queryByText(i18n.t("settingsPreferencesSaved"))).toBeNull();
+    expect(
+      screen.getByRole<HTMLButtonElement>("combobox", {
+        name: i18n.t("configurationVerbosity"),
+      }).textContent,
+    ).toContain(i18n.t("configurationVerbosity_default"));
+  },
+);
+
 it("supports arrow, Home and End navigation with one tabbable settings tab", async () => {
   vi.stubGlobal("fetch", settingsFetcher());
   renderSettings();

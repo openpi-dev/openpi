@@ -86,7 +86,9 @@ test("projects canonical Web appearance values without exposing the post-edit co
         webChatWidth: 960,
         webChatFontSize: 16,
         webExpandThinking: true,
+        webHiddenThinkingLevels: ["minimal", "xhigh"],
       },
+      response: { verbosity: "high", reasoningSummary: "none" },
       postEdit: { command: "npm run format" },
     }),
   );
@@ -107,4 +109,9 @@ test("projects canonical Web appearance values without exposing the post-edit co
   );
   assert.equal(projection.postEditConfigured, true);
   assert.equal("command" in projection, false);
+  assert.deepEqual(projection.response, {
+    verbosity: "high",
+    reasoningSummary: "none",
+  });
+  assert.deepEqual(projection.ui.webHiddenThinkingLevels, ["minimal", "xhigh"]);
 });

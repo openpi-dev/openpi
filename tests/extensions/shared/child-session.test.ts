@@ -496,6 +496,13 @@ test("child resources remove only verified parent-only OpenPI extensions", async
       "native hosted search must not bypass child tool authority",
     );
     assert.equal(
+      extensions.some((extension) =>
+        extension.path.endsWith("/setup/index.ts"),
+      ),
+      false,
+      "parent response preferences and setup writer must not reach child Sessions",
+    );
+    assert.equal(
       extensions.some((extension) => extension.tools.has("openpi_load_tools")),
       false,
       "parent-only OpenPI extension should not reach the child runtime",

@@ -769,6 +769,13 @@ export class PiWebRuntime implements WebRuntimeController {
     return { ...support, ...(model ? { model: model.id, provider: model.provider } : {}) };
   }
 
+  getResponseSupport() {
+    this.assertActive();
+    const model = this.runtime.session.model;
+    const responses = model?.api === "openai-responses" || model?.api === "openai-codex-responses";
+    return { verbosity: responses, reasoningSummary: responses && Boolean(model?.reasoning) };
+  }
+
   reloadSettingsResources(sessionId: string, sessionPath: string) {
     return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
       if (this.sessionManager.getSessionFile() !== sessionPath) {

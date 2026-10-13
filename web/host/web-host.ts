@@ -27,8 +27,8 @@ import {
   webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
-import { isDetailDisplay, isFooterStyle, isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
-import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
+import { inspectSetupConfig, isDetailDisplay, isFooterStyle, isHiddenThinkingLevels, isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
+import { projectWebSetupConfig, projectWebSetupInspection } from "../runtime/settings-catalog.ts";
 import { validModelConfiguration, validProviderConfigurationChange } from "../runtime/model-configuration.ts";
 import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
 import { projectSetupOutcome } from "../protocol/setup-outcome.ts";
@@ -1273,10 +1273,11 @@ export class WebHost {
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
-      const { theme, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, pinnedSort, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
+      const { theme, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, hiddenThinkingLevels, pinnedSort, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
       // Browser appearance is package-wide and independent of agent execution.
       // Keep this surface restricted to presentation fields, including on Plan turns.
-      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "pinnedSort", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
+      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "hiddenThinkingLevels", "pinnedSort", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
+        (hiddenThinkingLevels !== undefined && !isHiddenThinkingLevels(hiddenThinkingLevels)) ||
         (subagentResultDisplay !== undefined && !isDetailDisplay(subagentResultDisplay)) ||
         (bashToolDisplay !== undefined && !isDetailDisplay(bashToolDisplay)) ||
         (fileMutationDisplay !== undefined && !isDetailDisplay(fileMutationDisplay)) ||
@@ -1302,6 +1303,7 @@ export class WebHost {
             ...(auxiliaryWidth !== undefined ? { webAuxiliaryWidth: auxiliaryWidth } : {}),
             ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
             ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
+            ...(isHiddenThinkingLevels(hiddenThinkingLevels) ? { webHiddenThinkingLevels: hiddenThinkingLevels } : {}),
             ...(pinnedSort !== undefined ? { webPinnedSort: pinnedSort } : {}),
             ...(isDetailDisplay(subagentResultDisplay) ? { subagentResultDisplay } : {}),
             ...(isDetailDisplay(bashToolDisplay) ? { bashToolDisplay } : {}),
@@ -1911,12 +1913,17 @@ export class WebHost {
           error: "Pi settings resources are unavailable",
         });
       }
+      const inspectedSetup = inspectSetupConfig();
+      const resources = this.runtime.listSettingsResources();
+      const setupErrors = inspectedSetup.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
       return this.json(response, 200, {
         sessionId: diagnosticSession,
         sessionPath: this.runtime.sessionManager.getSessionFile(),
-        setup: projectWebSetupConfig(loadSetupConfig()),
+        ...projectWebSetupInspection(inspectedSetup),
         webSearch: this.runtime.getWebSearchSupport?.() ?? { available: false, reason: "unknown-connection" },
-        resources: this.runtime.listSettingsResources(),
+        responseSupport: this.runtime.getResponseSupport?.() ?? { verbosity: false, reasoningSummary: false },
+        ...(this.runtime.getThinkingState ? { thinking: { ...boundThinkingProjection(this.runtime.getThinkingState()), revision: this.sequence } } : {}),
+        resources: { ...resources, diagnostics: { ...resources.diagnostics, settingsErrors: (resources.diagnostics.settingsErrors ?? 0) + setupErrors } },
       });
     }
     if (url.pathname === "/api/session-sources" || url.pathname === "/api/session-sources/image") {
@@ -2313,6 +2320,7 @@ export class WebHost {
           auxiliaryWidth: setup.ui.webAuxiliaryWidth,
           chatFontSize: setup.ui.webChatFontSize,
           expandThinking: setup.ui.webExpandThinking,
+          hiddenThinkingLevels: setup.ui.webHiddenThinkingLevels,
           pinnedSort: setup.ui.webPinnedSort,
           subagentResultDisplay: setup.ui.subagentResultDisplay,
           bashToolDisplay: setup.ui.bashToolDisplay,
