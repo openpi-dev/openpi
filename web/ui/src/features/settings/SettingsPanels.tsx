@@ -6,25 +6,18 @@ import {
   Bot,
   Check,
   Clipboard,
-  CloudFog,
   Code2,
   Cpu,
   ExternalLink,
   FileText,
-  Flower2,
   FolderCog,
   Gauge,
   KeyRound,
-  Monitor,
-  Moon,
   Plug,
   Plus,
   RefreshCw,
-  RotateCcw,
   Search,
   Sparkles,
-  Sun,
-  TreePine,
   Wrench,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -36,18 +29,8 @@ import type {
   WebSettingsPluginSummary,
   WebSettingsPreferencesPatch,
   WebSettingsSkillSummary,
-  WebThemePreference,
 } from "../../../../protocol/types.ts";
 import { copyText } from "../../lib/clipboard.ts";
-
-const themes = [
-  { id: "light", label: "themeLight", Icon: Sun },
-  { id: "dark", label: "themeDark", Icon: Moon },
-  { id: "mist", label: "themeMist", Icon: CloudFog },
-  { id: "rose", label: "themeRose", Icon: Flower2 },
-  { id: "pine", label: "themePine", Icon: TreePine },
-  { id: "system", label: "themeSystem", Icon: Monitor },
-] as const;
 
 const roles = ["explorer", "implementer", "reviewer", "advisor"] as const;
 
@@ -151,7 +134,6 @@ export function GeneralSettingsPanel({
   currentModel,
   thinkingLevel,
   cwd,
-  theme,
   setupPending,
   setupBlocked = false,
   preferencePending,
@@ -167,7 +149,6 @@ export function GeneralSettingsPanel({
   currentModel?: WebModelSummary;
   thinkingLevel: string;
   cwd: string;
-  theme: WebThemePreference;
   setupPending: boolean;
   setupBlocked?: boolean;
   preferencePending: boolean;
@@ -180,21 +161,10 @@ export function GeneralSettingsPanel({
 }) {
   const { t } = useTranslation();
   const setup = catalog?.setup;
-  const selectedTheme = setup?.ui.webTheme ?? theme;
-  const [chatWidth, setChatWidth] = useState(setup?.ui.webChatWidth ?? 820);
-  const [chatFontSize, setChatFontSize] = useState(
-    setup?.ui.webChatFontSize ?? 14,
-  );
   const configuredConcurrency = setup?.workflows.concurrency ?? 0;
   const configuredCalls = setup?.workflows.maxAgentCalls ?? 0;
   const [concurrency, setConcurrency] = useState(configuredConcurrency);
   const [maxCalls, setMaxCalls] = useState(configuredCalls);
-
-  useEffect(() => {
-    if (!setup) return;
-    setChatWidth(setup.ui.webChatWidth);
-    setChatFontSize(setup.ui.webChatFontSize);
-  }, [setup]);
 
   useEffect(
     () => setConcurrency(configuredConcurrency),
@@ -221,147 +191,6 @@ export function GeneralSettingsPanel({
         <p className="settings-pending-hint" role="status">
           {setupBlockedReason || t("settingsSetupBusyHint")}
         </p>
-      )}
-
-      <section className="settings-section-block">
-        <h2>{t("appearance")}</h2>
-        <div
-          className="settings-theme-options"
-          role="radiogroup"
-          aria-label={t("appearance")}
-        >
-          {themes.map(({ id, label, Icon }) => (
-            <label
-              key={id}
-              className="settings-theme-option"
-              data-selected={selectedTheme === id ? "true" : undefined}
-            >
-              <input
-                type="radio"
-                name="openpi-web-theme"
-                value={id}
-                checked={selectedTheme === id}
-                disabled={preferencePending}
-                onChange={() => {
-                  void onUpdatePreferences({ theme: id });
-                }}
-              />
-              <Icon aria-hidden="true" />
-              <span>{t(label)}</span>
-            </label>
-          ))}
-        </div>
-      </section>
-
-      {setup && (
-        <section className="settings-section-block settings-chat-controls">
-          <h2>{t("conversationSettings")}</h2>
-          <Switch
-            label={t("expandThinkingByDefault")}
-            value={setup.ui.webExpandThinking}
-            size="sm"
-            width="100%"
-            labelPosition="start"
-            labelSpacing="spread"
-            isDisabled={preferencePending}
-            isLoading={preferencePending}
-            onChange={(checked: boolean) => {
-              void onUpdatePreferences({ expandThinking: checked });
-            }}
-          />
-          <div className="settings-slider-control">
-            <div className="settings-slider-heading">
-              <span>{t("chatContentWidth")}</span>
-              <output>{chatWidth}px</output>
-              <button
-                type="button"
-                className="settings-reset-button"
-                aria-label={t("resetChatContentWidth")}
-                title={t("resetChatContentWidth")}
-                disabled={preferencePending || chatWidth === 820}
-                onClick={() => {
-                  setChatWidth(820);
-                  void onUpdatePreferences({ chatWidth: 820 }).then(
-                    (accepted) => {
-                      if (!accepted) setChatWidth(setup.ui.webChatWidth);
-                    },
-                  );
-                }}
-              >
-                <RotateCcw aria-hidden="true" />
-              </button>
-            </div>
-            <Slider
-              label={t("chatContentWidth")}
-              isLabelHidden
-              value={chatWidth}
-              min={820}
-              max={2000}
-              step={10}
-              width="100%"
-              valueDisplay="none"
-              formatValue={(value: number) => `${value}px`}
-              isDisabled={preferencePending}
-              onChange={(value: number) => setChatWidth(value)}
-              onChangeEnd={(value: number) => {
-                if (value !== setup.ui.webChatWidth) {
-                  void onUpdatePreferences({ chatWidth: value }).then(
-                    (accepted) => {
-                      if (!accepted) setChatWidth(setup.ui.webChatWidth);
-                    },
-                  );
-                }
-              }}
-            />
-          </div>
-          <div className="settings-slider-control">
-            <div className="settings-slider-heading">
-              <span>{t("chatFontSize")}</span>
-              <output>{chatFontSize}px</output>
-              <button
-                type="button"
-                className="settings-reset-button"
-                aria-label={t("resetChatFontSize")}
-                title={t("resetChatFontSize")}
-                disabled={preferencePending || chatFontSize === 14}
-                onClick={() => {
-                  setChatFontSize(14);
-                  void onUpdatePreferences({ chatFontSize: 14 }).then(
-                    (accepted) => {
-                      if (!accepted) setChatFontSize(setup.ui.webChatFontSize);
-                    },
-                  );
-                }}
-              >
-                <RotateCcw aria-hidden="true" />
-              </button>
-            </div>
-            <Slider
-              label={t("chatFontSize")}
-              isLabelHidden
-              value={chatFontSize}
-              min={12}
-              max={24}
-              step={1}
-              width="100%"
-              valueDisplay="none"
-              formatValue={(value: number) => `${value}px`}
-              isDisabled={preferencePending}
-              onChange={(value: number) => setChatFontSize(value)}
-              onChangeEnd={(value: number) => {
-                if (value !== setup.ui.webChatFontSize) {
-                  void onUpdatePreferences({ chatFontSize: value }).then(
-                    (accepted) => {
-                      if (!accepted) {
-                        setChatFontSize(setup.ui.webChatFontSize);
-                      }
-                    },
-                  );
-                }
-              }}
-            />
-          </div>
-        </section>
       )}
 
       <SettingsLoadState

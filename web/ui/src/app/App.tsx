@@ -28,7 +28,11 @@ import {
 import type { DiffLineReference } from "../features/review/DiffCodePreview.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
-import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.tsx";
+import {
+  ProviderSettingsPage,
+  settingsSectionFromUrl,
+  type SettingsSection,
+} from "../features/settings/ProviderSettingsPage.tsx";
 import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
 import { SessionOverview } from "../features/subagents/SessionOverview.tsx";
 import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
@@ -186,7 +190,7 @@ export function App() {
     sessionId: string;
     sessionPath: string;
     cwd: string;
-    entry: "general" | "credentials" | "browser";
+    entry: SettingsSection | "credentials";
   } | null>(null);
   const [workbarWorkspaces, setWorkbarWorkspaces] =
     useState<WorkbarWorkspace[]>(loadWorkbarPositions);
@@ -351,7 +355,7 @@ export function App() {
     if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
   }, [providerSettings, providerSettingsVisible]);
   const openProviderSettings = async (
-    entry: "general" | "credentials" | "browser" = "general",
+    entry: SettingsSection | "credentials" = "general",
   ) => {
     providerSettingsTrigger.current =
       document.activeElement instanceof HTMLElement
@@ -385,6 +389,9 @@ export function App() {
   };
   const closeProviderSettings = useCallback(() => {
     setProviderSettings(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("settings");
+    window.history.replaceState(window.history.state, "", url);
     requestAnimationFrame(() => {
       const trigger = providerSettingsTrigger.current;
       providerSettingsTrigger.current = null;
@@ -690,21 +697,20 @@ export function App() {
       return signal.aborted ? undefined : browserOpener.current?.(url);
     },
   );
-  const browserSettingsLink = useRef(
-    new URLSearchParams(location.search).get("settings") === "browser",
+  const settingsLink = useRef(
+    settingsSectionFromUrl(
+      new URLSearchParams(location.search).get("settings"),
+    ),
   );
-  const openBrowserSettingsFromLink = useEffectEvent(() => {
-    void openProviderSettings("browser");
+  const openSettingsFromLink = useEffectEvent((section: SettingsSection) => {
+    void openProviderSettings(section);
   });
   useEffect(() => {
-    if (
-      !browserSettingsLink.current ||
-      !state.snapshot ||
-      state.sessionSwitching
-    )
+    if (!settingsLink.current || !state.snapshot || state.sessionSwitching)
       return;
-    browserSettingsLink.current = false;
-    openBrowserSettingsFromLink();
+    const section = settingsLink.current;
+    settingsLink.current = undefined;
+    openSettingsFromLink(section);
   }, [state.snapshot, state.sessionSwitching]);
   const auxiliaryVisible = Boolean(
     subagentVisible || workbarVisible || artifactPanelOpen,
@@ -1344,6 +1350,8 @@ export function App() {
             t("unknownState")
           }
           theme={state.snapshot?.preferences.theme ?? "system"}
+          workspaces={state.snapshot?.workspaces ?? []}
+          onRestoreSession={(path) => actions.unarchiveSession(path)}
           plan={state.snapshot?.runtime.plan}
           planSelectionPending={state.planSelectionPending}
           onExitPlan={() => actions.selectPlanMode(false)}

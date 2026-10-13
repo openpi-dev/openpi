@@ -279,7 +279,6 @@ test("General result and footer controls save, restore after reload, and preserv
     .locator(".settings-general-panel")
     .screenshot({ path: testInfo.outputPath("settings-editable-desktop.png") });
   await page.reload();
-  await page.getByRole("button", { name: "设置", exact: true }).click();
   await expect(
     dialog.getByRole("combobox", { name: "Bash 操作", exact: true }),
   ).toHaveValue("full");
@@ -392,6 +391,8 @@ test("model provider cards preserve drafts, stage discovery and keep the existin
   await expect(
     dialog.getByRole("heading", { name: "常规", exact: true }),
   ).toBeVisible();
+  await dialog.getByRole("tab", { name: "外观", exact: true }).click();
+  await dialog.getByRole("button", { name: "高级", exact: true }).click();
   await expect(
     dialog.getByRole("button", { name: "恢复默认聊天宽度" }),
   ).toBeDisabled();
@@ -400,13 +401,16 @@ test("model provider cards preserve drafts, stage discovery and keep the existin
   ).toBeDisabled();
   expect(
     await dialog
-      .locator("section.settings-chat-controls")
+      .locator(".appearance-advanced-content")
       .evaluate((element) => element.clientWidth),
-  ).toBeLessThanOrEqual(420);
+  ).toBeLessThanOrEqual(768);
   const dark = dialog.getByRole("radio", { name: "深色", exact: true });
   await page.keyboard.press("Shift");
   await dark.focus();
-  await expect(dark.locator("..")).toHaveCSS("outline-style", "solid");
+  await expect(dark.locator("+ .appearance-mode-preview")).toHaveCSS(
+    "outline-style",
+    "solid",
+  );
   await page.screenshot({
     path: testInfo.outputPath("settings-general-desktop.png"),
   });

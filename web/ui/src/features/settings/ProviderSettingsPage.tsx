@@ -2,6 +2,7 @@ import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog } from "@astryxdesign/core/Dialog";
 import {
+  Archive,
   Bot,
   Cpu,
   Globe2,
@@ -10,6 +11,7 @@ import {
   Search,
   Shield,
   SlidersHorizontal,
+  Sun,
   X,
 } from "lucide-react";
 import { BrowserSettingsPanel } from "./BrowserSettingsPanel.tsx";
@@ -23,6 +25,7 @@ import type {
   WebSettingsPreferencesPatch,
   WebSnapshot,
   WebThemePreference,
+  WebWorkspaceSummary,
 } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
 import { ProviderModelsSection } from "./ProviderModelsSection.tsx";
@@ -33,9 +36,13 @@ import {
   SubagentsSettingsPanel,
 } from "./SettingsPanels.tsx";
 import { useSettingsCatalog } from "./useSettingsCatalog.ts";
+import { AppearanceSettingsPanel } from "./AppearanceSettingsPanel.tsx";
+import { ArchivedChatsSettingsPanel } from "./ArchivedChatsSettingsPanel.tsx";
 
-type SettingsSection =
+export type SettingsSection =
   | "general"
+  | "appearance"
+  | "archived-chats"
   | "configuration"
   | "models"
   | "browser"
@@ -45,15 +52,94 @@ type SettingsSection =
   | "plugins";
 
 const settingsSections = [
-  { id: "general", label: "generalSettings", Icon: SlidersHorizontal },
-  { id: "models", label: "modelSettings", Icon: Cpu },
-  { id: "browser", label: "browserSettings", Icon: Globe2 },
-  { id: "web-search", label: "webSearchSettings", Icon: Search },
-  { id: "configuration", label: "configurationSettings", Icon: Shield },
-  { id: "skills", label: "skillsSettings", Icon: Layers3 },
-  { id: "subagents", label: "subagentsSettings", Icon: Bot },
-  { id: "plugins", label: "pluginsSettings", Icon: Plug },
+  {
+    id: "general",
+    group: "settingsPersonal",
+    label: "generalSettings",
+    Icon: SlidersHorizontal,
+    terms: ["agentBehavior", "resultDisplay", "workflowLimits"],
+  },
+  {
+    id: "appearance",
+    group: "settingsPersonal",
+    label: "appearance",
+    Icon: Sun,
+    terms: [
+      "appearanceTheme",
+      "appearanceAccent",
+      "appearanceFont",
+      "chatContentWidth",
+      "chatFontSize",
+    ],
+  },
+  {
+    id: "archived-chats",
+    group: "settingsPersonal",
+    label: "settingsArchivedChats",
+    Icon: Archive,
+    terms: ["restoreConversation"],
+  },
+  {
+    id: "configuration",
+    group: "settingsPersonal",
+    label: "configurationSettings",
+    Icon: Shield,
+    terms: [
+      "configurationApproval",
+      "configurationSandbox",
+      "configurationVerbosity",
+      "configurationSummary",
+      "configurationReasoningLevels",
+      "configurationDependencies",
+    ],
+  },
+  {
+    id: "models",
+    group: "settingsAgent",
+    label: "modelSettings",
+    Icon: Cpu,
+    terms: ["modelDefaultTitle"],
+  },
+  {
+    id: "subagents",
+    group: "settingsAgent",
+    label: "subagentsSettings",
+    Icon: Bot,
+    terms: [],
+  },
+  {
+    id: "web-search",
+    group: "settingsAgent",
+    label: "webSearchSettings",
+    Icon: Search,
+    terms: [],
+  },
+  {
+    id: "skills",
+    group: "settingsIntegrations",
+    label: "skillsSettings",
+    Icon: Layers3,
+    terms: [],
+  },
+  {
+    id: "plugins",
+    group: "settingsIntegrations",
+    label: "pluginsSettings",
+    Icon: Plug,
+    terms: [],
+  },
+  {
+    id: "browser",
+    group: "settingsIntegrations",
+    label: "browserSettings",
+    Icon: Globe2,
+    terms: [],
+  },
 ] as const;
+
+export function settingsSectionFromUrl(value: string | null) {
+  return settingsSections.find(({ id }) => id === value)?.id;
+}
 
 export function ProviderSettingsPage({
   sessionId,
@@ -64,6 +150,8 @@ export function ProviderSettingsPage({
   currentModel,
   thinkingLevel,
   theme,
+  workspaces = [],
+  onRestoreSession,
   capabilities,
   setupBusy: sessionBusy,
   setupBlockedReason,
@@ -81,11 +169,13 @@ export function ProviderSettingsPage({
   sessionId: string;
   sessionPath?: string;
   cwd: string;
-  entry?: "general" | "credentials" | "browser";
+  entry?: SettingsSection | "credentials";
   models: WebModelSummary[];
   currentModel?: WebModelSummary;
   thinkingLevel: string;
   theme: WebThemePreference;
+  workspaces?: WebWorkspaceSummary[];
+  onRestoreSession?: (path: string) => Promise<boolean>;
   capabilities?: WebCapabilitySnapshot;
   setupBusy: boolean;
   setupBlockedReason?: string;
@@ -105,10 +195,13 @@ export function ProviderSettingsPage({
   const setupBusy = sessionBusy || Boolean(setupBlockedReason);
   const closeButton = useRef<HTMLButtonElement>(null);
   const tabs = useRef<HTMLDivElement>(null);
+  const [search, setSearch] = useState("");
   const [section, setSection] = useState<SettingsSection>(
     entry === "credentials" ? "models" : entry,
   );
-  const [modelsVisited, setModelsVisited] = useState(entry === "credentials");
+  const [modelsVisited, setModelsVisited] = useState(
+    entry === "credentials" || entry === "models",
+  );
   const [setupPending, setSetupPending] = useState(false);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
   const [setupSection, setSetupSection] = useState<SettingsSection>("general");
@@ -116,6 +209,7 @@ export function ProviderSettingsPage({
   const setupObservedBusy = useRef(false);
   const setupRefreshTimer = useRef(0);
   const [preferencePending, setPreferencePending] = useState(false);
+  const preferenceInFlight = useRef(false);
   const [preferencesSaved, setPreferencesSaved] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [modelDraftDirty, setModelDraftDirty] = useState(false);
@@ -241,7 +335,8 @@ export function ProviderSettingsPage({
   };
 
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
-    if (preferencePending || !catalog) return false;
+    if (preferenceInFlight.current || !catalog) return false;
+    preferenceInFlight.current = true;
     setPreferencePending(true);
     setPreferencesSaved(false);
     setSetupError(null);
@@ -255,6 +350,7 @@ export function ProviderSettingsPage({
       setSetupError(t("settingsPreferencesSaveFailed"));
       return false;
     } finally {
+      preferenceInFlight.current = false;
       setPreferencePending(false);
     }
   };
@@ -262,9 +358,23 @@ export function ProviderSettingsPage({
   const selectSection = (next: SettingsSection) => {
     if (saving) return;
     setSection(next);
+    setSearch("");
     if (next === "models") setModelsVisited(true);
     setSetupError(null);
   };
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("settings", section);
+    window.history.replaceState(window.history.state, "", url);
+  }, [section]);
+  const visibleSections = settingsSections.filter(({ label, terms }) =>
+    [label, ...terms].some((key) =>
+      t(key)
+        .normalize("NFKC")
+        .toLocaleLowerCase()
+        .includes(search.trim().normalize("NFKC").toLocaleLowerCase()),
+    ),
+  );
   const navigate = (
     target: NonNullable<typeof pendingNavigation>,
     discard = false,
@@ -284,7 +394,7 @@ export function ProviderSettingsPage({
       isOpen
       purpose="info"
       padding={0}
-      width={1080}
+      width="calc(100vw - 32px)"
       maxHeight="calc(100dvh - 16px)"
       className="provider-settings-dialog"
       aria-label={t("settings")}
@@ -293,76 +403,131 @@ export function ProviderSettingsPage({
       }}
     >
       <section className="provider-settings-surface">
-        <header className="provider-settings-header">
-          <strong className="provider-settings-title">{t("settings")}</strong>
-          <select
-            className="provider-settings-mobile-picker"
-            aria-label={t("settingsNavigation")}
-            disabled={saving}
-            value={section}
-            onChange={(event) => {
-              const next = settingsSections.find(
-                ({ id }) => id === event.target.value,
-              );
-              if (next) selectSection(next.id);
-            }}
-          >
-            {settingsSections.map(({ id, label }) => (
-              <option key={id} value={id}>
-                {t(label)}
-              </option>
-            ))}
-          </select>
+        <aside className="provider-settings-sidebar">
+          <header className="provider-settings-header">
+            <strong className="provider-settings-title">{t("settings")}</strong>
+            <select
+              className="provider-settings-mobile-picker"
+              aria-label={t("settingsNavigation")}
+              disabled={saving}
+              value={section}
+              onChange={(event) => {
+                const next = settingsSections.find(
+                  ({ id }) => id === event.target.value,
+                );
+                if (next) selectSection(next.id);
+              }}
+            >
+              {settingsSections.map(({ id, label }) => (
+                <option key={id} value={id}>
+                  {t(label)}
+                </option>
+              ))}
+            </select>
+          </header>
+          <label className="provider-settings-search">
+            <Search aria-hidden="true" />
+            <input
+              type="search"
+              aria-label={t("settingsSearch")}
+              placeholder={t("settingsSearch")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              disabled={saving}
+            />
+            {search && (
+              <button
+                type="button"
+                aria-label={t("settingsClearSearch")}
+                onClick={() => setSearch("")}
+              >
+                <X aria-hidden="true" />
+              </button>
+            )}
+          </label>
           <div
             className="provider-settings-navigation"
             ref={tabs}
             aria-label={t("settingsNavigation")}
             role="tablist"
+            aria-orientation="vertical"
           >
-            {settingsSections.map(({ id, label, Icon }, index) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                disabled={saving}
-                id={`settings-tab-${id}`}
-                tabIndex={section === id ? 0 : -1}
-                aria-selected={section === id}
-                aria-controls={`settings-panel-${id}`}
-                className="provider-settings-tab"
-                title={t(label)}
-                onClick={() => selectSection(id)}
-                onKeyDown={(event) => {
-                  if (
-                    event.altKey ||
-                    event.ctrlKey ||
-                    event.metaKey ||
-                    event.nativeEvent.isComposing
-                  )
-                    return;
-                  const next =
-                    event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? settingsSections.length - 1
-                        : event.key === "ArrowRight"
-                          ? (index + 1) % settingsSections.length
-                          : event.key === "ArrowLeft"
-                            ? (index + settingsSections.length - 1) %
-                              settingsSections.length
-                            : undefined;
-                  if (next === undefined) return;
-                  event.preventDefault();
-                  selectSection(settingsSections[next]!.id);
-                  tabs.current
-                    ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
-                    [next]?.focus();
-                }}
-              >
-                <Icon aria-hidden="true" />
-                <span>{t(label)}</span>
-              </button>
-            ))}
+            {["settingsPersonal", "settingsAgent", "settingsIntegrations"].map(
+              (group) => (
+                <div className="provider-settings-nav-group" key={group}>
+                  {visibleSections.some((item) => item.group === group) && (
+                    <p>{t(group)}</p>
+                  )}
+                  {visibleSections
+                    .filter((item) => item.group === group)
+                    .map(({ id, label, Icon }) => (
+                      <button
+                        key={id}
+                        type="button"
+                        role="tab"
+                        disabled={saving}
+                        id={`settings-tab-${id}`}
+                        tabIndex={
+                          section === id ||
+                          (!visibleSections.some(
+                            (item) => item.id === section,
+                          ) &&
+                            visibleSections[0]?.id === id)
+                            ? 0
+                            : -1
+                        }
+                        aria-selected={section === id}
+                        aria-controls={`settings-panel-${id}`}
+                        className="provider-settings-tab"
+                        title={t(label)}
+                        onClick={() => selectSection(id)}
+                        onKeyDown={(event) => {
+                          if (
+                            event.altKey ||
+                            event.ctrlKey ||
+                            event.metaKey ||
+                            event.nativeEvent.isComposing
+                          )
+                            return;
+                          const index = visibleSections.findIndex(
+                            (item) => item.id === id,
+                          );
+                          const next =
+                            event.key === "Home"
+                              ? 0
+                              : event.key === "End"
+                                ? visibleSections.length - 1
+                                : event.key === "ArrowDown" ||
+                                    event.key === "ArrowRight"
+                                  ? (index + 1) % visibleSections.length
+                                  : event.key === "ArrowUp" ||
+                                      event.key === "ArrowLeft"
+                                    ? (index + visibleSections.length - 1) %
+                                      visibleSections.length
+                                    : undefined;
+                          if (next === undefined) return;
+                          event.preventDefault();
+                          const target = visibleSections[next]!.id;
+                          selectSection(target);
+                          tabs.current
+                            ?.querySelector<HTMLButtonElement>(
+                              `#settings-tab-${target}`,
+                            )
+                            ?.focus();
+                        }}
+                      >
+                        <Icon aria-hidden="true" />
+                        <span>{t(label)}</span>
+                      </button>
+                    ))}
+                </div>
+              ),
+            )}
+            {visibleSections.length === 0 && (
+              <p className="provider-settings-no-results" role="status">
+                {t("settingsNoResults")}
+              </p>
+            )}
           </div>
           <button
             ref={closeButton}
@@ -375,228 +540,267 @@ export function ProviderSettingsPage({
           >
             <X />
           </button>
-        </header>
+        </aside>
 
-        {planBlocked && section !== "browser" && (
-          <div className="settings-plan-notice" role="status">
-            <span>{t(setupBusy ? "setupPlanBusy" : "setupPlanBlocked")}</span>
-            <Button
-              label={t("planModeExit")}
-              variant="secondary"
-              size="sm"
-              isDisabled={setupBusy || planSelectionPending || !onExitPlan}
-              onClick={() => void onExitPlan?.()}
-            />
-          </div>
-        )}
-        <div className="provider-settings-main">
-          <div
-            id="settings-panel-configuration"
-            aria-labelledby="settings-tab-configuration"
-            role="tabpanel"
-            hidden={section !== "configuration"}
-          >
-            {section === "configuration" && (
-              <ConfigurationSettingsPanel
-                catalog={catalog}
-                error={catalogError}
-                pending={
-                  setupDisabled ||
-                  (setupSubmitted &&
-                    setupSection === "configuration" &&
-                    (!currentOutcome || currentOutcome.status === "pending"))
-                }
-                preferencePending={preferencePending}
-                onConfigure={configureOpenPi}
-                onUpdatePreferences={updateWebPreferences}
-                onRefresh={refresh}
-                onOpenRuntimeStatus={() => navigate({ kind: "runtime" })}
+        <div className="provider-settings-body">
+          {planBlocked && section !== "browser" && (
+            <div className="settings-plan-notice" role="status">
+              <span>{t(setupBusy ? "setupPlanBusy" : "setupPlanBlocked")}</span>
+              <Button
+                label={t("planModeExit")}
+                variant="secondary"
+                size="sm"
+                isDisabled={setupBusy || planSelectionPending || !onExitPlan}
+                onClick={() => void onExitPlan?.()}
               />
-            )}
-          </div>
-          <div
-            id="settings-panel-web-search"
-            aria-labelledby="settings-tab-web-search"
-            role="tabpanel"
-            hidden={section !== "web-search"}
-          >
-            {section === "web-search" && (
-              <WebSearchSettingsPanel
-                catalog={catalog}
-                error={catalogError}
-                pending={setupDisabled}
-                onConfigure={configureOpenPi}
-                onRefresh={refresh}
-              />
-            )}
-          </div>
-          <div
-            id="settings-panel-browser"
-            aria-labelledby="settings-tab-browser"
-            role="tabpanel"
-            hidden={section !== "browser"}
-          >
-            {section === "browser" && (
-              <BrowserSettingsPanel onSaved={onPreferencesChanged} />
-            )}
-          </div>
-          <div
-            id="settings-panel-general"
-            aria-labelledby="settings-tab-general"
-            role="tabpanel"
-            hidden={section !== "general"}
-          >
-            <GeneralSettingsPanel
-              catalog={catalog}
-              error={catalogError}
-              currentModel={currentModel}
-              thinkingLevel={thinkingLevel}
-              cwd={cwd}
-              theme={theme}
-              setupPending={setupPending || setupBusy}
-              preferencePending={preferencePending || !catalog}
-              setupBusy={setupBusy}
-              setupBlockedReason={setupBlockedReason}
-              setupBlocked={planBlocked || planSelectionPending}
-              onConfigure={configureOpenPi}
-              onUpdatePreferences={updateWebPreferences}
-              onOpenRuntimeStatus={() => navigate({ kind: "runtime" })}
-              onRefresh={refresh}
-            />
-          </div>
-
-          <section
-            id="settings-panel-models"
-            aria-labelledby="settings-tab-models"
-            className="settings-models"
-            role="tabpanel"
-            hidden={section !== "models"}
-          >
-            {modelsVisited && (
-              <ProviderModelsSection
-                key={sessionId}
-                sessionId={sessionId}
-                sessionPath={sessionPath}
-                models={models}
-                currentModel={currentModel}
-                busy={setupBusy}
-                focusCredentials={entry === "credentials"}
-                onSaved={async () => {
-                  refresh();
-                  return onPreferencesChanged();
-                }}
-                onSelectModel={onSelectModel}
-                onDraftChange={setModelDraftDirty}
-                onSavingChange={setModelSaving}
-              />
-            )}
-          </section>
-
-          <div
-            id="settings-panel-skills"
-            aria-labelledby="settings-tab-skills"
-            role="tabpanel"
-            hidden={section !== "skills"}
-          >
-            <SkillsSettingsPanel
-              key={sessionId}
-              catalog={catalog}
-              error={catalogError}
-              onRefresh={refresh}
-              setupPending={setupDisabled}
-              onConfigure={configureOpenPi}
-              onReload={reloadResources}
-            />
-          </div>
-
-          <div
-            id="settings-panel-subagents"
-            aria-labelledby="settings-tab-subagents"
-            role="tabpanel"
-            hidden={section !== "subagents"}
-          >
-            <SubagentsSettingsPanel
-              catalog={catalog}
-              error={catalogError}
-              currentModel={currentModel}
-              models={models}
-              activity={capabilities?.subagents}
-              setupPending={setupPending || setupBusy}
-              setupBlocked={planBlocked || planSelectionPending}
-              onConfigure={configureOpenPi}
-              onRefresh={refresh}
-            />
-          </div>
-
-          <div
-            id="settings-panel-plugins"
-            aria-labelledby="settings-tab-plugins"
-            role="tabpanel"
-            hidden={section !== "plugins"}
-          >
-            <PluginsSettingsPanel
-              key={sessionId}
-              catalog={catalog}
-              error={catalogError}
-              onRefresh={refresh}
-              setupPending={setupDisabled}
-              onConfigure={configureOpenPi}
-              onReload={reloadResources}
-            />
-          </div>
-        </div>
-        {interaction}
-        {setupError && (
-          <div className="settings-global-error" role="alert">
-            {setupError}
-          </div>
-        )}
-        {(preferencePending || preferencesSaved) &&
-          !setupError &&
-          !setupNeedsAttention && (
-            <div className="settings-global-status" role="status">
-              {t(
-                preferencePending
-                  ? "savingSettings"
-                  : "settingsPreferencesSaved",
+            </div>
+          )}
+          <div className="provider-settings-main">
+            <div
+              id="settings-panel-configuration"
+              aria-labelledby="settings-tab-configuration"
+              aria-label={t("configurationSettings")}
+              role="tabpanel"
+              hidden={section !== "configuration"}
+            >
+              {section === "configuration" && (
+                <ConfigurationSettingsPanel
+                  catalog={catalog}
+                  error={catalogError}
+                  pending={
+                    setupDisabled ||
+                    (setupSubmitted &&
+                      setupSection === "configuration" &&
+                      (!currentOutcome || currentOutcome.status === "pending"))
+                  }
+                  preferencePending={preferencePending}
+                  onConfigure={configureOpenPi}
+                  onUpdatePreferences={updateWebPreferences}
+                  onRefresh={refresh}
+                  onOpenRuntimeStatus={() => navigate({ kind: "runtime" })}
+                />
               )}
             </div>
-          )}
-        {!preferencePending &&
-          (!preferencesSaved || setupNeedsAttention) &&
-          ((setupSubmitted && setupSection === section) || currentOutcome) &&
-          !setupError && (
             <div
-              className={
-                currentOutcome?.status === "failed"
-                  ? "settings-global-error"
-                  : "settings-global-status"
-              }
-              role={currentOutcome?.status === "failed" ? "alert" : "status"}
+              id="settings-panel-appearance"
+              aria-labelledby="settings-tab-appearance"
+              aria-label={t("appearance")}
+              role="tabpanel"
+              hidden={section !== "appearance"}
             >
-              {currentOutcome
-                ? t(
-                    (section === "skills" ||
-                      section === "plugins" ||
-                      section === "web-search") &&
-                      ["unconfirmed", "saved", "unchanged"].includes(
-                        currentOutcome.status,
-                      )
-                      ? "resourceRequestFinished"
-                      : `setupOutcome_${currentOutcome.status}`,
-                  )
-                : t(
-                    setupBusy
-                      ? "setupRequestRunning"
-                      : section === "skills" ||
-                          section === "plugins" ||
-                          section === "web-search"
-                        ? "resourceRequestSubmitted"
-                        : "setupRequestAccepted",
-                  )}
-              {currentOutcome?.error && <p>{currentOutcome.error}</p>}
+              <AppearanceSettingsPanel
+                catalog={catalog}
+                theme={theme}
+                pending={preferencePending}
+                error={catalogError}
+                onRefresh={refresh}
+                onUpdatePreferences={updateWebPreferences}
+              />
+            </div>
+            <div
+              id="settings-panel-archived-chats"
+              aria-labelledby="settings-tab-archived-chats"
+              aria-label={t("settingsArchivedChats")}
+              role="tabpanel"
+              hidden={section !== "archived-chats"}
+            >
+              {section === "archived-chats" && (
+                <ArchivedChatsSettingsPanel
+                  workspaces={workspaces}
+                  onRestore={onRestoreSession ?? (async () => false)}
+                />
+              )}
+            </div>
+            <div
+              id="settings-panel-web-search"
+              aria-labelledby="settings-tab-web-search"
+              aria-label={t("webSearchSettings")}
+              role="tabpanel"
+              hidden={section !== "web-search"}
+            >
+              {section === "web-search" && (
+                <WebSearchSettingsPanel
+                  catalog={catalog}
+                  error={catalogError}
+                  pending={setupDisabled}
+                  onConfigure={configureOpenPi}
+                  onRefresh={refresh}
+                />
+              )}
+            </div>
+            <div
+              id="settings-panel-browser"
+              aria-labelledby="settings-tab-browser"
+              aria-label={t("browserSettings")}
+              role="tabpanel"
+              hidden={section !== "browser"}
+            >
+              {section === "browser" && (
+                <BrowserSettingsPanel onSaved={onPreferencesChanged} />
+              )}
+            </div>
+            <div
+              id="settings-panel-general"
+              aria-labelledby="settings-tab-general"
+              aria-label={t("generalSettings")}
+              role="tabpanel"
+              hidden={section !== "general"}
+            >
+              <GeneralSettingsPanel
+                catalog={catalog}
+                error={catalogError}
+                currentModel={currentModel}
+                thinkingLevel={thinkingLevel}
+                cwd={cwd}
+                setupPending={setupPending || setupBusy}
+                preferencePending={preferencePending || !catalog}
+                setupBusy={setupBusy}
+                setupBlockedReason={setupBlockedReason}
+                setupBlocked={planBlocked || planSelectionPending}
+                onConfigure={configureOpenPi}
+                onUpdatePreferences={updateWebPreferences}
+                onOpenRuntimeStatus={() => navigate({ kind: "runtime" })}
+                onRefresh={refresh}
+              />
+            </div>
+
+            <section
+              id="settings-panel-models"
+              aria-labelledby="settings-tab-models"
+              aria-label={t("modelSettings")}
+              className="settings-models"
+              role="tabpanel"
+              hidden={section !== "models"}
+            >
+              {modelsVisited && (
+                <ProviderModelsSection
+                  key={sessionId}
+                  sessionId={sessionId}
+                  sessionPath={sessionPath}
+                  models={models}
+                  currentModel={currentModel}
+                  busy={setupBusy}
+                  focusCredentials={entry === "credentials"}
+                  onSaved={async () => {
+                    refresh();
+                    return onPreferencesChanged();
+                  }}
+                  onSelectModel={onSelectModel}
+                  onDraftChange={setModelDraftDirty}
+                  onSavingChange={setModelSaving}
+                />
+              )}
+            </section>
+
+            <div
+              id="settings-panel-skills"
+              aria-labelledby="settings-tab-skills"
+              aria-label={t("skillsSettings")}
+              role="tabpanel"
+              hidden={section !== "skills"}
+            >
+              <SkillsSettingsPanel
+                key={sessionId}
+                catalog={catalog}
+                error={catalogError}
+                onRefresh={refresh}
+                setupPending={setupDisabled}
+                onConfigure={configureOpenPi}
+                onReload={reloadResources}
+              />
+            </div>
+
+            <div
+              id="settings-panel-subagents"
+              aria-labelledby="settings-tab-subagents"
+              aria-label={t("subagentsSettings")}
+              role="tabpanel"
+              hidden={section !== "subagents"}
+            >
+              <SubagentsSettingsPanel
+                catalog={catalog}
+                error={catalogError}
+                currentModel={currentModel}
+                models={models}
+                activity={capabilities?.subagents}
+                setupPending={setupPending || setupBusy}
+                setupBlocked={planBlocked || planSelectionPending}
+                onConfigure={configureOpenPi}
+                onRefresh={refresh}
+              />
+            </div>
+
+            <div
+              id="settings-panel-plugins"
+              aria-labelledby="settings-tab-plugins"
+              aria-label={t("pluginsSettings")}
+              role="tabpanel"
+              hidden={section !== "plugins"}
+            >
+              <PluginsSettingsPanel
+                key={sessionId}
+                catalog={catalog}
+                error={catalogError}
+                onRefresh={refresh}
+                setupPending={setupDisabled}
+                onConfigure={configureOpenPi}
+                onReload={reloadResources}
+              />
+            </div>
+          </div>
+          {interaction}
+          {setupError && (
+            <div className="settings-global-error" role="alert">
+              {setupError}
             </div>
           )}
+          {(preferencePending || preferencesSaved) &&
+            !setupError &&
+            !setupNeedsAttention && (
+              <div className="settings-global-status" role="status">
+                {t(
+                  preferencePending
+                    ? "savingSettings"
+                    : "settingsPreferencesSaved",
+                )}
+              </div>
+            )}
+          {!preferencePending &&
+            (!preferencesSaved || setupNeedsAttention) &&
+            ((setupSubmitted && setupSection === section) || currentOutcome) &&
+            !setupError && (
+              <div
+                className={
+                  currentOutcome?.status === "failed"
+                    ? "settings-global-error"
+                    : "settings-global-status"
+                }
+                role={currentOutcome?.status === "failed" ? "alert" : "status"}
+              >
+                {currentOutcome
+                  ? t(
+                      (section === "skills" ||
+                        section === "plugins" ||
+                        section === "web-search") &&
+                        ["unconfirmed", "saved", "unchanged"].includes(
+                          currentOutcome.status,
+                        )
+                        ? "resourceRequestFinished"
+                        : `setupOutcome_${currentOutcome.status}`,
+                    )
+                  : t(
+                      setupBusy
+                        ? "setupRequestRunning"
+                        : section === "skills" ||
+                            section === "plugins" ||
+                            section === "web-search"
+                          ? "resourceRequestSubmitted"
+                          : "setupRequestAccepted",
+                    )}
+                {currentOutcome?.error && <p>{currentOutcome.error}</p>}
+              </div>
+            )}
+        </div>
       </section>
       {pendingNavigation && (
         <AlertDialog

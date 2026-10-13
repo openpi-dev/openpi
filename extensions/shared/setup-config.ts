@@ -115,6 +115,35 @@ export const WEB_THEMES = [
 ] as const;
 export type WebTheme = (typeof WEB_THEMES)[number];
 
+export const WEB_APPEARANCE_PALETTES = [
+  "default",
+  "mist",
+  "rose",
+  "pine",
+] as const;
+export const WEB_APPEARANCE_FONTS = [
+  "system",
+  "sans",
+  "serif",
+  "mono",
+] as const;
+
+export interface WebAppearancePreference {
+  readonly palette: (typeof WEB_APPEARANCE_PALETTES)[number];
+  readonly accent: string;
+  readonly background: string;
+  readonly foreground: string;
+  readonly font: (typeof WEB_APPEARANCE_FONTS)[number];
+}
+
+export const DEFAULT_WEB_APPEARANCE: WebAppearancePreference = {
+  palette: "default",
+  accent: "",
+  background: "",
+  foreground: "",
+  font: "system",
+};
+
 export const DEFAULT_WEB_CHAT_WIDTH = 820;
 export const MIN_WEB_CHAT_WIDTH = 820;
 export const MAX_WEB_CHAT_WIDTH = 2_000;
@@ -227,6 +256,7 @@ export interface MyPiSetupConfig {
   };
   readonly ui: {
     readonly webTheme: WebTheme;
+    readonly webAppearance: WebAppearancePreference;
     readonly webChatWidth: number;
     readonly webSidebarWidth: number;
     readonly webAuxiliaryWidth: number;
@@ -274,6 +304,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   },
   ui: {
     webTheme: "system",
+    webAppearance: DEFAULT_WEB_APPEARANCE,
     webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
     webSidebarWidth: DEFAULT_WEB_SIDEBAR_WIDTH,
     webAuxiliaryWidth: DEFAULT_WEB_AUXILIARY_WIDTH,
@@ -305,6 +336,28 @@ const ESTIMATED_PROCESS_STARTED_AT = Math.max(
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+export function isWebAppearancePreference(
+  value: unknown,
+): value is WebAppearancePreference {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.keys(value).every((key) =>
+      ["palette", "accent", "background", "foreground", "font"].includes(key),
+    ) &&
+    WEB_APPEARANCE_PALETTES.includes(
+      value.palette as WebAppearancePreference["palette"],
+    ) &&
+    WEB_APPEARANCE_FONTS.includes(
+      value.font as WebAppearancePreference["font"],
+    ) &&
+    [value.accent, value.background, value.foreground].every(
+      (color) =>
+        typeof color === "string" && /^(?:|#[0-9a-f]{6})$/iu.test(color),
+    )
+  );
+}
 
 const isReasoningLevel = (value: unknown): value is ReasoningLevel =>
   typeof value === "string" &&
@@ -664,6 +717,9 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
+      webAppearance: isWebAppearancePreference(ui.webAppearance)
+        ? { ...ui.webAppearance }
+        : { ...DEFAULT_WEB_APPEARANCE },
       webPinnedSort: ui.webPinnedSort === "updated" ? "updated" : "manual",
       webChatWidth: boundedIntegerRange(
         ui.webChatWidth,
@@ -791,6 +847,7 @@ const setupShape: ConfigShape = {
   },
   ui: {
     webTheme: isWebTheme,
+    webAppearance: isWebAppearancePreference,
     webChatWidth: integerBetween(MIN_WEB_CHAT_WIDTH, MAX_WEB_CHAT_WIDTH),
     webSidebarWidth: integerBetween(
       MIN_WEB_SIDEBAR_WIDTH,
@@ -1535,7 +1592,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"
       : `Session child executions: ${config.childExecutions.maxActive} active slots shared by Workflow, Direct Subagent, and BTW`,
-    `UI: Web theme ${config.ui.webTheme} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · pinned ${config.ui.webPinnedSort} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
+    `UI: Web theme ${config.ui.webTheme} · palette ${config.ui.webAppearance.palette} · accent ${config.ui.webAppearance.accent || "theme default"} / background ${config.ui.webAppearance.background || "theme default"} / foreground ${config.ui.webAppearance.foreground || "theme default"} · font ${config.ui.webAppearance.font} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · pinned ${config.ui.webPinnedSort} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,

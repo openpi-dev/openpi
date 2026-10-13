@@ -449,9 +449,11 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 ### 自然语言配置与页面设置
 
-`/openpi-setup` 是自然语言配置入口。Web 的主题、聊天宽度、字号、默认展开思考块、可见推理强度和置顶排序控件直接保存，不调用模型、不产生聊天消息，模型运行或 Plan 模式下也可调整。这些展示偏好仍使用同一份 `my-pi-setup.json` 和共享配置锁、校验、未知字段保留及原子写入；以保存接口成功回执更新界面。其他 OpenPI 自有配置继续通过 setup 回合修改。
+`/openpi-setup` 是自然语言配置入口。Web 的主题、配色、字体、聊天宽度、字号、默认展开思考块、可见推理强度和置顶排序控件直接保存，不调用模型、不产生聊天消息，模型运行或 Plan 模式下也可调整。这些展示偏好仍使用同一份 `my-pi-setup.json` 和共享配置锁、校验、未知字段保留及原子写入；以保存接口成功回执更新界面。其他 OpenPI 自有配置继续通过 setup 回合修改。
 
 Web「配置」页的响应详细程度和推理摘要通过 `/openpi-setup` 保存为 `response_verbosity`（`default` / `low` / `medium` / `high`）与 `response_reasoning_summary`（`default` / `auto` / `concise` / `detailed` / `none`）。两者默认 `default`，保留 Pi 的原生请求。它们仅作用于当前模型的 OpenAI Responses / Codex Responses API；摘要还要求原生推理能力和已有 reasoning 参数。`none` 仅移除摘要请求，不关闭推理或删除 reasoning effort。其他 API 保持原请求。可见推理强度使用 `web_hidden_thinking_levels` 保存隐藏列表，默认 `[]`；合法值为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，与 Pi 原生支持列表求交后展示，并保留当前选中值，不改变模型能力或当前 Session 的推理强度。
+
+Web 外观将模式与配色分开：`ui.webTheme` 的新模式选择为 `system` / `light` / `dark`；`ui.webAppearance` 是完整对象，默认 `{ "palette": "default", "accent": "", "background": "", "foreground": "", "font": "system" }`。`palette` 可选 `default` / `mist` / `rose` / `pine`，`font` 可选 `system` / `sans` / `serif` / `mono`；三种颜色只允许空串（使用主题默认色）或 `#RRGGBB`。保存外观时整对象替换并拒绝未知字段，不接受嵌套局部修改。旧 `ui.webTheme` 的 `mist` / `rose` / `pine` 继续优先作为旧配色预设；替换旧预设时同时保存新模式和外观对象。`/openpi-setup` 通过 `ui_web_appearance` 修改同一份外观配置，无参数状态显示当前配色、默认色或自定义色及字体。
 
 个人配置 `my-pi-setup.json` 使用 `configVersion: 1`。无参数 `/openpi-setup` 展示配置来源、版本、字段诊断与是否允许写入。缺文件时仅使用默认值；旧格式仅在明确保存时迁移；JSON 损坏、读取失败、不支持的版本及非法已知字段会阻止覆盖，并保留原文件。未知字段会警告并保留；会丢失未知字段的修改被拒绝。有 UI 的 Session 启动或扩展重载时，加载错误会主动提示正在使用安全默认值且写入已阻止；旧格式或未知字段会给出简短警告，引导到 `/openpi-setup` 查看详情，不触发模型调用或自动改写文件。缺文件和合法的当前版本配置不告警。当前 Session 应用失败时尝试恢复旧文件和配置；若文件已被外部修改或恢复失败，则报告恢复不完整。诊断不展示字段原值或 post-edit 命令。修复文件或明确移除文件后才能恢复配置写入，入口仍为 `/openpi-setup`。
 
@@ -476,7 +478,7 @@ Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px�
 
 Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。有可靠耗时记录的回合，执行时展开整个过程，完成后“用时”默认收起中间说明、思考和工具，最终回答继续显示在下方；可点击“用时”查看完整过程，不折叠用户问题或最终回答。连续的思考、工具和活动按原生顺序组成同一组，遇到说明文字或其他消息就分开；单行活动直接显示，不再套一层分组。活动组运行时展开，结束后收起为图标、操作摘要与计数；思考保留在实际发生的位置，使用独立的一行文字预览，展开后使用 Markdown 排版。工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
-<!-- config-contract: webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webHiddenThinkingLevels ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webHiddenThinkingLevels ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 浏览器模型控制默认关闭。打开 Web「设置 → 浏览器」，可点击完成安装引导、连接检查、总开关、逐个浏览器授权和默认浏览器选择；也可用 `/openpi-setup` 自然语言设置 `browser_control`、`browser_embedded`、`browser_default`、`browser_external`。默认值依次为 `false`、`true`、`embedded`、`[]`：总开关关闭时所有模型浏览器操作都被拒绝，普通 iframe 浏览不受影响。设置中的授权变更通过同一配置写入器和 Pi 原生扩展事件生效，无需一次模型调用。
 
@@ -523,7 +525,8 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
 | Session child execution slots | 关闭；显式设为 1-64 后由 Workflow / Direct / BTW 共享 |
-| Web 主题                    | `system`；另有 `light` / `dark` / `mist` / `rose` / `pine` |
+| Web 模式                    | `system`；另有 `light` / `dark`，兼容旧 `mist` / `rose` / `pine` 预设 |
+| Web 外观                    | `ui.webAppearance`：配色 `default`，强调色/背景/前景 `""`（主题默认色），字体 `system` |
 | Web 聊天宽度 / 聊天字号     | 820px / 14px；范围 820-2000px / 12-24px        |
 | Web 思考块                  | 默认折叠                                       |
 | 响应详细程度 / 推理摘要     | `default` / `default`；保留 Pi 原生请求         |

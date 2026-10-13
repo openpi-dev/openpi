@@ -124,6 +124,13 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["Web theme"],
   },
   {
+    path: "ui.webAppearance",
+    writerTokens: ["params.ui_web_appearance"],
+    statusTokens: ["config.ui.webAppearance"],
+    readmeTerms: ["ui.webAppearance"],
+    setupTerms: ["ui.webAppearance"],
+  },
+  {
     path: "ui.webChatWidth",
     writerTokens: ["params.ui_web_chat_width"],
     statusTokens: ["config.ui.webChatWidth"],

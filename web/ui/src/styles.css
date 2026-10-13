@@ -14,6 +14,7 @@
 @import "./features/settings/provider-settings.css";
 @import "./features/settings/configuration-settings.css";
 @import "./features/settings/browser-settings.css";
+@import "./features/settings/settings-surface.css";
 @import "./features/workbar/workbar.css";
 @import "./features/transcript/turn-timing.css";
 @import "./features/transcript/turn-changes.css";
@@ -29,7 +30,7 @@
   --sidebar-active: #dde9e4;
   --border: oklch(91.6% 0.009 248);
   --border-strong: oklch(86.8% 0.014 248);
-  --text: oklch(26.2% 0.018 249);
+  --text: #1a1c1f;
   --muted: oklch(52.5% 0.019 249);
   --subtle: oklch(65.2% 0.016 249);
   --settings-secondary-text: #4d5a61;
@@ -58,9 +59,14 @@ body {
   margin: 0;
   background-color: var(--sidebar);
   color: var(--text);
-  font: 14px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 14px/1.5 var(--openpi-interface-font, ui-sans-serif), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+[data-astryx-theme] {
+  --font-family-body: var(--openpi-interface-font, ui-sans-serif);
+  --font-family-heading: var(--openpi-interface-font, ui-sans-serif);
+  font-family: var(--openpi-interface-font, ui-sans-serif);
 }
 ::selection { background: oklch(51.6% 0.151 253 / 18%); }
 button, input, textarea { font: inherit; letter-spacing: 0; }
@@ -893,21 +899,21 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 @media (prefers-reduced-motion: reduce) { .question-choice { transition: none; } }
 
 /* Resolve the canonical Pi theme without a second browser preference. */
-:root[data-theme="mist"] {
+:root[data-theme="mist"], :root[data-theme="light"][data-palette="mist"] {
   color-scheme: light;
   --page: #f8fbfc; --sidebar: #eef3f5; --sidebar-hover: #e2ebee; --sidebar-active: #d8e6ea;
   --border: #dbe4e8; --border-strong: #c4d0d5; --text: #253239; --muted: #66757d; --subtle: #8a989e;
   --settings-secondary-text: #52636c;
   --accent: #347991; --focus: #3f879f; --healthy: #34825d; --error: #b94d50; --warning: #a86f22;
 }
-:root[data-theme="rose"] {
+:root[data-theme="rose"], :root[data-theme="light"][data-palette="rose"] {
   color-scheme: light;
   --page: #fffafb; --sidebar: #f8eff1; --sidebar-hover: #f1e2e6; --sidebar-active: #ecd8dd;
   --border: #eadde0; --border-strong: #d8c2c8; --text: #392b2f; --muted: #79646a; --subtle: #9a858b;
   --settings-secondary-text: #654f56;
   --accent: #a64f68; --focus: #b45b73; --healthy: #42815e; --error: #b6474c; --warning: #a96d24;
 }
-:root[data-theme="pine"] {
+:root[data-theme="pine"], :root[data-theme="dark"][data-palette="pine"] {
   color-scheme: dark;
   --page: #16201c; --sidebar: #1b2823; --sidebar-hover: #26362f; --sidebar-active: #30453b;
   --border: #35483f; --border-strong: #4a6257; --text: #edf3ef; --muted: #a8b7af; --subtle: #7f9188;
@@ -927,6 +933,21 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   --settings-secondary-text: #c3cbd3;
   --accent: #74a9e6; --focus: #78aee9; --healthy: #62c795; --error: #ff8c84; --warning: #e5b64f;
   --grid-minor: #87909908; --grid-major: #87909912; --grid-cross: #8790991c;
+}
+:root[data-theme="dark"][data-palette="mist"] {
+  --page: #182126; --sidebar: #1d292f; --sidebar-hover: #29383f; --sidebar-active: #31434b;
+  --text: #edf3f5; --muted: #a8b9c1; --subtle: #8299a3; --settings-secondary-text: #c3d2d9;
+  --border: #35474f; --border-strong: #4a626d; --accent: #7bb5ca; --focus: #89c1d5;
+}
+:root[data-theme="dark"][data-palette="rose"] {
+  --page: #251c20; --sidebar: #2d2227; --sidebar-hover: #3c2c33; --sidebar-active: #4a343e;
+  --text: #f5edf0; --muted: #c3abb5; --subtle: #a08a93; --settings-secondary-text: #d9c7cf;
+  --border: #4b3740; --border-strong: #684d59; --accent: #dc99ae; --focus: #e6a7ba;
+}
+:root[data-theme="light"][data-palette="pine"] {
+  --page: #f5faf7; --sidebar: #edf5f0; --sidebar-hover: #deebe3; --sidebar-active: #d2e5d9;
+  --text: #24382d; --muted: #60796a; --subtle: #80988a; --settings-secondary-text: #4f6659;
+  --border: #d7e6dd; --border-strong: #bed1c6; --accent: #357950; --focus: #40865c;
 }
 :root:is([data-theme="dark"], [data-theme="pine"]) body { background-image: linear-gradient(var(--grid-minor) 1px, transparent 1px), linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px); }
 :root:is([data-theme="dark"], [data-theme="pine"]) .session-sidebar { background: var(--sidebar); box-shadow: none; border-color: var(--border); }

@@ -32,6 +32,7 @@ import {
   WEB_MAX_ARCHIVED_SESSION_CURSOR,
   WEB_MAX_ARCHIVED_SESSION_QUERY,
   WEB_MAX_ARCHIVED_SESSION_SCAN,
+  WEB_MAX_ARCHIVED_SESSION_CWD,
   WEB_MAX_SESSIONS,
   WEB_MAX_SESSION_PREVIEW,
   WEB_MAX_SNAPSHOT_BYTES,
@@ -42,6 +43,7 @@ import {
   WEB_PROMPT_IMAGE_MAX_BYTES,
   WEB_PROMPT_IMAGE_MAX_BASE64_CHARS,
   type WebSessionProjection,
+  type WebArchivedSessionQuery,
   type WebSessionHistoryPage,
   type WebSessionPromptHistoryPage,
   type WebSessionPromptPreview,
@@ -343,11 +345,7 @@ async function listTerminalSessionInfo(workspace: string, signal?: AbortSignal) 
   return { sessions, partial };
 }
 
-export interface ArchivedSessionQuery {
-  readonly cursor?: string;
-  readonly limit?: number;
-  readonly query?: string;
-}
+export type ArchivedSessionQuery = WebArchivedSessionQuery;
 
 interface ArchivedSessionCursor {
   readonly version: 1;
@@ -359,8 +357,13 @@ function encodeArchivedSessionCursor(cursor: ArchivedSessionCursor) {
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
 }
 
-function archivedQueryHash(query: string) {
-  return createHash("sha256").update(query).digest("hex");
+function archivedQueryHash(query: string, sort: "updated" | "created", cwd?: string) {
+  // Preserve cursors from the original default query. NUL cannot occur in a
+  // valid query, so scoped hashes cannot collide with that legacy encoding.
+  const scope = sort === "updated" && cwd === undefined
+    ? query
+    : `\0${JSON.stringify([query, sort, cwd ?? null])}`;
+  return createHash("sha256").update(scope).digest("hex");
 }
 
 function decodeArchivedSessionCursor(value: string) {
@@ -670,12 +673,16 @@ export class PiWebAdapter {
     await this.ensureArchivesLoaded();
     const limit = options.limit ?? 25;
     const query = options.query?.trim() ?? "";
+    const sort = options.sort ?? "updated";
     if (
       !Number.isSafeInteger(limit) ||
       limit <= 0 ||
       limit > WEB_MAX_ARCHIVED_SESSION_PAGE ||
       query.length > WEB_MAX_ARCHIVED_SESSION_QUERY ||
       /[\u0000-\u001f\u007f]/u.test(query) ||
+      (sort !== "updated" && sort !== "created") ||
+      (options.cwd !== undefined &&
+        (!isAbsolute(options.cwd) || options.cwd.length > WEB_MAX_ARCHIVED_SESSION_CWD || /[\u0000-\u001f\u007f]/u.test(options.cwd))) ||
       (options.cursor !== undefined &&
         (options.cursor.length === 0 ||
           options.cursor.length > WEB_MAX_ARCHIVED_SESSION_CURSOR ||
@@ -687,13 +694,16 @@ export class PiWebAdapter {
     const allSessions = await SessionManager.listAll(
       this.runtime.sessionDirectory,
     );
+    if (sort === "created") allSessions.sort((left, right) => right.created.getTime() - left.created.getTime() || right.path.localeCompare(left.path));
     const scanned = allSessions.slice(0, WEB_MAX_ARCHIVED_SESSION_SCAN);
+    const cwd = options.cwd === undefined ? undefined : resolve(options.cwd);
     const normalizedQuery = query.normalize("NFKC").toLocaleLowerCase();
     if (normalizedQuery.length > WEB_MAX_ARCHIVED_SESSION_QUERY) {
       return { status: "invalid" as const };
     }
     const matches = scanned.filter((session) => {
       if (!this.archivedSessions.has(resolve(session.path))) return false;
+      if (cwd !== undefined && resolve(session.cwd) !== cwd) return false;
       if (!normalizedQuery) return true;
       const source = [
         session.id,
@@ -706,11 +716,12 @@ export class PiWebAdapter {
         .toLocaleLowerCase();
       return source.includes(normalizedQuery);
     });
+    const queryHash = archivedQueryHash(normalizedQuery, sort, cwd);
     let start = 0;
     if (options.cursor !== undefined) {
       const cursor = decodeArchivedSessionCursor(options.cursor);
       if (!cursor) return { status: "invalid" as const };
-      if (cursor.queryHash !== archivedQueryHash(normalizedQuery)) {
+      if (cursor.queryHash !== queryHash) {
         return { status: "stale_cursor" as const };
       }
       const cursorIndex = matches.findIndex(
@@ -750,7 +761,7 @@ export class PiWebAdapter {
             nextCursor: encodeArchivedSessionCursor({
               version: 1,
               sessionPath: sessions.at(-1)!.path,
-              queryHash: archivedQueryHash(normalizedQuery),
+              queryHash,
             }),
           }
         : {}),
@@ -930,6 +941,7 @@ export class PiWebAdapter {
       }
     }
     return {
+      workspacePaths: new Set(allSessions.map((session) => resolve(session.cwd))),
       sessions: projected.map((record) => {
         const pinOrder = this.sessionPins.findIndex((pin) => pin.path === record.path && pin.id === record.id);
         const session = { ...record, ...(pinOrder >= 0 ? { pinOrder } : {}) };
@@ -1103,6 +1115,7 @@ export class PiWebAdapter {
     const sessions: WebSessionSummary[] = sessionProjection.sessions;
     const currentCwd = resolve(this.runtime.cwd);
     const workspacePaths = await this.workspacePaths(sessions);
+    for (const path of sessionProjection.workspacePaths) workspacePaths.add(path);
     const retainedWorkspacePaths: string[] = [];
     let visibleWorkspaceCount = 0;
     for (const workspacePath of workspacePaths) {
@@ -1328,13 +1341,15 @@ export class PiWebAdapter {
     knownSessions?: WebSessionSummary[],
     workspaceState?: WorkspaceStateSnapshot,
   ) {
-    const sessions = knownSessions ?? (await this.listSessions());
+    const sessionWorkspaces = knownSessions
+      ? knownSessions.map((session) => session.cwd)
+      : (await this.listSessionProjection()).workspacePaths;
     return new Set([
       ...(this.runtime.workspaceSelected === true
         ? [resolve(this.runtime.cwd)]
         : []),
       ...(workspaceState?.importedWorkspaces ?? this.importedWorkspaces),
-      ...sessions.map((session) => session.cwd),
+      ...sessionWorkspaces,
     ]);
   }
 

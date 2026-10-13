@@ -24,6 +24,7 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 
 const {
   DEFAULT_SETUP_CONFIG,
+  DEFAULT_WEB_APPEARANCE,
   FOOTER_PRESET_DEFINITIONS,
   formatSetupConfig,
   loadSetupConfig,
@@ -965,6 +966,62 @@ test("an invalid stored footer style is diagnosed with its legal range and never
   assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
 });
 
+test("complete Web appearance defaults and color/font choices round-trip without changing the legacy theme", async () => {
+  assert.deepEqual(parseSetupConfig({}).ui.webAppearance, {
+    palette: "default",
+    accent: "",
+    background: "",
+    foreground: "",
+    font: "system",
+  });
+  assert.match(
+    formatSetupConfig(parseSetupConfig({})),
+    /palette default · accent theme default \/ background theme default \/ foreground theme default · font system/u,
+  );
+  for (const webTheme of ["system", "light", "dark", "mist", "rose", "pine"]) {
+    const original = JSON.stringify({
+      configVersion: 1,
+      ui: { webTheme },
+      future: { retained: true },
+    });
+    writeFileSync(SETUP_CONFIG_PATH, original);
+    const appearance = {
+      palette: "rose" as const,
+      accent: "#aBc123",
+      background: "#FFFFFF",
+      foreground: "",
+      font: "serif" as const,
+    };
+    const receipt = await updateSetupConfig((config) => ({
+      ...config,
+      ui: { ...config.ui, webAppearance: appearance },
+    }));
+    assert.deepEqual(receipt.config.ui.webAppearance, appearance);
+    assert.equal(receipt.config.ui.webTheme, webTheme);
+    assert.deepEqual(loadSetupConfig().ui.webAppearance, appearance);
+    assert.equal(inspectSetupConfig().writable, true);
+    assert.deepEqual(
+      JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")).future,
+      { retained: true },
+    );
+    const saved = readFileSync(SETUP_CONFIG_PATH, "utf8");
+    await assert.rejects(
+      updateSetupConfig(
+        (config) => ({
+          ...config,
+          ui: { ...config.ui, webAppearance: DEFAULT_WEB_APPEARANCE },
+        }),
+        async (config) => {
+          if (config.ui.webAppearance.palette === "default")
+            throw new Error("Consumer failed");
+        },
+      ),
+      /previous file and configuration restored/u,
+    );
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), saved);
+  }
+});
+
 test("Web appearance fields accept canonical bounds and remain known on explicit saves", async () => {
   for (const configVersion of [undefined, 1]) {
     for (const ui of [
@@ -999,6 +1056,22 @@ test("Web appearance fields accept canonical bounds and remain known on explicit
 
 test("invalid Web appearance values are diagnosed and block both stored and candidate writes", async () => {
   const invalidValues = {
+    webAppearance: [
+      null,
+      [],
+      "default",
+      {},
+      { ...DEFAULT_WEB_APPEARANCE, palette: "unknown" },
+      { ...DEFAULT_WEB_APPEARANCE, font: "unknown" },
+      { ...DEFAULT_WEB_APPEARANCE, accent: "#123" },
+      { ...DEFAULT_WEB_APPEARANCE, background: "rgb(0,0,0)" },
+      { ...DEFAULT_WEB_APPEARANCE, foreground: "#12345678" },
+      { ...DEFAULT_WEB_APPEARANCE, accent: "#zzzzzz" },
+      { ...DEFAULT_WEB_APPEARANCE, background: " #123456" },
+      { ...DEFAULT_WEB_APPEARANCE, foreground: 0 },
+      { ...DEFAULT_WEB_APPEARANCE, font: undefined },
+      { ...DEFAULT_WEB_APPEARANCE, unknown: true },
+    ],
     webChatWidth: [819, 2001, 960.5, "960", null, true, {}, []],
     webChatFontSize: [11, 25, 16.5, "16", null, false, {}, []],
     webSidebarWidth: [219, 421, 320.5, "320", null, false],

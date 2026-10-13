@@ -35,9 +35,8 @@ const hostAgentDirectory = await mkdtemp(join(tmpdir(), "openpi-host-agent-"));
 const previousHostAgentDirectory = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = hostAgentDirectory;
 const { WebHost } = await import("../../web/host/web-host.ts");
-const { loadSetupConfig, formatSetupConfig } = await import(
-  "../../extensions/shared/setup-config.ts"
-);
+const { loadSetupConfig, formatSetupConfig, DEFAULT_WEB_APPEARANCE } =
+  await import("../../extensions/shared/setup-config.ts");
 after(async () => {
   if (previousHostAgentDirectory === undefined)
     delete process.env.PI_CODING_AGENT_DIR;
@@ -246,6 +245,17 @@ test("appearance writes preserve package config, reject extra authority, and nev
       { workflows: { concurrency: 64 } },
       { theme: ["dark"] },
       { theme: null },
+      { appearance: null },
+      { appearance: { palette: "rose" } },
+      {
+        theme: "light",
+        appearance: { ...DEFAULT_WEB_APPEARANCE, unknown: true },
+      },
+      { appearance: { ...DEFAULT_WEB_APPEARANCE, palette: "unknown" } },
+      { appearance: { ...DEFAULT_WEB_APPEARANCE, font: "unknown" } },
+      { appearance: { ...DEFAULT_WEB_APPEARANCE, accent: "#123" } },
+      { appearance: { ...DEFAULT_WEB_APPEARANCE, background: "red" } },
+      { appearance: { ...DEFAULT_WEB_APPEARANCE, foreground: "#12345678" } },
       { chatWidth: 819 },
       { chatWidth: 2001 },
       { chatWidth: "1040" },
@@ -265,9 +275,18 @@ test("appearance writes preserve package config, reject extra authority, and nev
       { footerStyle: "compact" },
     ]) {
       assert.equal((await post(body)).status, 400);
+      assert.equal(await readFile(path, "utf8"), JSON.stringify(before));
     }
+    const appearance = {
+      palette: "mist",
+      accent: "#123aBC",
+      background: "#F0F0F0",
+      foreground: "",
+      font: "mono",
+    };
     const saved = await post({
       theme: "dark",
+      appearance,
       chatWidth: 1040,
       sidebarWidth: 320,
       auxiliaryWidth: 600,
@@ -281,13 +300,16 @@ test("appearance writes preserve package config, reject extra authority, and nev
       footerStyle: "powerline-mono",
     });
     assert.equal(saved.status, 200);
-    assert.equal((await saved.json()).setup.ui.webChatWidth, 1040);
+    const savedSetup = (await saved.json()).setup;
+    assert.equal(savedSetup.ui.webChatWidth, 1040);
+    assert.deepEqual(savedSetup.ui.webAppearance, appearance);
     const after = JSON.parse(await readFile(path, "utf8"));
     assert.deepEqual(after, {
       ...before,
       ui: {
         ...before.ui,
         webTheme: "dark",
+        webAppearance: appearance,
         webChatWidth: 1040,
         webSidebarWidth: 320,
         webAuxiliaryWidth: 600,
@@ -321,6 +343,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
       headers: { Authorization: `Bearer ${token}` },
     });
     const preferences = (await snapshot.json()).preferences;
+    assert.deepEqual(preferences.appearance, appearance);
     assert.equal(preferences.chatWidth, 1200);
     assert.equal(preferences.sidebarWidth, 320);
     assert.equal(preferences.auxiliaryWidth, 600);
@@ -328,7 +351,10 @@ test("appearance writes preserve package config, reject extra authority, and nev
     assert.equal(preferences.bashToolDisplay, "full");
     assert.equal(preferences.fileMutationDisplay, "full");
     await writeFile(path, "{invalid-private-config");
-    const blocked = await post({ theme: "light" });
+    const blocked = await post({
+      theme: "light",
+      appearance: DEFAULT_WEB_APPEARANCE,
+    });
     assert.equal(blocked.status, 422);
     assert.ok(!(await blocked.text()).includes("invalid-private-config"));
     assert.equal(await readFile(path, "utf8"), "{invalid-private-config");
@@ -2573,6 +2599,143 @@ function testRuntime(
   };
   return runtime;
 }
+
+test("archived listing applies project and sort before pagination and rejects a cursor from another scope", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-archive-query-host-"));
+  const project = join(cwd, "project & space");
+  const otherProject = `${project}-other`;
+  const runtime = testRuntime(cwd);
+  const { host, launched, headers } = await startTestHost(runtime);
+  t.after(async () => {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const paths: string[] = [];
+  for (const [index, workspace, created, modified] of [
+    [0, project, "2020-01-01", "2024-01-03"],
+    [1, otherProject, "2020-01-04", "2024-01-04"],
+    [2, project, "2020-01-03", "2024-01-01"],
+    [3, project, "2020-01-02", "2024-01-02"],
+  ] as const) {
+    const manager = SessionManager.create(workspace, cwd);
+    const timestamp = Date.parse(`${modified}T00:00:00.000Z`);
+    manager.appendMessage({
+      role: "user",
+      content: `archived ${index}`,
+      timestamp,
+    });
+    manager.appendMessage({
+      role: "assistant",
+      content: [],
+      api: "openai-responses",
+      provider: "fixture",
+      model: "fixture",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp,
+    });
+    const path = manager.getSessionFile()!;
+    const lines = (await readFile(path, "utf8")).trim().split("\n");
+    lines[0] = JSON.stringify({
+      ...JSON.parse(lines[0]!),
+      timestamp: `${created}T00:00:00.000Z`,
+    });
+    await writeFile(path, `${lines.join("\n")}\n`);
+    paths.push(path);
+    assert.equal(
+      (
+        await fetch(
+          `${launched.origin}/api/sessions/archive?path=${encodeURIComponent(path)}`,
+          { method: "POST", headers },
+        )
+      ).status,
+      200,
+    );
+  }
+  const read = (query: Record<string, string>) =>
+    fetch(
+      `${launched.origin}/api/sessions/archived?${new URLSearchParams(query)}`,
+      { headers },
+    );
+  const updated = await read({ cwd: project, limit: "1" });
+  assert.equal(updated.status, 200);
+  assert.deepEqual(
+    (await updated.json()).sessions.map(
+      (session: { path: string }) => session.path,
+    ),
+    [paths[0]],
+  );
+  const created = await read({ cwd: project, sort: "created", limit: "1" });
+  assert.equal(created.status, 200);
+  const first = (await created.json()) as {
+    sessions: Array<{ path: string }>;
+    nextCursor: string;
+  };
+  assert.deepEqual(
+    first.sessions.map((session) => session.path),
+    [paths[2]],
+  );
+  assert.ok(first.nextCursor);
+  const next = await read({
+    cwd: project,
+    sort: "created",
+    limit: "1",
+    cursor: first.nextCursor,
+  });
+  assert.equal(next.status, 200);
+  assert.deepEqual(
+    (await next.json()).sessions.map(
+      (session: { path: string }) => session.path,
+    ),
+    [paths[3]],
+  );
+  const staleScopes: Record<string, string>[] = [
+    { cwd: project, sort: "updated" },
+    { cwd: otherProject, sort: "created" },
+    { cwd: project, sort: "created", q: "changed" },
+  ];
+  for (const query of staleScopes) {
+    const response = await read({ ...query, cursor: first.nextCursor });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, "ARCHIVED_SESSION_CURSOR_STALE");
+  }
+  const invalidQueries: Record<string, string>[] = [
+    { sort: "unknown" },
+    { cwd: "" },
+    { cwd: "relative" },
+    { cwd: `${project}\n` },
+    { cwd: `/${"x".repeat(4096)}` },
+  ];
+  for (const query of invalidQueries) {
+    const response = await read(query);
+    assert.equal(response.status, 400);
+    assert.equal(
+      (await response.json()).code,
+      "INVALID_ARCHIVED_SESSION_QUERY",
+    );
+  }
+  for (const query of [
+    "sort=created&sort=updated",
+    `cwd=${encodeURIComponent(project)}&cwd=${encodeURIComponent(otherProject)}`,
+  ]) {
+    const response = await fetch(
+      `${launched.origin}/api/sessions/archived?${query}`,
+      { headers },
+    );
+    assert.equal(response.status, 400);
+    assert.equal(
+      (await response.json()).code,
+      "INVALID_ARCHIVED_SESSION_QUERY",
+    );
+  }
+});
 
 async function startTestHost(
   runtime: WebRuntimeController,

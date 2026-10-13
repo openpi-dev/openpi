@@ -1,4 +1,3 @@
-.settings-configuration-panel { width: 100%; max-width: 960px; height: 100%; margin: 0 auto; overflow-y: auto; padding: 26px clamp(18px, 4vw, 40px) 44px; }
 .settings-configuration-panel > .settings-page-heading { margin-bottom: 24px; }
 .settings-configuration-panel .inspection-warning > span { display: block; margin-top: 6px; overflow-wrap: anywhere; }
 .configuration-scope { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; color: var(--muted); font-size: 12px; }
@@ -22,7 +21,6 @@
 .configuration-runtime-button:hover { background: var(--sidebar-hover); }
 .configuration-runtime-button svg { width: 14px; height: 14px; }
 @media (max-width: 560px) {
-  .settings-configuration-panel { padding: 22px 16px 34px; }
   .configuration-scope { align-items: flex-start; flex-direction: column; gap: 8px; }
   .configuration-group { padding: 0 14px; }
   .configuration-row { flex-wrap: wrap; gap: 12px; }

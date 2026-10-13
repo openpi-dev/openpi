@@ -57,6 +57,8 @@ import {
   RESPONSE_VERBOSITIES,
   SETUP_CONFIG_CHANGED_CHANNEL,
   updateSetupConfig,
+  WEB_APPEARANCE_FONTS,
+  WEB_APPEARANCE_PALETTES,
   WEB_THEMES,
   type WebTheme,
 } from "../shared/setup-config.ts";
@@ -196,7 +198,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Visible Web thinking levels: web_hidden_thinking_levels replaces the presentation-only hidden list. Empty (default) shows every native supported level; legal levels are off/minimal/low/medium/high/xhigh/max. A hidden current level stays visible. This does not change Pi model support, active thinking effort, defaults, or child authority.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
-    `- UI: OpenPI Web themes are system (default), light, dark, mist, rose, and pine. Chat content width defaults to ${DEFAULT_WEB_CHAT_WIDTH}px (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}px), chat font size defaults to ${DEFAULT_WEB_CHAT_FONT_SIZE}px (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}px), and thinking blocks are collapsed by default. These values are projected from canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web appearance changes apply on its next canonical snapshot.`,
+    `- UI: OpenPI Web mode is system (default), light, or dark. The complete ui_web_appearance object defaults to {palette:"default",accent:"",background:"",foreground:"",font:"system"}; palette supports default/mist/rose/pine, font supports system/sans/serif/mono, and each color must be empty for the theme default or #RRGGBB. Preserve unrequested fields when replacing this object. Legacy ui_web_theme values mist, rose, and pine remain valid and take precedence over the new palette; replacing a legacy preset requires selecting system/light/dark together with the appearance object. Chat content width defaults to ${DEFAULT_WEB_CHAT_WIDTH}px (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}px), chat font size defaults to ${DEFAULT_WEB_CHAT_FONT_SIZE}px (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}px), and thinking blocks are collapsed by default. These values are projected from canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web appearance changes apply on its next canonical snapshot.`,
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact; all three default to compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Recommend compact for users who scan activity first and inspect evidence on demand.",
@@ -529,7 +531,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure OpenPI",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures current-model native web search, Responses output verbosity/reasoning summary, capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (theme, chat width, font size, thinking expansion, visible thinking levels), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Native web search reuses the current Session connection and credentials; unknown or unsupported connections receive no search tool and never fall back to a search provider. Legacy web_access_action alone manages the reviewed optional Pi package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
+      "Apply a user-requested configuration change for this Pi setup. Configures current-model native web search, Responses output verbosity/reasoning summary, capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (mode, palette, colors, font, chat width, font size, thinking expansion, visible thinking levels), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Native web search reuses the current Session connection and credentials; unknown or unsupported connections receive no search tool and never fall back to a search provider. Legacy web_access_action alone manages the reviewed optional Pi package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
     parameters: Type.Object({
       web_search_enabled: Type.Optional(
         Type.Boolean({
@@ -634,6 +636,22 @@ export default function openPiSetup(pi: ExtensionAPI) {
           description:
             "Canonical OpenPI Web theme: system follows the browser/OS color scheme; light, dark, mist, rose, and pine force that appearance. Stored in package setup rather than browser storage. Omit to preserve the current value.",
         }),
+      ),
+      ui_web_appearance: Type.Optional(
+        Type.Object(
+          {
+            palette: StringEnum(WEB_APPEARANCE_PALETTES),
+            accent: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
+            background: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
+            foreground: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
+            font: StringEnum(WEB_APPEARANCE_FONTS),
+          },
+          {
+            additionalProperties: false,
+            description:
+              "Complete OpenPI Web appearance object. Palette: default, mist, rose, pine. Font: system, sans, serif, mono. Each color is empty for the theme default or #RRGGBB. Defaults to default palette, empty colors, system font. Replaces the whole object; preserve fields the user did not ask to change. Legacy mist/rose/pine ui_web_theme takes precedence; select system/light/dark when replacing a legacy preset. Omit to preserve the current object.",
+          },
+        ),
       ),
       browser_control: Type.Optional(
         Type.Boolean({
@@ -978,6 +996,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??
               current.ui.webTheme,
+            webAppearance: params.ui_web_appearance ?? current.ui.webAppearance,
             webChatWidth: params.ui_web_chat_width ?? current.ui.webChatWidth,
             webSidebarWidth:
               params.ui_web_sidebar_width ?? current.ui.webSidebarWidth,

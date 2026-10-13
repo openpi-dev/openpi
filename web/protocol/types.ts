@@ -1,4 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { WebAppearancePreference } from "../../extensions/shared/setup-config.ts";
+export type { WebAppearancePreference } from "../../extensions/shared/setup-config.ts";
 import { readTurnTiming, WEB_TURN_TIMING_ENTRY } from "./turn-timing.ts";
 import { readTurnChangesDetail, summarizeTurnChanges, WEB_TURN_CHANGES_ENTRY, type WebTurnChanges } from "./turn-changes.ts";
 import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK, WEB_COMMAND_HANDLED } from "../../extensions/shared/web-command-feedback.ts";
@@ -26,6 +28,7 @@ export const WEB_MAX_ARCHIVED_SESSION_PAGE = 50;
 export const WEB_MAX_ARCHIVED_SESSION_QUERY = 160;
 export const WEB_MAX_ARCHIVED_SESSION_CURSOR = 512;
 export const WEB_MAX_ARCHIVED_SESSION_SCAN = 5_000;
+export const WEB_MAX_ARCHIVED_SESSION_CWD = 4_096;
 export const WEB_MAX_MODEL_SEARCH_RESULTS = 50;
 export const WEB_MAX_MODEL_SEARCH_BYTES = 64 * 1024;
 export const WEB_MAX_MODEL_QUERY = 200;
@@ -228,6 +231,7 @@ export interface WebOpenPiSetupProjection {
   };
   ui: {
     webTheme: WebThemePreference;
+    webAppearance?: WebAppearancePreference;
     webChatWidth: number;
     webSidebarWidth?: number;
     webAuxiliaryWidth?: number;
@@ -266,6 +270,14 @@ export interface WebSettingsCatalog {
   resources: WebSettingsResourceCatalog;
 }
 
+export interface WebArchivedSessionQuery {
+  readonly query?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: "updated" | "created";
+  readonly cwd?: string;
+}
+
 export interface WebSettingsPreferencesPatch {
   hiddenThinkingLevels?: readonly ReasoningLevel[];
   subagentResultDisplay?: "full" | "compact";
@@ -275,6 +287,7 @@ export interface WebSettingsPreferencesPatch {
   footerStyle?: "plain" | "powerline" | "powerline-mono";
   pinnedSort?: "manual" | "updated";
   theme?: WebThemePreference;
+  appearance?: WebAppearancePreference;
   chatWidth?: number;
   sidebarWidth?: number;
   auxiliaryWidth?: number;
@@ -514,6 +527,7 @@ export interface WebSnapshot {
   cursor: number;
   preferences: {
     theme: WebThemePreference;
+    appearance?: WebAppearancePreference;
     /** Optional for compatibility with snapshots emitted before Web display preferences existed. */
     chatWidth?: number;
     sidebarWidth?: number;

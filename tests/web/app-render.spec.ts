@@ -3678,6 +3678,43 @@ it("resolves canonical system theme changes and explicit overrides", () => {
   expect(
     document.documentElement.style.getPropertyValue("--conversation-font-size"),
   ).toBe("16px");
+  act(() =>
+    webStore.setState({
+      snapshot: {
+        ...snapshot,
+        preferences: {
+          ...snapshot.preferences,
+          theme: "dark",
+          appearance: {
+            palette: "rose",
+            background: "#18212A",
+            foreground: "#EEF3F8",
+            accent: "#AABBCC",
+            font: "serif",
+          },
+        },
+      },
+    }),
+  );
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(document.documentElement.dataset.palette).toBe("rose");
+  expect(document.documentElement.style.getPropertyValue("--page")).toBe(
+    "#18212A",
+  );
+  expect(document.documentElement.style.getPropertyValue("--text")).toBe(
+    "#EEF3F8",
+  );
+  expect(document.documentElement.style.getPropertyValue("--focus")).toBe(
+    "#AABBCC",
+  );
+  expect(
+    document.documentElement.style.getPropertyValue("--openpi-interface-font"),
+  ).toContain("Georgia");
+  act(() => webStore.setState({ snapshot }));
+  expect(document.documentElement.style.getPropertyValue("--page")).toBe("");
+  expect(document.documentElement.style.getPropertyValue("--text")).toBe("");
+  expect(document.documentElement.style.getPropertyValue("--focus")).toBe("");
+  expect(document.documentElement.dataset.palette).toBe("default");
   unmount();
   webStore.setState({ snapshot: initial });
   vi.unstubAllGlobals();

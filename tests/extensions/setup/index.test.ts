@@ -331,6 +331,19 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   assert.equal("suggestion_model" in parameters.properties, true);
   assert.equal("capability_discovery" in parameters.properties, true);
   assert.equal("ui_web_theme" in parameters.properties, true);
+  const appearance = parameters.properties.ui_web_appearance as {
+    required: string[];
+    additionalProperties: boolean;
+    properties: Record<string, unknown>;
+  };
+  assert.deepEqual(appearance.required, [
+    "palette",
+    "accent",
+    "background",
+    "foreground",
+    "font",
+  ]);
+  assert.equal(appearance.additionalProperties, false);
   assert.equal("ui_web_chat_width" in parameters.properties, true);
   assert.equal("ui_web_sidebar_width" in parameters.properties, true);
   assert.equal("ui_web_auxiliary_width" in parameters.properties, true);
@@ -502,6 +515,34 @@ test("response preferences use exact APIs and current model identity and preserv
   } finally {
     rmSync(SETUP_CONFIG_PATH, { force: true });
   }
+});
+
+test("setup saves a complete Web appearance object and preserves the selected mode", async () => {
+  const h = visibilityHarness();
+  await h.emit("session_start");
+  await h.runCommand(
+    "openpi-setup",
+    "Use a rose palette with serif text and blue accents",
+  );
+  const appearance = {
+    palette: "rose",
+    accent: "#123ABC",
+    background: "",
+    foreground: "",
+    font: "serif",
+  };
+  const previousTheme = loadSetupConfig().ui.webTheme;
+  await h.tools
+    .get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!
+    .execute(
+      "appearance-save",
+      { ui_web_appearance: appearance },
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+  assert.deepEqual(loadSetupConfig().ui.webAppearance, appearance);
+  assert.equal(loadSetupConfig().ui.webTheme, previousTheme);
 });
 
 test("native search setup defaults off, preserves preferences, and binds support to the current connection", async () => {
@@ -1462,7 +1503,15 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /Right accepts it without submitting/);
   assert.match(message, /concurrency controls simultaneous agents/);
   assert.match(message, /large header costs vertical space/);
-  assert.match(message, /OpenPI Web themes are system \(default\).*mist.*pine/);
+  assert.match(
+    message,
+    /OpenPI Web mode is system \(default\), light, or dark/,
+  );
+  assert.match(message, /complete ui_web_appearance object defaults/);
+  assert.match(message, /palette supports default\/mist\/rose\/pine/);
+  assert.match(message, /font supports system\/sans\/serif\/mono/);
+  assert.match(message, /empty for the theme default or #RRGGBB/);
+  assert.match(message, /Legacy ui_web_theme.*take precedence/);
   assert.match(message, /ui_web_theme=dark/);
   assert.match(message, /Chat content width.*820-2000px/);
   assert.match(message, /ui_web_chat_width=960/);

@@ -247,6 +247,7 @@ export function projectWebSetupConfig(
     workflows: { ...config.workflows },
     ui: {
       webTheme: config.ui.webTheme,
+      webAppearance: { ...config.ui.webAppearance },
       webChatWidth: config.ui.webChatWidth,
       webSidebarWidth: config.ui.webSidebarWidth,
       webAuxiliaryWidth: config.ui.webAuxiliaryWidth,

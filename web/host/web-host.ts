@@ -27,7 +27,7 @@ import {
   webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
-import { inspectSetupConfig, isDetailDisplay, isFooterStyle, isHiddenThinkingLevels, isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
+import { inspectSetupConfig, isDetailDisplay, isFooterStyle, isHiddenThinkingLevels, isWebAppearancePreference, isWebTheme, loadSetupConfig, updateSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig, projectWebSetupInspection } from "../runtime/settings-catalog.ts";
 import { validModelConfiguration, validProviderConfigurationChange } from "../runtime/model-configuration.ts";
 import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
@@ -1273,10 +1273,10 @@ export class WebHost {
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
-      const { theme, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, hiddenThinkingLevels, pinnedSort, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
+      const { theme, appearance, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, hiddenThinkingLevels, pinnedSort, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
       // Browser appearance is package-wide and independent of agent execution.
       // Keep this surface restricted to presentation fields, including on Plan turns.
-      if (!keys.length || keys.some((key) => !["theme", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "hiddenThinkingLevels", "pinnedSort", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
+      if (!keys.length || keys.some((key) => !["theme", "appearance", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "hiddenThinkingLevels", "pinnedSort", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
         (hiddenThinkingLevels !== undefined && !isHiddenThinkingLevels(hiddenThinkingLevels)) ||
         (subagentResultDisplay !== undefined && !isDetailDisplay(subagentResultDisplay)) ||
         (bashToolDisplay !== undefined && !isDetailDisplay(bashToolDisplay)) ||
@@ -1285,6 +1285,7 @@ export class WebHost {
         (footerStyle !== undefined && !isFooterStyle(footerStyle)) ||
         (pinnedSort !== undefined && pinnedSort !== "manual" && pinnedSort !== "updated") ||
         (theme !== undefined && !isWebTheme(theme)) ||
+        (appearance !== undefined && !isWebAppearancePreference(appearance)) ||
         (chatWidth !== undefined && (typeof chatWidth !== "number" || !Number.isInteger(chatWidth) || chatWidth < 820 || chatWidth > 2000)) ||
         (sidebarWidth !== undefined && (typeof sidebarWidth !== "number" || !Number.isInteger(sidebarWidth) || sidebarWidth < 220 || sidebarWidth > 420)) ||
         (auxiliaryWidth !== undefined && (typeof auxiliaryWidth !== "number" || !Number.isInteger(auxiliaryWidth) || auxiliaryWidth < 360 || auxiliaryWidth > 720)) ||
@@ -1298,6 +1299,7 @@ export class WebHost {
           ui: {
             ...current.ui,
             ...(theme !== undefined ? { webTheme: theme } : {}),
+            ...(isWebAppearancePreference(appearance) ? { webAppearance: appearance } : {}),
             ...(chatWidth !== undefined ? { webChatWidth: chatWidth } : {}),
             ...(sidebarWidth !== undefined ? { webSidebarWidth: sidebarWidth } : {}),
             ...(auxiliaryWidth !== undefined ? { webAuxiliaryWidth: auxiliaryWidth } : {}),
@@ -2093,6 +2095,11 @@ export class WebHost {
       }
     }
     if (url.pathname === "/api/sessions/archived") {
+      const sort = url.searchParams.get("sort");
+      if ((sort !== null && sort !== "updated" && sort !== "created") ||
+        url.searchParams.getAll("sort").length > 1 || url.searchParams.getAll("cwd").length > 1) {
+        return this.json(response, 400, { code: "INVALID_ARCHIVED_SESSION_QUERY", error: "archived Session sort and project must be unambiguous" });
+      }
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit === null ? undefined : Number(rawLimit);
       if (
@@ -2108,6 +2115,8 @@ export class WebHost {
         });
       }
       const result = await this.adapter.listArchivedSessions({
+        ...(sort !== null ? { sort } : {}),
+        ...(url.searchParams.has("cwd") ? { cwd: url.searchParams.get("cwd") ?? "" } : {}),
         ...(url.searchParams.has("cursor")
           ? { cursor: url.searchParams.get("cursor") ?? "" }
           : {}),
@@ -2315,6 +2324,7 @@ export class WebHost {
         cursor,
         preferences: {
           theme: setup.ui.webTheme,
+          appearance: { ...setup.ui.webAppearance },
           chatWidth: setup.ui.webChatWidth,
           sidebarWidth: setup.ui.webSidebarWidth,
           auxiliaryWidth: setup.ui.webAuxiliaryWidth,
