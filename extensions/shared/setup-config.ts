@@ -122,6 +122,7 @@ export const WEB_APPEARANCE_PALETTES = [
   "pine",
 ] as const;
 export const WEB_APPEARANCE_FONTS = [
+  "codex",
   "system",
   "sans",
   "serif",
@@ -141,7 +142,7 @@ export const DEFAULT_WEB_APPEARANCE: WebAppearancePreference = {
   accent: "",
   background: "",
   foreground: "",
-  font: "system",
+  font: "codex",
 };
 
 export const DEFAULT_WEB_CHAT_WIDTH = 820;
@@ -730,7 +731,13 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
       webAppearance: isWebAppearancePreference(ui.webAppearance)
-        ? { ...ui.webAppearance }
+        ? {
+            ...ui.webAppearance,
+            font:
+              ui.webAppearance.font === "system"
+                ? "codex"
+                : ui.webAppearance.font,
+          }
         : { ...DEFAULT_WEB_APPEARANCE },
       webPinnedSort: ui.webPinnedSort === "updated" ? "updated" : "manual",
       webSidebarGrouping: ui.webSidebarGrouping === "list" ? "list" : "project",

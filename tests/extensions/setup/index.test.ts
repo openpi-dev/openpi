@@ -1544,7 +1544,7 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   );
   assert.match(message, /complete ui_web_appearance object defaults/);
   assert.match(message, /palette supports default\/mist\/rose\/pine/);
-  assert.match(message, /font supports system\/sans\/serif\/mono/);
+  assert.match(message, /font supports codex\/sans\/serif\/mono/);
   assert.match(message, /empty for the theme default or #RRGGBB/);
   assert.match(message, /Legacy ui_web_theme.*take precedence/);
   assert.match(message, /ui_web_theme=dark/);

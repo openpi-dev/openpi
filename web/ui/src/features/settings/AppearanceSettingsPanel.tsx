@@ -395,7 +395,7 @@ export function AppearanceSettingsPanel({
             <span>{t("appearanceFont")}</span>
             <AppearanceMenu
               label={t("appearanceFont")}
-              value={appearance.font}
+              value={appearance.font === "system" ? "codex" : appearance.font}
               options={fonts.map((id) => ({
                 id,
                 label: t(`appearanceFont_${id}`),

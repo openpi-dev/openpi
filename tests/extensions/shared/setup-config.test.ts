@@ -980,11 +980,11 @@ test("complete Web appearance defaults and color/font choices round-trip without
     accent: "",
     background: "",
     foreground: "",
-    font: "system",
+    font: "codex",
   });
   assert.match(
     formatSetupConfig(parseSetupConfig({})),
-    /palette default · accent theme default \/ background theme default \/ foreground theme default · font system/u,
+    /palette default · accent theme default \/ background theme default \/ foreground theme default · font codex/u,
   );
   for (const webTheme of ["system", "light", "dark", "mist", "rose", "pine"]) {
     const original = JSON.stringify({
@@ -1027,6 +1027,34 @@ test("complete Web appearance defaults and color/font choices round-trip without
       /previous file and configuration restored/u,
     );
     assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), saved);
+  }
+});
+
+test("legacy system fonts resolve to Codex without rewriting preferences on read", async () => {
+  const appearance = {
+    ...DEFAULT_WEB_APPEARANCE,
+    palette: "rose" as const,
+    accent: "#123456",
+    font: "system" as const,
+  };
+  const raw = JSON.stringify({
+    configVersion: 1,
+    ui: { webAppearance: appearance },
+  });
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  assert.equal(inspectSetupConfig().writable, true);
+  assert.deepEqual(loadSetupConfig().ui.webAppearance, {
+    ...appearance,
+    font: "codex",
+  });
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  for (const font of ["codex", "sans", "serif", "mono"] as const) {
+    const receipt = await updateSetupConfig((config) => ({
+      ...config,
+      ui: { ...config.ui, webAppearance: { ...appearance, font } },
+    }));
+    assert.equal(receipt.config.ui.webAppearance.font, font);
+    assert.equal(loadSetupConfig().ui.webAppearance.font, font);
   }
 });
 

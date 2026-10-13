@@ -59,20 +59,24 @@
 .plan-mode-bar { display: flex; gap: 12px; align-items: center; justify-content: flex-end; width: min(100% - 32px, 800px); margin: 0 auto 6px; color: var(--muted); font-size: 12px; }
 .plan-mode-bar button { padding: 4px 8px; min-height: 28px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); }
 html, body, #root { width: 100%; height: 100%; overflow: hidden; }
+:root {
+  --openpi-default-font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --openpi-interface-font: var(--openpi-default-font);
+}
 body {
   margin: 0;
   background-color: var(--sidebar);
   color: var(--text);
-  font: 14px/1.5 var(--openpi-interface-font, ui-sans-serif), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 14px/1.5 var(--openpi-interface-font);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 [data-astryx-theme] {
-  --font-family-body: var(--openpi-interface-font, ui-sans-serif);
-  --font-family-heading: var(--openpi-interface-font, ui-sans-serif);
+  --font-family-body: var(--openpi-interface-font);
+  --font-family-heading: var(--openpi-interface-font);
   --color-text-primary: var(--text);
   --color-background-popover: var(--page);
-  font-family: var(--openpi-interface-font, ui-sans-serif);
+  font-family: var(--openpi-interface-font);
 }
 ::selection { background: oklch(51.6% 0.151 253 / 18%); }
 button, input, textarea { font: inherit; letter-spacing: 0; }
