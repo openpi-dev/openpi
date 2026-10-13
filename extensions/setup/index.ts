@@ -170,7 +170,7 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Code Mode, Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
@@ -194,6 +194,7 @@ export function buildInteractiveSetupPrompt(options: {
     "Before asking, briefly explain what can be configured and the practical impact:",
     `- Web search: off by default. web_search_enabled toggles the repository-owned native search extension. It uses the current Session model, protocol and Pi credentials; unsupported or unknown connections receive no native search tool, and there is no fallback to Exa or another provider. web_search_model_support declares support only for the exact current provider/model/protocol/base URL, only when the user explicitly confirms capability or a real native search has been verified; null removes that declaration. Never infer support from a model name or an API-compatible gateway. Legacy web_access_action remains only for managing previously installed ${WEB_ACCESS_PACKAGE.source}; never install or activate it as a fallback.`,
     "- Capability discovery: explicit is the safe default and keeps OpenPI model tools absent until the user asks for a capability. adaptive is opt-in and keeps only the small openpi_load_tools gateway visible, allowing the model to load Subagents, Workflows, background terminals, structured search, or Session tracking when it judges them useful. Loaded groups remain session-stable, and normal permission, concurrency, and workflow limits still apply.",
+    "- Code Mode: code_mode_enabled defaults to true and activates Pi's native codemode alongside ordinary tools in CLI and Web parent sessions. false removes this package default. Native defaultTools selections and CLI/SDK tool restrictions take precedence; do not rewrite them to force activation. The model chooses when to compose calls. Children retain their inherited tool allowlists; this default does not widen them. No provider request or native settings write occurs on activation.",
     "- Response preferences: response_verbosity is default, low, medium, or high; response_reasoning_summary is default, auto, concise, detailed, or none. Both default to default, preserving Pi's native request. Overrides apply only to OpenAI Responses/Codex Responses. Summary changes require the current model's native reasoning and an existing reasoning request; none removes only its summary field, keeping effort. These are request preferences, not a guarantee about provider output.",
     "- Visible Web thinking levels: web_hidden_thinking_levels replaces the presentation-only hidden list. Empty (default) shows every native supported level; legal levels are off/minimal/low/medium/high/xhigh/max. A hidden current level stays visible. This does not change Pi model support, active thinking effort, defaults, or child authority.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
@@ -533,6 +534,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
     description:
       "Apply a user-requested configuration change for this Pi setup. Configures current-model native web search, Responses output verbosity/reasoning summary, capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (mode, palette, colors, font, chat width, font size, thinking expansion, visible thinking levels), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Native web search reuses the current Session connection and credentials; unknown or unsupported connections receive no search tool and never fall back to a search provider. Legacy web_access_action alone manages the reviewed optional Pi package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
     parameters: Type.Object({
+      code_mode_enabled: Type.Optional(
+        Type.Boolean({
+          description:
+            "Default activation of Pi's native codemode in CLI and Web parent sessions. Defaults to true. Native defaultTools and CLI/SDK restrictions take precedence. No native settings are rewritten; child allowlists remain authoritative. Omit to preserve.",
+        }),
+      ),
       web_search_enabled: Type.Optional(
         Type.Boolean({
           description:
@@ -969,6 +976,9 @@ export default function openPiSetup(pi: ExtensionAPI) {
         );
 
         const config: MyPiSetupConfig = {
+          codeMode: {
+            enabled: params.code_mode_enabled ?? current.codeMode.enabled,
+          },
           response: {
             verbosity: params.response_verbosity ?? current.response.verbosity,
             reasoningSummary:

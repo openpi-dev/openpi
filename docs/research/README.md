@@ -21,6 +21,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 - [`PI_1_2_COMPATIBILITY_2026-10-13.md`](PI_1_2_COMPATIBILITY_2026-10-13.md) — managed Web host dependency resolution, Pi 1.2.0 custom runs, cancellation, Plan admission and terminal cursor compatibility, with isolated package/native/browser evidence ([#765](https://github.com/openpi-dev/openpi/issues/765)).
 
+- [`CODEMODE_DEFAULT_2026-10-13.md`](CODEMODE_DEFAULT_2026-10-13.md) — default native Code Mode activation in CLI/Web, configuration and authority boundaries, real entry receipts and ablations; original-task speedup remains unmeasured ([#763](https://github.com/openpi-dev/openpi/issues/763), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
+
 - [`WEB_CONFIGURATION_2026-10-13.md`](WEB_CONFIGURATION_2026-10-13.md) — Codex shipped Configuration and same-version app-server traces, frozen state matrix, Pi-native preferences and local browser/request validation with ablation; Codex runtime and remote-provider acceptance remain unverified ([#754](https://github.com/openpi-dev/openpi/issues/754), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 
 - [`WEB_SEARCH_INTEGRATION_2026-10-10.md`](WEB_SEARCH_INTEGRATION_2026-10-10.md) — optional package comparison and subsequent current-Session-model native search, default-off setup, original-image replay, protocol/UI evidence, and ablation; provider-wide search quality remains unmeasured ([#169](https://github.com/openpi-dev/openpi/issues/169), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).

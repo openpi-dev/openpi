@@ -8,6 +8,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CONFIG_FIELD_CONTRACT = [
   {
+    path: "codeMode.enabled",
+    writerTokens: ["params.code_mode_enabled"],
+    statusTokens: ["config.codeMode.enabled"],
+    readmeTerms: ["code_mode_enabled"],
+    setupTerms: ["code_mode_enabled"],
+  },
+  {
     path: "webSearch.enabled",
     writerTokens: ["params.web_search_enabled"],
     statusTokens: ["config.webSearch.enabled"],
