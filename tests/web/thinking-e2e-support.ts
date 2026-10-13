@@ -1,5 +1,5 @@
 import type { Page, Route } from "@playwright/test";
-import type { WebModelSummary } from "../../web/protocol/types.ts";
+import type { WebModelSummary, WebSnapshot } from "../../web/protocol/types.ts";
 
 /**
  * Route-mocked backend fixture for the thinking-level picker.
@@ -37,6 +37,7 @@ export interface ThinkingFixture {
 }
 
 export interface ThinkingFixtureOverrides {
+  preferences?: Partial<WebSnapshot["preferences"]>;
   models?: WebModelSummary[];
   level?: string;
   available?: string[];
@@ -168,6 +169,10 @@ export async function installThinkingFixture(
         },
       ];
       snapshot.thinking = { ...projection(), revision: ++state.revision };
+      snapshot.preferences = {
+        ...(snapshot.preferences as object),
+        ...overrides.preferences,
+      };
       await route.fulfill({ json: snapshot });
     } catch {
       // A background snapshot refresh can be aborted while the page navigates

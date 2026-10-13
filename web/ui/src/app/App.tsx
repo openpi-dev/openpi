@@ -40,11 +40,19 @@ import type { DiffLineReference } from "../features/review/DiffCodePreview.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
 import { ArchiveNotifications } from "../features/sessions/ArchiveNotifications.tsx";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
-import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.tsx";
+import {
+  ProviderSettingsPage,
+  settingsSectionFromUrl,
+  type SettingsSection,
+} from "../features/settings/ProviderSettingsPage.tsx";
 import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
 import { SessionOverview } from "../features/subagents/SessionOverview.tsx";
 import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
 import { subagentOverview } from "../features/subagents/subagent-overview.ts";
+import {
+  loadSubagentPanelPosition,
+  saveSubagentPanelPosition,
+} from "../features/subagents/subagent-panel-position.ts";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import {
   createSessionReadingCache,
@@ -194,7 +202,7 @@ export function App() {
     sessionId: string;
     sessionPath: string;
     cwd: string;
-    entry: "general" | "credentials" | "browser";
+    entry: SettingsSection | "credentials";
   } | null>(null);
   const [workbarWorkspaces, setWorkbarWorkspaces] =
     useState<WorkbarWorkspace[]>(loadWorkbarPositions);
@@ -252,10 +260,11 @@ export function App() {
     sessionId: string;
     sessionPath: string;
     id?: string;
+    kind?: "workflows";
     navigation: number;
-  } | null>(null);
+  } | null>(loadSubagentPanelPosition);
   const inspectSubagent = useCallback(
-    (id?: string) => {
+    (id?: string, kind?: "workflows") => {
       const current = webStore.getState();
       const session = current.snapshot?.selectedSession;
       if (
@@ -277,6 +286,7 @@ export function App() {
         sessionId: session.id,
         sessionPath: session.path,
         id,
+        kind,
         navigation: (previous?.navigation ?? 0) + 1,
       }));
     },
@@ -289,8 +299,15 @@ export function App() {
     subagentTarget.sessionId === state.snapshot?.selectedSession?.id &&
     subagentTarget.sessionPath === state.snapshot?.selectedSession?.path;
   useEffect(() => {
-    if (subagentTarget && !subagentVisible) setSubagentTarget(null);
-  }, [subagentTarget, subagentVisible]);
+    if (
+      state.snapshot &&
+      !state.sessionSwitching &&
+      subagentTarget &&
+      !subagentVisible
+    )
+      setSubagentTarget(null);
+  }, [state.snapshot, state.sessionSwitching, subagentTarget, subagentVisible]);
+  useEffect(() => saveSubagentPanelPosition(subagentTarget), [subagentTarget]);
   useEffect(() => {
     if (subagentVisible || !auxiliaryOpen.current) return;
     auxiliaryOpen.current = false;
@@ -359,7 +376,7 @@ export function App() {
     if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
   }, [providerSettings, providerSettingsVisible]);
   const openProviderSettings = async (
-    entry: "general" | "credentials" | "browser" = "general",
+    entry: SettingsSection | "credentials" = "general",
   ) => {
     providerSettingsTrigger.current =
       document.activeElement instanceof HTMLElement
@@ -393,6 +410,9 @@ export function App() {
   };
   const closeProviderSettings = useCallback(() => {
     setProviderSettings(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("settings");
+    window.history.replaceState(window.history.state, "", url);
     requestAnimationFrame(() => {
       const trigger = providerSettingsTrigger.current;
       providerSettingsTrigger.current = null;
@@ -591,8 +611,22 @@ export function App() {
     ? state.snapshot?.runtime.capabilities.subagents
     : undefined;
   const overviewAgents = useMemo(
-    () => subagentOverview(liveSubagents?.items ?? [], savedSubagents),
-    [liveSubagents?.items, savedSubagents],
+    () =>
+      subagentOverview(
+        liveSubagents?.items ?? [],
+        savedSubagents,
+        controlled
+          ? state.snapshot?.runtime.capabilities.workflows?.items
+          : undefined,
+        state.connection === "connected",
+      ),
+    [
+      liveSubagents?.items,
+      savedSubagents,
+      controlled,
+      state.snapshot?.runtime.capabilities.workflows?.items,
+      state.connection,
+    ],
   );
   const execution = state.snapshot?.selectedExecution;
   const selectedExecution =
@@ -698,21 +732,20 @@ export function App() {
       return signal.aborted ? undefined : browserOpener.current?.(url);
     },
   );
-  const browserSettingsLink = useRef(
-    new URLSearchParams(location.search).get("settings") === "browser",
+  const settingsLink = useRef(
+    settingsSectionFromUrl(
+      new URLSearchParams(location.search).get("settings"),
+    ),
   );
-  const openBrowserSettingsFromLink = useEffectEvent(() => {
-    void openProviderSettings("browser");
+  const openSettingsFromLink = useEffectEvent((section: SettingsSection) => {
+    void openProviderSettings(section);
   });
   useEffect(() => {
-    if (
-      !browserSettingsLink.current ||
-      !state.snapshot ||
-      state.sessionSwitching
-    )
+    if (!settingsLink.current || !state.snapshot || state.sessionSwitching)
       return;
-    browserSettingsLink.current = false;
-    openBrowserSettingsFromLink();
+    const section = settingsLink.current;
+    settingsLink.current = undefined;
+    openSettingsFromLink(section);
   }, [state.snapshot, state.sessionSwitching]);
   const auxiliaryVisible = Boolean(
     subagentVisible || workbarVisible || artifactPanelOpen,
@@ -925,7 +958,18 @@ export function App() {
                   sessionId={selected.id}
                   workspace={workspace?.name || workspaceName(selected.cwd)}
                   agents={overviewAgents}
-                  omitted={liveSubagents?.omitted ?? 0}
+                  omitted={
+                    (liveSubagents?.omitted ?? 0) +
+                    (controlled
+                      ? (
+                          state.snapshot?.runtime.capabilities.workflows
+                            ?.items ?? []
+                        ).reduce(
+                          (sum, item) => sum + (item.children?.omitted ?? 0),
+                          0,
+                        )
+                      : 0)
+                  }
                   review={gitReview.result}
                   reviewLoading={gitReview.loading}
                   reviewError={gitReview.error}
@@ -1174,6 +1218,7 @@ export function App() {
                 }}
                 onInspectSubagent={inspectSubagent}
                 activeTurn={state.activeTurn}
+                activityObserved={state.connection === "connected"}
                 turnCancellationPending={state.turnCancellationPending}
                 turnTerminalStatus={state.turnTerminalStatus}
                 pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
@@ -1261,6 +1306,8 @@ export function App() {
               key={`${subagentTarget.sessionId}:${subagentTarget.navigation}`}
               sessionId={subagentTarget.sessionId}
               initialId={subagentTarget.id}
+              initialKind={subagentTarget.kind}
+              observed={state.connection === "connected"}
               activity={
                 isControlledSession(state.snapshot, {
                   id: subagentTarget.sessionId,
@@ -1270,6 +1317,11 @@ export function App() {
                   : undefined
               }
               records={savedSubagents}
+              workflows={
+                controlled
+                  ? state.snapshot?.runtime.capabilities.workflows
+                  : undefined
+              }
               liveAvailable={isControlledSession(state.snapshot, {
                 id: subagentTarget.sessionId,
                 path: subagentTarget.sessionPath,
@@ -1393,6 +1445,8 @@ export function App() {
             t("unknownState")
           }
           theme={state.snapshot?.preferences.theme ?? "system"}
+          workspaces={state.snapshot?.workspaces ?? []}
+          onRestoreSession={(path) => actions.unarchiveSession(path)}
           plan={state.snapshot?.runtime.plan}
           planSelectionPending={state.planSelectionPending}
           onExitPlan={() => actions.selectPlanMode(false)}

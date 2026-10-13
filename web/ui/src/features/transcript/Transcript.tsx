@@ -4,6 +4,7 @@ import {
   Bot,
   Check,
   ChevronRight,
+  CircleAlert,
   Clipboard,
   GitBranch,
   Globe,
@@ -27,7 +28,10 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebSubagentActivity } from "../../../../../extensions/shared/web-observer-registry.ts";
+import type {
+  WebSubagentActivity,
+  WebWorkflowActivity,
+} from "../../../../../extensions/shared/web-observer-registry.ts";
 import {
   type EvidenceState,
   evidenceText,
@@ -56,6 +60,11 @@ import {
   formatTurnTime,
 } from "../../lib/format.ts";
 import { isControlledSession } from "../../lib/session-control.ts";
+import {
+  recordedSubagents,
+  type RecordedSubagent,
+} from "../subagents/recorded-subagents.ts";
+import { SubagentTaskRow } from "../subagents/SubagentTaskRow.tsx";
 import type { LiveEntry } from "../../store/web-store.ts";
 import { CompactionStatus } from "./CompactionStatus.tsx";
 import { FullMessageText } from "./FullMessageText.tsx";
@@ -125,7 +134,7 @@ interface TranscriptProps {
   forkAvailable?: boolean;
   forkPending?: boolean;
   resultExposureEnabled?: boolean;
-  onInspectSubagent?: (id: string) => void;
+  onInspectSubagent?: (id: string, kind?: "workflows") => void;
   onReviewTurn?: OpenTurnReview;
   onHistoryAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
   onRefreshHistory?: () => Promise<boolean>;
@@ -242,6 +251,26 @@ function StatusMark({ status }: { status: Status }) {
   return null;
 }
 
+function ErrorNotice({
+  label,
+  message,
+  children,
+}: {
+  label: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="execution-error" role="alert" aria-label={label}>
+      <CircleAlert aria-hidden="true" />
+      <div className="execution-error-content">
+        <p>{message}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function ProviderOutcome({
   failed,
   error,
@@ -257,17 +286,18 @@ function ProviderOutcome({
 }) {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
+  if (!failed)
+    return (
+      <div className="provider-outcome aborted" role="status">
+        {t("modelRequestStopped")}
+      </div>
+    );
   return (
-    <div
-      className={`provider-outcome ${failed ? "failed" : "aborted"}`}
-      role={failed ? "alert" : "status"}
+    <ErrorNotice
+      label={t("modelRequestFailed")}
+      message={error || t("modelFailureUnknown")}
     >
-      <strong>
-        {t(failed ? "modelRequestFailed" : "modelRequestStopped")}
-      </strong>
-      {failed && <p>{error || t("modelFailureUnknown")}</p>}
-      {failed && <small>{t("modelFailureNextStep")}</small>}
-      {failed && retryPrompt && (
+      {retryPrompt && (
         <div className="provider-outcome-actions">
           <button
             type="button"
@@ -282,7 +312,7 @@ function ProviderOutcome({
           </button>
         </div>
       )}
-    </div>
+    </ErrorNotice>
   );
 }
 
@@ -576,13 +606,28 @@ function ActivityCard({
 function familyCard(
   part: Extract<WebMessagePart, { type: "toolCall" }>,
   result?: WebLiveMessage,
-  subagents: readonly WebSubagentActivity[] = [],
-  onInspectSubagent?: (id: string) => void,
-  liveState?: EvidenceState,
-  defaultOpen = false,
-  observed = true,
+  options: {
+    sessionId: string;
+    subagents?: readonly WebSubagentActivity[];
+    records?: readonly RecordedSubagent[];
+    workflows?: readonly WebWorkflowActivity[];
+    onInspectSubagent?: (id: string, kind?: "workflows") => void;
+    liveState?: EvidenceState;
+    defaultOpen?: boolean;
+    observed?: boolean;
+  } = { sessionId: "" },
 ) {
   if (result?.forkSnapshotToolResult) return null;
+  const {
+    sessionId,
+    subagents = [],
+    records = [],
+    workflows = [],
+    onInspectSubagent,
+    liveState,
+    defaultOpen = false,
+    observed = true,
+  } = options;
   const name = part.name || "";
   const args = parseArguments(part.arguments);
   const details = record(result?.details);
@@ -590,16 +635,14 @@ function familyCard(
   const status =
     !observed && nativeStatus === "running" ? "unknown" : nativeStatus;
   if (name === "subagent_spawn") {
-    const meta = [args.agent_type, details.model || args.model]
-      .filter(Boolean)
-      .join(" · ");
     return (
       <SubagentCard
+        sessionId={sessionId}
         id={typeof details.id === "string" ? details.id : undefined}
         title={String(details.title || args.name || "subagent")}
-        meta={meta}
         body={result?.content || String(args.prompt || part.arguments)}
         activity={subagents.find((item) => item.id === details.id)}
+        saved={records.find((item) => item.id === details.id)}
         spawnFailed={result?.isError === true}
         observed={observed}
         defaultOpen={defaultOpen}
@@ -609,12 +652,14 @@ function familyCard(
   }
   if (name.startsWith("subagent")) {
     const action = name.replaceAll("_", " ").replace(/^subagent /u, "");
+    const child =
+      subagents.find((item) => item.id === args.id) ??
+      records.find((item) => item.id === args.id);
     return (
       <ActivityCard
         family="subagent"
         defaultOpen={defaultOpen}
-        title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} Subagent`}
-        meta={String(args.id || "")}
+        title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} · ${child?.title || args.id || "Subagent"}`}
         body={result?.content || part.arguments}
         status={status}
       />
@@ -629,6 +674,9 @@ function familyCard(
         "unnamed",
     );
     const agents = record(details.agents);
+    const children = workflows.find(
+      (item) => item.runId === details.runId,
+    )?.children;
     const meta = [
       details.runId,
       details.status,
@@ -639,13 +687,21 @@ function familyCard(
       .filter(Boolean)
       .join(" · ");
     return (
-      <ActivityCard
-        family="workflow"
-        title={`Workflow · ${workflowName}`}
-        meta={meta}
-        body={result?.content || script}
-        status={status}
-      />
+      <>
+        <ActivityCard
+          family="workflow"
+          title={`Workflow · ${workflowName}`}
+          meta={meta}
+          body={result?.content || script}
+          status={status}
+        />
+        <WorkflowChildren
+          sessionId={sessionId}
+          tasks={children}
+          observed={observed}
+          onInspect={onInspectSubagent}
+        />
+      </>
     );
   }
   if (name.startsWith("workflow")) {
@@ -663,21 +719,23 @@ function familyCard(
 }
 
 function SubagentCard({
+  sessionId,
   id,
   title,
-  meta,
   body,
   activity,
+  saved,
   spawnFailed,
   onInspect,
   defaultOpen = false,
   observed = true,
 }: {
+  sessionId: string;
   id?: string;
   title: string;
-  meta: string;
   body: string;
   activity?: WebSubagentActivity;
+  saved?: RecordedSubagent;
   spawnFailed: boolean;
   onInspect?: (id: string) => void;
   defaultOpen?: boolean;
@@ -685,7 +743,10 @@ function SubagentCard({
 }) {
   const { t } = useTranslation();
   const nativeState =
-    activity?.outcome === "interrupted" ? "interrupted" : activity?.status;
+    activity?.outcome === "interrupted"
+      ? "interrupted"
+      : (activity?.status ??
+        (saved?.state === "running" ? undefined : saved?.state));
   const state =
     !observed && (nativeState === "running" || (!nativeState && !spawnFailed))
       ? "unknown"
@@ -701,30 +762,69 @@ function SubagentCard({
             ? t("subagentStateUnavailable")
             : t("subagentStarting");
   return (
-    <section className="message-details activity-card subagent">
-      <button
-        className="subagent-card-open"
-        type="button"
-        disabled={!id || !onInspect}
-        aria-label={t("inspectSubagent", { name: title })}
-        onClick={() => id && onInspect?.(id)}
-      >
-        <span className="activity-icon" aria-hidden="true">
-          <Bot />
-        </span>
-        <span className="activity-main">
-          <strong className="activity-title">{title}</strong>
-          {meta && <span className="activity-meta">{meta}</span>}
-        </span>
-        <span className={`subagent-state ${state ?? "unknown"}`}>{label}</span>
-        <span aria-hidden="true">›</span>
-      </button>
-      <details className="subagent-receipt" open={defaultOpen || undefined}>
-        <summary>{t("subagentSpawnReceipt")}</summary>
-        <p>{t("subagentSpawnReceiptHint")}</p>
-        <pre className="details-body tool-evidence">{body}</pre>
-      </details>
+    <section className="activity-card subagent subagent-activity">
+      <SubagentTaskRow
+        identity={`${sessionId}:${id ?? title}`}
+        title={title}
+        state={state}
+        label={label}
+        onInspect={id && onInspect ? () => onInspect(id) : undefined}
+      />
+      {(defaultOpen || spawnFailed) && (
+        <details className="subagent-receipt" open={defaultOpen || undefined}>
+          <summary>{t("subagentSpawnReceipt")}</summary>
+          <p>{t("subagentSpawnReceiptHint")}</p>
+          <pre className="details-body tool-evidence">{body}</pre>
+        </details>
+      )}
     </section>
+  );
+}
+
+function WorkflowChildren({
+  sessionId,
+  tasks,
+  observed,
+  onInspect,
+}: {
+  sessionId: string;
+  tasks: WebWorkflowActivity["children"];
+  observed: boolean;
+  onInspect?: (id: string, kind?: "workflows") => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {tasks?.items.map((child) => {
+        const state =
+          child.outcome === "interrupted"
+            ? "interrupted"
+            : !observed && child.status === "running"
+              ? "unknown"
+              : child.status;
+        return (
+          <SubagentTaskRow
+            key={child.id}
+            identity={`${sessionId}:${child.id}`}
+            title={child.title}
+            state={state}
+            label={t(
+              state === "unknown"
+                ? "toolState_unknown"
+                : `subagentState_${state}`,
+            )}
+            onInspect={
+              onInspect ? () => onInspect(child.id, "workflows") : undefined
+            }
+          />
+        );
+      })}
+      {Boolean(tasks?.omitted) && (
+        <p className="inspection-note">
+          {t("subagentListTruncated", { count: tasks?.omitted })}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -989,9 +1089,13 @@ function MessageActions({
 function CustomResult({
   message,
   fullSubagent = false,
+  sessionId,
+  onInspectSubagent,
 }: {
   message: WebLiveMessage;
   fullSubagent?: boolean;
+  sessionId: string;
+  onInspectSubagent?: (id: string) => void;
 }) {
   const { t } = useTranslation();
   if (message.customType === "openpi-web-command-feedback")
@@ -1026,46 +1130,52 @@ function CustomResult({
     const results = Array.isArray(details.results)
       ? details.results.map(record)
       : [details];
-    const statuses = results.map((result) =>
-      result.outcome === "interrupted"
-        ? "warn"
-        : canonicalStatus(result.status),
+    const ownedIds = new Set(
+      recordedSubagents([message]).map((item) => item.id),
     );
-    const status: Status = statuses.includes("error")
-      ? "error"
-      : statuses.includes("warn")
-        ? "warn"
-        : statuses.includes("running")
-          ? "running"
-          : statuses.length > 0 && statuses.every((value) => value === "done")
-            ? "done"
-            : "unknown";
     return (
-      <ActivityCard
-        family="subagent"
-        title={t("subagentBackgroundResult", { count: results.length })}
-        defaultOpen={fullSubagent}
-        meta={results
-          .map((result) =>
-            [
-              String(result.title || result.id || ""),
-              result.outcome === "interrupted"
-                ? t("subagentState_interrupted")
-                : ["running", "done", "error"].includes(String(result.status))
-                  ? t(`subagentState_${result.status}`)
-                  : t("unknownState"),
-            ]
-              .filter(Boolean)
-              .join(" · "),
-          )
-          .join(" / ")}
-        body={
-          !fullSubagent && typeof details.displayContent === "string"
-            ? details.displayContent
-            : message.content
-        }
-        status={status}
-      />
+      <section className="activity-card subagent subagent-activity">
+        {results.map((result) => {
+          const id = typeof result.id === "string" ? result.id : "";
+          const state =
+            result.outcome === "interrupted"
+              ? "interrupted"
+              : result.status === "done" ||
+                  result.status === "error" ||
+                  result.status === "running"
+                ? result.status
+                : "unknown";
+          return (
+            <SubagentTaskRow
+              key={id || JSON.stringify(result)}
+              identity={`${sessionId}:${id}`}
+              title={String(result.title || id || t("subagentDetails"))}
+              state={state}
+              label={t(
+                state === "unknown" ? "unknownState" : `subagentState_${state}`,
+              )}
+              onInspect={
+                onInspectSubagent && ownedIds.has(id)
+                  ? () => onInspectSubagent(id)
+                  : undefined
+              }
+            />
+          );
+        })}
+        <details
+          className="subagent-result-evidence"
+          open={fullSubagent || undefined}
+        >
+          <summary>
+            {t("subagentBackgroundResult", { count: results.length })}
+          </summary>
+          <pre className="details-body tool-evidence">
+            {!fullSubagent && typeof details.displayContent === "string"
+              ? details.displayContent
+              : message.content}
+          </pre>
+        </details>
+      </section>
     );
   }
   if (message.customType === "workflow-result") {
@@ -2414,10 +2524,11 @@ export function Transcript(props: TranscriptProps) {
   }, []);
 
   const { rows, turns } = useMemo(() => {
+    const records = recordedSubagents(entries.map((entry) => entry.message));
     const failures = providerFailures(entries, running && !historyPaused);
     const lastFinalError = [...failures.finalErrors].at(-1);
     const attemptContents = new Map<string, RenderRow[]>();
-    let retryRendered = false;
+    let retryRowKey: string | undefined;
     const results = new Map<string, DisplayEntry>();
     const pairedToolIds = new Set<string>();
     const liveTools = historyPaused
@@ -2556,6 +2667,8 @@ export function Transcript(props: TranscriptProps) {
                 <div className="message-content">
                   <CustomResult
                     message={message}
+                    sessionId={selectedId ?? ""}
+                    onInspectSubagent={props.onInspectSubagent}
                     fullSubagent={
                       props.snapshot.preferences.subagentResultDisplay ===
                       "full"
@@ -3005,17 +3118,20 @@ export function Transcript(props: TranscriptProps) {
                   defaultOpen={defaultOpen}
                 />
               ) : (
-                familyCard(
-                  part,
-                  result,
-                  active
+                familyCard(part, result, {
+                  sessionId: selectedId ?? "",
+                  subagents: active
                     ? props.snapshot.runtime.capabilities.subagents?.items
                     : undefined,
-                  props.onInspectSubagent,
+                  workflows: active
+                    ? props.snapshot.runtime.capabilities.workflows?.items
+                    : undefined,
+                  records,
+                  onInspectSubagent: props.onInspectSubagent,
                   liveState,
                   defaultOpen,
-                  props.activityObserved !== false,
-                )
+                  observed: props.activityObserved !== false,
+                })
               );
             const args = parseArguments(part.arguments);
             const { Icon, action } = toolActivity(part.name);
@@ -3028,7 +3144,11 @@ export function Transcript(props: TranscriptProps) {
               kind:
                 part.name === "plan_ready" && result && planPresentation(result)
                   ? "response"
-                  : "process",
+                  : card &&
+                      (part.name === "subagent_spawn" ||
+                        part.name === "workflow")
+                    ? "custom"
+                    : "process",
               processType: /^(subagent|workflow)/u.test(part.name)
                 ? "activity"
                 : "tool",
@@ -3099,7 +3219,8 @@ export function Transcript(props: TranscriptProps) {
         }
         const attempts = failures.groups.get(index);
         if (attempts) {
-          if (attempts.state === "retrying" && retry) retryRendered = true;
+          if (attempts.state === "retrying" && retry)
+            retryRowKey = `${attempts.attempts[0]!.key}-attempts`;
           detailRows.push({
             key: `${attempts.attempts[0]!.key}-attempts`,
             turn,
@@ -3279,10 +3400,15 @@ export function Transcript(props: TranscriptProps) {
       }
       return [];
     });
-    if (retry && !retryRendered)
-      rendered.push({
+    let nativeEnd = rendered.length;
+    while (nativeEnd > 0 && rendered[nativeEnd - 1]!.pendingPrompt) nativeEnd--;
+    const pendingPreviews = rendered.length - nativeEnd;
+    const nativeTurn = rendered[nativeEnd - 1]?.turn ?? 0;
+    if (retry && !retryRowKey) {
+      retryRowKey = "native-retry";
+      rendered.splice(nativeEnd, 0, {
         key: "native-retry",
-        turn,
+        turn: nativeTurn,
         kind: "outcome",
         content: (
           <article className="message-row assistant outcome-row">
@@ -3298,6 +3424,46 @@ export function Transcript(props: TranscriptProps) {
           </article>
         ),
       });
+    }
+    const compaction = !historyPaused && selectedExecution?.compaction;
+    if (compaction && compaction.state !== "completed") {
+      const retryIndex = rendered.findIndex((row) => row.key === retryRowKey);
+      const compactionRow: RenderRow = {
+        key: `native-compaction-${compaction.startedAt ?? compaction.state}`,
+        turn: rendered[retryIndex]?.turn ?? nativeTurn,
+        kind: "custom",
+        content: (
+          <CompactionStatus
+            compaction={compaction}
+            observed={
+              props.activityObserved !== false &&
+              selectedExecution?.status !== "unknown"
+            }
+          />
+        ),
+      };
+      // Keep the current compaction before the observed reconnect status.
+      // Completed compactions continue to use Pi's chronological entries.
+      rendered.splice(
+        retryIndex < 0 ? nativeEnd : retryIndex,
+        0,
+        compactionRow,
+      );
+      if (compaction.state === "failed" && compaction.errorMessage)
+        rendered.splice(rendered.length - pendingPreviews, 0, {
+          key: "native-compaction-error",
+          turn: compactionRow.turn,
+          kind: "custom",
+          content: (
+            <article className="message-row assistant outcome-row">
+              <ErrorNotice
+                label={t("compactionFailed")}
+                message={compaction.errorMessage}
+              />
+            </article>
+          ),
+        });
+    }
     return { rows: rendered, turns: turnItems };
   }, [
     active,
@@ -3315,6 +3481,7 @@ export function Transcript(props: TranscriptProps) {
     props.forkPending,
     props.onInspectSubagent,
     props.snapshot.runtime.capabilities.subagents,
+    props.snapshot.runtime.capabilities.workflows?.items,
     props.snapshot.preferences.expandThinking,
     props.snapshot.preferences.subagentResultDisplay,
     props.snapshot.preferences.bashToolDisplay,
@@ -3812,21 +3979,6 @@ export function Transcript(props: TranscriptProps) {
             props.onReviewTurn,
             props.activityObserved !== false,
           )}
-          {selectedExecution?.compaction &&
-            selectedExecution.compaction.state !== "completed" && (
-              <CompactionStatus
-                key={JSON.stringify([
-                  selected?.id,
-                  selected?.path,
-                  selectedExecution.compaction.startedAt,
-                ])}
-                compaction={selectedExecution.compaction}
-                observed={
-                  props.activityObserved !== false &&
-                  selectedExecution.status !== "unknown"
-                }
-              />
-            )}
           {running &&
             props.activityObserved !== false &&
             selectedExecution?.compaction?.state !== "running" && (

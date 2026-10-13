@@ -1,6 +1,6 @@
 import { basename, dirname, extname } from "node:path";
 import { createHash } from "node:crypto";
-import type { MyPiSetupConfig } from "../../extensions/shared/setup-config.ts";
+import type { inspectSetupConfig, MyPiSetupConfig } from "../../extensions/shared/setup-config.ts";
 import type { readConfiguredPackages } from "./configured-packages.ts";
 import { projectAssistantError } from "../protocol/types.ts";
 import type {
@@ -212,12 +212,26 @@ export function projectWebSettingsResources(
   };
 }
 
+export function projectWebSetupInspection(inspection: ReturnType<typeof inspectSetupConfig>) {
+  return {
+    setup: projectWebSetupConfig(inspection.config),
+    setupWritable: inspection.writable,
+    setupDiagnostics: inspection.diagnostics.slice(0, 16).map((diagnostic) => ({
+      severity: diagnostic.severity,
+      path: boundedText(diagnostic.path, 160),
+      message: boundedText(diagnostic.message, 240),
+    })),
+    setupDiagnosticsOmitted: Math.max(0, inspection.diagnostics.length - 16),
+  };
+}
+
 export function projectWebSetupConfig(
   config: MyPiSetupConfig,
 ): WebOpenPiSetupProjection {
   return {
     capabilities: { discovery: config.capabilities.discovery },
     webSearch: { enabled: config.webSearch.enabled },
+    response: { ...config.response },
     suggestions: {
       enabled: config.suggestions.enabled,
       ...(config.suggestions.model
@@ -233,11 +247,13 @@ export function projectWebSetupConfig(
     workflows: { ...config.workflows },
     ui: {
       webTheme: config.ui.webTheme,
+      webAppearance: { ...config.ui.webAppearance },
       webChatWidth: config.ui.webChatWidth,
       webSidebarWidth: config.ui.webSidebarWidth,
       webAuxiliaryWidth: config.ui.webAuxiliaryWidth,
       webChatFontSize: config.ui.webChatFontSize,
       webExpandThinking: config.ui.webExpandThinking,
+      webHiddenThinkingLevels: [...config.ui.webHiddenThinkingLevels],
       webPinnedSort: config.ui.webPinnedSort,
       webSidebarGrouping: config.ui.webSidebarGrouping,
       webChatsSort: config.ui.webChatsSort,

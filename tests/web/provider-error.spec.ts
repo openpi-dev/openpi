@@ -98,9 +98,9 @@ it("renders a persisted provider error with no body after refresh", () => {
   expect(screen.getByRole("alert").textContent).toContain(
     "gateway_concurrency_limit (429)",
   );
-  expect(screen.getByRole("alert").textContent).toContain(
-    "Model request failed",
-  );
+  expect(
+    screen.getByRole("alert", { name: "Model request failed" }).textContent,
+  ).toBe("gateway_concurrency_limit (429)");
   expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
 });
 
@@ -376,6 +376,137 @@ it("restores an inline native reconnect row after refresh, reveals its reason, a
   rerender(transcriptNode({ ...state }));
   expect(container.querySelector(".provider-attempts.retrying")).toBeNull();
 });
+
+it("keeps interrupted compaction before native reconnect progress and its separate error notice", () => {
+  const reason = "Error running remote compact task: 503 Service Unavailable";
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Run once" }),
+    error("response stream closed"),
+  ]);
+  state.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    compaction: { state: "failed", errorMessage: reason },
+    retry: {
+      attempt: 2,
+      maxAttempts: 2,
+      errorMessage: "response stream closed",
+    },
+  };
+  const { container, rerender } = render(transcriptNode(state));
+  const status = container.querySelector(
+    '.context-compaction[data-state="failed"]',
+  )!;
+  const reconnect = container.querySelector(".provider-attempts")!;
+  const notice = screen.getByRole("alert", {
+    name: "Context compaction failed",
+  });
+  expect(status.textContent).toBe("Compaction interrupted");
+  expect(reconnect.querySelector("summary")?.textContent).toBe(
+    "Reconnecting 2/2",
+  );
+  expect(
+    status.compareDocumentPosition(reconnect) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    reconnect.compareDocumentPosition(notice) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(notice.textContent).toBe(reason);
+  expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+  rerender(transcriptNode(state, { activityObserved: false }));
+  expect(status.textContent).toBe("Compaction interrupted");
+  expect(reconnect.textContent).toContain(
+    "Reconnection status unconfirmed 2/2",
+  );
+  expect(screen.getByRole("alert").textContent).toBe(reason);
+  state.selectedExecution.compaction = { state: "cancelled" };
+  rerender(transcriptNode({ ...state }));
+  expect(container.querySelector('[data-state="cancelled"]')?.textContent).toBe(
+    "Compaction interrupted",
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+  state.selectedExecution.sessionPath = "/tmp/other.jsonl";
+  rerender(transcriptNode({ ...state }));
+  expect(container.querySelector(".context-compaction")).toBeNull();
+});
+
+it.each(["recorded", "unloaded", "none"] as const)(
+  "keeps current compaction and %s retry with the native turn before a queued prompt",
+  (retrySource) => {
+    const state = turnSnapshot([
+      projectMessage({ role: "user", content: "First task" }),
+      ...(retrySource === "recorded" ? [error("response stream closed")] : []),
+    ]);
+    state.selectedExecution = {
+      sessionId: "session",
+      sessionPath: "/tmp/session.jsonl",
+      status: "running",
+      liveTools: [],
+      liveToolsOmitted: 0,
+      compaction: { state: "failed", errorMessage: "compact failed 503" },
+      ...(retrySource === "none"
+        ? {}
+        : { retry: { attempt: 2, maxAttempts: 2 } }),
+    };
+    const options = {
+      liveMessages: [
+        {
+          key: "queued-prompt",
+          message: projectMessage({
+            role: "user",
+            content: "Next task pending",
+          }),
+          optimistic: {
+            sessionId: "session",
+            sessionPath: "/tmp/session.jsonl",
+            commandId: "next",
+            afterEntryId: state.selectedSession!.entries.at(-1)!.id!,
+            admitted: false,
+          },
+        },
+      ],
+    };
+    const { container, rerender } = render(transcriptNode(state, options));
+    const nativeTurn = screen
+      .getByText("First task")
+      .closest(".conversation-turn");
+    const queuedTurn = screen
+      .getByText("Next task pending")
+      .closest(".conversation-turn")!;
+    expect(container.querySelectorAll(".conversation-turn")).toHaveLength(2);
+    expect(
+      container
+        .querySelector(".context-compaction")
+        ?.closest(".conversation-turn"),
+    ).toBe(nativeTurn);
+    expect(screen.getByRole("alert").closest(".conversation-turn")).toBe(
+      nativeTurn,
+    );
+    if (retrySource !== "none")
+      expect(
+        container
+          .querySelector(".provider-attempts")
+          ?.closest(".conversation-turn"),
+      ).toBe(nativeTurn);
+    expect(queuedTurn.querySelector(".turn-state.waiting")).toBeTruthy();
+    expect(queuedTurn.querySelector('[role="alert"]')).toBeNull();
+    for (const compactionState of ["running", "cancelled"] as const) {
+      state.selectedExecution.compaction = { state: compactionState };
+      rerender(transcriptNode({ ...state }, options));
+      expect(
+        container
+          .querySelector(".context-compaction")
+          ?.closest(".conversation-turn"),
+      ).toBe(nativeTurn);
+      expect(screen.queryByRole("alert")).toBeNull();
+    }
+  },
+);
 
 it("does not invent retry limits or a reconnect phase from an incomplete model response", () => {
   const state = turnSnapshot([

@@ -256,17 +256,21 @@ it("does not interpret the copied retry attempt as a terminal child failure", ()
       errorMessage: "Temporary provider error",
     }),
   );
-  const { container, rerender } = render(
+  const { rerender } = render(
     transcript(snapshot([prompt(), attempt, boundary("retry-attempt")])),
   );
   expect(screen.getByText(i18n.t("modelEarlierAttempts"))).toBeTruthy();
-  expect(container.querySelector(".provider-outcome.failed")).toBeNull();
+  expect(
+    screen.queryByRole("alert", { name: i18n.t("modelRequestFailed") }),
+  ).toBeNull();
   expect(
     screen.queryByRole("button", { name: i18n.t("retryPrompt") }),
   ).toBeNull();
   rerender(transcript(snapshot([prompt(), attempt])));
-  expect(container.querySelector(".provider-outcome.failed")).toBeTruthy();
-  expect(screen.getByText(i18n.t("modelRequestFailed"))).toBeTruthy();
+  expect(
+    screen.getByRole("alert", { name: i18n.t("modelRequestFailed") })
+      .textContent,
+  ).toContain("Temporary provider error");
 });
 
 it.each(["bash", "read", "write", "subagent_spawn", "workflow", "plugin_tool"])(
@@ -293,7 +297,17 @@ it.each(["bash", "read", "write", "subagent_spawn", "workflow", "plugin_tool"])(
     );
     rerender(transcript(snapshot(pendingTool(name, false))));
     expect(screen.queryByText(i18n.t("toolSnapshotMissingResult"))).toBeNull();
-    expect(container.querySelector(".process-step.error")).toBeTruthy();
+    if (name === "subagent_spawn") {
+      expect(screen.getByText(i18n.t("subagentSpawnFailed"))).toBeTruthy();
+    } else {
+      expect(
+        container.querySelector(
+          name === "workflow"
+            ? ".activity-card.workflow .status-mark.error"
+            : ".process-step.error",
+        ),
+      ).toBeTruthy();
+    }
   },
 );
 

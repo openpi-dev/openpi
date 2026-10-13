@@ -295,6 +295,92 @@ test("native subagent display receipts use bounded content and do not invoke get
   assert.equal(projectEntry({ ...entry, data }).message, undefined);
 });
 
+test("native subagent finish facts survive before parent result delivery without exposing private evidence", () => {
+  const entry = {
+    type: "custom" as const,
+    id: "finish",
+    parentId: "spawn",
+    timestamp: "2026-10-13T00:00:00Z",
+    customType: "subagent-finished",
+    data: {
+      id: "sa-1",
+      title: "Completed child",
+      status: "done",
+      evidence: { sessionFilePath: "/private/child.jsonl" },
+      completion: {
+        observed: { outcome: "success", evidenceRef: "private-locator" },
+      },
+    },
+  };
+  const projected = projectEntry(entry);
+  assert.equal(projected.type, "message");
+  assert.equal(projected.id, "finish");
+  assert.equal(projected.message?.display, false);
+  assert.equal(projected.message?.content, "");
+  assert.equal(projected.message?.customType, "subagent-finished");
+  assert.deepEqual(projected.message?.details, {
+    id: "sa-1",
+    title: "Completed child",
+    status: "done",
+  });
+  assert.equal(JSON.stringify(projected).includes("private"), false);
+  for (const [outcome, expected] of [
+    ["cancelled", "interrupted"],
+    ["uncertain", "uncertain"],
+  ]) {
+    const result = projectEntry({
+      ...entry,
+      data: {
+        ...entry.data,
+        status: "error",
+        completion: { observed: { outcome } },
+      },
+    });
+    assert.deepEqual(result.message?.details, {
+      id: "sa-1",
+      title: "Completed child",
+      status: "error",
+      outcome: expected,
+    });
+  }
+});
+
+test("native subagent finish projection validates exact identities, bounds titles and never invokes metadata getters", () => {
+  const entry = {
+    type: "custom" as const,
+    id: "finish",
+    parentId: "spawn",
+    timestamp: "2026-10-13T00:00:00Z",
+    customType: "subagent-finished",
+    data: { id: "sa-1", title: "x".repeat(20_000), status: "done" },
+  };
+  const projected = projectEntry(entry).message;
+  assert.ok(JSON.stringify(projected).length < 1500);
+  for (const data of [
+    null,
+    { id: "bad\nID", status: "done" },
+    { id: "x".repeat(161), status: "done" },
+    { id: "sa-1", status: "running" },
+    Object.defineProperty({}, "id", {
+      get() {
+        throw new Error("private getter");
+      },
+    }),
+  ]) {
+    assert.equal(projectEntry({ ...entry, data }).message, undefined);
+  }
+  const completion = Object.defineProperty({}, "observed", {
+    get() {
+      throw new Error("private getter");
+    },
+  });
+  assert.equal(
+    projectEntry({ ...entry, data: { ...entry.data, completion } }).message
+      ?.display,
+    false,
+  );
+});
+
 test("message projection drops oversized details", () => {
   const projected = projectMessage({
     role: "toolResult",

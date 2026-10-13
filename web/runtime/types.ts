@@ -189,6 +189,8 @@ export interface WebSessionExecution {
   /** Native compaction observation; completion history remains in Pi entries. */
   compaction?: {
     state: "running" | "completed" | "failed" | "cancelled" | "unchanged";
+    /** Bounded, sanitized detail from the native compaction end event. */
+    errorMessage?: string;
     startedAt?: number;
     elapsedMs?: number;
   };
@@ -328,6 +330,7 @@ export interface WebRuntimeController {
   listCommands?(): WebCommandDiscoveryResult;
   listSettingsResources?(): WebSettingsResourceCatalog;
   getWebSearchSupport?(): { available: boolean; reason?: string; model?: string; provider?: string };
+  getResponseSupport?(): { verbosity: boolean; reasoningSummary: boolean };
   applySetupConfiguration?(): Promise<void>;
   reloadSettingsResources?(sessionId: string, sessionPath: string): Promise<void>;
   listProviderAuth?(): WebProviderAuthProjection;

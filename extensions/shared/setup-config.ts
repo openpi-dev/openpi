@@ -42,6 +42,35 @@ export const REASONING_LEVELS = [
 
 export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
 
+export const RESPONSE_VERBOSITIES = [
+  "default",
+  "low",
+  "medium",
+  "high",
+] as const;
+export const RESPONSE_REASONING_SUMMARIES = [
+  "default",
+  "auto",
+  "concise",
+  "detailed",
+  "none",
+] as const;
+
+export type ResponseVerbosity = (typeof RESPONSE_VERBOSITIES)[number];
+export type ResponseReasoningSummary =
+  (typeof RESPONSE_REASONING_SUMMARIES)[number];
+
+export function isHiddenThinkingLevels(
+  value: unknown,
+): value is ReasoningLevel[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= REASONING_LEVELS.length &&
+    Array.from(value).every(isReasoningLevel) &&
+    new Set(value).size === value.length
+  );
+}
+
 export const FOOTER_ITEMS = [
   "cwd",
   "model",
@@ -85,6 +114,35 @@ export const WEB_THEMES = [
   "system",
 ] as const;
 export type WebTheme = (typeof WEB_THEMES)[number];
+
+export const WEB_APPEARANCE_PALETTES = [
+  "default",
+  "mist",
+  "rose",
+  "pine",
+] as const;
+export const WEB_APPEARANCE_FONTS = [
+  "system",
+  "sans",
+  "serif",
+  "mono",
+] as const;
+
+export interface WebAppearancePreference {
+  readonly palette: (typeof WEB_APPEARANCE_PALETTES)[number];
+  readonly accent: string;
+  readonly background: string;
+  readonly foreground: string;
+  readonly font: (typeof WEB_APPEARANCE_FONTS)[number];
+}
+
+export const DEFAULT_WEB_APPEARANCE: WebAppearancePreference = {
+  palette: "default",
+  accent: "",
+  background: "",
+  foreground: "",
+  font: "system",
+};
 
 export const DEFAULT_WEB_CHAT_WIDTH = 820;
 export const MIN_WEB_CHAT_WIDTH = 820;
@@ -192,13 +250,19 @@ export interface MyPiSetupConfig {
   };
   readonly browser: BrowserConfig;
   readonly webSearch: WebSearchConfig;
+  readonly response: {
+    readonly verbosity: ResponseVerbosity;
+    readonly reasoningSummary: ResponseReasoningSummary;
+  };
   readonly ui: {
     readonly webTheme: WebTheme;
+    readonly webAppearance: WebAppearancePreference;
     readonly webChatWidth: number;
     readonly webSidebarWidth: number;
     readonly webAuxiliaryWidth: number;
     readonly webChatFontSize: number;
     readonly webExpandThinking: boolean;
+    readonly webHiddenThinkingLevels: readonly ReasoningLevel[];
     readonly webPinnedSort: "manual" | "updated";
     readonly webSidebarGrouping: "project" | "list";
     readonly webChatsSort: "manual" | "updated";
@@ -229,6 +293,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   capabilities: { discovery: "explicit" },
   suggestions: { enabled: false },
   webSearch: { enabled: false, modelSupport: [] },
+  response: { verbosity: "default", reasoningSummary: "default" },
   workflows: {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
@@ -242,11 +307,13 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   },
   ui: {
     webTheme: "system",
+    webAppearance: DEFAULT_WEB_APPEARANCE,
     webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
     webSidebarWidth: DEFAULT_WEB_SIDEBAR_WIDTH,
     webAuxiliaryWidth: DEFAULT_WEB_AUXILIARY_WIDTH,
     webChatFontSize: DEFAULT_WEB_CHAT_FONT_SIZE,
     webExpandThinking: false,
+    webHiddenThinkingLevels: [],
     webPinnedSort: "manual",
     webSidebarGrouping: "project",
     webChatsSort: "updated",
@@ -275,6 +342,28 @@ const ESTIMATED_PROCESS_STARTED_AT = Math.max(
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+export function isWebAppearancePreference(
+  value: unknown,
+): value is WebAppearancePreference {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 5 &&
+    Object.keys(value).every((key) =>
+      ["palette", "accent", "background", "foreground", "font"].includes(key),
+    ) &&
+    WEB_APPEARANCE_PALETTES.includes(
+      value.palette as WebAppearancePreference["palette"],
+    ) &&
+    WEB_APPEARANCE_FONTS.includes(
+      value.font as WebAppearancePreference["font"],
+    ) &&
+    [value.accent, value.background, value.foreground].every(
+      (color) =>
+        typeof color === "string" && /^(?:|#[0-9a-f]{6})$/iu.test(color),
+    )
+  );
+}
 
 const isReasoningLevel = (value: unknown): value is ReasoningLevel =>
   typeof value === "string" &&
@@ -565,6 +654,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   const ui = isRecord(value.ui) ? value.ui : {};
   const browser = isRecord(value.browser) ? value.browser : {};
   const webSearch = isRecord(value.webSearch) ? value.webSearch : {};
+  const response = isRecord(value.response) ? value.response : {};
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
@@ -581,6 +671,14 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       modelSupport: isWebSearchModelSupport(webSearch.modelSupport)
         ? webSearch.modelSupport
         : [],
+    },
+    response: {
+      verbosity: isResponseVerbosity(response.verbosity)
+        ? response.verbosity
+        : "default",
+      reasoningSummary: isResponseReasoningSummary(response.reasoningSummary)
+        ? response.reasoningSummary
+        : "default",
     },
     suggestions: {
       enabled: requestedEnabled && Boolean(model),
@@ -625,6 +723,9 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
+      webAppearance: isWebAppearancePreference(ui.webAppearance)
+        ? { ...ui.webAppearance }
+        : { ...DEFAULT_WEB_APPEARANCE },
       webPinnedSort: ui.webPinnedSort === "updated" ? "updated" : "manual",
       webSidebarGrouping: ui.webSidebarGrouping === "list" ? "list" : "project",
       webChatsSort: ui.webChatsSort === "manual" ? "manual" : "updated",
@@ -657,6 +758,11 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         typeof ui.webExpandThinking === "boolean"
           ? ui.webExpandThinking
           : false,
+      webHiddenThinkingLevels: isHiddenThinkingLevels(
+        ui.webHiddenThinkingLevels,
+      )
+        ? [...ui.webHiddenThinkingLevels]
+        : [],
       showHeader: typeof ui.showHeader === "boolean" ? ui.showHeader : false,
       customFooter:
         typeof ui.customFooter === "boolean" ? ui.customFooter : true,
@@ -708,6 +814,12 @@ const nonemptyString = (value: unknown) =>
   typeof value === "string" && value.trim().length > 0;
 const oneOf = (values: readonly unknown[]) => (value: unknown) =>
   values.includes(value);
+const isResponseVerbosity = (value: unknown): value is ResponseVerbosity =>
+  RESPONSE_VERBOSITIES.includes(value as ResponseVerbosity);
+const isResponseReasoningSummary = (
+  value: unknown,
+): value is ResponseReasoningSummary =>
+  RESPONSE_REASONING_SUMMARIES.includes(value as ResponseReasoningSummary);
 const integerBetween = (minimum: number, maximum: number) => (value: unknown) =>
   typeof value === "number" &&
   Number.isInteger(value) &&
@@ -738,8 +850,13 @@ const setupShape: ConfigShape = {
     externalBrowsers: isBrowserList,
   },
   webSearch: { enabled: booleanValue, modelSupport: isWebSearchModelSupport },
+  response: {
+    verbosity: isResponseVerbosity,
+    reasoningSummary: isResponseReasoningSummary,
+  },
   ui: {
     webTheme: isWebTheme,
+    webAppearance: isWebAppearancePreference,
     webChatWidth: integerBetween(MIN_WEB_CHAT_WIDTH, MAX_WEB_CHAT_WIDTH),
     webSidebarWidth: integerBetween(
       MIN_WEB_SIDEBAR_WIDTH,
@@ -754,6 +871,7 @@ const setupShape: ConfigShape = {
       MAX_WEB_CHAT_FONT_SIZE,
     ),
     webExpandThinking: booleanValue,
+    webHiddenThinkingLevels: isHiddenThinkingLevels,
     webPinnedSort: (value) => value === "manual" || value === "updated",
     webSidebarGrouping: (value) => value === "project" || value === "list",
     webChatsSort: (value) => value === "manual" || value === "updated",
@@ -1480,11 +1598,13 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Browser control: ${config.browser.control ? "on" : "off"} · default ${config.browser.defaultBrowser} · embedded ${config.browser.embedded ? "allowed" : "blocked"} · external ${config.browser.externalBrowsers.join(", ") || "none"}`,
     `Browser choices: embedded (Chromium host), ${EXTERNAL_BROWSERS.join(", ")}; Safari/Firefox use native tabs.`,
     `Web search: ${config.webSearch.enabled ? "on" : "off"} · current Session model and Pi credentials · unsupported or unknown connections receive no search tool · ${config.webSearch.modelSupport.length} explicit model support declarations · no search-provider fallback`,
+    `Response preferences: verbosity ${config.response.verbosity} · reasoning summary ${config.response.reasoningSummary} · Responses APIs only; default preserves Pi's request`,
+    `Hidden Web thinking levels: ${config.ui.webHiddenThinkingLevels.join(", ") || "none"} · presentation only; native support and current effort are unchanged`,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"
       : `Session child executions: ${config.childExecutions.maxActive} active slots shared by Workflow, Direct Subagent, and BTW`,
-    `UI: Web theme ${config.ui.webTheme} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · sidebar ${config.ui.webSidebarGrouping} / chats ${config.ui.webChatsSort} / pinned ${config.ui.webPinnedSort} / projects in recents ${config.ui.webProjectsInRecents ? "on" : "off"} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
+    `UI: Web theme ${config.ui.webTheme} · palette ${config.ui.webAppearance.palette} · accent ${config.ui.webAppearance.accent || "theme default"} / background ${config.ui.webAppearance.background || "theme default"} / foreground ${config.ui.webAppearance.foreground || "theme default"} · font ${config.ui.webAppearance.font} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · sidebar ${config.ui.webSidebarGrouping} / chats ${config.ui.webChatsSort} / pinned ${config.ui.webPinnedSort} / projects in recents ${config.ui.webProjectsInRecents ? "on" : "off"} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,

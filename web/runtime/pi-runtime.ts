@@ -291,6 +291,7 @@ export class PiWebRuntime implements WebRuntimeController {
     sessionId: string;
     sessionPath: string;
     state: NonNullable<WebSessionExecution["compaction"]>["state"];
+    errorMessage?: string;
     startedAt?: number;
     clock?: number;
   }>;
@@ -502,6 +503,7 @@ export class PiWebRuntime implements WebRuntimeController {
     })) {
       return {
         state: observed.state,
+        ...(observed.errorMessage === undefined ? {} : { errorMessage: observed.errorMessage }),
         ...(observed.startedAt === undefined ? {} : { startedAt: observed.startedAt }),
         ...(observed.clock === undefined ? {} : {
           elapsedMs: elapsed(observed.clock),
@@ -526,6 +528,7 @@ export class PiWebRuntime implements WebRuntimeController {
       this.compactionObservations.set(session, {
         ...identity,
         state: event.aborted ? "cancelled" : event.errorMessage ? "failed" : event.result ? "completed" : "unchanged",
+        ...(event.errorMessage ? { errorMessage: projectAssistantError(event.errorMessage).value } : {}),
       });
     }
     if (event.type === "compaction_end") {
@@ -807,6 +810,13 @@ export class PiWebRuntime implements WebRuntimeController {
     const support = resolveWebSearchSupport(model, loadSetupConfig().webSearch,
       model ? this.runtime.services.modelRuntime.isUsingOAuth(model.provider) : false);
     return { ...support, ...(model ? { model: model.id, provider: model.provider } : {}) };
+  }
+
+  getResponseSupport() {
+    this.assertActive();
+    const model = this.runtime.session.model;
+    const responses = model?.api === "openai-responses" || model?.api === "openai-codex-responses";
+    return { verbosity: responses, reasoningSummary: responses && Boolean(model?.reasoning) };
   }
 
   reloadSettingsResources(sessionId: string, sessionPath: string) {

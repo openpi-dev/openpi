@@ -38,6 +38,7 @@ import {
   formatSetupConfig,
   formatSetupDiagnostics,
   inspectSetupConfig,
+  loadSetupConfig,
   MAX_SESSION_CHILD_EXECUTION_LIMIT,
   MAX_WEB_AUXILIARY_WIDTH,
   MAX_WEB_CHAT_FONT_SIZE,
@@ -52,8 +53,12 @@ import {
   type MyPiSetupConfig,
   POST_EDIT_COMMAND_MAX_CHARS,
   REASONING_LEVELS,
+  RESPONSE_REASONING_SUMMARIES,
+  RESPONSE_VERBOSITIES,
   SETUP_CONFIG_CHANGED_CHANNEL,
   updateSetupConfig,
+  WEB_APPEARANCE_FONTS,
+  WEB_APPEARANCE_PALETTES,
   WEB_THEMES,
   type WebTheme,
 } from "../shared/setup-config.ts";
@@ -165,7 +170,7 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Capability discovery, optional Web search, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
@@ -189,9 +194,11 @@ export function buildInteractiveSetupPrompt(options: {
     "Before asking, briefly explain what can be configured and the practical impact:",
     `- Web search: off by default. web_search_enabled toggles the repository-owned native search extension. It uses the current Session model, protocol and Pi credentials; unsupported or unknown connections receive no native search tool, and there is no fallback to Exa or another provider. web_search_model_support declares support only for the exact current provider/model/protocol/base URL, only when the user explicitly confirms capability or a real native search has been verified; null removes that declaration. Never infer support from a model name or an API-compatible gateway. Legacy web_access_action remains only for managing previously installed ${WEB_ACCESS_PACKAGE.source}; never install or activate it as a fallback.`,
     "- Capability discovery: explicit is the safe default and keeps OpenPI model tools absent until the user asks for a capability. adaptive is opt-in and keeps only the small openpi_load_tools gateway visible, allowing the model to load Subagents, Workflows, background terminals, structured search, or Session tracking when it judges them useful. Loaded groups remain session-stable, and normal permission, concurrency, and workflow limits still apply.",
+    "- Response preferences: response_verbosity is default, low, medium, or high; response_reasoning_summary is default, auto, concise, detailed, or none. Both default to default, preserving Pi's native request. Overrides apply only to OpenAI Responses/Codex Responses. Summary changes require the current model's native reasoning and an existing reasoning request; none removes only its summary field, keeping effort. These are request preferences, not a guarantee about provider output.",
+    "- Visible Web thinking levels: web_hidden_thinking_levels replaces the presentation-only hidden list. Empty (default) shows every native supported level; legal levels are off/minimal/low/medium/high/xhigh/max. A hidden current level stays visible. This does not change Pi model support, active thinking effort, defaults, or child authority.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
-    `- UI: OpenPI Web themes are system (default), light, dark, mist, rose, and pine. Chat content width defaults to ${DEFAULT_WEB_CHAT_WIDTH}px (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}px), chat font size defaults to ${DEFAULT_WEB_CHAT_FONT_SIZE}px (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}px), and thinking blocks are collapsed by default. These values are projected from canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web appearance changes apply on its next canonical snapshot.`,
+    `- UI: OpenPI Web mode is system (default), light, or dark. The complete ui_web_appearance object defaults to {palette:"default",accent:"",background:"",foreground:"",font:"system"}; palette supports default/mist/rose/pine, font supports system/sans/serif/mono, and each color must be empty for the theme default or #RRGGBB. Preserve unrequested fields when replacing this object. Legacy ui_web_theme values mist, rose, and pine remain valid and take precedence over the new palette; replacing a legacy preset requires selecting system/light/dark together with the appearance object. Chat content width defaults to ${DEFAULT_WEB_CHAT_WIDTH}px (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}px), chat font size defaults to ${DEFAULT_WEB_CHAT_FONT_SIZE}px (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}px), and thinking blocks are collapsed by default. These values are projected from canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web appearance changes apply on its next canonical snapshot.`,
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact; all three default to compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Recommend compact for users who scan activity first and inspect evidence on demand.",
@@ -207,6 +214,8 @@ export function buildInteractiveSetupPrompt(options: {
     `- Web sidebar width defaults to ${DEFAULT_WEB_SIDEBAR_WIDTH}px (${MIN_WEB_SIDEBAR_WIDTH}-${MAX_WEB_SIDEBAR_WIDTH}); tool pane width defaults to ${DEFAULT_WEB_AUXILIARY_WIDTH}px (${MIN_WEB_AUXILIARY_WIDTH}-${MAX_WEB_AUXILIARY_WIDTH}). Dragging a pane saves the same canonical preferences; small viewports temporarily clamp the visible width.`,
     '- "use a 320px sidebar and 600px tool pane" → ui_web_sidebar_width=320, ui_web_auxiliary_width=600',
     '- "use 16px chat text and expand thinking by default" → ui_web_chat_font_size=16, ui_web_expand_thinking=true',
+    '- "give detailed responses without a reasoning summary" → response_verbosity=high, response_reasoning_summary=none',
+    '- "hide minimal from the Web reasoning picker" → web_hidden_thinking_levels=["minimal"]',
     '- "switch footer to powerline" → ui_footer_preset=powerline',
     '- "use mono powerline" → ui_footer_preset=powerline-mono',
     '- "compact footer" → ui_footer_preset=compact',
@@ -241,6 +250,9 @@ export function buildSetupNoopClosureText() {
 export const CONFIGURE_MY_PI_SETUP_TOOL_NAME = "configure_my_pi_setup";
 const SETUP_REQUEST_CUSTOM_TYPE = "openpi-setup-request";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 type SetupEpisode = "idle" | "armed" | "active";
 
 function showConfigureTool(pi: ExtensionAPI) {
@@ -257,6 +269,42 @@ function hideConfigureTool(pi: ExtensionAPI) {
 }
 
 export default function openPiSetup(pi: ExtensionAPI) {
+  // Setup is already parent-only. Keep preferences at Pi's request seam,
+  // without another provider or a wider child capability surface.
+  pi.on("before_provider_request", (event, ctx) => {
+    const model = ctx.model;
+    const payload = event.payload;
+    if (
+      !model ||
+      (model.api !== "openai-responses" &&
+        model.api !== "openai-codex-responses") ||
+      !isRecord(payload) ||
+      payload.model !== model.id
+    )
+      return;
+    const { verbosity, reasoningSummary } = loadSetupConfig().response;
+    let result = payload;
+    if (verbosity !== "default") {
+      result = {
+        ...result,
+        text: {
+          ...(isRecord(payload.text) ? payload.text : {}),
+          verbosity,
+        },
+      };
+    }
+    if (
+      reasoningSummary !== "default" &&
+      model.reasoning &&
+      isRecord(payload.reasoning)
+    ) {
+      const reasoning = { ...payload.reasoning };
+      if (reasoningSummary === "none") delete reasoning.summary;
+      else reasoning.summary = reasoningSummary;
+      result = { ...result, reasoning };
+    }
+    return result === payload ? undefined : result;
+  });
   // Pi invokes message renderers only from its interactive TUI. RPC/JSON
   // serialize raw messages, and HTML export renders stored content separately.
   pi.registerMessageRenderer(
@@ -317,6 +365,23 @@ export default function openPiSetup(pi: ExtensionAPI) {
     publishEpisode();
   };
 
+  const recordRejectedSetup = (
+    reason:
+      | "plan_mode_active"
+      | "writer_activation_failed"
+      | "config_read_failed",
+    content: string,
+  ) =>
+    pi.sendMessage(
+      {
+        customType: "openpi-setup-closed",
+        content,
+        display: true,
+        details: { reason },
+      },
+      { triggerTurn: false },
+    );
+
   pi.on("session_start", (_event, ctx) => {
     resetEpisode();
     if (!ctx.hasUI) return;
@@ -365,13 +430,10 @@ export default function openPiSetup(pi: ExtensionAPI) {
     if (!request) return;
     if (restorePlanModeState(ctx.sessionManager.getBranch()).planning) {
       resetEpisode();
-      pi.sendMessage({
-        customType: "openpi-setup-closed",
-        content:
-          "Setup was not started. Exit Plan mode before changing OpenPI settings, then retry /openpi-setup.",
-        display: true,
-        details: { reason: "plan_mode_active" },
-      });
+      recordRejectedSetup(
+        "plan_mode_active",
+        "Setup was not started. Exit Plan mode before changing OpenPI settings, then retry /openpi-setup.",
+      );
       return;
     }
     if (!showConfigureTool(pi)) {
@@ -382,13 +444,10 @@ export default function openPiSetup(pi: ExtensionAPI) {
           "error",
         );
       }
-      pi.sendMessage({
-        customType: "openpi-setup-closed",
-        content:
-          "OpenPI could not activate its owned configuration writer, so setup was not started. Check for duplicate or mismatched OpenPI extension sources, then retry with /openpi-setup <request>. Do not edit configuration files directly.",
-        display: true,
-        details: { reason: "writer_activation_failed" },
-      });
+      recordRejectedSetup(
+        "writer_activation_failed",
+        "OpenPI could not activate its owned configuration writer, so setup was not started. Check for duplicate or mismatched OpenPI extension sources, then retry with /openpi-setup <request>. Do not edit configuration files directly.",
+      );
       return;
     }
     claimedToolCallId = undefined;
@@ -472,7 +531,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure OpenPI",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures current-model native web search, capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (theme, chat width, font size, thinking expansion), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Native web search reuses the current Session connection and credentials; unknown or unsupported connections receive no search tool and never fall back to a search provider. Legacy web_access_action alone manages the reviewed optional Pi package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
+      "Apply a user-requested configuration change for this Pi setup. Configures current-model native web search, Responses output verbosity/reasoning summary, capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (mode, palette, colors, font, chat width, font size, thinking expansion, visible thinking levels), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Native web search reuses the current Session connection and credentials; unknown or unsupported connections receive no search tool and never fall back to a search provider. Legacy web_access_action alone manages the reviewed optional Pi package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
     parameters: Type.Object({
       web_search_enabled: Type.Optional(
         Type.Boolean({
@@ -484,6 +543,26 @@ export default function openPiSetup(pi: ExtensionAPI) {
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
             "Explicit support declaration for the exact current connection (provider/model/API/base URL). true only after the user explicitly confirms native search capability or an actual native search was verified; false denies support; null removes the declaration. Never infer from a model name or OpenAI compatibility. Omit to preserve.",
+        }),
+      ),
+      response_verbosity: Type.Optional(
+        StringEnum(RESPONSE_VERBOSITIES, {
+          description:
+            "Optional output verbosity for OpenAI Responses/Codex Responses: default preserves Pi's request; low, medium, or high overrides only text.verbosity. Unsupported APIs are unchanged. Omit to preserve the saved preference.",
+        }),
+      ),
+      response_reasoning_summary: Type.Optional(
+        StringEnum(RESPONSE_REASONING_SUMMARIES, {
+          description:
+            "Optional reasoning summary for an existing native reasoning request on OpenAI Responses/Codex Responses. default preserves Pi's request; auto, concise, and detailed override summary; none removes summary without changing effort. Unsupported requests are unchanged. Omit to preserve the saved preference.",
+        }),
+      ),
+      web_hidden_thinking_levels: Type.Optional(
+        Type.Array(StringEnum(REASONING_LEVELS), {
+          uniqueItems: true,
+          maxItems: REASONING_LEVELS.length,
+          description:
+            "Web presentation-only hidden reasoning levels. Empty (default) hides none. Replaces the saved list; a hidden current value stays visible. Does not change Pi's supported levels, current effort, or defaults. Omit to preserve.",
         }),
       ),
       web_access_action: Type.Optional(
@@ -557,6 +636,22 @@ export default function openPiSetup(pi: ExtensionAPI) {
           description:
             "Canonical OpenPI Web theme: system follows the browser/OS color scheme; light, dark, mist, rose, and pine force that appearance. Stored in package setup rather than browser storage. Omit to preserve the current value.",
         }),
+      ),
+      ui_web_appearance: Type.Optional(
+        Type.Object(
+          {
+            palette: StringEnum(WEB_APPEARANCE_PALETTES),
+            accent: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
+            background: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
+            foreground: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
+            font: StringEnum(WEB_APPEARANCE_FONTS),
+          },
+          {
+            additionalProperties: false,
+            description:
+              "Complete OpenPI Web appearance object. Palette: default, mist, rose, pine. Font: system, sans, serif, mono. Each color is empty for the theme default or #RRGGBB. Defaults to default palette, empty colors, system font. Replaces the whole object; preserve fields the user did not ask to change. Legacy mist/rose/pine ui_web_theme takes precedence; select system/light/dark when replacing a legacy preset. Omit to preserve the current object.",
+          },
+        ),
       ),
       browser_control: Type.Optional(
         Type.Boolean({
@@ -874,6 +969,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
         );
 
         const config: MyPiSetupConfig = {
+          response: {
+            verbosity: params.response_verbosity ?? current.response.verbosity,
+            reasoningSummary:
+              params.response_reasoning_summary ??
+              current.response.reasoningSummary,
+          },
           webSearch: {
             enabled: params.web_search_enabled ?? current.webSearch.enabled,
             modelSupport,
@@ -913,6 +1014,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??
               current.ui.webTheme,
+            webAppearance: params.ui_web_appearance ?? current.ui.webAppearance,
             webChatWidth: params.ui_web_chat_width ?? current.ui.webChatWidth,
             webSidebarWidth:
               params.ui_web_sidebar_width ?? current.ui.webSidebarWidth,
@@ -922,6 +1024,9 @@ export default function openPiSetup(pi: ExtensionAPI) {
               params.ui_web_chat_font_size ?? current.ui.webChatFontSize,
             webExpandThinking:
               params.ui_web_expand_thinking ?? current.ui.webExpandThinking,
+            webHiddenThinkingLevels:
+              params.web_hidden_thinking_levels ??
+              current.ui.webHiddenThinkingLevels,
             webPinnedSort:
               params.ui_web_pinned_sort ?? current.ui.webPinnedSort,
             webSidebarGrouping:
@@ -995,16 +1100,23 @@ export default function openPiSetup(pi: ExtensionAPI) {
     command: "openpi-setup" | "my-pi-setup",
   ) => {
     if (restorePlanModeState(ctx.sessionManager.getBranch()).planning) {
-      throw new Error(
-        "Exit Plan mode before changing OpenPI settings, then retry /openpi-setup. No setup turn was started.",
-      );
+      const message =
+        "Exit Plan mode before changing OpenPI settings, then retry /openpi-setup. No setup turn was started.";
+      recordRejectedSetup("plan_mode_active", message);
+      throw new Error(message);
     }
     const request = args.trim();
     const inspected = inspectSetupConfig();
     const diagnostics = formatSetupDiagnostics(inspected);
     if (ctx.hasUI)
       ctx.ui.notify(diagnostics, inspected.writable ? "info" : "error");
-    if (!inspected.writable) throw new Error(diagnostics);
+    if (!inspected.writable) {
+      recordRejectedSetup(
+        "config_read_failed",
+        "OpenPI could not load a valid configuration, so setup was not started. Configuration writes are blocked and the file is unchanged. Repair the configuration, then retry /openpi-setup for diagnostics and recovery guidance.",
+      );
+      throw new Error(diagnostics);
+    }
     const currentConfiguration = `${formatSetupConfig(inspected.config)}\n\n${diagnostics}`;
     const savedConfigExists = inspected.source === "disk";
     const currentModel = ctx.model
@@ -1040,6 +1152,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
       const message =
         "OpenPI could not find its owned configuration writer. Setup was not started; check for duplicate or mismatched OpenPI extension sources.";
       if (ctx.hasUI) ctx.ui.notify(message, "error");
+      recordRejectedSetup("writer_activation_failed", message);
       throw new Error(message);
     }
     const requestId = `setup-${++requestSequence}`;

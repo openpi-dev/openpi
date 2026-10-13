@@ -215,7 +215,7 @@ it("uses the full subagent result only when requested while preserving the exact
     }),
   );
   expect(
-    container.querySelector<HTMLDetailsElement>(".activity-card.subagent")
+    container.querySelector<HTMLDetailsElement>(".subagent-result-evidence")
       ?.open,
   ).toBe(true);
   expect(container.textContent).toContain("complete child report");

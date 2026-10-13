@@ -76,6 +76,16 @@ test("Setup rejects planning, ready and invalid branches before starting a model
     }
     assert.equal(h.isActive(), false);
     assert.equal(h.setupRequests().length, 0);
+    assert.equal(h.closures().length, 2);
+    assert.ok(
+      h
+        .closures()
+        .every(
+          ({ message }) =>
+            (message as { details: { reason: string } }).details.reason ===
+            "plan_mode_active",
+        ),
+    );
     branch.push({
       type: "custom",
       customType: "my-pi-setup-plan-mode-state",
@@ -321,11 +331,27 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   assert.equal("suggestion_model" in parameters.properties, true);
   assert.equal("capability_discovery" in parameters.properties, true);
   assert.equal("ui_web_theme" in parameters.properties, true);
+  const appearance = parameters.properties.ui_web_appearance as {
+    required: string[];
+    additionalProperties: boolean;
+    properties: Record<string, unknown>;
+  };
+  assert.deepEqual(appearance.required, [
+    "palette",
+    "accent",
+    "background",
+    "foreground",
+    "font",
+  ]);
+  assert.equal(appearance.additionalProperties, false);
   assert.equal("ui_web_chat_width" in parameters.properties, true);
   assert.equal("ui_web_sidebar_width" in parameters.properties, true);
   assert.equal("ui_web_auxiliary_width" in parameters.properties, true);
   assert.equal("ui_web_chat_font_size" in parameters.properties, true);
   assert.equal("ui_web_expand_thinking" in parameters.properties, true);
+  assert.equal("response_verbosity" in parameters.properties, true);
+  assert.equal("response_reasoning_summary" in parameters.properties, true);
+  assert.equal("web_hidden_thinking_levels" in parameters.properties, true);
   assert.equal("child_execution_limit" in parameters.properties, true);
   const postEdit = parameters.properties.post_edit_command as {
     description?: string;
@@ -338,6 +364,185 @@ test("registers the canonical setup command, legacy alias, and one constrained t
     ),
     false,
   );
+});
+
+test("response and picker preferences persist through setup without changing unrelated choices", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const apply = (
+    params: Record<string, unknown>,
+    signal = new AbortController().signal,
+  ) => tool.execute("response-setup", params, signal, () => {}, h.ctx);
+  try {
+    await apply({
+      response_verbosity: "high",
+      response_reasoning_summary: "none",
+      web_hidden_thinking_levels: ["minimal", "xhigh"],
+      ui_web_theme: "pine",
+    });
+    assert.deepEqual(loadSetupConfig().response, {
+      verbosity: "high",
+      reasoningSummary: "none",
+    });
+    assert.deepEqual(loadSetupConfig().ui.webHiddenThinkingLevels, [
+      "minimal",
+      "xhigh",
+    ]);
+    await apply({ workflow_concurrency: 4 });
+    assert.deepEqual(loadSetupConfig().response, {
+      verbosity: "high",
+      reasoningSummary: "none",
+    });
+    assert.equal(loadSetupConfig().ui.webTheme, "pine");
+    const before = readFileSync(SETUP_CONFIG_PATH, "utf8");
+    for (const invalid of [
+      { response_verbosity: "verbose" },
+      { response_reasoning_summary: "off" },
+      { web_hidden_thinking_levels: ["high", "high"] },
+      { web_hidden_thinking_levels: ["unsupported"] },
+    ]) {
+      await assert.rejects(apply(invalid));
+      assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), before);
+    }
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      apply({ response_verbosity: "low" }, controller.signal),
+    );
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), before);
+    await apply({
+      response_verbosity: "default",
+      response_reasoning_summary: "default",
+      web_hidden_thinking_levels: [],
+    });
+    assert.deepEqual(loadSetupConfig().response, {
+      verbosity: "default",
+      reasoningSummary: "default",
+    });
+    assert.deepEqual(loadSetupConfig().ui.webHiddenThinkingLevels, []);
+    assert.equal(loadSetupConfig().ui.webTheme, "pine");
+  } finally {
+    rmSync(SETUP_CONFIG_PATH, { force: true });
+  }
+});
+
+test("response preferences use exact APIs and current model identity and preserve native payload fields", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  const model = {
+    id: "current",
+    name: "Current",
+    provider: "fixture",
+    api: "openai-responses" as const,
+    baseUrl: "http://127.0.0.1/v1",
+    reasoning: true,
+    input: ["text"] as ("text" | "image")[],
+    contextWindow: 128000,
+    maxTokens: 2048,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  h.ctx.model = model;
+  const payload = {
+    model: "current",
+    input: [{ role: "user", content: "fixture" }],
+    tools: [{ type: "function", name: "read" }],
+    text: { format: { type: "text" }, verbosity: "medium" },
+    reasoning: { effort: "high", summary: "auto", encrypted: "fixture" },
+  };
+  try {
+    assert.deepEqual(await h.emit("before_provider_request", { payload }), [
+      undefined,
+    ]);
+    await tool.execute(
+      "response-setup",
+      { response_verbosity: "low", response_reasoning_summary: "none" },
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+    const expected = {
+      ...payload,
+      text: { ...payload.text, verbosity: "low" },
+      reasoning: { effort: "high", encrypted: "fixture" },
+    };
+    for (const api of ["openai-responses", "openai-codex-responses"] as const) {
+      h.ctx.model = { ...model, api };
+      assert.deepEqual(await h.emit("before_provider_request", { payload }), [
+        expected,
+      ]);
+    }
+    assert.equal(payload.reasoning.summary, "auto");
+    assert.equal(payload.text.verbosity, "medium");
+    for (const api of [
+      "openai-completions",
+      "anthropic-messages",
+      "azure-openai-responses",
+    ] as const) {
+      h.ctx.model = { ...model, api };
+      assert.deepEqual(await h.emit("before_provider_request", { payload }), [
+        undefined,
+      ]);
+    }
+    h.ctx.model = model;
+    assert.deepEqual(
+      await h.emit("before_provider_request", {
+        payload: { ...payload, model: "old-model" },
+      }),
+      [undefined],
+    );
+    await tool.execute(
+      "response-setup",
+      { response_verbosity: "default", response_reasoning_summary: "detailed" },
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+    h.ctx.model = { ...model, reasoning: false };
+    assert.deepEqual(await h.emit("before_provider_request", { payload }), [
+      undefined,
+    ]);
+    h.ctx.model = model;
+    const { reasoning: _reasoning, ...withoutReasoning } = payload;
+    assert.deepEqual(
+      await h.emit("before_provider_request", { payload: withoutReasoning }),
+      [undefined],
+    );
+    assert.deepEqual(await h.emit("before_provider_request", { payload }), [
+      { ...payload, reasoning: { ...payload.reasoning, summary: "detailed" } },
+    ]);
+  } finally {
+    rmSync(SETUP_CONFIG_PATH, { force: true });
+  }
+});
+
+test("setup saves a complete Web appearance object and preserves the selected mode", async () => {
+  const h = visibilityHarness();
+  await h.emit("session_start");
+  await h.runCommand(
+    "openpi-setup",
+    "Use a rose palette with serif text and blue accents",
+  );
+  const appearance = {
+    palette: "rose",
+    accent: "#123ABC",
+    background: "",
+    foreground: "",
+    font: "serif",
+  };
+  const previousTheme = loadSetupConfig().ui.webTheme;
+  await h.tools
+    .get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!
+    .execute(
+      "appearance-save",
+      { ui_web_appearance: appearance },
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+  assert.deepEqual(loadSetupConfig().ui.webAppearance, appearance);
+  assert.equal(loadSetupConfig().ui.webTheme, previousTheme);
 });
 
 test("native search setup defaults off, preserves preferences, and binds support to the current connection", async () => {
@@ -687,6 +892,7 @@ test("setup activation fails closed for a foreign same-name writer", async () =>
   );
   assert.deepEqual(h.userMessages, []);
   assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
+  assert.match(JSON.stringify(h.closures()), /writer_activation_failed/);
 });
 
 test("successful configure_my_pi_setup hides the tool", async () => {
@@ -1055,7 +1261,7 @@ test("queued setup fails closed if writer provenance changes before delivery", a
   assert.equal(h.isActive(), true, "the foreign namesake must be preserved");
   assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
   assert.deepEqual(h.notifications, []);
-  assert.deepEqual(h.closures()[0]?.options, undefined);
+  assert.deepEqual(h.closures()[0]?.options, { triggerTurn: false });
   assert.match(
     String(
       (h.closures()[0]?.message as { content?: unknown } | undefined)?.content,
@@ -1303,7 +1509,15 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /Right accepts it without submitting/);
   assert.match(message, /concurrency controls simultaneous agents/);
   assert.match(message, /large header costs vertical space/);
-  assert.match(message, /OpenPI Web themes are system \(default\).*mist.*pine/);
+  assert.match(
+    message,
+    /OpenPI Web mode is system \(default\), light, or dark/,
+  );
+  assert.match(message, /complete ui_web_appearance object defaults/);
+  assert.match(message, /palette supports default\/mist\/rose\/pine/);
+  assert.match(message, /font supports system\/sans\/serif\/mono/);
+  assert.match(message, /empty for the theme default or #RRGGBB/);
+  assert.match(message, /Legacy ui_web_theme.*take precedence/);
   assert.match(message, /ui_web_theme=dark/);
   assert.match(message, /Chat content width.*820-2000px/);
   assert.match(message, /ui_web_chat_width=960/);
@@ -1376,7 +1590,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Capability discovery, optional Web search, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);
@@ -1552,6 +1766,8 @@ test("doctor exposes load errors without arming a writer or triggering a model t
   );
   assert.equal(h.isActive(), false);
   assert.deepEqual(h.setupRequests(), []);
+  assert.match(JSON.stringify(h.closures()), /config_read_failed/);
+  assert.doesNotMatch(JSON.stringify(h.closures()), /postEdit|command.*42/);
   assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
   rmSync(SETUP_CONFIG_PATH);
 });

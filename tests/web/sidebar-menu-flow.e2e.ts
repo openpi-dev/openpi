@@ -168,6 +168,7 @@ async function createMenuHost(browser: Browser) {
     errors,
     prohibited,
     snapshot,
+    archived: () => api("/api/sessions/archived"),
     async restart() {
       const port = Number(new URL(host.origin).port);
       await page.goto("about:blank");
@@ -205,6 +206,82 @@ async function openConversationMenu(row: Locator) {
   await trigger.press("Enter");
   return trigger;
 }
+
+test("archive notifications view or undo the exact native session and expire without restoring it", async ({
+  browser,
+}) => {
+  const fixture = await createMenuHost(browser);
+  const { page } = fixture;
+  try {
+    const rows = page.locator(".workspace-tree .session-row");
+    await expect(rows).toHaveCount(3);
+    await page.clock.install();
+    const archive = async (name: string) => {
+      await openConversationMenu(
+        rows.filter({ has: page.getByText(name, { exact: true }) }),
+      );
+      await page.getByRole("menuitem", { name: "归档", exact: true }).click();
+      const notice = page.locator(".archive-notification").filter({
+        hasText: name,
+      });
+      await expect(notice).toBeVisible();
+      return notice;
+    };
+    const beta = await archive("Beta conversation");
+    const gamma = await archive("Gamma conversation");
+    await expect(page.locator(".archive-notification")).toHaveCount(2);
+    await page.screenshot({
+      path: test.info().outputPath("archive-notifications-stacked.png"),
+      animations: "disabled",
+    });
+
+    await beta.getByRole("button", { name: "查看", exact: true }).click();
+    await expect(beta).toBeHidden();
+    await expect
+      .poll(async () => (await fixture.snapshot()).selectedSession?.id)
+      .toBe(fixture.sessions[1]!.id);
+    expect(
+      (await fixture.snapshot()).sessions.find(
+        (session) => session.id === fixture.sessions[1]!.id,
+      )?.archived,
+    ).toBe(true);
+    await gamma.getByRole("button", { name: "撤销", exact: true }).click();
+    await expect(gamma).toBeHidden();
+    await expect(
+      rows.getByText("Gamma conversation", { exact: true }),
+    ).toBeVisible();
+    expect(
+      (await fixture.snapshot()).sessions.find(
+        (session) => session.id === fixture.sessions[1]!.id,
+      )?.archived,
+    ).toBe(true);
+
+    const timed = await archive("Gamma conversation");
+    await timed.hover();
+    await page.clock.runFor(9000);
+    await expect(timed).toBeVisible();
+    await page.mouse.move(5, 5);
+    await page.clock.runFor(7000);
+    await expect(timed).toBeVisible();
+    await page.clock.runFor(1000);
+    await expect(timed).toBeHidden();
+    expect((await fixture.archived()).sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: fixture.sessions[2]!.id,
+          archived: true,
+        }),
+      ]),
+    );
+    await page.reload();
+    await expect(rows).toHaveCount(1);
+    await expect(page.locator(".archive-notification")).toHaveCount(0);
+    expect(fixture.prohibited).toEqual([]);
+    expect(fixture.errors).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("native sidebar project drag survives Host restart while ordinary project and conversation clicks preserve order", async ({
   browser,

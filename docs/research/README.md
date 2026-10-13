@@ -9,6 +9,7 @@ Research records preserve sourced investigation and distinguish observations, in
 ## Draft investigations
 
 - [`WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md`](WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md) — Codex 侧栏多轮返工的原因、REA 证据边界、视觉验收遗漏与追加差距审计（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #711](https://github.com/openpi-dev/openpi/pull/711)）。
+- [`WEB_SUBAGENTS_2026-10-13.md`](WEB_SUBAGENTS_2026-10-13.md) — Codex local subagent activity, parent/child lifecycle, state matrix and Pi-native Web parity; native Codex runtime observation remains unavailable ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 
 - [`WORKFLOW_FULLSCREEN_IMAGE_OWNER_2026-10-04.md`](WORKFLOW_FULLSCREEN_IMAGE_OWNER_2026-10-04.md) — Pi-owned fullscreen image suppression candidate and isolated protocol evidence; OpenPI adoption deferred pending upstream review and terminal acceptance ([#657](https://github.com/openpi-dev/openpi/issues/657)).
 
@@ -17,6 +18,8 @@ Research records preserve sourced investigation and distinguish observations, in
 - [`WEB_INTERACTION_COMPARISON_2026-09-30.md`](WEB_INTERACTION_COMPARISON_2026-09-30.md) — PR #598 竞品截图对照与后续 Web 迭代：基础交互、普通附件、原始子代理结果、第三栏、真实 Luna 文件读取；追加现场演示、工具菜单焦点、Codex / Maka 历史分页与导航、两小时阅读连续性、发布整合及浏览器输入/滚动边界/Windows 定位，保留独立冻结、失败、消融和未验证边界（[#639](https://github.com/openpi-dev/openpi/issues/639)、[PR #640](https://github.com/openpi-dev/openpi/pull/640)、[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 ## Validated investigations
+
+- [`WEB_CONFIGURATION_2026-10-13.md`](WEB_CONFIGURATION_2026-10-13.md) — Codex shipped Configuration and same-version app-server traces, frozen state matrix, Pi-native preferences and local browser/request validation with ablation; Codex runtime and remote-provider acceptance remain unverified ([#754](https://github.com/openpi-dev/openpi/issues/754), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 
 - [`WEB_SEARCH_INTEGRATION_2026-10-10.md`](WEB_SEARCH_INTEGRATION_2026-10-10.md) — optional package comparison and subsequent current-Session-model native search, default-off setup, original-image replay, protocol/UI evidence, and ablation; provider-wide search quality remains unmeasured ([#169](https://github.com/openpi-dev/openpi/issues/169), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 

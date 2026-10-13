@@ -2,6 +2,7 @@ import type {
   WebBackgroundTerminalDetail,
   WebCapabilityActionRequest,
   WebSubagentDetail,
+  WebWorkflowAgentDetail,
 } from "../../../../extensions/shared/web-observer-registry.ts";
 import {
   ARTIFACT_MAX_BYTES,
@@ -26,6 +27,7 @@ import type { WebSessionSources } from "../../../protocol/session-sources.ts";
 import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
+  type WebArchivedSessionQuery,
   type WebCommandDiscoveryResult,
   type WebGitReviewResult,
   type WebHistoryAnchor,
@@ -807,13 +809,15 @@ export class WebClient {
   }
 
   listArchivedSessions(
-    options: { query?: string; cursor?: string; limit?: number } = {},
+    options: WebArchivedSessionQuery = {},
     signal?: AbortSignal,
   ) {
     const query = new URLSearchParams();
     if (options.query !== undefined) query.set("q", options.query);
     if (options.cursor !== undefined) query.set("cursor", options.cursor);
     if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.sort !== undefined) query.set("sort", options.sort);
+    if (options.cwd !== undefined) query.set("cwd", options.cwd);
     return this.request<ArchivedSessionPage>(
       `/api/sessions/archived?${query}`,
       { signal },
@@ -1063,6 +1067,13 @@ export class WebClient {
   subagentDetail(sessionId: string, id: string, signal: AbortSignal) {
     return this.request<{ sessionId: string; detail: WebSubagentDetail }>(
       `/api/capabilities/detail?kind=subagents&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  workflowAgentDetail(sessionId: string, id: string, signal: AbortSignal) {
+    return this.request<{ sessionId: string; detail: WebWorkflowAgentDetail }>(
+      `/api/capabilities/detail?kind=workflows&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }
