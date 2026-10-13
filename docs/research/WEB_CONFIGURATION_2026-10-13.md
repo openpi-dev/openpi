@@ -68,7 +68,7 @@ This matrix was recorded before implementation. Tests use these transitions as t
 
 ### Source and runtime identity
 
-The implementation is an uncommitted change on `codex/configuration-settings` in `/Users/admin/.codex/worktrees/configuration-settings/openpi`, based on the PR #711 commit above. Node.js 24.20.0, Bun 1.3.14 and the worktree's Pi 0.99.1 dependencies were used. An isolated `PI_CODING_AGENT_DIR` reports this absolute worktree as its sole OpenPI source through `pi list`. The original checkout and the installed Web runtime were not modified.
+Initial implementation and validation used an uncommitted change on `codex/configuration-settings` in `/Users/admin/.codex/worktrees/configuration-settings/openpi`, based on the PR #711 commit above. Node.js 24.20.0, Bun 1.3.14 and the worktree's Pi 0.99.1 dependencies were used. An isolated `PI_CODING_AGENT_DIR` reports this absolute worktree as its sole OpenPI source through `pi list`. The original checkout and the installed Web runtime were not modified. Subsequent PR integration is recorded below without widening the initial evidence boundary.
 
 The local archive is `/Users/admin/Documents/ChatGPT/openpi-evidence/configuration-settings-20261013`. `manifest.json` identifies the final patch, source receipts, validation logs and captures by SHA-256. The 666,270,512-byte `rea-evidence.json` stays in that archive, alongside the exact-member extraction receipt. Its exported top-level unknown list is empty; this does not erase the parent's 9,057 semantic unknowns or widen its partial coverage.
 
@@ -96,3 +96,11 @@ Removing the provider payload/model identity guard applied current preferences t
 ### Remaining limits
 
 Browser evidence uses the worktree's built UI and isolated fixture endpoints; it does not establish a deployed server upgrade or an interactive TUI smoke. The native HTTP fixture exercises real Pi transport with ordinary tool schemas but calls no paid model. Codex Responses is checked at the Pi hook boundary; remote gateways' acceptance of every optional verbosity/summary value remains unverified. Response preferences remain parent-only, while the visible-level filter is presentation-only. Codex's actual hover/focus, animation, cancellation/error rendering and refresh transitions remain unobserved for the tool-access reason above; numerical visual parity is not claimed.
+
+## PR #711 integration — 2026-10-13
+
+Implementation commit `41cc796b8ffb9b22a9ec612c47274011e03da886` incorporates PR #711's newer `ad069f841cec26421834b39715af60ac9a2c1a11` compaction/reconnect change. The seven upstream-only files remain byte-identical; shared source changes merge without conflicts. Conflicts in generated `web/dist/app.js` and `styles.css` were resolved by rebuilding from the integrated source. The isolated `pi list` again reports this worktree as the sole OpenPI source.
+
+On that integrated implementation, `bun run check` passes and the complete isolated `bun run test` passes: **2,382 Node passes, 9 skips, zero failures; 1,300 UI passes across 87 files**. All **9** installed-Chrome Configuration/settings-parity cases pass together. The earlier ablation and provider observations retain their original source boundaries; this integration does not establish remote-provider, TUI or deployed-runtime acceptance.
+
+The same archive retains `check-pr711.log`, `test-pr711.log`, `browser-pr711.log` and the `browser-pr711/` captures. `pr711-integration-manifest.json` identifies the integrated implementation and publication receipts separately from the initial uncommitted manifest. The subsequent record-only update is checked by `check-pr711-record.log`; source and test behavior are unchanged by that update. PR #711 and Issue #754 link back to this record.
