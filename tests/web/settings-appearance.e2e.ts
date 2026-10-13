@@ -11,9 +11,8 @@ async function installSettingsFixture(page: Page) {
   let archived = true;
   let failRestore = true;
   const queries: URLSearchParams[] = [];
-  await page.route("**/events?**", (route) =>
-    route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }),
-  );
+  // Keep the owned Host's event stream open. A finite SSE response repeatedly
+  // reconnects and can supersede the snapshot confirming an archive restore.
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch({
       url: new URL("/api/snapshot", route.request().url()).href,
