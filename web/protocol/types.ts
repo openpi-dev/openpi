@@ -979,6 +979,26 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
     const detail = readTurnChangesDetail(entry.data);
     if (detail) return { type: entry.type, ...metadata, turnChanges: summarizeTurnChanges(detail) };
   }
+  if (entry.type === "custom" && entry.customType === "subagent-finished") {
+    // The owner persists settlement before deferred parent result delivery.
+    // Retain only display facts; private evidence locators stay in Pi's record.
+    const own = (value: unknown, key: string): unknown => value && typeof value === "object"
+      ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;
+    const id = own(entry.data, "id");
+    const status = own(entry.data, "status");
+    if (typeof id === "string" && id.length > 0 && id.length <= 160 &&
+      !/[\u0000-\u001f\u007f]/u.test(id) && (status === "done" || status === "error")) {
+      const title = own(entry.data, "title");
+      const titleProjection = typeof title === "string" ? boundedTextProjection(title, WEB_MAX_METADATA_TEXT) : undefined;
+      const outcome = own(own(own(entry.data, "completion"), "observed"), "outcome");
+      return { type: "message", ...metadata, message: {
+        role: "custom", customType: entry.customType, content: "", display: false,
+        details: { id, status, ...(titleProjection ? { title: titleProjection.value } : {}),
+          ...(outcome === "cancelled" ? { outcome: "interrupted" } : outcome === "uncertain" ? { outcome } : {}) },
+        ...(titleProjection?.truncated ? { truncation: { truncated: true as const, text: true as const } } : {}),
+      } };
+    }
+  }
   if (entry.type === "custom" && entry.customType === "subagent-result") {
     // Pi persists the user-facing receipt separately from its hidden model
     // follow-up. Project the display receipt, never the transport instruction.

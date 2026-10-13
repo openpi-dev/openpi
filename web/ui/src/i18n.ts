@@ -670,6 +670,12 @@ const resources = {
       subagentStale:
         "Could not refresh. The details below are the last received snapshot.",
       subagentNoMessages: "No messages received yet.",
+      subagentTranscriptUnavailable:
+        "This view retains a task summary and cannot show the full child conversation.",
+      subagentWorkflowsTruncated:
+        "{{count}} workflows are outside the loaded list; their task counts are unknown.",
+      subagentState_unknown: "Unconfirmed",
+      subagentUnconfirmedGroup: "Unconfirmed",
       subagentTruncated:
         "Showing a bounded excerpt; {{count}} earlier messages omitted. Some text may be shortened.",
       subagentListTruncated:
@@ -2488,6 +2494,12 @@ const resources = {
         "当前会话已无法提供此子代理的实时详情。启动回执不代表任务已完成。",
       subagentStale: "刷新失败，下方保留的是上次收到的状态。",
       subagentNoMessages: "暂未收到消息。",
+      subagentTranscriptUnavailable:
+        "此视图仅保留任务摘要，无法显示完整子代理对话。",
+      subagentWorkflowsTruncated:
+        "另有 {{count}} 个 workflow 未包含在当前列表中，其任务数量未知。",
+      subagentState_unknown: "未确认",
+      subagentUnconfirmedGroup: "未确认",
       subagentTruncated:
         "当前显示有界摘录，已省略 {{count}} 条较早消息，部分文本可能已截短。",
       subagentListTruncated: "另有 {{count}} 个任务未包含在当前列表中。",

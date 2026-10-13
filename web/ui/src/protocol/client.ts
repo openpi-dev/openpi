@@ -2,6 +2,7 @@ import type {
   WebBackgroundTerminalDetail,
   WebCapabilityActionRequest,
   WebSubagentDetail,
+  WebWorkflowAgentDetail,
 } from "../../../../extensions/shared/web-observer-registry.ts";
 import {
   ARTIFACT_MAX_BYTES,
@@ -962,6 +963,13 @@ export class WebClient {
   subagentDetail(sessionId: string, id: string, signal: AbortSignal) {
     return this.request<{ sessionId: string; detail: WebSubagentDetail }>(
       `/api/capabilities/detail?kind=subagents&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  workflowAgentDetail(sessionId: string, id: string, signal: AbortSignal) {
+    return this.request<{ sessionId: string; detail: WebWorkflowAgentDetail }>(
+      `/api/capabilities/detail?kind=workflows&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }

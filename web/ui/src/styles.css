@@ -478,18 +478,27 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .activity-title { color: var(--text); font-weight: 550; }
 .activity-meta { color: var(--subtle); font-size: 11px; }
 .activity-card .details-body { margin-left:35px; }
-.subagent-card-open { display:flex; align-items:center; gap:9px; width:100%; min-height:44px; padding:5px 8px; border:0; border-radius:6px; color:var(--text); background:transparent; text-align:left; cursor:pointer; }
-.subagent-card-open:disabled { cursor:default; }
-.subagent-card-open:not(:disabled):hover { background:var(--sidebar-hover); }
+.subagent-card-open { display:flex; align-items:center; gap:6px; width:fit-content; max-width:100%; min-width:0; min-height:28px; padding:3px 4px; margin-left:-4px; border:0; border-radius:5px; color:var(--text); background:transparent; text-align:left; font:inherit; font-size:var(--conversation-font-size); line-height:20px; }
+button.subagent-card-open { cursor:pointer; }
+button.subagent-card-open:hover { background:var(--sidebar-hover); }
 .subagent-card-open:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.subagent-activity-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.subagent-card-open .subagent-avatar, .subagent-card-open .subagent-avatar svg { width:16px; height:16px; }
+.subagent-card-open .subagent-state { font-size:inherit; color:var(--muted); }
+.subagent-card-open .subagent-state:is(.error,.interrupted) { color:var(--error); }
 .subagent-state { flex-shrink:0; font-size:11px; color:var(--muted); }
 .subagent-state.running { color:var(--accent); }
 .subagent-state.done { color:var(--healthy); }
 .subagent-state.error, .subagent-state.interrupted { color:var(--error); }
+.subagent-card-open .subagent-state:is(.running,.done) { color:var(--muted); }
 .subagent-receipt { border-top:1px solid var(--border); color:var(--muted); font-size:11px; }
 .subagent-receipt > summary { min-height:0; cursor:pointer; padding:6px 12px; }
 .subagent-receipt > p { margin:4px 12px; }
 .subagent-receipt pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.subagent-result-evidence { color:var(--muted); font-size:12px; }
+.subagent-result-evidence > summary { min-height:0; padding:2px 0 2px 22px; cursor:pointer; }
+.subagent-result-evidence pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media (pointer:coarse), (hover:none) { .subagent-card-open { min-height:44px; } }
 .app-shell.with-subagent-panel { grid-template-columns:var(--sidebar-width) minmax(0,1fr) var(--auxiliary-width); }
 .app-shell.with-subagent-panel.sidebar-collapsed { grid-template-columns:56px minmax(0,1fr) var(--auxiliary-width); }
 .subagent-panel { position:relative; min-width:0; min-height:0; height:100dvh; color:var(--text); background:var(--page); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
@@ -503,12 +512,13 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .subagent-list-group :is(h2,h3) span { color:var(--subtle); }
 .subagent-list-group > p, .subagent-list > p { margin:10px 0; font-size:12px; color:var(--muted); }
 .subagent-task-row { border-radius:8px; min-height:56px; }
+.subagent-task-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .subagent-task-end { display:flex; align-items:center; justify-content:flex-end; gap:12px; font-size:12px; color:var(--muted); white-space:nowrap; }
 .subagent-task-end svg { width:16px; height:16px; }
 .subagent-running-icon { animation:subagent-spin 1.1s linear infinite; }
 @keyframes subagent-spin { to { transform:rotate(360deg); } }
-.subagent-avatar { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; flex:none; }
-.subagent-avatar svg { width:28px; height:28px; stroke-width:1.65; }
+.subagent-avatar { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; flex:none; }
+.subagent-avatar svg { width:24px; height:24px; }
 .subagent-avatar.tone-0 { color:light-dark(#a97523,#f0b961); }
 .subagent-avatar.tone-1 { color:light-dark(#358c7b,#77cfb8); }
 .subagent-avatar.tone-2 { color:light-dark(#bf6474,#f59bac); }
@@ -585,7 +595,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .subagent-panel { grid-column:1 / -1; border-left:0; }
   .subagent-panel-heading { padding:12px 16px; }
   .subagent-detail, .subagent-list { padding:20px 16px; }
-  .subagent-card-open { flex-wrap:wrap; }
 }
 
 .plan-card { min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--page); overflow: hidden; }

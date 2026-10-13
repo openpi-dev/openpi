@@ -901,7 +901,7 @@ describe("OpenPI React transcript", () => {
     ).toContain(i18n.t("processToolCount", { count: 4 }));
     expect(
       process?.querySelector("summary")?.getAttribute("aria-label"),
-    ).toContain(i18n.t("processActivityCount", { count: 1 }));
+    ).not.toContain(i18n.t("processActivityCount", { count: 1 }));
     const counts = process?.querySelector(".process-sequence-counts");
     expect(counts?.textContent).toContain(
       i18n.t("processThinkingCount", { count: 1 }),
@@ -909,7 +909,7 @@ describe("OpenPI React transcript", () => {
     expect(counts?.textContent).toContain(
       i18n.t("processToolCount", { count: 4 }),
     );
-    expect(counts?.textContent).toContain(
+    expect(counts?.textContent).not.toContain(
       i18n.t("processActivityCount", { count: 1 }),
     );
     expect(
@@ -925,6 +925,11 @@ describe("OpenPI React transcript", () => {
     expect(container.querySelectorAll(".activity-card.subagent")).toHaveLength(
       1,
     );
+    expect(
+      container
+        .querySelector(".activity-card.subagent")
+        ?.closest(".process-sequence"),
+    ).toBeNull();
     expect(screen.getByText("Done.")).toBeTruthy();
     expect(
       container.querySelectorAll(".status-mark.done").length,
@@ -932,7 +937,7 @@ describe("OpenPI React transcript", () => {
 
     fireEvent.click(process!.querySelector("summary")!);
     expect(process?.open).toBe(true);
-    expect(process?.querySelectorAll(".process-step")).toHaveLength(6);
+    expect(process?.querySelectorAll(".process-step")).toHaveLength(5);
   });
 });
 
@@ -1605,9 +1610,17 @@ it.each([
       },
     ];
     const original = JSON.stringify(snapshot);
-    const node = (observed?: boolean) =>
+    const node = (observed?: boolean, full = false) =>
       createElement(Transcript, {
-        snapshot,
+        snapshot: full
+          ? {
+              ...snapshot,
+              preferences: {
+                ...snapshot.preferences,
+                subagentResultDisplay: "full",
+              },
+            }
+          : snapshot,
         activityObserved: observed,
         liveMessages: [],
         liveRunning: true,
@@ -1629,6 +1642,15 @@ it.each([
       view.container.querySelector(`.subagent-state.${expected}`),
     ).toBeTruthy();
     expect(view.container.querySelector(".subagent-state.running")).toBeNull();
+    expect(view.container.querySelector(".subagent-receipt")).toBeNull();
+    view.rerender(createElement(I18nextProvider, { i18n }, node(false, true)));
+    expect(
+      view.container.querySelector<HTMLDetailsElement>(".subagent-receipt")
+        ?.open,
+    ).toBe(true);
+    expect(
+      view.container.querySelector(`.subagent-state.${expected}`),
+    ).toBeTruthy();
     expect(view.container.textContent).toContain("Exact native spawn receipt");
     expect(JSON.stringify(snapshot)).toBe(original);
   },
@@ -1697,6 +1719,12 @@ it("shows an unobserved pending child as unknown while preserving a native faile
   expect(view.container.textContent).toContain(
     "Exact native failed spawn receipt",
   );
+  const failedReceipt =
+    view.container.querySelector<HTMLDetailsElement>(".subagent-receipt")!;
+  expect(failedReceipt.open).toBe(false);
+  fireEvent.click(failedReceipt.querySelector("summary")!);
+  expect(failedReceipt.open).toBe(true);
+  expect(view.container.querySelectorAll(".subagent-receipt")).toHaveLength(1);
   expect(JSON.stringify(snapshot)).toBe(original);
   view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
   expect(labels()).toEqual([
