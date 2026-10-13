@@ -347,7 +347,7 @@ it("C12 aborts a previous model's catalog and rejects its late capabilities in t
     screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
   );
   view.rerender(settingsElement({ currentModel: models[1] }));
-  const verbosity = await screen.findByRole<HTMLButtonElement>("combobox", {
+  const verbosity = await screen.findByRole<HTMLButtonElement>("button", {
     name: i18n.t("configurationVerbosity"),
   });
   expect(firstRequest.signal?.aborted).toBe(true);
@@ -378,7 +378,7 @@ it("C01-C08 surfaces unreadable canonical configuration and recovers only after 
   );
   await screen.findByText("response.verbosity: Invalid persisted value");
   expect(
-    screen.queryByRole("combobox", { name: i18n.t("configurationVerbosity") }),
+    screen.queryByRole("button", { name: i18n.t("configurationVerbosity") }),
   ).toBeNull();
   payload.setupWritable = true;
   payload.setupDiagnostics = [];
@@ -389,7 +389,7 @@ it("C01-C08 surfaces unreadable canonical configuration and recovers only after 
   );
   expect(
     (
-      await screen.findByRole<HTMLButtonElement>("combobox", {
+      await screen.findByRole<HTMLButtonElement>("button", {
         name: i18n.t("configurationVerbosity"),
       })
     ).disabled,
@@ -410,7 +410,7 @@ it("C01 shows configuration loading without claiming defaults or sandbox capabil
     i18n.t("settingsCatalogLoading"),
   );
   expect(
-    screen.queryByRole("combobox", { name: i18n.t("configurationVerbosity") }),
+    screen.queryByRole("button", { name: i18n.t("configurationVerbosity") }),
   ).toBeNull();
   expect(
     screen.queryByText(i18n.t("configurationSandboxUnavailable")),
@@ -425,13 +425,13 @@ it("C06 keeps accepted response setup distinct from a saved canonical value and 
   fireEvent.click(
     screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
   );
-  const verbosity = await screen.findByRole<HTMLButtonElement>("combobox", {
+  const verbosity = await screen.findByRole<HTMLButtonElement>("button", {
     name: i18n.t("configurationVerbosity"),
   });
   fireEvent.click(verbosity);
   fireEvent.click(
-    await screen.findByRole("option", {
-      name: i18n.t("configurationVerbosity_high"),
+    await screen.findByRole("menuitem", {
+      name: (name) => name.startsWith(i18n.t("configurationVerbosity_high")),
     }),
   );
   await waitFor(() =>
@@ -461,6 +461,52 @@ it("C06 keeps accepted response setup distinct from a saved canonical value and 
     i18n.t("configurationVerbosity_default"),
   );
   expect(configure).toHaveBeenCalledTimes(1);
+});
+
+it("C06-C10 blocks already-open choices when the live Session becomes busy", async () => {
+  const fetcher = vi.fn(settingsFetcher(configurationPayload()));
+  vi.stubGlobal("fetch", fetcher);
+  const configure = vi.fn(async () => true);
+  const view = renderSettings({ onConfigureOpenPi: configure });
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: i18n.t("configurationVerbosity"),
+    }),
+  );
+  const high = await screen.findByRole("menuitem", {
+    name: (name) => name.startsWith(i18n.t("configurationVerbosity_high")),
+  });
+  view.rerender(
+    settingsElement({ setupBusy: true, onConfigureOpenPi: configure }),
+  );
+  expect(high.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(high);
+  expect(configure).not.toHaveBeenCalled();
+
+  fireEvent.keyDown(high, { key: "Escape" });
+  view.rerender(
+    settingsElement({ setupBusy: false, onConfigureOpenPi: configure }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("configurationReasoningLevels"),
+    }),
+  );
+  const max = await screen.findByRole("menuitemcheckbox", { name: "max" });
+  view.rerender(
+    settingsElement({ setupBusy: true, onConfigureOpenPi: configure }),
+  );
+  expect(max.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(max);
+  expect(max.getAttribute("aria-checked")).toBe("true");
+  expect(
+    fetcher.mock.calls.some(([input]) =>
+      String(input).includes("/api/settings/preferences"),
+    ),
+  ).toBe(false);
 });
 
 it("C08 retains a failed reasoning display preference and retries through the presentation endpoint", async () => {
@@ -495,17 +541,17 @@ it("C08 retains a failed reasoning display preference and retries through the pr
       name: i18n.t("configurationReasoningLevels"),
     }),
   );
-  const max = await screen.findByRole<HTMLInputElement>("checkbox", {
+  const max = await screen.findByRole("menuitemcheckbox", {
     name: "max",
   });
   fireEvent.click(max);
   await screen.findByText(i18n.t("settingsPreferencesSaveFailed"));
-  expect(max.checked).toBe(true);
+  expect(max.getAttribute("aria-checked")).toBe("true");
   expect(payload.setup.ui.webHiddenThinkingLevels).toEqual([]);
   fail = false;
   fireEvent.click(max);
   await screen.findByText(i18n.t("settingsPreferencesSaved"));
-  expect(max.checked).toBe(false);
+  expect(max.getAttribute("aria-checked")).toBe("false");
   expect(patches).toEqual([
     { hiddenThinkingLevels: ["max"] },
     { hiddenThinkingLevels: ["max"] },
@@ -524,13 +570,13 @@ it("C10 disables unsupported response controls and never offers editable permiss
   );
   expect(
     (
-      await screen.findByRole<HTMLButtonElement>("combobox", {
+      await screen.findByRole<HTMLButtonElement>("button", {
         name: i18n.t("configurationVerbosity"),
       })
     ).disabled,
   ).toBe(true);
   expect(
-    screen.getByRole<HTMLButtonElement>("combobox", {
+    screen.getByRole<HTMLButtonElement>("button", {
       name: i18n.t("configurationSummary"),
     }).disabled,
   ).toBe(true);
@@ -560,19 +606,17 @@ it.each(["failed", "cancelled", "unconfirmed"] as const)(
       screen.getByRole("tab", { name: i18n.t("configurationSettings") }),
     );
     fireEvent.click(
-      await screen.findByRole("combobox", {
+      await screen.findByRole("button", {
         name: i18n.t("configurationVerbosity"),
       }),
     );
     fireEvent.click(
-      await screen.findByRole("option", {
-        name: i18n.t("configurationVerbosity_high"),
+      await screen.findByRole("menuitem", {
+        name: (name) => name.startsWith(i18n.t("configurationVerbosity_high")),
       }),
     );
     await screen.findByText(i18n.t("setupRequestAccepted"));
-    fireEvent.click(
-      screen.getByRole("tab", { name: i18n.t("generalSettings") }),
-    );
+    openAppearance();
     fireEvent.click(screen.getByRole("radio", { name: i18n.t("themeDark") }));
     await screen.findByText(i18n.t("settingsPreferencesSaved"));
     fireEvent.click(
@@ -587,7 +631,7 @@ it.each(["failed", "cancelled", "unconfirmed"] as const)(
     await screen.findByText(i18n.t(`setupOutcome_${status}`));
     expect(screen.queryByText(i18n.t("settingsPreferencesSaved"))).toBeNull();
     expect(
-      screen.getByRole<HTMLButtonElement>("combobox", {
+      screen.getByRole<HTMLButtonElement>("button", {
         name: i18n.t("configurationVerbosity"),
       }).textContent,
     ).toContain(i18n.t("configurationVerbosity_default"));
@@ -673,7 +717,7 @@ it("filters settings by translated setting names and preserves the active page u
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("settingsClearSearch") }),
   );
-  expect(screen.getAllByRole("tab")).toHaveLength(9);
+  expect(screen.getAllByRole("tab")).toHaveLength(10);
 });
 
 it("validates and cancels theme imports without writes; a failed valid import keeps its draft and saved mode", async () => {

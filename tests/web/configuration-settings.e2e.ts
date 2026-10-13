@@ -162,7 +162,7 @@ test("C12 editing the same model's API refreshes capabilities before returning t
   await page.setViewportSize({ width: 1440, height: 1000 });
   const dialog = await openConfiguration(page);
   await expect(
-    dialog.getByRole("combobox", { name: "输出详细程度", exact: true }),
+    dialog.getByRole("button", { name: "输出详细程度", exact: true }),
   ).toBeEnabled();
   const initialReads = state.catalogReads;
   await dialog.getByRole("tab", { name: "模型", exact: true }).click();
@@ -184,10 +184,10 @@ test("C12 editing the same model's API refreshes capabilities before returning t
   });
   await dialog.getByRole("tab", { name: "配置", exact: true }).click();
   await expect(
-    dialog.getByRole("combobox", { name: "输出详细程度", exact: true }),
+    dialog.getByRole("button", { name: "输出详细程度", exact: true }),
   ).toBeDisabled();
   await expect(
-    dialog.getByRole("combobox", { name: "推理摘要", exact: true }),
+    dialog.getByRole("button", { name: "推理摘要", exact: true }),
   ).toBeDisabled();
 });
 
@@ -197,7 +197,7 @@ test("C02-C05 configuration menus keep hover, keyboard focus, escape and outside
   const { state } = await configurationFixture(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const dialog = await openConfiguration(page);
-  const verbosity = dialog.getByRole("combobox", {
+  const verbosity = dialog.getByRole("button", {
     name: "输出详细程度",
     exact: true,
   });
@@ -206,34 +206,39 @@ test("C02-C05 configuration menus keep hover, keyboard focus, escape and outside
   await verbosity.focus();
   await expect(verbosity).toBeFocused();
   await verbosity.press("Enter");
-  await expect(page.getByRole("listbox")).toBeVisible();
-  await expect(page.getByRole("option")).toHaveText([
-    "模型默认",
-    "简短",
-    "适中",
-    "详细",
+  await expect(page.getByRole("menu")).toBeVisible();
+  await expect(page.getByRole("menuitem")).toHaveText([
+    /^模型默认$/,
+    /^简短/,
+    /^适中/,
+    /^详细/,
   ]);
   await page.screenshot({
     path: testInfo.outputPath("configuration-menu-light.png"),
   });
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(verbosity).toBeFocused();
   const levels = dialog.getByRole("button", {
     name: "可用推理强度",
     exact: true,
   });
   await levels.click();
-  await expect(page.getByRole("checkbox")).toHaveCount(4);
+  await expect(page.getByRole("menuitemcheckbox")).toHaveText([
+    "off",
+    "low",
+    "high",
+    "max",
+  ]);
   await expect(
-    page.getByRole("checkbox", { name: "max", exact: true }),
+    page.getByRole("menuitemcheckbox", { name: "max", exact: true }),
   ).toBeChecked();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect(page.getByRole("menuitemcheckbox")).toHaveCount(0);
   await expect(levels).toBeFocused();
   await levels.click();
   await dialog.getByRole("heading", { name: "配置", exact: true }).click();
-  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect(page.getByRole("menuitemcheckbox")).toHaveCount(0);
   expect(state.writes).toEqual([]);
   await dialog.screenshot({
     path: testInfo.outputPath("configuration-desktop-light.png"),
@@ -259,7 +264,7 @@ test("C03 configuration stays readable and keyboard reachable in dark and narrow
     dialog.getByRole("combobox", { name: "设置导航", exact: true }),
   ).toHaveValue("configuration");
   await dialog
-    .getByRole("combobox", { name: "输出详细程度", exact: true })
+    .getByRole("button", { name: "输出详细程度", exact: true })
     .scrollIntoViewIfNeeded();
   expect(
     await dialog.evaluate(
@@ -283,15 +288,19 @@ test("C03 configuration stays readable and keyboard reachable in dark and narrow
   await dialog.screenshot({
     path: testInfo.outputPath("configuration-mobile-dependencies.png"),
   });
-  const summary = dialog.getByRole("combobox", {
+  const summary = dialog.getByRole("button", {
     name: "推理摘要",
     exact: true,
   });
   await summary.focus();
   await summary.press("Enter");
   await expect(
-    page.getByRole("option", { name: "关闭", exact: true }),
+    page.getByRole("menuitem", { name: "关闭", exact: false }),
   ).toBeVisible();
+  const menu = await page.getByRole("menu").boundingBox();
+  expect(menu).not.toBeNull();
+  expect(menu!.x).toBeGreaterThanOrEqual(0);
+  expect(menu!.x + menu!.width).toBeLessThanOrEqual(390);
   await page.keyboard.press("Escape");
   await expect(summary).toBeFocused();
 });
@@ -310,12 +319,12 @@ test("C06 admission and a delayed catalog refresh never imply response settings 
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   const dialog = await openConfiguration(page);
-  const verbosity = dialog.getByRole("combobox", {
+  const verbosity = dialog.getByRole("button", {
     name: "输出详细程度",
     exact: true,
   });
   await verbosity.click();
-  await page.getByRole("option", { name: "详细", exact: true }).click();
+  await page.getByRole("menuitem", { name: "详细", exact: false }).click();
   await expect(
     dialog.getByText("配置请求已接收。", { exact: true }),
   ).toBeVisible();
@@ -342,7 +351,7 @@ test("C08-C09 failed display saves retain canonical checks; retry and refresh pr
     .getByRole("button", { name: "可用推理强度", exact: true })
     .click();
   state.fail = true;
-  const max = page.getByRole("checkbox", { name: "max", exact: true });
+  const max = page.getByRole("menuitemcheckbox", { name: "max", exact: true });
   await max.click();
   await expect(
     dialog.getByText("无法保存显示设置，请检查配置诊断后重试。", {
@@ -354,9 +363,11 @@ test("C08-C09 failed display saves retain canonical checks; retry and refresh pr
   await max.click();
   await expect(max).not.toBeChecked();
   // Hiding the actual level is a presentation preference; its native value remains visible.
-  await page.getByRole("checkbox", { name: "high", exact: true }).click();
+  await page
+    .getByRole("menuitemcheckbox", { name: "high", exact: true })
+    .click();
   await expect(
-    page.getByRole("checkbox", { name: "high", exact: true }),
+    page.getByRole("menuitemcheckbox", { name: "high", exact: true }),
   ).not.toBeChecked();
   await page.keyboard.press("Escape");
   await expect(
@@ -371,7 +382,7 @@ test("C08-C09 failed display saves retain canonical checks; retry and refresh pr
     .getByRole("button", { name: "可用推理强度", exact: true })
     .click();
   await expect(
-    page.getByRole("checkbox", { name: "max", exact: true }),
+    page.getByRole("menuitemcheckbox", { name: "max", exact: true }),
   ).not.toBeChecked();
   await page.keyboard.press("Escape");
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();

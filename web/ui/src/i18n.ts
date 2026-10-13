@@ -739,6 +739,10 @@ const resources = {
       configurationSandboxUnavailable: "No OS sandbox",
       configurationSearchDetail:
         "Let the current Session model search the web when supported.",
+      configurationSearchOff:
+        "Do not offer native search to the current model.",
+      configurationSearchOn:
+        "Offer native search when the current connection supports it.",
       configurationVerbosity: "Output verbosity",
       configurationVerbosityDetail:
         "Choose how much detail the model includes in its response.",
@@ -748,6 +752,12 @@ const resources = {
       configurationVerbosity_low: "Low",
       configurationVerbosity_medium: "Medium",
       configurationVerbosity_high: "High",
+      configurationVerbosityHelp_low:
+        "Prefer short answers with fewer details.",
+      configurationVerbosityHelp_medium:
+        "Include useful explanation and a moderate amount of detail.",
+      configurationVerbosityHelp_high:
+        "Include more complete explanation and detail.",
       configurationVerbosityRequest:
         "Set only response_verbosity to {{value}}; preserve the other OpenPI settings.",
       configurationSummary: "Reasoning summary",
@@ -760,6 +770,12 @@ const resources = {
       configurationSummary_concise: "Concise",
       configurationSummary_detailed: "Detailed",
       configurationSummary_none: "Off",
+      configurationSummaryHelp_auto: "Let the model choose the summary length.",
+      configurationSummaryHelp_concise: "Request a brief reasoning summary.",
+      configurationSummaryHelp_detailed:
+        "Request a more detailed reasoning summary.",
+      configurationSummaryHelp_none:
+        "Do not request a summary. Keep the current reasoning effort.",
       configurationSummaryRequest:
         "Set only response_reasoning_summary to {{value}}; preserve the other OpenPI settings.",
       configurationModelFeatures: "Model features",
@@ -2534,6 +2550,8 @@ const resources = {
       configurationSandboxDetail: "工具使用宿主进程的权限运行。",
       configurationSandboxUnavailable: "未提供 OS 沙箱",
       configurationSearchDetail: "允许当前会话模型在支持时访问网络。",
+      configurationSearchOff: "不向当前模型提供原生搜索。",
+      configurationSearchOn: "在当前连接支持时允许原生搜索。",
       configurationVerbosity: "输出详细程度",
       configurationVerbosityDetail: "选择模型回复包含细节的详细程度。",
       configurationResponsesUnavailable:
@@ -2542,6 +2560,9 @@ const resources = {
       configurationVerbosity_low: "简短",
       configurationVerbosity_medium: "适中",
       configurationVerbosity_high: "详细",
+      configurationVerbosityHelp_low: "简短直接地回答，减少额外细节。",
+      configurationVerbosityHelp_medium: "给出必要解释与适量细节。",
+      configurationVerbosityHelp_high: "提供更完整的解释与细节。",
       configurationVerbosityRequest:
         "只把 response_verbosity 设为 {{value}}，保留其他 OpenPI 配置。",
       configurationSummary: "推理摘要",
@@ -2552,6 +2573,10 @@ const resources = {
       configurationSummary_concise: "简洁",
       configurationSummary_detailed: "详细",
       configurationSummary_none: "关闭",
+      configurationSummaryHelp_auto: "由模型自动选择摘要长度。",
+      configurationSummaryHelp_concise: "请求简洁的推理摘要。",
+      configurationSummaryHelp_detailed: "请求较详细的推理摘要。",
+      configurationSummaryHelp_none: "不请求推理摘要；保留当前推理强度。",
       configurationSummaryRequest:
         "只把 response_reasoning_summary 设为 {{value}}，保留其他 OpenPI 配置。",
       configurationModelFeatures: "模型功能",

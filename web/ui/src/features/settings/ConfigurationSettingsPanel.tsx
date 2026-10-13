@@ -1,12 +1,59 @@
-import { ComplexSelector } from "@astryxdesign/core/ComplexSelector";
-import { Selector } from "@astryxdesign/core/Selector";
-import { ArrowUpRight, RefreshCw, UserRound } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+} from "@astryxdesign/core/DropdownMenu";
+import { ArrowUpRight, Check, RefreshCw, UserRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ReasoningLevel } from "../../../../../extensions/shared/setup-config.ts";
 import type {
   WebSettingsCatalog,
   WebSettingsPreferencesPatch,
 } from "../../../../protocol/types.ts";
+
+function ConfigurationMenu({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string; description?: string }[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <DropdownMenu
+      button={{
+        label: options.find((option) => option.value === value)?.label ?? value,
+        "aria-label": label,
+        variant: "secondary",
+        size: "sm",
+        className: "configuration-menu-trigger",
+        isDisabled: disabled,
+      }}
+      className="configuration-menu"
+      menuWidth="min(360px, calc(100vw - 32px))"
+      alignment="end"
+      items={options.map((option) => ({
+        id: option.value,
+        label: option.label,
+        isDisabled: disabled,
+        description: option.description ? (
+          <span className="configuration-option-description">
+            {option.description}
+          </span>
+        ) : undefined,
+        endContent:
+          value === option.value ? <Check aria-hidden="true" /> : undefined,
+        onClick: () => {
+          if (option.value !== value) onChange(option.value);
+        },
+      }))}
+    />
+  );
+}
 
 export function ConfigurationSettingsPanel({
   catalog,
@@ -113,25 +160,25 @@ export function ConfigurationSettingsPanel({
                 )}
               </div>
               <div className="configuration-control">
-                <Selector
+                <ConfigurationMenu
                   label={t("webSearchSettings")}
-                  isLabelHidden
-                  size="sm"
-                  width={144}
                   value={
                     catalog.setup.webSearch?.enabled === true ? "on" : "off"
                   }
                   options={[
-                    { value: "off", label: t("disabled") },
-                    { value: "on", label: t("enabled") },
+                    {
+                      value: "off",
+                      label: t("disabled"),
+                      description: t("configurationSearchOff"),
+                    },
+                    {
+                      value: "on",
+                      label: t("enabled"),
+                      description: t("configurationSearchOn"),
+                    },
                   ]}
-                  isDisabled={blocked}
+                  disabled={blocked}
                   onChange={(value: string) => {
-                    if (
-                      (value === "on") ===
-                      (catalog.setup.webSearch?.enabled === true)
-                    )
-                      return;
                     void onConfigure(
                       t(
                         value === "on"
@@ -152,26 +199,26 @@ export function ConfigurationSettingsPanel({
                 )}
               </div>
               <div className="configuration-control">
-                <Selector
+                <ConfigurationMenu
                   label={t("configurationVerbosity")}
-                  isLabelHidden
-                  size="sm"
-                  width={144}
                   value={verbosity}
                   options={["default", "low", "medium", "high"].map(
                     (value) => ({
                       value,
                       label: t(`configurationVerbosity_${value}`),
+                      description:
+                        value === "default"
+                          ? undefined
+                          : t(`configurationVerbosityHelp_${value}`),
                     }),
                   )}
-                  isDisabled={
+                  disabled={
                     blocked || catalog.responseSupport?.verbosity !== true
                   }
                   onChange={(value: string) => {
-                    if (value !== verbosity)
-                      void onConfigure(
-                        t("configurationVerbosityRequest", { value }),
-                      );
+                    void onConfigure(
+                      t("configurationVerbosityRequest", { value }),
+                    );
                   }}
                 />
               </div>
@@ -185,11 +232,8 @@ export function ConfigurationSettingsPanel({
                 )}
               </div>
               <div className="configuration-control">
-                <Selector
+                <ConfigurationMenu
                   label={t("configurationSummary")}
-                  isLabelHidden
-                  size="sm"
-                  width={144}
                   value={summary}
                   options={[
                     "default",
@@ -200,16 +244,19 @@ export function ConfigurationSettingsPanel({
                   ].map((value) => ({
                     value,
                     label: t(`configurationSummary_${value}`),
+                    description:
+                      value === "default"
+                        ? undefined
+                        : t(`configurationSummaryHelp_${value}`),
                   }))}
-                  isDisabled={
+                  disabled={
                     blocked ||
                     catalog.responseSupport?.reasoningSummary !== true
                   }
                   onChange={(value: string) => {
-                    if (value !== summary)
-                      void onConfigure(
-                        t("configurationSummaryRequest", { value }),
-                      );
+                    void onConfigure(
+                      t("configurationSummaryRequest", { value }),
+                    );
                   }}
                 />
               </div>
@@ -224,55 +271,45 @@ export function ConfigurationSettingsPanel({
                   <p>{t("configurationReasoningDetail")}</p>
                 </div>
                 <div className="configuration-control">
-                  <ComplexSelector
-                    label={t("configurationReasoningLevels")}
-                    isLabelHidden
-                    size="sm"
-                    width={144}
-                    value={hidden}
-                    triggerLabel={t("configurationReasoningCount", {
-                      count: levels.filter((level) => !hidden.includes(level))
-                        .length,
-                    })}
-                    isDisabled={blocked || levels.length === 0}
-                    placement="below"
-                    alignment="end"
-                    onChange={(
-                      hiddenThinkingLevels: readonly ReasoningLevel[],
-                    ) => {
-                      void onUpdatePreferences({ hiddenThinkingLevels });
+                  <DropdownMenu
+                    button={{
+                      label: t("configurationReasoningCount", {
+                        count: levels.filter((level) => !hidden.includes(level))
+                          .length,
+                      }),
+                      "aria-label": t("configurationReasoningLevels"),
+                      variant: "secondary",
+                      size: "sm",
+                      className: "configuration-menu-trigger",
+                      isDisabled: blocked || levels.length === 0,
                     }}
+                    className="configuration-level-menu"
+                    menuWidth="min(240px, calc(100vw - 32px))"
+                    alignment="end"
                   >
-                    {(
-                      value: readonly ReasoningLevel[],
-                      onChange: (next: readonly ReasoningLevel[]) => void,
-                    ) => (
-                      <fieldset
-                        className="configuration-levels"
-                        disabled={preferencePending}
-                      >
-                        <legend className="sr-only">
-                          {t("configurationReasoningLevels")}
-                        </legend>
-                        {levels.map((level) => (
-                          <label key={level}>
-                            <input
-                              type="checkbox"
-                              checked={!value.includes(level)}
-                              onChange={(event) =>
-                                onChange(
-                                  event.target.checked
-                                    ? value.filter((item) => item !== level)
-                                    : [...value, level],
-                                )
-                              }
-                            />
-                            <span>{level}</span>
-                          </label>
-                        ))}
-                      </fieldset>
-                    )}
-                  </ComplexSelector>
+                    {levels.map((level) => (
+                      <DropdownMenuCheckboxItem
+                        key={level}
+                        label={level}
+                        value={!hidden.includes(level)}
+                        isDisabled={blocked}
+                        endContent={
+                          <span className="configuration-check">
+                            {!hidden.includes(level) && (
+                              <Check aria-hidden="true" />
+                            )}
+                          </span>
+                        }
+                        onChange={(checked: boolean) => {
+                          void onUpdatePreferences({
+                            hiddenThinkingLevels: checked
+                              ? hidden.filter((item) => item !== level)
+                              : [...hidden, level],
+                          });
+                        }}
+                      />
+                    ))}
+                  </DropdownMenu>
                 </div>
               </div>
             </div>
