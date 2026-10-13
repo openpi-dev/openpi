@@ -739,6 +739,24 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "OpenPI Web pinned conversation order: manual (default) or recently updated. Omit to preserve the current value.",
         }),
       ),
+      ui_web_sidebar_grouping: Type.Optional(
+        StringEnum(["project", "list"] as const, {
+          description:
+            "OpenPI Web sidebar grouping: project (default) or one recent conversation list. Omit to preserve the current value.",
+        }),
+      ),
+      ui_web_chats_sort: Type.Optional(
+        StringEnum(["manual", "updated"] as const, {
+          description:
+            "OpenPI Web conversation order within projects and the recent list: recently updated (default) or manual. Omit to preserve the current value.",
+        }),
+      ),
+      ui_web_projects_in_recents: Type.Optional(
+        Type.Boolean({
+          description:
+            "Whether OpenPI Web recents includes conversations from unpinned projects (default true). Omit to preserve the current value.",
+        }),
+      ),
       ui_custom_footer: Type.Optional(
         Type.Boolean({
           description:
@@ -1011,6 +1029,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
               current.ui.webHiddenThinkingLevels,
             webPinnedSort:
               params.ui_web_pinned_sort ?? current.ui.webPinnedSort,
+            webSidebarGrouping:
+              params.ui_web_sidebar_grouping ?? current.ui.webSidebarGrouping,
+            webChatsSort: params.ui_web_chats_sort ?? current.ui.webChatsSort,
+            webProjectsInRecents:
+              params.ui_web_projects_in_recents ??
+              current.ui.webProjectsInRecents,
             showHeader: params.ui_show_header ?? current.ui.showHeader,
             customFooter: params.ui_custom_footer ?? current.ui.customFooter,
             ...footer,

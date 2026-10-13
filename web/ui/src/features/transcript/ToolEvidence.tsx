@@ -1,5 +1,5 @@
-import { type ReactNode, useContext, useState } from "react";
 import { Check, ChevronRight, Clipboard } from "lucide-react";
+import { type ReactNode, useContext, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   type EvidenceState,
@@ -11,8 +11,8 @@ import type {
   WebLiveMessage,
   WebMessagePart,
 } from "../../../../protocol/types.ts";
-import { ArtifactContext } from "../artifacts/context.ts";
 import { copyText } from "../../lib/clipboard.ts";
+import { ArtifactContext } from "../artifacts/context.ts";
 import {
   toolActivity,
   toolActivityLabel,
@@ -57,6 +57,9 @@ export function ToolEvidence({
   const artifacts = useContext(ArtifactContext);
   const view = projectToolEvidence(call, result, liveState);
   const state = !observed && view.state === "running" ? "unknown" : view.state;
+  const statusLabel = result?.forkSnapshotToolResult
+    ? t("toolSnapshotMissingResult")
+    : t(`toolState_${state}`);
   const fileReference = view.resolvedPath ?? view.path;
   const path = view.path ?? "";
   const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
@@ -123,7 +126,7 @@ export function ToolEvidence({
           </span>
         )}
         <ChevronRight className="evidence-chevron" aria-hidden="true" />
-        <span className="evidence-status">{t(`toolState_${state}`)}</span>
+        <span className="evidence-status">{statusLabel}</span>
       </summary>
       <div className="evidence-content">
         {view.path && (
@@ -175,7 +178,7 @@ export function ToolEvidence({
             </figcaption>
             <pre>{shellText || t("noOutput")}</pre>
             <div className="evidence-process-meta">
-              {t(`toolState_${state}`)}
+              {statusLabel}
               {view.exitCode !== undefined
                 ? ` · exit ${view.exitCode}`
                 : view.signal

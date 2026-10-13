@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import { createElement, Fragment } from "react";
 import { I18nextProvider } from "react-i18next";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { App } from "../../web/ui/src/app/App.tsx";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
@@ -19,9 +19,12 @@ import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 
 afterEach(() => {
   cleanup();
-  sessionStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+beforeEach(() => {
+  vi.spyOn(actions, "setSessionRead").mockResolvedValue();
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
 
 const truncation = {
@@ -49,7 +52,7 @@ function snapshot(id = "A", commandId = "turn-1", finishedAt = 2): WebSnapshot {
     protocolVersion: 1,
     cursor: 1,
     generatedAt: "2026-09-30T00:00:00Z",
-    preferences: { theme: "system" },
+    preferences: { theme: "system", projectsInRecents: false },
     currentSessionId: id,
     currentSessionPath: path,
     runtime: { status: "idle", capabilities: {} },
@@ -69,6 +72,8 @@ function snapshot(id = "A", commandId = "turn-1", finishedAt = 2): WebSnapshot {
         created: "2026-09-30T00:00:00Z",
         firstMessage: "Question",
         messageCount: 2,
+        unread: true,
+        readRevision: `revision:${path}:${commandId}:${finishedAt}`,
         execution: {
           status: "idle",
           lastTurn: {
@@ -126,6 +131,22 @@ function snapshot(id = "A", commandId = "turn-1", finishedAt = 2): WebSnapshot {
   };
 }
 
+function readSnapshot(value: WebSnapshot) {
+  return {
+    ...value,
+    sessions: value.sessions.map((session) =>
+      session.path === value.selectedSession?.path &&
+      session.id === value.selectedSession?.id
+        ? {
+            ...session,
+            unread: false,
+            readRevision: `${session.readRevision}:read`,
+          }
+        : session,
+    ),
+  };
+}
+
 const actions = createWebStore().getState().actions;
 function Conversation({
   value,
@@ -177,10 +198,16 @@ function unread() {
   return document.querySelectorAll(".session-state-completed");
 }
 
-it("acknowledges the loaded selection immediately, independently of title, mtime and result position", () => {
+it("requests reading the loaded revision independently of title and mtime, and clears unread only after backend confirmation", () => {
   const value = snapshot();
   const mounted = render(createElement(Conversation, { value }));
-  expect(unread()).toHaveLength(0);
+  expect(actions.setSessionRead).toHaveBeenCalledExactlyOnceWith(
+    value.sessions[0]!.path,
+    value.sessions[0]!.id,
+    true,
+    value.sessions[0]!.readRevision,
+  );
+  expect(unread()).toHaveLength(1);
   const renamed = {
     ...value,
     sessions: value.sessions.map((session) => ({
@@ -190,16 +217,29 @@ it("acknowledges the loaded selection immediately, independently of title, mtime
     })),
   };
   mounted.rerender(createElement(Conversation, { value: renamed }));
+  expect(actions.setSessionRead).toHaveBeenCalledOnce();
+  expect(unread()).toHaveLength(1);
+  mounted.rerender(
+    createElement(Conversation, { value: readSnapshot(renamed) }),
+  );
   expect(unread()).toHaveLength(0);
-  expect(sessionStorage.getItem("openpi.seen-completions")).toContain("turn-1");
   const next = snapshot("A", "turn-2", 3);
   mounted.rerender(
     createElement(Conversation, { value: next, enabled: false }),
   );
   expect(unread()).toHaveLength(1);
+  expect(actions.setSessionRead).toHaveBeenCalledOnce();
   mounted.rerender(createElement(Conversation, { value: next }));
+  expect(actions.setSessionRead).toHaveBeenCalledTimes(2);
+  expect(actions.setSessionRead).toHaveBeenLastCalledWith(
+    next.sessions[0]!.path,
+    next.sessions[0]!.id,
+    true,
+    next.sessions[0]!.readRevision,
+  );
+  expect(unread()).toHaveLength(1);
+  mounted.rerender(createElement(Conversation, { value: readSnapshot(next) }));
   expect(unread()).toHaveLength(0);
-  expect(sessionStorage.getItem("openpi.seen-completions")).toContain("turn-2");
 });
 
 it("keeps a background tab unread and acknowledges its loaded selection when it becomes visible", () => {
@@ -209,9 +249,16 @@ it("keeps a background tab unread and acknowledges its loaded selection when it 
   );
   render(createElement(Conversation, { value: snapshot() }));
   expect(unread()).toHaveLength(1);
+  expect(actions.setSessionRead).not.toHaveBeenCalled();
   visibility = "visible";
   fireEvent(document, new Event("visibilitychange"));
-  expect(unread()).toHaveLength(0);
+  expect(actions.setSessionRead).toHaveBeenCalledExactlyOnceWith(
+    "/sessions/A.jsonl",
+    "A",
+    true,
+    snapshot().sessions[0]!.readRevision,
+  );
+  expect(unread()).toHaveLength(1);
 });
 
 it("does not acknowledge hidden, covered or disconnected views", () => {
@@ -220,31 +267,41 @@ it("does not acknowledge hidden, covered or disconnected views", () => {
     createElement(Conversation, { value, enabled: false }),
   );
   expect(unread()).toHaveLength(1);
+  expect(actions.setSessionRead).not.toHaveBeenCalled();
   mounted.rerender(createElement(Conversation, { value, connected: false }));
   expect(unread()).toHaveLength(1);
+  expect(actions.setSessionRead).not.toHaveBeenCalled();
   const dialog = document.createElement("dialog");
   dialog.open = true;
   document.body.append(dialog);
   mounted.rerender(createElement(Conversation, { value }));
   expect(unread()).toHaveLength(1);
+  expect(actions.setSessionRead).not.toHaveBeenCalled();
   dialog.open = false;
   fireEvent(dialog, new Event("close"));
-  expect(unread()).toHaveLength(0);
+  expect(actions.setSessionRead).toHaveBeenCalledOnce();
+  expect(unread()).toHaveLength(1);
   dialog.remove();
 });
 
-it.each(["no-projection", "pending-path", "copied-id"] as const)(
+it.each([
+  "no-projection",
+  "pending-path",
+  "copied-path",
+  "reused-path",
+] as const)(
   "does not acknowledge a requested selection until its exact native path and id load: %s",
   (pending) => {
     const value = snapshot();
     let selectedPath = value.selectedSession!.path;
     if (pending === "no-projection") delete value.selectedSession;
     if (pending === "pending-path") selectedPath = "/sessions/not-loaded.jsonl";
-    if (pending === "copied-id")
+    if (pending === "copied-path")
       value.selectedSession!.path = "/sessions/copied.jsonl";
+    if (pending === "reused-path") value.selectedSession!.id = "different-id";
     render(createElement(Conversation, { value, selectedPath }));
     expect(unread()).toHaveLength(1);
-    expect(sessionStorage.getItem("openpi.seen-completions")).toBeNull();
+    expect(actions.setSessionRead).not.toHaveBeenCalled();
   },
 );
 
@@ -257,26 +314,44 @@ it("acknowledges a bounded loaded history without requiring its final result to 
     truncated: true,
   };
   render(createElement(Conversation, { value }));
-  expect(unread()).toHaveLength(0);
+  expect(actions.setSessionRead).toHaveBeenCalledExactlyOnceWith(
+    value.sessions[0]!.path,
+    value.sessions[0]!.id,
+    true,
+    value.sessions[0]!.readRevision,
+  );
+  expect(unread()).toHaveLength(1);
 });
 
-it("keeps background completions unread and persists only the exact visited session and turn", () => {
+it("keeps background completions unread and restores only the backend's exact visited-session projection", () => {
   const a = snapshot();
   const b = snapshot("B");
   b.sessions.unshift(a.sessions[0]!);
   const mounted = render(createElement(Conversation, { value: b }));
-  expect(unread()).toHaveLength(1);
-  expect(sessionStorage.getItem("openpi.seen-completions")).toContain(
+  expect(actions.setSessionRead).toHaveBeenCalledExactlyOnceWith(
     "/sessions/B.jsonl",
+    "B",
+    true,
+    b.sessions[1]!.readRevision,
   );
-  expect(sessionStorage.getItem("openpi.seen-completions")).not.toContain(
-    "/sessions/A.jsonl",
-  );
+  expect(unread()).toHaveLength(2);
+  mounted.rerender(createElement(Conversation, { value: readSnapshot(b) }));
+  expect(unread()).toHaveLength(1);
   mounted.rerender(createElement(Conversation, { value: a }));
+  expect(actions.setSessionRead).toHaveBeenCalledTimes(2);
+  expect(actions.setSessionRead).toHaveBeenLastCalledWith(
+    "/sessions/A.jsonl",
+    "A",
+    true,
+    a.sessions[0]!.readRevision,
+  );
+  expect(unread()).toHaveLength(1);
+  const confirmed = readSnapshot(a);
+  mounted.rerender(createElement(Conversation, { value: confirmed }));
   expect(unread()).toHaveLength(0);
   mounted.unmount();
   const restored = render(
-    createElement(Conversation, { value: a, enabled: false }),
+    createElement(Conversation, { value: confirmed, enabled: false }),
   );
   expect(unread()).toHaveLength(0);
   const copied = snapshot();
@@ -286,30 +361,55 @@ it("keeps background completions unread and persists only the exact visited sess
     createElement(Conversation, { value: copied, enabled: false }),
   );
   expect(unread()).toHaveLength(1);
+  expect(actions.setSessionRead).toHaveBeenCalledTimes(2);
 });
 
-it("uses the native completion identity when legacy summaries have no result entry id", () => {
+it("uses the backend revision when a summary has no result entry id", () => {
   const value = snapshot();
   delete value.sessions[0]!.execution!.lastTurn!.resultEntryId;
   value.selectedSession!.entries = [value.selectedSession!.entries[0]!];
   render(createElement(Conversation, { value }));
-  expect(unread()).toHaveLength(0);
+  expect(actions.setSessionRead).toHaveBeenCalledExactlyOnceWith(
+    value.sessions[0]!.path,
+    value.sessions[0]!.id,
+    true,
+    value.sessions[0]!.readRevision,
+  );
+});
+
+it("does not automatically acknowledge a legacy summary without a read revision", () => {
+  const value = snapshot();
+  delete value.sessions[0]!.readRevision;
+  render(createElement(Conversation, { value }));
+  expect(unread()).toHaveLength(1);
+  expect(actions.setSessionRead).not.toHaveBeenCalled();
 });
 
 it.each(["failed", "cancelled", "uncertain"] as const)(
-  "never records a %s outcome as a completed read",
+  "reads an explicitly unread %s result without changing its runtime outcome",
   (outcome) => {
     const value = snapshot();
     value.sessions[0]!.execution!.lastTurn!.outcome = outcome;
-    render(createElement(Conversation, { value }));
-    expect(sessionStorage.getItem("openpi.seen-completions")).toBeNull();
+    const mounted = render(createElement(Conversation, { value }));
+    expect(actions.setSessionRead).toHaveBeenCalledExactlyOnceWith(
+      value.sessions[0]!.path,
+      value.sessions[0]!.id,
+      true,
+      value.sessions[0]!.readRevision,
+    );
+    expect(document.querySelectorAll(".session-row.is-unread")).toHaveLength(1);
+    const confirmed = readSnapshot(value);
+    mounted.rerender(createElement(Conversation, { value: confirmed }));
+    expect(document.querySelectorAll(".session-row.is-unread")).toHaveLength(0);
+    expect(confirmed.sessions[0]!.execution!.lastTurn!.outcome).toBe(outcome);
   },
 );
 
-it("the App defers acknowledgement during selection and marks the loaded reader in chat or trajectory", () => {
+it("the App defers acknowledgement during selection and trajectory until the loaded chat is visible", () => {
   const initial = webStore.getState();
   const start = vi.spyOn(initial.actions, "start").mockImplementation(() => {});
   const stop = vi.spyOn(initial.actions, "stop").mockImplementation(() => {});
+  const read = vi.spyOn(initial.actions, "setSessionRead").mockResolvedValue();
   const value = snapshot();
   webStore.setState({
     ...createWebStore().getState(),
@@ -325,15 +425,38 @@ it("the App defers acknowledgement during selection and marks the loaded reader 
   );
   try {
     expect(unread()).toHaveLength(1);
+    expect(read).not.toHaveBeenCalled();
     act(() => webStore.setState({ sessionSwitching: false }));
+    expect(read).toHaveBeenCalledExactlyOnceWith(
+      value.sessions[0]!.path,
+      value.sessions[0]!.id,
+      true,
+      value.sessions[0]!.readRevision,
+    );
+    expect(unread()).toHaveLength(1);
+    act(() => webStore.setState({ snapshot: readSnapshot(value) }));
     expect(unread()).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: i18n.t("trajectory") }));
     const next = snapshot("A", "turn-2", 3);
     act(() => webStore.setState({ snapshot: next }));
-    expect(unread()).toHaveLength(0);
-    expect(sessionStorage.getItem("openpi.seen-completions")).toContain(
-      "turn-2",
+    expect(read).toHaveBeenCalledOnce();
+    expect(unread()).toHaveLength(1);
+    expect(
+      screen
+        .getByRole("button", { name: i18n.t("trajectory") })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("chatView") }));
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenLastCalledWith(
+      next.sessions[0]!.path,
+      next.sessions[0]!.id,
+      true,
+      next.sessions[0]!.readRevision,
     );
+    expect(unread()).toHaveLength(1);
+    act(() => webStore.setState({ snapshot: readSnapshot(next) }));
+    expect(unread()).toHaveLength(0);
   } finally {
     mounted.unmount();
     start.mockRestore();

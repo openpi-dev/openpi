@@ -1029,7 +1029,17 @@ test("Web appearance fields accept canonical bounds and remain known on explicit
       { webChatWidth: 960, webChatFontSize: 16, webExpandThinking: true },
       { webChatWidth: 2000, webChatFontSize: 24, webExpandThinking: true },
       { webSidebarWidth: 220, webAuxiliaryWidth: 360 },
-      { webSidebarWidth: 420, webAuxiliaryWidth: 720 },
+      { webSidebarWidth: 520, webAuxiliaryWidth: 720 },
+      {
+        webSidebarGrouping: "project",
+        webChatsSort: "updated",
+        webProjectsInRecents: true,
+      },
+      {
+        webSidebarGrouping: "list",
+        webChatsSort: "manual",
+        webProjectsInRecents: false,
+      },
     ]) {
       const raw = JSON.stringify({ configVersion, ui });
       writeFileSync(SETUP_CONFIG_PATH, raw);
@@ -1074,9 +1084,12 @@ test("invalid Web appearance values are diagnosed and block both stored and cand
     ],
     webChatWidth: [819, 2001, 960.5, "960", null, true, {}, []],
     webChatFontSize: [11, 25, 16.5, "16", null, false, {}, []],
-    webSidebarWidth: [219, 421, 320.5, "320", null, false],
+    webSidebarWidth: [219, 521, 320.5, "320", null, false],
     webAuxiliaryWidth: [359, 721, 520.5, "520", null, false],
     webExpandThinking: [0, 1, "true", null, {}, []],
+    webSidebarGrouping: ["connection", "unknown", false, null, {}, []],
+    webChatsSort: ["updated_at", "unknown", false, null, {}, []],
+    webProjectsInRecents: [0, 1, "true", null, {}, []],
   };
   for (const [key, values] of Object.entries(invalidValues)) {
     for (const value of values) {

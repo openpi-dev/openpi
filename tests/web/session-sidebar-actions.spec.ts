@@ -51,9 +51,13 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 beforeEach(() => {
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  vi.spyOn(WebClient.prototype, "sessionOpenTargets").mockResolvedValue({
+    targets: [],
+  });
 });
 afterAll(() => {
   Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
@@ -75,6 +79,7 @@ function session(name: string, archived = false) {
     created: "2026-09-26T10:00:00Z",
     messageCount: 1,
     firstMessage: "hello",
+    readRevision: `revision:${cwd}/${name}.jsonl`,
   } satisfies WebSessionSummary;
 }
 
@@ -95,13 +100,13 @@ function archivePage(
   } satisfies ArchivedSessionPage;
 }
 
-function mount(sessions = [session("First")]) {
+function mount(sessions: WebSessionSummary[] = [session("First")]) {
   const actions = createWebStore().getState().actions;
   const data = {
     protocolVersion: 1,
     generatedAt: "2026-09-26T10:00:00Z",
     cursor: 1,
-    preferences: { theme: "system" },
+    preferences: { theme: "system", projectsInRecents: false },
     workspaces: [{ path: cwd, name: "Project", current: false }],
     sessions,
     models: [],
@@ -136,6 +141,7 @@ function mount(sessions = [session("First")]) {
   const view = render(element());
   return {
     ...view,
+    data,
     actions,
     update(next: Partial<typeof props>) {
       Object.assign(props, next);
@@ -145,9 +151,9 @@ function mount(sessions = [session("First")]) {
 }
 
 async function openRename(name: string) {
-  const row = (await screen.findByText(name)).closest<HTMLElement>(
-    ".session-row",
-  );
+  const row = (
+    await screen.findByText(name, { selector: ".session-title" })
+  ).closest<HTMLElement>(".session-row");
   if (!row) throw new Error("Session row is missing");
   fireEvent.click(
     within(row).getByRole("button", {
@@ -156,10 +162,10 @@ async function openRename(name: string) {
   );
   fireEvent.click(
     await screen.findByRole("menuitem", {
-      name: i18n.t("renameConversation"),
+      name: i18n.t("sidebarRename"),
     }),
   );
-  return screen.getByRole<HTMLInputElement>("textbox", {
+  return screen.findByRole<HTMLInputElement>("textbox", {
     name: i18n.t("conversationName"),
   });
 }
@@ -183,6 +189,176 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+it("marks a conversation read against its exact revision, retries failure and waits for the backend projection before changing badges", async () => {
+  const receipt = {
+    commandId: "turn-42",
+    finishedAt: 42,
+    outcome: "completed" as const,
+    resultEntryId: "result-42",
+  };
+  const entry: WebSessionSummary = {
+    ...session("Result"),
+    unread: true,
+    execution: { status: "idle", lastTurn: receipt },
+  };
+  const view = mount([entry]);
+  const read = vi
+    .spyOn(view.actions, "setSessionRead")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue();
+  const select = vi.spyOn(view.actions, "selectSession").mockResolvedValue();
+  const openMenu = () =>
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("conversationOptions") }),
+    );
+  openMenu();
+  fireEvent.click(
+    await screen.findByRole("menuitem", {
+      name: i18n.t("markConversationRead"),
+    }),
+  );
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    i18n.t("sidebarReadFailed"),
+  );
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+  expect(read).toHaveBeenCalledExactlyOnceWith(
+    entry.path,
+    entry.id,
+    true,
+    entry.readRevision,
+  );
+  openMenu();
+  fireEvent.click(
+    await screen.findByRole("menuitem", {
+      name: i18n.t("markConversationRead"),
+    }),
+  );
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+  const confirmed = { ...entry, unread: false, readRevision: "confirmed-read" };
+  view.update({ snapshot: { ...view.data, sessions: [confirmed] } });
+  expect(document.querySelector(".session-state-completed")).toBeNull();
+  openMenu();
+  fireEvent.click(
+    await screen.findByRole("menuitem", {
+      name: i18n.t("markConversationUnread"),
+    }),
+  );
+  await waitFor(() =>
+    expect(read).toHaveBeenLastCalledWith(
+      entry.path,
+      entry.id,
+      false,
+      confirmed.readRevision,
+    ),
+  );
+  expect(document.querySelector(".session-state-completed")).toBeNull();
+  view.update({
+    snapshot: {
+      ...view.data,
+      sessions: [{ ...entry, readRevision: "confirmed-unread" }],
+    },
+  });
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+  expect(select).not.toHaveBeenCalled();
+});
+
+it.each([true, false])(
+  "disables a manual read-state write without a revision when unread is %s",
+  async (unread) => {
+    const view = mount([
+      { ...session("Legacy"), unread, readRevision: undefined },
+    ]);
+    const read = vi.spyOn(view.actions, "setSessionRead").mockResolvedValue();
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("conversationOptions") }),
+    );
+    const item = await screen.findByRole("menuitem", {
+      name: i18n.t(unread ? "markConversationRead" : "markConversationUnread"),
+    });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(read).not.toHaveBeenCalled();
+  },
+);
+
+it("marks only readable unread chats in the chosen project as read, including individually pinned chats", async () => {
+  const regular = { ...session("Regular"), unread: true };
+  const pinned = { ...session("Pinned"), unread: true, pinOrder: 0 };
+  const entries: WebSessionSummary[] = [
+    regular,
+    pinned,
+    { ...session("Already read"), unread: false },
+    { ...session("Archived", true), unread: true },
+    { ...session("Legacy"), unread: true, readRevision: undefined },
+    { ...session("Ungrouped"), unread: true, ungrouped: true },
+    {
+      ...session("Other project"),
+      cwd: "/repos/other",
+      path: "/repos/other/chat.jsonl",
+      readRevision: "other-project-revision",
+      unread: true,
+    },
+  ];
+  const view = mount(entries);
+  const read = vi.spyOn(view.actions, "setSessionRead").mockResolvedValue();
+  const select = vi.spyOn(view.actions, "selectSession").mockResolvedValue();
+  fireEvent.click(
+    within(screen.getByRole("region", { name: "Project" })).getByRole(
+      "button",
+      { name: i18n.t("workspaceOptions") },
+    ),
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: i18n.t("sidebarMarkAllRead") }),
+  );
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(read.mock.calls).toEqual(
+    expect.arrayContaining([
+      [regular.path, regular.id, true, regular.readRevision],
+      [pinned.path, pinned.id, true, pinned.readRevision],
+    ]),
+  );
+  expect(select).not.toHaveBeenCalled();
+});
+
+it.each([
+  { name: "Command+K", key: "k", metaKey: true },
+  { name: "Control+K", key: "k", ctrlKey: true },
+  { name: "Command+Shift+P", key: "P", metaKey: true, shiftKey: true },
+])(
+  "leaves $name to the browser and opens search through its button",
+  ({ name: _name, ...keys }) => {
+    const { actions } = mount();
+    const select = vi.spyOn(actions, "selectSession").mockResolvedValue();
+    const trigger = screen.getByRole("button", {
+      name: i18n.t("searchConversations"),
+    });
+    trigger.focus();
+    fireEvent.keyDown(document, { ...keys, isComposing: true });
+    expect(
+      screen.queryByRole("dialog", { name: i18n.t("transcriptSearch") }),
+    ).toBeNull();
+    expect(fireEvent.keyDown(document, keys)).toBe(true);
+    expect(
+      screen.queryByRole("dialog", { name: i18n.t("transcriptSearch") }),
+    ).toBeNull();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", {
+      name: i18n.t("transcriptSearch"),
+    });
+    const input = within(dialog).getByRole("searchbox");
+    expect(document.activeElement).toBe(input);
+    expect(select).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: i18n.t("transcriptSearch") }),
+    ).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  },
+);
 
 it("locks the exact rename form until its native write settles and admits one submission", async () => {
   const { actions } = mount();
@@ -607,9 +783,9 @@ it.each(["global", "workspace"] as const)(
     expect(query).toHaveBeenCalledExactlyOnceWith("");
     expect(
       screen
-        .getByRole("button", { name: i18n.t("currentConversations") })
+        .getByRole("button", { name: i18n.t("archivedConversations") })
         .getAttribute("aria-pressed"),
-    ).toBe("true");
+    ).toBe("false");
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: i18n.t("newSession"),

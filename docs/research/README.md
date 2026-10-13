@@ -8,6 +8,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Draft investigations
 
+- [`WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md`](WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md) — Codex 侧栏多轮返工的原因、REA 证据边界、视觉验收遗漏与追加差距审计（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #711](https://github.com/openpi-dev/openpi/pull/711)）。
 - [`WEB_SUBAGENTS_2026-10-13.md`](WEB_SUBAGENTS_2026-10-13.md) — Codex local subagent activity, parent/child lifecycle, state matrix and Pi-native Web parity; native Codex runtime observation remains unavailable ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 
 - [`WORKFLOW_FULLSCREEN_IMAGE_OWNER_2026-10-04.md`](WORKFLOW_FULLSCREEN_IMAGE_OWNER_2026-10-04.md) — Pi-owned fullscreen image suppression candidate and isolated protocol evidence; OpenPI adoption deferred pending upstream review and terminal acceptance ([#657](https://github.com/openpi-dev/openpi/issues/657)).

@@ -30,8 +30,8 @@ import {
   type SessionReadingCache,
   sessionReadingScope,
 } from "../../web/ui/src/features/transcript/session-reading-state.ts";
-import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
+import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
@@ -771,7 +771,7 @@ describe("OpenPI React transcript", () => {
     );
 
     expect(screen.getByRole<HTMLInputElement>("searchbox").value).toBe("foo ");
-    expect(screen.getByText("foo bar")).toBeTruthy();
+    expect(screen.getAllByText("foo bar")).toHaveLength(2);
   });
 
   it("keeps the 16-cell logo animation replayable", () => {
@@ -4089,9 +4089,7 @@ it("loads archived history even when its workspace summary was omitted", async (
     expect.any(AbortSignal),
   );
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(
-    await screen.findByRole("menuitem", { name: "Restore conversation" }),
-  );
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Restore" }));
   expect(
     await screen.findByText(
       "Could not confirm restoration. Refresh and try again.",

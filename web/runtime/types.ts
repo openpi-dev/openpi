@@ -15,6 +15,7 @@ import type {
 } from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
 import type { WebProviderLogin } from "../protocol/provider-login.ts";
+import type { WebSessionForkSnapshot, WebSessionForkWorktree } from "../protocol/session-fork.ts";
 
 export type WebProviderAuthSource =
   | "stored"
@@ -106,8 +107,17 @@ export type WebRuntimeRequestErrorCode =
   | "MODEL_CONFIGURATION_CONFLICT"
   | "PROVIDER_LOGIN_CONFLICT"
   | "SESSION_CONFLICT"
+  | "SESSION_READ_STATE_CHANGED"
+  | "SIDEBAR_PIN_CHANGED"
   | "SESSION_FORK_UNAVAILABLE"
   | "SESSION_FORK_CAPACITY"
+  | "SESSION_DELETE_UNAVAILABLE"
+  | "SESSION_DELETE_CAPACITY"
+  | "SESSION_DELETE_BUSY"
+  | "WORKSPACE_ORDER_CHANGED"
+  | "WORKSPACE_NOT_FOUND"
+  | "SESSION_MARKDOWN_TOO_LARGE"
+  | "SESSION_OPEN_UNAVAILABLE"
   | "TURN_CONFLICT"
   | "PROMPT_REJECTED"
   | "WORKSPACE_REQUIRED"
@@ -115,12 +125,12 @@ export type WebRuntimeRequestErrorCode =
 
 export class WebRuntimeRequestError extends Error {
   readonly code: WebRuntimeRequestErrorCode;
-  readonly statusCode: 400 | 409 | 422 | 501;
+  readonly statusCode: 400 | 404 | 409 | 413 | 422 | 501;
 
   constructor(
     message: string,
     code: WebRuntimeRequestErrorCode,
-    statusCode: 400 | 409 | 422 | 501,
+    statusCode: 400 | 404 | 409 | 413 | 422 | 501,
   ) {
     super(message);
     this.name = "WebRuntimeRequestError";
@@ -228,9 +238,29 @@ export interface WebSessionCreationResult {
   sessionPath?: string;
 }
 
-export interface WebSessionForkRequest extends WebHistoryAnchor {
+export type WebSessionForkRequest = {
   commandId: string;
-  rerun?: { mode: "edit"; content: string } | { mode: "regenerate" };
+  sessionId: string;
+  sessionPath: string;
+} & (
+  | { scope: "conversation"; environment?: "local" | "worktree"; entryId?: never; rerun?: never }
+  | { scope?: "message"; environment?: never; entryId: string; rerun?: { mode: "edit"; content: string } | { mode: "regenerate" } }
+);
+
+export interface WebSessionForkOptions {
+  local: boolean;
+  worktree: boolean;
+  reason?: string;
+}
+
+export interface WebSessionForkCancelRequest {
+  commandId: string;
+  sessionId: string;
+  sessionPath: string;
+}
+
+export interface WebSessionForkCancelResult {
+  state: "requested" | "too-late" | "not-found";
 }
 
 export interface WebSessionForkResult {
@@ -240,8 +270,31 @@ export interface WebSessionForkResult {
   replayed?: boolean;
   sessionId?: string;
   sessionPath?: string;
+  cwd?: string;
+  workspacePath?: string;
+  environment?: "local" | "worktree";
+  worktree?: WebSessionForkWorktree;
+  snapshot?: WebSessionForkSnapshot;
+  /** Live source status when the response was produced; the child starts idle. */
+  sourceStillRunning?: boolean;
+  reason?: string;
+  /** A checkout is preserved whenever safe cleanup cannot be established. */
+  preservedWorktreePath?: string;
   /** Prepared from the complete native user message; admission still uses /api/prompt. */
   prompt?: { content: string; images: WebPromptImage[] };
+}
+
+export interface WebSessionDeleteRequest {
+  commandId: string;
+  sessionId: string;
+  sessionPath: string;
+}
+
+export interface WebSessionDeleteResult extends WebSessionDeleteRequest {
+  state: "deleted" | "cancelled" | "uncertain";
+  replayed?: boolean;
+  /** The native active Session was replaced; the Web UI must clear its selection. */
+  activeSessionChanged?: boolean;
 }
 
 export interface WebRuntimeController {
@@ -269,6 +322,9 @@ export interface WebRuntimeController {
   ): Promise<WebSessionCreationResult>;
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   forkSession?(request: WebSessionForkRequest): Promise<WebSessionForkResult>;
+  sessionForkOptions?(request: { sessionPath: string; sessionId: string }): Promise<WebSessionForkOptions>;
+  cancelSessionFork?(request: WebSessionForkCancelRequest): Promise<WebSessionForkCancelResult>;
+  deleteSession?(request: WebSessionDeleteRequest): Promise<WebSessionDeleteResult>;
   listModels(): WebModelSummary[];
   searchModels(query: string, limit?: number, provider?: string): WebModelSearchResult;
   listCommands?(): WebCommandDiscoveryResult;
