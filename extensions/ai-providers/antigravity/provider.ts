@@ -425,7 +425,7 @@ async function readErrorResponseBody(
   const timeoutError = () =>
     new Error("Timed out reading Cloud Code Assist error response body");
   try {
-    while (bytesRead < MAX_ERROR_BODY_BYTES) {
+    while (true) {
       if (signal?.aborted) throw new Error("Request aborted");
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw timeoutError();
@@ -458,6 +458,10 @@ async function readErrorResponseBody(
         break;
       }
       const remainingBytes = MAX_ERROR_BODY_BYTES - bytesRead;
+      if (remainingBytes === 0) {
+        truncated = true;
+        break;
+      }
       const value = result.value.subarray(0, remainingBytes);
       bytesRead += value.byteLength;
       chunks.push(decoder.decode(value, { stream: true }));
@@ -465,7 +469,6 @@ async function readErrorResponseBody(
         truncated = true;
         break;
       }
-      if (bytesRead === MAX_ERROR_BODY_BYTES) truncated = true;
     }
     chunks.push(decoder.decode());
     return chunks.join("") + (truncated ? "… [truncated]" : "");

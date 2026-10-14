@@ -15,6 +15,34 @@ type CompatibleTui = {
   setClearOnShrink(enabled: boolean): void;
 };
 
+type TerminalSettings = {
+  terminal?: {
+    clearOnShrink?: boolean;
+  };
+};
+
+type SettingsReader = {
+  getGlobalSettings(): TerminalSettings;
+  getProjectSettings(): TerminalSettings;
+  drainErrors?(): readonly unknown[];
+};
+
+type SettingsReaderFactory = (
+  cwd: string,
+) => SettingsReader | Promise<SettingsReader>;
+
+type WindowsTerminalCompatibilityOptions = {
+  readonly platform?: NodeJS.Platform;
+  readonly clearOnShrinkEnv?: string;
+  readonly settingsReaderFactory?: SettingsReaderFactory;
+};
+
+type WindowsTerminalCompatibilityRuntime = {
+  readonly platform: NodeJS.Platform;
+  readonly clearOnShrinkEnv?: string;
+  readonly settingsReaderFactory: SettingsReaderFactory;
+};
+
 export function shouldClearShrunkRows(
   platform: NodeJS.Platform,
   mode: "regular" | "fullscreen",
@@ -36,13 +64,47 @@ export function applyWindowsTerminalCompatibility(
   }
 }
 
-function install(ctx: ExtensionContext, pi: ExtensionAPI) {
+export async function readWindowsTerminalCompatibilityEnabled(options: {
+  readonly platform: NodeJS.Platform;
+  readonly clearOnShrinkEnv?: string;
+  readonly cwd: string;
+  readonly settingsReaderFactory: SettingsReaderFactory;
+}) {
+  if (options.platform !== "win32" || options.clearOnShrinkEnv === "0") {
+    return false;
+  }
+
+  try {
+    const settings = await options.settingsReaderFactory(options.cwd);
+    if ((settings.drainErrors?.().length ?? 0) > 0) return false;
+
+    const project = settings.getProjectSettings().terminal?.clearOnShrink;
+    if (project !== undefined) return project;
+
+    const global = settings.getGlobalSettings().terminal?.clearOnShrink;
+    return global ?? true;
+  } catch {
+    return false;
+  }
+}
+
+async function install(
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+  options: WindowsTerminalCompatibilityRuntime,
+  isCurrent: () => boolean,
+) {
   if (ctx.mode !== "tui") {
     return;
   }
 
-  const windowsCompatEnabled =
-    process.platform === "win32" && process.env.PI_CLEAR_ON_SHRINK !== "0";
+  const windowsCompatEnabled = await readWindowsTerminalCompatibilityEnabled({
+    platform: options.platform,
+    clearOnShrinkEnv: options.clearOnShrinkEnv,
+    cwd: ctx.cwd,
+    settingsReaderFactory: options.settingsReaderFactory,
+  });
+  if (!isCurrent()) return;
   let currentTui: CompatibleTui | undefined;
   let lastMode: CompatibleTui["mode"] | undefined;
   const removeInputListener = ctx.ui.onTerminalInput(() => {
@@ -50,7 +112,7 @@ function install(ctx: ExtensionContext, pi: ExtensionAPI) {
       lastMode = currentTui.mode;
       applyWindowsTerminalCompatibility(
         currentTui,
-        process.platform,
+        options.platform,
         windowsCompatEnabled,
       );
     }
@@ -66,7 +128,7 @@ function install(ctx: ExtensionContext, pi: ExtensionAPI) {
       // editor replacement, so all existing input behavior remains intact.
       applyWindowsTerminalCompatibility(
         tui,
-        process.platform,
+        options.platform,
         windowsCompatEnabled,
       );
       return base;
@@ -78,9 +140,36 @@ function install(ctx: ExtensionContext, pi: ExtensionAPI) {
   });
 }
 
-export default function windowsTerminalCompat(pi: ExtensionAPI) {
-  pi.on("session_start", (_event, ctx) => install(ctx, pi));
+export function registerWindowsTerminalCompatibility(
+  pi: ExtensionAPI,
+  options: WindowsTerminalCompatibilityOptions = {},
+) {
+  let generation = 0;
+  const settingsReaderFactory =
+    options.settingsReaderFactory ??
+    (async (cwd) => {
+      const { SettingsManager } = await import(
+        "@earendil-works/pi-coding-agent"
+      );
+      return SettingsManager.create(cwd);
+    });
+  const runtime = {
+    platform: options.platform ?? process.platform,
+    clearOnShrinkEnv:
+      options.clearOnShrinkEnv ?? process.env.PI_CLEAR_ON_SHRINK,
+    settingsReaderFactory,
+  };
+
+  pi.on("session_start", async (_event, ctx) => {
+    const currentGeneration = ++generation;
+    await install(ctx, pi, runtime, () => generation === currentGeneration);
+  });
   pi.on("session_shutdown", () => {
+    generation += 1;
     removeEditorLayer(pi, WINDOWS_TERMINAL_COMPAT_LAYER);
   });
+}
+
+export default function windowsTerminalCompat(pi: ExtensionAPI) {
+  registerWindowsTerminalCompatibility(pi);
 }

@@ -120,6 +120,43 @@ test("oversized completion batches split into bounded messages without losing de
       1,
     );
   }
+  let offset = 0;
+  for (const batch of batches) {
+    offset += batch.entries.length;
+    if (offset === entries.length) continue;
+    assert.throws(
+      () =>
+        buildProjectedWorkflowCompletionBatch(
+          [...batch.entries, entries[offset]!],
+          { tokens: 10_000, contextWindow: 100_000 },
+        ),
+      /delivery facts exceed the transport payload limit/,
+    );
+  }
+});
+
+test("completion batching preserves the manifest error for one oversized delivery", () => {
+  const details: WorkflowDetails = {
+    runId: "wf_oversized",
+    status: "completed",
+    background: true,
+    startedAt: 1,
+    finishedAt: 2,
+    phases: [],
+    agents: [],
+  };
+  const entries = [
+    {
+      deliveryId: `delivery-${"x".repeat(48 * 1024)}`,
+      details,
+      runDir: "/tmp/wf_oversized",
+    },
+  ];
+
+  assert.throws(
+    () => buildProjectedWorkflowCompletionBatches(entries),
+    /delivery facts exceed the transport payload limit/,
+  );
 });
 
 test("completion batching keeps small and large deliveries grouped", () => {
