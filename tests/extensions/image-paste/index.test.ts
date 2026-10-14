@@ -210,7 +210,7 @@ test("backspace anywhere in an image placeholder removes it atomically", () => {
   assert.equal(base.setTextCalls, 0);
 });
 
-test("a removed placeholder is not expanded on submission", () => {
+test("removing a placeholder reclaims its unsubmitted clipboard file", () => {
   const path = temporaryImage("png", "image");
   const { base, editor, submitted } = harness();
 
@@ -221,7 +221,7 @@ test("a removed placeholder is not expanded on submission", () => {
   base.submit();
 
   assert.equal(submitted[0], "keep");
-  assert.equal(existsSync(path), true);
+  assert.equal(existsSync(path), false);
 });
 
 test("ordinary paths and unregistered placeholder text stay ordinary text", () => {
@@ -232,6 +232,24 @@ test("ordinary paths and unregistered placeholder text stay ordinary text", () =
   base.submit();
 
   assert.equal(submitted[0], "/tmp/example.png [Image #1]");
+});
+
+test("removing one of two draft attachments for the same file keeps it", () => {
+  const path = temporaryImage("png", "shared");
+  const { base, editor, submitted } = harness();
+
+  editor.insertTextAtCursor(path);
+  editor.insertTextAtCursor(" ");
+  editor.insertTextAtCursor(path);
+  base.cursor = 1;
+  editor.handleInput("BACKSPACE");
+
+  assert.equal(editor.getText(), " [Image #2]");
+  assert.equal(existsSync(path), true);
+
+  base.submit();
+  assert.equal(submitted[0], path);
+  assert.equal(existsSync(path), true);
 });
 
 test("duplicating a placeholder makes both copies ordinary text", () => {
@@ -245,7 +263,7 @@ test("duplicating a placeholder makes both copies ordinary text", () => {
 
   // An ambiguous token cannot own a path, so neither copy expands.
   assert.equal(submitted[0], "[Image #1] [Image #1]");
-  assert.equal(existsSync(path), true);
+  assert.equal(existsSync(path), false);
 });
 
 test("deleting the last image makes its number available to the next paste", () => {

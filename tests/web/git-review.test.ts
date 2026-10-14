@@ -521,10 +521,21 @@ test("Git review reports a non-repository instead of an empty snapshot", async (
   });
 });
 
-test("summary counts stay partial for symlinks and do not read their targets", async () => {
+test("summary counts stay partial for symlinks and do not read their targets", async (t) => {
   const root = await repository();
   await writeFile(join(root, "small.txt"), "one\ntwo");
-  await symlink("base.txt", join(root, "linked.txt"));
+  try {
+    await symlink("base.txt", join(root, "linked.txt"));
+  } catch (error) {
+    if (
+      process.platform === "win32" &&
+      (error as NodeJS.ErrnoException).code === "EPERM"
+    ) {
+      t.skip("Windows file symlinks require Developer Mode or elevation");
+      return;
+    }
+    throw error;
+  }
   const result = await readGitReview(root, {
     source: "unstaged",
     summary: true,
