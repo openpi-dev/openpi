@@ -78,6 +78,72 @@ it("presents fork success as status and a subsequent ordinary error as an alert"
   }
 });
 
+it("keeps one usage strip with the selected Session when its sibling overview also changes identity", () => {
+  const initial = webStore.getState();
+  const start = vi.spyOn(initial.actions, "start").mockImplementation(() => {});
+  const stop = vi.spyOn(initial.actions, "stop").mockImplementation(() => {});
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.usage = {
+    input: 6_835,
+    output: 6,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 6_841,
+    context: { tokens: 6_841, contextWindow: 128_000, percent: 5.3 },
+  };
+  webStore.setState({
+    snapshot,
+    selectedPath: snapshot.selectedSession!.path,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    connection: "connected",
+    workspaceDraft: false,
+    liveRunning: false,
+    liveMessages: [],
+  });
+  const view = render(createElement(Providers, null, createElement(App)));
+  try {
+    for (const [index, [id, path]] of [
+      ["other", "/tmp/other"],
+      ["other", "/tmp/other-copy"],
+      ["session", "/tmp/session"],
+    ].entries()) {
+      const output = 100 + index;
+      act(() =>
+        webStore.setState({
+          selectedPath: path,
+          snapshot: {
+            ...snapshot,
+            currentSessionId: id,
+            currentSessionPath: path,
+            selectedSession: { ...snapshot.selectedSession!, id, path },
+            usage: { ...snapshot.usage!, output },
+          },
+        }),
+      );
+      expect(view.container.querySelectorAll(".session-usage")).toHaveLength(1);
+      expect(
+        view.container.querySelector(".session-usage-trigger")?.textContent,
+      ).toContain(String(output));
+      expect(
+        screen.getAllByRole("button", {
+          name: i18n.t("sessionOverview"),
+        }),
+      ).toHaveLength(1);
+    }
+    act(() => webStore.setState({ sessionSwitching: true }));
+    expect(view.container.querySelector(".session-usage")).toBeNull();
+    act(() => webStore.setState({ sessionSwitching: false, snapshot }));
+    expect(view.container.querySelectorAll(".session-usage")).toHaveLength(1);
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    webStore.setState(initial, true);
+  }
+});
+
 it("Plan controls preserve drafts without sending prompts, and the placeholder follows confirmed planning messages", async () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.plan = "inactive";

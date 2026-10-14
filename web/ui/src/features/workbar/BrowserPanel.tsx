@@ -7,7 +7,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { browserAddress } from "./browser-address.ts";
 import { useBrowserBridge } from "./browser-bridge.ts";
@@ -206,6 +206,9 @@ function DirectBrowserPage({
           <iframe
             key={page.revision}
             data-openpi-browser-page={pageId}
+            data-openpi-browser-document={bridge.page?.document}
+            data-openpi-browser-url={bridge.page?.url}
+            data-openpi-browser-title={bridge.page?.title}
             src={url}
             title={t("browserPageTitle", { address: new URL(url).host })}
             referrerPolicy="no-referrer"
@@ -237,7 +240,11 @@ function DirectBrowserPage({
   );
 }
 
-export function BrowserPanel() {
+export function BrowserPanel({
+  onReady,
+}: {
+  onReady?: (open: ((url: string) => string | undefined) | undefined) => void;
+} = {}) {
   const { t } = useTranslation();
   const prefix = useId();
   const reading = useWorkbarReadingState();
@@ -261,7 +268,7 @@ export function BrowserPanel() {
   const add = (url = "") => {
     if (tabsRef.current.length >= MAX_PAGES) {
       if (url) setBlockedUrl(url);
-      return;
+      return undefined;
     }
     const tab = {
       id: nextId.current++,
@@ -274,7 +281,14 @@ export function BrowserPanel() {
     setSelected(tab.id);
     setBlockedUrl(undefined);
     focusTab(tab.id);
+    return `${prefix}-page-${tab.id}`;
   };
+  const addRef = useRef(add);
+  addRef.current = add;
+  useEffect(() => {
+    onReady?.((url) => addRef.current(url));
+    return () => onReady?.(undefined);
+  }, [onReady]);
   const close = (id: number) => {
     if (reading?.browser) delete reading.browser.pages[id];
     setBlockedUrl(undefined);

@@ -1197,7 +1197,12 @@ function buildEntries(
         .filter((part) => message.role !== "user" || part.type !== "text")
         .map((part) =>
           part.type === "image"
-            ? [part.type, part.mimeType, part.name]
+            ? [
+                part.type,
+                part.mimeType,
+                // Pi persists user image data and MIME type without its filename.
+                message.role === "user" ? undefined : part.name,
+              ]
             : part.type,
         ),
       message.stopReason,

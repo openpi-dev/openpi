@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -47,6 +48,8 @@ import { Transcript } from "../features/transcript/Transcript.tsx";
 import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
 import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
+import { useBrowserConnector } from "../features/workbar/browser-connector.ts";
+import { useBrowserControl } from "../features/workbar/browser-control.ts";
 import {
   loadWorkbarPositions,
   saveWorkbarPositions,
@@ -73,6 +76,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 export function App() {
+  useBrowserConnector();
   const state = useStore(webStore);
   const { t } = useTranslation();
   const { actions } = state;
@@ -83,6 +87,15 @@ export function App() {
   const providerSettingsTrigger = useRef<HTMLElement | null>(null);
   const workbarReturnFocus = useRef<HTMLElement | null>(null);
   const artifactProvider = useRef<ArtifactProviderHandle>(null);
+  const browserOpener = useRef<
+    ((url: string) => string | undefined) | undefined
+  >(undefined);
+  const browserReady = useCallback(
+    (open: ((url: string) => string | undefined) | undefined) => {
+      browserOpener.current = open;
+    },
+    [],
+  );
   const readingCache = useMemo(createSessionReadingCache, []);
   const readingRestored = useRef(new Set<string>());
   const [, updateReadingRestore] = useState(0);
@@ -173,7 +186,7 @@ export function App() {
     sessionId: string;
     sessionPath: string;
     cwd: string;
-    entry: "general" | "credentials";
+    entry: "general" | "credentials" | "browser";
   } | null>(null);
   const [workbarWorkspaces, setWorkbarWorkspaces] =
     useState<WorkbarWorkspace[]>(loadWorkbarPositions);
@@ -338,7 +351,7 @@ export function App() {
     if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
   }, [providerSettings, providerSettingsVisible]);
   const openProviderSettings = async (
-    entry: "general" | "credentials" = "general",
+    entry: "general" | "credentials" | "browser" = "general",
   ) => {
     providerSettingsTrigger.current =
       document.activeElement instanceof HTMLElement
@@ -660,6 +673,39 @@ export function App() {
       if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus();
     });
   };
+  const browserScope =
+    !state.sessionSwitching &&
+    !state.workspaceDraft &&
+    isControlledSession(state.snapshot, selected)
+      ? selected
+      : undefined;
+  useBrowserControl(
+    browserScope?.id,
+    browserScope?.path,
+    async (url, signal) => {
+      openWorkbar("browser");
+      const deadline = Date.now() + 5000;
+      while (!browserOpener.current && !signal.aborted && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      return signal.aborted ? undefined : browserOpener.current?.(url);
+    },
+  );
+  const browserSettingsLink = useRef(
+    new URLSearchParams(location.search).get("settings") === "browser",
+  );
+  const openBrowserSettingsFromLink = useEffectEvent(() => {
+    void openProviderSettings("browser");
+  });
+  useEffect(() => {
+    if (
+      !browserSettingsLink.current ||
+      !state.snapshot ||
+      state.sessionSwitching
+    )
+      return;
+    browserSettingsLink.current = false;
+    openBrowserSettingsFromLink();
+  }, [state.snapshot, state.sessionSwitching]);
   const auxiliaryVisible = Boolean(
     subagentVisible || workbarVisible || artifactPanelOpen,
   );
@@ -842,7 +888,9 @@ export function App() {
               </div>
               <SessionUsageBar
                 key={
-                  selected ? `${selected.id}:${selected.path}` : "no-session"
+                  selected
+                    ? `usage:${selected.id}:${selected.path}`
+                    : "usage:no-session"
                 }
                 usage={
                   selected && !state.sessionSwitching
@@ -856,7 +904,7 @@ export function App() {
               />
               {selected && !state.sessionSwitching && (
                 <SessionOverview
-                  key={`${selected.id}:${selected.path}`}
+                  key={`overview:${selected.id}:${selected.path}`}
                   sessionId={selected.id}
                   workspace={workspace?.name || workspaceName(selected.cwd)}
                   agents={overviewAgents}
@@ -1188,6 +1236,7 @@ export function App() {
               requestRevision={workbarTarget.requestRevision}
               sessionId={selected.id}
               sessionPath={selected.path}
+              onBrowserReady={browserReady}
               canControl={
                 !state.sessionSwitching &&
                 isControlledSession(state.snapshot, selected)

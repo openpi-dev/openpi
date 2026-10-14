@@ -12,6 +12,7 @@
 @import "./features/sessions/session-sidebar.css";
 @import "./features/review/review.css";
 @import "./features/settings/provider-settings.css";
+@import "./features/settings/browser-settings.css";
 @import "./features/workbar/workbar.css";
 @import "./features/transcript/turn-timing.css";
 @import "./features/transcript/turn-changes.css";

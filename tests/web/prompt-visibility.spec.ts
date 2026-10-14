@@ -79,64 +79,73 @@ it("preserves a file disclosure through the admitted optimistic input's exact na
   expect(button.getAttribute("aria-expanded")).toBe("false");
 });
 
-it("reconciles a named image prompt after native persistence without creating another waiting turn", () => {
-  const value = snapshot();
-  value.runtime.status = "idle";
-  value.selectedSession!.entries = [
-    {
-      id: "image-input",
-      type: "message",
-      timestamp: "2026-10-01T00:00:00Z",
-      message: projectMessage({
+it.each([undefined, "截屏 100%.png"])(
+  "reconciles a named image prompt when Pi persists its name as %s without another waiting turn",
+  (nativeName) => {
+    const value = snapshot();
+    value.runtime.status = "idle";
+    value.selectedSession!.entries = [
+      {
+        id: "image-input",
+        type: "message",
+        timestamp: "2026-10-01T00:00:00Z",
+        message: projectMessage({
+          role: "user",
+          content: [
+            { type: "text", text: "请看图片" },
+            {
+              type: "image",
+              mimeType: "image/png",
+              ...(nativeName === undefined ? {} : { name: nativeName }),
+              data: "native-bytes",
+            },
+          ],
+        }),
+      },
+      {
+        id: "image-answer",
+        type: "message",
+        timestamp: "2026-10-01T00:00:01Z",
+        message: {
+          role: "assistant",
+          content: "已收到图片",
+          stopReason: "stop",
+        },
+      },
+    ];
+    const pending: LiveEntry = {
+      key: "optimistic-image",
+      message: {
         role: "user",
-        content: [
-          { type: "text", text: "请看图片" },
+        content: "请看图片",
+        parts: [
           {
             type: "image",
             mimeType: "image/png",
             name: "截屏 100%.png",
-            data: "native-bytes",
+            previewUrl: "data:image/png;base64,aGk=",
           },
         ],
-      }),
-    },
-    {
-      id: "image-answer",
-      type: "message",
-      timestamp: "2026-10-01T00:00:01Z",
-      message: { role: "assistant", content: "已收到图片", stopReason: "stop" },
-    },
-  ];
-  const pending: LiveEntry = {
-    key: "optimistic-image",
-    message: {
-      role: "user",
-      content: "请看图片",
-      parts: [
-        {
-          type: "image",
-          mimeType: "image/png",
-          name: "截屏 100%.png",
-          previewUrl: "data:image/png;base64,aGk=",
-        },
-      ],
-    },
-    optimistic: {
-      sessionId: "s",
-      sessionPath: "/session.jsonl",
-      commandId: "image",
-      afterEntryId: null,
-      admitted: true,
-    },
-  };
-  const remember = vi.fn();
-  const view = render(node(value, [pending], remember));
-  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(1);
-  expect(view.container.querySelector(".turn-state.waiting")).toBeNull();
-  expect(remember).toHaveBeenCalledWith("s", "/session.jsonl", [
-    { key: "optimistic-image", entryId: "image-input" },
-  ]);
-});
+      },
+      optimistic: {
+        sessionId: "s",
+        sessionPath: "/session.jsonl",
+        commandId: "image",
+        afterEntryId: null,
+        admitted: true,
+      },
+    };
+    const remember = vi.fn();
+    const view = render(node(value, [pending], remember));
+    expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(
+      1,
+    );
+    expect(view.container.querySelector(".turn-state.waiting")).toBeNull();
+    expect(remember).toHaveBeenCalledWith("s", "/session.jsonl", [
+      { key: "optimistic-image", entryId: "image-input" },
+    ]);
+  },
+);
 
 it("keeps an unaccepted prompt even when another native input matches its text", () => {
   const value = snapshot();
