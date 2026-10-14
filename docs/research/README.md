@@ -20,6 +20,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`HARNESS_LATENCY_OWNERSHIP_2026-10-14.md`](HARNESS_LATENCY_OWNERSHIP_2026-10-14.md) — frozen Codex, Claude reconstruction, Maka and Pi source comparison; existing batching/output/background/cache mechanisms, Pi-owned lifecycle gaps and gateway incident boundaries; no comparative speedup claimed ([#763](https://github.com/openpi-dev/openpi/issues/763), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
+
 - [`WEB_DOCUMENT_FEEDBACK_2026-10-13.md`](WEB_DOCUMENT_FEEDBACK_2026-10-13.md) — document-reported timing, retry, conversation continuation and typography symptoms; current Codex artifact evidence, Pi-native fixes and local validation ([#763](https://github.com/openpi-dev/openpi/issues/763), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 
 - [`CODEX_DEFAULT_FONT_2026-10-13.md`](CODEX_DEFAULT_FONT_2026-10-13.md) — shipped Codex font defaults, bounded REA evidence, actual Mac glyphs, legacy preference compatibility and browser validation ([#767](https://github.com/openpi-dev/openpi/issues/767), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
