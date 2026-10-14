@@ -3,8 +3,8 @@ import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import {
   missingPiCodingAgentDiagnostic,
@@ -267,6 +267,22 @@ test("standalone source uses the install peer and official 0.84.1 exports", asyn
   }
 });
 
+test("standalone keeps the Pi entry alias when the host cannot resolve providers/all", async () => {
+  const layout = await isolatedLayout();
+  try {
+    await rm(layout.peer.providers, { force: true });
+    const aliases = resolveStandaloneJitiAliases({
+      env: {},
+      fromUrl: layout.fromUrl,
+    });
+    assert.deepEqual(aliases, {
+      [PI_CODING_AGENT_PACKAGE]: realpathSync(layout.peer.entry),
+    });
+  } finally {
+    await rm(layout.root, { recursive: true, force: true });
+  }
+});
+
 test("standalone does not inherit an ancestor tree peer", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-pi-entry-"));
   try {
@@ -359,6 +375,15 @@ test("real checkout Pi exports resolve from this install", () => {
       "utf8",
     ),
   ) as { version?: string; exports?: { "."?: { import?: string } } };
-  assert.equal(manifest.version, "1.2.0");
+  // CI also runs this against the supported minimum host, so assert the
+  // installed host is a stable release at or above the declared peer floor.
+  const floor = [0, 99, 1];
+  const installed = String(manifest.version).split(".").map(Number);
+  assert.equal(installed.length, 3);
+  const diff = installed.findIndex((part, index) => part !== floor[index]);
+  assert.ok(
+    diff < 0 || installed[diff]! > floor[diff]!,
+    String(manifest.version),
+  );
   assert.equal(manifest.exports?.["."]?.import, "./dist/index.js");
 });

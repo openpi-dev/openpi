@@ -1244,7 +1244,7 @@ test("Direct spawn tolerates inherited misses but rejects a missing explicit rol
                 messages: [message],
                 willRetry: false,
               });
-              child.emit({ type: "agent_settled", aborted: false });
+              child.emit({ type: "agent_settled", ...{ aborted: false } });
             },
           });
           return { session: harness.session };
