@@ -151,6 +151,8 @@ export interface WebSettingsSkillSummary {
   scope: "user" | "project" | "temporary";
   origin: "package" | "top-level";
   disableModelInvocation: boolean;
+  /** False when a bounded projection cannot retain an exact operation target. */
+  canManage?: boolean;
 }
 
 export interface WebSettingsExtensionSummary {
@@ -166,6 +168,16 @@ export interface WebSettingsPluginSummary {
   scope: "user" | "project" | "temporary";
   origin: "package" | "top-level";
   baseDir?: string;
+  /** Native configuration on disk, distinct from this Session's loaded resources. */
+  configured?: boolean;
+  /** False when a bounded projection cannot retain an exact operation target. */
+  canManage?: boolean;
+  enabled?: boolean;
+  installed?: boolean;
+  name?: string;
+  installedVersion?: string;
+  configuredVersion?: string;
+  diagnostics?: string[];
   extensions: WebSettingsExtensionSummary[];
   skills: string[];
   prompts: string[];
@@ -182,6 +194,7 @@ export interface WebSettingsResourceCatalog {
     themes: number;
   };
   diagnostics: {
+    settingsErrors?: number;
     extensionErrors: number;
     skillErrors: number;
   };
@@ -237,6 +250,7 @@ export interface WebOpenPiSetupProjection {
 
 export interface WebSettingsCatalog {
   sessionId: string;
+  sessionPath?: string;
   setup: WebOpenPiSetupProjection;
   resources: WebSettingsResourceCatalog;
 }

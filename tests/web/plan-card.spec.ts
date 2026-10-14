@@ -161,8 +161,14 @@ it("keeps the next thinking-only message visible after a completed ask_user with
     }),
   ).toBeTruthy();
   expect(
-    container.querySelector(".thinking-line")?.closest(".process-sequence"),
+    container
+      .querySelector(".thinking-line")
+      ?.closest(".process-sequence:not(.single-process)"),
   ).toBeNull();
+  const sequence =
+    container.querySelector<HTMLDetailsElement>(".single-process")!;
+  expect(sequence.open).toBe(true);
+  expect(sequence.querySelector("summary")?.hidden).toBe(true);
 });
 
 it("does not relocate the answer bubble while plan arguments stream after it", () => {

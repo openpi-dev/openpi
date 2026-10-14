@@ -225,5 +225,11 @@ it("keeps visible reasoning evidence while ignoring whitespace-only provider par
   ).toContain("Checked the tools.");
   expect(container.querySelector(".thinking-line .tool-icon")).toBeNull();
   expect(container.querySelector(".thinking-line .tool-name")).toBeNull();
-  expect(container.querySelector(".process-sequence")).toBeNull();
+  expect(
+    container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
+  const sequence =
+    container.querySelector<HTMLDetailsElement>(".single-process")!;
+  expect(sequence.open).toBe(true);
+  expect(sequence.querySelector("summary")?.hidden).toBe(true);
 });

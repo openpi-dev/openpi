@@ -2887,6 +2887,50 @@ test("serves Session-bound command discovery with fail-closed request validation
   }
 });
 
+test("resource reload validates its target and reports native conflicts without a success receipt", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-resource-reload-"));
+  const runtime = testRuntime(cwd);
+  const attempts: Array<{ sessionId: string; sessionPath: string }> = [];
+  let conflict = false;
+  runtime.reloadSettingsResources = async (sessionId, sessionPath) => {
+    attempts.push({ sessionId, sessionPath });
+    if (conflict)
+      throw new WebRuntimeRequestError("stale target", "SESSION_CONFLICT", 409);
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const target = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: "/fixture/current.jsonl",
+  };
+  const post = (body: unknown) =>
+    fetch(`${launched.origin}/api/settings/reload`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await post({ sessionId: target.sessionId })).status, 400);
+    assert.equal(
+      (await post({ ...target, source: "npm:unexpected" })).status,
+      400,
+    );
+    assert.equal(attempts.length, 0);
+    const success = await post(target);
+    assert.equal(success.status, 200);
+    assert.deepEqual(await success.json(), { reloaded: true });
+    assert.deepEqual(attempts, [target]);
+    conflict = true;
+    const rejected = await post(target);
+    assert.equal(rejected.status, 409);
+    const receipt = await rejected.json();
+    assert.equal(receipt.code, "SESSION_CONFLICT");
+    assert.equal(receipt.reloaded, undefined);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("serves a Session-bound settings catalog and rejects unsupported preference request shapes", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-settings-"));
   const runtime = testRuntime(cwd);

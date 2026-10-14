@@ -894,6 +894,54 @@ test("file reference validation can be cancelled without changing the draft", as
   }
 });
 
+test("side conversation shows one editor in narrow layouts and preserves both drafts", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  const mainInput = page.getByRole("textbox", { name: "描述任务" });
+  await mainInput.fill("Keep the main conversation draft");
+  const workbar = await openWorkbarTool(page, "侧边对话");
+  const sideInput = workbar.getByPlaceholder("提出一个侧边问题…");
+  await sideInput.fill("Keep the side conversation draft");
+
+  for (const width of [783, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(mainInput).toBeHidden();
+    await expect(sideInput).toBeVisible();
+    await expect(page.locator("textarea:visible")).toHaveCount(1);
+    await expect(sideInput).toHaveValue("Keep the side conversation draft");
+    await sideInput.click();
+    await expect(sideInput).toBeFocused();
+    await expect(sideInput).toHaveCSS("outline-style", "none");
+  }
+
+  await workbar.getByRole("button", { name: "打开工具", exact: true }).click();
+  await workbar.getByRole("button", { name: /^浏览器/u }).click();
+  await expect(mainInput).toBeVisible();
+  await expect(mainInput).toHaveValue("Keep the main conversation draft");
+  await expect(page.locator("textarea:visible")).toHaveCount(1);
+  await workbar
+    .locator(".workbar-tab > button:first-child")
+    .filter({ hasText: "侧边对话" })
+    .click();
+  await expect(mainInput).toBeHidden();
+  await expect(sideInput).toHaveValue("Keep the side conversation draft");
+
+  await workbar.getByRole("button", { name: "返回聊天" }).click();
+  await expect(mainInput).toBeVisible();
+  await expect(mainInput).toHaveValue("Keep the main conversation draft");
+  await expect(mainInput).toBeFocused();
+  await expect(page.locator("textarea:visible")).toHaveCount(1);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbarTool(page, "侧边对话");
+  await expect(mainInput).toBeVisible();
+  await expect(sideInput).toBeVisible();
+  await expect(sideInput).toHaveValue("Keep the side conversation draft");
+  await expect(mainInput).toHaveValue("Keep the main conversation draft");
+});
+
 test("workbar exposes five tools and completes a side conversation lifecycle", async ({
   page,
 }) => {
