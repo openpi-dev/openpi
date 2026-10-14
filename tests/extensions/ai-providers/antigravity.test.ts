@@ -1326,6 +1326,34 @@ test("streamAntigravity truncates and cancels an oversized error body", async ()
   assert.ok((error.error.errorMessage?.length ?? 0) < 70 * 1024);
 });
 
+test("streamAntigravity preserves an error body that exactly fits the byte limit", async () => {
+  let cancellations = 0;
+  const body = "x".repeat(64 * 1024);
+  globalThis.fetch = (async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(body));
+          controller.close();
+        },
+        cancel() {
+          cancellations++;
+        },
+      }),
+      { status: 400 },
+    )) as typeof fetch;
+
+  const events = await collectEvents(
+    streamAntigravity(GEMINI_MODEL, SIMPLE_CONTEXT, { apiKey: API_KEY }),
+  );
+  assert.equal(cancellations, 0);
+  const error = events.find((event) => event.type === "error");
+  assert.ok(error && error.type === "error");
+  const message = error.error.errorMessage ?? "";
+  assert.ok(message.endsWith(body));
+  assert.equal(message.endsWith("… [truncated]"), false);
+});
+
 test("streamAntigravity fails over after a transient error in a 200 stream", async () => {
   const urls: string[] = [];
   globalThis.fetch = (async (input: unknown) => {

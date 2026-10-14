@@ -4,7 +4,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Source-verified designs
 
-- [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection; Oct12 adds grouped/searchable records and responsive evidence details ([#446](https://github.com/openpi-dev/openpi/issues/446)).
+- [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection ([#446](https://github.com/openpi-dev/openpi/issues/446)).
 
 ## Draft investigations
 
@@ -16,11 +16,6 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
-- [`WEB_SEARCH_INTEGRATION_2026-10-10.md`](WEB_SEARCH_INTEGRATION_2026-10-10.md) — optional package comparison and subsequent current-Session-model native search, default-off setup, original-image replay, protocol/UI evidence, and ablation; provider-wide search quality remains unmeasured ([#169](https://github.com/openpi-dev/openpi/issues/169), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
-
-- [`PI_BROWSER_TOOLS_2026-10-09.md`](PI_BROWSER_TOOLS_2026-10-09.md) — native Pi package loading, standalone and iframe boundaries, and a locally validated browser-only pi-computer-use adaptation for OpenPI's bound embedded pages ([#169](https://github.com/openpi-dev/openpi/issues/169), [#597](https://github.com/openpi-dev/openpi/issues/597)).
-
-- [`WEB_CODEX_ACTIVITY_2026-10-08.md`](WEB_CODEX_ACTIVITY_2026-10-08.md) — Codex/Claude source comparisons, completed process folding with visible final answers, native execution ownership across steering, floating latest activity, chronological mixed thinking/tool groups, visited completion indicators, reader-owned running activity scrolling, latest native-answer keyboard focus, exact-anchor reading restoration, disconnected activity uncertainty, narrow-screen file targets, complete saved thinking, exact native retry projection, real threshold compaction with restored model configuration, restrained tool labels, matching compaction glyph, native Code Mode activation and ordinary presentation boundaries, repository gates and installed native cart/invoice evidence; numerical fidelity remains unverified ([#597](https://github.com/openpi-dev/openpi/issues/597)).
 - [`WEB_RERUN_CONFIRMATION_RACE_2026-10-09.md`](WEB_RERUN_CONFIRMATION_RACE_2026-10-09.md) — same-child snapshot confirmation race, historical CI symptoms, bounded rechecking and epoch-owned cleanup; controlled store and mock E2E evidence with Windows test limitations ([#717](https://github.com/openpi-dev/openpi/issues/717)).
 
 - [`CHILD_RENDER_PARITY_2026-10-05.md`](CHILD_RENDER_PARITY_2026-10-05.md) — Session-owned child message/tool presentation, native paired component validation and host-private Mermaid/image boundaries ([#681](https://github.com/openpi-dev/openpi/issues/681)).
