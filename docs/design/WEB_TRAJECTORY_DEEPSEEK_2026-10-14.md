@@ -4,6 +4,7 @@
 - 创建与最近核查：2026-10-14。
 - 适用范围：以 OpenPI `7daee1eb818e60d3bf52e79edb1b3ef1cfecd9a1` 为基线的独立轨迹改动；Pi `1.2.0`。
 - 跟踪与认领：[#785](https://github.com/openpi-dev/openpi/issues/785)，由 `@testikun` 认领。依赖现有 Web [#711](https://github.com/openpi-dev/openpi/pull/711)，不修改其分支。
+- 实现 PR：[#789](https://github.com/openpi-dev/openpi/pull/789)，独立叠放于 #711。
 - 来源：DeepSeek Harness [`d743267388641bc76f17c45ce8b4c231aed1d32c`](https://github.com/deepseek-ai/deepseek-harness/tree/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/client/ui-trajectory)，MIT。移植许可位于 `web/ui/src/features/trajectory/LICENSE.dsh`。
 - 替代关系：无；既有轨迹研究的历史验证保持原边界。
 
