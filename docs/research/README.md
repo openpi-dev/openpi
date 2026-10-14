@@ -16,7 +16,6 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
-- [`WEB_CODEX_ACTIVITY_2026-10-08.md`](WEB_CODEX_ACTIVITY_2026-10-08.md) — Codex/Claude source comparisons, completed process folding with visible final answers, native execution ownership across steering, floating latest activity, chronological mixed thinking/tool groups, visited completion indicators, reader-owned running activity scrolling, latest native-answer keyboard focus, exact-anchor reading restoration, disconnected activity uncertainty, narrow-screen file targets, complete saved thinking, exact native retry projection, real threshold compaction with restored model configuration, restrained tool labels, matching compaction glyph, native Code Mode activation and ordinary presentation boundaries, repository gates and installed native cart/invoice evidence; numerical fidelity remains unverified ([#597](https://github.com/openpi-dev/openpi/issues/597)).
 - [`WEB_RERUN_CONFIRMATION_RACE_2026-10-09.md`](WEB_RERUN_CONFIRMATION_RACE_2026-10-09.md) — same-child snapshot confirmation race, historical CI symptoms, bounded rechecking and epoch-owned cleanup; controlled store and mock E2E evidence with Windows test limitations ([#717](https://github.com/openpi-dev/openpi/issues/717)).
 
 - [`CHILD_RENDER_PARITY_2026-10-05.md`](CHILD_RENDER_PARITY_2026-10-05.md) — Session-owned child message/tool presentation, native paired component validation and host-private Mermaid/image boundaries ([#681](https://github.com/openpi-dev/openpi/issues/681)).

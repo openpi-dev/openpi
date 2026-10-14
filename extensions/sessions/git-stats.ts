@@ -188,10 +188,18 @@ export function createSessionStatsLoader(options: StatsLoaderOptions = {}) {
   const canonicalCwd = (cwd: string) => {
     const absolute = resolve(cwd);
     let pending = canonicalCwds.get(absolute);
-    if (!pending) {
-      pending = canonicalize(absolute).catch(() => absolute);
+    if (pending) {
+      canonicalCwds.delete(absolute);
       canonicalCwds.set(absolute, pending);
+      return pending;
     }
+    while (canonicalCwds.size >= Math.max(1, maxCache)) {
+      const oldest = canonicalCwds.keys().next().value;
+      if (oldest === undefined) break;
+      canonicalCwds.delete(oldest);
+    }
+    pending = canonicalize(absolute).catch(() => absolute);
+    canonicalCwds.set(absolute, pending);
     return pending;
   };
 
