@@ -339,7 +339,7 @@ test("workspace files stay beside previews, support rich documents and remain us
       .poll(() => readFile(join(cwd, "src", "index.ts"), "utf8"))
       .toBe(draft);
     await expect(
-      page.getByRole("button", { name: /保存文件|Save file/u }),
+      page.getByRole("button", { name: /^(已保存|Saved)$/u }),
     ).toBeDisabled();
     await editor.fill('export const workspace = "Preserved draft";\n');
     await writeFile(

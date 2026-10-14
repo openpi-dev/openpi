@@ -3935,9 +3935,10 @@ it("does not repeat a provider identity used as the fallback model label", () =>
     }),
   );
 
-  expect(
-    screen.getByRole("button", { name: "provider-alpha/model-a" }).textContent,
-  ).toBe("model-a");
+  const trigger = screen.getByRole("button", {
+    name: "provider-alpha/model-a",
+  });
+  expect(within(trigger).getByText("model-a", { exact: true })).toBeTruthy();
   expect(
     screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
   ).toBeNull();
@@ -4306,7 +4307,7 @@ it("debounces bounded model search when the snapshot omitted models", async () =
   };
   const baseStore = createWebStore();
   const searchModels = vi.fn(async (_query: string) => {});
-  const selectModel = vi.fn(async (_value: string) => {});
+  const selectModel = vi.fn(async (_value: string) => true);
   const actions = {
     ...baseStore.getState().actions,
     searchModels,

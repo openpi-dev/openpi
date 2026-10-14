@@ -1,4 +1,5 @@
 import type { Page, Route } from "@playwright/test";
+import type { WebModelSummary } from "../../web/protocol/types.ts";
 
 /**
  * Route-mocked backend fixture for the thinking-level picker.
@@ -36,6 +37,7 @@ export interface ThinkingFixture {
 }
 
 export interface ThinkingFixtureOverrides {
+  models?: WebModelSummary[];
   level?: string;
   available?: string[];
   supported?: boolean;
@@ -156,7 +158,7 @@ export async function installThinkingFixture(
         status: state.runtimeStatus,
         capabilities: {},
       };
-      snapshot.models = [
+      snapshot.models = overrides.models ?? [
         {
           provider: "mock",
           id: "reasoner",

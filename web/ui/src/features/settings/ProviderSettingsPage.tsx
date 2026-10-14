@@ -38,6 +38,7 @@ const settingsSections = [
 
 export function ProviderSettingsPage({
   sessionId,
+  sessionPath,
   cwd,
   entry = "general",
   models,
@@ -54,10 +55,12 @@ export function ProviderSettingsPage({
   onConfigureOpenPi,
   interaction,
   onPreferencesChanged,
+  onSelectModel,
   onOpenRuntimeStatus,
   onClose,
 }: {
   sessionId: string;
+  sessionPath?: string;
   cwd: string;
   entry?: "general" | "credentials";
   models: WebModelSummary[];
@@ -72,7 +75,7 @@ export function ProviderSettingsPage({
   onExitPlan?: () => Promise<void>;
   setupOutcome?: WebSnapshot["runtime"]["setup"];
   modelSelectionPending: boolean;
-  onSelectModel: (value: string) => void;
+  onSelectModel: (value: string) => Promise<boolean> | boolean;
   onConfigureOpenPi: (request: string) => Promise<boolean>;
   interaction?: import("react").ReactNode;
   onPreferencesChanged: () => Promise<boolean>;
@@ -229,6 +232,7 @@ export function ProviderSettingsPage({
   };
 
   const selectSection = (next: SettingsSection) => {
+    if (saving) return;
     setSection(next);
     if (next === "models") setModelsVisited(true);
     setSetupError(null);
@@ -266,6 +270,7 @@ export function ProviderSettingsPage({
           <select
             className="provider-settings-mobile-picker"
             aria-label={t("settingsNavigation")}
+            disabled={saving}
             value={section}
             onChange={(event) => {
               const next = settingsSections.find(
@@ -291,6 +296,7 @@ export function ProviderSettingsPage({
                 key={id}
                 type="button"
                 role="tab"
+                disabled={saving}
                 id={`settings-tab-${id}`}
                 tabIndex={section === id ? 0 : -1}
                 aria-selected={section === id}
@@ -392,11 +398,13 @@ export function ProviderSettingsPage({
               <ProviderModelsSection
                 key={sessionId}
                 sessionId={sessionId}
+                sessionPath={sessionPath}
                 models={models}
                 currentModel={currentModel}
                 busy={setupBusy}
                 focusCredentials={entry === "credentials"}
                 onSaved={onPreferencesChanged}
+                onSelectModel={onSelectModel}
                 onDraftChange={setModelDraftDirty}
                 onSavingChange={setModelSaving}
               />

@@ -1196,6 +1196,7 @@ export function App() {
                 void actions.selectSession(selected.path)
               }
               cwd={selected.cwd}
+              snapshot={state.snapshot ?? undefined}
               capabilities={
                 isControlledSession(state.snapshot, selected)
                   ? (state.snapshot?.runtime.capabilities ?? {})
@@ -1313,7 +1314,8 @@ export function App() {
               : undefined
           }
           modelSelectionPending={state.modelSelectionPending}
-          onSelectModel={(value) => void actions.selectModel(value)}
+          sessionPath={providerSettings.sessionPath}
+          onSelectModel={(value) => actions.selectModel(value)}
           onConfigureOpenPi={configureOpenPiFromSettings}
           interaction={
             state.snapshot &&

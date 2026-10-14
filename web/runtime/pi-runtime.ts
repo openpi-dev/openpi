@@ -12,6 +12,7 @@ import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   type PromptOptions,
+  CredentialSynchronizationError,
   ProjectTrustStore,
   SessionManager,
   SettingsManager,
@@ -72,6 +73,7 @@ import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
+import { WebProviderLoginService } from "./provider-login.ts";
 import { changeProviderConfiguration, readModelConfigurations, saveModelConfigurations } from "./model-configuration.ts";
 import { discoverProviderModels, type ProviderModelDiscovery } from "./provider-model-discovery.ts";
 import { matchesSessionIdentity } from "./session-identity.ts";
@@ -214,6 +216,7 @@ export class PiWebRuntime implements WebRuntimeController {
   >();
   private controllerMutation: Promise<void> = Promise.resolve();
   private promptAdmission: Promise<void> = Promise.resolve();
+  private providerLogin?: WebProviderLoginService;
   private thinkingMutationInFlight = false;
   private thinkingMutationPending?: {
     waiters: Array<{
@@ -732,8 +735,9 @@ export class PiWebRuntime implements WebRuntimeController {
     }));
   }
 
-  searchModels(query: string, limit?: number) {
-    return projectWebModelSearch(this.listModels(), query, limit);
+  searchModels(query: string, limit?: number, provider?: string) {
+    const models = this.listModels().filter((model) => !provider || model.provider === provider);
+    return projectWebModelSearch(models, query, limit);
   }
 
   listCommands() {
@@ -810,6 +814,7 @@ export class PiWebRuntime implements WebRuntimeController {
           configured: status.configured,
           ...(source ? { source } : {}),
           subscription: modelRuntime.isUsingSubscription(id),
+          ...(provider.auth.oauth?.loginLabel || provider.auth.oauth?.name ? { loginLabel: boundedProviderName(provider.auth.oauth.loginLabel || provider.auth.oauth.name).value } : {}),
           nameTruncated: name.truncated,
           custom: !builtinProviders.has(id) && !modelRuntime.getRegisteredProviderIds().includes(id),
           ...(endpoint && ["http:", "https:"].includes(endpoint.protocol) && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash ? { baseUrl: endpoint.href } : {}),
@@ -838,7 +843,7 @@ export class PiWebRuntime implements WebRuntimeController {
     }
   }
 
-  private async mutateSettings(sessionId: string, operation: () => Promise<void>) {
+  private async mutateSettings<T>(sessionId: string, operation: () => Promise<T>) {
     // Reuse prompt admission: a second tab cannot begin a turn halfway through
     // a configuration write, and already-admitted turns are checked for idle.
     const previousAdmission = this.promptAdmission;
@@ -847,7 +852,7 @@ export class PiWebRuntime implements WebRuntimeController {
     try {
       await previousAdmission;
       this.assertSettingsWritable(sessionId);
-      await operation();
+      return await operation();
     } finally { release(); }
   }
 
@@ -874,8 +879,125 @@ export class PiWebRuntime implements WebRuntimeController {
     }));
   }
 
+  startProviderLogin(sessionId: string, provider: string) {
+    return this.serializeControllerMutation(async () => {
+      this.assertSettingsWritable(sessionId);
+      const owner = this.runtime;
+      const models = owner.services.modelRuntime;
+      if (!models.getProvider(provider)?.auth.oauth?.login)
+        throw new WebRuntimeRequestError("Account login is unavailable for this provider", "PROVIDER_LOGIN_CONFLICT", 422);
+      this.providerLogin ??= new WebProviderLoginService();
+      return this.providerLogin.start(sessionId, provider, async (interaction) => {
+        const result = await this.mutateSettings(sessionId, async () => {
+          try {
+            await models.login(provider, "oauth", interaction, {
+              getDeviceId: () => owner.session.settingsManager.getOrCreateDeviceId(),
+            });
+            return {};
+          } catch (error) {
+            // Native Pi distinguishes a committed credential from a failed login.
+            // Never inspect, log or project the credential carried by this error.
+            if (error instanceof CredentialSynchronizationError && error.operation === "login" && error.providerId === provider)
+              return { refreshRequired: true };
+            throw error;
+          }
+        });
+        this.emit("settings_changed", {});
+        return result;
+      });
+    });
+  }
+
+  readProviderLogin(sessionId: string, id?: string) {
+    this.assertProviderLoginOwner(sessionId);
+    if (id && !this.providerLogin) throw this.providerLoginConflict();
+    return this.providerLogin?.read(sessionId, id) ?? null;
+  }
+
+  respondProviderLogin(sessionId: string, id: string, promptId: string, value: string) {
+    this.assertProviderLoginOwner(sessionId);
+    if (!this.providerLogin) throw new WebRuntimeRequestError("Login unavailable", "PROVIDER_LOGIN_CONFLICT", 409);
+    return this.providerLogin.respond(sessionId, id, promptId, value);
+  }
+
+  cancelProviderLogin(sessionId: string, id: string) {
+    this.assertProviderLoginOwner(sessionId);
+    if (!this.providerLogin) throw new WebRuntimeRequestError("Login unavailable", "PROVIDER_LOGIN_CONFLICT", 409);
+    return this.providerLogin.cancel(sessionId, id);
+  }
+
+  private assertProviderLoginOwner(sessionId: string) {
+    this.assertActive();
+    if (sessionId !== this.sessionManager.getSessionId()) throw new WebRuntimeRequestError("The active Session changed", "PROVIDER_LOGIN_CONFLICT", 409);
+  }
+
+  logoutProvider(sessionId: string, provider: string) {
+    return this.serializeControllerMutation(async () => {
+      let refreshRequired = false;
+      await this.mutateSettings(sessionId, async () => {
+        const models = this.runtime.services.modelRuntime;
+        if (!models.getProvider(provider)?.auth.oauth) throw new WebRuntimeRequestError("Account login is unavailable", "PROVIDER_LOGIN_CONFLICT", 422);
+        try { await models.logout(provider, { signal: AbortSignal.timeout(10_000) }); }
+        catch (error) {
+          if (error instanceof CredentialSynchronizationError && error.operation === "logout" && error.providerId === provider) refreshRequired = true;
+          else throw error;
+        }
+      });
+      return { ...(refreshRequired ? { refreshRequired: true } : {}) };
+    });
+  }
+
   readModelConfigurations() {
     return readModelConfigurations(this.runtime.services.agentDir);
+  }
+
+  private modelDefaultSettings() {
+    // A fresh native manager reads shared settings without replacing the active
+    // Session's model or consuming its pending settings diagnostics.
+    const settings = SettingsManager.create(this.cwd, this.runtime.services.agentDir, {
+      projectTrusted: this.runtime.session.settingsManager.isProjectTrusted(),
+    });
+    if (settings.drainErrors().length) throw new Error("Pi model defaults could not be read");
+    for (const scope of [settings.getGlobalSettings(), settings.getProjectSettings()]) {
+      if (scope.defaultProvider !== undefined && (typeof scope.defaultProvider !== "string" || !/^[a-zA-Z0-9._-]{1,160}$/u.test(scope.defaultProvider))) throw new Error("Invalid Pi default provider");
+      if (scope.defaultModel !== undefined && (typeof scope.defaultModel !== "string" || !scope.defaultModel || scope.defaultModel.length > 256 || /[\u0000-\u001f]/u.test(scope.defaultModel))) throw new Error("Invalid Pi default model");
+    }
+    return settings;
+  }
+
+  readModelDefaults() {
+    const settings = this.modelDefaultSettings();
+    const global = settings.getGlobalSettings();
+    const project = settings.getProjectSettings();
+    const provider = settings.getDefaultProvider();
+    const id = settings.getDefaultModel();
+    return {
+      model: global.defaultProvider && global.defaultModel
+        ? { provider: global.defaultProvider, id: global.defaultModel } : null,
+      ...((project.defaultProvider || project.defaultModel) && provider && id
+        ? { projectOverride: { provider, id } } : {}),
+    };
+  }
+
+  saveModelDefault(provider: string, modelId: string, options: WebModelSelectionOptions) {
+    return this.serializeControllerMutation(() => this.mutateSettings(options.expectedSessionId ?? "", async () => {
+      if (!options.expectedSessionPath || !matchesSessionIdentity(this.sessionManager, options)) {
+        throw new WebRuntimeRequestError("The active Session changed", "SESSION_CONFLICT", 409);
+      }
+      if (!this.runtime.services.modelRuntime.getAvailableSnapshot().some((model) => model.provider === provider && model.id === modelId)) {
+        throw new WebRuntimeRequestError("Model is not available", "MODEL_NOT_AVAILABLE", 422);
+      }
+      const settings = this.modelDefaultSettings();
+      settings.setDefaultModelAndProvider(provider, modelId);
+      await settings.flush();
+      const errors = settings.drainErrors();
+      await settings.reload();
+      const saved = settings.getGlobalSettings();
+      if (errors.length || settings.drainErrors().length || saved.defaultProvider !== provider || saved.defaultModel !== modelId) {
+        throw new Error("Pi model default save was not confirmed");
+      }
+      return this.readModelDefaults();
+    }));
   }
 
   saveModelConfiguration(sessionId: string, revision: string, model: WebModelConfiguration) {
@@ -1284,6 +1406,7 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   private async dispatchPrompt(agentRuntime: AgentSessionRuntime, content: string, options?: WebPromptOptions, fromCompactionQueue = false) {
+    this.assertNoProviderLogin();
     const session = agentRuntime.session;
     const sessionId = session.sessionManager.getSessionId();
     const previousAdmission = this.promptAdmission;
@@ -1788,6 +1911,7 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private async disposeInternal() {
     this.disposed = true;
+    await this.providerLogin?.dispose();
     this.compactionQueues?.clear();
     this.unsubscribeSession?.();
     this.unsubscribeSession = undefined;
@@ -2292,10 +2416,12 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   private serializeControllerMutation<T>(operation: () => Promise<T>, historyFork = false) {
+    if (this.providerLogin?.active) return Promise.reject(this.providerLoginConflict());
     if (!historyFork && this.historyForkPending)
       return Promise.reject(new WebRuntimeRequestError("Session fork is in progress. Keep your draft.", "SESSION_CONFLICT", 409));
     const result = (this.controllerMutation ?? Promise.resolve()).then(() => {
       this.assertActive();
+      this.assertNoProviderLogin();
       return operation();
     });
     this.controllerMutation = result.then(
@@ -2435,6 +2561,14 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private assertActive() {
     if (this.disposed) throw new Error("Web runtime is stopped");
+  }
+
+  private providerLoginConflict() {
+    return new WebRuntimeRequestError("Finish or cancel the account login before changing the active Session.", "PROVIDER_LOGIN_CONFLICT", 409);
+  }
+
+  private assertNoProviderLogin() {
+    if (this.providerLogin?.active) throw this.providerLoginConflict();
   }
 
   private assertNoHistoryFork() {
