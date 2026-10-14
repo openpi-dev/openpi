@@ -15,7 +15,7 @@ function record(value: unknown) {
 
 function rejectedBeforeDelivery(entry: Record<string, unknown>) {
   return entry.type === "custom_message" && entry.customType === "openpi-setup-closed" &&
-    ["plan_mode_active", "writer_activation_failed"].includes(String(record(entry.details).reason));
+    ["plan_mode_active", "writer_activation_failed", "config_read_failed"].includes(String(record(entry.details).reason));
 }
 
 /** Read canonical receipts before transcript truncation or presentation hiding. */
