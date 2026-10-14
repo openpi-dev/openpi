@@ -166,6 +166,11 @@ export function resolveStandaloneJitiAliases(options?: {
   const host = createJiti(entry);
   const providers = "@earendil-works/pi-ai/providers/all";
   aliases[PI_CODING_AGENT_PACKAGE] = entry;
-  aliases[providers] = fileURLToPath(host.esmResolve(providers));
+  try {
+    aliases[providers] = fileURLToPath(host.esmResolve(providers));
+  } catch {
+    // Older or unusual hosts may not export this subpath. Leave it unaliased so
+    // normal resolution applies instead of failing Web startup here.
+  }
   return aliases;
 }

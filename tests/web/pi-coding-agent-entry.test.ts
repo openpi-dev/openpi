@@ -267,6 +267,22 @@ test("standalone source uses the install peer and official 0.84.1 exports", asyn
   }
 });
 
+test("standalone keeps the Pi entry alias when the host cannot resolve providers/all", async () => {
+  const layout = await isolatedLayout();
+  try {
+    await rm(layout.peer.providers, { force: true });
+    const aliases = resolveStandaloneJitiAliases({
+      env: {},
+      fromUrl: layout.fromUrl,
+    });
+    assert.deepEqual(aliases, {
+      [PI_CODING_AGENT_PACKAGE]: realpathSync(layout.peer.entry),
+    });
+  } finally {
+    await rm(layout.root, { recursive: true, force: true });
+  }
+});
+
 test("standalone does not inherit an ancestor tree peer", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-pi-entry-"));
   try {
