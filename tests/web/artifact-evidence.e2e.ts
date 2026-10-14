@@ -265,10 +265,10 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(page.locator(".session-changes-trigger")).toHaveCount(0);
     for (const group of await page.locator(".process-sequence").all())
       if ((await group.getAttribute("open")) === null)
-        await group.locator(":scope > summary").press("Enter");
+        await group.locator(":scope > summary").click();
     for (const card of await page.locator(".tool-evidence-card").all())
       if ((await card.getAttribute("open")) === null)
-        await card.locator(":scope > summary").press("Enter");
+        await card.locator(":scope > summary").click();
     const readCard = page.locator('.tool-evidence-card[data-tool="read"]');
     const toolTitleColors = await readCard
       .locator(":scope > summary")

@@ -530,7 +530,7 @@ test("provider failures remain visible after refresh without discarding partial 
 }, testInfo) => {
   let content = "";
   let stopReason: "error" | "aborted" = "error";
-  const retried: string[] = [];
+  const retried: { content: string; retryEntryId?: string }[] = [];
   await page.route("**/events?**", (route) =>
     route.fulfill({
       contentType: "text/event-stream",
@@ -564,8 +564,11 @@ test("provider failures remain visible after refresh without discarding partial 
     await route.fulfill({ response, json: snapshot });
   });
   await page.route("**/api/prompt", async (route) => {
-    const body = route.request().postDataJSON() as { content: string };
-    retried.push(body.content);
+    const body = route.request().postDataJSON() as {
+      content: string;
+      retryEntryId?: string;
+    };
+    retried.push({ content: body.content, retryEntryId: body.retryEntryId });
     await route.fulfill({ json: { id: "provider-retry", accepted: true } });
   });
   await openWorkbench(page);
@@ -586,7 +589,10 @@ test("provider failures remain visible after refresh without discarding partial 
     });
   }
   await page.getByRole("button", { name: "重试消息" }).click();
-  await expect.poll(() => retried).toEqual(["Question"]);
+  await expect
+    .poll(() => retried)
+    .toEqual([{ content: "", retryEntryId: "failed-assistant" }]);
+  await expect(page.locator(".message-row.user")).toHaveCount(1);
   await page.reload();
   await expect(page.getByRole("alert")).toContainText(
     "gateway_concurrency_limit (429)",

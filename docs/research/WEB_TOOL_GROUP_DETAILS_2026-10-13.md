@@ -201,3 +201,16 @@ REA parent `ev_cb50e58e2e116c16fd1d084ff0c8be96dc999bc18220e253b7e69386b230c36f`
 最终源码检查：`bun run check` exit 0；`VITEST_MAX_WORKERS=1 bun run test` exit 0，Node **2511 passed / 9 skipped / 0 failed**，Vitest **94 files / 1439 passed**。日志为本地证据目录的 `check-final.log`、`test-final.log`；保留既有 bundle-size 与 JSDOM 能力提示。源码、测试和已跟踪的构建产物一起提交；私有 Session、安装包代码、预览服务及原始 REA 证据不加入 Git。新提交的 CI 另行判定，不用本地通过冒充 CI 通过。
 
 推送前 PR 新增默认字体提交 `b31a3dd86da71cee9a169b1c5a81a3c5dcb3bfa1`；本轮修改已 rebase 到其上，保留字体设置并从合并源码重建产物。整合后再次核对唯一 `pi list` 来源，浏览器实际默认字体为 `-apple-system, system-ui, Segoe UI, sans-serif`。`bun run check` 和完整 `bun run test` 均 exit 0：Node **2512 passed / 9 skipped / 0 failed**，Vitest **94 files / 1439 passed**；最终日志为 `check-font-integrated.log`、`test-font-integrated.log`，组件截图为 `tool-groups-codemode-final.jpg`。本段是整合后验证，上文数字保留各自源码边界。
+
+## 追加：2026-10-14 CI 回归修复
+
+本轮先拉取 PR #711 最新 `bafef51f6f00a06f5ad35026c4414e390721e67f`，保留其会话连续性更新，并再次核对隔离 `pi list` 的唯一来源。[失败 CI 38419532850](https://github.com/openpi-dev/openpi/actions/runs/38419532850) 的直接原因是两项浏览器断言和一项 Windows 清理失败，其他聚合红灯来自这些依赖。
+
+- 差异标题在 `#f4f6f5` 背景上使用 `#128252` 小字，对比度为 4.45，低于 AA 4.5。仅在差异卡片内将新增计数字色与现有正文色混合，保留绿色含义及灰色标题底。原来的完整 Axe 断言不删减；移除这一条 CSS 的消融重新得到同一 4.45 失败。
+- 新的原生重试通过空文本和精确 `retryEntryId` 继续失败回复，旧 E2E 仍要求重新发送 `Question`。更新请求断言，并确认点击重试后用户消息仍只有一条；不把产品逻辑退回重复输入。
+- Code Mode 外层取消可以早于实际 shell 结束，Windows 删除 cwd 因而出现 `EBUSY`。测试在保持订阅的情况下等待对应子调用的终态，设十秒失败上限，随后 dispose 并使用有界文件系统重试。保留真实 shell、取消和历史回执检查，无平台跳过。
+- 文件证据 E2E 在展开动画尚未可交互时发送 Enter，复核中观察到焦点仍留在组标题并再次折叠。此文件改用等待可点击的原生摘要操作；独立键盘覆盖保留在既有测试中。
+
+两个原 CI 浏览器失败均已在本地原样复现，修复后的真实浏览器用例通过。验收日志保存在 `/Users/admin/.codex/research/pr711-ci-2026-10-14/`。一次同时重建 `web/dist` 和运行 CLI 启动测试的本地尝试出现临时 HTTP 500；构建和使用构建产物的验收改为串行，不修改或放宽启动测试。Windows 的最终平台结论以新提交 CI 为准。
+
+最终串行验证：`bun run check` exit 0；完整 `bun run test` exit 0，Node **2516 passed / 9 skipped / 0 failed**，Vitest **94 files / 1453 passed**。两项原失败浏览器用例 **2/2 passed**；Code Mode 原生测试通过。对应 `check-final.log`、`test-final.log`、`e2e-final.log`、`native-fixed.log`；`ablation-contrast-isolated.log` 记录移除样式后的预期对比度失败。原始本地并行干扰日志保留，未计为最终通过证据。

@@ -1083,6 +1083,7 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .evidence-process-meta { padding:0 12px 9px; color:var(--subtle); font-size:11px; }
 .evidence-diff { margin:0; overflow:hidden; border:1px solid var(--border); border-radius:8px; background:var(--page); }
 .evidence-diff figcaption { display:flex; align-items:center; gap:8px; min-height:34px; padding:4px 10px; background:var(--sidebar); border-bottom:1px solid var(--border); color:var(--muted); }
+.evidence-diff .review-additions { color:color-mix(in oklab, var(--healthy) 85%, var(--text)); }
 .evidence-diff-file { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:0; background:transparent; padding:0; font:inherit; color:inherit; }
 button.evidence-diff-file { cursor:pointer; }
 button.evidence-diff-file:hover { text-decoration:underline; color:var(--text); }

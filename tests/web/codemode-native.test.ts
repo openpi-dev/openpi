@@ -19,6 +19,8 @@ import { codemodeChildren } from "../../web/ui/src/features/transcript/codemode-
 
 test("real Pi Code Mode sandbox emits child evidence and persists the bounded native ledger", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "openpi-code-web-"));
+  const cancelledChildFinished = Promise.withResolvers<void>();
+  let cancellationStarted = false;
   let session:
     | Awaited<ReturnType<typeof createAgentSession>>["session"]
     | undefined;
@@ -138,8 +140,16 @@ test("real Pi Code Mode sandbox emits child evidence and persists the bounded na
         event.type === "tool_execution_start" &&
         "parentToolCallId" in event &&
         event.parentToolCallId === "code-cancel"
-      )
+      ) {
+        cancellationStarted = true;
         setTimeout(() => session?.agent.abort(), 20);
+      }
+      if (
+        event.type === "tool_execution_end" &&
+        "parentToolCallId" in event &&
+        event.parentToolCallId === "code-cancel"
+      )
+        cancelledChildFinished.resolve();
     });
     await session.agent.prompt("Execute the local fixture tools.");
     assert.ok(
@@ -231,7 +241,25 @@ test("real Pi Code Mode sandbox emits child evidence and persists the bounded na
       assert.equal(cancellationView?.children[0]?.state, "cancelled");
     }
   } finally {
-    session?.dispose();
-    await rm(cwd, { recursive: true, force: true });
+    // Code Mode can settle before the cancelled native shell releases its cwd.
+    // Keep the subscriber alive until that child's terminal event is observed.
+    await session?.abort();
+    try {
+      if (cancellationStarted) {
+        const timeout = setTimeout(() => {
+          cancelledChildFinished.reject(
+            new Error("Cancelled child did not settle"),
+          );
+        }, 10_000);
+        try {
+          await cancelledChildFinished.promise;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+    } finally {
+      session?.dispose();
+      await rm(cwd, { recursive: true, force: true, maxRetries: 5 });
+    }
   }
 });
