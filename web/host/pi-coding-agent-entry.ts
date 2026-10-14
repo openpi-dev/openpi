@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createJiti } from "jiti";
 
 export const PI_CODING_AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_CODING_AGENT_ENTRY_ENV = "OPENPI_PI_CODING_AGENT_ENTRY";
@@ -158,5 +159,13 @@ export function resolveStandaloneJitiAliases(options?: {
     fromUrl,
     source: "standalone",
   });
-  return entry ? { [PI_CODING_AGENT_PACKAGE]: entry } : {};
+  const aliases: Record<string, string> = {};
+  if (!entry) return aliases;
+  // Pi-managed packages omit peers. Resolve Web's direct Pi import from the
+  // selected host, using its ESM exports rather than OpenPI's install tree.
+  const host = createJiti(entry);
+  const providers = "@earendil-works/pi-ai/providers/all";
+  aliases[PI_CODING_AGENT_PACKAGE] = entry;
+  aliases[providers] = fileURLToPath(host.esmResolve(providers));
+  return aliases;
 }

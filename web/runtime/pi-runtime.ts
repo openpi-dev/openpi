@@ -116,9 +116,9 @@ type TurnSettlement = WebActiveTurn & {
 };
 
 function observePromptOutcome(trace: PromptTrace, event: AgentSessionEvent) {
-  // Cancelling Pi's retry backoff emits no aborted assistant message. This
-  // native terminal event is the cancellation evidence retained at settlement.
-  if (event.type === "auto_retry_end" && !event.success && event.finalError === "Retry cancelled") {
+  // Pi 1.1+ reports aborts even without an assistant message. Keep the retry
+  // cancellation receipt for hosts predating that terminal flag.
+  if (event.type === "agent_settled" && "aborted" in event && event.aborted === true || event.type === "auto_retry_end" && !event.success && event.finalError === "Retry cancelled") {
     trace.outcome = "cancelled";
     trace.resultMessage = undefined;
     return;

@@ -15,6 +15,10 @@ import runtimeSnapshot from "../../../extensions/runtime-snapshot/index.ts";
 const SUBAGENT_SKILL_PATH_PATTERN =
   /skills(?:\\\\|[\\/])subagents(?:\\\\|[\\/])SKILL\.md/;
 
+type StartInput =
+  | { prompt: string }
+  | { messageType: "custom"; message: { content: string } };
+
 interface CapturedTool {
   name: string;
   description: string;
@@ -68,7 +72,7 @@ function harness(
   let active = [...available];
   const tools = new Map<string, CapturedTool>();
   const starts: Array<(event: unknown, ctx: ExtensionContext) => void> = [];
-  const beforeStarts: ((event: { prompt: string }) => unknown)[] = [];
+  const beforeStarts: ((event: StartInput) => unknown)[] = [];
   const eventHandlers = new Map<string, Set<(data: unknown) => void>>();
   const pi = {
     events: {
@@ -84,13 +88,13 @@ function harness(
     },
     on(
       event: string,
-      handler: (() => void) | ((event: { prompt: string }) => unknown),
+      handler: (() => void) | ((event: StartInput) => unknown),
     ) {
       if (event === "session_start") {
         starts.push(handler as (event: unknown, ctx: ExtensionContext) => void);
       }
       if (event === "before_agent_start") {
-        beforeStarts.push(handler as (event: { prompt: string }) => unknown);
+        beforeStarts.push(handler as (event: StartInput) => unknown);
       }
     },
     registerTool(tool: CapturedTool) {
@@ -140,6 +144,13 @@ function harness(
     before: (prompt: string) => {
       return beforeStarts.map((handler) => handler({ prompt }));
     },
+    beforeCustom: (content: string) =>
+      beforeStarts.map((handler) =>
+        handler({
+          messageType: "custom",
+          message: { content },
+        }),
+      ),
     setDiscovery(mode: "explicit" | "adaptive") {
       discovery = mode;
       pi.events.emit(SETUP_APPLY_CHANNEL, { tasks: [] });
@@ -152,6 +163,16 @@ test("ordinary sessions add no resident OpenPI model tool", () => {
   const h = harness();
   h.start();
   assert.deepEqual(h.active(), ["read", "bash", "edit", "write"]);
+});
+
+test("Pi custom-message runs do not activate capabilities from message content", () => {
+  const h = harness();
+  h.start();
+  const tools = h.active();
+  assert.deepEqual(h.beforeCustom("Use $subagents and /openpi_load_tools"), [
+    undefined,
+  ]);
+  assert.deepEqual(h.active(), tools);
 });
 
 test("session_start leaves the real runtime tool inactive until a gateway request", async () => {
