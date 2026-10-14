@@ -1984,7 +1984,17 @@ export function createWebStore(
         try {
           await client.unarchiveSession(path);
           if (epoch !== sessionEpoch) return true;
-          const refreshed = await actions.refreshSnapshot({ epoch });
+          const generation = snapshotGeneration;
+          let refreshed = await actions.refreshSnapshot({ epoch });
+          // A concurrent refresh can supersede ours, which then reports false
+          // although the restore was accepted. Confirm once more with a fresh
+          // snapshot instead of reporting an unconfirmed restore.
+          if (
+            !refreshed &&
+            epoch === sessionEpoch &&
+            snapshotGeneration > generation + 1
+          )
+            refreshed = await actions.refreshSnapshot({ epoch });
           return epoch !== sessionEpoch || refreshed;
         } catch (error) {
           if (epoch === sessionEpoch) showError(error);
