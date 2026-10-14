@@ -1047,7 +1047,8 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .evidence-icon svg { width:16px; height:16px; stroke-width:1.65; }
 .evidence-target { display:flex; flex:0 1 auto; align-items:baseline; gap:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); }
 .evidence-command { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.evidence-filename { min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--muted); }
+.evidence-filename { min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--muted); text-decoration:underline dotted; text-decoration-thickness:1px; text-decoration-color:color-mix(in oklab, currentColor 55%, transparent); text-underline-offset:.2em; }
+.tool-evidence-card > summary:is(:hover, :focus-visible) .evidence-filename { text-decoration-color:currentColor; }
 .evidence-chevron { width:13px; height:13px; flex:none; color:var(--subtle); transition:transform 140ms ease; }
 .tool-evidence-card[open] > summary .evidence-chevron { transform:rotate(90deg); }
 :is(.tool-evidence-card, .tool-line, .process-sequence) > summary :is(.evidence-chevron, .tool-disclosure, .process-sequence-counts) { opacity:0; transition:opacity 140ms ease, transform 140ms ease; }

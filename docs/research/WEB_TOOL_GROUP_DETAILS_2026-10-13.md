@@ -214,3 +214,9 @@ REA parent `ev_cb50e58e2e116c16fd1d084ff0c8be96dc999bc18220e253b7e69386b230c36f`
 两个原 CI 浏览器失败均已在本地原样复现，修复后的真实浏览器用例通过。验收日志保存在 `/Users/admin/.codex/research/pr711-ci-2026-10-14/`。一次同时重建 `web/dist` 和运行 CLI 启动测试的本地尝试出现临时 HTTP 500；构建和使用构建产物的验收改为串行，不修改或放宽启动测试。Windows 的最终平台结论以新提交 CI 为准。
 
 最终串行验证：`bun run check` exit 0；完整 `bun run test` exit 0，Node **2516 passed / 9 skipped / 0 failed**，Vitest **94 files / 1453 passed**。两项原失败浏览器用例 **2/2 passed**；Code Mode 原生测试通过。对应 `check-final.log`、`test-final.log`、`e2e-final.log`、`native-fixed.log`；`ablation-contrast-isolated.log` 记录移除样式后的预期对比度失败。原始本地并行干扰日志保留，未计为最终通过证据。
+
+`ee5561cb` 的 [CI 38496397498](https://github.com/openpi-dev/openpi/actions/runs/38496397498) 已通过所有 Windows／Linux runtime 和 UI 检查，普通浏览器第一分片 **78/78 passed**。随后首次执行到的 Plan provider 步骤暴露另一项旧断言：它仍要求失去控制的已查看 Session 禁用输入框，而最新会话连续性功能允许编辑该 Session 的草稿。后续仅更新测试，实际编辑并验证切回后保留同一草稿；继续断言 provider 请求数不增长、文件未写入、Plan 保持 ready，重新准备并显式提交后才执行。实施授权失效仍由 Composer 对精确 Session／revision 的既有检查负责，与草稿是否可编辑分别验证；既有组件测试还直接验证切换后提交不携带旧授权。没有恢复旧产品行为或删除 Plan 门禁检查。
+
+用户随后补充文件名下划线需求。工具摘要的文件名使用 1px 点状下划线，与文字间隔 `.2em`，正常状态为正文色的 55% 不透明度，悬停／键盘聚焦时加深；直接复用现有文件名元素和原生摘要交互，不增加组件或执行状态。真实组件预览已观察浅色、深色、375px 内容宽度及键盘聚焦：14px 字体的实际偏移为 2.8px，深色聚焦线条变为 `rgb(168, 176, 184)`，其余文件仍为 55% 透明度。路径、命令和动作文字不额外加线；截图 `tool-filename-underline.jpg` 位于上述本地证据目录。该预览使用模拟执行数据，与原生 Plan provider 5/5 浏览器验收分别记录。
+
+后续最终验证：`bun run check` 与完整 `bun run test` 均 exit 0（Node **2516 passed / 9 skipped**；UI **1453 passed / 94 files**）；Plan provider **5/5**，两项原失败浏览器用例 **2/2**。日志为 `check-followup.log`、`test-followup.log`、`plan-followup.log`、`e2e-followup.log`。虚线消融去掉交互加深规则后，已聚焦文件仍只有 55% 不透明度；恢复后为完整正文色，保留这一条规则，未新增抽象。`underline-ablation.json` 保存该观察，Enter 展开／收起文件内容亦已验证。新提交 CI 结论仍需单独确认。
