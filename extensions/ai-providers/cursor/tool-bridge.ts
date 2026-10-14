@@ -10,7 +10,7 @@ import {
 
 export const CURSOR_PI_PROVIDER = "openpi";
 export const CURSOR_PI_TOOLS_SYSTEM_PROMPT =
-  "Use only the provided openpi MCP tools. These are the active Pi tools and Pi owns their execution and permissions. Do not use Cursor-native filesystem, shell, editing, web, task, or interaction tools. When tool results appear in conversation history, continue from those results. Do not repeat a completed tool call.";
+  "Use only the Pi tools advertised in this request context. Their names are the names shown in the tool list (for example, read, rg, or bash); do not invent an MCP-prefixed name. Pi owns their execution and permissions. Do not use Cursor-native filesystem, shell, editing, web, task, or interaction tools. When tool results appear in conversation history, continue from those results. Do not repeat a completed tool call.";
 
 export function buildCursorTools(tools: Context["tools"]) {
   return (tools ?? []).map((tool) => {
