@@ -139,6 +139,331 @@ function rerunChild() {
   return child;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function pendingSnapshot() {
+  const response = deferred<WebSnapshot>();
+  const requested = deferred<void>();
+  return {
+    requested: requested.promise,
+    resolve: response.resolve,
+    read: () => {
+      requested.resolve();
+      return response.promise;
+    },
+  };
+}
+
+const preparedPrompt = {
+  content: "Revised question with complete file references",
+  images: [
+    {
+      data: "iVBORw0KGgo=",
+      mimeType: "image/png" as const,
+      name: "original.png",
+    },
+  ],
+};
+
+function forkHarness(receiptPatch: Partial<WebSessionForkResult> = {}) {
+  const { client, store } = mount();
+  const fork = vi
+    .spyOn(client, "forkSession")
+    .mockImplementation(async (request) => ({
+      state: "forked",
+      commandId: request.commandId,
+      source: anchor,
+      sessionId: "child",
+      sessionPath: "/project/child.jsonl",
+      prompt: preparedPrompt,
+      ...receiptPatch,
+    }));
+  const prompt = vi
+    .spyOn(client, "prompt")
+    .mockImplementation(async (_id, _content, commandId) => ({
+      id: commandId,
+      accepted: true,
+    }));
+  return { client, store, fork, prompt };
+}
+
+it.each(["edit", "regenerate", "fork"] as const)(
+  "rechecks %s confirmation after a concurrent refresh without repeating the fork or prompt",
+  async (mode) => {
+    const { client, store, fork, prompt } = forkHarness();
+    const confirmation = pendingSnapshot();
+    const refresh = vi
+      .spyOn(client, "snapshot")
+      .mockImplementationOnce(confirmation.read)
+      .mockResolvedValue(rerunChild());
+    const actions = store.getState().actions;
+    const pending =
+      mode === "edit"
+        ? actions.editMessage(anchor, "Revision")
+        : mode === "regenerate"
+          ? actions.regenerateMessage(anchor)
+          : actions.forkMessage(anchor);
+    await confirmation.requested;
+    expect(await actions.refreshSnapshot()).toBe(true);
+    confirmation.resolve(rerunChild());
+
+    expect(await pending).toBe(true);
+    expect(fork).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(
+      refresh.mock.calls.every(([path]) => path === "/project/child.jsonl"),
+    ).toBe(true);
+    expect(fork.mock.calls[0]![0].rerun).toEqual(
+      mode === "edit"
+        ? { mode: "edit", content: "Revision" }
+        : mode === "regenerate"
+          ? { mode: "regenerate" }
+          : undefined,
+    );
+    if (mode === "fork") {
+      expect(prompt).not.toHaveBeenCalled();
+    } else {
+      expect(prompt).toHaveBeenCalledExactlyOnceWith(
+        "child",
+        preparedPrompt.content,
+        expect.any(String),
+        "/project/child.jsonl",
+        false,
+        preparedPrompt.images,
+      );
+    }
+    expect(store.getState().notice).toEqual({
+      kind: "success",
+      message: i18n.t(
+        mode === "fork" ? "forkSessionCreated" : "messageRerunStarted",
+      ),
+    });
+    expect(store.getState().sessionForkPending).toBe(false);
+    expect(store.getState().sessionSwitching).toBe(false);
+  },
+);
+
+it("ends uncertain after both confirmations are superseded even when the cache contains the correct child", async () => {
+  const { client, store, fork, prompt } = forkHarness();
+  const first = pendingSnapshot();
+  const retry = pendingSnapshot();
+  const refresh = vi
+    .spyOn(client, "snapshot")
+    .mockImplementationOnce(first.read)
+    .mockResolvedValueOnce(rerunChild())
+    .mockImplementationOnce(retry.read)
+    .mockResolvedValueOnce(rerunChild());
+  const pending = store.getState().actions.regenerateMessage(anchor);
+  await first.requested;
+  expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+  first.resolve(rerunChild());
+  await retry.requested;
+  expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+  retry.resolve(rerunChild());
+
+  expect(await pending).toBe(false);
+  expect(refresh).toHaveBeenCalledTimes(4);
+  expect(fork).toHaveBeenCalledOnce();
+  expect(prompt).not.toHaveBeenCalled();
+  expect(store.getState().snapshot?.selectedSession?.path).toBe(
+    "/project/child.jsonl",
+  );
+  expect(store.getState().notice).toBe(i18n.t("forkSessionUncertain"));
+  expect(store.getState().sessionForkPending).toBe(false);
+  expect(store.getState().sessionSwitching).toBe(false);
+});
+
+it("releases fork pending state when canonical rechecking returns to the source", async () => {
+  const { client, store, fork, prompt } = forkHarness();
+  const first = pendingSnapshot();
+  const refresh = vi
+    .spyOn(client, "snapshot")
+    .mockImplementationOnce(first.read)
+    .mockResolvedValueOnce(rerunChild())
+    .mockResolvedValue(snapshot());
+  const pending = store.getState().actions.regenerateMessage(anchor);
+  await first.requested;
+  expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+  first.resolve(rerunChild());
+
+  expect(await pending).toBe(false);
+  expect(refresh).toHaveBeenCalledTimes(4);
+  expect(fork).toHaveBeenCalledOnce();
+  expect(prompt).not.toHaveBeenCalled();
+  expect(store.getState().selectedPath).toBe(anchor.sessionPath);
+  expect(store.getState().snapshot?.selectedSession?.id).toBe(anchor.sessionId);
+  expect(store.getState().notice).toBe(i18n.t("forkSessionUncertain"));
+  expect(store.getState().sessionForkPending).toBe(false);
+  expect(store.getState().sessionSwitching).toBe(false);
+});
+
+it.each([
+  { phase: "first", target: "workspace" },
+  { phase: "first", target: "session" },
+  { phase: "retry", target: "workspace" },
+  { phase: "retry", target: "session" },
+] as const)(
+  "preserves a newer $target selection while the $phase confirmation is pending",
+  async ({ phase, target }) => {
+    const { client, store, fork, prompt } = forkHarness();
+    const first = pendingSnapshot();
+    const retry = pendingSnapshot();
+    const refresh = vi
+      .spyOn(client, "snapshot")
+      .mockImplementationOnce(first.read);
+    if (phase === "retry") {
+      refresh
+        .mockResolvedValueOnce(rerunChild())
+        .mockImplementationOnce(retry.read);
+    }
+    const actions = store.getState().actions;
+    const pending = actions.regenerateMessage(anchor);
+    await first.requested;
+    if (phase === "retry") {
+      expect(await actions.refreshSnapshot()).toBe(true);
+      first.resolve(rerunChild());
+      await retry.requested;
+    }
+
+    const otherPath = "/project/other.jsonl";
+    const selectionReceipt = deferred<{ cancelled: boolean }>();
+    let selecting = Promise.resolve();
+    if (target === "workspace") {
+      actions.setWorkspace("/other");
+    } else {
+      vi.spyOn(client, "selectSession").mockReturnValue(
+        selectionReceipt.promise,
+      );
+      refresh.mockResolvedValueOnce(snapshot("other", otherPath));
+      selecting = actions.selectSession(otherPath);
+    }
+    const newerSelection = {
+      selectedPath: store.getState().selectedPath,
+      selectedWorkspace: store.getState().selectedWorkspace,
+      workspaceDraft: store.getState().workspaceDraft,
+      sessionSwitching: store.getState().sessionSwitching,
+      notice: store.getState().notice,
+    };
+    (phase === "first" ? first : retry).resolve(rerunChild());
+
+    expect(await pending).toBe(false);
+    expect(refresh).toHaveBeenCalledTimes(phase === "first" ? 1 : 3);
+    expect(fork).toHaveBeenCalledOnce();
+    expect(prompt).not.toHaveBeenCalled();
+    expect(store.getState()).toMatchObject(newerSelection);
+    expect(store.getState().sessionForkPending).toBe(false);
+    if (target === "workspace") {
+      expect(store.getState().selectedWorkspace).toBe("/other");
+      expect(store.getState().workspaceDraft).toBe(true);
+    } else {
+      expect(store.getState().selectedPath).toBe(otherPath);
+      expect(store.getState().sessionSwitching).toBe(true);
+      selectionReceipt.resolve({ cancelled: false });
+      await selecting;
+      expect(store.getState().snapshot?.selectedSession?.id).toBe("other");
+      expect(refresh).toHaveBeenCalledTimes(phase === "first" ? 2 : 4);
+    }
+    expect(store.getState().sessionSwitching).toBe(false);
+  },
+);
+
+it.each([
+  {
+    name: "different child ID",
+    confirmation: () => snapshot("other", "/project/child.jsonl"),
+    reads: 3,
+  },
+  {
+    name: "different child path",
+    confirmation: () => snapshot("child", "/project/copy.jsonl"),
+    reads: 4,
+  },
+  {
+    name: "same ID with a different runtime path",
+    confirmation: () => ({
+      ...rerunChild(),
+      currentSessionPath: "/project/copy.jsonl",
+    }),
+    reads: 3,
+  },
+  {
+    name: "runtime authority moved to another Session",
+    confirmation: () => ({
+      ...rerunChild(),
+      currentSessionId: "other",
+      currentSessionPath: "/project/other.jsonl",
+    }),
+    reads: 3,
+  },
+])(
+  "does not send after rechecking a child with $name",
+  async ({ confirmation, reads }) => {
+    const { client, store, fork, prompt } = forkHarness();
+    const first = pendingSnapshot();
+    const refresh = vi
+      .spyOn(client, "snapshot")
+      .mockImplementationOnce(first.read)
+      .mockResolvedValueOnce(rerunChild())
+      .mockImplementation(async () => confirmation());
+    const pending = store.getState().actions.regenerateMessage(anchor);
+    await first.requested;
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    first.resolve(rerunChild());
+
+    expect(await pending).toBe(false);
+    expect(refresh).toHaveBeenCalledTimes(reads);
+    expect(fork).toHaveBeenCalledOnce();
+    expect(prompt).not.toHaveBeenCalled();
+    expect(store.getState().notice).toBe(i18n.t("forkSessionUncertain"));
+    expect(store.getState().sessionForkPending).toBe(false);
+    expect(store.getState().sessionSwitching).toBe(false);
+  },
+);
+
+it.each([
+  { name: "command ID", patch: { commandId: "other-command" } },
+  {
+    name: "source Session ID",
+    patch: { source: { ...anchor, sessionId: "other" } },
+  },
+  {
+    name: "source path",
+    patch: { source: { ...anchor, sessionPath: "/project/other.jsonl" } },
+  },
+  {
+    name: "source entry",
+    patch: { source: { ...anchor, entryId: "other-entry" } },
+  },
+  { name: "child reusing source ID", patch: { sessionId: anchor.sessionId } },
+  {
+    name: "child reusing source path",
+    patch: { sessionPath: anchor.sessionPath },
+  },
+])(
+  "rejects an invalid fork receipt's $name before confirmation",
+  async ({ patch }) => {
+    const { client, store, fork, prompt } = forkHarness(patch);
+    const refresh = vi.spyOn(client, "snapshot");
+
+    expect(await store.getState().actions.regenerateMessage(anchor)).toBe(
+      false,
+    );
+    expect(fork).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+    expect(store.getState().selectedPath).toBe(anchor.sessionPath);
+    expect(store.getState().notice).toBe(i18n.t("forkSessionUncertain"));
+    expect(store.getState().sessionForkPending).toBe(false);
+    expect(store.getState().sessionSwitching).toBe(false);
+  },
+);
+
 it("edits an older saved question, confirms its native child, and sends the prepared full prompt through ordinary admission", async () => {
   const { client, store } = mount();
   const parent = snapshot();

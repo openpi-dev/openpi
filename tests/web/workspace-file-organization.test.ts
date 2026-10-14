@@ -562,17 +562,28 @@ test("trash pagination reaches every removed entry without capping future file o
         ),
       ),
     );
-    for (let index = 0; index < 252; index++) {
-      const [entry] = (
-        await f.reader.listFiles("s", ".", "", f.scope.sessionPath)
-      ).entries;
-      assert.ok(entry?.identity);
-      await f.reader.mutateFile("s", f.scope.sessionPath, {
-        kind: "trash",
-        path: entry.path,
-        identity: entry.identity,
-      });
+    // A listing page also holds 250 entries: trash each listed page instead
+    // of relisting before every removal. Two pages must empty the workspace.
+    let trashed = 0;
+    for (let page = 0; page < 3; page++) {
+      const { entries } = await f.reader.listFiles(
+        "s",
+        ".",
+        "",
+        f.scope.sessionPath,
+      );
+      if (entries.length === 0) break;
+      for (const entry of entries) {
+        assert.ok(entry.identity);
+        await f.reader.mutateFile("s", f.scope.sessionPath, {
+          kind: "trash",
+          path: entry.path,
+          identity: entry.identity,
+        });
+        trashed++;
+      }
     }
+    assert.equal(trashed, 252);
     const first = await f.reader.listTrash("s", f.scope.sessionPath);
     assert.equal(first.entries.length, 250);
     assert.ok(first.nextCursor);
