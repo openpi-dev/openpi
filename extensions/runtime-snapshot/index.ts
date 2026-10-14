@@ -21,6 +21,7 @@ import {
 } from "../shared/web-observer-registry.ts";
 
 export const MAX_SNAPSHOT_BYTES = 16 * 1024;
+const GIT_READ_TIMEOUT_MS = 5_000;
 const MAX_RESOURCE_ITEMS = 32;
 const MAX_TOOL_NAMES = 64;
 const PACKAGE_DIRECTORY = fileURLToPath(new URL("../../", import.meta.url));
@@ -116,7 +117,10 @@ async function gitRead(cwd: string, args: string[], signal?: AbortSignal) {
       {
         encoding: "utf8",
         env,
-        timeout: 1_000,
+        // Git startup can exceed one second on Windows runners even for a
+        // small worktree. Keep reads bounded without treating that latency as
+        // unavailable runtime state.
+        timeout: GIT_READ_TIMEOUT_MS,
         maxBuffer: 8 * 1024,
         signal,
       },
