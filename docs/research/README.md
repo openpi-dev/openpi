@@ -4,7 +4,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Source-verified designs
 
-- [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection ([#446](https://github.com/openpi-dev/openpi/issues/446)).
+- [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection; Oct12 adds grouped/searchable records and responsive evidence details ([#446](https://github.com/openpi-dev/openpi/issues/446)).
 
 ## Draft investigations
 
@@ -15,6 +15,8 @@ Research records preserve sourced investigation and distinguish observations, in
 - [`WEB_INTERACTION_COMPARISON_2026-09-30.md`](WEB_INTERACTION_COMPARISON_2026-09-30.md) — PR #598 竞品截图对照与后续 Web 迭代：基础交互、普通附件、原始子代理结果、第三栏、真实 Luna 文件读取；追加现场演示、工具菜单焦点、Codex / Maka 历史分页与导航、两小时阅读连续性、发布整合及浏览器输入/滚动边界/Windows 定位，保留独立冻结、失败、消融和未验证边界（[#639](https://github.com/openpi-dev/openpi/issues/639)、[PR #640](https://github.com/openpi-dev/openpi/pull/640)、[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 ## Validated investigations
+
+- [`WEB_SEARCH_INTEGRATION_2026-10-10.md`](WEB_SEARCH_INTEGRATION_2026-10-10.md) — optional package comparison and subsequent current-Session-model native search, default-off setup, original-image replay, protocol/UI evidence, and ablation; provider-wide search quality remains unmeasured ([#169](https://github.com/openpi-dev/openpi/issues/169), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 
 - [`PI_BROWSER_TOOLS_2026-10-09.md`](PI_BROWSER_TOOLS_2026-10-09.md) — native Pi package loading, standalone and iframe boundaries, and a locally validated browser-only pi-computer-use adaptation for OpenPI's bound embedded pages ([#169](https://github.com/openpi-dev/openpi/issues/169), [#597](https://github.com/openpi-dev/openpi/issues/597)).
 

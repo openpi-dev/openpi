@@ -82,6 +82,8 @@ import {
   projectWebSettingsResources,
 } from "./settings-catalog.ts";
 import { applySetupConfiguration } from "../../extensions/shared/setup-apply.ts";
+import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
+import { resolveWebSearchSupport } from "../../extensions/web-search/support.ts";
 
 const setupEvents = new WeakMap<object, ReturnType<typeof createEventBus>>();
 
@@ -245,6 +247,7 @@ export class PiWebRuntime implements WebRuntimeController {
     sessionId: string;
     sessionPath: string;
     state: NonNullable<WebSessionExecution["compaction"]>["state"];
+    errorMessage?: string;
     startedAt?: number;
     clock?: number;
   }>;
@@ -457,6 +460,7 @@ export class PiWebRuntime implements WebRuntimeController {
     })) {
       return {
         state: observed.state,
+        ...(observed.errorMessage === undefined ? {} : { errorMessage: observed.errorMessage }),
         ...(observed.startedAt === undefined ? {} : { startedAt: observed.startedAt }),
         ...(observed.clock === undefined ? {} : {
           elapsedMs: elapsed(observed.clock),
@@ -481,6 +485,7 @@ export class PiWebRuntime implements WebRuntimeController {
       this.compactionObservations.set(session, {
         ...identity,
         state: event.aborted ? "cancelled" : event.errorMessage ? "failed" : event.result ? "completed" : "unchanged",
+        ...(event.errorMessage ? { errorMessage: projectAssistantError(event.errorMessage).value } : {}),
       });
     }
     if (event.type === "compaction_end") {
@@ -755,6 +760,13 @@ export class PiWebRuntime implements WebRuntimeController {
     this.assertWorkspaceSelected();
     return projectWebSettingsResources(this.runtime.services.resourceLoader,
       readConfiguredPackages(this.cwd, this.runtime.services.agentDir, this.runtime.session.settingsManager.isProjectTrusted()));
+  }
+
+  getWebSearchSupport() {
+    const model = this.runtime.session.model;
+    const support = resolveWebSearchSupport(model, loadSetupConfig().webSearch,
+      model ? this.runtime.services.modelRuntime.isUsingOAuth(model.provider) : false);
+    return { ...support, ...(model ? { model: model.id, provider: model.provider } : {}) };
   }
 
   reloadSettingsResources(sessionId: string, sessionPath: string) {

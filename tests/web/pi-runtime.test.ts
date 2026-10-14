@@ -881,6 +881,85 @@ test("compaction is busy, accepts a held prompt, and projects native outcomes wi
   assert.equal(api.isIdle(), true);
 });
 
+test("compaction failure details remain bounded, redacted and local to the observed Session", () => {
+  const session = promptSession("compaction-error");
+  let path = "/tmp/compaction-error.jsonl";
+  session.sessionManager.getSessionFile = () => path;
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  const errorMessage =
+    "503 Service Unavailable\nhttp://127.0.0.1:8080/v1/responses Bearer fixture-secret; token=fixture-token";
+  const projectedError =
+    "503 Service Unavailable [redacted URL] Bearer [redacted]; token=[redacted]";
+  finishCompaction(runtime, session, { errorMessage });
+  const failed = { state: "failed", errorMessage: projectedError };
+  assert.deepEqual(
+    api.getSessionExecution("compaction-error", path).compaction,
+    failed,
+  );
+  assert.deepEqual(
+    api.getSessionExecution("compaction-error", path).compaction,
+    failed,
+  );
+  assert.equal(
+    api.getSessionExecution("compaction-error", "/tmp/copied.jsonl").compaction,
+    undefined,
+  );
+  path = "/tmp/copied.jsonl";
+  assert.equal(
+    api.getSessionExecution("compaction-error", path).compaction,
+    undefined,
+  );
+  path = "/tmp/compaction-error.jsonl";
+  session.sessionManager.getSessionId = () => "different-session";
+  assert.equal(
+    api.getSessionExecution("different-session", path).compaction,
+    undefined,
+  );
+  session.sessionManager.getSessionId = () => "compaction-error";
+  const restarted = promptHarness(session) as unknown as PiWebRuntime;
+  assert.equal(
+    restarted.getSessionExecution("compaction-error", path).compaction,
+    undefined,
+  );
+  finishCompaction(runtime, session, { aborted: true, errorMessage });
+  assert.deepEqual(
+    api.getSessionExecution("compaction-error", path).compaction,
+    {
+      state: "cancelled",
+      errorMessage: projectedError,
+    },
+  );
+  finishCompaction(runtime, session, {
+    errorMessage: `${errorMessage}; ${"detail ".repeat(100)}`,
+  });
+  const bounded = api.getSessionExecution("compaction-error", path).compaction!
+    .errorMessage!;
+  assert.ok(bounded.length <= 512);
+  assert.ok(bounded.endsWith("[truncated]"));
+  assert.doesNotMatch(bounded, /fixture-secret|fixture-token|127\.0\.0\.1/);
+  for (const detail of [
+    {},
+    { aborted: true },
+    { result: { summary: "private summary" } },
+  ]) {
+    finishCompaction(runtime, session, detail);
+    assert.equal(
+      api.getSessionExecution("compaction-error", path).compaction
+        ?.errorMessage,
+      undefined,
+    );
+  }
+  finishCompaction(runtime, session, { errorMessage });
+  (
+    runtime as unknown as { projectEvent(session: object, event: object): void }
+  ).projectEvent(session, { type: "compaction_start", reason: "overflow" });
+  assert.equal(
+    api.getSessionExecution("compaction-error", path).compaction?.errorMessage,
+    undefined,
+  );
+});
+
 test("Plan control targets the active idle owned Session without admitting a prompt", async () => {
   const session = promptSession("session-a");
   const runtime = promptHarness(session);

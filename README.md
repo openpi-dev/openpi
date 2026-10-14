@@ -93,6 +93,12 @@ pi install npm:@tt-a1i/openpi
 
 Skill 使用 Pi 原生机制：模型根据名称、描述和路径按需用 `read` 读取；用户明确调用时，在输入开头使用 `/skill:code-review 审查这个 PR`（前提是 Pi 已加载该 Skill）。候选补全、正文展开和运行中追加输入均由 Pi 处理。OpenPI 不提供专门的 `$skill` 语法或独立的 Skill 加载通道。
 
+联网搜索由仓库内独立的 `extensions/web-search/` Pi 扩展提供，默认关闭，不增加 OpenPI 工具组。Web **设置 → 联网搜索** 或 `/openpi-setup 开启联网搜索` 通过 `web_search_enabled` 开关启用。默认只使用当前会话模型、实际连接协议和 Pi 原有凭据，在同一次模型请求里声明供应商原生搜索；不另选搜索模型、不发送独立摘要请求，也不自动切换 Exa 或其他供应商。
+
+当前实现适配 OpenAI Responses/Codex Responses 和 Anthropic Messages；官方已知支持的模型可直接启用，未知网关或不支持的协议不提供搜索工具。自定义连接经真实原生搜索验证或用户明确确认支持后，可在 setup 中用 `web_search_model_support` 声明当前 provider/model/API/base URL 的能力（true 支持、false 禁用、null 恢复自动判断）；切换连接不会沿用别的连接的声明。设置页分别显示开关与当前模型支持状态。DeepSeek 官方 Responses 会忽略原生搜索，不能通过声明强行启用；GPT-5 的 minimal 推理模式也不提供搜索工具。
+
+历史保留原生搜索终态、供应商输出和可点击引用；关闭不删历史，恢复只回放仍在 Pi 上下文中的同一连接输出。取消和用量归 Pi 管理，Direct/Workflow 子会话不加载该扩展。单次原生输出及一次请求的原生回放上限为 256 KiB，超限要求压缩会话；Anthropic 的 `pause_turn` 明确报告错误，当前适配器尚未实现自动协议续接。旧 `web_access_action` 仅保留兼容既有可选 Pi 插件的显式管理，不是原生搜索的回退路径。
+
 Skill 正文通过原生用户消息或工具结果进入正常 Session 历史，压缩也交给 Pi。OpenPI 不另存正文快照，不叠加隐藏正文，也不在压缩后自动补回。压缩后不保证全文仍在模型上下文中；需要时可重新读取或显式调用。普通 `read` 的输出限制和模型总上下文限制仍然适用。设计边界见 [Decision 0002](docs/decisions/0002-native-skill-lifecycle.md)。
 
 </details>
@@ -460,19 +466,21 @@ Web 侧栏支持独立置顶会话分区。行内图钉可置顶或取消，置�
 
 会话行右侧只保留三种提示：执行中的转圈、已完成未读的小圆点、需要处理的提示。等待输入和失败共用需要处理标记，悬停或打开会话可查看具体原因；停止和未知结果恢复普通行。断线时收起执行动画，由页面连接状态统一提示，绝不当作完成。打开并确认加载会话后，在可见的对话或执行轨迹页面立即将该轮完成圆点记为已读；折叠过程或浏览较早的消息不影响已读。后台页面、未确认的切换、断线和被遮住的会话保留提示，已读记录只影响当前浏览器标签页的对应会话与回合。后台完成回执在当前 Host 生命周期内保留，不将已释放运行实例误报为空闲。
 
+Web 思考行使用简洁的灯泡图标，仍按原有偏好折叠。执行轨迹按原生用户消息分组，连续的会话变更默认收起；搜索可查找已加载的消息、推理、工具参数和结果。选择工具后可分别查看概览、输入和结果，记录信息按需展开；窄面板自动上下排列。此视图只展示已保存的有界记录，不推断执行耗时、缺失结果或完整模型请求。详见[执行轨迹边界与展示](docs/research/WEB_TRAJECTORY_2026-09-07.md)。
+
 Web 模型配置先填写提供商连接，再选择“获取可用模型”。列表支持搜索、勾选当前结果和批量添加，已有配置不会重复添加；搜索保留其他结果的勾选。查询仅请求提供商模型目录，不调用模型。可使用同一已保存端点的 Pi 凭据，或输入仅用于本次查询的临时密钥；临时密钥不会保存。新增模型沿用表单里的能力默认值，可在高级参数中逐项调整。提供商不支持目录接口时仍可手动添加。
 
 Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px（360–720px）。拖动或键盘调整后保存到同一份配置，刷新后恢复；小窗口按当前视口临时限制显示宽度，不覆盖已保存值。也可用 `/openpi-setup` 修改 `ui.webSidebarWidth` 和 `ui.webAuxiliaryWidth`。
 
 Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。有可靠耗时记录的回合，执行时展开整个过程，完成后“用时”默认收起中间说明、思考和工具，最终回答继续显示在下方；可点击“用时”查看完整过程，不折叠用户问题或最终回答。连续的思考、工具和活动按原生顺序组成同一组，遇到说明文字或其他消息就分开；单行活动直接显示，不再套一层分组。活动组运行时展开，结束后收起为图标、操作摘要与计数；思考保留在实际发生的位置，使用独立的一行文字预览，展开后使用 Markdown 排版。工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: webSearch.enabled webSearch.modelSupport capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 浏览器模型控制默认关闭。打开 Web「设置 → 浏览器」，可点击完成安装引导、连接检查、总开关、逐个浏览器授权和默认浏览器选择；也可用 `/openpi-setup` 自然语言设置 `browser_control`、`browser_embedded`、`browser_default`、`browser_external`。默认值依次为 `false`、`true`、`embedded`、`[]`：总开关关闭时所有模型浏览器操作都被拒绝，普通 iframe 浏览不受影响。设置中的授权变更通过同一配置写入器和 Pi 原生扩展事件生效，无需一次模型调用。
 
 普通浏览器可选择 `chrome`、`edge`、`brave`、`chromium`、`safari`、`firefox`。安装引导可打开独立窗口，在支持 Document Picture-in-Picture 的浏览器中浮动显示，其他浏览器使用普通弹窗。步骤中的圈选是操作示意；浏览器管理页仍由浏览器自身管理。Safari 26+（macOS）和 Firefox 128+ 使用随包提供的兼容扩展控制普通标签，内置控制仍需要 Chromium 系浏览器。开发安装为临时扩展，重启后需要重新加载；正式一键安装需要另行发布签名扩展。
 
-活动组收起时仍显示真实的当前活动：工具显示图标和目标，思考显示当前预览；组内思考、工具和其他活动的计数保持可见。展开的列表最高为 360px 或视口高度的一半，可在组内滚动。执行中停留在底部会跟随新活动，向上查看时保留阅读位置，主动回到底部或点击“跳至最新”后恢复跟随。只有当前执行的活动使用缓慢、间歇的文字流光，展开的组标题保持静止，并遵循系统减少动态效果设置。展开思考不再套用工具输出的行数和字节限制；超长的已保存思考按原始消息和内容片段加载，超过一页时可继续加载。上下文压缩的进行中、完成、失败、取消和连接未知提示来自 Pi 原生事件。
+活动组收起时仍显示真实的当前活动：工具显示图标和目标，思考显示当前预览；组内思考、工具和其他活动的计数与展开箭头在悬停或键盘聚焦时显示，触屏始终显示入口。思考正文默认折叠，其箭头遵循相同规则；同一条 Pi 原生助手消息内、紧随思考的工具使用细线连接，正文或消息边界会切断连线，不推断跨消息的因果关系。展开的列表最高为 360px 或视口高度的一半，可在组内滚动。执行中停留在底部会跟随新活动，向上查看时保留阅读位置，主动回到底部或点击“跳至最新”后恢复跟随。只有当前执行的活动使用缓慢、间歇的文字流光，展开的组标题保持静止，并遵循系统减少动态效果设置。展开思考不再套用工具输出的行数和字节限制；超长的已保存思考按原始消息和内容片段加载，超过一页时可继续加载。上下文压缩的进行中、完成、失败、取消和连接未知提示来自 Pi 原生事件。
 
 执行中追加的当前轮消息归属于原生执行的初始输入，使用同一个“用时”开关；折叠时保留追加消息和原生完成记录对应的最终回答，展开后保持时间顺序。没有原生输入身份的旧记录沿用原先边界，不猜测合并。正文、工具和“用时”分隔线共用聊天宽度，用户气泡按比例限制宽度；工具与思考字号随聊天字号变化。向上阅读时，输入框上方居中显示回到最新位置的按钮：运行时为跳动三点，结束后为向下箭头；底部不再另列通用“正在运行”提示。减少动态效果设置会停用三点动画。
 

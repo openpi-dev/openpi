@@ -17,8 +17,8 @@ export function CompactionStatus({
   const labels = {
     running: "compactionRunning",
     completed: "compactionCompleted",
-    failed: "compactionFailed",
-    cancelled: "compactionCancelled",
+    failed: "compactionInterrupted",
+    cancelled: "compactionInterrupted",
     unchanged: "compactionUnchanged",
     unavailable: "compactionUnavailable",
   } as const;

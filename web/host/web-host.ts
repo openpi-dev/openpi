@@ -1915,6 +1915,7 @@ export class WebHost {
         sessionId: diagnosticSession,
         sessionPath: this.runtime.sessionManager.getSessionFile(),
         setup: projectWebSetupConfig(loadSetupConfig()),
+        webSearch: this.runtime.getWebSearchSupport?.() ?? { available: false, reason: "unknown-connection" },
         resources: this.runtime.listSettingsResources(),
       });
     }

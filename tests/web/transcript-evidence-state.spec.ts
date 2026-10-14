@@ -533,6 +533,93 @@ it("keeps interleaved reasoning and tools in chronological groups separated by p
   expect(JSON.stringify(value.selectedSession!.entries)).toBe(original);
 });
 
+it("keeps default thinking folded as it streams and preserves an explicit expansion", async () => {
+  const value: WebSnapshot = snapshot({ running: true });
+  value.preferences.expandThinking = false;
+  value.selectedSession!.entries[1]!.message!.parts = [
+    { type: "thinking", text: "Inspecting implementation" },
+  ];
+  const rendered = render(view(value));
+  const disclosure =
+    rendered.container.querySelector<HTMLDetailsElement>(".thinking-line")!;
+  expect(disclosure.open).toBe(false);
+  const updated = structuredClone(value);
+  updated.selectedSession!.entries[1]!.message!.parts = [
+    {
+      type: "thinking",
+      text: "Inspecting implementation\n\nCheck the source.",
+    },
+  ];
+  rendered.rerender(view(updated));
+  expect(disclosure.open).toBe(false);
+  fireEvent.click(disclosure.querySelector("summary")!);
+  await waitFor(() => expect(disclosure.open).toBe(true));
+  updated.runtime.status = "idle";
+  updated.selectedSession!.entries[1]!.message!.stopReason = "stop";
+  rendered.rerender(view(updated));
+  expect(disclosure.open).toBe(true);
+});
+
+it("connects tools only to preceding thinking in the same native assistant message", () => {
+  const value: WebSnapshot = snapshot();
+  value.selectedSession!.entries[1]!.message!.parts = [
+    { type: "thinking", text: "Inspect the source first" },
+    call,
+    { type: "thinking", text: "Then inspect the settings" },
+    { ...call, id: "same-message", name: "read" },
+    { type: "text", text: "A separate phase follows." },
+    { ...call, id: "after-prose", name: "ls" },
+  ];
+  value.selectedSession!.entries.push(
+    {
+      id: "separate-thinking",
+      type: "message",
+      timestamp: "2026-09-26T10:00:03Z",
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [{ type: "thinking", text: "An independent reasoning note" }],
+      },
+    },
+    {
+      id: "separate-tool",
+      type: "message",
+      timestamp: "2026-09-26T10:00:04Z",
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [{ ...call, id: "other-message", name: "grep" }],
+      },
+    },
+  );
+  const original = JSON.stringify(value.selectedSession!.entries);
+  const { container } = render(view(value));
+  expect(
+    Array.from(container.querySelectorAll(".process-step"), (step) => ({
+      text: step.querySelector(".thinking-line .tool-summary")?.textContent,
+      tool: step.querySelector("[data-tool]")?.getAttribute("data-tool"),
+      connected: step.classList.contains("thought-tool-step"),
+    })),
+  ).toEqual([
+    { text: "Inspect the source first", tool: undefined, connected: false },
+    { text: undefined, tool: "bash", connected: true },
+    {
+      text: "Then inspect the settings",
+      tool: undefined,
+      connected: false,
+    },
+    { text: undefined, tool: "read", connected: true },
+    { text: undefined, tool: "ls", connected: false },
+    {
+      text: "An independent reasoning note",
+      tool: undefined,
+      connected: false,
+    },
+    { text: undefined, tool: "grep", connected: false },
+  ]);
+  expect(JSON.stringify(value.selectedSession!.entries)).toBe(original);
+});
+
 it("preserves expanded recovered thinking and its DOM when a singleton gains a second process row", async () => {
   const value: WebSnapshot = snapshot();
   const thinking = {

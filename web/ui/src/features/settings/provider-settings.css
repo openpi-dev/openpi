@@ -755,6 +755,20 @@
   height: 14px;
 }
 
+.settings-web-search-panel .settings-detail-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.settings-web-search-panel .settings-detail-heading h2 svg {
+  width: 16px;
+  height: 16px;
+}
+
 .settings-managed-panel .settings-empty-detail {
   min-height: 240px;
   gap: 12px;

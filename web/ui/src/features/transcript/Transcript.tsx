@@ -3,10 +3,12 @@ import {
   ArrowDown,
   Bot,
   Check,
-  ChevronDown,
   ChevronRight,
+  CircleAlert,
   Clipboard,
   GitBranch,
+  Globe,
+  Lightbulb,
   Pencil,
   RotateCcw,
   Wifi,
@@ -149,6 +151,7 @@ interface RenderRow {
   processPreview?: string;
   processToolName?: string;
   processStatus?: Status;
+  processMessageKey?: string;
   error?: boolean;
   outcome?: "completed" | "failed" | "interrupted";
   pendingPrompt?: boolean;
@@ -237,6 +240,26 @@ function StatusMark({ status }: { status: Status }) {
   return null;
 }
 
+function ErrorNotice({
+  label,
+  message,
+  children,
+}: {
+  label: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="execution-error" role="alert" aria-label={label}>
+      <CircleAlert aria-hidden="true" />
+      <div className="execution-error-content">
+        <p>{message}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function ProviderOutcome({
   failed,
   error,
@@ -252,17 +275,18 @@ function ProviderOutcome({
 }) {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
+  if (!failed)
+    return (
+      <div className="provider-outcome aborted" role="status">
+        {t("modelRequestStopped")}
+      </div>
+    );
   return (
-    <div
-      className={`provider-outcome ${failed ? "failed" : "aborted"}`}
-      role={failed ? "alert" : "status"}
+    <ErrorNotice
+      label={t("modelRequestFailed")}
+      message={error || t("modelFailureUnknown")}
     >
-      <strong>
-        {t(failed ? "modelRequestFailed" : "modelRequestStopped")}
-      </strong>
-      {failed && <p>{error || t("modelFailureUnknown")}</p>}
-      {failed && <small>{t("modelFailureNextStep")}</small>}
-      {failed && retryPrompt && (
+      {retryPrompt && (
         <div className="provider-outcome-actions">
           <button
             type="button"
@@ -277,7 +301,7 @@ function ProviderOutcome({
           </button>
         </div>
       )}
-    </div>
+    </ErrorNotice>
   );
 }
 
@@ -753,10 +777,13 @@ function ThinkingEvidence({
         aria-label={[name, preview].filter(Boolean).join(" · ")}
         title={preview}
       >
+        <span className="tool-icon" aria-hidden="true">
+          <Lightbulb />
+        </span>
         <span className="details-title">
           <span className="tool-summary">{preview || name}</span>
         </span>
-        <ChevronDown className="tool-disclosure" aria-hidden="true" />
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
       </summary>
       {expanded && (
         <div className="details-body thinking-evidence">
@@ -1415,6 +1442,7 @@ function ProcessSequence({
   active: boolean;
 }) {
   const { t } = useTranslation();
+  let thinkingMessageKey: string | undefined;
   const [open, setOpen] = useState(active);
   const single = rows.length === 1;
   const previousSingle = useRef(single);
@@ -1663,15 +1691,26 @@ function ProcessSequence({
         }}
       >
         <div className="process-sequence-body">
-          {rows.map((row) => (
-            <div
-              className={`process-step ${single ? "single-tool-step " : ""}${row.processStatus ?? "unknown"}`}
-              data-status={row.processStatus ?? "unknown"}
-              key={row.key}
-            >
-              {row.content}
-            </div>
-          ))}
+          {rows.map((row) => {
+            // Native message order establishes this visual association;
+            // chronological proximity across messages does not.
+            if (row.processType === "thinking")
+              thinkingMessageKey = row.processMessageKey;
+            else if (row.processMessageKey !== thinkingMessageKey)
+              thinkingMessageKey = undefined;
+            const followsThinking =
+              thinkingMessageKey !== undefined &&
+              row.processType !== "thinking";
+            return (
+              <div
+                className={`process-step ${single ? "single-tool-step " : ""}${followsThinking ? "thought-tool-step " : ""}${row.processStatus ?? "unknown"}`}
+                data-status={row.processStatus ?? "unknown"}
+                key={row.key}
+              >
+                {row.content}
+              </div>
+            );
+          })}
         </div>
       </section>
     </details>
@@ -1732,7 +1771,7 @@ function TurnRun({
   for (const row of rows) {
     if (row.content === null) continue;
     const final = timing?.resultEntryId
-      ? row.responseEntryId === timing.resultEntryId
+      ? row.responseEntryId === timing.resultEntryId && row.final !== false
       : !active && row.final;
     const foldable = row.kind !== "prompt" && !final;
     const previous = blocks.at(-1);
@@ -2349,7 +2388,7 @@ export function Transcript(props: TranscriptProps) {
     const failures = providerFailures(entries, running && !historyPaused);
     const lastFinalError = [...failures.finalErrors].at(-1);
     const attemptContents = new Map<string, RenderRow[]>();
-    let retryRendered = false;
+    let retryRowKey: string | undefined;
     const results = new Map<string, DisplayEntry>();
     const pairedToolIds = new Set<string>();
     const liveTools = historyPaused
@@ -2619,6 +2658,49 @@ export function Transcript(props: TranscriptProps) {
             .join("");
         const detailRows: RenderRow[] = [];
         const parts = message.parts ?? [];
+        const searches = message.webSearch ?? [];
+        const searchPosition = (search: (typeof searches)[number]) =>
+          Math.min(parts.length, search.beforePartIndex ?? 0);
+        const appendSearches = (beforePartIndex: number) => {
+          for (const [searchIndex, search] of searches.entries()) {
+            if (searchPosition(search) !== beforePartIndex) continue;
+            const status =
+              search.status === "completed"
+                ? "done"
+                : search.status === "failed"
+                  ? "error"
+                  : "warn";
+            detailRows.push({
+              key: `${entry.key}-native-search-${searchIndex}`,
+              turn,
+              kind: "process",
+              processType: "tool",
+              processMessageKey: entry.key,
+              processToolName: "web_search",
+              processPreview: search.query,
+              processStatus: status,
+              error: search.status === "failed",
+              content: (
+                <article
+                  className="message-row assistant detail-only"
+                  data-history-entry={`${entry.entryId ?? entry.key}-native-search-${searchIndex}-body`}
+                  data-history-message={entry.entryId ?? entry.key}
+                  tabIndex={-1}
+                >
+                  <div className="message-content">
+                    <EvidenceDetails
+                      body={search.query}
+                      icon={<Globe />}
+                      name="web_search"
+                      summary={search.query}
+                      status={status}
+                    />
+                  </div>
+                </article>
+              ),
+            });
+          }
+        };
         const lastVisiblePart = parts.reduce(
           (last, part, partIndex) =>
             (part.type === "thinking" || part.type === "text") &&
@@ -2654,7 +2736,9 @@ export function Transcript(props: TranscriptProps) {
             kind: "response",
             responseEntryId: entry.entryId,
             final:
-              message.stopReason === "stop" || message.stopReason === "length",
+              actions &&
+              (message.stopReason === "stop" ||
+                message.stopReason === "length"),
             content: (
               <article
                 className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
@@ -2740,10 +2824,18 @@ export function Transcript(props: TranscriptProps) {
           });
         };
         message.parts?.forEach((part, partIndex) => {
-          if (part.type === "text" && parts[partIndex - 1]?.type !== "text") {
+          appendSearches(partIndex);
+          if (
+            part.type === "text" &&
+            (parts[partIndex - 1]?.type !== "text" ||
+              searches.some((search) => searchPosition(search) === partIndex))
+          ) {
             let text = part.text;
             let end = partIndex + 1;
-            while (parts[end]?.type === "text") {
+            while (
+              parts[end]?.type === "text" &&
+              !searches.some((search) => searchPosition(search) === end)
+            ) {
               const next = parts[end];
               if (next?.type === "text") text += next.text;
               end++;
@@ -2775,6 +2867,7 @@ export function Transcript(props: TranscriptProps) {
               turn,
               kind: "process",
               processType: "thinking",
+              processMessageKey: entry.key,
               processPreview: thinkingPreview(part.text),
               processStatus: status,
               content: (
@@ -2900,6 +2993,7 @@ export function Transcript(props: TranscriptProps) {
               processType: /^(subagent|workflow)/u.test(part.name)
                 ? "activity"
                 : "tool",
+              processMessageKey: entry.key,
               processToolName: part.name,
               processPreview: toolActivityTarget(part.name, args)
                 .split("\n")
@@ -2953,6 +3047,7 @@ export function Transcript(props: TranscriptProps) {
             });
           }
         });
+        appendSearches(parts.length);
         if (lastTextIndex < 0)
           appendText(message.content, `${entry.key}-answer`, true);
         if (
@@ -2964,7 +3059,8 @@ export function Transcript(props: TranscriptProps) {
         }
         const attempts = failures.groups.get(index);
         if (attempts) {
-          if (attempts.state === "retrying" && retry) retryRendered = true;
+          if (attempts.state === "retrying" && retry)
+            retryRowKey = `${attempts.attempts[0]!.key}-attempts`;
           detailRows.push({
             key: `${attempts.attempts[0]!.key}-attempts`,
             turn,
@@ -3141,10 +3237,15 @@ export function Transcript(props: TranscriptProps) {
       }
       return [];
     });
-    if (retry && !retryRendered)
-      rendered.push({
+    let nativeEnd = rendered.length;
+    while (nativeEnd > 0 && rendered[nativeEnd - 1]!.pendingPrompt) nativeEnd--;
+    const pendingPreviews = rendered.length - nativeEnd;
+    const nativeTurn = rendered[nativeEnd - 1]?.turn ?? 0;
+    if (retry && !retryRowKey) {
+      retryRowKey = "native-retry";
+      rendered.splice(nativeEnd, 0, {
         key: "native-retry",
-        turn,
+        turn: nativeTurn,
         kind: "outcome",
         content: (
           <article className="message-row assistant outcome-row">
@@ -3160,6 +3261,46 @@ export function Transcript(props: TranscriptProps) {
           </article>
         ),
       });
+    }
+    const compaction = !historyPaused && selectedExecution?.compaction;
+    if (compaction && compaction.state !== "completed") {
+      const retryIndex = rendered.findIndex((row) => row.key === retryRowKey);
+      const compactionRow: RenderRow = {
+        key: `native-compaction-${compaction.startedAt ?? compaction.state}`,
+        turn: rendered[retryIndex]?.turn ?? nativeTurn,
+        kind: "custom",
+        content: (
+          <CompactionStatus
+            compaction={compaction}
+            observed={
+              props.activityObserved !== false &&
+              selectedExecution?.status !== "unknown"
+            }
+          />
+        ),
+      };
+      // Keep the current compaction before the observed reconnect status.
+      // Completed compactions continue to use Pi's chronological entries.
+      rendered.splice(
+        retryIndex < 0 ? nativeEnd : retryIndex,
+        0,
+        compactionRow,
+      );
+      if (compaction.state === "failed" && compaction.errorMessage)
+        rendered.splice(rendered.length - pendingPreviews, 0, {
+          key: "native-compaction-error",
+          turn: compactionRow.turn,
+          kind: "custom",
+          content: (
+            <article className="message-row assistant outcome-row">
+              <ErrorNotice
+                label={t("compactionFailed")}
+                message={compaction.errorMessage}
+              />
+            </article>
+          ),
+        });
+    }
     return { rows: rendered, turns: turnItems };
   }, [
     active,
@@ -3674,21 +3815,6 @@ export function Transcript(props: TranscriptProps) {
             props.onReviewTurn,
             props.activityObserved !== false,
           )}
-          {selectedExecution?.compaction &&
-            selectedExecution.compaction.state !== "completed" && (
-              <CompactionStatus
-                key={JSON.stringify([
-                  selected?.id,
-                  selected?.path,
-                  selectedExecution.compaction.startedAt,
-                ])}
-                compaction={selectedExecution.compaction}
-                observed={
-                  props.activityObserved !== false &&
-                  selectedExecution.status !== "unknown"
-                }
-              />
-            )}
           {running &&
             props.activityObserved !== false &&
             selectedExecution?.compaction?.state !== "running" && (
