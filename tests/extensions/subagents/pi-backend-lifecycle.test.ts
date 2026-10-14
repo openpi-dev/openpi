@@ -204,9 +204,9 @@ test("the production Pi adapter bridges startup, first response, tools, usage, a
       harness.setContextUsage({ tokens: 321, contextWindow: 8_192 });
       harness.emitAssistant("Repository inspected");
       harness.setStreaming(false);
-      harness.emit({ type: "agent_settled", aborted: false });
+      harness.emit({ type: "agent_settled", ...{ aborted: false } });
       harness.resolvePrompt();
-      harness.emit({ type: "agent_settled", aborted: false });
+      harness.emit({ type: "agent_settled", ...{ aborted: false } });
     },
   );
 
@@ -274,7 +274,7 @@ test("native aborted settlement interrupts a child without an aborted assistant 
           harness.emitAssistant("partial result", {
             stopReason: previousResult,
           });
-        harness.emit({ type: "agent_settled", aborted: true });
+        harness.emit({ type: "agent_settled", ...{ aborted: true } });
         harness.resolvePrompt();
       },
     );
@@ -332,7 +332,7 @@ test("a direct subagent validates, persists, and delivers structured output", as
         harness.emit({ type: "agent_start" });
         harness.emitAssistant("");
         harness.setStreaming(false);
-        harness.emit({ type: "agent_settled", aborted: false });
+        harness.emit({ type: "agent_settled", ...{ aborted: false } });
         harness.resolvePrompt();
       },
     );
@@ -365,7 +365,7 @@ test("a direct subagent validates, persists, and delivers structured output", as
         );
         next.emit({ type: "agent_start" });
         next.emitAssistant("done");
-        next.emit({ type: "agent_settled", aborted: false });
+        next.emit({ type: "agent_settled", ...{ aborted: false } });
         next.resolvePrompt();
       },
     );
@@ -403,7 +403,7 @@ test("a direct structured subagent fails when it never submits", async () => {
       harness.emit({ type: "agent_start" });
       harness.emitAssistant("plain text only");
       harness.setStreaming(false);
-      harness.emit({ type: "agent_settled", aborted: false });
+      harness.emit({ type: "agent_settled", ...{ aborted: false } });
       harness.resolvePrompt();
     },
   );
@@ -433,7 +433,7 @@ test("by-the-way spawns use in-memory sessions without persisting to disk", asyn
       const harness = fixtures.harnesses[0];
       assert.ok(harness);
       harness.emitAssistant("answer");
-      harness.emit({ type: "agent_settled", aborted: false });
+      harness.emit({ type: "agent_settled", ...{ aborted: false } });
       harness.resolvePrompt();
     },
   );
@@ -462,7 +462,7 @@ test("prompt rejection wins over an earlier agent_settled event", async () => {
     harness.emit({ type: "agent_start" });
     harness.emitAssistant("partial provider output");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(manager.view.get(spawned.id)?.status, "running");
@@ -507,7 +507,7 @@ test("a prompt that resolves without lifecycle events fails explicitly", async (
     harness.setStreaming(true);
     harness.emit({ type: "agent_start" });
     harness.emitAssistant("late lifecycle output");
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(manager.view.get(spawned.id)?.finalText, "");
   } finally {
@@ -581,7 +581,7 @@ test("streaming send steers while idle send starts a distinct run", async () => 
 
     harness.emitAssistant("first result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([first.id]));
     assert.equal(manager.view.get(first.id)?.finalText, "first result");
@@ -596,7 +596,7 @@ test("streaming send steers while idle send starts a distinct run", async () => 
     harness.emitTextDelta("second response");
     harness.emitAssistant("second result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([first.id]));
 
@@ -612,7 +612,7 @@ test("streaming send steers while idle send starts a distinct run", async () => 
       [first.id, first.id],
     );
 
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(settlements.length, 2);
   } finally {
@@ -642,7 +642,7 @@ test("cancelled active run restarts only after the old prompt is quiescent", asy
 
     const cancellation = runtime.runPromise(manager.cancel([spawned.id]));
     await waitFor(() => harness.calls.aborts === 1, "active run abort");
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     const report = await cancellation;
     assert.equal(report[0]?.cancelled, true);
@@ -665,7 +665,7 @@ test("cancelled active run restarts only after the old prompt is quiescent", asy
     harness.emit({ type: "agent_start" });
     harness.emitAssistant("fresh restarted result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([spawned.id]));
     assert.equal(manager.view.get(spawned.id)?.status, "done");
@@ -754,7 +754,7 @@ test("preflight cancellation stays single-flight until the exact prompt settles"
       args: { path: "stale.txt" },
     });
     harness.emitAssistant("stale cancelled result");
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(cancelFinished, false);
     assert.equal(settlements, 0);
@@ -778,7 +778,7 @@ test("preflight cancellation stays single-flight until the exact prompt settles"
     harness.emitTextDelta("fresh delta");
     harness.emitAssistant("fresh result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     secondPrompt.resolve();
     await runtime.runPromise(manager.waitFor([spawned.id]));
 
@@ -833,7 +833,7 @@ test("settled restart waits for the previous prompt Promise microtask boundary",
     harness.emit({ type: "agent_start" });
     harness.emitAssistant("first result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(manager.view.get(spawned.id)?.status, "running");
 
@@ -856,7 +856,7 @@ test("settled restart waits for the previous prompt Promise microtask boundary",
     harness.emit({ type: "agent_start" });
     harness.emitAssistant("second result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     secondPrompt.resolve();
     await runtime.runPromise(manager.waitFor([spawned.id]));
     assert.equal(manager.view.get(spawned.id)?.finalText, "second result");
@@ -893,7 +893,7 @@ test("cancel invalidates a restart waiting on the previous prompt Promise", asyn
     harness.emit({ type: "agent_start" });
     harness.emitAssistant("first result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(manager.view.get(spawned.id)?.status, "running");
 
@@ -952,7 +952,7 @@ test("an aborted send cannot start its deferred restart later", async () => {
     harness.emit({ type: "agent_start" });
     harness.emitAssistant("stable prior result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(manager.view.get(spawned.id)?.status, "running");
 
@@ -1012,7 +1012,7 @@ test("run-local terminal evidence survives preflight and post-run compaction", a
     // Post-run compaction can replace it again before agent_settled.
     harness.messages.splice(0, harness.messages.length);
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([spawned.id]));
     assert.equal(
@@ -1029,7 +1029,7 @@ test("run-local terminal evidence survives preflight and post-run compaction", a
     });
     harness.messages.splice(0, harness.messages.length);
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([spawned.id]));
     assert.equal(manager.view.get(spawned.id)?.status, "error");
@@ -1051,7 +1051,7 @@ test("run-local terminal evidence survives preflight and post-run compaction", a
     harness.messages.splice(0, harness.messages.length);
     const cancellation = runtime.runPromise(manager.cancel([spawned.id]));
     await waitFor(() => harness.calls.aborts === 1, "compacted run abort");
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     await cancellation;
     assert.equal(manager.view.get(spawned.id)?.status, "error");
@@ -1087,7 +1087,7 @@ test("cancelled restart preflight never reuses the previous run output", async (
     harness.emit({ type: "agent_start" });
     harness.emitAssistant("previous successful result");
     harness.setStreaming(false);
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([spawned.id]));
     assert.equal(
@@ -1187,7 +1187,7 @@ test("a preflight that ignores abort is force-closed without reopening the sessi
     const freshHarness = fixtures.harnesses[1];
     assert.ok(freshHarness);
     await waitFor(() => freshHarness.calls.aborts === 1, "fresh run abort");
-    freshHarness.emit({ type: "agent_settled", aborted: false });
+    freshHarness.emit({ type: "agent_settled", ...{ aborted: false } });
     freshHarness.resolvePrompt();
     await freshCancellation;
   } finally {
@@ -1251,7 +1251,7 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
     assert.equal(cancellationFinished, false);
     latePrompt.reject(new Error("late prompt rejection"));
     for (const harness of fixtures.harnesses.slice(1)) {
-      harness.emit({ type: "agent_settled", aborted: false });
+      harness.emit({ type: "agent_settled", ...{ aborted: false } });
       harness.resolvePrompt();
     }
     const report = await cancellation;
@@ -1270,7 +1270,7 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
     assert.ok(toolHarness);
     promptHarness.emit({ type: "agent_start" });
     promptHarness.emitAssistant("late prompt completion");
-    promptHarness.emit({ type: "agent_settled", aborted: false });
+    promptHarness.emit({ type: "agent_settled", ...{ aborted: false } });
     toolHarness.emit({
       type: "tool_execution_end",
       toolCallId: "tool-2",
@@ -1279,7 +1279,7 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
       isError: false,
     });
     toolHarness.emitAssistant("late tool completion");
-    toolHarness.emit({ type: "agent_settled", aborted: false });
+    toolHarness.emit({ type: "agent_settled", ...{ aborted: false } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(settlements, 4);
     assert.equal(manager.view.get(spawned[0]!.id)?.finalText, "");
@@ -1301,7 +1301,10 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
       () => afterCancellationHarness.calls.aborts === 1,
       "replacement run abort",
     );
-    afterCancellationHarness.emit({ type: "agent_settled", aborted: false });
+    afterCancellationHarness.emit({
+      type: "agent_settled",
+      ...{ aborted: false },
+    });
     afterCancellationHarness.resolvePrompt();
     await afterCancellationStop;
   } finally {
@@ -1330,7 +1333,7 @@ test("quiet provider thinking past 45 seconds remains live and can complete", as
     assert.equal(harness.calls.aborts, 0);
     t.mock.timers.reset();
     harness.emitAssistant("completed after quiet thinking");
-    harness.emit({ type: "agent_settled", aborted: false });
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
     harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([spawned.id]));
     assert.equal(manager.view.get(spawned.id)?.status, "done");
