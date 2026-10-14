@@ -2,16 +2,30 @@ import {
   type ExtensionAPI,
   isToolCallEventType,
 } from "@earendil-works/pi-coding-agent";
+import {
+  loadSetupConfig,
+  SETUP_CONFIG_CHANGED_CHANNEL,
+} from "../shared/setup-config.ts";
 import { createWorkspaceCleanupGuard } from "./workspace-provenance.ts";
 
 const DELETE_CONFIRMATION_TITLE = "Delete pre-existing workspace files?";
+const OPAQUE_DELETE_CONFIRMATION_TITLE = "Allow unverified workspace cleanup?";
 
 function deleteConfirmationMessage(paths: readonly string[]) {
+  if (paths.length === 0) {
+    return "OpenPI cannot verify which workspace files this command may delete. Allow this command to run?";
+  }
   return `The command would delete files that existed before this agent changed them:\n\n${paths.map((candidate) => `- ${candidate}`).join("\n")}\n\nAllow this exact deletion?`;
 }
 
 export default function workspaceCleanupGuard(pi: ExtensionAPI) {
-  const workspaceCleanup = createWorkspaceCleanupGuard();
+  const workspaceCleanup = createWorkspaceCleanupGuard(
+    loadSetupConfig().workspaceCleanupGuard,
+  );
+
+  pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
+    workspaceCleanup.setMode(loadSetupConfig().workspaceCleanupGuard);
+  });
 
   pi.on("tool_call", async (event, ctx) => {
     if (isToolCallEventType("write", event)) {
@@ -30,7 +44,9 @@ export default function workspaceCleanupGuard(pi: ExtensionAPI) {
       cwd: ctx.cwd,
       confirmDelete: (paths) =>
         ctx.ui.confirm(
-          DELETE_CONFIRMATION_TITLE,
+          paths.length === 0
+            ? OPAQUE_DELETE_CONFIRMATION_TITLE
+            : DELETE_CONFIRMATION_TITLE,
           deleteConfirmationMessage(paths),
           { signal: ctx.signal },
         ),

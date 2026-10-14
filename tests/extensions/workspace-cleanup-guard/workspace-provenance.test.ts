@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { createWorkspaceCleanupGuard } from "../../../extensions/workspace-cleanup-guard/workspace-provenance.ts";
 
 function guardFor(
   confirmDelete: (paths: readonly string[]) => Promise<boolean>,
+  mode: "enforce" | "ask" | "off" = "enforce",
 ) {
-  const guard = createWorkspaceCleanupGuard();
+  const guard = createWorkspaceCleanupGuard(mode);
   return {
     ...guard,
     before(attempt: { id: string; command: string; cwd: string }) {
@@ -16,6 +19,168 @@ function guardFor(
     },
   };
 }
+
+test("cleanup guard modes keep enforce default, ask on opaque commands, and bypass in off", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "baseline.txt"), "keep");
+    const confirmations: string[][] = [];
+    const noConfirmations: string[][] = [];
+    const noPaths: string[] = [];
+    const baselinePath = ["baseline.txt"];
+    const enforce = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return true;
+    });
+    assert.equal(
+      (
+        await enforce.before({
+          id: "enforce-opaque",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "block",
+    );
+    assert.deepEqual(confirmations, noConfirmations);
+
+    const ask = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return true;
+    }, "ask");
+    assert.equal(
+      (
+        await ask.before({
+          id: "ask-opaque",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths]);
+
+    assert.equal(
+      (
+        await ask.before({
+          id: "ask-known-path",
+          command: "rm baseline.txt",
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath]);
+
+    assert.equal(
+      (
+        await ask.before({
+          id: "ask-outside-path",
+          command: "rm ../outside.txt",
+          cwd: workspace,
+        })
+      ).kind,
+      "block",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath]);
+
+    const denyAsk = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return false;
+    }, "ask");
+    assert.equal(
+      (
+        await denyAsk.before({
+          id: "deny-ask-opaque",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "block",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath, noPaths]);
+
+    const off = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return false;
+    }, "off");
+    assert.equal(
+      (
+        await off.before({
+          id: "off-opaque",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath, noPaths]);
+    assert.equal(
+      (
+        await off.before({
+          id: "off-known-path",
+          command: "rm baseline.txt",
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath, noPaths]);
+
+    const changeable = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return true;
+    });
+    changeable.setMode("ask");
+    assert.equal(
+      (
+        await changeable.before({
+          id: "changed-to-ask",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath, noPaths, noPaths]);
+  });
+});
+
+test("mode changes invalidate pending cleanup confirmations", async () => {
+  await withWorkspace(async (workspace) => {
+    const confirmAfterModeChange = async (
+      command: string,
+      expectedPaths: string[],
+    ) => {
+      let resolveConfirmation!: (confirmed: boolean) => void;
+      let signalConfirmationStarted!: () => void;
+      const confirmation = new Promise<boolean>((resolve) => {
+        resolveConfirmation = resolve;
+      });
+      const confirmationStarted = new Promise<void>((resolve) => {
+        signalConfirmationStarted = resolve;
+      });
+      const guard = guardFor(async (paths) => {
+        assert.deepEqual(paths, expectedPaths);
+        signalConfirmationStarted();
+        return confirmation;
+      }, "ask");
+
+      const pending = guard.before({
+        id: command,
+        command,
+        cwd: workspace,
+      });
+      await confirmationStarted;
+      guard.setMode("enforce");
+      resolveConfirmation(true);
+      assert.equal((await pending).kind, "block");
+    };
+
+    await confirmAfterModeChange('rm "$(cat target)"', []);
+    await writeFile(path.join(workspace, "baseline.txt"), "keep");
+    await confirmAfterModeChange("rm baseline.txt", ["baseline.txt"]);
+  });
+});
 
 async function withWorkspace(run: (workspace: string) => Promise<void>) {
   const workspace = await mkdtemp(
@@ -589,5 +754,370 @@ test("proven creation survives a later command failure", async () => {
       ).kind,
       "allow",
     );
+  });
+});
+
+async function pauseNextLstat(
+  run: (started: Promise<void>, resume: () => void) => Promise<void>,
+  absentObservations: readonly number[] = [],
+) {
+  const original = fsPromises.lstat;
+  let signalStarted!: () => void;
+  let resume!: () => void;
+  const started = new Promise<void>((resolve) => {
+    signalStarted = resolve;
+  });
+  const resumed = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  let observationCount = 0;
+  const observe = (...args: Parameters<typeof original>) => {
+    observationCount += 1;
+    if (absentObservations.includes(observationCount)) {
+      return Promise.reject(
+        Object.assign(new Error("simulated absent observation"), {
+          code: "ENOENT",
+        }),
+      );
+    }
+    return original(...args);
+  };
+  let first = true;
+  const mocked = mock.method(
+    fsPromises,
+    "lstat",
+    async (...args: Parameters<typeof original>) => {
+      if (!first) return observe(...args);
+      first = false;
+      // Capture the filesystem observation before allowing the policy/reset interleaving.
+      const observation = observe(...args);
+      void observation.catch(() => undefined);
+      signalStarted();
+      await resumed;
+      return observation;
+    },
+  );
+  syncBuiltinESMExports();
+  try {
+    await run(started, resume);
+  } finally {
+    resume();
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+}
+
+for (const invalidate of ["policy", "reset"] as const) {
+  const invalidateGuard = (guard: ReturnType<typeof guardFor>) => {
+    if (invalidate === "reset") guard.reset();
+    else {
+      guard.setMode("off");
+      guard.setMode("enforce");
+    }
+  };
+
+  test(`${invalidate} prevents stale preparation from restoring baseline over fresh ownership`, async () => {
+    await withWorkspace(async (workspace) => {
+      let confirmations = 0;
+      const guard = guardFor(async () => {
+        confirmations += 1;
+        return false;
+      });
+      await writeFile(path.join(workspace, "scratch.txt"), "old observation");
+      await pauseNextLstat(
+        async (started, resume) => {
+          const preparation = guard.beforeWrite({
+            id: "old",
+            cwd: workspace,
+            path: "scratch.txt",
+          });
+          await started;
+          invalidateGuard(guard);
+          // Model a fresh absent observation without deleting a filesystem path.
+          await guard.beforeWrite({
+            id: "new",
+            cwd: workspace,
+            path: "scratch.txt",
+          });
+          await writeFile(path.join(workspace, "scratch.txt"), "new scratch");
+          resume();
+          await preparation;
+        },
+        [2],
+      );
+      await guard.after({ id: "new", isError: false });
+      assert.equal(
+        (
+          await guard.before({
+            id: "delete",
+            cwd: workspace,
+            command: "rm scratch.txt",
+          })
+        ).kind,
+        "allow",
+      );
+      assert.equal(confirmations, 0);
+    });
+  });
+
+  test(`${invalidate} invalidates Bash creation preparation`, async () => {
+    await withWorkspace(async (workspace) => {
+      let confirmations = 0;
+      const guard = guardFor(async () => {
+        confirmations += 1;
+        return false;
+      });
+      await pauseNextLstat(async (started, resume) => {
+        const preparation = guard.before({
+          id: "old",
+          cwd: workspace,
+          command: "cat > scratch.txt",
+        });
+        await started;
+        invalidateGuard(guard);
+        resume();
+        assert.equal((await preparation).kind, "block");
+      });
+      await writeFile(path.join(workspace, "scratch.txt"), "scratch");
+      await guard.after({ id: "old", isError: false });
+      assert.equal(
+        (
+          await guard.before({
+            id: "delete",
+            cwd: workspace,
+            command: "rm scratch.txt",
+          })
+        ).kind,
+        "block",
+      );
+      assert.equal(confirmations, 1);
+    });
+  });
+
+  test(`${invalidate} invalidates write preparation and cannot consume new same-id pending`, async () => {
+    await withWorkspace(async (workspace) => {
+      let confirmations = 0;
+      const guard = guardFor(async () => {
+        confirmations += 1;
+        return false;
+      });
+      await pauseNextLstat(async (started, resume) => {
+        const preparation = guard.beforeWrite({
+          id: "same",
+          cwd: workspace,
+          path: "old.txt",
+        });
+        await started;
+        invalidateGuard(guard);
+        await guard.beforeWrite({
+          id: "same",
+          cwd: workspace,
+          path: "new.txt",
+        });
+        resume();
+        await preparation;
+      });
+      await writeFile(path.join(workspace, "old.txt"), "old");
+      await writeFile(path.join(workspace, "new.txt"), "new");
+      await guard.after({ id: "same", isError: false });
+      assert.equal(
+        (
+          await guard.before({
+            id: "new-delete",
+            cwd: workspace,
+            command: "rm new.txt",
+          })
+        ).kind,
+        "allow",
+      );
+      assert.equal(
+        (
+          await guard.before({
+            id: "old-delete",
+            cwd: workspace,
+            command: "rm old.txt",
+          })
+        ).kind,
+        "block",
+      );
+      assert.equal(confirmations, 1);
+    });
+  });
+
+  test(`${invalidate} invalidates after creation observation and preserves new pending`, async () => {
+    await withWorkspace(async (workspace) => {
+      let confirmations = 0;
+      const guard = guardFor(async () => {
+        confirmations += 1;
+        return false;
+      });
+      await guard.beforeWrite({ id: "same", cwd: workspace, path: "old.txt" });
+      await writeFile(path.join(workspace, "old.txt"), "old");
+      await pauseNextLstat(async (started, resume) => {
+        const completion = guard.after({ id: "same", isError: false });
+        await started;
+        invalidateGuard(guard);
+        await guard.beforeWrite({
+          id: "same",
+          cwd: workspace,
+          path: "new.txt",
+        });
+        await writeFile(path.join(workspace, "new.txt"), "new");
+        resume();
+        await completion;
+      });
+      await guard.after({ id: "same", isError: false });
+      assert.equal(
+        (
+          await guard.before({
+            id: "new-delete",
+            cwd: workspace,
+            command: "rm new.txt",
+          })
+        ).kind,
+        "allow",
+      );
+      assert.equal(
+        (
+          await guard.before({
+            id: "old-delete",
+            cwd: workspace,
+            command: "rm old.txt",
+          })
+        ).kind,
+        "block",
+      );
+      assert.equal(confirmations, 1);
+    });
+  });
+
+  test(`${invalidate} invalidates after removal observation before deleting new ownership`, async () => {
+    await withWorkspace(async (workspace) => {
+      let confirmations = 0;
+      const guard = guardFor(async () => {
+        confirmations += 1;
+        return false;
+      });
+      await guard.beforeWrite({
+        id: "create",
+        cwd: workspace,
+        path: "scratch.txt",
+      });
+      await writeFile(path.join(workspace, "scratch.txt"), "scratch");
+      await guard.after({ id: "create", isError: false });
+      assert.equal(
+        (
+          await guard.before({
+            id: "remove",
+            cwd: workspace,
+            command: "rm scratch.txt",
+          })
+        ).kind,
+        "allow",
+      );
+      // Simulate absent lstat observations for the completed removal and fresh
+      // preparation; no deletion command or filesystem removal is executed.
+      await pauseNextLstat(
+        async (started, resume) => {
+          const completion = guard.after({ id: "remove", isError: false });
+          await started;
+          invalidateGuard(guard);
+          await guard.beforeWrite({
+            id: "new",
+            cwd: workspace,
+            path: "scratch.txt",
+          });
+          await writeFile(path.join(workspace, "scratch.txt"), "new scratch");
+          await guard.after({ id: "new", isError: false });
+          resume();
+          await completion;
+        },
+        [1, 2],
+      );
+      assert.equal(
+        (
+          await guard.before({
+            id: "current-delete",
+            cwd: workspace,
+            command: "rm scratch.txt",
+          })
+        ).kind,
+        "allow",
+      );
+      assert.equal(confirmations, 0);
+    });
+  });
+}
+
+test("unchanged mode preserves current pending and session ownership", async () => {
+  await withWorkspace(async (workspace) => {
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return false;
+    });
+    await guard.beforeWrite({
+      id: "create",
+      cwd: workspace,
+      path: "scratch.txt",
+    });
+    guard.setMode("enforce");
+    await writeFile(path.join(workspace, "scratch.txt"), "scratch");
+    await guard.after({ id: "create", isError: false });
+    guard.setMode("enforce");
+    assert.equal(
+      (
+        await guard.before({
+          id: "delete",
+          cwd: workspace,
+          command: "rm scratch.txt",
+        })
+      ).kind,
+      "allow",
+    );
+    assert.equal(confirmations, 0);
+  });
+});
+
+test("after rechecks current ownership after its asynchronous creation observation", async () => {
+  await withWorkspace(async (workspace) => {
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return false;
+    });
+    await guard.beforeWrite({
+      id: "create",
+      cwd: workspace,
+      path: "scratch.txt",
+    });
+    await writeFile(path.join(workspace, "scratch.txt"), "scratch");
+    await pauseNextLstat(async (started, resume) => {
+      const completion = guard.after({ id: "create", isError: false });
+      await started;
+      assert.equal(
+        (
+          await guard.before({
+            id: "protected",
+            cwd: workspace,
+            command: "rm scratch.txt",
+          })
+        ).kind,
+        "block",
+      );
+      resume();
+      await completion;
+    });
+    assert.equal(
+      (
+        await guard.before({
+          id: "still-protected",
+          cwd: workspace,
+          command: "rm scratch.txt",
+        })
+      ).kind,
+      "block",
+    );
+    assert.equal(confirmations, 2);
   });
 });
