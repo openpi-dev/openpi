@@ -492,6 +492,9 @@ async function* readSseChunks(
     if (payload === "[DONE]") return undefined;
     return JSON.parse(payload) as CcaChunk;
   };
+  const addDataLine = (line: string) => {
+    if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  };
   let sawEvent = false;
   let reachedEnd = false;
   const timeoutError = () =>
@@ -552,15 +555,12 @@ async function* readSseChunks(
             sawEvent = true;
             yield event;
           }
-        } else if (line.startsWith("data:")) {
-          dataLines.push(line.slice(5).trimStart());
-        }
+        } else addDataLine(line);
         // event:/id:/retry: lines carry no payload for this API.
       }
     }
     buffer += decoder.decode();
-    const tail = buffer.trim();
-    if (tail.startsWith("data:")) dataLines.push(tail.slice(5).trimStart());
+    for (const line of buffer.split("\n")) addDataLine(line.replace(/\r$/, ""));
     const event = flush();
     if (event) yield event;
   } finally {

@@ -1231,6 +1231,34 @@ test("streamAntigravity maps SSE parts to pi events", async () => {
   assert.equal(sent.project, "proj-1");
 });
 
+test("streamAntigravity parses an unterminated multi-line SSE event at EOF", async () => {
+  globalThis.fetch = (async () => {
+    const payload = [
+      'data: {"response":',
+      'data: {"candidates":[{"content":{"parts":[{"text":"tail"}]},"finishReason":"STOP"}]}}',
+    ].join("\n");
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(payload));
+          controller.close();
+        },
+      }),
+      { status: 200 },
+    );
+  }) as typeof fetch;
+
+  const events = await collectEvents(
+    streamAntigravity(GEMINI_MODEL, SIMPLE_CONTEXT, { apiKey: API_KEY }),
+  );
+  const text = events.find((event) => event.type === "text_delta");
+  assert.ok(text && text.type === "text_delta");
+  assert.equal(text.delta, "tail");
+  const done = events.find((event) => event.type === "done");
+  assert.ok(done && done.type === "done");
+  assert.equal(done.reason, "stop");
+});
+
 test("streamAntigravity fails over to the sandbox endpoint on 5xx", async () => {
   const urls: string[] = [];
   globalThis.fetch = (async (input: unknown) => {
