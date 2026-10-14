@@ -2,6 +2,7 @@ import type {
   WebBackgroundTerminalDetail,
   WebCapabilityActionRequest,
   WebSubagentDetail,
+  WebWorkflowAgentDetail,
 } from "../../../../extensions/shared/web-observer-registry.ts";
 import {
   ARTIFACT_MAX_BYTES,
@@ -18,9 +19,11 @@ import {
   type WebQuestionRequest,
 } from "../../../protocol/questions.ts";
 import type { WebSessionSources } from "../../../protocol/session-sources.ts";
+import type { WebProviderLogin } from "../../../protocol/provider-login.ts";
 import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
+  type WebArchivedSessionQuery,
   type WebCommandDiscoveryResult,
   type WebGitReviewResult,
   type WebHistoryAnchor,
@@ -44,6 +47,7 @@ import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type {
   WebModelConfiguration,
   WebModelConfigurations,
+  WebModelDefaults,
   WebProviderAuthProjection,
   WebSessionForkRequest,
   WebSessionForkResult,
@@ -182,7 +186,7 @@ export class WebClient {
           response.status,
           body.code,
         );
-      return body;
+      return body as T;
     } catch (error) {
       if (timedOut) throw new Error(timeoutMessage);
       throw error;
@@ -279,7 +283,8 @@ export class WebClient {
     entryId: string,
     cursor: number,
     signal: AbortSignal,
-    purpose?: "plan",
+    purpose?: "plan" | "thinking",
+    partIndex?: number,
   ) {
     return this.request<{
       entryId: string;
@@ -287,8 +292,9 @@ export class WebClient {
       nextCursor: number | null;
       totalChars: number;
       planStatus?: "ready";
+      partIndex?: number;
     }>(
-      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor), ...(purpose ? { purpose } : {}) })}`,
+      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor), ...(purpose ? { purpose } : {}), ...(partIndex !== undefined ? { partIndex: String(partIndex) } : {}) })}`,
       { signal, timeoutMessage: "Message request timed out. Please retry." },
     );
   }
@@ -699,13 +705,15 @@ export class WebClient {
   }
 
   listArchivedSessions(
-    options: { query?: string; cursor?: string; limit?: number } = {},
+    options: WebArchivedSessionQuery = {},
     signal?: AbortSignal,
   ) {
     const query = new URLSearchParams();
     if (options.query !== undefined) query.set("q", options.query);
     if (options.cursor !== undefined) query.set("cursor", options.cursor);
     if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.sort !== undefined) query.set("sort", options.sort);
+    if (options.cwd !== undefined) query.set("cwd", options.cwd);
     return this.request<ArchivedSessionPage>(
       `/api/sessions/archived?${query}`,
       { signal },
@@ -809,6 +817,47 @@ export class WebClient {
     });
   }
 
+  providerLogin(sessionId: string, id?: string, signal?: AbortSignal) {
+    const query = new URLSearchParams({ sessionId, ...(id ? { id } : {}) });
+    return this.request<WebProviderLogin | null>(
+      `/api/providers/login?${query}`,
+      { signal },
+    );
+  }
+
+  startProviderLogin(sessionId: string, provider: string) {
+    return this.request<WebProviderLogin>("/api/providers/login", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, provider }),
+    });
+  }
+
+  respondProviderLogin(
+    sessionId: string,
+    id: string,
+    promptId: string,
+    value: string,
+  ) {
+    return this.request<WebProviderLogin>("/api/providers/login/respond", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, id, promptId, value }),
+    });
+  }
+
+  cancelProviderLogin(sessionId: string, id: string) {
+    return this.request<WebProviderLogin>("/api/providers/login/cancel", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, id }),
+    });
+  }
+
+  logoutProvider(sessionId: string, provider: string) {
+    return this.request<{ refreshRequired?: boolean }>(
+      "/api/providers/logout",
+      { method: "POST", body: JSON.stringify({ sessionId, provider }) },
+    );
+  }
+
   modelConfigurations(sessionId: string, signal?: AbortSignal) {
     return this.request<WebModelConfigurations>(
       `/api/models/configuration?sessionId=${encodeURIComponent(sessionId)}`,
@@ -854,6 +903,13 @@ export class WebClient {
       `/api/settings/catalog?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
+  }
+
+  reloadSettingsResources(sessionId: string, sessionPath: string) {
+    return this.request<{ reloaded: true }>("/api/settings/reload", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, sessionPath }),
+    });
   }
 
   savePreferences(patch: WebSettingsPreferencesPatch) {
@@ -911,6 +967,13 @@ export class WebClient {
     );
   }
 
+  workflowAgentDetail(sessionId: string, id: string, signal: AbortSignal) {
+    return this.request<{ sessionId: string; detail: WebWorkflowAgentDetail }>(
+      `/api/capabilities/detail?kind=workflows&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
   subagentAction(
     sessionId: string,
     action: WebCapabilityActionRequest,
@@ -926,6 +989,25 @@ export class WebClient {
     );
   }
 
+  modelDefaults(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebModelDefaults>(
+      `/api/models/default?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  saveModelDefault(
+    provider: string,
+    modelId: string,
+    sessionId: string,
+    sessionPath: string,
+  ) {
+    return this.request<WebModelDefaults>("/api/models/default", {
+      method: "POST",
+      body: JSON.stringify({ provider, modelId, sessionId, sessionPath }),
+    });
+  }
+
   selectModel(
     provider: string,
     modelId: string,
@@ -938,12 +1020,18 @@ export class WebClient {
     });
   }
 
-  searchModels(query: string, sessionId?: string, signal?: AbortSignal) {
+  searchModels(
+    query: string,
+    sessionId?: string,
+    signal?: AbortSignal,
+    provider?: string,
+  ) {
     const params = new URLSearchParams({
       query,
       limit: String(WEB_MAX_MODEL_SEARCH_RESULTS),
     });
     if (sessionId) params.set("sessionId", sessionId);
+    if (provider) params.set("provider", provider);
     return this.request<WebModelSearchResult>(`/api/models?${params}`, {
       signal,
     });

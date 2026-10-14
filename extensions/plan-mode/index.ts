@@ -613,7 +613,12 @@ export default function planMode(pi: ExtensionAPI) {
           pendingImplementationApproval = undefined;
         return projectPlanControl(ctx.sessionManager.getBranch());
       }
-      if (!ctx.isIdle())
+      // Pi 1.2 marks the run busy before the admitted prompt's preflight callback.
+      const admittedImplementation =
+        request.action === "implement" &&
+        pendingImplementationApproval?.revision === request.expectedRevision &&
+        pendingImplementationApproval.beforeAgentStart;
+      if (!ctx.isIdle() && !admittedImplementation)
         throw new PlanControlError(
           "Stop the current turn before changing Plan mode",
           "PLAN_BUSY",
@@ -635,11 +640,7 @@ export default function planMode(pi: ExtensionAPI) {
           );
         const prompt = buildPlanImplementationPrompt(readyPlan);
         if (request.action === "prepare") return { ...current, prompt };
-        if (
-          pendingImplementationApproval?.revision !==
-            request.expectedRevision ||
-          !pendingImplementationApproval.beforeAgentStart
-        )
+        if (!admittedImplementation)
           throw new PlanControlError(
             "Pi did not start the approved implementation prompt",
             "PLAN_CONFLICT",
@@ -688,8 +689,8 @@ export default function planMode(pi: ExtensionAPI) {
     });
   };
 
-  // Custom-message turns (including Setup) bypass before_agent_start. Project
-  // the current stance at every provider call, without persisting a message or
+  // Project the current stance for user and custom-message turns at every
+  // provider call, without persisting a message or
   // leaving an obsolete restriction in Pi's cached system prompt.
   pi.on("context", (event, ctx) => {
     if (!planning) {
@@ -732,6 +733,7 @@ export default function planMode(pi: ExtensionAPI) {
   // above remains the single source of Plan instructions for provider calls.
   pi.on("before_agent_start", (event) => {
     if (
+      "prompt" in event &&
       planning &&
       pendingImplementationApproval !== undefined &&
       event.prompt === pendingImplementationApproval.prompt

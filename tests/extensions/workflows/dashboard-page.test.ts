@@ -59,6 +59,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
         clearScreen() {},
         setTitle() {},
         setProgress() {},
+        ...{ setProgramStatus() {} },
       };
       const tui =
         mode === "regular"
