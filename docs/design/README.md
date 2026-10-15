@@ -44,6 +44,8 @@ These records predate [`Decision 0001`](../decisions/0001-documentation-and-evid
 - [`WEB_INTERACTION_UI.md`](WEB_INTERACTION_UI.md) — #562 Web interaction design and the #470 Plan Ready implementation handoff follow-up
 - [`SESSION_CHILD_EXECUTION_ADMISSION.md`](SESSION_CHILD_EXECUTION_ADMISSION.md) — #159 session-local admission for active Workflow, Direct Subagent, and BTW executions
 
+- [`ANTIGRAVITY_LOCAL_SCHEMA_REFS.md`](ANTIGRAVITY_LOCAL_SCHEMA_REFS.md) — #465/#488 bounded local schema-reference expansion, opaque instance data and the local/live provider validation boundary
+
 开发与热更新流程见 [`docs/development/OPENPI_WEB_DEVELOPMENT.md`](../development/OPENPI_WEB_DEVELOPMENT.md)。
 
 - [`CHILD_SESSION_EXPERIENCE.md`](CHILD_SESSION_EXPERIENCE.md) — source/component-validated running-child follow, native rendering seams, bounded legacy expansion and remaining live TUI acceptance (#658).
