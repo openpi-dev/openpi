@@ -288,7 +288,7 @@ export function buildSubagentSendResult(options: {
 
 /** Describes nonblocking inspection of a subagent without consuming its result. */
 export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
-  "Peek at a subagent's status and recent activity without blocking. Does not consume its result. Do NOT poll with it to wait for completion — a settled subagent's result is delivered to you automatically. Use it only when you need a running subagent's current partial state right now (e.g. to decide whether to steer it).";
+  "Peek at a subagent's status and recent activity without blocking. Does not consume its result. Do NOT poll with it to wait for completion — a settled subagent's result is delivered to you automatically. Use it when you need a running subagent's partial state (e.g. to decide whether to steer it), or select generation/evidence to retrieve settled Direct owner evidence on the active parent branch. Explicit evidence reads use Pi permissions and native nested-call metadata may include paths; receipts do not. Availability is bounded, not a retention guarantee.";
 
 /** Model-facing schema description for the subagent id to inspect. */
 export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {

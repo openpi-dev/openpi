@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { useTranslation } from "react-i18next";
 
 interface PaneResizeHandleProps {
   side: "left" | "right";
@@ -29,13 +30,14 @@ export function PaneResizeHandle({
   onChange,
   onDraggingChange,
 }: PaneResizeHandleProps) {
+  const { t } = useTranslation();
   const drag = useRef<{
     pointerId: number;
     startX: number;
     startValue: number;
   } | null>(null);
 
-  const finishDrag = (element: HTMLDivElement, pointerId: number) => {
+  const finishDrag = (element: HTMLElement, pointerId: number) => {
     if (drag.current?.pointerId !== pointerId) return;
     drag.current = null;
     if (element.hasPointerCapture(pointerId))
@@ -46,10 +48,39 @@ export function PaneResizeHandle({
   const update = (next: number) => onChange(clamp(next, min, max));
 
   return (
-    <div
+    <hr
       className={`pane-resizer ${side}`}
-      aria-hidden="true"
+      tabIndex={0}
+      aria-label={t(side === "left" ? "resizeSidebar" : "resizeWorkbar")}
+      aria-orientation="vertical"
+      aria-valuenow={value}
+      aria-valuemin={min}
+      aria-valuemax={max}
       data-pane-resizer={side}
+      onKeyDown={(event) => {
+        let next: number;
+        switch (event.key) {
+          case "ArrowLeft":
+          case "ArrowRight": {
+            const direction = event.key === "ArrowRight" ? 1 : -1;
+            next = value + direction * (side === "left" ? 16 : -16);
+            break;
+          }
+          case "Home":
+            next = min;
+            break;
+          case "End":
+            next = max;
+            break;
+          case "Enter":
+            next = defaultValue;
+            break;
+          default:
+            return;
+        }
+        event.preventDefault();
+        update(next);
+      }}
       onDoubleClick={() => update(defaultValue)}
       onPointerDown={(event) => {
         if (event.button !== 0) return;

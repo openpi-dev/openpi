@@ -70,7 +70,7 @@ function capabilitySkillPaths(capabilities: readonly OpenPiCapability[]) {
 function skillGuidance(capabilities: readonly OpenPiCapability[]) {
   const skills = capabilitySkillPaths(capabilities);
   return skills.length > 0
-    ? `Before first use, read the matching OpenPI capability guidance: ${skills.join(", ")}.`
+    ? `Capability discovery only; loading tools does not request execution. Decide whether to use them from the user's full request. Before first use, read the matching OpenPI capability guidance: ${skills.join(", ")}.`
     : "";
 }
 
@@ -158,6 +158,7 @@ export function createCapabilitiesExtension(
     });
 
     pi.on("before_agent_start", (event) => {
+      if (!("prompt" in event)) return;
       if (requestsCapabilityGateway(event.prompt)) {
         patchOwnedTools(pi, "capabilities", {
           enable: OPENPI_TOOL_SURFACE.capabilities.entry,
@@ -182,7 +183,7 @@ export function createCapabilitiesExtension(
       name: "openpi_load_tools",
       label: "Load OpenPI Tools",
       description:
-        "Load optional OpenPI groups only when useful: search, delegate, workflow, background, or session. Ordinary file and shell work needs none. Loaded groups stay available.",
+        "Load optional OpenPI groups only when useful: search, delegate, workflow, background, session, or runtime. Ordinary file and shell work needs none. Loaded groups stay available.",
       parameters: OpenPiLoadToolsParameters,
       async execute(_toolCallId, params: OpenPiLoadToolsInput) {
         const result = params.groups

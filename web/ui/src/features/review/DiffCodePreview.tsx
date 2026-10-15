@@ -1,9 +1,17 @@
-import { useMemo } from "react";
+import { MessageSquarePlus } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebGitReviewFile } from "../../../../protocol/types.ts";
 
 const DIFF_LINE_CAP = 500;
-const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/u;
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/u;
+
+export interface DiffLineReference {
+  filePath: string;
+  side: "new" | "old";
+  line: number;
+  code: string;
+}
 
 interface DiffRow {
   id: number;
@@ -22,18 +30,22 @@ export function parseDiffRows(diff: string) {
   let oldLine = 0;
   let newLine = 0;
   let inHunk = false;
+  let oldRemaining = 0;
+  let newRemaining = 0;
   const lines = diff.split("\n");
   if (lines.at(-1) === "") lines.pop();
   for (const line of lines) {
     const hunk = HUNK_HEADER.exec(line);
     if (hunk) {
       oldLine = Number(hunk[1]);
-      newLine = Number(hunk[2]);
+      newLine = Number(hunk[3]);
+      oldRemaining = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      newRemaining = hunk[4] === undefined ? 1 : Number(hunk[4]);
       inHunk = true;
       pushRow({
         kind: "meta",
         marker: "",
-        code: hunk[3]?.trim() || line,
+        code: hunk[5]?.trim() || line,
       });
       continue;
     }
@@ -52,7 +64,7 @@ export function parseDiffRows(diff: string) {
       pushRow({ kind: "meta", marker: "", code: line });
       continue;
     }
-    if (line.startsWith("+")) {
+    if (line.startsWith("+") && newRemaining > 0) {
       pushRow({
         kind: "added",
         newLine,
@@ -60,9 +72,10 @@ export function parseDiffRows(diff: string) {
         code: line.slice(1),
       });
       newLine += 1;
+      newRemaining -= 1;
       continue;
     }
-    if (line.startsWith("-")) {
+    if (line.startsWith("-") && oldRemaining > 0) {
       pushRow({
         kind: "removed",
         oldLine,
@@ -70,9 +83,15 @@ export function parseDiffRows(diff: string) {
         code: line.slice(1),
       });
       oldLine += 1;
+      oldRemaining -= 1;
       continue;
     }
     if (line.startsWith("\\ No newline")) {
+      pushRow({ kind: "meta", marker: "", code: line });
+      continue;
+    }
+    if (!line.startsWith(" ") || oldRemaining <= 0 || newRemaining <= 0) {
+      inHunk = false;
       pushRow({ kind: "meta", marker: "", code: line });
       continue;
     }
@@ -85,14 +104,50 @@ export function parseDiffRows(diff: string) {
     });
     oldLine += 1;
     newLine += 1;
+    oldRemaining -= 1;
+    newRemaining -= 1;
   }
   return rows;
 }
 
-export function DiffCodePreview({ file }: { file: WebGitReviewFile }) {
+export function DiffCodePreview({
+  file,
+  onReferenceLine,
+}: {
+  file: WebGitReviewFile;
+  onReferenceLine?: (reference: DiffLineReference) => void;
+}) {
   const { t } = useTranslation();
   const rows = useMemo(() => parseDiffRows(file.diff), [file.diff]);
   const visibleRows = rows.slice(0, DIFF_LINE_CAP);
+  const figure = useRef<HTMLElement>(null);
+  const [selection, setSelection] = useState<{
+    file: WebGitReviewFile;
+    id: number;
+  } | null>(null);
+  const selected = selection?.file === file ? selection.id : undefined;
+  const referenceFor = (row: DiffRow) => {
+    const side = row.newLine !== undefined ? "new" : "old";
+    const line = row.newLine ?? row.oldLine;
+    if (
+      !onReferenceLine ||
+      file.binary ||
+      !line ||
+      line < 1 ||
+      !Number.isSafeInteger(line) ||
+      (file.diffTruncated &&
+        !file.diff.endsWith("\n") &&
+        row.id === rows.at(-1)?.id)
+    )
+      return;
+    return {
+      filePath: side === "old" ? (file.previousPath ?? file.path) : file.path,
+      side,
+      line,
+      code: row.code,
+    } satisfies DiffLineReference;
+  };
+  const selectableRows = visibleRows.filter((row) => referenceFor(row));
   const hidden = Math.max(0, rows.length - visibleRows.length);
   const digits = String(
     visibleRows.reduce(
@@ -103,35 +158,118 @@ export function DiffCodePreview({ file }: { file: WebGitReviewFile }) {
 
   return (
     <>
-      <figure className="review-file-diff" aria-label={t("changeDiff")}>
+      <figure
+        ref={figure}
+        className="review-file-diff"
+        aria-label={t("changeDiff")}
+      >
         <pre>
-          {visibleRows.map((row) => (
-            <span
-              className="review-diff-line"
-              data-kind={row.kind}
-              key={row.id}
-            >
+          {visibleRows.map((row) => {
+            const reference = referenceFor(row);
+            const gutters = (
+              <>
+                <span
+                  className="review-diff-gutter"
+                  style={{ width: `${digits + 1}ch` }}
+                  aria-hidden="true"
+                >
+                  {row.oldLine ?? ""}
+                </span>
+                <span
+                  className="review-diff-gutter"
+                  style={{ width: `${digits + 1}ch` }}
+                  aria-hidden="true"
+                >
+                  {row.newLine ?? ""}
+                </span>
+              </>
+            );
+            return (
               <span
-                className="review-diff-gutter"
-                style={{ width: `${digits + 1}ch` }}
-                aria-hidden="true"
+                className="review-diff-line"
+                data-kind={row.kind}
+                data-selected={selected === row.id || undefined}
+                key={row.id}
               >
-                {row.oldLine ?? ""}
+                {reference ? (
+                  <button
+                    type="button"
+                    className="review-diff-line-select"
+                    data-diff-row={row.id}
+                    aria-label={t(
+                      reference.side === "new"
+                        ? "reviewSelectNewLine"
+                        : "reviewSelectOldLine",
+                      { line: reference.line },
+                    )}
+                    aria-pressed={selected === row.id}
+                    tabIndex={
+                      (selected ?? selectableRows[0]?.id) === row.id ? 0 : -1
+                    }
+                    onClick={() => setSelection({ file, id: row.id })}
+                    onKeyDown={(event) => {
+                      const index = selectableRows.indexOf(row);
+                      let target: DiffRow | undefined;
+                      if (event.key === "ArrowDown")
+                        target =
+                          selectableRows[
+                            Math.min(index + 1, selectableRows.length - 1)
+                          ];
+                      else if (event.key === "ArrowUp")
+                        target = selectableRows[Math.max(index - 1, 0)];
+                      else if (event.key === "Home") target = selectableRows[0];
+                      else if (event.key === "End")
+                        target = selectableRows.at(-1);
+                      else return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (!target) return;
+                      setSelection({ file, id: target.id });
+                      figure.current
+                        ?.querySelector<HTMLButtonElement>(
+                          `[data-diff-row="${target.id}"]`,
+                        )
+                        ?.focus({ preventScroll: true });
+                    }}
+                  >
+                    {gutters}
+                  </button>
+                ) : (
+                  gutters
+                )}
+                <span className="review-diff-marker" aria-hidden="true">
+                  {row.marker}
+                </span>
+                <span className="review-diff-code">{row.code}</span>
+                {reference && selected === row.id && (
+                  <button
+                    type="button"
+                    className="review-diff-reference"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={(event) => {
+                      const code = event.currentTarget
+                        .closest(".review-diff-line")
+                        ?.querySelector(".review-diff-code");
+                      const textSelection = window.getSelection();
+                      const selectedCode =
+                        code?.contains(textSelection?.anchorNode ?? null) &&
+                        code.contains(textSelection?.focusNode ?? null)
+                          ? textSelection?.toString()
+                          : undefined;
+                      onReferenceLine?.({
+                        ...reference,
+                        code: selectedCode || reference.code,
+                      });
+                    }}
+                  >
+                    <MessageSquarePlus aria-hidden="true" />
+                    {t("reviewQuoteLine")}
+                  </button>
+                )}
+                {"\n"}
               </span>
-              <span
-                className="review-diff-gutter"
-                style={{ width: `${digits + 1}ch` }}
-                aria-hidden="true"
-              >
-                {row.newLine ?? ""}
-              </span>
-              <span className="review-diff-marker" aria-hidden="true">
-                {row.marker}
-              </span>
-              <span className="review-diff-code">{row.code}</span>
-              {"\n"}
-            </span>
-          ))}
+            );
+          })}
         </pre>
       </figure>
       {hidden > 0 && (

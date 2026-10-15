@@ -72,6 +72,7 @@ function transcript(
     generatedAt: "2026-09-19T00:00:00Z",
     cursor: 1,
     currentSessionId: active ? "session" : "other",
+    currentSessionPath: active ? "/tmp/session" : "/tmp/other",
     workspaces: [],
     sessions: [],
     models: [],
@@ -153,10 +154,21 @@ it("keeps the next thinking-only message visible after a completed ask_user with
     content: "",
     parts: [{ type: "thinking", text: "Investigating the export plan" }],
   };
-  render(transcript([asked, answered], [next]));
+  const { container } = render(transcript([asked, answered], [next]));
   expect(
-    screen.getByText("Investigating the export plan", { selector: "pre" }),
+    screen.getByText("Investigating the export plan", {
+      selector: ".thinking-line > summary .tool-summary",
+    }),
   ).toBeTruthy();
+  expect(
+    container
+      .querySelector(".thinking-line")
+      ?.closest(".process-sequence:not(.single-process)"),
+  ).toBeNull();
+  const sequence =
+    container.querySelector<HTMLDetailsElement>(".single-process")!;
+  expect(sequence.open).toBe(true);
+  expect(sequence.querySelector("summary")?.hidden).toBe(true);
 });
 
 it("does not relocate the answer bubble while plan arguments stream after it", () => {
@@ -213,12 +225,18 @@ it("keeps answered tool evidence mounted and open as a snapshot absorbs live mes
   };
   const live = [feedback, answered, next];
   const view = render(transcript([asked], live));
+  expect(
+    screen.getAllByText(answered.content, { selector: ".tool-summary" }),
+  ).toHaveLength(1);
   const evidence = screen
     .getByText(answered.content, { selector: "pre" })
     .closest("details")!;
   fireEvent.click(evidence.querySelector("summary")!);
   expect(evidence.open).toBe(true);
   view.rerender(transcript([asked, answered], live));
+  expect(
+    screen.getAllByText(answered.content, { selector: ".tool-summary" }),
+  ).toHaveLength(1);
   expect(
     screen.getByText(answered.content, { selector: "pre" }).closest("details"),
   ).toBe(evidence);

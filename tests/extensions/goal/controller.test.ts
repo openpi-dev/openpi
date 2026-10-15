@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { registerWebCommandFeedback } from "../../../extensions/shared/web-command-feedback.ts";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -56,6 +57,30 @@ function active(now = 100, tokenBudget?: number) {
     "goal_ctrl_1",
   );
 }
+
+test("print-mode goal automation requires the exact attached Web Session and stops scheduling after detach", () => {
+  const h = harness();
+  const ctx = { ...h.ctx, mode: "print" as const };
+  const controller = new GoalController(h.pi);
+  controller.restore(ctx);
+  controller.replace(active());
+  assert.equal(controller.kickoff(ctx), false);
+  const detachOther = registerWebCommandFeedback({}, () => {});
+  assert.equal(controller.kickoff(ctx), false);
+  detachOther();
+  const detach = registerWebCommandFeedback(ctx.sessionManager, () => {});
+  try {
+    assert.equal(controller.kickoff(ctx), true);
+    assert.equal(h.messages.length, 1);
+    controller.pause();
+    controller.resume();
+    detach();
+    assert.equal(controller.kickoff(ctx), false);
+    assert.equal(h.messages.length, 1);
+  } finally {
+    detach();
+  }
+});
 
 function assistant(totalTokens: number, stopReason = "stop") {
   return {

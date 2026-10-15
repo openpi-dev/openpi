@@ -102,7 +102,14 @@ interface MutableSnapshot {
   cwd: string;
   status: SubagentStatus;
   outcome?: SubagentSnapshot["outcome"];
+  executionUncertain?: boolean;
   worktreeBranch?: string;
+  worktreeBaseSha?: string;
+  requestedCwd?: string;
+  runGeneration?: number;
+  completionGeneration?: number;
+  evidence?: SubagentSnapshot["evidence"];
+  runTranscriptStart: number;
   createdAt: number;
   settledAt?: number;
   errorText?: string;
@@ -354,11 +361,15 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         // A cancel can clear a queued restart before RunStarted reaches the
         // manager. Its RunSettled still belongs to the new run, not the old
         // settled snapshot, so promote the lifecycle before applying it.
+        if (s.runGeneration !== undefined) s.runGeneration++;
+        s.runTranscriptStart = s.transcriptVersion;
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
       }
       s.settledAt = Date.now();
+      s.completionGeneration = s.runGeneration;
+      s.executionUncertain = !releaseAdmission;
       switch (outcome._tag) {
         case "Completed":
           s.status = "done";
@@ -413,14 +424,28 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       const s = entry.snapshot;
       switch (event._tag) {
         case "RunStarted":
+          if (event.generation !== undefined) {
+            s.runGeneration = event.generation;
+          } else if (s.status !== "running") {
+            s.runGeneration = (s.runGeneration ?? 0) + 1;
+          }
+          if (s.status !== "running") {
+            s.runTranscriptStart = s.transcriptVersion;
+          }
+          s.evidence = undefined;
           entry.restarting = false;
           s.status = "running";
           s.outcome = undefined;
+          s.executionUncertain = undefined;
           s.settledAt = undefined;
           s.errorText = undefined;
+          s.finalText = "";
+          s.completionGeneration = undefined;
           s.structuredResult = undefined;
           break;
         case "RunSettled":
+          if (event.notStarted) s.runGeneration = undefined;
+          s.evidence = event.evidence;
           settle(entry, event.outcome);
           return; // settle() already notified
         case "UserMessage":
@@ -593,9 +618,15 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
               title: task.title,
               prompt: task.prompt,
               cwd: task.cwd,
+              requestedCwd: task.worktree?.repoCwd ?? task.cwd,
+              runGeneration: 1,
+              runTranscriptStart: 0,
               status: "running",
               ...(task.worktree
-                ? { worktreeBranch: task.worktree.branch }
+                ? {
+                    worktreeBranch: task.worktree.branch,
+                    worktreeBaseSha: task.worktree.baseSha,
+                  }
                 : {}),
               createdAt: Date.now(),
               meta,

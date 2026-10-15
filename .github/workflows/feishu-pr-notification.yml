@@ -11,7 +11,7 @@ permissions:
 jobs:
   notify:
     name: Notify Feishu
-    uses: openpi-dev/automation/.github/workflows/openpi-feishu-pr-notification.yml@main
+    uses: openpi-dev/automation/.github/workflows/openpi-feishu-pr-notification.yml@ac8a4140e4ce458a2ed693c5ec9798946ccc0dda # main
     secrets:
       FEISHU_PR_BOT_WEBHOOK: ${{ secrets.FEISHU_PR_BOT_WEBHOOK }}
       FEISHU_PR_BOT_SECRET: ${{ secrets.FEISHU_PR_BOT_SECRET }}

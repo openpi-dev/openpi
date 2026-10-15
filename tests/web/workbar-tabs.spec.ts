@@ -7,7 +7,7 @@ import {
 } from "../../web/ui/src/features/workbar/workbar-tabs.ts";
 
 describe("workbar tabs", () => {
-  it("keeps opened tools mounted while activation changes", () => {
+  it("keeps opened tools available while activation changes", () => {
     const terminal = initialWorkbarTabs("terminal");
     const browser = openWorkbarTool(terminal, "browser");
     const returned = activateWorkbarTool(browser, "terminal");

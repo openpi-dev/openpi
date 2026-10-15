@@ -1,16 +1,30 @@
-import type { Element, Root } from "hast";
+import type { Element, Root, RootContent } from "hast";
 import { Check, Clipboard } from "lucide-react";
 import type { ComponentPropsWithoutRef } from "react";
-import { memo, useContext, useEffect, useRef, useState } from "react";
+import {
+  isValidElement,
+  lazy,
+  memo,
+  Suspense,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
+import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { isLocalArtifactLink } from "../../../protocol/artifacts.ts";
 import { ArtifactContext } from "../features/artifacts/context.ts";
+import { InlineFileImage } from "../features/files/InlineFileImage.tsx";
 import { copyText } from "../lib/clipboard.ts";
-import type { RootContent } from "hast";
+
+const MermaidPreview = lazy(
+  () => import("../features/files/MermaidPreview.tsx"),
+);
 
 function labelTaskCheckboxes() {
   return (tree: Root) => {
@@ -172,17 +186,38 @@ function CodeBlock({
   );
 }
 
+function FileCodeBlock(
+  props: ComponentPropsWithoutRef<"pre"> & { node?: Element },
+) {
+  const child = props.children;
+  if (
+    isValidElement<{ className?: string; children?: string }>(child) &&
+    child.props.className === "language-mermaid"
+  )
+    return (
+      <Suspense fallback={<pre>{child.props.children}</pre>}>
+        <MermaidPreview source={String(child.props.children ?? "")} />
+      </Suspense>
+    );
+  return <CodeBlock {...props} />;
+}
+
 export const Markdown = memo(function Markdown({
   children,
+  filePreview = false,
 }: {
   children: string;
+  filePreview?: boolean;
 }) {
+  const { t } = useTranslation();
   const artifacts = useContext(ArtifactContext);
+  let imageCount = 0;
   return (
     <div className="markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         rehypePlugins={[
+          ...(filePreview ? [rehypeRaw] : []),
           preserveWindowsLinks,
           rehypeSanitize,
           labelTaskCheckboxes,
@@ -191,7 +226,7 @@ export const Markdown = memo(function Markdown({
           isLocalArtifactLink(value) ? value : safeUrl(value)
         }
         components={{
-          pre: CodeBlock,
+          pre: filePreview ? FileCodeBlock : CodeBlock,
           table({ children, ...props }) {
             return (
               <section
@@ -207,7 +242,7 @@ export const Markdown = memo(function Markdown({
           a({ href, node, children: label, ...props }) {
             href = windowsLink(node) ?? href;
             if (isLocalArtifactLink(href ?? ""))
-              return artifacts ? (
+              return artifacts && !artifacts.disabled ? (
                 <button
                   type="button"
                   className="artifact-link"
@@ -221,7 +256,10 @@ export const Markdown = memo(function Markdown({
                   </small>
                 </button>
               ) : (
-                <span title="Open this file from its Session">{label}</span>
+                <span title={t("artifactReferenceUnavailable", { path: href })}>
+                  {label}
+                  <small className="artifact-link-path"> ({href})</small>
+                </span>
               );
             const safeHref = safeUrl(href ?? "");
             return safeHref ? (
@@ -234,8 +272,17 @@ export const Markdown = memo(function Markdown({
           },
           img({ src, node, alt, title }) {
             src = windowsLink(node) ?? src;
+            if (
+              filePreview &&
+              src &&
+              isLocalArtifactLink(src) &&
+              artifacts?.parent &&
+              !artifacts.disabled &&
+              imageCount++ < 16
+            )
+              return <InlineFileImage src={src} alt={alt || ""} />;
             if (isLocalArtifactLink(src ?? ""))
-              return artifacts ? (
+              return artifacts && !artifacts.disabled ? (
                 <button
                   type="button"
                   className="artifact-link"
@@ -249,7 +296,10 @@ export const Markdown = memo(function Markdown({
                   </small>
                 </button>
               ) : (
-                <span>[image: {alt || "image"}]</span>
+                <span title={t("artifactReferenceUnavailable", { path: src })}>
+                  [image: {alt || "image"}]
+                  <small className="artifact-link-path"> ({src})</small>
+                </span>
               );
             const safeHref = safeUrl(src ?? "");
             const label = alt || "image";

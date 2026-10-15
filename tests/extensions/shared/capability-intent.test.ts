@@ -2,113 +2,143 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   capabilitiesRequestedByPrompt,
+  capabilityNameMentions,
   requestsCapabilityGateway,
 } from "../../../extensions/shared/capability-intent.ts";
 
-test("classifies explicit capability intent across English, Chinese, and mixed phrases", () => {
-  assert.deepEqual(capabilitiesRequestedByPrompt("subagent, workflow"), []);
-  assert.deepEqual(
-    capabilitiesRequestedByPrompt("用 Subagent 并行检查这三个模块"),
-    ["delegate"],
-  );
-  assert.deepEqual(capabilitiesRequestedByPrompt("子代理了解下项目"), [
-    "delegate",
-  ]);
-  assert.deepEqual(
-    capabilitiesRequestedByPrompt("Use subagents to review this change"),
-    ["delegate"],
-  );
-  assert.deepEqual(
-    capabilitiesRequestedByPrompt("用 Workflow 分阶段实现和审查"),
-    ["workflow"],
-  );
-  assert.deepEqual(
-    capabilitiesRequestedByPrompt("Run a workflow for implementation"),
-    ["workflow"],
-  );
-});
-
-test("standalone English capability names select their group", () => {
-  for (const prompt of ["subagent", "subagents", "  SubAgentS\n"]) {
+test("capability names select discovery across case, plurals, Chinese and multiple lines", () => {
+  for (const prompt of [
+    "subagent",
+    "SubAgents",
+    "子代理了解下项目",
+    "用Subagent检查",
+    "subagent.",
+  ])
     assert.deepEqual(
       capabilitiesRequestedByPrompt(prompt),
       ["delegate"],
       prompt,
     );
-  }
-  for (const prompt of ["workflow", "workflows", "\n WORKFLOW \t"]) {
+  for (const prompt of [
+    "workflow",
+    "WORKFLOWS",
+    "工作流",
+    "用Workflow汇总",
+    "workflow.",
+  ])
     assert.deepEqual(
       capabilitiesRequestedByPrompt(prompt),
       ["workflow"],
       prompt,
     );
-  }
-});
-
-test("English references without an imperative stay inert", () => {
-  assert.deepEqual(
-    capabilitiesRequestedByPrompt("Compare Subagent and Workflow"),
-    [],
-  );
   for (const prompt of [
-    "git checkout -b subagent-matching",
-    "Please review the subagent.ts implementation",
-    "讨论 workflow 和 subagent 的区别",
-    "subagent.ts",
-    "subagent?",
-    "`subagent`",
-    '"workflow"',
-    "Explain this:\nsubagent",
-    "不要启动\nworkflow",
-    "subagent\nworkflow",
+    "subagent, workflow",
+    "讨论 子代理 和工作流",
+    "不要启动\nworkflow 与 subagent",
+    "Compare Subagent and Workflow",
   ])
-    assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
-  assert.deepEqual(
-    capabilitiesRequestedByPrompt("Use a subagent to review this change"),
-    ["delegate"],
-  );
+    assert.deepEqual(
+      capabilitiesRequestedByPrompt(prompt),
+      ["delegate", "workflow"],
+      prompt,
+    );
 });
 
-test("negation and conditional language remain fail-closed", () => {
+test("names load discovery for discussion, negation and conditions without judging execution intent", () => {
   for (const prompt of [
     "Do not use subagents.",
-    "If needed, run a workflow.",
     "如果需要，可以用 Subagent。",
-    "不要用 Workflow。",
-  ]) {
-    assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
-  }
-});
-
-test("Chinese discussion of subagents does not authorize delegation", () => {
-  for (const prompt of [
     "子代理是什么？",
-    "子代理的设计有哪些取舍？",
-    "聊聊子代理的设计",
-  ]) {
-    assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
-  }
-});
-
-test("gateway intent shares the same negation policy", () => {
-  assert.equal(requestsCapabilityGateway("Show OpenPI capabilities."), true);
-  assert.equal(requestsCapabilityGateway("Do not use OpenPI tools."), false);
-});
-
-test("declarative English usage is not a capability request", () => {
-  for (const prompt of [
+    "Explain this:\nsubagent",
+    "`subagent`",
+    "subagent?",
     "I use subagents in this repo",
+  ])
+    assert.deepEqual(
+      capabilitiesRequestedByPrompt(prompt),
+      ["delegate"],
+      prompt,
+    );
+  for (const prompt of [
+    "If needed, run a workflow.",
+    "不要用 Workflow。",
+    '\"workflow\"',
     "We run workflows every day",
-    "They use a workflow for releases",
-  ]) {
+  ])
+    assert.deepEqual(
+      capabilitiesRequestedByPrompt(prompt),
+      ["workflow"],
+      prompt,
+    );
+});
+
+test("identifier and path fragments do not select capability names", () => {
+  for (const prompt of [
+    "subagent.ts",
+    "workflow.json",
+    "subagent.项目",
+    "subagent-matching",
+    "my_subagent",
+    "subagent2",
+    "mysubagent",
+    "workflow_status",
+    "工作流_状态",
+    "my子代理Flag",
+    "/tools/workflow",
+    "C:\\tools\\subagent.ts",
+    "Use subagent.ts",
+    "用工作流.json",
+  ])
     assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
-  }
-  assert.deepEqual(
-    capabilitiesRequestedByPrompt("Please use a subagent to inspect this"),
-    ["delegate"],
+  const mentions = capabilityNameMentions(
+    "subagent.ts then SUBAGENTS and 工作流",
   );
   assert.deepEqual(
-    capabilitiesRequestedByPrompt("Could you run a workflow for this task"),
-    ["workflow"],
+    mentions.map((mention) => mention.capability),
+    ["delegate", "workflow"],
+  );
+  assert.deepEqual(
+    mentions.map(({ start, end }) =>
+      "subagent.ts then SUBAGENTS and 工作流".slice(start, end),
+    ),
+    ["SUBAGENTS", "工作流"],
+  );
+});
+
+test("other capabilities and gateway retain their explicit request policy", () => {
+  for (const prompt of [
+    "Do not use fd",
+    "If needed, run a background process",
+    "不要设置目标",
+    "runtime snapshot",
+  ])
+    assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
+  assert.deepEqual(capabilitiesRequestedByPrompt("use fd"), ["search"]);
+  assert.deepEqual(
+    capabilitiesRequestedByPrompt("run a job in the background"),
+    ["background"],
+  );
+  assert.deepEqual(capabilitiesRequestedByPrompt("create a goal"), ["session"]);
+  assert.equal(requestsCapabilityGateway("Show OpenPI capabilities."), true);
+  assert.equal(requestsCapabilityGateway("Do not use OpenPI tools."), false);
+  assert.equal(requestsCapabilityGateway("workflow"), false);
+});
+
+test("legacy delegation action phrases remain compatible without inferring use from name mentions", () => {
+  for (const prompt of [
+    "Delegate this task.",
+    "Please parallelize this work.",
+    "Could you delegate this task?",
+    "来并行代理检查",
+    "委派任务",
+  ])
+    assert.deepEqual(
+      capabilitiesRequestedByPrompt(prompt),
+      ["delegate"],
+      prompt,
+    );
+  assert.deepEqual(
+    capabilitiesRequestedByPrompt("Never delegate this task."),
+    [],
   );
 });

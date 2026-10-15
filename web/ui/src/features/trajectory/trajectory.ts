@@ -29,6 +29,29 @@ export function defaultTrajectoryNode(nodes: readonly TrajectoryNode[]) {
   return nodes.at(-1);
 }
 
+/** Reading groups only; native record order and result pairing stay intact. */
+export function groupTrajectory(nodes: readonly TrajectoryNode[]) {
+  const groups: {
+    key: string;
+    prompt?: TrajectoryNode;
+    runs: TrajectoryNode[][];
+  }[] = [];
+  for (const node of nodes) {
+    if (node.kind === "user" || !groups.length)
+      groups.push({
+        key: node.key,
+        ...(node.kind === "user" ? { prompt: node } : {}),
+        runs: [],
+      });
+    const group = groups.at(-1)!;
+    const previous = group.runs.at(-1);
+    if (node.kind === "event" && previous?.[0]?.kind === "event")
+      previous.push(node);
+    else group.runs.push([node]);
+  }
+  return groups;
+}
+
 // This is record order, not a dependency graph or execution timing model.
 export function buildTrajectory(entries: readonly Entry[]) {
   const order = new Map(entries.map((entry, index) => [entry.id, index]));

@@ -6,6 +6,7 @@ import {
   realpath,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -22,6 +23,51 @@ function code(value: string) {
   return (error: unknown) =>
     error instanceof ArtifactError && error.code === value;
 }
+
+test("explicit external-file authorization is read-only, exact-file and session-bound", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-external-file-"));
+  const workspace = join(root, "workspace");
+  const other = join(root, "worktree");
+  await mkdir(workspace);
+  await mkdir(other);
+  const file = join(other, "index%20.ts");
+  await writeFile(file, "export const value = 1;\n");
+  await writeFile(join(other, "neighbor.ts"), "not granted");
+  let sessionId = "s";
+  const reader = new ArtifactReader(() => ({ sessionId, cwd: workspace }));
+  try {
+    await assert.rejects(
+      reader.resolveFile("s", file),
+      code("ARTIFACT_DENIED"),
+    );
+    await assert.rejects(
+      reader.authorizeFile("other", file),
+      code("ARTIFACT_DENIED"),
+    );
+    const handle = await reader.authorizeFile("s", file.replaceAll("%", "%25"));
+    assert.equal(
+      (await reader.read(handle, "s")).preview.text,
+      "export const value = 1;\n",
+    );
+    await assert.rejects(
+      reader.resolveFile("s", "neighbor.ts", handle),
+      code("ARTIFACT_DENIED"),
+    );
+    await assert.rejects(
+      reader.authorizeFile("s", "../worktree/neighbor.ts"),
+      code("ARTIFACT_DENIED"),
+    );
+    await assert.rejects(
+      reader.authorizeFile("s", other),
+      code("ARTIFACT_UNSUPPORTED"),
+    );
+    sessionId = "next";
+    await assert.rejects(reader.read(handle, "s"), code("ARTIFACT_EXPIRED"));
+  } finally {
+    reader.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 for (const [name, source, expected, truncated] of [
   ["literal replacement character", "report: \ufffd", "report: \ufffd", false],
@@ -95,6 +141,11 @@ test("artifact reads bind Session, canonical file, content revision and explicit
       createHash("sha256").update(first.bytes).digest("hex"),
     );
     await writeFile(path, "# revision two");
+    // Both revisions are 14 bytes, and two writes inside one coarse filesystem
+    // timestamp tick keep identical stat metadata. Advance mtime as a later
+    // save would, so the check exercises the identity, not scheduler timing.
+    const later = new Date(Date.now() + 5_000);
+    await utimes(path, later, later);
     assert.notEqual(
       (await reader.metadata(handle, sessionId)).identity,
       first.preview.identity,

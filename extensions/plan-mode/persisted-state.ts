@@ -18,7 +18,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isBoundedReadyPlan(value: unknown): value is string {
+export function isBoundedReadyPlan(value: unknown): value is string {
   return (
     typeof value === "string" &&
     sanitizeTerminalText(value) === value &&

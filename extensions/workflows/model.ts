@@ -9,10 +9,17 @@ import {
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
+import type {
+  DelegationCompletion,
+  DelegationOutcome,
+  DelegationReplayOrigin,
+} from "../shared/delegation-completion.ts";
 import { spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type { WorktreeCleanup } from "../shared/worktree.ts";
 import type { AcceptanceLedger } from "./acceptance.ts";
+import { workflowAgentCompletion } from "./agent-completion.ts";
+import type { ExecutionTimingSummary } from "./execution-timing.ts";
 import {
   projectWorkflowGraph,
   type WorkflowGraphProjection,
@@ -103,6 +110,17 @@ export interface TranscriptEntry {
 
 export interface AgentRecord {
   index: number;
+  /** Additive owner facts for the shared completion projection. */
+  executionOutcome?: DelegationOutcome;
+  resultPersistence?: "saved" | "failed";
+  resultHasText?: boolean;
+  resultHasStructured?: boolean;
+  requestedCwd?: string;
+  effectiveCwd?: string;
+  isolation?: "shared" | "worktree";
+  replayOrigin?: DelegationReplayOrigin | "unknown";
+  /** Read-only tool projection; canonical facts remain in this owner record. */
+  completion?: DelegationCompletion;
   /** Stable identity and independent intent/admission/execution status planes. */
   callId?: string;
   invocation?: InvocationRecord;
@@ -114,6 +132,10 @@ export interface AgentRecord {
   resultRef?: string;
   /** Run-directory-relative authoritative result captured before projection. */
   resultArtifact?: string;
+  /** Privacy-safe event summary, independent of bounded transcripts. */
+  timing?: ExecutionTimingSummary;
+  timingArtifact?: string;
+  timingArtifactState?: "saved" | "failed";
   label: string;
   phase?: string;
   state: AgentState;
@@ -215,7 +237,11 @@ export function compactWorkflowToolDetails(
           ),
         }
       : {}),
-    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
+    agents: details.agents.map((agent) => ({
+      ...agent,
+      completion: workflowAgentCompletion(details.runId, agent),
+      transcript: [],
+    })),
   };
 }
 

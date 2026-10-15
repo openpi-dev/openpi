@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import fs from "node:fs";
-import {
+import fs, {
   chmodSync,
   existsSync,
   mkdirSync,
@@ -23,6 +22,7 @@ import {
 import type { TUI } from "@earendil-works/pi-tui";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import { WORKFLOW_COMMIT_FILE } from "../../../extensions/workflows/artifacts.ts";
+import { ExecutionTimingLedger } from "../../../extensions/workflows/execution-timing.ts";
 import type {
   Theme,
   WorkflowDetails,
@@ -1411,11 +1411,11 @@ test("Workflow transcript follows, pauses on its top row, and resumes", () => {
     dashboard.focused = true;
     dashboard.handleInput("right");
     dashboard.handleInput("right");
-    // A transcript page opens on the start of work that already happened.
+    // A running transcript opens at the latest output and follows by default.
     assert.equal(mouseModes.at(-1), "\x1b[?1000h\x1b[?1006h");
     const opened = dashboard.render(80).join("\n");
-    assert.match(opened, /line 0\b/);
-    assert.doesNotMatch(opened, /line 39/);
+    assert.match(opened, /line 39/);
+    assert.doesNotMatch(opened, /line 0\b/);
 
     dashboard.handleInput("G");
     const pinned = dashboard.render(80).join("\n");
@@ -1911,5 +1911,88 @@ test("retained history excluded by request time is not retried on animation tick
     assert.equal(read.mock.callCount(), 1);
   } finally {
     dashboard.dispose();
+  }
+});
+
+test("persisted timing survives reload and report inspection without making replay fresh execution", () => {
+  const ledger = new ExecutionTimingLedger(1, () => 0);
+  ledger.toolStart("id", "read");
+  ledger.toolEnd("id", "read", false);
+  ledger.eventsEnded();
+  const timing = ledger.snapshot("success").summary;
+  const raw = {
+    runId: "wf_timing",
+    background: false,
+    status: "completed",
+    startedAt: 1,
+    phases: [],
+    agents: [
+      {
+        index: 1,
+        label: "fixture",
+        state: "done",
+        startedAt: 1,
+        usage: {},
+        transcript: [],
+        timing,
+        timingArtifact: "agent-timing/agent-0001.json",
+        timingArtifactState: "saved",
+      },
+    ],
+  };
+  const restored = normalizePersistedWorkflowDetails("wf_timing", raw)!;
+  assert.deepEqual(restored.agents[0]?.timing, timing);
+  assert.match(buildWorkflowReport(restored), /0ms tool wall/);
+  assert.match(buildWorkflowReport(restored), /agent-timing\/agent-0001.json/);
+  raw.agents[0]!.timingArtifact = "../../private.json";
+  assert.equal(
+    normalizePersistedWorkflowDetails("wf_timing", raw)?.agents[0]
+      ?.timingArtifact,
+    undefined,
+  );
+  const replay = normalizePersistedWorkflowDetails("wf_timing", {
+    ...raw,
+    agents: [{ ...raw.agents[0], executionOutcome: "replayed" }],
+  });
+  assert.equal(replay?.agents[0]?.timing, undefined);
+});
+
+test("malformed timing enums in persisted JSON cannot break workflow reload", () => {
+  const timing = new ExecutionTimingLedger(1, () => 0).snapshot(
+    "failure",
+  ).summary;
+  for (const malformed of [
+    { outcome: ["success"] },
+    { coverage: ["unobserved"] },
+    { outcome: { toString: null } },
+    { coverage: { toString: null } },
+  ]) {
+    const raw: unknown = JSON.parse(
+      JSON.stringify({
+        background: false,
+        status: "completed",
+        startedAt: 1,
+        phases: [],
+        agents: [
+          {
+            index: 1,
+            label: "fixture",
+            state: "done",
+            startedAt: 1,
+            usage: {},
+            transcript: [],
+            timing: { ...timing, ...malformed },
+          },
+        ],
+      }),
+    );
+    assert.doesNotThrow(() => {
+      const restored = normalizePersistedWorkflowDetails(
+        "wf_malformed_timing",
+        raw,
+      );
+      assert.equal(restored?.agents.length, 1);
+      assert.equal(restored?.agents[0]?.timing, undefined);
+    });
   }
 });

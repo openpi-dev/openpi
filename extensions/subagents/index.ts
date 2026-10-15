@@ -52,6 +52,12 @@ import {
 } from "../shared/activity-status.ts";
 import { sanitizeText } from "../shared/agent-transcript.ts";
 import {
+  delegationCompletionText,
+  type DelegationCompletion,
+} from "../shared/delegation-completion.ts";
+import { subagentCompletion } from "./src/completion.ts";
+import { queryDirectEvidence } from "./src/evidence.ts";
+import {
   sessionChildExecutionAdmission,
   type ChildExecutionAdmission,
 } from "../shared/child-execution-admission.ts";
@@ -183,6 +189,9 @@ interface SpawnResultDetails {
 }
 
 interface SubagentFinishedData {
+  readonly origin?: "model";
+  readonly evidence?: SubagentSnapshot["evidence"];
+  readonly completion?: DelegationCompletion;
   readonly id: string;
   readonly title: string;
   readonly status: SubagentSnapshot["status"];
@@ -190,6 +199,7 @@ interface SubagentFinishedData {
 }
 
 interface SubagentResultDetails {
+  readonly completion?: DelegationCompletion;
   readonly id?: string;
   readonly title?: string;
   readonly status?: SubagentSnapshot["status"];
@@ -202,6 +212,7 @@ interface SubagentResultDetails {
   readonly structuredArtifactPath?: string;
   readonly count?: number;
   readonly results?: ReadonlyArray<{
+    readonly completion?: DelegationCompletion;
     readonly id: string;
     readonly title: string;
     readonly status: SubagentSnapshot["status"];
@@ -317,7 +328,7 @@ export function createSubagentResultDispatcher(
         title: snap.title,
         status: snap.status,
         errorText: snap.errorText,
-        output: "",
+        output: delegationCompletionText(subagentCompletion(snap)),
       }),
     );
     const wrapperBytes =
@@ -347,7 +358,10 @@ export function createSubagentResultDispatcher(
     const projections = snaps.map((snap, index) =>
       normalizeProjection(outputFor(snap, allocation.budgets[index]!)),
     );
-    const outputs = projections.map((projection) => projection.text);
+    const outputs = projections.map(
+      (projection, index) =>
+        `${projection.text}\n\n${delegationCompletionText(subagentCompletion(snaps[index]!))}`,
+    );
     const displayContent = boundAutomaticResultBatch(
       snaps
         .map((snap, index) =>
@@ -356,7 +370,7 @@ export function createSubagentResultDispatcher(
             title: snap.title,
             status: snap.status,
             errorText: snap.errorText,
-            output: outputs[index]!,
+            output: projections[index]!.text,
           }),
         )
         .join("\n\n"),
@@ -377,6 +391,7 @@ export function createSubagentResultDispatcher(
     const details: SubagentResultDetails =
       snaps.length === 1
         ? {
+            completion: subagentCompletion(snaps[0]!),
             id: snaps[0]!.id,
             title: snaps[0]!.title,
             status: snaps[0]!.status,
@@ -400,6 +415,7 @@ export function createSubagentResultDispatcher(
         : {
             count: snaps.length,
             results: snaps.map((snap, index) => ({
+              completion: subagentCompletion(snap),
               id: snap.id,
               title: snap.title,
               status: snap.status,
@@ -788,12 +804,21 @@ export default function (
     }
     // Mark the finish in the transcript. The result itself reaches the model
     // separately; this line is for the reader watching the run.
-    pi.appendEntry<SubagentFinishedData>("subagent-finished", {
-      id: snap.id,
-      title: snap.title,
-      status: snap.status,
-      elapsed: formatElapsed(snap),
-    });
+    try {
+      if (snap.evidence) snap.evidence.parentBound = true;
+      pi.appendEntry<SubagentFinishedData>("subagent-finished", {
+        id: snap.id,
+        origin: "model",
+        title: snap.title,
+        status: snap.status,
+        elapsed: formatElapsed(snap),
+        evidence: snap.evidence,
+        completion: subagentCompletion(snap),
+      });
+    } catch {
+      // Storage failure must not hide execution success or invent a locator.
+      if (snap.evidence) snap.evidence.parentBound = false;
+    }
     if (consumed) {
       resultDelivery.consume([snap.id]);
       return;
@@ -1082,7 +1107,12 @@ export default function (
         model,
         reasoningEffort: params.reasoning_effort ?? agentType?.reasoningEffort,
         ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
-        ...(childTools ? { tools: childTools } : {}),
+        ...(childTools
+          ? {
+              tools: childTools,
+              inheritedTools: agentType?.tools === undefined,
+            }
+          : {}),
         ...(agentType ? { agentTypeName: agentType.name } : {}),
         ...(params.output_schema !== undefined
           ? { outputSchema: params.output_schema }
@@ -1090,6 +1120,8 @@ export default function (
         ...(worktree ? { worktree: { ...worktree, repoCwd: cwd } } : {}),
         parent: {
           parentCwd: ctx.cwd,
+          sessionId: ctx.sessionManager?.getSessionId?.(),
+          originEntryId: ctx.sessionManager?.getLeafId?.(),
           projectTrusted,
           inheritedModel: ctx.model
             ? { provider: ctx.model.provider, id: ctx.model.id }
@@ -1274,6 +1306,7 @@ export default function (
         const verb = snap.status === "error" ? "failed" : "finished";
         let header = `## ${snap.id} "${snap.title}" ${verb}`;
         if (snap.errorText) header += `\nError: ${snap.errorText}`;
+        header += `\n\n${delegationCompletionText(subagentCompletion(snap))}`;
         return { id, snap, header };
       });
       const separatorsBytes = Math.max(0, entries.length - 1) * 7;
@@ -1342,6 +1375,7 @@ export default function (
             const snap = manager.view.get(id);
             return {
               id,
+              ...(snap ? { completion: subagentCompletion(snap) } : {}),
               title: snap?.title,
               status: snap?.status,
               ...(snap?.outcome ? { outcome: snap.outcome } : {}),
@@ -1509,8 +1543,55 @@ export default function (
       id: Type.String({
         description: SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS.id,
       }),
+      generation: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description:
+            "Actual Direct run generation; omitted selects the latest active-branch owner record when reading evidence.",
+        }),
+      ),
+      evidence: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("transcript"),
+            Type.Literal("final"),
+            Type.Literal("structured"),
+          ],
+          {
+            description:
+              "Explicit original evidence read through Pi permissions. Native nestedCalls may disclose read paths. Missing/legacy/unsealed/pruned/denied/oversized evidence is unavailable.",
+          },
+        ),
+      ),
+      offset: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description:
+            "Unicode code-point offset in selected evidence; use nextOffset to continue.",
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: 4096,
+          description:
+            "Maximum code points per page (default 2048); serialized page capped at 16 KiB.",
+        }),
+      ),
     }),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (
+        params.generation !== undefined ||
+        params.evidence !== undefined ||
+        params.offset !== undefined ||
+        params.limit !== undefined
+      ) {
+        const evidence = await queryDirectEvidence(ctx, params, signal);
+        return {
+          content: [{ type: "text", text: JSON.stringify(evidence) }],
+          details: evidence,
+        };
+      }
       const manager = await getManager();
       const snap = manager.view.get(params.id);
       if (!snap || !isModelVisible(snap)) {
@@ -1535,9 +1616,20 @@ export default function (
         text += "\n\n(no text output yet)";
       }
 
+      const completion = subagentCompletion(snap);
       return {
-        content: [{ type: "text", text }],
-        details: { id: snap.id, status: snap.status, turns: snap.turns },
+        content: [
+          {
+            type: "text",
+            text: `${text}\n\n${delegationCompletionText(completion)}`,
+          },
+        ],
+        details: {
+          id: snap.id,
+          status: snap.status,
+          turns: snap.turns,
+          completion,
+        },
       };
     },
   });

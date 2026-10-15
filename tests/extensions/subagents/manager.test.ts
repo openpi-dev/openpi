@@ -29,6 +29,7 @@ import {
 } from "../../../extensions/subagents/src/manager.ts";
 import { runTool } from "../../../extensions/subagents/src/runtime.ts";
 import { ChildExecutionAdmission } from "../../../extensions/shared/child-execution-admission.ts";
+import { subagentCompletion } from "../../../extensions/subagents/src/completion.ts";
 
 const STATUS_WAIT_TIMEOUT_MS = 5_000;
 
@@ -363,6 +364,7 @@ test("FAIL: an uncertain Direct stop retains its shared slot and cannot restart"
       );
       await runTool(runtime, manager.cancel([snap.id]));
       assert.equal(admission.snapshot().held, 1);
+      assert.equal(subagentCompletion(snap).observed.outcome, "uncertain");
       assert.match(
         manager.view.get(snap.id)?.errorText ?? "",
         /termination is uncertain/,
@@ -656,6 +658,9 @@ test("send steers an idle subagent into another turn", async () => {
     await runTool(runtime, manager.waitFor([snap.id]));
     const afterFirst = manager.view.get(snap.id);
     assert.equal(afterFirst?.status, "done");
+    const firstGeneration = afterFirst?.runGeneration;
+    assert.equal(firstGeneration, 1);
+    const firstCompletion = subagentCompletion(afterFirst!);
 
     await runTool(runtime, manager.send(snap.id, "Second turn"));
     // The fresh run flips the status back to running...
@@ -665,9 +670,19 @@ test("send steers an idle subagent into another turn", async () => {
       "start the second turn",
       (status) => status === "running",
     );
+    const running = manager.view.get(snap.id)!;
+    assert.equal(running.finalText, "");
+    assert.equal(subagentCompletion(running).observed.evidenceRef, undefined);
+    assert.equal(subagentCompletion(running).modelClaimed.status, "unknown");
     await runTool(runtime, manager.waitFor([snap.id]));
     const afterSecond = manager.view.get(snap.id);
     assert.equal(afterSecond?.status, "done");
+    assert.equal(afterSecond?.runGeneration, 2);
+    assert.equal(afterSecond?.completionGeneration, 2);
+    assert.notEqual(
+      subagentCompletion(afterSecond!).identity.executionId,
+      firstCompletion.identity.executionId,
+    );
     assert.match(afterSecond?.finalText ?? "", /Second turn/);
   });
 });

@@ -11,7 +11,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { loadSetupConfig } from "../shared/setup-config.ts";
-import { withActivityRenderer } from "./render.ts";
+import {
+  activityEnabled,
+  activityRenderers,
+  withActivityRenderer,
+} from "./render.ts";
 
 function compact<TParams extends TSchema, TDetails, TState>(
   definition: ToolDefinition<TParams, TDetails, TState>,
@@ -25,6 +29,32 @@ function compact<TParams extends TSchema, TDetails, TState>(
  * native schema, prompt metadata, execute function, result, and details.
  */
 export default function fileMutationDisplay(pi: ExtensionAPI) {
+  // Modern hosts separate presentation from tool execution. Register the same
+  // resolver in TUI and headless Sessions so child inspection inherits it
+  // without replacing the child's shell/filesystem executor.
+  type Presentation = Pick<
+    ToolDefinition,
+    "renderCall" | "renderResult" | "renderShell"
+  >;
+  const host = pi as ExtensionAPI & {
+    registerToolRenderer?: (
+      resolver: (
+        name: string,
+        next: () => Presentation | undefined,
+      ) => Presentation | undefined,
+    ) => void;
+  };
+  const modern = typeof host.registerToolRenderer === "function";
+  if (host.registerToolRenderer) {
+    host.registerToolRenderer((name, next) => {
+      const base = next();
+      if (!base) return base;
+      const display = loadSetupConfig().ui;
+      return activityEnabled(name, display)
+        ? { ...base, ...activityRenderers(name, base) }
+        : base;
+    });
+  }
   pi.on("session_start", (_event, ctx) => {
     const display = loadSetupConfig().ui;
     // This extension changes only the interactive TUI projection. Headless
@@ -40,6 +70,8 @@ export default function fileMutationDisplay(pi: ExtensionAPI) {
         display.bashToolDisplay === "full" &&
         display.fileMutationDisplay === "full",
     );
+
+    if (modern) return;
 
     pi.registerTool(
       compact(

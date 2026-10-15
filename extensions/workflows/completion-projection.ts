@@ -13,6 +13,9 @@ import {
   type WorkflowStatus,
 } from "./model.ts";
 import { safeStringify } from "./serialization.ts";
+import { workflowCompletionLines } from "./agent-completion.ts";
+
+export type WorkflowCompletionSeverity = "info" | "warning" | "error";
 
 const MAX_DISPLAY_ENTRIES = 64;
 const MAX_DISPLAY_BYTES = 64 * 1024;
@@ -33,6 +36,8 @@ export interface WorkflowCompletionDisplayEntry {
   status: WorkflowStatus;
   summary: string;
   alerts: string[];
+  /** Optional for legacy display envelopes, whose alerts remain warnings. */
+  alertSeverities?: WorkflowCompletionSeverity[];
   resultPreview?: string;
   expanded: string;
 }
@@ -86,60 +91,98 @@ function isDroppedWorkLog(entry: WorkflowLogEntry) {
 
 /** Exceptional evidence that must remain visible while the report is collapsed. */
 function completionAlerts(details: WorkflowDetails) {
-  const alerts: string[] = [];
-  if (details.error) alerts.push(`Error: ${details.error}`);
+  const notices: { text: string; severity: WorkflowCompletionSeverity }[] = [];
+  const add = (
+    text: string,
+    severity: WorkflowCompletionSeverity = "warning",
+  ) => notices.push({ text, severity });
+  if (details.error) add(`Error: ${details.error}`, "error");
 
   const failed = labels(details, "error");
-  if (failed.length > 0) alerts.push(`Failed agents: ${failed.join(", ")}`);
+  if (failed.length > 0) add(`Failed agents: ${failed.join(", ")}`, "error");
   const uncertain = labels(details, "uncertain");
   if (uncertain.length > 0) {
-    alerts.push(`Uncertain agents: ${uncertain.join(", ")}`);
+    add(`Uncertain agents: ${uncertain.join(", ")}`);
   }
   if (details.logsDropped) {
-    alerts.push(`${details.logsDropped} earlier log line(s) dropped`);
+    add(`${details.logsDropped} earlier log line(s) dropped`);
   }
   if (details.transcriptsOmitted) {
-    alerts.push(
+    add(
       `${details.transcriptsOmitted.agents} agent transcript(s) omitted from transcripts.json (byte budget)`,
     );
   }
 
   for (const entry of details.logs ?? []) {
     if (!isDroppedWorkLog(entry)) continue;
-    alerts.push(`Dropped work: ${sanitizeWorkflowDisplayLine(entry.text)}`);
+    add(`Dropped work: ${sanitizeWorkflowDisplayLine(entry.text)}`);
   }
 
   for (const agent of details.agents) {
     if (agent.worktreePath) {
       const reason = agent.worktreeCleanup?.reason ?? "cleanup was unsafe";
-      alerts.push(
+      const cleanup = agent.worktreeCleanup;
+      // A complete handoff plus the cleanup owner's fully inspected facts
+      // proves ordinary preservation. Missing facts stay warning, never success.
+      const normalRetention = Boolean(
+        agent.worktreeHandoffArtifact &&
+          cleanup?.commits !== undefined &&
+          (cleanup.dirty ||
+            cleanup.untracked ||
+            cleanup.ignored ||
+            cleanup.detached),
+      );
+      add(
         `Retained worktree [${sanitizeWorkflowDisplayLine(agent.label)}]: ${shortenHome(agent.worktreePath)} (${sanitizeWorkflowDisplayLine(reason)})${
           agent.worktreeHandoffArtifact
             ? `; handoff ${sanitizeWorkflowDisplayLine(agent.worktreeHandoffArtifact)}`
             : ""
-        }`,
+        }; ${normalRetention ? "local files/checkout preserved; inspect before integration" : "handoff/cleanup needs inspection; child execution state unchanged"}`,
+        normalRetention ? "info" : "warning",
       );
       continue;
     }
-    if (!agent.worktreeHandoffArtifact) continue;
+    if (!agent.worktreeHandoffArtifact) {
+      // Finalization can fail after removal: there is no retained path or
+      // reliable handoff reference, but the owner's diagnostic must survive.
+      if (agent.worktreeCleanup?.reason) {
+        add(
+          `Worktree handoff needs inspection [${sanitizeWorkflowDisplayLine(agent.label)}]: ${agent.worktreeCleanup.reason}; artifact unavailable; child execution state unchanged`,
+        );
+      }
+      continue;
+    }
     const cleanup = agent.worktreeCleanup;
     const work = cleanup?.commits
       ? `${cleanup.commits} commit${cleanup.commits === 1 ? "" : "s"} on ${cleanup.branch}`
       : agent.worktreeBranch
         ? `branch ${agent.worktreeBranch}`
         : "isolated work";
-    alerts.push(
-      `Worktree handoff [${sanitizeWorkflowDisplayLine(agent.label)}]: ${sanitizeWorkflowDisplayLine(work)}; ${sanitizeWorkflowDisplayLine(agent.worktreeHandoffArtifact)}`,
+    add(
+      `Worktree handoff [${sanitizeWorkflowDisplayLine(agent.label)}]: ${sanitizeWorkflowDisplayLine(work)}; ${sanitizeWorkflowDisplayLine(agent.worktreeHandoffArtifact)}${cleanup?.reason ? `; cleanup needs inspection: ${cleanup.reason}` : ""}`,
+      cleanup?.reason ? "warning" : "info",
     );
   }
 
-  const unique = [...new Set(alerts)].map((alert) =>
-    sanitizeTerminalText(boundedLine(alert, 512)),
-  );
+  const unique = [
+    ...new Map(notices.map((notice) => [notice.text, notice])).values(),
+  ].map(({ text, severity }) => ({
+    text: sanitizeTerminalText(boundedLine(text, 512)),
+    severity,
+  }));
   if (unique.length <= MAX_ALERTS) return unique;
   return [
-    ...unique.slice(0, MAX_ALERTS - 1),
-    `${unique.length - MAX_ALERTS + 1} more exceptional item(s); expand for evidence`,
+    ...unique
+      .slice()
+      .sort((left, right) => {
+        const rank = { error: 0, warning: 1, info: 2 };
+        return rank[left.severity] - rank[right.severity];
+      })
+      .slice(0, MAX_ALERTS - 1),
+    {
+      text: `${unique.length - MAX_ALERTS + 1} more item(s); expand for evidence`,
+      severity: "warning" as const,
+    },
   ];
 }
 
@@ -167,6 +210,10 @@ function buildOperatorReport(
     `Workflow ${details.name ? `"${details.name}"` : details.runId} ${details.status} — ${done}/${details.agents.length} agents ok${failed ? `, ${failed} failed` : ""}${uncertain ? `, ${uncertain} uncertain` : ""} across ${details.phases.length} phase(s) in ${elapsed}.`,
     `Run dir: ${shortenHome(runDir)}`,
     `Delivery id: ${deliveryId}`,
+    "Agent status records execution/call settlement only; tests, review, delivery and worktree handoff require separate evidence.",
+    ...completionAlerts(details).map(
+      ({ text, severity }) => `[${severity}] ${text}`,
+    ),
   ];
 
   const artifacts = [
@@ -247,6 +294,7 @@ function buildOperatorReport(
       );
     }
   }
+  lines.push("", ...workflowCompletionLines(details.runId, details.agents));
   if (details.result !== undefined) {
     lines.push("", "Result:", resultJson(details.result));
   }
@@ -266,7 +314,8 @@ export function buildWorkflowCompletionDisplay(
     runId: boundedLine(details.runId, 512),
     status: details.status,
     summary: completionSummary(details),
-    alerts: completionAlerts(details),
+    alerts: completionAlerts(details).map((notice) => notice.text),
+    alertSeverities: completionAlerts(details).map((notice) => notice.severity),
     resultPreview: completionResultPreview(details),
     expanded: "",
   });
@@ -418,6 +467,7 @@ export function isWorkflowCompletionDisplay(
           "status",
           "summary",
           "alerts",
+          "alertSeverities",
           "resultPreview",
           "expanded",
         ]) &&
@@ -428,6 +478,15 @@ export function isWorkflowCompletionDisplay(
         Array.isArray(record.alerts) &&
         record.alerts.length <= MAX_ALERTS &&
         record.alerts.every((alert) => isString(alert, 512)) &&
+        (record.alertSeverities === undefined ||
+          (Array.isArray(record.alertSeverities) &&
+            record.alertSeverities.length === record.alerts.length &&
+            record.alertSeverities.every(
+              (severity) =>
+                severity === "info" ||
+                severity === "warning" ||
+                severity === "error",
+            ))) &&
         (record.resultPreview === undefined ||
           isString(record.resultPreview)) &&
         isString(record.expanded, MAX_EXPANDED_ENTRY_BYTES)
@@ -447,7 +506,10 @@ export function workflowCompletionSummary(
 export function workflowCompletionAlerts(
   entry: WorkflowCompletionDisplayEntry,
 ) {
-  return entry.alerts;
+  return entry.alerts.map((text, index) => ({
+    text,
+    severity: entry.alertSeverities?.[index] ?? "warning",
+  }));
 }
 
 export function workflowCompletionResultPreview(

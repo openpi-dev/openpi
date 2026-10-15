@@ -67,7 +67,8 @@ export async function consumeEventStream(options: EventStreamOptions) {
       const interruption = new Promise<never>((_, reject) => {
         onAbort = () => reject(new Error("event stream aborted"));
         options.signal.addEventListener("abort", onAbort, { once: true });
-        if (options.signal.aborted) onAbort();
+        window.addEventListener("offline", onAbort, { once: true });
+        if (options.signal.aborted || navigator.onLine === false) onAbort();
         timer = window.setTimeout(
           () => reject(new Error("event stream stalled")),
           45_000,
@@ -76,7 +77,10 @@ export async function consumeEventStream(options: EventStreamOptions) {
       const { done, value } = await Promise.race([chunk, interruption]).finally(
         () => {
           window.clearTimeout(timer);
-          if (onAbort) options.signal.removeEventListener("abort", onAbort);
+          if (onAbort) {
+            options.signal.removeEventListener("abort", onAbort);
+            window.removeEventListener("offline", onAbort);
+          }
         },
       );
       if (done) throw new Error("event connection closed");

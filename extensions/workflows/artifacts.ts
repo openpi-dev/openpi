@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  invocationTiming,
+  TIMING_ARTIFACT_MAX_BYTES,
+  type TimingEntry,
+} from "./execution-timing.ts";
+import {
   boundedJournal,
   JOURNAL_MAX_BYTES,
   type JournalEntry,
@@ -10,6 +15,7 @@ import {
   type WorkflowJournalAccumulator,
 } from "./journal.ts";
 import {
+  type AgentRecord,
   refreshWorkflowGraph,
   type TranscriptEntry,
   type WorkflowDelivery,
@@ -543,6 +549,35 @@ export function persistWorkflowAgentResult(
       `Agent result artifact exceeded the ${AGENT_RESULT_ARTIFACT_MAX_BYTES}-byte budget (${encoded.limit} limit at ${encoded.path})`,
     );
   }
+  writeRunFile(runDir, artifact, encoded.json);
+  return artifact;
+}
+
+/** Side artifact shares the existing run retention/lifetime; contains no tool payloads. */
+export function persistWorkflowAgentTiming(
+  runDir: string,
+  agent: AgentRecord,
+  entries: readonly TimingEntry[] = [],
+) {
+  if (!agent.invocation) throw new Error("Timing requires invocation identity");
+  const artifact = `agent-timing/agent-${String(agent.index).padStart(4, "0")}.json`;
+  const encoded = encodeCompleteJson(
+    {
+      version: 1,
+      invocation: invocationTiming(agent.invocation),
+      ...(agent.replayOrigin ? { replayOrigin: agent.replayOrigin } : {}),
+      ...(agent.timing ? { summary: agent.timing } : {}),
+      entries,
+    },
+    {
+      maxBytes: TIMING_ARTIFACT_MAX_BYTES,
+      maxDepth: 12,
+      maxNodes: TIMING_ARTIFACT_MAX_BYTES,
+      maxStringBytes: 512,
+    },
+  );
+  if (!encoded.ok)
+    throw new Error("Agent timing artifact exceeded its byte budget");
   writeRunFile(runDir, artifact, encoded.json);
   return artifact;
 }

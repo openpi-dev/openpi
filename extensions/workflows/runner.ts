@@ -22,26 +22,31 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
+import { createAgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import {
   bindChildSessionExtensions,
   childToolPolicy,
   createChildResources,
   shutdownAndDisposeChildSession,
 } from "../shared/child-session.ts";
-import { createToolCallTimeoutGuard } from "../shared/tool-call-timeout.ts";
-import { type AgentUsage, emptyUsage, type TranscriptEntry } from "./model.ts";
 import {
   childToolsWithStructuredOutput,
   createStructuredOutputTool,
   STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
 } from "../shared/structured-output.ts";
-import { buildWorkflowAgentPrompt } from "./prompt.ts";
+import { createToolCallTimeoutGuard } from "../shared/tool-call-timeout.ts";
+import {
+  ExecutionTimingLedger,
+  type ExecutionTimingSummary,
+  TIMING_ACTIVE_LIMIT,
+} from "./execution-timing.ts";
+import { type AgentUsage, emptyUsage, type TranscriptEntry } from "./model.ts";
 import {
   AgentProgressProjection,
   type ProgressAssistantMessage,
   transcriptFromMessages,
 } from "./progress-projection.ts";
+import { buildWorkflowAgentPrompt } from "./prompt.ts";
 import {
   createReplayFilesystemBoundary,
   type ReplayFilesystemBoundaryOptions,
@@ -77,6 +82,7 @@ export interface AgentOutcome {
   model?: string;
   contextWindow?: number;
   transcript: TranscriptEntry[];
+  timing?: ReturnType<ExecutionTimingLedger["snapshot"]>;
   /** Set when child shutdown did not provide trustworthy terminal evidence. */
   retainAdmissionLease?: true;
 }
@@ -106,6 +112,11 @@ export interface RunAgentOptions {
   modelRegistry: ExtensionContext["modelRegistry"];
   /** Agent Type allowlist; childToolPolicy can only narrow capabilities. */
   tools?: readonly string[];
+  /**
+   * True when `tools` was projected from the parent's live surface. A name the
+   * child cannot expose then narrows the child instead of failing the run.
+   */
+  inheritedTools?: boolean;
   signal?: AbortSignal;
   onProgress?: (progress: AgentProgress) => void;
   /** Canonical repository boundary required before this call can be journaled. */
@@ -157,11 +168,14 @@ export function guardWorkflowChildTools(
   session: WorkflowToolSession,
   timeoutMs?: number,
   replayFilesystemBoundary?: ReplayFilesystemBoundaryOptions,
+  timing?: ExecutionTimingLedger,
 ) {
   const boundary = replayFilesystemBoundary
     ? createReplayFilesystemBoundary(replayFilesystemBoundary)
     : undefined;
-  const timeout = createToolCallTimeoutGuard(timeoutMs);
+  const timeout = createToolCallTimeoutGuard(timeoutMs, (id, outcome) =>
+    timing?.toolBoundary(id, outcome),
+  );
   const apply = () => {
     // Keep the replay boundary outermost: if the timeout rejects before a
     // cooperative tool finishes aborting, path revalidation still completes
@@ -219,7 +233,12 @@ export function recordToolExecutionTiming(
   event: ToolTimingEvent,
   observedAt = Date.now(),
 ) {
+  if (Buffer.byteLength(event.toolCallId) > 256) return;
   const previous = timings.get(event.toolCallId);
+  if (!previous && timings.size >= TIMING_ACTIVE_LIMIT) {
+    const oldest = timings.keys().next().value;
+    if (oldest !== undefined) timings.delete(oldest);
+  }
   if (event.type === "tool_execution_start") {
     if (previous?.startedAt !== undefined) return;
     timings.set(event.toolCallId, { ...previous, startedAt: observedAt });
@@ -247,6 +266,9 @@ function errorText(error: unknown): string {
 export async function runAgent(
   options: RunAgentOptions,
 ): Promise<AgentOutcome> {
+  const timing = new ExecutionTimingLedger();
+  const timingOutcome = (outcome: ExecutionTimingSummary["outcome"]) =>
+    timing.snapshot(outcome);
   let structured: unknown;
   let settled = false;
   let customTools: ToolDefinition[] | undefined;
@@ -333,7 +355,9 @@ export async function runAgent(
     ({ session } = await Promise.race([sessionCreation, abortRace]));
     if (aborted) throw abortError();
     await Promise.race([
-      bindChildSessionExtensions(session, childTools),
+      bindChildSessionExtensions(session, childTools, {
+        tolerateInheritedMisses: options.inheritedTools === true,
+      }),
       abortRace,
     ]);
     if (aborted) throw abortError();
@@ -341,11 +365,13 @@ export async function runAgent(
       session,
       options.toolCallTimeoutMs,
       options.replayFilesystemBoundary,
+      timing,
     );
   } catch (error) {
     settled = true;
     unsubscribeToolGuards?.();
     options.signal?.removeEventListener("abort", onAbort);
+    timing.eventsEnded();
     const cleanup = session
       ? await shutdownAndDisposeChildSession(session, {
           abort: true,
@@ -368,6 +394,7 @@ export async function runAgent(
         model: options.model?.id,
         contextWindow: options.model?.contextWindow,
         transcript: [],
+        timing: timingOutcome(retainAdmissionLease ? "uncertain" : "cancelled"),
         ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
       };
     }
@@ -380,12 +407,13 @@ export async function runAgent(
       model: options.model?.id,
       contextWindow: options.model?.contextWindow,
       transcript: [],
+      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "failure"),
       ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
 
   const childSession = session;
-  const toolRenderer = new AgentToolRenderLedger();
+  const toolRenderer = createAgentToolRenderLedger(childSession);
   let usage = emptyUsage();
   let modelId = childSession.model?.id ?? options.model?.id;
   let contextWindow = childSession.model?.contextWindow;
@@ -506,9 +534,11 @@ export async function runAgent(
       }
     });
   };
+  timing.eventsStarted();
   const unsubscribe = childSession.subscribe((event) => {
     if (settled) return;
     if (event.type === "tool_execution_start") {
+      timing.toolStart(event.toolCallId, event.toolName);
       toolRenderer.start(
         event.toolCallId,
         event.toolName,
@@ -523,6 +553,7 @@ export async function runAgent(
         event.partialResult,
       );
     } else if (event.type === "tool_execution_end") {
+      timing.toolEnd(event.toolCallId, event.toolName, event.isError);
       toolRenderer.end(
         event.toolCallId,
         event.toolName,
@@ -530,6 +561,8 @@ export async function runAgent(
         event.isError,
       );
     }
+    if (event.type === "auto_retry_start" || event.type === "auto_retry_end")
+      timing.retry(event.type);
     if (event.type === "message_end") {
       assistantSettlement = observeAssistantSettlement(
         assistantSettlement,
@@ -565,6 +598,7 @@ export async function runAgent(
     captureToolRenderData(childSession.messages);
     snapshotProjection();
     if (!aborted) {
+      timing.promptStarted();
       // Pi owns transport liveness and retries. Quiet model output is not
       // evidence of a stalled request (thinking and retry backoff can be silent).
       await Promise.race([
@@ -587,6 +621,7 @@ export async function runAgent(
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     settled = true;
+    timing.eventsEnded();
     unsubscribe();
     unsubscribeToolGuards?.();
     try {
@@ -637,6 +672,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
+      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "cancelled"),
       ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
@@ -655,6 +691,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
+      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "failure"),
       ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
@@ -670,6 +707,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
+      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "failure"),
       ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
@@ -685,6 +723,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
+      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "failure"),
       ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
@@ -698,5 +737,6 @@ export async function runAgent(
     model: modelId,
     contextWindow,
     transcript,
+    timing: timingOutcome("success"),
   };
 }

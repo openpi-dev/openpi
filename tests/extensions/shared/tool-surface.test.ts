@@ -222,6 +222,7 @@ test("catalog defines the compact parent entry surface and every managed name on
     "workflow",
     "background",
     "session",
+    "runtime",
   ]);
   assert.equal(
     OPENPI_TOOL_SURFACE_NAMES.length,

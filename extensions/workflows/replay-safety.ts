@@ -4,11 +4,13 @@ import * as fs from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  DefaultResourceLoader,
-  ToolDefinition,
+import {
+  VERSION as PI_VERSION,
+  type DefaultResourceLoader,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { effectiveChildToolAllowlist } from "../shared/child-session.ts";
+import { isPiBuiltinExtensionPath } from "../shared/pi-builtin-extensions.ts";
 
 const REPLAY_FILESYSTEM_TOOL_NAMES = new Set([
   "read",
@@ -566,9 +568,24 @@ function resourceFingerprint(loader: ReplayResourceLoader) {
         `${right.name}\0${right.file.path}`,
       ),
     );
+  // Reviewed native factories have no file path. Bind both their presence and
+  // their implementation version; an unknown synthetic extension still cannot
+  // prove its behavior and must disable replay rather than disappear from it.
   const extensions = loader
     .getExtensions()
-    .extensions.map((extension) => resourceFile(extension.resolvedPath))
+    .extensions.map((extension) => {
+      const extensionPath = extension.resolvedPath;
+      if (isPiBuiltinExtensionPath(extensionPath)) {
+        return { path: extensionPath, runtimeVersion: PI_VERSION };
+      }
+      if (
+        extensionPath.startsWith("builtin:") ||
+        extensionPath.startsWith("<")
+      ) {
+        throw new Error(`unverifiable extension identity: ${extensionPath}`);
+      }
+      return resourceFile(extensionPath);
+    })
     .sort((left, right) => left.path.localeCompare(right.path));
 
   return digest(

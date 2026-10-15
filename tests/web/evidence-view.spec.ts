@@ -15,7 +15,10 @@ import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.
 import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts";
 import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
-import "../../web/ui/src/i18n.ts";
+import { i18n } from "../../web/ui/src/i18n.ts";
+import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
+
+installCheckVisibilityFixture();
 
 afterEach(() => {
   cleanup();
@@ -81,16 +84,21 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
   expect(
     screen.getByRole("figure", { name: "Test evidence" }).textContent,
   ).toContain("1 failed");
-  expect(screen.getByText("cancelled")).toBeTruthy();
-  expect(container.querySelectorAll(".diff-added").length).toBe(1);
   expect(
-    screen.getAllByText("Raw arguments and result (sanitized)"),
-  ).toHaveLength(4);
+    container.querySelector('[data-tool="bash"][data-state="cancelled"]'),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(i18n.t("toolState_cancelled"), {
+      selector: ".evidence-status",
+    }),
+  ).toBeTruthy();
+  expect(container.querySelectorAll(".diff-added").length).toBe(1);
+  expect(screen.getAllByText(i18n.t("toolRawEvidence"))).toHaveLength(4);
 });
 
-it("opens resolved file evidence through the active artifact context", () => {
+it("expands a file summary without nested controls and opens the resolved file through the active artifact context", () => {
   const open = vi.fn();
-  render(
+  const { container } = render(
     createElement(
       ArtifactContext.Provider,
       { value: { open } },
@@ -109,7 +117,11 @@ it("opens resolved file evidence through the active artifact context", () => {
     ),
   );
 
-  fireEvent.click(screen.getByText("read"));
+  const summary = container.querySelector(".tool-evidence-card > summary")!;
+  expect(summary.textContent).toContain("report.md");
+  expect(summary.querySelector("button, a, input, [tabindex]")).toBeNull();
+  fireEvent.click(summary);
+  expect(open).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "/workspace/report.md" }));
   expect(open).toHaveBeenCalledWith("/workspace/report.md");
 });
@@ -229,7 +241,7 @@ it("restores the original opener after nested preview navigation and ignores sta
     await act(async () => finishCopy?.());
     expect(screen.queryByText("File path copied")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   } finally {
     if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
     else Reflect.deleteProperty(navigator, "clipboard");
@@ -294,7 +306,7 @@ it("keeps real relative paths intact even when they resemble encoded Windows lin
   }
 });
 
-it("polls metadata with backoff, rereads changes and refreshes, and stops on close", async () => {
+it("polls metadata with backoff, retains changed text until refresh, and stops on close", async () => {
   vi.useFakeTimers();
   const resolve = vi
     .spyOn(WebClient.prototype, "resolveArtifact")
@@ -327,8 +339,10 @@ it("polls metadata with backoff, rereads changes and refreshes, and stops on clo
         createElement(Markdown, null, "[Report](./report.md)"),
       ),
     );
+    const opener = screen.getByRole("button", { name: "Report" });
+    opener.focus();
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Report" }));
+      fireEvent.click(opener);
     });
     expect(preview).toHaveBeenCalledTimes(1);
     await act(async () => {
@@ -344,20 +358,23 @@ it("polls metadata with backoff, rereads changes and refreshes, and stops on clo
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
-    expect(preview).toHaveBeenCalledTimes(2);
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(i18n.t("filesContentChanged"))).toBeTruthy();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Refresh file" }));
     });
-    expect(preview).toHaveBeenCalledTimes(3);
+    expect(preview).toHaveBeenCalledTimes(2);
     expect(resolve).toHaveBeenCalledTimes(2);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
     });
+    act(() => vi.advanceTimersToNextFrame());
+    expect(document.activeElement).toBe(opener);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(metadata).toHaveBeenCalledTimes(2);
-    expect(preview).toHaveBeenCalledTimes(3);
+    expect(preview).toHaveBeenCalledTimes(2);
   } finally {
     cleanup();
     vi.useRealTimers();

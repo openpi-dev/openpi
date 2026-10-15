@@ -36,6 +36,7 @@ import {
   streamAntigravity,
 } from "../../../extensions/ai-providers/antigravity/provider.ts";
 import { collapseAntigravityModels } from "../../../extensions/ai-providers/antigravity/routing.ts";
+import { resolveTranscript } from "../../../extensions/ai-providers/transcript.ts";
 
 const GEMINI_MODEL: Model<Api> = {
   id: "gemini-3.1-pro",
@@ -758,6 +759,161 @@ test("buildRequestBody honors disabled and forced tool choices", () => {
   );
 });
 
+// --- transcript input shape (Pi 0.86+) -------------------------------------
+
+const TRANSCRIPT_TOOLS = [
+  {
+    name: "read",
+    description: "Read file contents",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "bash",
+    description: "Execute bash commands",
+    parameters: { type: "object", properties: {} },
+  },
+];
+
+/**
+ * Pi 0.86+ hands a custom provider a TranscriptContext: `systemPrompt` and `tools`
+ * are folded into a leading system message, and later system messages carry
+ * prompt/tool deltas. `content` is empty in that leading message.
+ */
+function transcriptContext(extraSystem: Record<string, unknown>[] = []) {
+  return {
+    messages: [
+      {
+        role: "system",
+        content: "",
+        sections: {
+          preamble: "You are an expert coding assistant.",
+          rules: "- be concise",
+        },
+        toolsAdded: TRANSCRIPT_TOOLS,
+        timestamp: 0,
+      },
+      ...extraSystem,
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+    ],
+  } as unknown as Context;
+}
+
+test("resolveTranscript replays the system prompt and tools from a Pi 0.86+ transcript", () => {
+  const resolved = resolveTranscript(transcriptContext());
+  assert.deepEqual(resolved.systemPrompts, [
+    "You are an expert coding assistant.\n\n- be concise",
+  ]);
+  assert.deepEqual(
+    resolved.tools?.map((tool) => tool.name),
+    ["read", "bash"],
+  );
+  assert.deepEqual(
+    resolved.messages.map((message) => message.role),
+    ["user"],
+  );
+});
+
+test("resolveTranscript applies tool removals and section patches in order", () => {
+  const resolved = resolveTranscript(
+    transcriptContext([
+      {
+        role: "system",
+        content: "Second instruction.",
+        sections: { rules: null, docs: "docs section" },
+        toolsAdded: [
+          {
+            name: "edit",
+            description: "Edit files",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+        toolsRemoved: [{ name: "read" }],
+        timestamp: 2,
+      },
+    ]),
+  );
+  // Matches Pi's own getCurrentSystemPrompt(): all content first, then the
+  // sections still in effect, in first-insertion order.
+  assert.deepEqual(resolved.systemPrompts, [
+    "Second instruction.\n\nYou are an expert coding assistant.\n\ndocs section",
+  ]);
+  assert.deepEqual(
+    resolved.tools?.map((tool) => tool.name),
+    ["bash", "edit"],
+  );
+});
+
+test("resolveTranscript accepts Pi's shorthand Context input", () => {
+  const resolved = resolveTranscript(SIMPLE_CONTEXT);
+  assert.deepEqual(resolved.systemPrompts, ["You are helpful."]);
+  assert.equal(resolved.tools, undefined);
+  assert.deepEqual(resolved.messages, SIMPLE_CONTEXT.messages);
+});
+
+test("buildRequestBody reads the system prompt and tools from a Pi 0.86+ transcript", () => {
+  const body = buildRequestBody(
+    GEMINI_MODEL,
+    transcriptContext(),
+    undefined,
+    "p",
+  ) as {
+    request: {
+      contents: { role: string; parts: { text?: string }[] }[];
+      systemInstruction: { role: string; parts: { text: string }[] };
+      tools: { functionDeclarations: { name: string }[] }[];
+    };
+  };
+  assert.equal(
+    body.request.systemInstruction.parts[0]!.text,
+    "You are an expert coding assistant.\n\n- be concise",
+  );
+  assert.deepEqual(
+    body.request.tools[0]!.functionDeclarations.map(
+      (declaration) => declaration.name,
+    ),
+    ["read", "bash"],
+  );
+  assert.deepEqual(body.request.contents, [
+    { role: "user", parts: [{ text: "hello" }] },
+  ]);
+});
+
+test("convertMessages never turns a transcript system message into a functionResponse", () => {
+  // The regression: a leading system message with empty content used to reach the
+  // tool-result branch and produce `{ functionResponse: { response: ... } }` with no
+  // name, which Cloud Code Assist rejects as contents[0].parts[0].
+  const contents = convertMessages(GEMINI_MODEL, transcriptContext());
+  assert.deepEqual(contents, [{ role: "user", parts: [{ text: "hello" }] }]);
+  assert.equal(
+    contents.some((content) =>
+      content.parts.some((part) => part.functionResponse !== undefined),
+    ),
+    false,
+  );
+});
+
+test("convertMessages keeps a nameless tool result out of the functionResponse path", () => {
+  const contents = convertMessages(GEMINI_MODEL, {
+    messages: [
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "",
+        content: [{ type: "text", text: "tool output" }],
+        isError: false,
+        timestamp: 0,
+      },
+    ],
+  } as unknown as Context);
+  assert.deepEqual(contents, [
+    { role: "user", parts: [{ text: "tool output" }] },
+  ]);
+});
+
 test("discovery collapses wire variants and validates advertised capabilities", async () => {
   globalThis.fetch = (async () =>
     new Response(
@@ -1168,6 +1324,34 @@ test("streamAntigravity truncates and cancels an oversized error body", async ()
   assert.ok(error && error.type === "error");
   assert.match(error.error.errorMessage ?? "", /\[truncated\]$/);
   assert.ok((error.error.errorMessage?.length ?? 0) < 70 * 1024);
+});
+
+test("streamAntigravity preserves an error body that exactly fits the byte limit", async () => {
+  let cancellations = 0;
+  const body = "x".repeat(64 * 1024);
+  globalThis.fetch = (async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(body));
+          controller.close();
+        },
+        cancel() {
+          cancellations++;
+        },
+      }),
+      { status: 400 },
+    )) as typeof fetch;
+
+  const events = await collectEvents(
+    streamAntigravity(GEMINI_MODEL, SIMPLE_CONTEXT, { apiKey: API_KEY }),
+  );
+  assert.equal(cancellations, 0);
+  const error = events.find((event) => event.type === "error");
+  assert.ok(error && error.type === "error");
+  const message = error.error.errorMessage ?? "";
+  assert.ok(message.endsWith(body));
+  assert.equal(message.endsWith("… [truncated]"), false);
 });
 
 test("streamAntigravity fails over after a transient error in a 200 stream", async () => {

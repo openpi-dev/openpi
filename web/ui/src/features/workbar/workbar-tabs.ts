@@ -1,12 +1,17 @@
 import type { WorkbarTool } from "./types.ts";
 
 export type WorkbarContentTool = Exclude<WorkbarTool, "launcher">;
+export type WorkbarTabId = WorkbarContentTool | `terminal:${string}`;
+
+export function workbarTabTool(id: WorkbarTabId) {
+  return id.startsWith("terminal:") ? "terminal" : (id as WorkbarContentTool);
+}
 
 export interface WorkbarTabsState {
-  tabs: WorkbarContentTool[];
-  active: WorkbarContentTool | null;
+  tabs: WorkbarTabId[];
+  active: WorkbarTabId | null;
   launcherOpen: boolean;
-  activationHistory: WorkbarContentTool[];
+  activationHistory: WorkbarTabId[];
 }
 
 export function initialWorkbarTabs(tool: WorkbarTool): WorkbarTabsState {
@@ -28,7 +33,7 @@ export function initialWorkbarTabs(tool: WorkbarTool): WorkbarTabsState {
 
 export function openWorkbarTool(
   state: WorkbarTabsState,
-  tool: WorkbarTool,
+  tool: WorkbarTool | WorkbarTabId,
 ): WorkbarTabsState {
   if (tool === "launcher") {
     return { ...state, launcherOpen: true };
@@ -46,7 +51,7 @@ export function openWorkbarTool(
 
 export function activateWorkbarTool(
   state: WorkbarTabsState,
-  tool: WorkbarContentTool,
+  tool: WorkbarTabId,
 ): WorkbarTabsState {
   if (!state.tabs.includes(tool)) return state;
   return openWorkbarTool(state, tool);
@@ -54,7 +59,7 @@ export function activateWorkbarTool(
 
 export function closeWorkbarTool(
   state: WorkbarTabsState,
-  tool: WorkbarContentTool,
+  tool: WorkbarTabId,
 ): WorkbarTabsState {
   if (!state.tabs.includes(tool)) return state;
   const tabs = state.tabs.filter((item) => item !== tool);
