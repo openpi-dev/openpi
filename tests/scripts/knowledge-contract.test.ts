@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 // @ts-expect-error The checker is a JavaScript module without declarations.
 import * as knowledgeContract from "../../scripts/check-knowledge-contract.mjs";
 
@@ -22,8 +29,19 @@ related-prs: none
 supersedes: none
 `;
 
+const roots: string[] = [];
+after(() => {
+  for (const root of roots) rmSync(root, { recursive: true, force: true });
+});
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "openpi-knowledge-contract-"));
+  roots.push(root);
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({ scripts: { fixture: "node rerun.mjs" } }),
+  );
+  writeFileSync(join(root, "rerun.mjs"), "// fixture rerun entry\n");
   mkdirSync(join(root, "docs", "research"), { recursive: true });
   mkdirSync(join(root, "docs", "benchmarks", "runs"), { recursive: true });
   writeFileSync(
@@ -160,8 +178,14 @@ test("rejects unresolved benchmark metadata and nested index bypasses", () => {
   writeFileSync(
     run,
     readFileSync(run, "utf8")
-      .replace("evidence-reference: ../evidence.txt", "evidence-reference: missing-evidence.json")
-      .replace("rerun-entry-point: bun run fixture", "rerun-entry-point: missing-command"),
+      .replace(
+        "evidence-reference: ../evidence.txt",
+        "evidence-reference: missing-evidence.json",
+      )
+      .replace(
+        "rerun-entry-point: bun run fixture",
+        "rerun-entry-point: missing-command",
+      ),
   );
   const nested = join(root, "docs", "research", "topic");
   mkdirSync(nested, { recursive: true });
@@ -172,8 +196,228 @@ test("rejects unresolved benchmark metadata and nested index bypasses", () => {
   );
 
   const result = checkKnowledgeContract(root);
-  assert(result.problems.includes("docs/benchmarks/runs/run.md: invalid evidence-reference missing-evidence.json"));
-  assert(result.problems.includes("docs/benchmarks/runs/run.md: invalid rerun-entry-point missing-command"));
-  assert(result.problems.includes("docs/research/topic/README.md: missing frontmatter"));
-  assert(result.problems.includes("docs/research/record.md: not reachable from docs/research/README.md"));
+  assert(
+    result.problems.includes(
+      "docs/benchmarks/runs/run.md: invalid evidence-reference missing-evidence.json",
+    ),
+  );
+  assert(
+    result.problems.includes(
+      "docs/benchmarks/runs/run.md: invalid rerun-entry-point missing-command",
+    ),
+  );
+  assert(
+    result.problems.includes(
+      "docs/research/topic/README.md: missing frontmatter",
+    ),
+  );
+  assert(
+    result.problems.includes(
+      "docs/research/record.md: not reachable from docs/research/README.md",
+    ),
+  );
+});
+
+test("standard YAML rejects null comment values, duplicates and invalid documents", () => {
+  for (const replacement of [
+    "related-issues: #1",
+    "related-issues: null",
+    "related-issues: []",
+  ]) {
+    const root = fixture();
+    const path = join(root, "docs/research/record.md");
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace('related-issues: "#1"', replacement),
+    );
+    assert.ok(
+      checkKnowledgeContract(root).problems.some((problem: string) =>
+        problem.includes("missing related-issues"),
+      ),
+      replacement,
+    );
+  }
+  for (const header of [
+    "status: draft\nstatus: validated",
+    "status: [unfinished",
+    "- list",
+  ]) {
+    assert.equal(parseRecordFrontmatter(`---\n${header}\n---\n`), undefined);
+  }
+  assert.deepEqual(
+    parseRecordFrontmatter('---\nrelated-issues: ["#1", "#2"]\n---\n')?.get(
+      "related-issues",
+    ),
+    ["#1", "#2"],
+  );
+  const root = fixture();
+  const path = join(root, "docs/research/record.md");
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(
+      "status: draft",
+      "status: draft\nstatus: validated",
+    ),
+  );
+  assert.ok(
+    checkKnowledgeContract(root).problems.some((problem: string) =>
+      problem.includes("missing frontmatter"),
+    ),
+  );
+});
+
+test("frozen legacy path stays legacy after an ordinary correction, new sibling cannot opt out", () => {
+  const root = fixture();
+  const old = join(root, "docs/research/CHILD_RENDER_PARITY_2026-10-05.md");
+  writeFileSync(old, "# Legacy correction\n");
+  assert.equal(assertKnowledgeContract(root).records.length, 2);
+  writeFileSync(old, "# Legacy typo corrected\n");
+  assert.equal(assertKnowledgeContract(root).records.length, 2);
+  writeFileSync(
+    join(root, "docs/research/NEW_CHILD_RENDER_PARITY.md"),
+    "# New\n",
+  );
+  assert.ok(
+    checkKnowledgeContract(root).problems.includes(
+      "docs/research/NEW_CHILD_RENDER_PARITY.md: missing frontmatter",
+    ),
+  );
+});
+
+test("only category-root templates are exempt and code/comment links cannot provide reachability", () => {
+  const root = fixture();
+  mkdirSync(join(root, "docs/research/nested"));
+  writeFileSync(
+    join(root, "docs/research/nested/TEMPLATE.md"),
+    "# Not exempt\n",
+  );
+  writeFileSync(
+    join(root, "docs/research/README.md"),
+    "<!-- [record](record.md) -->\n```md\n[record](record.md)\n```\n`[record](record.md)`\n",
+  );
+  const result = checkKnowledgeContract(root);
+  assert.ok(
+    result.problems.includes(
+      "docs/research/nested/TEMPLATE.md: missing frontmatter",
+    ),
+  );
+  assert.ok(
+    result.problems.includes(
+      "docs/research/record.md: not reachable from docs/research/README.md",
+    ),
+  );
+});
+
+test("benchmark rerun commands must resolve an actual package script and local entry", () => {
+  for (const body of [undefined, "node missing.mjs", "bun run fixture"]) {
+    const root = fixture();
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: body ? { fixture: body } : {} }),
+    );
+    assert.ok(
+      checkKnowledgeContract(root).problems.includes(
+        "docs/benchmarks/runs/run.md: invalid rerun-entry-point bun run fixture",
+      ),
+    );
+  }
+});
+
+test("malformed URI escapes and linked external evidence fail without throwing", (t) => {
+  const root = fixture();
+  const record = join(root, "docs/research/record.md");
+  writeFileSync(
+    record,
+    readFileSync(record, "utf8") + "\n[Malformed](%ZZ.md)\n",
+  );
+  assert.ok(
+    checkKnowledgeContract(root).problems.some((problem: string) =>
+      problem.includes("broken repository link %ZZ.md"),
+    ),
+  );
+  if (process.platform === "win32") {
+    t.diagnostic(
+      "Symlink creation requires platform privilege; URI denial above remains checked",
+    );
+    return;
+  }
+  const outside = fixture();
+  symlinkSync(
+    join(outside, "rerun.mjs"),
+    join(root, "docs/benchmarks/escape.txt"),
+  );
+  const run = join(root, "docs/benchmarks/runs/run.md");
+  writeFileSync(
+    run,
+    readFileSync(run, "utf8").replace("../evidence.txt", "../escape.txt"),
+  );
+  const result = checkKnowledgeContract(root);
+  assert.ok(
+    result.problems.some((problem: string) =>
+      problem.includes("invalid evidence-reference ../escape.txt"),
+    ),
+  );
+  assert.ok(
+    result.problems.some((problem: string) =>
+      problem.includes("symbolic link in governed category"),
+    ),
+  );
+});
+
+test("external and archive evidence identities pass syntax checks without claiming retrievability", () => {
+  for (const reference of [
+    "https://example.com/receipts/run",
+    "archive:fixture-v1/receipt.json",
+  ]) {
+    const root = fixture();
+    const run = join(root, "docs/benchmarks/runs/run.md");
+    writeFileSync(
+      run,
+      readFileSync(run, "utf8").replace(
+        "evidence-reference: ../evidence.txt",
+        `evidence-reference: ${reference}`,
+      ),
+    );
+    assert.equal(assertKnowledgeContract(root).records.length, 2);
+  }
+});
+
+test("research headings inside comments or fenced code do not satisfy distinctions", () => {
+  const root = fixture();
+  const path = join(root, "docs/research/record.md");
+  writeFileSync(
+    path,
+    `${commonMetadata}---\n<!--\n## Verified facts\n## Inferences\n-->\n\n~~~md\n## Recommendations\n## Unknowns\n~~~\n`,
+  );
+  assert.equal(
+    checkKnowledgeContract(root).problems.filter((problem: string) =>
+      problem.includes("missing section"),
+    ).length,
+    4,
+  );
+});
+
+test("excessive YAML alias expansion fails closed", () => {
+  const source =
+    "---\na: &a [a, a, a]\nb: &b [*a, *a, *a]\nc: &c [*b, *b, *b]\nd: &d [*c, *c, *c]\ne: [*d, *d, *d]\n---\n";
+  assert.equal(parseRecordFrontmatter(source), undefined);
+});
+
+test("index links normalize relative spelling and local absolute body paths fail", () => {
+  const root = fixture();
+  writeFileSync(
+    join(root, "docs/research/README.md"),
+    "[record](./record.md#facts)\n",
+  );
+  assert.equal(assertKnowledgeContract(root).records.length, 2);
+  const path = join(root, "docs/research/record.md");
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8") + "\n[Private](/tmp/private-evidence.md)\n",
+  );
+  assert.ok(
+    checkKnowledgeContract(root).problems.includes(
+      "docs/research/record.md: broken repository link /tmp/private-evidence.md",
+    ),
+  );
 });

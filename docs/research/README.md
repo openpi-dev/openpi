@@ -2,7 +2,7 @@
 
 Research records preserve sourced investigation and distinguish observations, inferences, recommendations, and unknowns. They are not accepted Decisions or proof of runtime behavior by themselves.
 
-New governed records start from [`TEMPLATE.md`](TEMPLATE.md), retain the required metadata, and link back to their source Issue. The checker currently enforces this contract for `docs/research` and `docs/benchmarks`; only the explicit historical allowlist is exempt from frontmatter.
+New governed records start from [`TEMPLATE.md`](TEMPLATE.md), retain the required metadata, and link back to their source Issue. The checker currently enforces this contract for `docs/research` and `docs/benchmarks`; existing paths recorded in `scripts/knowledge-legacy-records.json` remain legacy until a scoped review explicitly migrates them. New paths require metadata. A byte change alone does not migrate a legacy record.
 
 ## Source-verified designs
 
