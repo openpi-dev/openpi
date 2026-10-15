@@ -4024,3 +4024,125 @@ test("metadata excludes archives and hidden projects but preserves explicit ungr
   assert.equal(ungrouped.sessions[0]!.path, hiddenSession.getSessionFile());
   assert.equal(ungrouped.sessions[0]!.ungrouped, true);
 });
+
+test("metadata HTTP deadline cancels native discovery and releases only its owner", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-metadata-deadline-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const current = SessionManager.create(root, join(root, "sessions"));
+  persistSession(current, "needle", 1);
+  const host = new WebHost({
+    runtime: runtimeFor(root, join(root, "sessions"), current),
+  });
+  await host.start();
+  t.after(() => host.stop());
+  const url = new URL(host.url);
+  const headers = {
+    Authorization: `Bearer ${new URLSearchParams(url.hash.slice(1)).get("token")}`,
+  };
+  let entered!: () => void;
+  let nativeSignal: AbortSignal | undefined;
+  const entry = new Promise<void>((done) => {
+    entered = done;
+  });
+  const listing = t.mock.method(
+    SessionManager,
+    "listAll",
+    async (_dir: unknown, _progress: unknown, signal?: AbortSignal) => {
+      if (!signal) return [];
+      nativeSignal = signal;
+      entered();
+      await new Promise<void>((_done, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        }),
+      );
+      return [];
+    },
+  );
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const pending = fetch(`${url.origin}/api/sessions?mode=metadata&q=needle`, {
+      headers,
+    });
+    await entry;
+    t.mock.timers.tick(14_999);
+    assert.equal(nativeSignal?.aborted, false);
+    t.mock.timers.tick(1);
+    const response = await pending;
+    assert.equal(response.status, 504);
+    assert.equal((await response.json()).code, "METADATA_QUERY_TIMEOUT");
+    assert.equal(nativeSignal?.aborted, true);
+  } finally {
+    t.mock.timers.reset();
+    listing.mock.restore();
+  }
+  const next = await fetch(
+    `${url.origin}/api/sessions?mode=metadata&q=needle`,
+    { headers },
+  );
+  assert.equal(next.status, 200);
+  assert.equal((await next.json()).sessions[0].id, current.getSessionId());
+});
+
+test("metadata HTTP disconnect aborts discovery without blocking the bare catalog", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-metadata-disconnect-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const current = SessionManager.create(root, join(root, "sessions"));
+  persistSession(current, "needle", 1);
+  const host = new WebHost({
+    runtime: runtimeFor(root, join(root, "sessions"), current),
+  });
+  await host.start();
+  t.after(() => host.stop());
+  const url = new URL(host.url);
+  const headers = {
+    Authorization: `Bearer ${new URLSearchParams(url.hash.slice(1)).get("token")}`,
+  };
+  let entered!: () => void;
+  let cancelled!: () => void;
+  const entry = new Promise<void>((done) => {
+    entered = done;
+  });
+  const cancellation = new Promise<void>((done) => {
+    cancelled = done;
+  });
+  const listing = t.mock.method(
+    SessionManager,
+    "listAll",
+    async (_dir: unknown, _progress: unknown, signal?: AbortSignal) => {
+      if (!signal) return [];
+      entered();
+      await new Promise<void>((_done, reject) =>
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(signal.reason);
+            cancelled();
+          },
+          { once: true },
+        ),
+      );
+      return [];
+    },
+  );
+  const controller = new AbortController();
+  const pending = fetch(`${url.origin}/api/sessions?mode=metadata&q=needle`, {
+    headers,
+    signal: controller.signal,
+  });
+  await entry;
+  assert.equal(
+    (await fetch(`${url.origin}/api/sessions`, { headers })).status,
+    200,
+  );
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  await cancellation;
+  await new Promise<void>((done) => setImmediate(done));
+  listing.mock.restore();
+  const next = await fetch(
+    `${url.origin}/api/sessions?mode=metadata&q=needle`,
+    { headers },
+  );
+  assert.equal(next.status, 200);
+});
