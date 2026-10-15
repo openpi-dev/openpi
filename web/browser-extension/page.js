@@ -81,6 +81,8 @@
         );
       if (message.type === "bound" && !active) {
         active = true;
+        document.documentElement.dataset.openpiBrowserDocument =
+          message.eventName;
         eventName = message.eventName;
         window.addEventListener(eventName, popup);
         document.addEventListener("click", click, true);
