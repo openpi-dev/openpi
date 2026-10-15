@@ -1,3 +1,4 @@
+import { recoverPendingPromptFiles } from "../host/prompt-files.ts";
 import { existsSync } from "node:fs";
 import { readConfiguredPackages } from "./configured-packages.ts";
 import { mkdir, realpath, stat } from "node:fs/promises";
@@ -322,6 +323,9 @@ export class PiWebRuntime implements WebRuntimeController {
     let runtime: PiWebRuntime | undefined;
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
+      const recovered = await recoverPendingPromptFiles(webSessionDirectory);
+      if (recovered.removed) console.info("OpenPI pending attachment recovery:", recovered);
+      else if (recovered.unknown || recovered.failed || recovered.incomplete) console.warn("OpenPI pending attachment recovery:", recovered);
       const created = await PiWebRuntime.createRuntime(
         canonicalCwd,
         workspaceSelected
