@@ -13,13 +13,17 @@ import {
   type WorkspaceFileMutationResult,
   type WorkspaceTrashListing,
 } from "../../../protocol/artifacts.ts";
+import type {
+  WebPromptFilesResponse,
+  WebPromptFileUpload,
+} from "../../../protocol/prompt-files.ts";
+import type { WebProviderLogin } from "../../../protocol/provider-login.ts";
 import {
   type WebQuestionAnswers,
   type WebQuestionReceipt,
   type WebQuestionRequest,
 } from "../../../protocol/questions.ts";
 import type { WebSessionSources } from "../../../protocol/session-sources.ts";
-import type { WebProviderLogin } from "../../../protocol/provider-login.ts";
 import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
@@ -34,9 +38,9 @@ import {
   type WebPromptDelivery,
   type WebPromptImage,
   type WebSessionHistoryPage,
+  type WebSessionProjection,
   type WebSessionPromptHistoryPage,
   type WebSessionPromptPreview,
-  type WebSessionProjection,
   type WebSessionSummary,
   type WebSettingsCatalog,
   type WebSettingsPreferencesPatch,
@@ -53,10 +57,6 @@ import type {
   WebSessionForkResult,
 } from "../../../runtime/types.ts";
 import type { WebTranscriptSearchResponse } from "../../../search/transcript-search.ts";
-import type {
-  WebPromptFileUpload,
-  WebPromptFilesResponse,
-} from "../../../protocol/prompt-files.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -1054,6 +1054,13 @@ export class WebClient {
   pendingQuestions(sessionId: string, signal?: AbortSignal) {
     return this.request<{ pending: WebQuestionRequest | null }>(
       `/api/questions/pending?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  questionReceipt(sessionId: string, requestId: string, signal?: AbortSignal) {
+    return this.request<{ receipt: WebQuestionReceipt | null }>(
+      `/api/questions/pending?${new URLSearchParams({ sessionId, requestId })}`,
       { signal },
     );
   }

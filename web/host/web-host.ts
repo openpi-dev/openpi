@@ -326,7 +326,7 @@ export class WebHost {
       const admission = turn && this.promptAdmissions.get(turn.commandId);
       if (!turn || !admission?.controllerId || admission.sessionId !== turn.sessionId ||
           !this.adapter.isCurrentSession({ id: admission.sessionId, path: admission.sessionPath })) return undefined;
-      return { ...turn, workspace: this.runtime.cwd, controllerId: admission.controllerId };
+      return { ...turn, workspace: this.runtime.cwd, sessionPath: admission.sessionPath, controllerId: admission.controllerId };
     };
     this.questions = new WebQuestionBroker(turnOwner, () => this.publish("questions_changed"));
     this.browser = new WebBrowserBroker(turnOwner);
@@ -483,7 +483,7 @@ export class WebHost {
     this.questionSession = scope;
     this.questions.cancel();
     if (scope) this.unregisterQuestions = registerWebQuestionBridge(scope,
-      (toolCallId, questions, signal, handoff) => this.questions.request(toolCallId, questions, signal, handoff));
+      (toolCallId, questions, signal, handoff, cleanup) => this.questions.request(toolCallId, questions, signal, handoff, cleanup));
     if (scope) this.unregisterBrowser = registerWebBrowserBridge(scope, (request, signal) => this.browser.execute(request, signal));
     if (scope) this.unregisterCommandFeedback = registerWebCommandFeedback(scope, (text, level) => {
       if (this.stopping || scope !== this.runtime.sessionManager) return;
@@ -1502,7 +1502,11 @@ export class WebHost {
       if (!sessionId || sessionId.length > 128 || !isWebControllerId(controller)) {
         return this.json(response, 400, { code: "INVALID_QUESTION_TARGET", error: "Session and browser controller are required" });
       }
-      return this.json(response, 200, { pending: this.questions.read(sessionId, controller) });
+      const requestId = url.searchParams.get("requestId");
+      if (requestId && !isWebControllerId(requestId)) return this.json(response, 400, { code: "INVALID_QUESTION_TARGET" });
+      return this.json(response, 200, requestId
+        ? { receipt: this.questions.receipt(sessionId, requestId, controller) }
+        : { pending: this.questions.read(sessionId, controller) });
     }
     if (url.pathname === "/api/questions/answer" && request.method === "POST") {
       const body = await this.readJson(request, WEB_QUESTION_BODY_BYTES);

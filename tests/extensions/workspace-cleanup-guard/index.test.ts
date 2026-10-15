@@ -7,6 +7,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { registerWebQuestionBridge } from "../../../extensions/ask-user/web-bridge.ts";
 import workspaceCleanupGuard from "../../../extensions/workspace-cleanup-guard/index.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
@@ -18,6 +19,8 @@ interface ConfirmOptions {
 interface HarnessOptions {
   cwd: string;
   signal?: AbortSignal;
+  hasUI?: boolean;
+  sessionManager?: object;
   confirm?: (
     title: string,
     message: string,
@@ -34,6 +37,8 @@ function harness(options: HarnessOptions) {
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd: options.cwd,
+    hasUI: options.hasUI,
+    sessionManager: options.sessionManager,
     signal: options.signal,
     ui: {
       confirm: options.confirm ?? (async () => false),
@@ -341,5 +346,50 @@ test("settlement clears provenance from the completed agent run", async () => {
       bashCall("remove", "rm -f scratch.txt"),
     )) as { block?: boolean } | undefined;
     assert.equal(result?.block, true);
+  });
+});
+
+test("print mode cleanup uses only its native Session-owned question bridge", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    const scope = {};
+    const h = harness({
+      cwd: workspace,
+      hasUI: false,
+      sessionManager: scope,
+      confirm: async () => {
+        throw new Error("print mode must not call no-op confirm");
+      },
+    });
+    const unregister = registerWebQuestionBridge(
+      scope,
+      async (_id, _questions, _signal, _handoff, cleanup) => {
+        assert.deepEqual(cleanup, { workspace, paths: ["keep.txt"] });
+        return {
+          kind: "answered",
+          answers: [{ id: "cleanup", selected: "Approve exact deletion" }],
+        };
+      },
+    );
+    try {
+      assert.equal(
+        await h.emit("tool_call", bashCall("remove", "rm keep.txt")),
+        undefined,
+      );
+    } finally {
+      unregister();
+    }
+    assert.deepEqual(
+      await h.emit("tool_call", bashCall("unavailable", "rm keep.txt")),
+      {
+        block: true,
+        reason:
+          "Blocked cleanup: keep.txt existed before this agent changed it and is not proven session-created scratch. Retry the cleanup without that path, or obtain explicit user confirmation to delete it.",
+      },
+    );
+    assert.equal(
+      await readFile(path.join(workspace, "keep.txt"), "utf8"),
+      "keep",
+    );
   });
 });

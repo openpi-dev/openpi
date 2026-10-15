@@ -6,6 +6,11 @@ export interface WebHandoffPresentation {
   completionSignal: string;
 }
 
+export interface WebCleanupTarget {
+  workspace: string;
+  paths: readonly string[];
+}
+
 export type WebQuestionOutcome =
   | { kind: "answered"; answers: AskUserAnswer[] }
   | { kind: "dismissed" | "cancelled" | "expired" | "unavailable" };
@@ -15,6 +20,7 @@ type QuestionBridge = (
   questions: AskUserInput["questions"],
   signal?: AbortSignal,
   handoff?: WebHandoffPresentation,
+  cleanup?: WebCleanupTarget,
 ) => Promise<WebQuestionOutcome>;
 
 // Pi's extension loader and the Web CLI can evaluate different module copies.
@@ -47,6 +53,7 @@ export function askWebQuestions(
   questions: AskUserInput["questions"],
   signal?: AbortSignal,
   handoff?: WebHandoffPresentation,
+  cleanup?: WebCleanupTarget,
 ) {
-  return bridges.get(scope)?.(toolCallId, questions, signal, handoff);
+  return bridges.get(scope)?.(toolCallId, questions, signal, handoff, cleanup);
 }

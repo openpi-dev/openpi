@@ -50,6 +50,25 @@ const resources = {
       planCardLoadingFull: "Loading plan...",
       planCardLoadFailed: "Could not load the full plan. Retry",
       planCardEvidence: "Tool result · plan_ready",
+      cleanupPrompt:
+        "Allow deletion of these pre-existing files? Approval is for this one attempt, not proof of execution.",
+      cleanupApprove: "Approve exact deletion",
+      cleanupDeny: "Deny deletion",
+      cleanupApproveHelp:
+        "Allow this one deletion attempt for the listed files.",
+      cleanupDenyHelp: "Keep the listed files and block this attempt.",
+      cleanupDecision_approved:
+        "Deletion approved for the listed targets. Check the tool result to verify execution.",
+      cleanupDecision_denied:
+        "Deletion was not approved. This attempt was blocked.",
+      cleanupDecision_expired:
+        "Deletion confirmation expired. This attempt was blocked.",
+      cleanupDecision_cancelled:
+        "Deletion confirmation was cancelled. This attempt was blocked.",
+      cleanupDecision_stale:
+        "Deletion confirmation lost its original run. This attempt was blocked.",
+      cleanupDecision_unknown:
+        "The original deletion decision could not be verified. Check the conversation and files; do not assume it was denied or retry deletion automatically.",
       questionWaiting: "Question",
       questionPreview: "View preview",
       questionSkip: "Skip",
@@ -1938,6 +1957,20 @@ const resources = {
       planCardLoadingFull: "正在加载计划...",
       planCardLoadFailed: "无法加载完整计划，重试",
       planCardEvidence: "工具结果 · plan_ready",
+      cleanupPrompt:
+        "允许删除这些预存文件？批准仅适用于本次尝试，不证明已执行。",
+      cleanupApprove: "批准删除所列目标",
+      cleanupDeny: "拒绝删除",
+      cleanupApproveHelp: "仅允许本次尝试删除所列文件。",
+      cleanupDenyHelp: "保留所列文件，阻止本次尝试。",
+      cleanupDecision_approved:
+        "已批准删除所列目标。是否实际执行，请核对工具结果。",
+      cleanupDecision_denied: "未批准删除，本次尝试已阻止。",
+      cleanupDecision_expired: "删除确认已过期，本次尝试已阻止。",
+      cleanupDecision_cancelled: "删除确认已取消，本次尝试已阻止。",
+      cleanupDecision_stale: "删除确认已失去原回合，本次尝试已阻止。",
+      cleanupDecision_unknown:
+        "无法核实原删除决定。请检查对话与文件，不要假定未批准，也不要自动重试删除。",
       questionWaiting: "问题",
       questionPreview: "查看预览",
       questionSkip: "跳过",

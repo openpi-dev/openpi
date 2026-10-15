@@ -1,7 +1,7 @@
 import type { AskUserAnswer, AskUserInput } from "../../extensions/ask-user/index.ts";
 import { answerDraftFits } from "../../extensions/ask-user/limits.ts";
 import { sanitizeTerminalText } from "../../extensions/shared/terminal-text.ts";
-import type { WebHandoffPresentation } from "../../extensions/ask-user/web-bridge.ts";
+import type { WebCleanupTarget, WebHandoffPresentation } from "../../extensions/ask-user/web-bridge.ts";
 
 export type WebQuestions = AskUserInput["questions"];
 export type WebQuestionAnswers = AskUserAnswer[];
@@ -13,6 +13,7 @@ export interface WebQuestionRequest {
   expiresAt: number;
   questions: WebQuestions;
   handoff?: WebHandoffPresentation;
+  cleanup?: WebCleanupTarget;
 }
 
 export function validHandoff(handoff: WebHandoffPresentation) {
@@ -23,6 +24,8 @@ export type WebQuestionState = "answered" | "dismissed" | "cancelled" | "expired
 export interface WebQuestionReceipt {
   state: WebQuestionState;
   replayed?: boolean;
+  cleanupTarget?: WebCleanupTarget;
+  cleanupDecision?: "approved" | "denied" | "expired" | "cancelled" | "stale" | "unknown";
 }
 
 export const WEB_QUESTION_BODY_BYTES = 64 * 1024;

@@ -1,41 +1,47 @@
-export type CleanupConfirmation = "approved" | "denied" | "unavailable";
+import {
+  askWebQuestions,
+  type WebCleanupTarget,
+} from "../ask-user/web-bridge.ts";
 
-type Confirm = (
-  paths: readonly string[],
-  signal?: AbortSignal,
-) => Promise<CleanupConfirmation>;
-
-const key = Symbol.for("@tt-a1i/openpi/web-cleanup-confirmation/v1");
-
-function providers(): Map<object, Confirm> {
-  const existing: unknown = Reflect.get(globalThis, key);
-  if (existing !== undefined) {
-    if (!(existing instanceof Map))
-      throw new Error("Incompatible Web confirmation registry");
-    return existing as Map<object, Confirm>;
-  }
-  const registry = new Map<object, Confirm>();
-  Object.defineProperty(globalThis, key, { value: registry });
-  return registry;
+export function cleanupQuestions(target: WebCleanupTarget) {
+  return [
+    {
+      id: "cleanup",
+      header: "Workspace cleanup",
+      question: `Delete pre-existing files in ${target.workspace}?\n\n${target.paths.map((candidate) => `- ${candidate}`).join("\n")}\n\nApproval applies only to these exact targets. It does not prove the command ran.`,
+      options: [
+        {
+          label: "Approve exact deletion",
+          description: "Allow this one deletion attempt for the listed files.",
+        },
+        {
+          label: "Deny deletion",
+          description: "Keep the listed files and block this attempt.",
+        },
+      ],
+    },
+  ];
 }
 
-export function registerWebCleanupConfirmation(
+/** Use the existing Session-owned Web question transport, never a second resolver. */
+export async function requestWebCleanupConfirmation(
   scope: object,
-  confirm: Confirm,
+  toolCallId: string,
+  target: WebCleanupTarget,
+  signal?: AbortSignal,
 ) {
-  const registry = providers();
-  registry.set(scope, confirm);
-  return () => {
-    if (registry.get(scope) === confirm) registry.delete(scope);
-  };
-}
-
-export function requestWebCleanupConfirmation(
-  scope: object,
-  paths: readonly string[],
-  signal?: AbortSignal,
-): Promise<CleanupConfirmation> {
-  return (
-    providers().get(scope)?.(paths, signal) ?? Promise.resolve("unavailable")
+  const result = await askWebQuestions(
+    scope,
+    toolCallId,
+    cleanupQuestions(target),
+    signal,
+    undefined,
+    target,
+  );
+  return !!(
+    result?.kind === "answered" &&
+    result.answers.length === 1 &&
+    result.answers[0]?.selected === "Approve exact deletion" &&
+    !result.answers[0].note
   );
 }
