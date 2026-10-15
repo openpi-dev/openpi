@@ -281,8 +281,8 @@ export type ParseAgentTypeResult =
     }
   | {
       readonly agentType?: undefined;
-      /** A malformed higher-precedence file blocks fallback to this name. */
-      readonly rejectedName: string;
+      /** A malformed higher-precedence file blocks fallback to these names. */
+      readonly rejectedNames: readonly string[];
       readonly diagnostics: AgentTypeDiagnostic[];
     };
 
@@ -298,9 +298,9 @@ export function parseAgentType(
   source = stem,
 ): ParseAgentTypeResult {
   const diagnostics: AgentTypeDiagnostic[] = [];
-  let rejectedName = stem;
+  const rejectedNames = [stem];
   const fail = (message: string) => ({
-    rejectedName,
+    rejectedNames,
     diagnostics: [...diagnostics, { source, message }],
   });
   if (Buffer.byteLength(content, "utf8") > AGENT_TYPE_LIMITS.fileBytes) {
@@ -331,8 +331,9 @@ export function parseAgentType(
     );
   }
   // Once a safe declared name is known, a malformed/misnamed file must block
-  // that role rather than only its filename spelling.
-  rejectedName = name;
+  // both that role and its filename spelling: either one may be the role the
+  // author meant to narrow, and the other would fall back to a broader one.
+  if (name !== stem) rejectedNames.push(name);
   // A renamed file with a stale `name` would otherwise shadow a different type
   // than the filename suggests.
   if (name !== stem) {
@@ -477,7 +478,7 @@ function loadDirectory(directory: string) {
     const result = parseAgentType(content, file.slice(0, -3), filePath);
     diagnostics.push(...result.diagnostics);
     if (result.agentType) agentTypes.push(result.agentType);
-    else rejectedNames.add(result.rejectedName);
+    else for (const name of result.rejectedNames) rejectedNames.add(name);
   }
 
   return { agentTypes, rejectedNames, diagnostics, blockAllFallback };

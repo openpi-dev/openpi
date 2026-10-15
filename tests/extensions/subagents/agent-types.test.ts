@@ -514,6 +514,42 @@ Do not write.
   });
 });
 
+test("FAIL: a misspelled name in a role file still blocks the role its filename names", async () => {
+  for (const layer of ["global", "project"] as const) {
+    await withTempDir(async (root) => {
+      const { agentDir, cwd } = await seed(root, {
+        [layer]: {
+          "implementer.md": `---
+name: implementor
+description: Intended read-only override.
+tools: [read, grep]
+---
+Do not write.
+`,
+        },
+      });
+      const loaded = loadAgentTypes({ agentDir, cwd, projectTrusted: true });
+      assert.equal(
+        loaded.agentTypes.has("implementer"),
+        false,
+        `${layer} implementer.md must not expose the write-capable builtin`,
+      );
+      assert.equal(loaded.agentTypes.has("implementor"), false);
+      const messages = loaded.diagnostics.map((entry) => entry.message);
+      assert.ok(
+        messages.some((message) =>
+          /does not match filename "implementer\.md"/.test(message),
+        ),
+      );
+      assert.ok(
+        messages.some((message) =>
+          /blocks fallback to built-in:implementer/.test(message),
+        ),
+      );
+    });
+  }
+});
+
 test("every key the parser reads is accepted without a warning", () => {
   const parsed = parseAgentType(VALID, "explore", "explore.md");
   assert.ok(parsed.agentType);
