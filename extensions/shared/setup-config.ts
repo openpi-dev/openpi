@@ -73,6 +73,7 @@ export function isHiddenThinkingLevels(
 
 export const FOOTER_ITEMS = [
   "cwd",
+  "cwd-base",
   "model",
   "thinking",
   "context",
@@ -178,6 +179,7 @@ const FLAT_FOOTER_ITEM_LINES: FooterLines = [
     "flex",
     "git",
     "pr",
+    "cwd-base",
     "cwd",
   ],
 ];

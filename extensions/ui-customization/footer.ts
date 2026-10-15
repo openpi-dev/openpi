@@ -36,6 +36,7 @@ const DIRECTORY_ICON = "\uea83"; // Codicon: folder
 /** Higher = keep longer when the line is too narrow. */
 const PRIORITY: Record<FooterItem, number> = {
   cwd: 100,
+  "cwd-base": 100,
   model: 95,
   context: 90,
   git: 80,
@@ -53,6 +54,7 @@ interface PowerlineColors {
 
 const POWERLINE_COLORS: Record<FooterItem, PowerlineColors> = {
   cwd: { fg: 231, bg: 33 },
+  "cwd-base": { fg: 231, bg: 33 },
   model: { fg: 231, bg: 61 },
   thinking: { fg: 231, bg: 97 },
   context: { fg: 231, bg: 64 },
@@ -130,6 +132,21 @@ export function formatDirectory(
   return sanitizeTerminalLabel(display);
 }
 
+/**
+ * Last path segment only; its width still depends on the directory name.
+ * Root paths have no basename, so they fall back to the sanitized original.
+ */
+export function formatDirectoryBase(
+  cwd: string,
+  pathModule = process.platform === "win32" ? win32 : posix,
+) {
+  const safeCwd = sanitizeTerminalLabel(cwd);
+  const root = pathModule.parse(safeCwd).root;
+  return root && pathModule.normalize(safeCwd) === pathModule.normalize(root)
+    ? safeCwd
+    : pathModule.basename(safeCwd) || safeCwd;
+}
+
 function contextTone(percent: number | null): SegmentTone {
   if (percent === null) return "muted";
   if (percent >= 90) return "error";
@@ -189,6 +206,10 @@ export function buildSegmentCatalog(
 
   return {
     cwd: { text: `${DIRECTORY_ICON} ${formatDirectory(cwd)}`, tone: "text" },
+    "cwd-base": {
+      text: `${DIRECTORY_ICON} ${formatDirectoryBase(cwd)}`,
+      tone: "text",
+    },
     model: { text: `${MODEL_ICON} ${modelText}`, tone: "muted" },
     thinking: { text: modelInfo.thinking, tone: "muted" },
     context: {

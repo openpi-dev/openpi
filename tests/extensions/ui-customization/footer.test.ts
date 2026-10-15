@@ -11,6 +11,7 @@ import {
   buildSegmentCatalog,
   fitSegmentsToWidth,
   formatDirectory,
+  formatDirectoryBase,
   renderFooter,
   resolveLineSegments,
   type FooterSegment,
@@ -76,6 +77,50 @@ test("formatDirectory compares Windows paths case-insensitively", () => {
     formatDirectory("c:\\users\\adam\\project", "C:\\Users\\Adam", win32),
     "~/project",
   );
+});
+
+test("formatDirectoryBase keeps only the last path segment", () => {
+  assert.equal(
+    formatDirectoryBase("/Users/adam/develop/work/project"),
+    "project",
+  );
+  assert.equal(formatDirectoryBase("/Users/adam"), "adam");
+  assert.equal(
+    formatDirectoryBase("C:\\Users\\Adam\\project", win32),
+    "project",
+  );
+  // Root paths have no basename, so the sanitized original is the fallback.
+  assert.equal(formatDirectoryBase("/"), "/");
+});
+
+test("cwd-base segment stays short while cwd keeps the full path", () => {
+  const catalog = buildSegmentCatalog(
+    "/Users/me/develop/work/bar_smyze_opserver",
+    modelInfo,
+    gitInfo,
+  );
+
+  assert.ok(catalog["cwd-base"].text.endsWith("bar_smyze_opserver"));
+  assert.ok(!catalog["cwd-base"].text.includes("/work/"));
+  assert.ok(catalog.cwd.text.includes("/work/"));
+});
+
+test("renderFooter renders a cwd-base layout within its width", () => {
+  const lines = normalizeFooterLines([
+    ["model", "context", "flex", "git", "cwd-base"],
+  ]);
+  const [line] = renderFooter({
+    cwd: "/Users/me/develop/work/bar_smyze_opserver",
+    modelInfo,
+    gitInfo,
+    style: "plain",
+    lines,
+    width: 100,
+    theme,
+  });
+
+  assert.ok(line.includes("bar_smyze_opserver"));
+  assert.ok(visibleWidth(line) <= 100);
 });
 
 test("default one-line layout leads with model context and ends with cwd", () => {
@@ -422,4 +467,35 @@ test("fitSegmentsToWidth never empties a previously non-empty side first", () =>
   assert.equal(fitted.left.length, 1);
   assert.equal(fitted.right.length, 1);
   assert.equal(fitted.left[0]!.id, "cwd");
+});
+
+test("cwd-base preserves POSIX/Windows roots, trailing separators and sanitized Unicode", () => {
+  for (const [cwd, expected] of [
+    ["/work/深层/项目/", "项目"],
+    ["///", "///"],
+    ["/work/\u001b[31m项目\u001b[0m", "项目"],
+    ["/work/\u001b]8;;https://example.test\u0007项目\u001b]8;;\u0007", "项目"],
+  ])
+    assert.equal(formatDirectoryBase(cwd, posix), expected);
+  for (const [cwd, expected] of [
+    ["C:\\", "C:\\"],
+    ["C:/", "C:/"],
+    ["//server/share/", "//server/share/"],
+    ["C:\\work\\项目\\", "项目"],
+    ["\\\\server\\share\\", "\\\\server\\share\\"],
+    ["\\\\server\\share\\项目\\", "项目"],
+  ])
+    assert.equal(formatDirectoryBase(cwd, win32), expected);
+  for (const width of [20, 40, 80, 150]) {
+    const lines = renderFooter({
+      cwd: "/work/deep/项目",
+      modelInfo,
+      gitInfo,
+      style: "plain",
+      lines: [["model", "context", "flex", "git", "cwd-base"]],
+      width,
+      theme,
+    });
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+  }
 });

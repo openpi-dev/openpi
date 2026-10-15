@@ -1818,3 +1818,35 @@ test("setup tool propagates real consumer failure and preserves disk and runtime
   assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), "{}");
   rmSync(SETUP_CONFIG_PATH);
 });
+
+test("cwd-base persists through canonical and flat footer setup without changing defaults", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME);
+  assert.ok(tool);
+  const { DEFAULT_FOOTER_LINES, formatSetupConfig } = await import(
+    "../../../extensions/shared/setup-config.ts"
+  );
+  assert.deepEqual(loadSetupConfig().ui.footerLines, DEFAULT_FOOTER_LINES);
+  for (const params of [
+    { ui_footer_lines: [["model", "context", "flex", "git", "cwd-base"]] },
+    { ui_footer_items: ["model", "context", "git", "cwd-base"] },
+  ]) {
+    await tool.execute(
+      "cwd-base-setup",
+      params,
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+    const config = loadSetupConfig();
+    assert.deepEqual(config.ui.footerLines, [
+      ["model", "context", "flex", "git", "cwd-base"],
+    ]);
+    assert.match(formatSetupConfig(config), /cwd-base/);
+    assert.equal(
+      "footerItems" in JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")).ui,
+      false,
+    );
+  }
+});
