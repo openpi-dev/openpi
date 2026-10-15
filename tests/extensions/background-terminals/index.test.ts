@@ -181,22 +181,25 @@ test("bg_start preserves shell-significant trailing whitespace", {
       list = tools.get("bg_list");
     assert(start && list);
     const before = await list.execute("before", {}, undefined, undefined, ctx);
-    await assert.rejects(
-      start.execute(
-        "blank",
-        { command: " \t\n ", title: "blank" },
-        undefined,
-        undefined,
-        ctx,
-      ),
-      /command must not be empty/,
-    );
+    for (const command of ["", " \t\n "]) {
+      await assert.rejects(
+        start.execute(
+          "blank",
+          { command, title: "blank" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        /command must not be empty/,
+      );
+    }
     assert.deepEqual(
       await list.execute("after", {}, undefined, undefined, ctx),
       before,
     );
     for (const command of [
       "printf %s hello",
+      " \tprintf %s hello",
       "printf %s hello" + String.fromCharCode(92) + " ",
     ]) {
       const control = spawnSync("/bin/sh", ["-c", command], { timeout: 5_000 });
