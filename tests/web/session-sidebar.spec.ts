@@ -1966,3 +1966,13 @@ it("metadata chooser aborts changed query and workspace scope and ignores late r
   view.unmount();
   expect(query.mock.calls[1]?.[1]?.aborted).toBe(true);
 });
+
+it("opens active metadata filtering through the existing visible list control", () => {
+  const actions = createWebStore().getState().actions;
+  const open = vi.spyOn(actions, "setSearchOpen");
+  mount(snapshot([]), { actions });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sidebarFilterList") }),
+  );
+  expect(open).toHaveBeenCalledWith(true);
+});

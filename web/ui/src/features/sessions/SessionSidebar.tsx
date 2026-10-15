@@ -1045,6 +1045,14 @@ export function SessionSidebar(props: SessionSidebarProps) {
   ];
   const organizationItems: DropdownMenuOption[] = [
     {
+      label: t("sidebarFilterList"),
+      icon: <Search />,
+      onClick: () => {
+        setActivityOpen(false);
+        props.actions.setSearchOpen(true);
+      },
+    },
+    {
       label: t("sidebarGroupBy"),
       items: [
         {
@@ -2154,7 +2162,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                       items={organizationItems}
                     />
                   )}
-                  {archived && (
+                  {
                     <Tooltip content={t("sidebarFilterList")}>
                       <button
                         className="icon-button"
@@ -2165,7 +2173,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                         <Search />
                       </button>
                     </Tooltip>
-                  )}
+                  }
                   {!archived && (
                     <Tooltip content={t("addWorkspace")}>
                       <button

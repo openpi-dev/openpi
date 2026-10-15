@@ -3722,8 +3722,13 @@ test("metadata catalog finds canonical sessions beyond500 and matches named firs
   await mkdir(sessions);
   const current = SessionManager.create(root, sessions);
   persistSession(current, "current", 9000);
+  const rareCwd = join(root, "rare-metadata-cwd");
+  await mkdir(rareCwd);
   for (let index = 0; index < 501; index++) {
-    const manager = SessionManager.create(root, sessions);
+    const manager = SessionManager.create(
+      index === 0 ? rareCwd : root,
+      sessions,
+    );
     persistSession(
       manager,
       index === 0 ? "unique first needle" : "ordinary",
@@ -3746,6 +3751,11 @@ test("metadata catalog finds canonical sessions beyond500 and matches named firs
   assert.equal(page.sessions[0]!.name, "named oldest");
   assert.equal(page.nextCursor, undefined);
   assert.equal(page.sessions[0]!.source, "web-session");
+  const cwdMatch = await adapter.listMetadataSessions({
+    query: "rare-metadata-cwd",
+  });
+  assert.equal(cwdMatch.sessions[0]!.path, page.sessions[0]!.path);
+  assert.equal(cwdMatch.sessions.length, 1);
 });
 
 test("metadata cursors bind scope and detect rename even without native activity changes", async (t) => {
@@ -3863,6 +3873,7 @@ test("metadata rejects ambiguous queries and owns cancellation without a pending
     SessionManager,
     "listAll",
     async (_dir: unknown, _progress: unknown, signal?: AbortSignal) => {
+      if (!signal) return []; // Bare discovery has a separate lifecycle.
       assert.equal(signal, controller.signal);
       entered();
       await new Promise<void>((_done, reject) =>
@@ -3878,6 +3889,9 @@ test("metadata rejects ambiguous queries and owns cancellation without a pending
     controller.signal,
   );
   await entry;
+  const bare = await adapter.listSessionProjection();
+  assert.equal(bare.sessions[0]!.id, current.getSessionId());
+  assert.equal(controller.signal.aborted, false);
   await assert.rejects(adapter.listMetadataSessions({ query: "x" }), {
     code: "METADATA_QUERY_BUSY",
   });
