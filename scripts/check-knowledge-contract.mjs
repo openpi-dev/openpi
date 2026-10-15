@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { parseDocument } from "yaml";
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,8 +60,6 @@ const LEGACY_RECORDS = new Set([
   ...legacyBaseline.records,
   ...historicalAdmissions.admissions.flatMap((admission) => admission.records),
 ]);
-const MARKDOWN_LINK_PATTERN =
-  /!?\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
 
 function markdownFiles(directory, problems) {
   if (!existsSync(directory)) return [];
@@ -99,36 +98,46 @@ function isTemplateOrIndex(directory, path) {
   );
 }
 
-function markdownProse(source) {
-  const withoutComments = source.replace(/<!--[\s\S]*?-->/g, "");
-  const lines = [];
-  let fence;
-  for (const line of withoutComments.split(/\r?\n/)) {
-    if (fence) {
-      const closing = /^ {0,3}(`+|~+)[ \t]*$/.exec(line)?.[1];
-      if (
-        closing &&
-        closing[0] === fence.marker &&
-        closing.length >= fence.length
-      )
-        fence = undefined;
-      continue;
-    }
-    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    // Backtick-fence info strings cannot themselves contain backticks.
-    if (opening && !(opening[1][0] === "`" && opening[2].includes("`"))) {
-      fence = { marker: opening[1][0], length: opening[1].length };
-      continue;
-    }
-    lines.push(line.replace(/`[^`]*`/g, ""));
+// Read evidence from actual Markdown nodes. Code and raw HTML are opaque;
+// list nesting and reference/inline links keep the parser's normal semantics.
+function markdownEvidence(source) {
+  const body = source.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
+  const nodes = [];
+  const opaque = new Set(["code", "inlineCode", "html"]);
+  function visit(node) {
+    if (opaque.has(node.type)) return;
+    nodes.push(node);
+    for (const child of node.children ?? []) visit(child);
   }
-  return lines.join("\n");
+  function text(node) {
+    if (opaque.has(node.type)) return "";
+    if (node.type === "text") return node.value;
+    return (node.children ?? []).map(text).join("");
+  }
+  visit(fromMarkdown(body));
+  const definitions = new Map();
+  for (const node of nodes) {
+    // CommonMark resolves duplicate reference definitions to the first one.
+    if (node.type === "definition" && !definitions.has(node.identifier))
+      definitions.set(node.identifier, node.url);
+  }
+  return {
+    headings: nodes
+      .filter((node) => node.type === "heading" && node.depth === 2)
+      .map((node) => text(node).trim().toLowerCase()),
+    links: nodes.flatMap((node) => {
+      if (node.type === "link" || node.type === "image") return [node.url];
+      if (node.type === "linkReference" || node.type === "imageReference") {
+        const target = definitions.get(node.identifier);
+        return target ? [target] : [];
+      }
+      return [];
+    }),
+  };
 }
 
 function markdownLinkTargets(source) {
-  return [...markdownProse(source).matchAll(MARKDOWN_LINK_PATTERN)].map(
-    (match) => match[1],
-  );
+  return markdownEvidence(source).links;
 }
 
 function isRepositoryReference(root, path, value) {
@@ -251,12 +260,7 @@ function validateMetadata({ category, metadata, record, problems }) {
 }
 
 function validateResearchSections({ source, record, problems }) {
-  const headings = new Set(
-    markdownProse(source)
-      .split(/\r?\n/)
-      .map((line) => /^##\s+(.+?)\s*$/.exec(line)?.[1].toLowerCase())
-      .filter(Boolean),
-  );
+  const headings = new Set(markdownEvidence(source).headings);
   for (const section of RESEARCH_SECTIONS) {
     if (!headings.has(section))
       problems.push(`${record}: missing section ${section}`);

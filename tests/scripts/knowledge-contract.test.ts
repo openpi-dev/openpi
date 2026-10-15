@@ -510,3 +510,88 @@ test("explicit historical integration admissions compose with frozen legacy path
     ),
   );
 });
+
+test("Markdown AST excludes indented/inline code and raw HTML from structural evidence", () => {
+  for (const index of [
+    "    [record](record.md)\n",
+    "\t[record](record.md)\n",
+    "`[record](record.md)`\n",
+    "<div>\n[record](record.md)\n</div>\n",
+    '<a href="record.md">record</a>\n',
+    "<!-- [record](record.md) -->\n",
+  ]) {
+    const root = fixture();
+    writeFileSync(join(root, "docs/research/README.md"), index);
+    assert.ok(
+      checkKnowledgeContract(root).problems.includes(
+        "docs/research/record.md: not reachable from docs/research/README.md",
+      ),
+      index,
+    );
+  }
+  const headings =
+    "## Verified facts\n## Inferences\n## Recommendations\n## Unknowns";
+  for (const body of [
+    headings
+      .split("\n")
+      .map((line) => `    ${line}`)
+      .join("\n"),
+    `<div>\n${headings}\n</div>`,
+    headings.replaceAll(/## ([^\n]+)/g, "## `$1`"),
+  ]) {
+    const root = fixture();
+    writeFileSync(
+      join(root, "docs/research/record.md"),
+      `${commonMetadata}---\n\n${body}\n`,
+    );
+    const { problems } = checkKnowledgeContract(root);
+    for (const section of [
+      "verified facts",
+      "inferences",
+      "recommendations",
+      "unknowns",
+    ]) {
+      assert.ok(
+        problems.includes(
+          `docs/research/record.md: missing section ${section}`,
+        ),
+        body,
+      );
+    }
+  }
+});
+
+test("Markdown AST preserves real inline, reference, ordinary and nested-list links", () => {
+  for (const index of [
+    "Paragraph with [record](record.md).\n",
+    "- [record](record.md)\n",
+    "- Records\n  - [record](record.md)\n",
+    "1. Records\n   - Nested\n     - [record](record.md)\n",
+    "- Records\n\n    [record](record.md)\n",
+    "Records include\n    [record](record.md)\n",
+    "[record][entry]\n\n[entry]: record.md\n",
+  ]) {
+    const root = fixture();
+    writeFileSync(join(root, "docs/research/README.md"), index);
+    assert.deepEqual(checkKnowledgeContract(root).problems, [], index);
+  }
+});
+
+test("reference link evidence uses the first real Markdown definition", () => {
+  const root = fixture();
+  writeFileSync(
+    join(root, "docs/research/README.md"),
+    "[record][entry]\n\n[entry]: missing.md\n[entry]: record.md\n",
+  );
+  const { problems } = checkKnowledgeContract(root);
+  assert.ok(
+    problems.includes(
+      "docs/research/record.md: not reachable from docs/research/README.md",
+    ),
+  );
+  assert.ok(
+    problems.includes(
+      "docs/research/README.md: broken repository link missing.md",
+    ),
+  );
+});
