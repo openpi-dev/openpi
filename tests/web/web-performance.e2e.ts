@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
+import { isControlledSession } from "../../web/ui/src/lib/session-control.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const fixturePath = "/m12-fixture/session.jsonl";
@@ -55,7 +56,11 @@ function projectedSnapshot(base: WebSnapshot, scenario: Scenario): WebSnapshot {
   const omitted = scenario === "truncated" ? 488 : 0;
   return {
     ...base,
+    // The UI only treats a Session as controlled when id and path both name
+    // it. Keeping the real Host path here made every synthetic snapshot a
+    // foreign Session, so the page reconnected forever before measuring.
     currentSessionId: sessionId,
+    currentSessionPath: fixturePath,
     workspaces: [
       { path: "/m12-fixture", name: "M12 synthetic", current: true },
     ],
@@ -103,6 +108,7 @@ async function installFixture(page: Page, scenario: Scenario) {
   let hostSnapshotMs: number | undefined;
   let requests = 0;
   let base: WebSnapshot | undefined;
+  const identities = new Set<string>();
   await page.route("**/api/snapshot**", async (route) => {
     requests++;
     try {
@@ -112,13 +118,50 @@ async function installFixture(page: Page, scenario: Scenario) {
         hostSnapshotMs = performance.now() - start;
         base = (await response.json()) as WebSnapshot;
       }
-      await route.fulfill({ json: projectedSnapshot(base, scenario) });
+      const snapshot = projectedSnapshot(base, scenario);
+      identities.add(
+        `${snapshot.currentSessionId}:${snapshot.currentSessionPath}`,
+      );
+      await route.fulfill({ json: snapshot });
     } catch {
       await route.abort().catch(() => undefined);
     }
   });
-  return { hostSnapshotMs: () => hostSnapshotMs, requests: () => requests };
+  return {
+    hostSnapshotMs: () => hostSnapshotMs,
+    requests: () => requests,
+    identities: () => [...identities],
+  };
 }
+
+// Fail with the identity mismatch itself instead of a reconnect timeout that
+// would read like a performance or transport regression.
+test("synthetic snapshots form one controlled Session identity", () => {
+  // Shaped like the real Host snapshot the fixture spreads: it already names
+  // the Host's own Session, which the projection must fully replace.
+  const base = {
+    currentSessionId: "host-session",
+    currentSessionPath: "/host/session.jsonl",
+    truncation: { truncated: false },
+    runtime: { status: "idle", capabilities: {} },
+  } as unknown as WebSnapshot;
+  for (const scenario of [
+    "empty",
+    "long",
+    "hundred",
+    "five-hundred",
+    "truncated",
+  ] as const) {
+    const snapshot = projectedSnapshot(base, scenario);
+    expect(
+      isControlledSession(snapshot),
+      `${scenario}: currentSessionId/currentSessionPath must match selectedSession`,
+    ).toBe(true);
+    expect(snapshot.sessions).toEqual([
+      expect.objectContaining({ id: sessionId, path: fixturePath }),
+    ]);
+  }
+});
 
 async function inputSamples(page: Page) {
   const input = page.getByRole("textbox", { name: "描述任务" });
@@ -308,6 +351,7 @@ for (const width of [1280, 390]) {
           transport: {
             nativeHostSnapshotFetchMs: fixture.hostSnapshotMs(),
             snapshotRequests: fixture.requests(),
+            snapshotSessionIdentities: fixture.identities(),
           },
           provider: "not invoked (route-mocked browser snapshot)",
           runtime: "native Host snapshot fetch only; no Pi turn executed",
@@ -362,6 +406,9 @@ test("transport interruption refreshes the same synthetic session without prompt
     /connected/,
   );
   expect(admissions).toBe(0);
+  // Every snapshot, including the ones after reconnecting, names the same
+  // synthetic Session.
+  expect(fixture.identities()).toEqual([`${sessionId}:${fixturePath}`]);
   const path = testInfo.outputPath("m12-transport-recovery.json");
   await writeFile(
     path,
