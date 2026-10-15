@@ -24,6 +24,7 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 
 const {
   DEFAULT_SETUP_CONFIG,
+  DEFAULT_WEB_APPEARANCE,
   FOOTER_PRESET_DEFINITIONS,
   formatSetupConfig,
   loadSetupConfig,
@@ -110,6 +111,14 @@ async function runSetupConfigChildScenario({
   });
 }
 
+test("Code Mode defaults on for old documents and preserves an explicit opt-out", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.codeMode.enabled, true);
+  assert.equal(parseSetupConfig({ configVersion: 1 }).codeMode.enabled, true);
+  const config = parseSetupConfig({ codeMode: { enabled: false } });
+  assert.equal(config.codeMode.enabled, false);
+  assert.match(formatSetupConfig(config), /Code Mode default: off/);
+});
+
 test("capability discovery defaults to explicit and accepts adaptive opt-in", () => {
   assert.equal(DEFAULT_SETUP_CONFIG.capabilities.discovery, "explicit");
   assert.equal(
@@ -125,6 +134,113 @@ test("capability discovery defaults to explicit and accepts adaptive opt-in", ()
   assert.match(
     formatSetupConfig(DEFAULT_SETUP_CONFIG),
     /Capability discovery: explicit/,
+  );
+});
+
+test("response preferences preserve native defaults and bounded Web thinking filters are canonical", async () => {
+  assert.deepEqual(parseSetupConfig({}).response, {
+    verbosity: "default",
+    reasoningSummary: "default",
+  });
+  assert.deepEqual(parseSetupConfig({}).ui.webHiddenThinkingLevels, []);
+  assert.deepEqual(
+    parseSetupConfig({
+      response: { verbosity: "invalid", reasoningSummary: "off" },
+      ui: { webHiddenThinkingLevels: ["high", "high"] },
+    }).response,
+    DEFAULT_SETUP_CONFIG.response,
+  );
+  assert.deepEqual(
+    parseSetupConfig({ ui: { webHiddenThinkingLevels: ["unknown"] } }).ui
+      .webHiddenThinkingLevels,
+    [],
+  );
+  const before = JSON.stringify({
+    configVersion: 1,
+    response: {
+      verbosity: "medium",
+      reasoningSummary: "concise",
+      futurePreference: true,
+    },
+    ui: { webHiddenThinkingLevels: ["minimal"] },
+  });
+  writeFileSync(SETUP_CONFIG_PATH, before);
+  await updateSetupConfig((config) => ({
+    ...config,
+    response: { ...config.response, verbosity: "high" },
+    ui: { ...config.ui, webHiddenThinkingLevels: [] },
+  }));
+  const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal(saved.response.futurePreference, true);
+  assert.deepEqual(loadSetupConfig().response, {
+    verbosity: "high",
+    reasoningSummary: "concise",
+  });
+  assert.deepEqual(loadSetupConfig().ui.webHiddenThinkingLevels, []);
+  assert.match(
+    formatSetupConfig(loadSetupConfig()),
+    /verbosity high.*reasoning summary concise/,
+  );
+  assert.match(
+    formatSetupConfig(loadSetupConfig()),
+    /Hidden Web thinking levels: none/,
+  );
+  const canonical = readFileSync(SETUP_CONFIG_PATH, "utf8");
+  const controller = new AbortController();
+  await assert.rejects(
+    updateSetupConfig(
+      (config) => ({
+        ...config,
+        response: { verbosity: "low", reasoningSummary: "none" },
+      }),
+      async () => controller.abort(),
+      controller.signal,
+    ),
+    /restored/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), canonical);
+  for (const invalid of [
+    { response: { verbosity: "verbose" } },
+    { response: { reasoningSummary: "off" } },
+    { ui: { webHiddenThinkingLevels: ["max", "max"] } },
+    { ui: { webHiddenThinkingLevels: ["unsupported"] } },
+  ]) {
+    const raw = JSON.stringify({ configVersion: 1, ...invalid });
+    writeFileSync(SETUP_CONFIG_PATH, raw);
+    assert.equal(inspectSetupConfig().writable, false);
+    await assert.rejects(
+      updateSetupConfig((config) => config),
+      /Refusing to overwrite/,
+    );
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  }
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+});
+
+test("FAIL: session child execution admission is opt-in and bounded", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.childExecutions.maxActive, undefined);
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 3 } }).childExecutions
+      .maxActive,
+    3,
+  );
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 0 } }).childExecutions
+      .maxActive,
+    undefined,
+  );
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 65 } }).childExecutions
+      .maxActive,
+    undefined,
+  );
+  assert.match(
+    formatSetupConfig(parseSetupConfig({ childExecutions: { maxActive: 3 } })),
+    /Session child executions: 3 active slots/,
+  );
+  assert.match(
+    formatSetupConfig(DEFAULT_SETUP_CONFIG),
+    /Session child executions: unbounded \(disabled\)/,
   );
 });
 
@@ -477,6 +593,10 @@ process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - starte
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    // Subscribe at spawn time: recovery can finish before the holder's exit
+    // is observed, so a later once(waiter, "exit") could miss it entirely.
+    const exited = once(child, "exit");
+    void exited.catch(() => {});
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     let stdout = "";
@@ -504,7 +624,7 @@ process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - starte
             );
         });
       });
-    return { child, waitFor, output: () => ({ stdout, stderr }) };
+    return { child, exited, waitFor, output: () => ({ stdout, stderr }) };
   };
 
   const holder = start(holderSource);
@@ -513,11 +633,10 @@ process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - starte
     await holder.waitFor("holding\n");
     waiter = start(waiterSource);
     await waiter.waitFor("watching\n");
-    const exited = once(holder.child, "exit");
     holder.child.kill("SIGKILL");
-    await exited;
+    await holder.exited;
 
-    await once(waiter.child, "exit");
+    await waiter.exited;
     const { stdout, stderr } = waiter.output();
     assert.equal(stderr, "");
     const result = JSON.parse(stdout.split("\n").at(-2) ?? "");
@@ -531,9 +650,8 @@ process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - starte
       if (!process) continue;
       const { child } = process;
       if (child.exitCode === null && child.signalCode === null) {
-        const exited = once(child, "exit");
         child.kill("SIGKILL");
-        await exited;
+        await process.exited;
       }
     }
     removeLockArtifacts();
@@ -856,12 +974,70 @@ test("an invalid stored footer style is diagnosed with its legal range and never
   assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
 });
 
+test("complete Web appearance defaults and color/font choices round-trip without changing the legacy theme", async () => {
+  assert.deepEqual(parseSetupConfig({}).ui.webAppearance, {
+    palette: "default",
+    accent: "",
+    background: "",
+    foreground: "",
+    font: "system",
+  });
+  assert.match(
+    formatSetupConfig(parseSetupConfig({})),
+    /palette default · accent theme default \/ background theme default \/ foreground theme default · font system/u,
+  );
+  for (const webTheme of ["system", "light", "dark", "mist", "rose", "pine"]) {
+    const original = JSON.stringify({
+      configVersion: 1,
+      ui: { webTheme },
+      future: { retained: true },
+    });
+    writeFileSync(SETUP_CONFIG_PATH, original);
+    const appearance = {
+      palette: "rose" as const,
+      accent: "#aBc123",
+      background: "#FFFFFF",
+      foreground: "",
+      font: "serif" as const,
+    };
+    const receipt = await updateSetupConfig((config) => ({
+      ...config,
+      ui: { ...config.ui, webAppearance: appearance },
+    }));
+    assert.deepEqual(receipt.config.ui.webAppearance, appearance);
+    assert.equal(receipt.config.ui.webTheme, webTheme);
+    assert.deepEqual(loadSetupConfig().ui.webAppearance, appearance);
+    assert.equal(inspectSetupConfig().writable, true);
+    assert.deepEqual(
+      JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")).future,
+      { retained: true },
+    );
+    const saved = readFileSync(SETUP_CONFIG_PATH, "utf8");
+    await assert.rejects(
+      updateSetupConfig(
+        (config) => ({
+          ...config,
+          ui: { ...config.ui, webAppearance: DEFAULT_WEB_APPEARANCE },
+        }),
+        async (config) => {
+          if (config.ui.webAppearance.palette === "default")
+            throw new Error("Consumer failed");
+        },
+      ),
+      /previous file and configuration restored/u,
+    );
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), saved);
+  }
+});
+
 test("Web appearance fields accept canonical bounds and remain known on explicit saves", async () => {
   for (const configVersion of [undefined, 1]) {
     for (const ui of [
       { webChatWidth: 820, webChatFontSize: 12, webExpandThinking: false },
       { webChatWidth: 960, webChatFontSize: 16, webExpandThinking: true },
       { webChatWidth: 2000, webChatFontSize: 24, webExpandThinking: true },
+      { webSidebarWidth: 220, webAuxiliaryWidth: 360 },
+      { webSidebarWidth: 420, webAuxiliaryWidth: 720 },
     ]) {
       const raw = JSON.stringify({ configVersion, ui });
       writeFileSync(SETUP_CONFIG_PATH, raw);
@@ -888,8 +1064,26 @@ test("Web appearance fields accept canonical bounds and remain known on explicit
 
 test("invalid Web appearance values are diagnosed and block both stored and candidate writes", async () => {
   const invalidValues = {
+    webAppearance: [
+      null,
+      [],
+      "default",
+      {},
+      { ...DEFAULT_WEB_APPEARANCE, palette: "unknown" },
+      { ...DEFAULT_WEB_APPEARANCE, font: "unknown" },
+      { ...DEFAULT_WEB_APPEARANCE, accent: "#123" },
+      { ...DEFAULT_WEB_APPEARANCE, background: "rgb(0,0,0)" },
+      { ...DEFAULT_WEB_APPEARANCE, foreground: "#12345678" },
+      { ...DEFAULT_WEB_APPEARANCE, accent: "#zzzzzz" },
+      { ...DEFAULT_WEB_APPEARANCE, background: " #123456" },
+      { ...DEFAULT_WEB_APPEARANCE, foreground: 0 },
+      { ...DEFAULT_WEB_APPEARANCE, font: undefined },
+      { ...DEFAULT_WEB_APPEARANCE, unknown: true },
+    ],
     webChatWidth: [819, 2001, 960.5, "960", null, true, {}, []],
     webChatFontSize: [11, 25, 16.5, "16", null, false, {}, []],
+    webSidebarWidth: [219, 421, 320.5, "320", null, false],
+    webAuxiliaryWidth: [359, 721, 520.5, "520", null, false],
     webExpandThinking: [0, 1, "true", null, {}, []],
   };
   for (const [key, values] of Object.entries(invalidValues)) {

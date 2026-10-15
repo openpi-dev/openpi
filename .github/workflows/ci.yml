@@ -12,9 +12,13 @@ concurrency:
 permissions:
   contents: read
 
+# Keep download caches outside the checkout and still install from the lockfile.
+env:
+  CI_APT_CACHE_DIR: /tmp/openpi-apt-download-cache
+
 jobs:
-  test:
-    name: Node ${{ matrix.node-version }}
+  test-node:
+    name: Runtime Node ${{ matrix.node-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -30,6 +34,8 @@ jobs:
         with:
           bun-version: 1.3.14
       - name: Install dependencies
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
         run: bun install --frozen-lockfile
       - run: bun run check
       - name: Verify committed Web build
@@ -40,7 +46,7 @@ jobs:
             echo "web/dist is missing or stale; run bun run build:web and commit the result"
             exit 1
           fi
-      - run: bun run test
+      - run: bun run test node
       - name: Smoke-test Pi package discovery
         run: |
           agent_dir="$(mktemp -d)"
@@ -69,7 +75,7 @@ jobs:
             --extension "$package/extensions/git-info/index.ts" \
             --extension "$package/extensions/ai-providers/index.ts" \
             </dev/null
-      - name: Smoke-test packed Web CLI with locked Pi host
+      - name: Smoke-test managed Web CLI with a separate locked Pi host
         run: |
           root="$(mktemp -d)"
           server_pid=""
@@ -86,19 +92,12 @@ jobs:
           npm pack --ignore-scripts --silent --pack-destination "$root" >/dev/null
           tarballs=("$root"/*.tgz)
           test "${#tarballs[@]}" -eq 1
-          pi_ai_version="$(node -p 'require("./node_modules/@earendil-works/pi-ai/package.json").version')"
-          pi_agent_version="$(node -p 'require("./node_modules/@earendil-works/pi-coding-agent/package.json").version')"
-          pi_tui_version="$(node -p 'require("./node_modules/@earendil-works/pi-tui/package.json").version')"
-          typebox_version="$(node -p 'require("./node_modules/typebox/package.json").version')"
-          npm install --prefix "$root/app" --ignore-scripts --no-audit --no-fund \
-            "@earendil-works/pi-ai@$pi_ai_version" \
-            "@earendil-works/pi-coding-agent@$pi_agent_version" \
-            "@earendil-works/pi-tui@$pi_tui_version" \
-            "typebox@$typebox_version" \
-            "${tarballs[0]}"
+          npm install --prefix "$root/app" --ignore-scripts --legacy-peer-deps --no-audit --no-fund "${tarballs[0]}"
+          test ! -e "$root/app/node_modules/@earendil-works/pi-ai"
+          test ! -e "$root/app/node_modules/@earendil-works/pi-coding-agent"
           test ! -e "$root/app/node_modules/@earendil-works/pi-server"
-          (cd "$root/app" && node --input-type=module -e 'await import("@earendil-works/pi-coding-agent")')
           PI_CODING_AGENT_DIR="$root/agent" \
+          OPENPI_PI_CODING_AGENT_ENTRY="$PWD/node_modules/@earendil-works/pi-coding-agent/dist/index.js" \
           OPENPI_WEB_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             "$root/app/node_modules/.bin/openpi" web "$root/workspace" --port 0 --no-open \
             >"$root/host.log" 2>&1 &
@@ -152,12 +151,8 @@ jobs:
           test ! -e "$root/source/node_modules/@earendil-works/pi-coding-agent"
           # Exercise the CLI with the lockfile's Pi host, not package-owned peers.
           mkdir -p "$root/source/node_modules/@earendil-works"
-          for peer in pi-ai pi-coding-agent pi-tui; do
-            ln -s \
-              "$PWD/node_modules/@earendil-works/$peer" \
-              "$root/source/node_modules/@earendil-works/$peer"
-          done
-          ln -s "$PWD/node_modules/typebox" "$root/source/node_modules/typebox"
+          ln -s "$PWD/node_modules/@earendil-works/pi-coding-agent" \
+            "$root/source/node_modules/@earendil-works/pi-coding-agent"
           OPENPI_WEB_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             node "$root/source/bin/openpi.js" web "$root/workspace" --port 0 --no-open \
             >"$root/host.log" 2>&1 &
@@ -175,9 +170,13 @@ jobs:
           wait "$server_pid"
           server_pid=""
 
-  web-e2e:
-    name: Web E2E (Node 22.19.0)
-    runs-on: ubuntu-latest
+  web-e2e-shards:
+    name: Web E2E shard ${{ matrix.shard }}/2
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -188,23 +187,69 @@ jobs:
         with:
           bun-version: 1.3.14
       - name: Install dependencies
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
         run: bun install --frozen-lockfile
-      - name: Install Chromium
-        run: bunx playwright install --with-deps chromium
-      - run: bun run test:web:e2e
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
+      - name: Prepare system dependency download cache
+        run: |
+          mkdir -p "$CI_APT_CACHE_DIR"
+          sudo tee /etc/apt/apt.conf.d/99-openpi-ci-cache >/dev/null <<EOF
+          Dir::Cache::archives "$CI_APT_CACHE_DIR";
+          APT::Keep-Downloaded-Packages "true";
+          Binary::apt-get::APT::Keep-Downloaded-Packages "true";
+          Acquire::Retries "2";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          EOF
+      - name: Cache Chromium system package downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CI_APT_CACHE_DIR }}/*.deb
+          key: apt-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('bun.lock') }}
+          restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-ubuntu24-
+      - name: Install Chromium and D-Bus
+        timeout-minutes: 10
+        run: |
+          bunx playwright install --with-deps chromium
+          sudo apt-get install --no-install-recommends -y dbus-daemon
+      # Independent runners isolate each shard's server, settings and filesystem.
+      - run: dbus-run-session -- bun run test:web:e2e --shard=${{ matrix.shard }}/2
+        env:
+          # The runner's installed Chrome has Ubuntu's native sandbox profile.
+          OPENPI_CHROME_PATH: /opt/google/chrome/chrome
+      - name: Test Plan Ready provider handoff
+        if: matrix.shard == 1
+        run: bunx playwright test --config tests/web/playwright.plan-provider.config.ts
       - name: Upload Playwright failure artifacts
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: openpi-web-playwright-results
-          path: /tmp/openpi-web-playwright-results
+          name: openpi-web-playwright-results-${{ matrix.shard }}
+          path: |
+            /tmp/openpi-web-playwright-results
+            /tmp/openpi-web-plan-provider-playwright-results
           if-no-files-found: ignore
           retention-days: 7
 
-  windows-background-terminals:
-    name: Background terminals (Windows)
+  windows-node:
+    name: Runtime Node (Windows ${{ matrix.group }})
     runs-on: windows-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: parallel 1/2
+            arguments: node-parallel --shard=1/2
+          - group: parallel 2/2
+            arguments: node-parallel --shard=2/2
+          - group: isolated processes
+            arguments: node-serial
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -213,18 +258,97 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
+      - name: Cache Bun downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/bun-install-cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-1.3.14-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-${{ runner.arch }}-1.3.14-
       - name: Install dependencies
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
         run: bun install --frozen-lockfile
-      - name: Test Windows process lifecycle
-        run: |
-          $testPath = if (Test-Path "tests/extensions/background-terminals/manager.test.ts") {
-            "tests/extensions/background-terminals/manager.test.ts"
-          } else {
-            "extensions/background-terminals/manager.test.ts"
-          }
-          node --test --experimental-strip-types $testPath
-      - name: Test Windows full-suite isolation
-        # Allow the parallel Node suite, serial process tests, and Vitest to finish.
-        # Windows process identity checks make config-write coverage slower here.
+      - name: Test Windows Node suite with process isolation
+        # Process tests stay serial inside their own VM; ordinary files are
+        # split into disjoint shards on separate VMs, with every shard required.
         timeout-minutes: 10
-        run: bun run test
+        run: bun run test ${{ matrix.arguments }}
+
+  test-ui:
+    name: UI ${{ matrix.os }} Node ${{ matrix.node-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node-version: [22.19.0, 24, 26]
+        include:
+          - os: windows-latest
+            node-version: 22.19.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Cache Bun downloads
+        if: runner.os == 'Windows'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/bun-install-cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-1.3.14-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-${{ runner.arch }}-1.3.14-
+      - name: Install dependencies
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
+        run: bun install --frozen-lockfile
+      - run: bun run test ui
+
+  # Keep existing check names for branch protection. always() makes skipped,
+  # cancelled and failed dependencies fail the gates rather than bypass them.
+  test:
+    name: Node ${{ matrix.node-version }}
+    if: always()
+    needs: [test-node, test-ui, windows-node, web-e2e-shards]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22.19.0, 24, 26]
+    steps:
+      - name: Require all test jobs
+        env:
+          NODE_RESULT: ${{ needs.test-node.result }}
+          UI_RESULT: ${{ needs.test-ui.result }}
+          WINDOWS_RESULT: ${{ needs.windows-node.result }}
+          E2E_RESULT: ${{ needs.web-e2e-shards.result }}
+        run: |
+          test "$NODE_RESULT" = success
+          test "$UI_RESULT" = success
+          test "$WINDOWS_RESULT" = success
+          test "$E2E_RESULT" = success
+
+  windows-background-terminals:
+    name: Background terminals (Windows)
+    if: always()
+    needs: [windows-node, test-ui]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Windows runtime and UI tests
+        env:
+          NODE_RESULT: ${{ needs.windows-node.result }}
+          UI_RESULT: ${{ needs.test-ui.result }}
+        run: test "$NODE_RESULT" = success && test "$UI_RESULT" = success
+
+  web-e2e:
+    name: Web E2E (Node 22.19.0)
+    if: always()
+    needs: [web-e2e-shards]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every E2E shard and provider handoff
+        env:
+          E2E_RESULT: ${{ needs.web-e2e-shards.result }}
+        run: test "$E2E_RESULT" = success

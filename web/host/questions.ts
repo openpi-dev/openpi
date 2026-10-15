@@ -100,6 +100,11 @@ export class WebQuestionBroker {
       ? structuredClone(p.request) : null;
   }
 
+  waitingSessionId() {
+    this.reconcile();
+    return this.pending?.owner.sessionId;
+  }
+
   answer(sessionId: string, requestId: string, controllerId: string, action: unknown, input: unknown) {
     this.reconcile();
     const p = this.pending?.request.requestId === requestId ? this.pending : undefined;

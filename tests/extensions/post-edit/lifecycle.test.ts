@@ -30,8 +30,13 @@ function deferred<T>() {
 }
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-const nodeCommand = (source: string) =>
-  `exec ${quote(process.execPath.replaceAll("\\", "/"))} -e ${quote(source)}`;
+const nodeCommand = (source: string) => {
+  if (process.platform === "win32") {
+    const encoded = Buffer.from(source, "utf8").toString("base64");
+    return `node -e "eval(Buffer.from('${encoded}','base64').toString())"`;
+  }
+  return `exec ${quote(process.execPath.replaceAll("\\", "/"))} -e ${quote(source)}`;
+};
 
 async function formatterGate() {
   const connected = deferred<Socket>();
@@ -280,6 +285,36 @@ test("real Pi waits for a foreground formatter before the next prompt reaches it
     await gate.close();
   }
 });
+
+for (const { name, command, expectedExit } of [
+  {
+    name: "cmdlet failures after a successful native command",
+    command: `${nodeCommand("process.exit(0)")}; Get-Item C:\\definitely-missing-openpi-file`,
+    expectedExit: 1,
+  },
+  {
+    name: "cmdlet failures without a native exit code",
+    command: "Get-Item C:\\definitely-missing-openpi-file",
+    expectedExit: 1,
+  },
+  {
+    name: "native command failures",
+    command: nodeCommand("process.exit(7)"),
+    expectedExit: 7,
+  },
+]) {
+  test(`real Windows post-edit preserves ${name}`, {
+    skip: process.platform !== "win32",
+    timeout: 15_000,
+  }, async () => {
+    await withSession(command, async (h) => {
+      h.enqueue(write("initial\\n"));
+      await h.session.prompt("write fixture");
+      await h.session.prompt("wait for post-edit failure");
+      assert.match(h.notices[0] ?? "", new RegExp(`exit ${expectedExit}`));
+    });
+  });
+}
 
 for (const name of ["write", "edit", "bash", "read"] as const) {
   test(`real Pi native ${name} backstop joins formatter with agent_start fence omitted`, {

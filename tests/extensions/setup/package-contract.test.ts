@@ -44,7 +44,7 @@ test("Pi host packages stay peers while local checks keep development copies", (
   for (const packageName of HOST_PACKAGES) {
     assert.equal(
       manifest.peerDependencies?.[packageName],
-      packageName === "typebox" ? "*" : ">=0.85.1",
+      packageName === "typebox" ? "*" : ">=0.99.1",
     );
     assert.ok(manifest.devDependencies?.[packageName]);
     assert.equal(manifest.dependencies?.[packageName], undefined);
@@ -74,6 +74,19 @@ test("experimental Pi server stays outside OpenPI runtime dependencies", () => {
 test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () => {
   assert.equal(manifest.dependencies?.["pi-intercom"], undefined);
   assert.equal(manifest.devDependencies?.["pi-intercom"], undefined);
+});
+
+test("web search remains an optional native Pi package without a bundled tool group", () => {
+  assert.equal(manifest.dependencies?.["pi-web-access"], undefined);
+  assert.equal(manifest.devDependencies?.["pi-web-access"], undefined);
+  const surface = readFileSync(
+    new URL("../../../extensions/shared/tool-surface.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    surface,
+    /web_search|fetch_content|web_enable|source_check/u,
+  );
 });
 
 test("the public OpenPI package has complete gallery and registry metadata", () => {

@@ -119,6 +119,14 @@ for (const theme of ["light", "dark"] as const) {
     const workspace = await mkdtemp(join(tmpdir(), "openpi-questions-e2e-"));
     try {
       await page.emulateMedia({ colorScheme: theme });
+      expect(
+        (
+          await page.request.post("/api/settings/preferences", {
+            headers,
+            data: { theme },
+          })
+        ).status(),
+      ).toBe(200);
       if (theme === "dark")
         await page.setViewportSize({ width: 390, height: 844 });
       const sessionId = await startQuestions(page, workspace);
@@ -213,8 +221,8 @@ for (const theme of ["light", "dark"] as const) {
       const next = JSON.stringify(provider.requests[1]!.body);
       expect(next).toContain("沿用当前主题");
       expect(next).toContain("桌面和手机都要验证");
-      // #561 hides Setup episodes from the main transcript. Completion must
-      // still be recorded by Pi, not inferred from the card disappearing.
+      // Completion is recorded by Pi, not inferred from the card disappearing.
+      // The user's original setup request remains visible exactly once.
       await expect
         .poll(async () => {
           const snapshot = await (
@@ -236,7 +244,7 @@ for (const theme of ["light", "dark"] as const) {
         page.getByText("/openpi-setup 请先询问我的偏好，不要修改配置。", {
           exact: true,
         }),
-      ).toHaveCount(0);
+      ).toHaveCount(1);
     } finally {
       await provider.close();
       await rm(workspace, { recursive: true, force: true });

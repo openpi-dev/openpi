@@ -101,6 +101,7 @@ it("parses changed text without reparsing mounted history during streaming or sn
     cursor: 1,
     preferences: { theme: "system" },
     currentSessionId: "current",
+    currentSessionPath: "/tmp/current.jsonl",
     workspaces: [],
     sessions: [],
     models: [],
@@ -183,6 +184,7 @@ it("parses changed text without reparsing mounted history during streaming or sn
 
   const other = structuredClone(snapshot);
   other.currentSessionId = "other";
+  other.currentSessionPath = "/tmp/other.jsonl";
   other.selectedSession!.id = "other";
   other.selectedSession!.path = "/tmp/other.jsonl";
   other.selectedSession!.entries[0].message!.content =

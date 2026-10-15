@@ -1,5 +1,27 @@
 # Design archive
 
+- [`WEB_CODEX_SETTINGS.md`](WEB_CODEX_SETTINGS.md) — draft Codex settings surface, appearance and archived-chat state comparison with bounded REA/App Server evidence for #597 / #711.
+
+- [`WEB_BROWSER_SETUP_2026-10-09.md`](WEB_BROWSER_SETUP_2026-10-09.md) — validated browser authorization, default/explicit selection and scrollable setup, with separate real-provider, browser and UI evidence for #169 / #597 / #711 / #720.
+
+- [`WEB_MODEL_CONNECTIONS.md`](WEB_MODEL_CONNECTIONS.md) — Pi-owned account login, three connection entry points, current/default model selection, brand marks and native cancellation (#732 / #711).
+
+- [`WEB_WORKBAR_TOOLS.md`](WEB_WORKBAR_TOOLS.md) — scoped Files, Terminal and Changes refinement, labelled actions, native tool picker and reading-state preservation (#597 / #711).
+
+- [`WEB_SIDE_CONVERSATION.md`](WEB_SIDE_CONVERSATION.md) — scoped side-chat appearance, centered empty state, unified composer and native Pi lifecycle preservation (#730).
+
+- [`WEB_BROWSER_CHROME.md`](WEB_BROWSER_CHROME.md) — scoped browser chrome refinement, retained panel hierarchy, theme-aware surfaces and visual ablation (#729).
+
+- [`WEB_SESSION_USAGE.md`](WEB_SESSION_USAGE.md) — locally validated compact usage strip, native context versus cumulative totals, progressive identity disclosure and shared popover lifecycle (#728).
+
+- [`WEB_RESOURCE_SETTINGS.md`](WEB_RESOURCE_SETTINGS.md) — scoped Skills/Plugins iteration, native configured versus loaded state, reviewed setup requests and explicit Session reload (#710).
+
+- [`WEB_CHANGE_REVIEW.md`](WEB_CHANGE_REVIEW.md) — validated turn/workspace scopes, unified review navigation, Codex-style cards and bounded pagination for #597 / #598
+
+- [`WEB_SUBAGENT_OVERVIEW.md`](WEB_SUBAGENT_OVERVIEW.md) — source- and UI-validated session summary popover, grouped child list and reference comparison for #597 / #598
+
+- [`WEB_WORKSPACE_SIDEBAR.md`](WEB_WORKSPACE_SIDEBAR.md) — draft folder-led workspace navigation and restrained Session hierarchy for #597 / #598
+
 These documents preserve the research, alternatives, and evaluations that led to the current implementation. Runtime behavior is defined by the code and current user documentation.
 
 These records predate [`Decision 0001`](../decisions/0001-documentation-and-evidence-governance.md) and have not been migrated to its metadata contract. Indexing preserves their history; it does not mark every statement as currently validated or adopted.
@@ -19,6 +41,9 @@ These records predate [`Decision 0001`](../decisions/0001-documentation-and-evid
 - [`WEB_SLASH_COMMAND_DISCOVERY.md`](WEB_SLASH_COMMAND_DISCOVERY.md) — Pi-owned command discovery, bounded Web projection, availability policy, and Composer completion interaction
 - [`COMPLETION_INBOX.md`](COMPLETION_INBOX.md) — shared owner, epoch, consumption, retry, and receipt contract for background completions
 - [`WEB_STRUCTURED_QUESTIONS.md`](WEB_STRUCTURED_QUESTIONS.md) — Web `ask_user` ownership, reviewed answers, bounded waits and browser validation
-- [`WEB_INTERACTION_UI.md`](WEB_INTERACTION_UI.md) — #562 native command feedback, Plan controls, human handoff and streaming/cancellation corrections
+- [`WEB_INTERACTION_UI.md`](WEB_INTERACTION_UI.md) — #562 Web interaction design and the #470 Plan Ready implementation handoff follow-up
+- [`SESSION_CHILD_EXECUTION_ADMISSION.md`](SESSION_CHILD_EXECUTION_ADMISSION.md) — #159 session-local admission for active Workflow, Direct Subagent, and BTW executions
 
 开发与热更新流程见 [`docs/development/OPENPI_WEB_DEVELOPMENT.md`](../development/OPENPI_WEB_DEVELOPMENT.md)。
+
+- [`CHILD_SESSION_EXPERIENCE.md`](CHILD_SESSION_EXPERIENCE.md) — source/component-validated running-child follow, native rendering seams, bounded legacy expansion and remaining live TUI acceptance (#658).

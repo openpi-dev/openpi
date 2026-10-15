@@ -28,4 +28,25 @@ describe("composer image attachments", () => {
     expect(staged.previewUrl).toMatch(/^data:image\/jpeg;base64,/u);
     expect(staged.name).toBe("renamed.txt");
   });
+
+  it("classifies a failed byte read separately from an unsupported format", async () => {
+    const file = new File(["unreadable"], "photo.png", { type: "image/png" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => {
+        throw new DOMException(
+          "The file could not be read.",
+          "NotReadableError",
+        );
+      },
+    });
+    await expect(stagePromptImage(file)).rejects.toThrow("image-read");
+  });
+
+  it("keeps invalid image signatures on the unsupported-format path", async () => {
+    const file = new File(["not an image"], "photo.png", { type: "image/png" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => new TextEncoder().encode("not an image").buffer,
+    });
+    await expect(stagePromptImage(file)).rejects.toThrow("image-type");
+  });
 });

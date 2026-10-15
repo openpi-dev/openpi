@@ -1,0 +1,29 @@
+.conversation-history {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  margin: 0 auto 12px;
+  padding: 8px 16px;
+  max-width: var(--conversation-content-width);
+  color: var(--muted);
+  font-size: 12px;
+}
+.conversation-history p {
+  width: 100%;
+  margin: 0;
+  text-align: center;
+}
+.conversation-history button {
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--text);
+  cursor: pointer;
+}
+.conversation-history button:disabled {
+  opacity: .6;
+  cursor: default;
+}

@@ -48,22 +48,24 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import {
-  createStatusWriter,
-  formatActivityStatus,
-} from "../shared/activity-status.ts";
+import { createStatusWriter } from "../shared/activity-status.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
+import {
+  type ChildExecutionAdmission,
+  sessionChildExecutionAdmission,
+} from "../shared/child-execution-admission.ts";
 import {
   inheritedChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
   waitBounded,
 } from "../shared/child-session.ts";
-import { contextPercent } from "../shared/context-utilization.ts";
 import { completionOwnerFor } from "../shared/completion-inbox.ts";
+import { contextPercent } from "../shared/context-utilization.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
 } from "../shared/editor-layers.ts";
+import { onSetupApply } from "../shared/setup-apply.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import { SPINNER_INTERVAL_MS } from "../shared/spinner.ts";
 import {
@@ -72,6 +74,7 @@ import {
 } from "../shared/tool-surface.ts";
 import {
   notifyWebCapabilities,
+  projectWorkflowAgentDetail,
   projectWorkflowCapability,
   registerWebCapability,
   type WebCapabilityScope,
@@ -94,10 +97,12 @@ import {
   applyAcceptance,
   parseAcceptanceContract,
 } from "./acceptance.ts";
+import { workflowAgentCompletion } from "./agent-completion.ts";
 import {
   createWorkflowPersistence,
   loadJournal,
   persistWorkflowAgentResult,
+  persistWorkflowAgentTiming,
   persistWorkflowDeliveryState,
   persistWorkflowJson,
   persistWorkflowTerminalState,
@@ -171,6 +176,7 @@ import {
   WorkflowStripState,
   WorkflowStripWidget,
   workflowStripEntryKey,
+  workflowActivityFooter,
 } from "./navigation.ts";
 import {
   normalizeWorkflowOperatorKey,
@@ -208,6 +214,7 @@ import {
   type WorkflowSettledRunRetentionOptions,
 } from "./retention.ts";
 import {
+  type AgentOutcome,
   createWorkflowResources,
   runAgent,
   type ThinkingLevel,
@@ -216,6 +223,7 @@ import {
 } from "./runner.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
 import { writeFileAtomic } from "./serialization.ts";
+import { workflowTranscriptDocument } from "./transcript.ts";
 import {
   finalizeWorktreeHandoff,
   prepareWorktreeHandoff,
@@ -545,6 +553,16 @@ interface ScriptAgentResult {
   /** Present only for the deprecated model self-attestation compatibility path. */
   acceptanceWarning?: string;
   error?: string;
+  /** Internal runtime receipt; never persisted or shown to the model. */
+  retainAdmissionLease?: true;
+}
+
+function admissionLeaseReceipt(
+  outcome: Pick<AgentOutcome, "retainAdmissionLease">,
+) {
+  return outcome.retainAdmissionLease === true
+    ? ({ retainAdmissionLease: true } as const)
+    : {};
 }
 
 interface AgentCallOptions {
@@ -819,10 +837,18 @@ export default function workflows(
   const activeRuns = new Map<string, ActiveWorkflowRunLifecycle>();
   let unregisterWebCapability: (() => void) | undefined;
   let webCapabilityScope: WebCapabilityScope | undefined;
+  let admission: ChildExecutionAdmission | undefined;
   const activeDetails = () =>
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
+  if (pi.events) {
+    onSetupApply(pi, () => {
+      admission?.configure({
+        maxActive: loadSetupConfig().childExecutions.maxActive,
+      });
+    });
+  }
   const settledRuns = createWorkflowSettledRunRetention(
     options.settledRetention,
   );
@@ -1000,17 +1026,22 @@ export default function workflows(
     if (!ctx) return;
     try {
       const running = activeRuns.size;
+      updateWorkflowWidget();
+      // The below-editor strip owns TUI identity/navigation; do not repeat
+      // ordinary activity in the footer. Keep failures from other runs visible.
+      const stripOwnsActivity = ctx.mode === "tui" && widgetVisible;
       statusWriter.write(
         ctx.ui,
-        running === 0 && completedRuns === 0 && failedRuns === 0
-          ? undefined
-          : formatActivityStatus(ctx.ui.theme, "workflows", {
-              running,
-              done: completedRuns,
-              failed: failedRuns,
-            }),
+        workflowActivityFooter(
+          ctx.ui.theme,
+          {
+            running,
+            done: completedRuns,
+            failed: failedRuns,
+          },
+          stripOwnsActivity,
+        ),
       );
-      updateWorkflowWidget();
     } catch {
       // UI may be unavailable.
     }
@@ -1084,6 +1115,9 @@ export default function workflows(
   };
 
   pi.on("session_start", (_event, ctx) => {
+    admission = sessionChildExecutionAdmission(ctx.sessionManager, {
+      maxActive: loadSetupConfig().childExecutions.maxActive,
+    });
     unregisterWebCapability?.();
     const scope = ctx.sessionManager;
     webCapabilityScope = scope;
@@ -1097,6 +1131,33 @@ export default function workflows(
             .filter(([runId]) => !activeRuns.has(runId))
             .map(([, details]) => details),
         ]),
+      detail: (id) => {
+        for (const details of [
+          ...activeDetails().values(),
+          ...settledRuns
+            .entriesArray()
+            .filter(([runId]) => !activeRuns.has(runId))
+            .map(([, retained]) => retained),
+        ]) {
+          const matches = details.agents.filter(
+            (agent) => `${details.runId}:call:${agent.index}` === id,
+          );
+          if (matches.length !== 1) continue;
+          const agent = matches[0]!;
+          return projectWorkflowAgentDetail(details.runId, {
+            ...agent,
+            cwd: agent.effectiveCwd ?? agent.requestedCwd,
+            errorText: agent.error,
+            transcript: workflowTranscriptDocument(agent.transcript).items,
+            transcriptUnavailable:
+              agent.transcript.length === 0 &&
+              (details.memoryProjection !== undefined ||
+                agent.replayed === true ||
+                agent.state !== "running"),
+          });
+        }
+        return undefined;
+      },
     });
     registerStableToolFamily();
     if (ctx.hasUI) lastContext = ctx;
@@ -1155,6 +1216,8 @@ export default function workflows(
       navigationLayerRegistered = false;
     }
     await shutdownActiveWorkflowRuns([...activeRuns.values()]);
+    admission?.shutdown();
+    admission = undefined;
     // Give deferred completions one final delivery attempt. Failed sends stay
     // durably pending; clearing first would discard an envelope whose initial
     // persistence may have failed.
@@ -1345,6 +1408,7 @@ export default function workflows(
         undefined,
         workflowConfig.concurrency,
         workflowConfig.maxAgentCalls,
+        admission,
       );
       const handoffs = createWorkflowHandoffRegistry();
       const operators = new WorkflowOperatorRegistry();
@@ -1540,6 +1604,9 @@ export default function workflows(
 
         const fail = (error: string): ScriptAgentResult => {
           if (record.state === "running" && !runSettled) {
+            record.executionOutcome = controller.signal.aborted
+              ? "cancelled"
+              : "failure";
             const at = Date.now();
             if (
               record.invocation?.admissionState === "pending" &&
@@ -1677,6 +1744,8 @@ export default function workflows(
           ctx.cwd,
           typeof opts.working_dir === "string" ? opts.working_dir : ".",
         );
+        record.requestedCwd = requestedCwd;
+        if (opts.isolation === undefined) record.isolation = "shared";
         try {
           if (!fs.statSync(requestedCwd).isDirectory())
             throw new Error("not a directory");
@@ -1849,11 +1918,30 @@ export default function workflows(
             return { ok: false as const, error: errorText(error) };
           }
         };
+        const persistAgentTiming = (
+          entries?: Parameters<typeof persistWorkflowAgentTiming>[2],
+        ) => {
+          try {
+            record.timingArtifact = persistWorkflowAgentTiming(
+              runDir,
+              record,
+              entries,
+            );
+            record.timingArtifactState = "saved";
+          } catch {
+            // Diagnostics do not rewrite execution/result outcomes. Failure is
+            // explicit, and the small summary still persists in workflow.json.
+            record.timingArtifactState = "failed";
+          }
+        };
         // Checked before controller.schedule on purpose: schedule() charges the
         // run's agent-call budget on entry, and a replayed call runs no agent.
         const cached =
           callKey && replayLease.canReplay ? replay?.take(callKey) : undefined;
         if (cached) {
+          record.executionOutcome = "replayed";
+          record.replayOrigin = cached.origin ?? "unknown";
+          record.effectiveCwd = replayIdentity?.cwd ?? requestedCwd;
           const finishedAt = Date.now();
           record.finishedAt = finishedAt;
           record.preview = sanitizeWorkflowDisplayText(
@@ -1895,6 +1983,7 @@ export default function workflows(
               : {}),
           });
           if (!persisted.ok) {
+            record.resultPersistence = "failed";
             record.invocation = transitionInvocation(record.invocation!, {
               status: "rejected",
               at: finishedAt,
@@ -1913,12 +2002,16 @@ export default function workflows(
               error: persisted.error,
             };
           }
+          record.resultPersistence = "saved";
+          record.resultHasText = cached.output.length > 0;
+          record.resultHasStructured = cached.structured !== undefined;
           record.invocation = transitionInvocation(record.invocation!, {
             status: "replayed",
             at: finishedAt,
           });
           record.state = "done";
           record.replayed = true;
+          persistAgentTiming();
           record.resultArtifact = persisted.artifact;
           const ref = handoffs.register({
             callId,
@@ -1995,6 +2088,8 @@ export default function workflows(
               if (!runSettled) record.worktreeBranch = worktree.branch;
             }
             const agentCwd = worktree?.path ?? requestedCwd;
+            record.effectiveCwd = replayIdentity?.cwd ?? agentCwd;
+            record.isolation = worktree ? "worktree" : "shared";
 
             // Inside the try, not before it: building resources can throw
             // (bad settings, an unreadable skills dir), and a throw out here
@@ -2052,6 +2147,7 @@ export default function workflows(
                   ...(sessionManager ? { sessionManager } : {}),
                   modelRegistry: ctx.modelRegistry,
                   tools: childTools,
+                  inheritedTools: agentType?.tools === undefined,
                   ...(testAgentSessionFactory
                     ? { sessionFactory: testAgentSessionFactory }
                     : {}),
@@ -2098,13 +2194,22 @@ export default function workflows(
                   ok: false,
                   output: "",
                   error: "Agent completed after workflow settlement",
+                  ...admissionLeaseReceipt(outcome),
                 };
               }
+              record.executionOutcome = outcome.retainAdmissionLease
+                ? "uncertain"
+                : outcome.aborted
+                  ? "cancelled"
+                  : outcome.ok
+                    ? "success"
+                    : "failure";
               record.usage = outcome.usage;
               record.model = outcome.model ?? record.model;
               record.contextWindow =
                 outcome.contextWindow ?? record.contextWindow;
               record.transcript = outcome.transcript;
+              record.timing = outcome.timing?.summary;
               record.preview = sanitizeWorkflowDisplayText(
                 outcome.output || record.preview,
                 PREVIEW_LENGTH,
@@ -2127,8 +2232,15 @@ export default function workflows(
                     ? { structured: outcome.structured }
                     : {}),
                 });
-                if (persisted.ok) record.resultArtifact = persisted.artifact;
-                else artifactError = persisted.error;
+                if (persisted.ok) {
+                  record.resultArtifact = persisted.artifact;
+                  record.resultPersistence = "saved";
+                  record.resultHasText = outcome.output.length > 0;
+                  record.resultHasStructured = outcome.structured !== undefined;
+                } else {
+                  record.resultPersistence = "failed";
+                  artifactError = persisted.error;
+                }
               }
               const outcomeOk = judged.ok && artifactError === undefined;
               record.invocation = transitionInvocation(record.invocation!, {
@@ -2136,6 +2248,7 @@ export default function workflows(
                 outcome: outcomeOk ? "success" : "error",
                 at: finishedAt,
               });
+              persistAgentTiming(outcome.timing?.entries);
               record.state = outcomeOk ? "done" : "error";
               if (outcomeOk) delete record.error;
               else {
@@ -2186,6 +2299,10 @@ export default function workflows(
                 journal.append({
                   key: completedKey,
                   output: outcome.output,
+                  origin: {
+                    executionId: callId,
+                    evidenceRef: `${details.runId}/${record.resultArtifact}`,
+                  },
                   ...(outcome.structured !== undefined
                     ? { structured: outcome.structured }
                     : {}),
@@ -2204,6 +2321,7 @@ export default function workflows(
                   ? { acceptanceWarning: judged.acceptanceWarning }
                   : {}),
                 ...(record.error !== undefined ? { error: record.error } : {}),
+                ...admissionLeaseReceipt(outcome),
               };
             } finally {
               // Reclaim as this agent settles, not at run end: a pipeline can
@@ -2586,6 +2704,10 @@ export default function workflows(
           ],
           details: {
             runs: [summarize(details)],
+            completions: details.agents
+              .slice(0, 16)
+              .map((agent) => workflowAgentCompletion(details.runId, agent)),
+            completionsOmitted: Math.max(0, details.agents.length - 16),
             retention,
             settledRunsEvicted: retention.settledRunsEvicted,
           },
@@ -2683,7 +2805,11 @@ export default function workflows(
             );
             for (const alert of workflowCompletionAlerts(entry)) {
               rows.push(
-                truncateToWidth(`  ${theme.fg("error", alert)}`, width, "…"),
+                truncateToWidth(
+                  `  ${theme.fg(alert.severity === "info" ? "muted" : alert.severity, `[${alert.severity}] ${alert.text}`)}`,
+                  width,
+                  "…",
+                ),
               );
             }
             const result = workflowCompletionResultPreview(entry);

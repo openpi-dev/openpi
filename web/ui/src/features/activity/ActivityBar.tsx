@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { formatElapsedMs } from "../../lib/format.ts";
 import { recordedSubagents } from "../subagents/recorded-subagents.ts";
+import { subagentOverview } from "../subagents/subagent-overview.ts";
 
 type Status = "running" | "done" | "error" | "interrupted" | "warn" | "unknown";
 
@@ -55,10 +56,12 @@ export function ActivityBar({
   snapshot,
   onInspectTerminal,
   onInspectSubagent,
+  observed = true,
 }: {
   snapshot: WebSnapshot | null;
   onInspectTerminal?: (id: string) => void;
   onInspectSubagent?: (id?: string) => void;
+  observed?: boolean;
 }) {
   const { t } = useTranslation();
   const [, tick] = useState(0);
@@ -73,17 +76,59 @@ export function ActivityBar({
     [snapshot?.selectedSession?.entries],
   );
   const liveSubagents = capabilities?.subagents;
+  const workflows = capabilities?.workflows?.items ?? [];
+  const workflowChildren = workflows.flatMap(
+    (item) => item.children?.items ?? [],
+  );
   const knownSubagentCount = new Set([
-    ...(liveSubagents?.items ?? []).map((item) => item.id),
-    ...saved.map((item) => item.id),
+    ...(liveSubagents?.items ?? []).map((item) => `subagents:${item.id}`),
+    ...saved.map((item) => `subagents:${item.id}`),
+    ...workflowChildren.map((item) => `workflows:${item.id}`),
   ]).size;
   const subagentCount = Math.max(
     knownSubagentCount,
-    (liveSubagents?.items.length ?? 0) + (liveSubagents?.omitted ?? 0),
+    (liveSubagents?.items.length ?? 0) +
+      (liveSubagents?.omitted ?? 0) +
+      workflowChildren.length +
+      workflows.reduce((sum, item) => sum + (item.children?.omitted ?? 0), 0),
   );
-  const activeSubagentCount = (liveSubagents?.items ?? []).filter(
-    (item) => item.status === "running",
+  const subagents = subagentOverview(
+    liveSubagents?.items ?? [],
+    saved,
+    workflows,
+    observed,
+  );
+  const activeSubagentCount = subagents.filter(
+    (item) => item.state === "running",
   ).length;
+  const completedSubagentCount = subagents.filter(
+    (item) => item.state === "done",
+  ).length;
+  const otherSubagentCount = subagents.filter(
+    (item) => item.state === "error" || item.state === "interrupted",
+  ).length;
+  const unknownSubagentCount = Math.max(
+    0,
+    subagentCount -
+      activeSubagentCount -
+      completedSubagentCount -
+      otherSubagentCount,
+  );
+  const subagentLabel = [
+    t("subagentProgress", {
+      running: activeSubagentCount,
+      completed: completedSubagentCount,
+    }),
+    otherSubagentCount
+      ? t("subagentSummaryOther", { count: otherSubagentCount })
+      : "",
+    unknownSubagentCount
+      ? t("subagentSummaryUnknown", { count: unknownSubagentCount })
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const admission = liveSubagents?.childExecutionAdmission;
   const running = [
     ...(capabilities?.workflows?.items ?? []),
     ...(capabilities?.["background-terminals"]?.items ?? []),
@@ -143,7 +188,12 @@ export function ActivityBar({
     visible.length +
     (capabilities?.workflows?.omitted ?? 0) +
     (capabilities?.["background-terminals"]?.omitted ?? 0);
-  if (!visible.length && !omitted && !(onInspectSubagent && subagentCount))
+  if (
+    !visible.length &&
+    !omitted &&
+    !(onInspectSubagent && subagentCount) &&
+    !admission?.enabled
+  )
     return null;
   return (
     <div className="activity-bar" role="status" aria-label="Runtime activity">
@@ -153,11 +203,13 @@ export function ActivityBar({
           type="button"
           onClick={() => onInspectSubagent()}
         >
-          {t("subagentList", {
-            count: subagentCount,
-            running: activeSubagentCount,
-          })}
+          {subagentLabel}
         </button>
+      )}
+      {admission?.enabled && admission.limit !== undefined && (
+        <span className="activity-chip subagent-list-trigger">
+          {`${admission.held}/${admission.limit} child slots · ${admission.queued} queued · wf ${admission.heldByOrigin.workflow} / direct ${admission.heldByOrigin.direct} / btw ${admission.heldByOrigin.btw}`}
+        </span>
       )}
       {visible.map(({ key, ...chip }) => (
         <Chip key={key} {...chip} />

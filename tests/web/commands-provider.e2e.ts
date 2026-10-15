@@ -52,10 +52,24 @@ test("native command feedback survives refresh without model calls", async ({
     await page.reload();
     await expect(page.locator(".message-row.user")).toHaveCount(5);
     await expect(page.locator(".command-feedback")).toHaveCount(5);
+    await expect(page.locator(".turn-state.waiting")).toHaveCount(0);
+    const refreshed = await (
+      await page.request.get("/api/snapshot", { headers })
+    ).json();
+    expect(
+      refreshed.selectedSession.entries.filter(
+        (entry: { message?: { customType?: string } }) =>
+          entry.message?.customType === "openpi-web-command-handled",
+      ),
+    ).toHaveLength(5);
     const texts = await page.locator(".message-row").allTextContents();
     expect(texts[0]).toContain("/plan off");
     expect(texts[1]).toContain("Plan mode off");
-    await expect(page.getByText("普通模式", { exact: true })).toBeVisible();
+    expect(
+      (await (await page.request.get("/api/snapshot", { headers })).json())
+        .runtime.plan,
+    ).toBe("inactive");
+    await expect(input).not.toHaveAttribute("placeholder", /Plan/);
     await page.screenshot({ path: info.outputPath("commands-light.png") });
   } finally {
     await rm(workspace, { recursive: true, force: true });

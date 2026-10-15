@@ -1,3 +1,4 @@
+import { workflowAgentCompletion } from "./agent-completion.ts";
 import type {
   AgentRecord,
   AgentUsage,
@@ -111,11 +112,13 @@ function compactInvocation(agent: AgentRecord) {
 }
 
 function compactAgent(
+  runId: string,
   agent: AgentRecord,
   display: boolean,
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {
     index: agent.index,
+    completion: workflowAgentCompletion(runId, agent),
     ...(agent.callId ? { callId: agent.callId } : {}),
     ...(agent.invocation ? { invocation: compactInvocation(agent) } : {}),
     label: bounded(agent.label, MAX_LABEL_BYTES) ?? "agent",
@@ -135,6 +138,10 @@ function compactAgent(
   // turn an otherwise recoverable artifact into an unusable path.
   if (agent.resultArtifact) result.resultArtifact = agent.resultArtifact;
   if (agent.resultRef) result.resultRef = agent.resultRef;
+  if (agent.timingArtifact) result.timingArtifact = agent.timingArtifact;
+  if (agent.timingArtifactState)
+    result.timingArtifactState = agent.timingArtifactState;
+  if (agent.timing) result.timing = agent.timing;
 
   if (!display) return result;
   if (agent.preview) result.preview = bounded(agent.preview, MAX_PREVIEW_BYTES);
@@ -320,7 +327,9 @@ export function projectWorkflowDetails(
   let display = true;
   let agentLimit = details.agents.length;
   let logLimit = Math.min(MAX_LOGS, details.logs?.length ?? 0);
-  let agents = details.agents.map((agent) => compactAgent(agent, display));
+  let agents = details.agents.map((agent) =>
+    compactAgent(details.runId, agent, display),
+  );
   let logs = (details.logs ?? []).slice(-logLimit).map((log) => ({
     at: log.at,
     text: bounded(log.text, MAX_PREVIEW_BYTES) ?? "",
@@ -328,7 +337,9 @@ export function projectWorkflowDetails(
 
   const removeOptionalFields = () => {
     display = false;
-    agents = details.agents.map((agent) => compactAgent(agent, false));
+    agents = details.agents.map((agent) =>
+      compactAgent(details.runId, agent, false),
+    );
     logs = [];
     logLimit = 0;
   };

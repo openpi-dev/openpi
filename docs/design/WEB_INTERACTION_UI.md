@@ -1,19 +1,21 @@
 # Web interaction UI
 
-- Status: draft — implementation under review, not an accepted architectural Decision
-- Created / verified: 2026-09-20
-- Source boundary: `codex/web-ask-user`, upstream base `45f12a4`, plus this implementation
+- Status: draft — #470 follow-up implementation under review, not an accepted architectural Decision
+- Created / verified: 2026-09-20 / 2026-09-29
+- Source boundary: base main `ad68e445805a4547d44f46f2f17ec083c28f51da`, plus the #470 implementation
 - Issue: https://github.com/openpi-dev/openpi/issues/562
 - PR: https://github.com/openpi-dev/openpi/pull/595
+- Follow-up issue: https://github.com/openpi-dev/openpi/issues/470
 - Related: #348 (Setup), #470 (implementation handoff), #549 (controller identity), #540 (Stop), #561 (Web UI)
 - Supersedes: none; complements [Web structured questions](WEB_STRUCTURED_QUESTIONS.md)
 
 ## Scope
 
 Expose existing Pi tools and extension commands in Web: structured questions,
-human handoff, completed plan cards, a mode-only Plan control and command
-feedback. Theme controls and direct preference writes are excluded. Configuration
-continues through `/openpi-setup`; this change does not alter that contract.
+human handoff, completed plan cards, Plan control and Plan Ready handoff, and
+command feedback. Theme controls and direct preference writes are excluded.
+Configuration continues through `/openpi-setup`; this change does not alter
+that contract.
 
 ## Plan ownership and presentation
 
@@ -26,16 +28,22 @@ revisions fail closed. Ready or invalid state requires an explicit exit.
 Registration is removed on shutdown and refreshed on branch restoration.
 
 Changing mode sends no prompt, creates no model turn and preserves the draft.
-The extension projects its current read-only/ready stance at
-`before_agent_start`, including after Session restoration. Permission enforcement
-remains in runtime tool gates. The placeholder appears after a real user message
-in the current planning episode and is derived from branch entries, not a
-second persisted mode flag. `/plan <objective>` retains its immediate-start path.
+The extension projects its current read-only/ready stance into each provider
+context through Pi's `context` event, including after Session restoration.
+Permission enforcement remains in runtime tool gates. The placeholder appears
+after a real user message in the current planning episode and is derived from
+branch entries, not a second persisted mode flag. `/plan <objective>` retains
+its immediate-start path.
 
 The plan card displays a successful `plan_ready` result, not streamed arguments.
 It does not imply implementation approval. Ready state remains read-only until
-an explicit owner action; automatically releasing that gate is not part of this
-UI. Implementation review still requires the TUI and belongs to #470.
+an explicit owner action. Web handoff and admission semantics are specified in
+the #470 follow-up below.
+
+The handoff uses the existing Plan projection and owner callback; it adds no
+second persisted Plan store. A stale revision, wrong Session, busy runtime,
+unsupported extension, or failed persistence leaves the Plan gate closed.
+Prompt admission retries remain bound to the same Plan revision.
 
 ## Native commands and model-visible context
 
@@ -121,8 +129,9 @@ waiting command bubble. Settings-hosted questions and Stop remain accessible
 inside the active dialog. Exclusive Web Locks prevent inherited controller IDs
 from being used concurrently; see [the controller contract](WEB_STRUCTURED_QUESTIONS.md).
 #549 and #540 remain separate work. #578 is a separate TUI answer-editor
-fix, not this Web questionnaire. This implementation does not close all of #343,
-#348, #470 or the remaining proposals in #562.
+fix, not this Web questionnaire. The earlier work did not close #343, #348,
+#470 or the remaining proposals in #562; the #470 handoff follow-up is tracked
+separately below.
 
 Integrated validation on 2026-09-20 against `45f12a4`: `bun run check`
 passed; the Node suite reported 1,712 passes, two failures and one platform
@@ -136,3 +145,20 @@ controller isolation and settings-dialog answer/cancellation flows. After the
 final CSS ordering adjustment, all seven question/handoff browser tests passed
 again. These are local automated results, not upstream acceptance or a fresh
 live-provider manual smoke.
+
+## #470 Plan Ready handoff follow-up
+
+The authenticated `POST /api/plan/implement` asks the native Plan extension for
+its existing implementation prompt. The serialized runtime verifies the exact
+active Session, idle state, and Plan revision; preparation does not change Plan
+state or send a prompt. The Composer presents the prompt for review and asks
+before replacing a nonempty draft. On submission, runtime admission binds
+approval to the Session, Plan revision, and exact prompt. Pi consumes the Ready
+state only after accepting that prompt, before provider context is built and
+the agent can call tools. Rejected preflight clears the transient approval and
+keeps the persisted Plan and write gate intact. Refreshing or switching
+Sessions cannot open the gate for another Session. `/plan off` remains
+available; fresh-Session handoff is reported as unsupported while retaining
+the Plan.
+
+Source: [Issue #470](https://github.com/openpi-dev/openpi/issues/470).

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import {
@@ -57,9 +58,15 @@ for (const [name, fields] of [
       assert.doesNotMatch(visible, /openpi-test-title/);
       assert.deepEqual(args, before);
       await assert.rejects(
-        tool.execute("invalid-call", args, undefined, undefined, {
-          cwd: process.cwd(),
-        } as ExtensionContext),
+        tool.execute(
+          "invalid-call",
+          args,
+          undefined,
+          undefined,
+          toolExecutionContext({
+            cwd: process.cwd(),
+          } as ExtensionContext),
+        ),
         /Invalid git revision|Invalid repository path/,
       );
       assert.deepEqual(

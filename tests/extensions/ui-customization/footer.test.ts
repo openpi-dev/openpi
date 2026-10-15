@@ -138,13 +138,13 @@ test("default one-line layout leads with model context and ends with cwd", () =>
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /project/);
   assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);
-  assert.match(lines[0]!, /25%\/1\.0m/);
+  assert.match(lines[0]!, /25%\/1\.0M/);
   // Cost is an opt-in metric and stays out of the default layout.
   assert.doesNotMatch(lines[0]!, /\$/);
   assert.match(lines[0]!, /main/);
   assert.match(lines[0]!, /PR #42/);
   const modelIndex = lines[0]!.indexOf("seal/gpt-5.6-sol");
-  const contextIndex = lines[0]!.indexOf("25%/1.0m");
+  const contextIndex = lines[0]!.indexOf("25%/1.0M");
   const branchIndex = lines[0]!.indexOf("main");
   const prIndex = lines[0]!.indexOf("PR #42");
   const cwdIndex = lines[0]!.indexOf("project");
@@ -152,8 +152,29 @@ test("default one-line layout leads with model context and ends with cwd", () =>
   assert.ok(contextIndex < branchIndex);
   assert.ok(branchIndex < prIndex);
   assert.ok(prIndex < cwdIndex);
-  const gap = branchIndex - contextIndex - "25%/1.0m".length;
+  const gap = branchIndex - contextIndex - "25%/1.0M".length;
   assert.ok(gap > 1);
+});
+
+test("footer context window matches the shared compact token formatter", () => {
+  const render = (contextWindow: number) =>
+    renderFooter({
+      cwd: "/Users/me/project",
+      modelInfo: { ...modelInfo, contextWindow, contextPercent: 25 },
+      gitInfo,
+      style: "plain",
+      lines: DEFAULT_FOOTER_LINES,
+      width: 140,
+      theme,
+      formatPullRequest: (n) => `PR #${n}`,
+    })[0]!;
+
+  // The footer shows the same capacity the shared child-agent projection
+  // shows, so the two must agree at every magnitude. It previously kept a
+  // private formatter that rounded across the whole 1k-999k range and used a
+  // lowercase "m".
+  assert.match(render(8_192), /25%\/8\.2k/);
+  assert.match(render(1_048_576), /25%\/1\.0M/);
 });
 
 test("legacy footerItems migration preserves the rendered footer", () => {
@@ -408,7 +429,7 @@ test("renderFooter renders only the configured segments", () => {
 
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);
-  assert.match(lines[0]!, /25%\/1\.0m/);
+  assert.match(lines[0]!, /25%\/1\.0M/);
   assert.match(lines[0]!, /cache 82%/);
   assert.doesNotMatch(lines[0]!, /project|main|PR #42/);
 });
@@ -446,4 +467,35 @@ test("fitSegmentsToWidth never empties a previously non-empty side first", () =>
   assert.equal(fitted.left.length, 1);
   assert.equal(fitted.right.length, 1);
   assert.equal(fitted.left[0]!.id, "cwd");
+});
+
+test("cwd-base preserves POSIX/Windows roots, trailing separators and sanitized Unicode", () => {
+  for (const [cwd, expected] of [
+    ["/work/深层/项目/", "项目"],
+    ["///", "///"],
+    ["/work/\u001b[31m项目\u001b[0m", "项目"],
+    ["/work/\u001b]8;;https://example.test\u0007项目\u001b]8;;\u0007", "项目"],
+  ])
+    assert.equal(formatDirectoryBase(cwd, posix), expected);
+  for (const [cwd, expected] of [
+    ["C:\\", "C:\\"],
+    ["C:/", "C:/"],
+    ["//server/share/", "//server/share/"],
+    ["C:\\work\\项目\\", "项目"],
+    ["\\\\server\\share\\", "\\\\server\\share\\"],
+    ["\\\\server\\share\\项目\\", "项目"],
+  ])
+    assert.equal(formatDirectoryBase(cwd, win32), expected);
+  for (const width of [20, 40, 80, 150]) {
+    const lines = renderFooter({
+      cwd: "/work/deep/项目",
+      modelInfo,
+      gitInfo,
+      style: "plain",
+      lines: [["model", "context", "flex", "git", "cwd-base"]],
+      width,
+      theme,
+    });
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+  }
 });

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -25,6 +25,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
   browser,
 }) => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-evidence-browser-"));
+  const outside = await mkdtemp(join(tmpdir(), "openpi-external-file-"));
+  const externalPath = join(outside, "external%25.ts");
+  await writeFile(externalPath, "export const otherWorktree = 42;");
   const manager = SessionManager.inMemory(cwd);
   const path = join(cwd, "report space.md");
   const writeTool = createEvidenceWriteTool(cwd);
@@ -180,7 +183,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       isError: row.isError,
       timestamp: Date.now(),
     });
-  assistant("[Report](./report%20space.md)\n\n[Missing](./missing.md)");
+  assistant(
+    `[Report](./report%20space.md)\n\n[Missing](./missing.md)\n\n[Other worktree](${encodeURI(externalPath)})`,
+  );
   const listeners = new Set<(event: WebRuntimeEvent) => void>();
   const runtime: WebRuntimeController = {
     searchModels: (query, limit) =>
@@ -244,12 +249,10 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
       .click();
     const workbar = page.locator(".workbar-panel");
-    await workbar
-      .getByRole("button", { name: /^(生成文件|Generated files)/u })
-      .click();
-    const generatedReport = workbar.getByRole("button", {
-      name: /report space\.md/u,
-    });
+    await workbar.getByRole("button", { name: /^(文件|Files)/u }).click();
+    const generatedReport = workbar.locator(
+      '[data-file-row="report space.md"]',
+    );
     await expect(generatedReport).toBeVisible();
     await generatedReport.click();
     const generatedPreview = page.getByRole("complementary", {
@@ -259,22 +262,13 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await generatedPreview
       .getByRole("button", { name: /关闭预览|Close preview/u })
       .click();
-    const changesTrigger = page.locator(".session-changes-trigger");
-    await expect(changesTrigger).toContainText(
-      /1 (?:个文件已更改|file changed)/u,
-    );
-    await expect(
-      changesTrigger.locator(".session-changes-counts"),
-    ).toContainText("+1-1");
-    await changesTrigger.click();
-    const changesPopover = page.locator(".session-changes-popover");
-    await expect(changesPopover).toContainText("report space.md");
-    for (const group of await page.locator(".process-sequence > summary").all())
-      await group.click();
-    for (const summary of await page
-      .locator(".tool-evidence-card > summary")
-      .all())
-      await summary.click();
+    await expect(page.locator(".session-changes-trigger")).toHaveCount(0);
+    for (const group of await page.locator(".process-sequence").all())
+      if ((await group.getAttribute("open")) === null)
+        await group.locator(":scope > summary").press("Enter");
+    for (const card of await page.locator(".tool-evidence-card").all())
+      if ((await card.getAttribute("open")) === null)
+        await card.locator(":scope > summary").press("Enter");
     const readCard = page
       .locator(".tool-evidence-card")
       .filter({ has: page.locator("summary strong", { hasText: "read" }) });
@@ -318,8 +312,14 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     ).toHaveCount(0);
     await expect(
       page.getByRole("figure", { name: "Test evidence" }),
-    ).toContainText("1 failed");
-    await expect(page.locator(".evidence-terminal")).toContainText("cancelled");
+    ).toContainText(/1 (?:failed|失败)/u);
+    await expect(page.locator(".evidence-terminal")).toHaveAttribute(
+      "data-state",
+      "cancelled",
+    );
+    await expect(page.locator(".evidence-terminal")).toContainText(
+      /已停止|Stopped/u,
+    );
     expect(
       (await new AxeBuilder({ page }).include(".tool-evidence-card").analyze())
         .violations,
@@ -332,17 +332,25 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByText("unknown tool evidence", { exact: true }).first(),
     ).toBeAttached();
-    await changesTrigger.click();
-    const reviewTrigger = changesPopover.getByRole("button", {
-      name: /report space\.md/u,
-    });
-    await reviewTrigger.click();
+    await page
+      .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
+      .click();
+    await workbar.locator(".workbar-add-tab").click();
+    await page
+      .getByRole("menu", { name: /打开工具|Open tools/u })
+      .getByRole("menuitem", { name: /^(?:变更|Changes)/u })
+      .click();
     const review = page.getByRole("complementary", {
       name: /变更|Changes/u,
     });
+    await review
+      .getByRole("combobox", { name: /变更范围|Change scope/u })
+      .selectOption("session");
     await expect(review).toContainText(
       /自本会话开始后的变更|Changes since this session started/u,
     );
+    await expect(review.locator(".session-review-file")).toHaveCount(1);
+    await review.locator(".session-review-file").click();
     await expect(
       review.getByRole("figure", { name: /变更差异|Change diff/u }),
     ).toContainText("Reviewed content");
@@ -354,31 +362,36 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       review.getByRole("figure", { name: /变更差异|Change diff/u }),
     ).toContainText("Reviewed content");
-    await review.getByRole("button", { name: /^(?:关闭|Close)$/u }).click();
-    await expect(changesTrigger).toBeFocused();
+    await workbar
+      .getByRole("button", { name: /收起工具栏|Collapse tools/u })
+      .click();
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(changesTrigger).toBeVisible();
-    expect(
-      await changesTrigger.evaluate(
-        (element) => element.scrollWidth <= element.clientWidth,
-      ),
-    ).toBe(true);
-    await changesTrigger.click();
-    await reviewTrigger.click();
+    await page
+      .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
+      .click();
+    await workbar.locator(".workbar-add-tab").click();
+    await page
+      .getByRole("menu", { name: /打开工具|Open tools/u })
+      .getByRole("menuitem", { name: /^(?:变更|Changes)/u })
+      .click();
     const mobileReview = page.getByRole("complementary", {
       name: /变更|Changes/u,
     });
     await expect(mobileReview).toBeVisible();
-    await expect(page.locator(".conversation-shell")).toBeHidden();
+    await expect(page.locator(".composer")).toHaveCount(1);
+    await expect(page.locator(".composer")).toBeVisible();
+    await expect(page.locator(".task-header")).toBeHidden();
+    await expect(
+      workbar.getByRole("button", { name: /返回聊天|Back to chat/u }),
+    ).toBeVisible();
     expect(
       await mobileReview.evaluate(
         (element) => element.scrollWidth <= element.clientWidth,
       ),
     ).toBe(true);
-    await mobileReview
-      .getByRole("button", { name: /^(?:关闭|Close)$/u })
+    await workbar
+      .getByRole("button", { name: /收起工具栏|Collapse tools/u })
       .click();
-    await expect(changesTrigger).toBeFocused();
     await page.setViewportSize({ width: 1280, height: 844 });
     await page.getByRole("button", { name: "Report", exact: true }).click();
     const artifactPanel = page.getByRole("complementary", {
@@ -420,10 +433,18 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       path,
       content: "# Latest report\nExternal revision",
     });
+    await expect(artifactPanel).toContainText(/文件已更新|The file changed/u, {
+      timeout: 8_000,
+    });
+    await expect(
+      page.getByRole("heading", { name: "Updated report" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: /刷新文件|Refresh file/u }).click();
     await expect(
       page.getByRole("heading", { name: "Latest report" }),
     ).toBeVisible({ timeout: 8_000 });
     await rm(path);
+    await page.getByRole("button", { name: /刷新文件|Refresh file/u }).click();
     await expect(artifactPanel).toContainText(
       /当前显示旧版预览|Showing an older preview/u,
       { timeout: 8_000 },
@@ -440,10 +461,26 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
     await page.getByRole("button", { name: "Missing", exact: true }).click();
     await expect(artifactPanel).toContainText("File no longer exists");
+    await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
+    await page
+      .getByRole("button", { name: "Other worktree", exact: true })
+      .click();
+    await expect(artifactPanel).not.toContainText("export const otherWorktree");
+    await page
+      .getByRole("button", { name: /只读打开此文件|Open this file read-only/u })
+      .click();
+    await expect(artifactPanel).toContainText(
+      "export const otherWorktree = 42;",
+    );
+    await page.getByRole("button", { name: /刷新文件|Refresh file/u }).click();
+    await expect(artifactPanel).toContainText(
+      "export const otherWorktree = 42;",
+    );
   } finally {
     await context.close();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
     await rm(baselineDirectory, { recursive: true, force: true });
   }
 });

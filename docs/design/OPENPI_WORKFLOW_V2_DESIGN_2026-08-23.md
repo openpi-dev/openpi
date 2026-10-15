@@ -533,7 +533,7 @@ Runtime 不自动插入 Report Agent。当前已提供：
 | Quick completion | 无故障窗口内 100/100 单次 completion；故障重投保持同一 delivery id |
 | Busy parent | 不打断当前 turn；settle 后自动唤醒 |
 | Delivery failure | 首次失败可重试，无永久丢失和双重展示 |
-| Terminal write failure | 无无解释 `running` |
+| Terminal write failure | 无解释的 `running` |
 | Wait interrupt | run 继续，status 可查 |
 | Repeated stop | 幂等 |
 | Schema stability | capability load 后 start/settle hash 不变 |

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { Agent } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
+  type ToolCall,
 } from "@earendil-works/pi-ai";
 import {
   initTheme,
@@ -144,7 +146,7 @@ test("native Agent execution errors reach the real Git tool renderer", async () 
   const definitions = registeredTools().filter((tool) =>
     tool.name.startsWith("git_"),
   );
-  const argsFor = (name: string) =>
+  const argsFor = (name: string): ToolCall["arguments"] =>
     name === "git_diff"
       ? { from: "openpi-test-nonexistent-revision" }
       : { revision: "openpi-test-nonexistent-revision" };
@@ -154,9 +156,15 @@ test("native Agent execution errors reach the real Git tool renderer", async () 
       tools: definitions.map((tool) => ({
         ...tool,
         execute: (id, args, signal, update) =>
-          tool.execute(id, args, signal, update, {
-            cwd: process.cwd(),
-          } as ExtensionContext),
+          tool.execute(
+            id,
+            args,
+            signal,
+            update,
+            toolExecutionContext({
+              cwd: process.cwd(),
+            } as ExtensionContext),
+          ),
       })),
     },
     streamFn() {

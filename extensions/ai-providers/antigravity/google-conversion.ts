@@ -140,6 +140,10 @@ function transformMessages(
         ? { ...message, toolCallId: normalizedId }
         : message;
     }
+    // Only assistant turns are rewritten. Any other role must pass through
+    // untouched: a transcript system message (Pi 0.86+) reaching this branch would
+    // be iterated as if it held assistant content and silently emptied.
+    if (message.role !== "assistant") return message;
 
     const isSameModel =
       message.provider === model.provider &&
@@ -346,6 +350,11 @@ export function convertMessages(
       continue;
     }
 
+    // Everything that is not a conversation turn is not representable on the wire.
+    // Skipping it is what keeps a stray role from becoming a nameless
+    // `functionResponse`, which Cloud Code Assist rejects outright.
+    if (message.role !== "toolResult") continue;
+
     const textResult = message.content
       .filter((part) => part.type === "text")
       .map((part) => part.text)
@@ -361,6 +370,14 @@ export function convertMessages(
       : hasImages
         ? "(see attached image)"
         : "";
+    // A result with no tool name carries no identity to report back; emitting it
+    // as `functionResponse` would fail the whole request. Keep its text instead.
+    if (!message.toolName) {
+      if (responseValue.length > 0) {
+        contents.push({ role: "user", parts: [{ text: responseValue }] });
+      }
+      continue;
+    }
     const imageParts: GooglePart[] = imageContent.map((image) => ({
       inlineData: { mimeType: image.mimeType, data: image.data },
     }));

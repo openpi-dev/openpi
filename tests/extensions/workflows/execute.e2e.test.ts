@@ -6,6 +6,7 @@
  */
 
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -36,6 +37,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { shutdownAndDisposeChildSession } from "../../../extensions/shared/child-session.ts";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
+import {
+  webCapabilityDetail,
+  webCapabilitySnapshot,
+} from "../../../extensions/shared/web-observer-registry.ts";
 import { reclaimWorktree } from "../../../extensions/shared/worktree.ts";
 import { persistWorkflowJson } from "../../../extensions/workflows/artifacts.ts";
 import {
@@ -70,6 +75,10 @@ mkdirSync(join(agentDir, "agents"), { recursive: true });
 writeFileSync(
   join(agentDir, "agents", "bounded-reviewer.md"),
   "---\nname: bounded-reviewer\ndescription: Replay fixture\ntools: [read]\n---\nInspect the repository without modifications.\n",
+);
+writeFileSync(
+  join(agentDir, "agents", "explicit-parent-fixture.md"),
+  "---\nname: explicit-parent-fixture\ndescription: Requires a parent fixture\ntools: [read, parent_fixture]\n---\nUse parent_fixture to verify the result.\n",
 );
 
 const {
@@ -655,6 +664,8 @@ test("a settled launch card does not repaint while its detached run stays active
           invalidations += 1;
         },
         lastComponent: undefined,
+        ...{ durationMs: undefined },
+        ...{ outputPad: 0 },
         state: {},
         cwd: repoDir,
         executionStarted: true,
@@ -970,6 +981,156 @@ test("settled retention is bounded while status and artifacts remain observable"
   assert.equal(lookup.details.runs[0]?.status, "completed");
 });
 
+test("Web workflow children resolve only exact active or retained owner evidence", async () => {
+  const ownerTools = new Map<string, CapturedTool>();
+  const ownerHandlers = new Map<
+    string,
+    Array<(event: unknown, ctx: ExtensionContext) => unknown>
+  >();
+  const ownerCtx = {
+    ...ctx,
+    sessionManager: {
+      getSessionId: () => "wf-web-owner-session",
+      getEntries: () => [],
+    },
+  } as unknown as ExtensionContext;
+  workflows(
+    {
+      ...pi,
+      registerTool(tool: CapturedTool) {
+        ownerTools.set(tool.name, tool);
+      },
+      on(event: string, handler: unknown) {
+        ownerHandlers.set(event, [
+          ...(ownerHandlers.get(event) ?? []),
+          handler as (event: unknown, ctx: ExtensionContext) => unknown,
+        ]);
+      },
+    } as unknown as ExtensionAPI,
+    { settledRetention: { maxRuns: 8, maxBytes: 64 * 1024 } },
+  );
+  for (const handler of ownerHandlers.get("session_start") ?? []) {
+    await handler({}, { ...ownerCtx, mode: "print" } as ExtensionContext);
+  }
+  const ownerWorkflow = ownerTools.get("workflow")!;
+  const scope = ownerCtx.sessionManager;
+  let releasePrompt = () => {};
+  const promptGate = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  let prompted = false;
+  __setWorkflowTestAgentSessionFactory(async () => ({
+    session: fakeAgentSession("owned workflow answer", promptGate, () => {
+      prompted = true;
+    }),
+  }));
+
+  try {
+    const script =
+      'export const meta = { name: "web-owner" };\nreturn await agent("Inspect the fixture", { agent_type: "bounded-reviewer", label: "Inspector" });';
+    const launch = (await ownerWorkflow.execute(
+      "e2e-web-workflow-owner",
+      { script, wait: false },
+      undefined,
+      undefined,
+      ownerCtx,
+    )) as { details: { runId: string } };
+    const runId = launch.details.runId;
+    const id = `${runId}:call:1`;
+    await waitFor(() => prompted, "Web workflow active child");
+    const active = webCapabilitySnapshot(scope)?.workflows?.items.find(
+      (item) => item.runId === runId,
+    );
+    assert.equal(active?.children?.items[0]?.id, id);
+    assert.equal(active?.children?.items[0]?.status, "running");
+    const activeReceipt = webCapabilityDetail(scope, "workflows", id);
+    assert.equal(activeReceipt.status, "found");
+    assert.ok(
+      activeReceipt.status === "found" &&
+        activeReceipt.detail.kind === "workflows",
+    );
+    assert.equal(activeReceipt.detail.transcriptUnavailable, false);
+    assert.equal(
+      webCapabilityDetail({}, "workflows", id).status,
+      "unavailable",
+    );
+    assert.equal(
+      webCapabilityDetail(scope, "workflows", `${runId}:call:01`).status,
+      "missing",
+    );
+    assert.equal(
+      webCapabilityDetail(scope, "workflows", "Inspector").status,
+      "missing",
+    );
+
+    releasePrompt();
+    await waitFor(
+      () =>
+        webCapabilitySnapshot(scope)?.workflows?.items.find(
+          (item) => item.runId === runId,
+        )?.status === "completed",
+      "Web workflow retained child",
+    );
+    const settled = webCapabilityDetail(scope, "workflows", id);
+    assert.ok(
+      settled.status === "found" && settled.detail.kind === "workflows",
+    );
+    assert.equal(settled.detail.status, "done");
+    assert.equal(settled.detail.transcriptUnavailable, true);
+    assert.deepEqual(settled.detail.transcript, []);
+    assert.equal(settled.detail.finalText, "");
+    assert.equal(
+      JSON.stringify(settled).includes("owned workflow answer"),
+      false,
+    );
+    assert.ok(
+      readFileSync(join(runDirFor(runId), "transcripts.json"), "utf8").includes(
+        "owned workflow answer",
+      ),
+    );
+
+    const resumed = (await ownerWorkflow.execute(
+      "e2e-web-workflow-replay",
+      { script, resume_from_run_id: runId, wait: true },
+      undefined,
+      undefined,
+      ownerCtx,
+    )) as { details: WorkflowDetails };
+    const replayDetail = webCapabilityDetail(
+      scope,
+      "workflows",
+      `${resumed.details.runId}:call:1`,
+    );
+    assert.ok(
+      replayDetail.status === "found" &&
+        replayDetail.detail.kind === "workflows",
+    );
+    assert.notEqual(replayDetail.detail.id, id);
+    assert.equal(replayDetail.detail.replayed, true);
+    assert.equal(replayDetail.detail.transcriptUnavailable, true);
+    assert.equal(replayDetail.detail.finalText, "");
+
+    // Canonical disk evidence deliberately stays outside this in-memory Web seam.
+    for (let index = 0; index < 8; index++) {
+      await ownerWorkflow.execute(
+        `e2e-web-owner-eviction-${index}`,
+        { script: `return ${index};`, wait: true },
+        undefined,
+        undefined,
+        ownerCtx,
+      );
+    }
+    assert.equal(webCapabilityDetail(scope, "workflows", id).status, "missing");
+    assert.equal(existsSync(join(runDirFor(runId), "transcripts.json")), true);
+  } finally {
+    releasePrompt();
+    __setWorkflowTestAgentSessionFactory(undefined);
+    for (const handler of ownerHandlers.get("session_shutdown") ?? []) {
+      await handler({}, ownerCtx);
+    }
+  }
+});
+
 test("agent calls run through the injected session factory and resume replays the journal", async () => {
   let sessionCreations = 0;
   const factory: WorkflowAgentSessionFactory = async () => {
@@ -993,20 +1154,59 @@ test("agent calls run through the injected session factory and resume replays th
       ctx,
     )) as {
       content: Array<{ type: string; text: string }>;
-      details: { runId?: unknown };
+      details: WorkflowDetails;
     };
     const firstText = first.content[0]!.text;
     assert.match(firstText, /"agent-run" completed/);
     assert.match(firstText, /injected agent output/);
     assert.equal(sessionCreations, 1);
+    assert.equal(
+      first.details.agents[0]?.completion?.observed.outcome,
+      "success",
+    );
+    assert.equal(
+      first.details.agents[0]?.completion?.verification.status,
+      "unknown",
+    );
 
     const firstRunId = first.details.runId;
+    const queried = (await status.execute("e2e-completion-query", {
+      runId: firstRunId,
+    })) as { details: { completions: unknown[] } };
+    assert.deepEqual(
+      queried.details.completions[0],
+      first.details.agents[0]?.completion,
+    );
     const firstDir = runDirFor(firstRunId);
+    const textRef = first.details.agents[0]?.completion?.modelClaimed.textRef;
+    assert.equal(textRef, `${firstRunId}/agent-results/agent-0001.json`);
+    // Resolve through the existing workflow run owner, not a new registry.
+    const savedResult = JSON.parse(
+      readFileSync(
+        join(firstDir, textRef.slice(firstRunId.length + 1)),
+        "utf8",
+      ),
+    );
+    assert.equal(savedResult.output, "injected agent output");
+    assert.equal(
+      JSON.stringify(first.details.agents[0]?.completion).includes(firstDir),
+      false,
+    );
     // A replay-safe read-only agent call is journaled on success.
     const journal = JSON.parse(
       readFileSync(join(firstDir, "journal.json"), "utf8"),
-    ) as { entries: unknown[] };
+    ) as {
+      entries: Array<{ origin?: { executionId: string; evidenceRef: string } }>;
+    };
     assert.equal(journal.entries.length, 1);
+    assert.equal(
+      journal.entries[0]?.origin?.executionId,
+      `${firstRunId}:call:1`,
+    );
+    assert.equal(
+      journal.entries[0]?.origin?.evidenceRef,
+      `${firstRunId}/agent-results/agent-0001.json`,
+    );
 
     // Resume with identical script and call content: the journal hit means no
     // new child session is created.
@@ -1022,12 +1222,24 @@ test("agent calls run through the injected session factory and resume replays th
       ctx,
     )) as {
       content: Array<{ type: string; text: string }>;
-      details: { runId?: unknown };
+      details: WorkflowDetails;
     };
     const resumedText = resumed.content[0]!.text;
     assert.match(resumedText, /injected agent output/);
     assert.match(resumedText, /Resumed from .*replayed 1\/1 agent call/);
+    assert.match(resumedText, /replay=no-new-execution/);
+    assert.deepEqual(resumed.details.agents[0]?.completion?.replay, {
+      newExecution: false,
+      origin: journal.entries[0]?.origin,
+    });
     assert.equal(sessionCreations, 1);
+    const replayQuery = (await status.execute("e2e-replay-query", {
+      runId: resumed.details.runId,
+    })) as { details: { completions: unknown[] } };
+    assert.deepEqual(
+      replayQuery.details.completions[0],
+      resumed.details.agents[0]?.completion,
+    );
 
     const persisted = readWorkflowJson(resumed.details.runId);
     const agents = persisted.agents as Array<{
@@ -1122,6 +1334,7 @@ async function runTamperedAcceptanceReplay(
       ...existingTools,
       {
         name: structuredTool.name,
+        exposure: "direct",
         description: structuredTool.description,
         parameters: structuredTool.parameters,
         promptGuidelines: structuredTool.promptGuidelines,
@@ -1152,7 +1365,7 @@ async function runTamperedAcceptanceReplay(
         },
         new AbortController().signal,
         () => {},
-        ctx,
+        toolExecutionContext(ctx),
       );
       await prompt("fixture prompt");
     };
@@ -1279,6 +1492,7 @@ test("structured agent results survive handoff refs and downstream inputs", asyn
       ...existingTools,
       {
         name: structuredTool.name,
+        exposure: "direct",
         description: structuredTool.description,
         parameters: structuredTool.parameters,
         promptGuidelines: structuredTool.promptGuidelines,
@@ -1302,7 +1516,7 @@ test("structured agent results survive handoff refs and downstream inputs", asyn
         { verdict: "accepted", score: 7 },
         new AbortController().signal,
         () => {},
-        ctx,
+        toolExecutionContext(ctx),
       );
     };
     return { session };
@@ -1374,6 +1588,7 @@ test("oversized authoritative agent results fail without a success record", asyn
       ...existingTools,
       {
         name: structuredTool.name,
+        exposure: "direct",
         description: structuredTool.description,
         parameters: structuredTool.parameters,
         promptGuidelines: structuredTool.promptGuidelines,
@@ -1397,7 +1612,7 @@ test("oversized authoritative agent results fail without a success record", asyn
         { blob: "x".repeat(3 * 1024 * 1024) },
         new AbortController().signal,
         () => {},
-        ctx,
+        toolExecutionContext(ctx),
       );
     };
     return { session };
@@ -1811,6 +2026,66 @@ test("built-in Workflow children inherit active shell/network tools in the selec
       );
     }
     assert.equal(calls.length, 2, "invalid cwd must not create child sessions");
+  } finally {
+    activeTools = previousTools;
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
+});
+
+test("Workflow entry tolerates inherited misses but rejects a missing explicit role tool before prompting", async () => {
+  const previousTools = [...activeTools];
+  activeTools = [...activeTools, "parent_fixture"];
+  let prompts = 0;
+  __setWorkflowTestAgentSessionFactory(async (options) => {
+    assert.deepEqual(options?.tools, ["read", "parent_fixture"]);
+    const session = fakeAgentSession(
+      "inherited surface narrowed",
+      undefined,
+      () => {
+        prompts++;
+      },
+    );
+    session.getActiveToolNames = () => ["read"];
+    session.getAllTools = () =>
+      [{ name: "read" }] as ReturnType<AgentSession["getAllTools"]>;
+    return { session };
+  });
+  try {
+    const inherited = (await workflow.execute(
+      "inherited-miss",
+      { script: 'return await agent("inspect");', wait: true },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId: string } };
+    const inheritedRun = readWorkflowJson(inherited.details.runId);
+    assert.equal(
+      (inheritedRun.agents as { state: string }[])[0]?.state,
+      "done",
+    );
+    assert.equal(prompts, 1);
+
+    const explicit = (await workflow.execute(
+      "explicit-miss",
+      {
+        script:
+          'return await agent("inspect", { agent_type: "explicit-parent-fixture" });',
+        wait: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId: string } };
+    const explicitRun = readWorkflowJson(explicit.details.runId);
+    const agent = (
+      explicitRun.agents as { state: string; error?: string }[]
+    )[0];
+    assert.equal(agent?.state, "error");
+    assert.match(
+      agent?.error ?? "",
+      /Child tool preflight failed: requested tool "parent_fixture" is unavailable/,
+    );
+    assert.equal(prompts, 1, "an explicit miss must fail before prompting");
   } finally {
     activeTools = previousTools;
     __setWorkflowTestAgentSessionFactory(undefined);

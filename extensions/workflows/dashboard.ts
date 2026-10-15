@@ -1,5 +1,5 @@
 /**
- * /workflows dashboard: a full-screen overlay with a run list and a per-run
+ * /workflows dashboard: a native custom-editor page with a run list and a per-run
  * detail view (phases sidebar + agents panel), modeled after:
  *
  *   name                                             5/5 agents · 31m18s · done
@@ -19,6 +19,7 @@ import {
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Container,
   type TUI,
   type TuiMouseEvent,
   truncateToWidth,
@@ -26,6 +27,7 @@ import {
 import { AgentSessionPage } from "../shared/agent-session-page.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
+import { decodeDelegationReplayOrigin } from "../shared/delegation-completion.ts";
 import {
   panelFrame,
   type ScreenHint,
@@ -36,6 +38,7 @@ import { SPINNER_INTERVAL_MS, spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { isAcceptanceLedger } from "./acceptance.ts";
 import { recoverPendingWorkflowCommit } from "./artifacts.ts";
+import { decodeExecutionTimingSummary } from "./execution-timing.ts";
 import { projectWorkflowGraph } from "./graph-projection.ts";
 import {
   classifyInterruptedInvocation,
@@ -70,6 +73,7 @@ import {
 import { measureWorkflowDetailsBytes } from "./retention.ts";
 import { writeFileAtomic } from "./serialization.ts";
 import { WorkflowTranscriptAdapter } from "./transcript.ts";
+import { dashboardPageRows } from "./dashboard-page.ts";
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
@@ -417,8 +421,55 @@ export function normalizePersistedWorkflowDetails(
             ),
           )
         : decodedInvocation;
+    const replayOrigin = decodeDelegationReplayOrigin(a.replayOrigin);
+    const executionOutcome =
+      a.executionOutcome === "success" ||
+      a.executionOutcome === "failure" ||
+      a.executionOutcome === "cancelled" ||
+      a.executionOutcome === "uncertain" ||
+      a.executionOutcome === "replayed"
+        ? a.executionOutcome
+        : undefined;
+    const timing =
+      executionOutcome === "replayed" ||
+      invocation?.admissionState === "replayed"
+        ? undefined
+        : decodeExecutionTimingSummary(a.timing);
+    const timingArtifact =
+      typeof a.timingArtifact === "string" &&
+      /^agent-timing\/agent-\d{4,8}\.json$/u.test(a.timingArtifact)
+        ? a.timingArtifact
+        : undefined;
     agents.push({
       index,
+      ...(timing ? { timing } : {}),
+      ...(timingArtifact ? { timingArtifact } : {}),
+      ...(a.timingArtifactState === "saved" ||
+      a.timingArtifactState === "failed"
+        ? { timingArtifactState: a.timingArtifactState }
+        : {}),
+      ...(executionOutcome ? { executionOutcome } : {}),
+      ...(a.resultPersistence === "saved" || a.resultPersistence === "failed"
+        ? { resultPersistence: a.resultPersistence }
+        : {}),
+      ...(typeof a.resultHasText === "boolean"
+        ? { resultHasText: a.resultHasText }
+        : {}),
+      ...(a.resultHasStructured === true ? { resultHasStructured: true } : {}),
+      ...(typeof a.requestedCwd === "string" && a.requestedCwd.length <= 4096
+        ? { requestedCwd: a.requestedCwd }
+        : {}),
+      ...(typeof a.effectiveCwd === "string" && a.effectiveCwd.length <= 4096
+        ? { effectiveCwd: a.effectiveCwd }
+        : {}),
+      ...(a.isolation === "shared" || a.isolation === "worktree"
+        ? { isolation: a.isolation }
+        : {}),
+      ...(replayOrigin
+        ? { replayOrigin }
+        : a.replayOrigin === "unknown"
+          ? { replayOrigin: "unknown" as const }
+          : {}),
       ...(typeof a.callId === "string" && a.callId
         ? { callId: sanitizeLine(a.callId, 256) }
         : {}),
@@ -875,6 +926,21 @@ export function buildWorkflowReport(details: WorkflowDetails): string {
         `- **${agent.label}** — ${status}${stats ? ` (${stats})` : ""}`,
       );
       if (agent.error) lines.push(`  - error: ${agent.error}`);
+      if (agent.timing) {
+        const timing = agent.timing;
+        lines.push(
+          `  - timing: ${Math.round(timing.toolWallMs)}ms tool wall / ${Math.round(timing.toolDurationMs)}ms summed tool duration; ${Math.round(timing.unattributedMs)}ms unattributed; ${timing.tools.paired}/${timing.tools.started} paired; ${timing.coverage}`,
+        );
+        lines.push(
+          `  - timing coverage: ${timing.tools.trackingDropped} tracking drops, ${timing.tools.unmatchedEnds} unmatched ends, ${timing.tools.unclosedStarts} unclosed starts, ${timing.tools.entriesOmitted} detail entries omitted; timeout=${timing.tools.timedOut}, cancelled=${timing.tools.cancelled}`,
+        );
+      }
+      if (agent.timingArtifact)
+        lines.push(`  - timing artifact: ${agent.timingArtifact}`);
+      if (agent.timingArtifactState === "failed")
+        lines.push(
+          "  - timing artifact: persistence failed (summary retained)",
+        );
     }
   }
 
@@ -965,6 +1031,7 @@ export class WorkflowDashboard {
   private onAbort?: (runId: string) => boolean;
   private initialToolsExpanded: boolean;
   private initialRunId?: string;
+  private readonly pageRows?: (width: number) => number;
 
   constructor(
     tui: TUI,
@@ -979,7 +1046,9 @@ export class WorkflowDashboard {
     onAbort?: (runId: string) => boolean,
     getRetained: () => ReadonlyMap<string, WorkflowDetails> = () => new Map(),
     initialToolsExpanded = false,
+    pageRows?: (width: number) => number,
   ) {
+    this.pageRows = pageRows;
     this.tui = tui;
     this.theme = theme;
     this.keybindings = keybindings;
@@ -1367,7 +1436,19 @@ export class WorkflowDashboard {
     if (this.view === "transcript" && this.transcriptPage) {
       return this.transcriptPage.render(width);
     }
-    const height = Math.max(MIN_HEIGHT, this.tui.terminal.rows - 1);
+    const height = this.pageRows
+      ? this.pageRows(width)
+      : Math.max(1, this.tui.terminal.rows - 1);
+    if (height < MIN_HEIGHT) {
+      return [
+        truncateToWidth(
+          `${this.keys("tui.select.cancel")} back/close · Workflows · ${this.entries.length} runs`,
+          width,
+          "",
+        ),
+        ...Array(Math.max(0, height - 1)).fill(""),
+      ];
+    }
     let lines: string[];
     if (this.view === "detail" && this.current) {
       lines = this.renderDetail(this.current.details, width, height);
@@ -1423,6 +1504,7 @@ export class WorkflowDashboard {
         },
       },
       { toolsExpanded: this.initialToolsExpanded },
+      this.pageRows,
     );
     this.transcriptPage.focused = this.focused;
     this.tui.requestRender();
@@ -1805,7 +1887,7 @@ function groupGlyph(group: PhaseGroup, theme: Theme) {
   return theme.fg("success", "✓");
 }
 
-/** Open the dashboard as a full-screen overlay. */
+/** Use Pi's editor replacement so its renderer owns chat image visibility. */
 export async function showWorkflowDashboard(
   ctx: ExtensionContext,
   getActive: () => Map<string, WorkflowDetails>,
@@ -1825,19 +1907,70 @@ export async function showWorkflowDashboard(
         sessionWorkflowRunIds(ctx),
         startedSince,
         () => {
-          dashboard.dispose();
           done(undefined);
         },
         initialRunId,
         onAbort,
         getRetained,
         ctx.ui.getToolsExpanded(),
+        tui.mode === "regular"
+          ? (width) => dashboardPageRows(tui, dashboard, width)
+          : undefined,
       );
-      return dashboard;
+      if (tui.mode === "fullscreen") {
+        // Fullscreen's native editor dock reserves transcript rows. Keep the
+        // existing overlay boundary; its graphics compositing remains a Pi
+        // owner issue. The empty editor slot avoids duplicate page rendering.
+        const overlay = tui.showOverlay(dashboard, {
+          anchor: "top-left",
+          width: "100%",
+          maxHeight: "100%",
+        });
+        return {
+          get focused() {
+            return dashboard.focused;
+          },
+          set focused(value: boolean) {
+            dashboard.focused = value;
+          },
+          render: () => [],
+          invalidate: () => dashboard.invalidate(),
+          handleInput: (data: string) => dashboard.handleInput(data),
+          dispose: () => {
+            overlay.hide();
+            dashboard.dispose();
+          },
+        };
+      }
+      // Native editor replacement can grow the main-screen buffer. Let the
+      // renderer clear a shrink when the editor returns, so chat images are
+      // restored into the visible viewport, then restore its previous policy.
+      const clearOnShrink = tui.getClearOnShrink();
+      tui.setClearOnShrink(true);
+      const page = new (class extends Container {
+        get focused() {
+          return dashboard.focused;
+        }
+        set focused(value: boolean) {
+          dashboard.focused = value;
+        }
+        handleInput(data: string) {
+          dashboard.handleInput(data);
+        }
+        dispose() {
+          dashboard.dispose();
+          try {
+            tui.renderNow();
+          } finally {
+            if (tui.getClearOnShrink()) tui.setClearOnShrink(clearOnShrink);
+          }
+        }
+      })();
+      page.addChild(dashboard);
+      return page;
     },
     {
-      overlay: true,
-      overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+      overlay: false,
     },
   );
 }
