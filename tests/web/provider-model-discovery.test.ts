@@ -560,3 +560,59 @@ test("Anthropic keeps the original deadline while waiting for the next page", as
     },
   );
 });
+
+for (const uniqueCount of [1, 500]) {
+  test(`Anthropic only truncates validated unique overflow: ${uniqueCount} unique with duplicate and invalid tail`, async () => {
+    await withAnthropicCatalog(
+      (_request, response) =>
+        response.end(
+          JSON.stringify({
+            data: [
+              ...Array.from({ length: uniqueCount }, (_, i) => ({
+                id: `model-${i}`,
+              })),
+              ...Array.from({ length: 501 }, () => ({
+                id: "model-0",
+                display_name: "Updated",
+              })),
+              { id: "bad\n" },
+              {},
+              null,
+            ],
+            has_more: false,
+          }),
+        ),
+      async (discover) => {
+        const result = await discover();
+        assert.equal(result.models.length, uniqueCount);
+        assert.equal(
+          result.models.find((model) => model.id === "model-0")?.name,
+          "Updated",
+        );
+        assert.equal(result.truncated, false);
+      },
+    );
+  });
+}
+
+for (const body of ["not JSON", '{"data":{}}']) {
+  test(`Anthropic rejects malformed later pages without returning partial models: ${body}`, async () => {
+    let requests = 0;
+    await withAnthropicCatalog(
+      (_request, response) =>
+        response.end(
+          ++requests === 1
+            ? JSON.stringify({
+                data: [{ id: "first" }],
+                has_more: true,
+                last_id: "first",
+              })
+            : body,
+        ),
+      async (discover) => {
+        await assert.rejects(discover());
+        assert.equal(requests, 2);
+      },
+    );
+  });
+}

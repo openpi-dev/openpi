@@ -71,17 +71,17 @@ export async function discoverProviderModels(request: ProviderModelDiscovery, he
     const data: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     if (!record(data) || !Array.isArray(data.data)) throw new Error("Unsupported model catalog");
     const hasMore = request.api === "anthropic-messages" && data.has_more === true;
-    truncated ||= data.data.length > 500;
-    for (const [index, item] of data.data.entries()) {
+    for (const item of data.data) {
       if (!item || typeof item !== "object" || typeof item.id !== "string" || !item.id || item.id.length > 256 || /[\u0000-\u001f]/u.test(item.id)) continue;
-      const name = typeof item.name === "string" ? item.name : typeof item.display_name === "string" ? item.display_name : item.id;
-      models.set(item.id, { ...modelCapabilities(item), id: item.id, name: name.slice(0, 256).replace(/[\u0000-\u001f]/gu, "") || item.id });
-      if (models.size >= 500) {
-        truncated ||= index < data.data.length - 1 || hasMore;
+      if (!models.has(item.id) && models.size === 500) {
+        truncated = true;
         break;
       }
+      const name = typeof item.name === "string" ? item.name : typeof item.display_name === "string" ? item.display_name : item.id;
+      models.set(item.id, { ...modelCapabilities(item), id: item.id, name: name.slice(0, 256).replace(/[\u0000-\u001f]/gu, "") || item.id });
     }
-    if (!hasMore || models.size >= 500) break;
+    if (models.size === 500 && hasMore) truncated = true;
+    if (!hasMore || models.size === 500) break;
     const cursor = data.last_id;
     if (typeof cursor !== "string" || !cursor || cursor.length > 256 || /[\u0000-\u001f]/u.test(cursor) || cursors.has(cursor) || data.data.length === 0) throw new Error("Unsupported model catalog pagination");
     cursors.add(cursor);
