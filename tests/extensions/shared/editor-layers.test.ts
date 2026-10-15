@@ -148,7 +148,7 @@ test("re-registering a layer for one TUI context does not stack prior wrappers",
   let editorFactory: EditorFactory | undefined = (() => ({
     layers: [],
   })) as unknown as EditorFactory;
-  const api = { events } as unknown as ExtensionAPI;
+  const api = { events, on() {} } as unknown as ExtensionAPI;
   const ctx = {
     mode: "tui",
     ui: {
@@ -184,7 +184,19 @@ test("re-registering a layer for one TUI context does not stack prior wrappers",
 });
 
 function ownershipHarness() {
-  const api = { events: createEventBus() } as unknown as ExtensionAPI;
+  const lifecycle = new Map<
+    string,
+    (event: unknown, ctx: ExtensionContext) => void
+  >();
+  const api = {
+    events: createEventBus(),
+    on(
+      event: string,
+      handler: (event: unknown, ctx: ExtensionContext) => void,
+    ) {
+      lifecycle.set(event, handler);
+    },
+  } as unknown as ExtensionAPI;
   const ui = (name: string) => {
     let baseCalls = 0;
     let factory = (() => {
@@ -214,8 +226,88 @@ function ownershipHarness() {
       {} as never,
     ) as unknown as { layers: string[] };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
-  return { api, ui, context, layer, rendered, settle };
+  return {
+    api,
+    ui,
+    context,
+    layer,
+    rendered,
+    settle,
+    shutdown: (owner: ReturnType<typeof ui>) =>
+      lifecycle.get("session_shutdown")?.(
+        { type: "session_shutdown" },
+        context(owner),
+      ),
+  };
 }
+
+test("fresh native contexts do not reread a stale prior context", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  let stale = false;
+  const ctx = {
+    get mode() {
+      assert.equal(stale, false, "captured context is stale");
+      return "tui";
+    },
+    get ui() {
+      assert.equal(stale, false, "captured context is stale");
+      return ui;
+    },
+  } as unknown as ExtensionContext;
+  registerEditorLayer(h.api, ctx, h.layer("one"));
+  await h.settle();
+  stale = true;
+  assert.doesNotThrow(() =>
+    registerEditorLayer(h.api, h.context(ui), h.layer("two", 2)),
+  );
+  await h.settle();
+  assert.deepEqual(h.rendered(ui).layers, ["native", "one", "two"]);
+});
+
+test("session shutdown cancels an editor projection queued before replacement", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  const base = ui.getEditorComponent();
+  registerEditorLayer(h.api, h.context(ui), h.layer("old"));
+  h.shutdown(ui);
+  await h.settle();
+  assert.equal(ui.getEditorComponent(), base);
+  registerEditorLayer(h.api, h.context(ui), h.layer("new"));
+  await h.settle();
+  assert.deepEqual(h.rendered(ui).layers, ["native", "new"]);
+});
+
+test("session shutdown restores the base before a new native UI wrapper registers", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  const base = ui.getEditorComponent();
+  registerEditorLayer(h.api, h.context(ui), h.layer("old"));
+  await h.settle();
+  h.shutdown(ui);
+  assert.equal(ui.getEditorComponent(), base);
+  const nextUi = { ...ui };
+  registerEditorLayer(h.api, h.context(nextUi), h.layer("new"));
+  await h.settle();
+  assert.deepEqual(h.rendered(nextUi).layers, ["native", "new"]);
+});
+
+test("session shutdown preserves a foreign editor and ignores another UI owner", async () => {
+  const h = ownershipHarness();
+  const ui = h.ui("native");
+  registerEditorLayer(h.api, h.context(ui), h.layer("old"));
+  await h.settle();
+  h.shutdown(h.ui("unrelated"));
+  assert.deepEqual(h.rendered(ui).layers, ["native", "old"]);
+  const replacement = h.ui("foreign").getEditorComponent();
+  ui.setEditorComponent(replacement);
+  h.shutdown(ui);
+  assert.equal(ui.getEditorComponent(), replacement);
+  const nextUi = { ...ui };
+  registerEditorLayer(h.api, h.context(nextUi), h.layer("new"));
+  await h.settle();
+  assert.deepEqual(h.rendered(nextUi).layers, ["foreign", "new"]);
+});
 
 test("fresh contexts sharing one UI retain distinct layers and replace matching IDs", async () => {
   const h = ownershipHarness();
