@@ -993,6 +993,51 @@ test("buildRequestBody budgets opaque nodes when schema expansion is active", ()
   );
 });
 
+test("buildRequestBody budgets sparse literal array slots before expansion", () => {
+  const payload = Type.Object({}, { default: Array(60_000) });
+  assert.doesNotThrow(() =>
+    buildRequestBody(
+      GEMINI_MODEL,
+      {
+        ...SIMPLE_CONTEXT,
+        tools: [
+          {
+            name: "ordinary",
+            description: "ordinary",
+            parameters: Type.Object({ payload }),
+          },
+        ],
+      },
+      undefined,
+      "p",
+    ),
+  );
+  assert.throws(
+    () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            {
+              name: "sparse",
+              description: "sparse",
+              parameters: Type.Object(
+                { payload, answer: Type.Ref("#/$defs/Answer") },
+                {
+                  $defs: { Answer: Type.String() },
+                },
+              ),
+            },
+          ],
+        },
+        undefined,
+        "p",
+      ),
+    /expansion limits/,
+  );
+});
+
 test("convertTools rejects unsafe local refs before the request", () => {
   assert.throws(
     () =>

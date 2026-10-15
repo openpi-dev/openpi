@@ -549,10 +549,11 @@ function expandLocalSchemaRefs(schema: unknown): unknown {
     }
     if (Array.isArray(value)) {
       append("[");
-      value.forEach((entry, index) => {
+      // JSON emits sparse slots as null; forEach would omit their budget.
+      for (let index = 0; index < value.length; index++) {
         if (index > 0) append(",");
-        measure(entry, depth + 1, active, position);
-      });
+        measure(value[index], depth + 1, active, position);
+      }
       append("]");
       return;
     }
