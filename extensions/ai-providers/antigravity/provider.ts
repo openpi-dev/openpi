@@ -23,9 +23,11 @@ import type {
   Context,
   Model,
   SimpleStreamOptions,
+  Tool,
   ToolCall,
 } from "@earendil-works/pi-ai/compat";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
+import { resolveTranscript } from "../transcript.ts";
 import { emptyUsage } from "../usage.ts";
 import { decodeApiKey } from "./credentials.ts";
 import {
@@ -186,13 +188,6 @@ function isClaudeRoute(modelId: string): boolean {
   return modelId.toLowerCase().includes("claude");
 }
 
-function normalizeSystemPrompts(
-  systemPrompt: Context["systemPrompt"],
-): string[] {
-  if (!systemPrompt) return [];
-  return Array.isArray(systemPrompt) ? systemPrompt : [systemPrompt];
-}
-
 /** Deterministic conversation id: hash of the first user text, like the client. */
 function deriveSessionId(context: Context): string {
   for (const message of context.messages) {
@@ -271,11 +266,10 @@ function buildToolConfig(
 
 /** Convert pi tools to CCA functionDeclarations with sanitized schemas. */
 function buildTools(
-  context: Context,
+  tools: Tool[] | undefined,
   toolChoice: AntigravityStreamOptions["toolChoice"],
 ): Record<string, unknown>[] | undefined {
   if (toolChoice === "none") return undefined;
-  const tools = context.tools;
   if (!tools || tools.length === 0) return undefined;
   const converted = convertTools([...tools], true) as
     | { functionDeclarations: Record<string, unknown>[] }[]
@@ -297,10 +291,16 @@ export function buildRequestBody(
   projectId: string,
   state?: AntigravitySessionState,
 ): Record<string, unknown> {
-  const contents = convertMessages(model, context);
+  // Pi owns prompt sections and tool deltas in the transcript. Resolve their
+  // current values before converting conversation messages to provider wire data.
+  const transcript = resolveTranscript(context);
+  const contents = convertMessages(model, {
+    ...context,
+    messages: transcript.messages,
+  });
 
   const request: Record<string, unknown> = { contents };
-  const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+  const systemPrompts = transcript.systemPrompts;
   if (systemPrompts.length > 0) {
     request.systemInstruction = {
       role: "user",
@@ -308,7 +308,7 @@ export function buildRequestBody(
     };
   }
 
-  const tools = buildTools(context, options?.toolChoice);
+  const tools = buildTools(transcript.tools, options?.toolChoice);
   if (tools) request.tools = tools;
   const toolConfig = buildToolConfig(
     model,
@@ -384,7 +384,7 @@ interface CcaPart {
   functionCall?: {
     id?: string;
     name?: string;
-    args?: Record<string, unknown>;
+    args?: ToolCall["arguments"];
   };
 }
 
@@ -425,7 +425,7 @@ async function readErrorResponseBody(
   const timeoutError = () =>
     new Error("Timed out reading Cloud Code Assist error response body");
   try {
-    while (bytesRead < MAX_ERROR_BODY_BYTES) {
+    while (true) {
       if (signal?.aborted) throw new Error("Request aborted");
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw timeoutError();
@@ -458,6 +458,10 @@ async function readErrorResponseBody(
         break;
       }
       const remainingBytes = MAX_ERROR_BODY_BYTES - bytesRead;
+      if (remainingBytes === 0) {
+        truncated = true;
+        break;
+      }
       const value = result.value.subarray(0, remainingBytes);
       bytesRead += value.byteLength;
       chunks.push(decoder.decode(value, { stream: true }));
@@ -465,7 +469,6 @@ async function readErrorResponseBody(
         truncated = true;
         break;
       }
-      if (bytesRead === MAX_ERROR_BODY_BYTES) truncated = true;
     }
     chunks.push(decoder.decode());
     return chunks.join("") + (truncated ? "… [truncated]" : "");

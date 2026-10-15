@@ -22,13 +22,18 @@ const agentDirectory = resolve(outputDirectory, "agent");
 
 // The seeded agent dir is isolated from the default suite. It must exist before
 // the backend starts because ModelConfig reads it during runtime creation.
-seedAgentDirectory(agentDirectory);
+seedAgentDirectory(agentDirectory, repositoryRoot);
 
 process.env.OPENPI_WEB_E2E_TOKEN = WEB_TOKEN;
 
 export default defineConfig({
   testDir: repositoryRoot,
-  testMatch: "tests/web/openpi-web-provider.e2e.ts",
+  testMatch: [
+    "tests/web/openpi-web-provider.e2e.ts",
+    "tests/web/questions-provider.e2e.ts",
+    "tests/web/plan-provider.e2e.ts",
+    "tests/web/commands-provider.e2e.ts",
+  ],
   outputDir: outputDirectory,
   fullyParallel: false,
   workers: 1,

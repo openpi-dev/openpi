@@ -27,10 +27,15 @@ export interface WorktreeHandoffManifest {
   };
   readonly numstat: string;
   readonly nameStatus: string;
-  /** Names only. Their contents are not claimed to be captured by the patch. */
+  /** Names only; trailing `/` entries summarize directories, not their files. */
   readonly untracked: readonly string[];
-  /** Names only. Their contents are not claimed to be captured by the patch. */
+  /** Names only; trailing `/` entries summarize directories, not their files. */
   readonly ignored: readonly string[];
+  /** Absent in legacy manifests and exact inventories. Never a content backup. */
+  readonly inventoryCoverage?: {
+    readonly untracked: "complete-files" | "directory-summary";
+    readonly ignored: "complete-files" | "directory-summary";
+  };
   readonly cleanup?: WorktreeCleanup;
 }
 
@@ -48,22 +53,63 @@ function boundedGit(cwd: string, args: readonly string[], deadline: number) {
   if (remaining <= 0) throw new Error("Git handoff deadline exceeded");
   const output = execFileSync("git", ["-c", "core.fsmonitor=false", ...args], {
     cwd,
-    encoding: "utf8",
     maxBuffer: GIT_MAX_BUFFER,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: Math.min(remaining, HANDOFF_GIT_TIMEOUT_MS),
   });
-  if (output.includes("\uFFFD")) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      output,
+    );
+  } catch {
     throw new Error("Git handoff output is not valid UTF-8");
   }
-  return output;
 }
 
 function nulPaths(value: string) {
-  if (value.includes("\uFFFD")) {
-    throw new Error("Git path inventory is not valid UTF-8");
-  }
   return value.split("\0").filter(Boolean).sort();
+}
+
+function isBufferOverflow(error: unknown) {
+  return error instanceof Error && "code" in error && error.code === "ENOBUFS";
+}
+
+function inventory(
+  git: (cwd: string, args: readonly string[]) => string,
+  cwd: string,
+  ignored: boolean,
+) {
+  const args = [
+    "ls-files",
+    "--others",
+    ...(ignored ? ["--ignored"] : []),
+    "--exclude-standard",
+    "-z",
+  ];
+  try {
+    return {
+      paths: nulPaths(git(cwd, args)),
+      coverage: "complete-files" as const,
+    };
+  } catch (error) {
+    if (!isBufferOverflow(error)) throw error;
+  }
+  // Git owns directory boundaries and ignore rules. Do not use partial output
+  // from the failed enumeration, or claim the summarized descendants are files
+  // we captured. Keep the same byte limit and shared operation deadline.
+  try {
+    return {
+      paths: nulPaths(
+        git(cwd, [...args, "--directory", "--no-empty-directory"]),
+      ),
+      coverage: "directory-summary" as const,
+    };
+  } catch (error) {
+    if (!isBufferOverflow(error)) throw error;
+    throw new Error(
+      `${ignored ? "ignored" : "untracked"} inventory exceeded ${GIT_MAX_BUFFER} bytes even with directory summaries; checkout must be preserved`,
+    );
+  }
 }
 
 function boundedError(error: unknown) {
@@ -154,6 +200,8 @@ export function prepareWorktreeHandoff(options: {
       };
     }
 
+    const untracked = inventory(git, worktree, false);
+    const ignored = inventory(git, worktree, true);
     const manifest: WorktreeHandoffManifest = {
       version: WORKTREE_HANDOFF_VERSION,
       runId: options.runId,
@@ -182,18 +230,17 @@ export function prepareWorktreeHandoff(options: {
         options.worktree.baseSha,
         "--",
       ]),
-      untracked: nulPaths(
-        git(worktree, ["ls-files", "--others", "--exclude-standard", "-z"]),
-      ),
-      ignored: nulPaths(
-        git(worktree, [
-          "ls-files",
-          "--others",
-          "--ignored",
-          "--exclude-standard",
-          "-z",
-        ]),
-      ),
+      untracked: untracked.paths,
+      ignored: ignored.paths,
+      ...(untracked.coverage === "directory-summary" ||
+      ignored.coverage === "directory-summary"
+        ? {
+            inventoryCoverage: {
+              untracked: untracked.coverage,
+              ignored: ignored.coverage,
+            },
+          }
+        : {}),
     };
     // An inventory is not a content backup. Cleanup will preserve these trees,
     // and the manifest says exactly what was not captured.

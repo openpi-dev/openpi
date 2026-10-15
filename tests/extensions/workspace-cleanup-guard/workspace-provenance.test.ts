@@ -400,6 +400,33 @@ test("an rm substring inside a longer path segment is not an rm reference", asyn
   });
 });
 
+test("quoted rm text without an executable reference stays native", async () => {
+  await withWorkspace(async (workspace) => {
+    const guard = guardFor(async () => false);
+
+    for (const [index, command] of [
+      "rg -n --fixed-strings 'rm -rf' . | head -20",
+      "rg -n --fixed-strings 'rm -rf' -g '!*.map' . | head -60",
+      'echo "rm permission required" | cat',
+      'mysql -e "SELECT 1 FROM t_role_menu rm ON 1=1" ; echo done',
+    ].entries()) {
+      const decision = await guard.before({
+        id: `quoted-rm-text-${index}`,
+        command,
+        cwd: workspace,
+      });
+      assert.equal(decision.kind, "allow", command);
+    }
+
+    const substituted = await guard.before({
+      id: "quoted-rm-text-substitution",
+      command: 'echo "rm $(printf keep.txt)"',
+      cwd: workspace,
+    });
+    assert.equal(substituted.kind, "block");
+  });
+});
+
 test("piped xargs input and absolute rm paths fail closed", async () => {
   await withWorkspace(async (workspace) => {
     const guard = guardFor(async () => true);

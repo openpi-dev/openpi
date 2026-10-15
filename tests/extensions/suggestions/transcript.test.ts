@@ -135,3 +135,185 @@ test("transcript enforces per-result and total byte caps", () => {
   assert.match(transcript, /transcript capped/);
   assert.match(transcript, /tool result capped/);
 });
+
+for (const fixture of [
+  {
+    name: "double-quoted spaces",
+    text: 'password="north south" next=visible',
+    expected: "password=[REDACTED] next=visible",
+  },
+  {
+    name: "quoted punctuation in JSON output",
+    text: '{"secret":"north,south;east}west","ordinary":"visible"}',
+    expected: '{"secret":[REDACTED],"ordinary":"visible"}',
+  },
+  {
+    name: "single-quoted spaces and punctuation",
+    text: "token='north south;east,west}' next=visible",
+    expected: "token=[REDACTED] next=visible",
+  },
+  {
+    name: "escaped double quotes and backslashes",
+    text: String.raw`password="north\" south\\east tail" next=visible`,
+    expected: "password=[REDACTED] next=visible",
+  },
+  {
+    name: "escaped single quotes and backslashes",
+    text: String.raw`token='north\' south\\east tail' next=visible`,
+    expected: "token=[REDACTED] next=visible",
+  },
+]) {
+  test(`transcript redacts the complete value for ${fixture.name}`, () => {
+    const transcript = serializeRunTranscript([
+      entry("result", {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: fixture.text }],
+        isError: false,
+        timestamp: 0,
+      }),
+    ]);
+
+    assert.equal(transcript, `TOOL RESULT read\n${fixture.expected}`);
+  });
+}
+
+test("transcript preserves unlabelled quoted prose and unquoted redaction", () => {
+  const transcript = serializeRunTranscript([
+    entry("user", {
+      role: "user",
+      content:
+        'Ordinary "north south" and \'east west\'. token=one-secret next=visible password: another-secret, ordinary: "hello world"',
+      timestamp: 0,
+    }),
+  ]);
+
+  assert.equal(
+    transcript,
+    'USER\nOrdinary "north south" and \'east west\'. token=[REDACTED] next=visible password: [REDACTED], ordinary: "hello world"',
+  );
+});
+
+test("transcript redacts every value in a standalone Cookie header", () => {
+  const transcript = serializeRunTranscript([
+    entry("cookie-header", {
+      role: "toolResult",
+      toolCallId: "call-cookie",
+      toolName: "read",
+      content: [
+        {
+          type: "text",
+          text: "Cookie: session=syntheticAlpha; sid=syntheticBeta\nordinary: visible",
+        },
+      ],
+      isError: false,
+      timestamp: 0,
+    }),
+  ]);
+
+  assert.equal(
+    transcript,
+    "TOOL RESULT read\nCookie: [REDACTED]\nordinary: visible",
+  );
+});
+
+for (const lineBreak of ["\n", "\r\n"]) {
+  test(`transcript preserves the next line after an empty Cookie header (${JSON.stringify(lineBreak)})`, () => {
+    const transcript = serializeRunTranscript([
+      entry("empty-cookie-header", {
+        role: "toolResult",
+        toolCallId: "call-empty-cookie",
+        toolName: "read",
+        content: [
+          {
+            type: "text",
+            text: `Cookie:${lineBreak}ordinary: visible`,
+          },
+        ],
+        isError: false,
+        timestamp: 0,
+      }),
+    ]);
+
+    assert.equal(
+      transcript,
+      `TOOL RESULT read\nCookie: [REDACTED]${lineBreak}ordinary: visible`,
+    );
+  });
+}
+
+for (const fixture of [
+  ...[")", "]", ".", ").]"].flatMap((closer) =>
+    ['"', "'"].map((quote) => ({
+      name: `${quote}-quoted value before ${closer}`,
+      text: `password=${quote}north south${quote}${closer} next=visible`,
+      expected: `password=[REDACTED]${closer} next=visible`,
+    })),
+  ),
+  {
+    name: "adjacent shell-quoted segments",
+    text: `password='north'"'"'south' next=visible`,
+    expected: "password=[REDACTED] next=visible",
+  },
+  {
+    name: "adjacent quoted and unquoted segments",
+    text: `token="north"middle'south' next=visible`,
+    expected: "token=[REDACTED] next=visible",
+  },
+  {
+    name: "quoted shell segments joined by punctuation",
+    text: `password="north"."south" next=visible`,
+    expected: "password=[REDACTED] next=visible",
+  },
+  {
+    name: "quoted and unquoted shell segments joined by punctuation",
+    text: `token='north'.south next=visible`,
+    expected: "token=[REDACTED] next=visible",
+  },
+  {
+    name: "unquoted header values inside shell quotes",
+    text: "curl -H 'Cookie: session=alpha-value' -H 'X-API-Key: bravo-value' https://example.test",
+    expected:
+      "curl -H 'Cookie: [REDACTED] -H 'X-API-Key: [REDACTED] https://example.test",
+  },
+  {
+    name: "nested shell wrappers without weakening baseline token masking",
+    text: `curl -H "Cookie: 'north south'" -H "X-API-Key: bravo-value" https://example.test`,
+    // A shell parser would be needed to recognize the first entire value.
+    // Preserve the existing token boundary and still redact the second header.
+    expected: `curl -H "Cookie: [REDACTED] south'" -H "X-API-Key: [REDACTED] https://example.test`,
+  },
+]) {
+  for (const role of ["toolResult", "bashExecution"] as const) {
+    test(`transcript redacts ${fixture.name} from ${role}`, () => {
+      const message =
+        role === "toolResult"
+          ? {
+              role,
+              toolCallId: "call-1",
+              toolName: "bash",
+              content: [{ type: "text" as const, text: fixture.text }],
+              isError: false,
+              timestamp: 0,
+            }
+          : {
+              role,
+              command: fixture.text,
+              output: "visible output",
+              exitCode: 0,
+              cancelled: false,
+              truncated: false,
+              timestamp: 0,
+            };
+      const transcript = serializeRunTranscript([entry("result", message)]);
+
+      assert.equal(
+        transcript,
+        role === "toolResult"
+          ? `TOOL RESULT bash\n${fixture.expected}`
+          : `USER SHELL (exit 0)\n${fixture.expected}\nvisible output`,
+      );
+    });
+  }
+}

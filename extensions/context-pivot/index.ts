@@ -101,8 +101,8 @@ export default function contextPivot(pi: ExtensionAPI) {
     });
   };
 
-  pi.on("session_start", () => {
-    setVisibleForContext();
+  pi.on("session_start", (_event, ctx) => {
+    setVisibleForContext(ctx);
   });
 
   pi.on("agent_start", (_event, ctx) => {

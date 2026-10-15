@@ -1,11 +1,15 @@
-import { Check, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, CircleStop, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { formatElapsedMs } from "../../lib/format.ts";
+import { recordedSubagents } from "../subagents/recorded-subagents.ts";
+import { subagentOverview } from "../subagents/subagent-overview.ts";
 
-type Status = "running" | "done" | "error" | "warn" | "unknown";
+type Status = "running" | "done" | "error" | "interrupted" | "warn" | "unknown";
 
 function canonicalStatus(value: string): Status {
+  if (value === "interrupted") return "interrupted";
   if (value === "running") return "running";
   if (value === "done" || value === "completed") return "done";
   if (["error", "failed", "aborted", "killed", "timed_out"].includes(value))
@@ -38,6 +42,8 @@ function Chip({
         <Check />
       ) : status === "error" ? (
         <X />
+      ) : status === "interrupted" ? (
+        <CircleStop />
       ) : (
         <span className="activity-chip-glyph">?</span>
       )}
@@ -49,14 +55,81 @@ function Chip({
 export function ActivityBar({
   snapshot,
   onInspectTerminal,
+  onInspectSubagent,
+  observed = true,
 }: {
   snapshot: WebSnapshot | null;
   onInspectTerminal?: (id: string) => void;
+  onInspectSubagent?: (id?: string) => void;
+  observed?: boolean;
 }) {
+  const { t } = useTranslation();
   const [, tick] = useState(0);
   const capabilities = snapshot?.runtime.capabilities;
+  const saved = useMemo(
+    () =>
+      recordedSubagents(
+        (snapshot?.selectedSession?.entries ?? []).flatMap((entry) =>
+          entry.message ? [entry.message] : [],
+        ),
+      ),
+    [snapshot?.selectedSession?.entries],
+  );
+  const liveSubagents = capabilities?.subagents;
+  const workflows = capabilities?.workflows?.items ?? [];
+  const workflowChildren = workflows.flatMap(
+    (item) => item.children?.items ?? [],
+  );
+  const knownSubagentCount = new Set([
+    ...(liveSubagents?.items ?? []).map((item) => `subagents:${item.id}`),
+    ...saved.map((item) => `subagents:${item.id}`),
+    ...workflowChildren.map((item) => `workflows:${item.id}`),
+  ]).size;
+  const subagentCount = Math.max(
+    knownSubagentCount,
+    (liveSubagents?.items.length ?? 0) +
+      (liveSubagents?.omitted ?? 0) +
+      workflowChildren.length +
+      workflows.reduce((sum, item) => sum + (item.children?.omitted ?? 0), 0),
+  );
+  const subagents = subagentOverview(
+    liveSubagents?.items ?? [],
+    saved,
+    workflows,
+    observed,
+  );
+  const activeSubagentCount = subagents.filter(
+    (item) => item.state === "running",
+  ).length;
+  const completedSubagentCount = subagents.filter(
+    (item) => item.state === "done",
+  ).length;
+  const otherSubagentCount = subagents.filter(
+    (item) => item.state === "error" || item.state === "interrupted",
+  ).length;
+  const unknownSubagentCount = Math.max(
+    0,
+    subagentCount -
+      activeSubagentCount -
+      completedSubagentCount -
+      otherSubagentCount,
+  );
+  const subagentLabel = [
+    t("subagentProgress", {
+      running: activeSubagentCount,
+      completed: completedSubagentCount,
+    }),
+    otherSubagentCount
+      ? t("subagentSummaryOther", { count: otherSubagentCount })
+      : "",
+    unknownSubagentCount
+      ? t("subagentSummaryUnknown", { count: unknownSubagentCount })
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const admission = liveSubagents?.childExecutionAdmission;
   const running = [
-    ...(capabilities?.subagents?.items ?? []),
     ...(capabilities?.workflows?.items ?? []),
     ...(capabilities?.["background-terminals"]?.items ?? []),
   ].some((item) => item.status === "running");
@@ -93,15 +166,6 @@ export function ActivityBar({
       status: canonicalStatus(workflow.status),
     });
   }
-  for (const subagent of capabilities?.subagents?.items ?? []) {
-    const elapsed = formatElapsedMs(subagent.createdAt, subagent.settledAt);
-    chips.push({
-      key: `subagent-${subagent.id}`,
-      kind: "subagent",
-      label: `${subagent.title || subagent.id}${elapsed ? ` · ${elapsed}` : ""}`,
-      status: canonicalStatus(subagent.status),
-    });
-  }
   for (const terminal of capabilities?.["background-terminals"]?.items ?? []) {
     const elapsed = formatElapsedMs(terminal.createdAt, terminal.settledAt);
     chips.push({
@@ -122,12 +186,31 @@ export function ActivityBar({
   const omitted =
     chips.length -
     visible.length +
-    (capabilities?.subagents?.omitted ?? 0) +
     (capabilities?.workflows?.omitted ?? 0) +
     (capabilities?.["background-terminals"]?.omitted ?? 0);
-  if (!visible.length && !omitted) return null;
+  if (
+    !visible.length &&
+    !omitted &&
+    !(onInspectSubagent && subagentCount) &&
+    !admission?.enabled
+  )
+    return null;
   return (
     <div className="activity-bar" role="status" aria-label="Runtime activity">
+      {onInspectSubagent && subagentCount > 0 && (
+        <button
+          className="activity-chip subagent-list-trigger"
+          type="button"
+          onClick={() => onInspectSubagent()}
+        >
+          {subagentLabel}
+        </button>
+      )}
+      {admission?.enabled && admission.limit !== undefined && (
+        <span className="activity-chip subagent-list-trigger">
+          {`${admission.held}/${admission.limit} child slots · ${admission.queued} queued · wf ${admission.heldByOrigin.workflow} / direct ${admission.heldByOrigin.direct} / btw ${admission.heldByOrigin.btw}`}
+        </span>
+      )}
       {visible.map(({ key, ...chip }) => (
         <Chip key={key} {...chip} />
       ))}

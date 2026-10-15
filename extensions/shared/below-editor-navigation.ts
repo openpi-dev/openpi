@@ -61,6 +61,10 @@ interface AppAwareEditor extends EditorComponent {
   onExtensionShortcut?: (data: string) => boolean;
 }
 
+interface CursorAwareEditor extends EditorComponent {
+  getCursor(): { line: number; col: number };
+}
+
 function appAwareEditor(editor: EditorComponent): AppAwareEditor | undefined {
   const candidate = editor as EditorComponent & Partial<AppAwareEditor>;
   return candidate.actionHandlers instanceof Map
@@ -303,6 +307,11 @@ export class BelowEditorNavigationEditor implements EditorComponent, Focusable {
     return this.base.getExpandedText?.() ?? this.base.getText();
   }
 
+  getCursor() {
+    const child = this.base as EditorComponent & Partial<CursorAwareEditor>;
+    return child.getCursor?.();
+  }
+
   setText(text: string) {
     this.strip.focused = false;
     this.base.setText(text);
@@ -322,6 +331,15 @@ export class BelowEditorNavigationEditor implements EditorComponent, Focusable {
 
   setPaddingX(padding: number) {
     this.base.setPaddingX?.(padding);
+  }
+
+  getPaddingX() {
+    const child = this.base as EditorComponent & {
+      getPaddingX?: () => number | undefined;
+    };
+    return typeof child.getPaddingX === "function"
+      ? child.getPaddingX()
+      : undefined;
   }
 
   setAutocompleteMaxVisible(maxVisible: number) {
