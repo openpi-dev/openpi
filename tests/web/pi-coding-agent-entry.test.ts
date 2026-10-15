@@ -3,8 +3,9 @@ import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createJiti } from "jiti";
 import {
   missingPiCodingAgentDiagnostic,
   PI_CODING_AGENT_ENTRY_ENV,
@@ -57,7 +58,22 @@ async function writePiPackage(
     `export const PI_ENTRY_STUB = ${JSON.stringify(options.marker)};\n`,
   );
   await writeFile(join(root, "dist", "cli.js"), "#!/usr/bin/env node\n");
-  return { root, entry, cli: join(root, "dist", "cli.js") };
+  const aiRoot = join(root, "node_modules", "@earendil-works", "pi-ai");
+  await mkdir(join(aiRoot, "dist", "providers"), { recursive: true });
+  await writeFile(
+    join(aiRoot, "package.json"),
+    JSON.stringify({
+      name: "@earendil-works/pi-ai",
+      type: "module",
+      exports: { "./providers/*": { import: "./dist/providers/*.js" } },
+    }),
+  );
+  const providers = join(aiRoot, "dist", "providers", "all.js");
+  await writeFile(
+    providers,
+    `export const marker = ${JSON.stringify(options.marker)};\n`,
+  );
+  return { root, entry, providers, cli: join(root, "dist", "cli.js") };
 }
 
 async function isolatedLayout() {
@@ -156,6 +172,15 @@ test("standalone uses a validated explicit handoff before its own peer", async (
       }),
       realpathSync(layout.host.entry),
     );
+    const aliases = resolveStandaloneJitiAliases({
+      env: { [PI_CODING_AGENT_ENTRY_ENV]: layout.host.cli },
+      fromUrl: layout.fromUrl,
+    });
+    const jiti = createJiti(layout.fromUrl, { alias: aliases });
+    const providers = await jiti.import<{ marker: string }>(
+      "@earendil-works/pi-ai/providers/all",
+    );
+    assert.equal(providers.marker, "host-0.85");
   } finally {
     await rm(layout.root, { recursive: true, force: true });
   }
@@ -233,6 +258,25 @@ test("standalone source uses the install peer and official 0.84.1 exports", asyn
     });
     assert.deepEqual(aliases, {
       [PI_CODING_AGENT_PACKAGE]: realpathSync(layout.peer.entry),
+      "@earendil-works/pi-ai/providers/all": realpathSync(
+        layout.peer.providers,
+      ),
+    });
+  } finally {
+    await rm(layout.root, { recursive: true, force: true });
+  }
+});
+
+test("standalone keeps the Pi entry alias when the host cannot resolve providers/all", async () => {
+  const layout = await isolatedLayout();
+  try {
+    await rm(layout.peer.providers, { force: true });
+    const aliases = resolveStandaloneJitiAliases({
+      env: {},
+      fromUrl: layout.fromUrl,
+    });
+    assert.deepEqual(aliases, {
+      [PI_CODING_AGENT_PACKAGE]: realpathSync(layout.peer.entry),
     });
   } finally {
     await rm(layout.root, { recursive: true, force: true });
@@ -296,7 +340,7 @@ test("standalone fail-closes without a peer and does not walk PATH", async () =>
   }
 });
 
-test("real checkout 0.99.1 exports resolve from this install", () => {
+test("real checkout Pi exports resolve from this install", () => {
   const aliases = resolveStandaloneJitiAliases({
     env: {},
     fromUrl: new URL("../../bin/openpi.js", import.meta.url).href,
@@ -331,6 +375,15 @@ test("real checkout 0.99.1 exports resolve from this install", () => {
       "utf8",
     ),
   ) as { version?: string; exports?: { "."?: { import?: string } } };
-  assert.equal(manifest.version, "0.99.1");
+  // CI also runs this against the supported minimum host, so assert the
+  // installed host is a stable release at or above the declared peer floor.
+  const floor = [0, 99, 1];
+  const installed = String(manifest.version).split(".").map(Number);
+  assert.equal(installed.length, 3);
+  const diff = installed.findIndex((part, index) => part !== floor[index]);
+  assert.ok(
+    diff < 0 || installed[diff]! > floor[diff]!,
+    String(manifest.version),
+  );
   assert.equal(manifest.exports?.["."]?.import, "./dist/index.js");
 });

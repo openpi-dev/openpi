@@ -200,74 +200,99 @@ test("busy, stale, ready and failed persistence never silently open the Plan gat
   h.emit("session_shutdown");
 });
 
-test("preparing is read-only; an admitted approved prompt clears the gate", () => {
-  const h = harness();
-  h.branch.push({
-    type: "custom",
-    customType: PLAN_MODE_STATE_ENTRY,
-    id: "ready",
-    data: { version: 1, status: "ready", plan: "Review this plan" },
-  });
-  h.emit("session_tree");
+for (const busyAtAdmission of [false, true]) {
+  test(`preparing is read-only; an admitted approved prompt clears the gate (busy=${busyAtAdmission})`, () => {
+    const h = harness();
+    h.branch.push({
+      type: "custom",
+      customType: PLAN_MODE_STATE_ENTRY,
+      id: "ready",
+      data: { version: 1, status: "ready", plan: "Review this plan" },
+    });
+    h.emit("session_tree");
 
-  const branchLength = h.branch.length;
-  const prepared = h.prepare("ready");
-  assert.equal(prepared.status, "ready");
-  assert.equal(prepared.revision, "ready");
-  assert.match(prepared.prompt ?? "", /Review this plan/);
-  assert.equal(h.branch.length, branchLength);
-  assert.equal(projectPlanControl(h.branch).status, "ready");
-  assert.equal(
-    (h.emit("tool_call", { toolName: "write" }) as { block: boolean }).block,
-    true,
-  );
+    const branchLength = h.branch.length;
+    const prepared = h.prepare("ready");
+    assert.equal(prepared.status, "ready");
+    assert.equal(prepared.revision, "ready");
+    assert.match(prepared.prompt ?? "", /Review this plan/);
+    assert.equal(h.branch.length, branchLength);
+    assert.equal(projectPlanControl(h.branch).status, "ready");
+    assert.equal(
+      (h.emit("tool_call", { toolName: "write" }) as { block: boolean }).block,
+      true,
+    );
 
-  const approvedPrompt = "Implement Review this plan";
-  const authorized = h.authorize(approvedPrompt, "ready");
-  assert.equal(authorized.status, "ready");
-  assert.equal(projectPlanControl(h.branch).status, "ready");
-  assert.equal(
-    h.emit("before_agent_start", { prompt: "an unrelated prompt" }),
-    undefined,
-  );
-  assert.match(
-    JSON.stringify(h.emit("context", { messages: [] })),
-    /plan is ready[\s\S]*Do not start implementation/,
-  );
-  assert.equal(
+    const approvedPrompt = "Implement Review this plan";
+    const authorized = h.authorize(approvedPrompt, "ready");
+    assert.equal(authorized.status, "ready");
+    assert.equal(projectPlanControl(h.branch).status, "ready");
     h.emit("before_agent_start", {
-      prompt: approvedPrompt,
-    }),
-    undefined,
-  );
-  assert.equal(projectPlanControl(h.branch).status, "ready");
-  assert.equal(
-    (h.emit("tool_call", { toolName: "write" }) as { block: boolean }).block,
-    true,
-  );
-  assert.match(
-    JSON.stringify(h.emit("context", { messages: [] })),
-    /plan is ready[\s\S]*Do not start implementation/,
-  );
+      messageType: "custom",
+      message: { content: approvedPrompt },
+    });
+    assert.throws(
+      () => h.implement("ready"),
+      /did not start the approved implementation prompt/,
+    );
+    h.setBusy(true);
+    assert.throws(() => h.implement("ready"), /Stop the current turn/);
+    h.setBusy(false);
+    assert.equal(projectPlanControl(h.branch).status, "ready");
+    assert.equal(
+      h.emit("before_agent_start", { prompt: "an unrelated prompt" }),
+      undefined,
+    );
+    assert.match(
+      JSON.stringify(h.emit("context", { messages: [] })),
+      /plan is ready[\s\S]*Do not start implementation/,
+    );
+    assert.equal(
+      h.emit("before_agent_start", {
+        prompt: approvedPrompt,
+      }),
+      undefined,
+    );
+    assert.equal(projectPlanControl(h.branch).status, "ready");
+    assert.equal(
+      (h.emit("tool_call", { toolName: "write" }) as { block: boolean }).block,
+      true,
+    );
+    assert.match(
+      JSON.stringify(h.emit("context", { messages: [] })),
+      /plan is ready[\s\S]*Do not start implementation/,
+    );
 
-  const result = h.implement("ready");
-  assert.equal(result.status, "inactive");
-  assert.match(result.prompt ?? "", /Review this plan/);
-  assert.deepEqual(h.branch.at(-1), {
-    type: "custom",
-    customType: PLAN_MODE_STATE_ENTRY,
-    id: `entry-${h.branch.length - 1}`,
-    data: { version: 1, status: "inactive" },
+    h.setBusy(busyAtAdmission);
+    if (busyAtAdmission) {
+      assert.throws(() => h.set(false), /Stop the current turn/);
+      assert.throws(() => h.prepare("ready"), /Stop the current turn/);
+      assert.throws(
+        () => h.authorize(approvedPrompt, "ready"),
+        /Stop the current turn/,
+      );
+      assert.throws(() => h.implement("stale"), /Stop the current turn/);
+    }
+    const result = h.implement("ready");
+    assert.equal(result.status, "inactive");
+    assert.match(result.prompt ?? "", /Review this plan/);
+    assert.deepEqual(h.branch.at(-1), {
+      type: "custom",
+      customType: PLAN_MODE_STATE_ENTRY,
+      id: `entry-${h.branch.length - 1}`,
+      data: { version: 1, status: "inactive" },
+    });
+    assert.equal(h.emit("tool_call", { toolName: "write" }), undefined);
+    assert.match(
+      JSON.stringify(h.emit("context", { messages: [] })),
+      /Plan mode is inactive/,
+    );
+    h.setBusy(false);
+    assert.throws(() => h.implement("ready"), /changed/);
+    assert.equal(projectPlanControl(h.branch).status, "inactive");
+    h.emit("session_shutdown");
   });
-  assert.equal(h.emit("tool_call", { toolName: "write" }), undefined);
-  assert.match(
-    JSON.stringify(h.emit("context", { messages: [] })),
-    /Plan mode is inactive/,
-  );
-  assert.throws(() => h.implement("ready"), /changed/);
-  assert.equal(projectPlanControl(h.branch).status, "inactive");
-  h.emit("session_shutdown");
-});
+}
 
 test("cancelling a rejected prompt keeps Plan Ready and the write gate closed", () => {
   const h = harness();

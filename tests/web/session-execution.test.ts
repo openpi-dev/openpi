@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -359,10 +360,29 @@ test("returning to a real running Pi Session preserves the original cancel ident
     "the restored identity must reach the owning native abort",
   );
   assert.equal(a.session.isIdle, true);
-  // The faux provider reports the aborted stream as an error. Preserve the
-  // actual terminal classification instead of treating abort() as evidence.
-  assert.equal(cancelled.state, "failed");
-  assert.match(cancelled.error ?? "", /active turn failed/);
+  const [major, minor] = (
+    JSON.parse(
+      readFileSync(
+        new URL(
+          "../../node_modules/@earendil-works/pi-coding-agent/package.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ).version as string
+  )
+    .split(".")
+    .map(Number);
+  if (major! >= 1 && minor! >= 1) {
+    // Pi 1.1+ reports an aborted settlement, which is authoritative even when
+    // the faux provider reports its interrupted stream as an error message.
+    assert.equal(cancelled.state, "accepted");
+    assert.equal(cancelled.error, undefined);
+  } else {
+    // Older hosts have no terminal abort flag; keep the actual classification.
+    assert.equal(cancelled.state, "failed");
+    assert.match(cancelled.error ?? "", /active turn failed/);
+  }
 });
 
 test("background settlement records timing in the owning Pi Session, never the currently selected one", {
