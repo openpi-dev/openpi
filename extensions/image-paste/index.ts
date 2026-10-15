@@ -1,6 +1,7 @@
-import { rmSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -45,6 +46,47 @@ interface Attachment {
 function normalizedPath(path: string) {
   const normalized = resolve(path);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function physicalPath(path: string) {
+  try {
+    return normalizedPath(realpathSync(path));
+  } catch {
+    return undefined;
+  }
+}
+
+function directFileSnapshot(path: string) {
+  try {
+    // Directory aliases are legitimate, but a foreign leaf symlink does not
+    // grant ownership of its target. Keep submission paths unchanged.
+    const initial = lstatSync(path);
+    if (!initial.isFile()) return undefined;
+    const canonical = physicalPath(path);
+    if (!canonical) return undefined;
+    const stat = lstatSync(canonical);
+    if (
+      !stat.isFile() ||
+      initial.dev !== stat.dev ||
+      initial.ino !== stat.ino ||
+      initial.birthtimeMs !== stat.birthtimeMs ||
+      initial.ctimeMs !== stat.ctimeMs ||
+      initial.mtimeMs !== stat.mtimeMs ||
+      initial.size !== stat.size
+    )
+      return undefined;
+    return {
+      path: canonical,
+      dev: stat.dev,
+      ino: stat.ino,
+      birthtimeMs: stat.birthtimeMs,
+      ctimeMs: stat.ctimeMs,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -189,7 +231,10 @@ export class ImageAttachmentStore {
   private nextAttachmentId = 1;
   private readonly draft = new Map<number, Attachment>();
   private readonly removed = new Map<number, Attachment>();
-  private readonly directDraftPaths = new Set<string>();
+  private readonly directDraftPaths = new Map<
+    string,
+    NonNullable<ReturnType<typeof directFileSnapshot>>
+  >();
 
   get hasDraft() {
     return this.draft.size > 0;
@@ -197,11 +242,13 @@ export class ImageAttachmentStore {
 
   attachClipboardPath(path: string, editorText: string) {
     if (!isPiClipboardImage(path)) return undefined;
-    const pathIdentity = normalizedPath(path);
-    const alreadyReferenced = [
-      ...this.draft.values(),
-      ...this.removed.values(),
-    ].some((attachment) => normalizedPath(attachment.path) === pathIdentity);
+    const pathIdentity = physicalPath(path);
+    const references = [...this.draft.values(), ...this.removed.values()].map(
+      (attachment) => physicalPath(attachment.path),
+    );
+    const alreadyReferenced =
+      !pathIdentity ||
+      references.some((value) => !value || value === pathIdentity);
 
     let id = this.nextAttachmentId;
     while (this.draft.has(id) || editorText.includes(`[Image #${id}]`)) id += 1;
@@ -209,7 +256,10 @@ export class ImageAttachmentStore {
     this.nextAttachmentId = id + 1;
     this.draft.set(id, { id, placeholder, path } satisfies Attachment);
     // Re-inserting a known adopted path must not claim a Pi-owned file.
-    if (!alreadyReferenced) this.directDraftPaths.add(pathIdentity);
+    const owned = !alreadyReferenced ? directFileSnapshot(path) : undefined;
+    if (owned && !this.directDraftPaths.has(owned.path)) {
+      this.directDraftPaths.set(owned.path, owned);
+    }
     return placeholder;
   }
 
@@ -272,7 +322,12 @@ export class ImageAttachmentStore {
     // An active draft may be queued or handed to Pi through setText(""). Keep
     // main's conservative handoff boundary, but retire older Undo-only files.
     for (const attachment of this.draft.values()) {
-      this.directDraftPaths.delete(normalizedPath(attachment.path));
+      const identity = physicalPath(attachment.path);
+      if (!identity) {
+        this.directDraftPaths.clear();
+        break;
+      }
+      this.directDraftPaths.delete(identity);
     }
     this.draft.clear();
     this.removed.clear();
@@ -283,20 +338,34 @@ export class ImageAttachmentStore {
   releaseDeliveredPaths(text: string) {
     for (const match of text.matchAll(CLIPBOARD_PATH_IN_TEXT)) {
       if (isPiClipboardPath(match[0])) {
-        this.directDraftPaths.delete(normalizedPath(match[0]));
+        const identity = physicalPath(match[0]);
+        if (!identity) {
+          this.directDraftPaths.clear();
+          return;
+        }
+        this.directDraftPaths.delete(identity);
       }
     }
   }
 
   private reclaimUnreferencedDirectDraftPaths() {
-    const referencedPaths = new Set(
-      [...this.draft.values(), ...this.removed.values()].map((attachment) =>
-        normalizedPath(attachment.path),
-      ),
-    );
-    for (const path of this.directDraftPaths) {
+    const referencedPaths = new Set<string>();
+    for (const attachment of [
+      ...this.draft.values(),
+      ...this.removed.values(),
+    ]) {
+      const identity = physicalPath(attachment.path);
+      // An unresolved reference might alias an owned path. It cannot authorize
+      // reclamation, and an unresolved handoff relinquishes ownership above.
+      if (!identity) return;
+      referencedPaths.add(identity);
+    }
+    for (const [path, owned] of this.directDraftPaths) {
       if (referencedPaths.has(path)) continue;
       this.directDraftPaths.delete(path);
+      // A move, replacement or external modification makes ownership uncertain.
+      // Never unlink a new file or a substituted leaf symlink at an old name.
+      if (!isDeepStrictEqual(directFileSnapshot(path), owned)) continue;
       try {
         rmSync(path, { force: true });
       } catch {

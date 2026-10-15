@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -373,4 +381,92 @@ test("native non-submit clearing still retires references beyond the 128 Undo wi
     editor.getExpandedText(),
     `[Image #1]${paths.slice(1).join("")}`,
   );
+});
+
+test("macOS physical temp aliases share active, adopted, and delivered PNG ownership", {
+  skip: process.platform !== "darwin",
+}, () => {
+  for (const mode of ["active", "adopt", "deliver"]) {
+    const store = new ImageAttachmentStore();
+    const path = image();
+    const bytes = readFileSync(path);
+    const alias = path.startsWith("/private/")
+      ? path.slice(8)
+      : `/private${path}`;
+    assert.equal(realpathSync(path), realpathSync(alias));
+    const first = store.attachClipboardPath(path, "")!;
+    if (mode === "active") {
+      const second = store.attachClipboardPath(alias, first)!;
+      store.reconcileDraft(`${first}${first} ${second}`);
+      assert.equal(store.expandPlaceholders(second), alias);
+    } else {
+      store.reconcileDraft("");
+      if (mode === "adopt") {
+        const token = store.adoptExpandedText(alias)!;
+        assert.equal(store.expandPlaceholders(token), alias);
+      } else {
+        store.releaseDeliveredPaths(alias);
+        store.clearDraft();
+      }
+    }
+    assert.deepEqual(readFileSync(alias), bytes);
+  }
+});
+
+test("cleanup preserves a replaced or externally modified clipboard file", () => {
+  for (const replacement of [true, false]) {
+    const store = new ImageAttachmentStore();
+    const path = image();
+    const token = store.attachClipboardPath(path, "")!;
+    if (replacement) {
+      const moved = `${path}.moved`;
+      files.push(moved);
+      renameSync(path, moved);
+    }
+    const foreignBytes = Buffer.from("foreign replacement, not an owned draft");
+    writeFileSync(path, foreignBytes);
+    store.reconcileDraft(`${token}${token}`);
+    assert.deepEqual(readFileSync(path), foreignBytes);
+  }
+});
+
+test("an unresolved live file identity cannot authorize another draft file's deletion", () => {
+  const store = new ImageAttachmentStore();
+  const missing = image();
+  const other = image();
+  const bytes = readFileSync(other);
+  const first = store.attachClipboardPath(missing, "")!;
+  const second = store.attachClipboardPath(other, first)!;
+  const moved = `${missing}.moved`;
+  files.push(moved);
+  renameSync(missing, moved);
+  store.reconcileDraft(`${first} ${second}${second}`);
+  assert.deepEqual(readFileSync(other), bytes);
+  store.clearDraft();
+  assert.deepEqual(readFileSync(other), bytes);
+});
+
+test("a foreign leaf symlink never grants ownership of its target", {
+  skip: process.platform === "win32",
+}, () => {
+  const store = new ImageAttachmentStore();
+  const target = image();
+  const bytes = readFileSync(target);
+  const link = join(tmpdir(), `pi-clipboard-${randomUUID()}.png`);
+  files.push(link);
+  symlinkSync(target, link);
+  const token = store.attachClipboardPath(link, "")!;
+  assert.ok(token);
+  store.reconcileDraft(`${token}${token}`);
+  assert.deepEqual(readFileSync(target), bytes);
+  assert.equal(existsSync(link), true);
+  const ownedPath = image();
+  const ownedToken = store.attachClipboardPath(ownedPath, "")!;
+  const moved = `${ownedPath}.moved`;
+  files.push(moved);
+  renameSync(ownedPath, moved);
+  symlinkSync(target, ownedPath);
+  store.reconcileDraft(`${ownedToken}${ownedToken}`);
+  assert.deepEqual(readFileSync(target), bytes);
+  assert.equal(existsSync(ownedPath), true);
 });
