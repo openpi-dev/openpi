@@ -115,6 +115,9 @@ export const WEB_THEMES = [
 ] as const;
 export type WebTheme = (typeof WEB_THEMES)[number];
 
+export const WEB_LANGUAGES = ["system", "en", "zh"] as const;
+export type WebLanguage = (typeof WEB_LANGUAGES)[number];
+
 export const WEB_APPEARANCE_PALETTES = [
   "default",
   "mist",
@@ -259,6 +262,7 @@ export interface MyPiSetupConfig {
   };
   readonly ui: {
     readonly webTheme: WebTheme;
+    readonly webLanguage: WebLanguage;
     readonly webAppearance: WebAppearancePreference;
     readonly webChatWidth: number;
     readonly webSidebarWidth: number;
@@ -308,6 +312,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   },
   ui: {
     webTheme: "system",
+    webLanguage: "system",
     webAppearance: DEFAULT_WEB_APPEARANCE,
     webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
     webSidebarWidth: DEFAULT_WEB_SIDEBAR_WIDTH,
@@ -388,6 +393,9 @@ const isCapabilityDiscoveryMode = (
 
 export const isWebTheme = (value: unknown): value is WebTheme =>
   typeof value === "string" && WEB_THEMES.includes(value as WebTheme);
+
+const isWebLanguage = (value: unknown): value is WebLanguage =>
+  typeof value === "string" && WEB_LANGUAGES.includes(value as WebLanguage);
 
 export function flattenFooterItems(lines: FooterLines): readonly FooterItem[] {
   const items: FooterItem[] = [];
@@ -723,6 +731,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
+      webLanguage: isWebLanguage(ui.webLanguage) ? ui.webLanguage : "system",
       webAppearance: isWebAppearancePreference(ui.webAppearance)
         ? { ...ui.webAppearance }
         : { ...DEFAULT_WEB_APPEARANCE },
@@ -854,6 +863,7 @@ const setupShape: ConfigShape = {
   },
   ui: {
     webTheme: isWebTheme,
+    webLanguage: isWebLanguage,
     webAppearance: isWebAppearancePreference,
     webChatWidth: integerBetween(MIN_WEB_CHAT_WIDTH, MAX_WEB_CHAT_WIDTH),
     webSidebarWidth: integerBetween(
@@ -1600,7 +1610,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     config.childExecutions.maxActive === undefined
       ? "Session child executions: unbounded (disabled)"
       : `Session child executions: ${config.childExecutions.maxActive} active slots shared by Workflow, Direct Subagent, and BTW`,
-    `UI: Web theme ${config.ui.webTheme} · palette ${config.ui.webAppearance.palette} · accent ${config.ui.webAppearance.accent || "theme default"} / background ${config.ui.webAppearance.background || "theme default"} / foreground ${config.ui.webAppearance.foreground || "theme default"} · font ${config.ui.webAppearance.font} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · pinned ${config.ui.webPinnedSort} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
+    `UI: Web theme ${config.ui.webTheme} · Web language ${config.ui.webLanguage} · palette ${config.ui.webAppearance.palette} · accent ${config.ui.webAppearance.accent || "theme default"} / background ${config.ui.webAppearance.background || "theme default"} / foreground ${config.ui.webAppearance.foreground || "theme default"} · font ${config.ui.webAppearance.font} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · pinned ${config.ui.webPinnedSort} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,

@@ -678,6 +678,75 @@ test("post-edit stays off or preserved unless the setup request changes it", asy
   assert.equal(loadSetupConfig().postEdit.command, "");
 });
 
+test("Web language setup persists choices and preserves all current UI settings", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME);
+  assert.ok(tool);
+  const { parseSetupConfig, formatSetupConfig, saveSetupConfig } = await import(
+    "../../../extensions/shared/setup-config.ts"
+  );
+  assert.equal(parseSetupConfig({}).ui.webLanguage, "system");
+  assert.equal(
+    parseSetupConfig({ ui: { webLanguage: "invalid" } }).ui.webLanguage,
+    "system",
+  );
+  const original = parseSetupConfig({
+    ui: {
+      webTheme: "dark",
+      webAppearance: {
+        palette: "rose",
+        accent: "#112233",
+        background: "",
+        foreground: "",
+        font: "mono",
+      },
+      webChatWidth: 930,
+      webChatFontSize: 17,
+      webSidebarWidth: 310,
+      webAuxiliaryWidth: 420,
+      webExpandThinking: true,
+      webHiddenThinkingLevels: ["off"],
+      webPinnedSort: "updated",
+    },
+  });
+  await saveSetupConfig(original);
+  for (const language of ["en", "zh", "system"] as const) {
+    await tool.execute(
+      "web-language-setup",
+      { ui_web_language: language },
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    );
+    const config = loadSetupConfig();
+    assert.deepEqual(config.ui, { ...original.ui, webLanguage: language });
+    assert.match(
+      formatSetupConfig(config),
+      new RegExp(`Web language ${language}`),
+    );
+  }
+  const beforeInvalid = readFileSync(SETUP_CONFIG_PATH, "utf8");
+  await assert.rejects(
+    tool.execute(
+      "invalid-language",
+      { ui_web_language: "invalid" },
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    ),
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), beforeInvalid);
+  await tool.execute(
+    "language-preserved",
+    { ui_show_header: true },
+    new AbortController().signal,
+    () => {},
+    h.ctx,
+  );
+  assert.equal(loadSetupConfig().ui.webLanguage, "system");
+});
+
 test("legacy ui_footer_items stays an input adapter and persists only footerLines", async () => {
   rmSync(SETUP_CONFIG_PATH, { force: true });
   const h = visibilityHarness();
@@ -1613,7 +1682,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Code Mode, Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Code Mode, Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance\/language, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);

@@ -231,6 +231,7 @@ export interface WebOpenPiSetupProjection {
   };
   ui: {
     webTheme: WebThemePreference;
+    webLanguage?: WebLanguagePreference;
     webAppearance?: WebAppearancePreference;
     webChatWidth: number;
     webSidebarWidth?: number;
@@ -521,12 +522,15 @@ export function boundThinkingProjection(
   };
 }
 
+export type WebLanguagePreference = "system" | "en" | "zh";
+
 export interface WebSnapshot {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
   generatedAt: string;
   cursor: number;
   preferences: {
     theme: WebThemePreference;
+    language?: WebLanguagePreference;
     appearance?: WebAppearancePreference;
     /** Optional for compatibility with snapshots emitted before Web display preferences existed. */
     chatWidth?: number;

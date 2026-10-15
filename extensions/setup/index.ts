@@ -60,6 +60,8 @@ import {
   WEB_APPEARANCE_FONTS,
   WEB_APPEARANCE_PALETTES,
   WEB_THEMES,
+  WEB_LANGUAGES,
+  type WebLanguage,
   type WebTheme,
 } from "../shared/setup-config.ts";
 import {
@@ -170,7 +172,7 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Code Mode, Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Code Mode, Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance/language, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
@@ -192,6 +194,7 @@ export function buildInteractiveSetupPrompt(options: {
     ...configurationState,
     "",
     "Before asking, briefly explain what can be configured and the practical impact:",
+    "- Web language: ui_web_language is system (default), en, or zh. System follows the browser language; explicit en/zh survives reload. Configure through this setup episode, never browser-local storage or direct Web preference writes.",
     `- Web search: off by default. web_search_enabled toggles the repository-owned native search extension. It uses the current Session model, protocol and Pi credentials; unsupported or unknown connections receive no native search tool, and there is no fallback to Exa or another provider. web_search_model_support declares support only for the exact current provider/model/protocol/base URL, only when the user explicitly confirms capability or a real native search has been verified; null removes that declaration. Never infer support from a model name or an API-compatible gateway. Legacy web_access_action remains only for managing previously installed ${WEB_ACCESS_PACKAGE.source}; never install or activate it as a fallback.`,
     "- Capability discovery: explicit is the safe default and keeps OpenPI model tools absent until the user asks for a capability. adaptive is opt-in and keeps only the small openpi_load_tools gateway visible, allowing the model to load Subagents, Workflows, background terminals, structured search, or Session tracking when it judges them useful. Loaded groups remain session-stable, and normal permission, concurrency, and workflow limits still apply.",
     "- Code Mode: code_mode_enabled defaults to true and activates Pi's native codemode alongside ordinary tools in CLI and Web parent sessions. false removes this package default. Native defaultTools selections and CLI/SDK tool restrictions take precedence; do not rewrite them to force activation. The model chooses when to compose calls. Children retain their inherited tool allowlists; this default does not widen them. No provider request or native settings write occurs on activation.",
@@ -209,6 +212,7 @@ export function buildInteractiveSetupPrompt(options: {
     '- "let the model discover OpenPI capabilities when useful" → capability_discovery=adaptive',
     '- "only use OpenPI capabilities when I ask" → capability_discovery=explicit',
     '- "use dark theme in OpenPI Web" → ui_web_theme=dark',
+    '- "use Chinese in OpenPI Web" → ui_web_language=zh',
     '- "allow the model to use the embedded browser" → browser_control=true (off by default; Browser Bridge debugger permission is reviewed in Chrome/Edge)',
     '- "allow Chrome and use it by default" → browser_control=true, browser_external=["chrome"], browser_default="chrome"; preserve other existing grants unless the user asks to revoke them. Installation and connection remain native browser steps in Settings → Browser.',
     '- "set OpenPI Web chat width to 960px" → ui_web_chat_width=960',
@@ -638,6 +642,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "Whether to show the large decorative Pi header. Defaults to false; omit to preserve the current value.",
         }),
       ),
+      ui_web_language: Type.Optional(
+        StringEnum(WEB_LANGUAGES, {
+          description:
+            "Canonical Web language: system follows browser language, en or zh forces that UI language. Omit to preserve. Setup-episode scoped; no browser-local preference.",
+        }),
+      ),
       ui_web_theme: Type.Optional(
         StringEnum(WEB_THEMES, {
           description:
@@ -1006,6 +1016,9 @@ export default function openPiSetup(pi: ExtensionAPI) {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??
               current.ui.webTheme,
+            webLanguage:
+              (params.ui_web_language as WebLanguage | undefined) ??
+              current.ui.webLanguage,
             webAppearance: params.ui_web_appearance ?? current.ui.webAppearance,
             webChatWidth: params.ui_web_chat_width ?? current.ui.webChatWidth,
             webSidebarWidth:

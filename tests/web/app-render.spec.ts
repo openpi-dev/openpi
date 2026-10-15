@@ -10,7 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import { createElement } from "react";
-import { I18nextProvider } from "react-i18next";
+import { I18nextProvider, useTranslation } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "zustand";
 import {
@@ -5958,4 +5958,89 @@ it("keeps the draft when a creation path arrives before failed canonical confirm
     await result.promise;
   });
   expect(input.value).toBe("keep creation draft");
+});
+
+it("canonical language rerenders translated controls while preserving current appearance", async () => {
+  const initial = webStore.getState();
+  const originalLanguage = navigator.language;
+  Object.defineProperty(navigator, "language", {
+    configurable: true,
+    value: "zh-TW",
+  });
+  const snapshot = activeSnapshot();
+  snapshot.preferences = {
+    ...snapshot.preferences,
+    language: "en",
+    theme: "dark",
+    chatWidth: 930,
+    chatFontSize: 17,
+    appearance: {
+      palette: "rose",
+      accent: "",
+      background: "",
+      foreground: "",
+      font: "mono",
+    },
+  };
+  function Label() {
+    const { t } = useTranslation();
+    return createElement("button", { type: "button" }, t("settings"));
+  }
+  webStore.setState({ snapshot });
+  const view = render(createElement(Providers, null, createElement(Label)));
+  try {
+    await waitFor(() => expect(document.documentElement.lang).toBe("en"));
+    expect(screen.getByRole("button").textContent).toBe("Settings");
+    act(() =>
+      webStore.setState({
+        snapshot: {
+          ...snapshot,
+          preferences: { ...snapshot.preferences, language: "zh" },
+        },
+      }),
+    );
+    await waitFor(() => expect(document.documentElement.lang).toBe("zh-CN"));
+    expect(screen.getByRole("button").textContent).toBe("设置");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(
+      document.documentElement.style.getPropertyValue(
+        "--conversation-content-width",
+      ),
+    ).toBe("930px");
+    expect(
+      document.documentElement.style.getPropertyValue(
+        "--conversation-font-size",
+      ),
+    ).toBe("17px");
+    act(() =>
+      webStore.setState({
+        snapshot: {
+          ...snapshot,
+          preferences: { ...snapshot.preferences, language: "system" },
+        },
+      }),
+    );
+    await waitFor(() => expect(document.documentElement.lang).toBe("zh-CN"));
+    Object.defineProperty(navigator, "language", {
+      configurable: true,
+      value: "en-US",
+    });
+    act(() =>
+      webStore.setState({
+        snapshot: {
+          ...snapshot,
+          preferences: { ...snapshot.preferences, language: undefined },
+        },
+      }),
+    );
+    await waitFor(() => expect(document.documentElement.lang).toBe("en"));
+  } finally {
+    view.unmount();
+    Object.defineProperty(navigator, "language", {
+      configurable: true,
+      value: originalLanguage,
+    });
+    webStore.setState(initial, true);
+    await i18n.changeLanguage("en");
+  }
 });

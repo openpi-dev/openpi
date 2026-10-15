@@ -2313,6 +2313,7 @@ export class WebHost {
         cursor,
         preferences: {
           theme: setup.ui.webTheme,
+          language: setup.ui.webLanguage,
           appearance: { ...setup.ui.webAppearance },
           chatWidth: setup.ui.webChatWidth,
           sidebarWidth: setup.ui.webSidebarWidth,

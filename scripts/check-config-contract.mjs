@@ -124,6 +124,13 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["child_execution_limit"],
   },
   {
+    path: "ui.webLanguage",
+    writerTokens: ["params.ui_web_language"],
+    statusTokens: ["config.ui.webLanguage"],
+    readmeTerms: ["ui.webLanguage"],
+    setupTerms: ["ui.webLanguage"],
+  },
+  {
     path: "ui.webTheme",
     writerTokens: ["params.ui_web_theme"],
     statusTokens: ["config.ui.webTheme"],

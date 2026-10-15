@@ -3,7 +3,7 @@ import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { type PropsWithChildren, useEffect, useState } from "react";
 import { I18nextProvider } from "react-i18next";
 import { useStore } from "zustand";
-import { i18n } from "../i18n.ts";
+import { applyWebLanguage, i18n } from "../i18n.ts";
 import {
   appearancePalette,
   defaultAppearance,
@@ -15,6 +15,10 @@ export function Providers({ children }: PropsWithChildren) {
     webStore,
     (state) => state.snapshot?.preferences,
   );
+  const languagePreference = preferences?.language;
+  useEffect(() => {
+    applyWebLanguage(languagePreference);
+  }, [languagePreference]);
   const preference = preferences?.theme ?? "system";
   const appearance = preferences?.appearance ?? defaultAppearance;
   const palette = appearancePalette(preference, appearance);
