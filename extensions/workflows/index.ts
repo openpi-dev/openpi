@@ -74,6 +74,7 @@ import {
 } from "../shared/tool-surface.ts";
 import {
   notifyWebCapabilities,
+  projectWorkflowAgentDetail,
   projectWorkflowCapability,
   registerWebCapability,
   type WebCapabilityScope,
@@ -222,6 +223,7 @@ import {
 } from "./runner.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
 import { writeFileAtomic } from "./serialization.ts";
+import { workflowTranscriptDocument } from "./transcript.ts";
 import {
   finalizeWorktreeHandoff,
   prepareWorktreeHandoff,
@@ -1129,6 +1131,33 @@ export default function workflows(
             .filter(([runId]) => !activeRuns.has(runId))
             .map(([, details]) => details),
         ]),
+      detail: (id) => {
+        for (const details of [
+          ...activeDetails().values(),
+          ...settledRuns
+            .entriesArray()
+            .filter(([runId]) => !activeRuns.has(runId))
+            .map(([, retained]) => retained),
+        ]) {
+          const matches = details.agents.filter(
+            (agent) => `${details.runId}:call:${agent.index}` === id,
+          );
+          if (matches.length !== 1) continue;
+          const agent = matches[0]!;
+          return projectWorkflowAgentDetail(details.runId, {
+            ...agent,
+            cwd: agent.effectiveCwd ?? agent.requestedCwd,
+            errorText: agent.error,
+            transcript: workflowTranscriptDocument(agent.transcript).items,
+            transcriptUnavailable:
+              agent.transcript.length === 0 &&
+              (details.memoryProjection !== undefined ||
+                agent.replayed === true ||
+                agent.state !== "running"),
+          });
+        }
+        return undefined;
+      },
     });
     registerStableToolFamily();
     if (ctx.hasUI) lastContext = ctx;

@@ -84,16 +84,21 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
   expect(
     screen.getByRole("figure", { name: "Test evidence" }).textContent,
   ).toContain("1 failed");
-  expect(screen.getByText("cancelled")).toBeTruthy();
-  expect(container.querySelectorAll(".diff-added").length).toBe(1);
   expect(
-    screen.getAllByText("Raw arguments and result (sanitized)"),
-  ).toHaveLength(4);
+    container.querySelector('[data-tool="bash"][data-state="cancelled"]'),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(i18n.t("toolState_cancelled"), {
+      selector: ".evidence-status",
+    }),
+  ).toBeTruthy();
+  expect(container.querySelectorAll(".diff-added").length).toBe(1);
+  expect(screen.getAllByText(i18n.t("toolRawEvidence"))).toHaveLength(4);
 });
 
-it("opens resolved file evidence through the active artifact context", () => {
+it("expands a file summary without nested controls and opens the resolved file through the active artifact context", () => {
   const open = vi.fn();
-  render(
+  const { container } = render(
     createElement(
       ArtifactContext.Provider,
       { value: { open } },
@@ -112,7 +117,11 @@ it("opens resolved file evidence through the active artifact context", () => {
     ),
   );
 
-  fireEvent.click(screen.getByText("read"));
+  const summary = container.querySelector(".tool-evidence-card > summary")!;
+  expect(summary.textContent).toContain("report.md");
+  expect(summary.querySelector("button, a, input, [tabindex]")).toBeNull();
+  fireEvent.click(summary);
+  expect(open).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "/workspace/report.md" }));
   expect(open).toHaveBeenCalledWith("/workspace/report.md");
 });
