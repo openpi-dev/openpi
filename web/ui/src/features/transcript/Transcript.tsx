@@ -4,17 +4,14 @@ import {
   Bot,
   Check,
   ChevronRight,
+  CircleAlert,
   Clipboard,
-  FilePenLine,
-  FileText,
-  Folder,
   GitBranch,
   Globe,
   Lightbulb,
   Pencil,
   RotateCcw,
-  Search,
-  Terminal,
+  Wifi,
   Workflow,
   Wrench,
   X,
@@ -31,12 +28,20 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebSubagentActivity } from "../../../../../extensions/shared/web-observer-registry.ts";
+import type {
+  WebSubagentActivity,
+  WebWorkflowActivity,
+} from "../../../../../extensions/shared/web-observer-registry.ts";
 import {
   type EvidenceState,
   evidenceText,
   isEvidenceTool,
 } from "../../../../protocol/evidence.ts";
+import {
+  isSetupPromptEcho,
+  setupDisplayMessage,
+  setupPromptParent,
+} from "../../../../protocol/prompt-navigation.ts";
 import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
 import type {
@@ -46,6 +51,7 @@ import type {
   WebSessionProjection,
   WebSnapshot,
 } from "../../../../protocol/types.ts";
+import type { WebSessionExecution } from "../../../../runtime/types.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { copyText } from "../../lib/clipboard.ts";
 import {
@@ -54,13 +60,18 @@ import {
   formatTurnTime,
 } from "../../lib/format.ts";
 import { isControlledSession } from "../../lib/session-control.ts";
+import {
+  recordedSubagents,
+  type RecordedSubagent,
+} from "../subagents/recorded-subagents.ts";
+import { SubagentTaskRow } from "../subagents/SubagentTaskRow.tsx";
 import type { LiveEntry } from "../../store/web-store.ts";
 import { CompactionStatus } from "./CompactionStatus.tsx";
 import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
 import {
-  rememberSessionReading,
   type ReadingPosition,
+  rememberSessionReading,
   type SessionReadingCache,
   sessionReadingScope,
 } from "./session-reading-state.ts";
@@ -68,15 +79,15 @@ import { ToolEvidence } from "./ToolEvidence.tsx";
 import { type OpenTurnReview, TurnChangesCard } from "./TurnChangesCard.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
 import { TurnNavigation, type TurnNavigationItem } from "./TurnNavigation.tsx";
+import {
+  toolActivity,
+  toolActivityLabel,
+  toolActivityTarget,
+} from "./tool-activity.ts";
 import { UserImageAttachments } from "./UserImageAttachments.tsx";
 import { UserMessageContent } from "./UserMessageContent.tsx";
-import { useSessionHistory } from "./use-session-history.ts";
 import { usePromptNavigation } from "./use-prompt-navigation.ts";
-import {
-  setupDisplayMessage,
-  isSetupPromptEcho,
-  setupPromptParent,
-} from "../../../../protocol/prompt-navigation.ts";
+import { useSessionHistory } from "./use-session-history.ts";
 import "./provider-outcomes.css";
 import "./conversation-navigation.css";
 import "./message-branch.css";
@@ -93,14 +104,6 @@ interface DisplayEntry {
   message: WebLiveMessage;
   timing?: WebTurnTiming;
   optimistic?: LiveEntry["optimistic"];
-}
-
-export interface CompletedResultExposure {
-  sessionId: string;
-  sessionPath: string;
-  commandId: string;
-  finishedAt: number;
-  resultEntryId: string;
 }
 
 interface TranscriptProps {
@@ -130,8 +133,7 @@ interface TranscriptProps {
   forkAvailable?: boolean;
   forkPending?: boolean;
   resultExposureEnabled?: boolean;
-  onCompletedResultSeen?: (completion: CompletedResultExposure) => void;
-  onInspectSubagent?: (id: string) => void;
+  onInspectSubagent?: (id: string, kind?: "workflows") => void;
   onReviewTurn?: OpenTurnReview;
   onHistoryAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
   onRefreshHistory?: () => Promise<boolean>;
@@ -152,15 +154,18 @@ interface RenderRow {
   turn: number;
   kind: "prompt" | "process" | "response" | "outcome" | "custom";
   content: ReactNode;
+  final?: boolean;
   processType?: "thinking" | "tool" | "activity";
   processPreview?: string;
+  processToolName?: string;
   processStatus?: Status;
-  defaultOpen?: boolean;
+  processMessageKey?: string;
   error?: boolean;
   outcome?: "completed" | "failed" | "interrupted";
   pendingPrompt?: boolean;
   promptCommandId?: string;
   promptEntryId?: string;
+  responseEntryId?: string;
   commandHandledInputId?: string;
   commandHandledCommandId?: string;
   timing?: WebTurnTiming;
@@ -210,24 +215,57 @@ function resultStatus(
 }
 
 function StatusMark({ status }: { status: Status }) {
+  const { t } = useTranslation();
   if (status === "running") {
     return (
-      <span className="status-mark running" role="img" aria-label="running">
+      <span
+        className="status-mark running"
+        role="img"
+        aria-label={t("toolState_running")}
+      >
         <i />
       </span>
     );
   }
   if (status === "done")
-    return <Check className="status-mark done" aria-label="completed" />;
+    return (
+      <Check className="status-mark done" aria-label={t("execution_done")} />
+    );
   if (status === "error")
-    return <X className="status-mark error" aria-label="failed" />;
+    return (
+      <X className="status-mark error" aria-label={t("toolState_failed")} />
+    );
   if (status === "warn")
     return (
-      <span className="status-mark warn" role="img" aria-label="uncertain">
+      <span
+        className="status-mark warn"
+        role="img"
+        aria-label={t("toolState_unknown")}
+      >
         ?
       </span>
     );
   return null;
+}
+
+function ErrorNotice({
+  label,
+  message,
+  children,
+}: {
+  label: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="execution-error" role="alert" aria-label={label}>
+      <CircleAlert aria-hidden="true" />
+      <div className="execution-error-content">
+        <p>{message}</p>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 function ProviderOutcome({
@@ -245,17 +283,18 @@ function ProviderOutcome({
 }) {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
+  if (!failed)
+    return (
+      <div className="provider-outcome aborted" role="status">
+        {t("modelRequestStopped")}
+      </div>
+    );
   return (
-    <div
-      className={`provider-outcome ${failed ? "failed" : "aborted"}`}
-      role={failed ? "alert" : "status"}
+    <ErrorNotice
+      label={t("modelRequestFailed")}
+      message={error || t("modelFailureUnknown")}
     >
-      <strong>
-        {t(failed ? "modelRequestFailed" : "modelRequestStopped")}
-      </strong>
-      {failed && <p>{error || t("modelFailureUnknown")}</p>}
-      {failed && <small>{t("modelFailureNextStep")}</small>}
-      {failed && retryPrompt && (
+      {retryPrompt && (
         <div className="provider-outcome-actions">
           <button
             type="button"
@@ -270,7 +309,7 @@ function ProviderOutcome({
           </button>
         </div>
       )}
-    </div>
+    </ErrorNotice>
   );
 }
 
@@ -283,29 +322,64 @@ type ProviderAttemptState =
 function ProviderAttempts({
   attempts,
   state,
+  retry,
+  observed = true,
 }: {
   attempts: { entry: DisplayEntry; content?: RenderRow[] }[];
   state: ProviderAttemptState;
+  retry?: WebSessionExecution["retry"];
+  observed?: boolean;
 }) {
   const { t } = useTranslation();
-  return (
-    <details className={`provider-outcome provider-attempts ${state}`}>
-      <summary>
-        <ChevronRight aria-hidden="true" />
-        {state !== "earlier" && (
-          <strong>
-            {t(
+  const unavailable = state === "retrying" && !observed;
+  const attempt = retry?.attempt;
+  const maxAttempts = retry?.maxAttempts;
+  const hasCounts =
+    typeof attempt === "number" &&
+    Number.isSafeInteger(attempt) &&
+    attempt > 0 &&
+    typeof maxAttempts === "number" &&
+    Number.isSafeInteger(maxAttempts) &&
+    maxAttempts >= attempt;
+  const hasDetails = attempts.length > 0 || Boolean(retry?.errorMessage);
+  const heading = (
+    <>
+      <Wifi aria-hidden="true" />
+      <span role={state === "retrying" ? "status" : undefined}>
+        {unavailable
+          ? t("modelReconnectUnknown")
+          : t(
               state === "recovered"
                 ? "modelRequestRecovered"
                 : state === "retrying"
-                  ? "modelRetrying"
-                  : "modelRequestStopped",
+                  ? retry
+                    ? "modelReconnecting"
+                    : "modelEarlierAttempts"
+                  : state === "interrupted"
+                    ? "modelRequestStopped"
+                    : "modelEarlierAttempts",
             )}
-          </strong>
-        )}
+        {state === "retrying" && hasCounts && ` ${attempt}/${maxAttempts}`}
+      </span>
+      {state !== "retrying" && (
         <span>{t("modelFailedAttempts", { count: attempts.length })}</span>
-      </summary>
+      )}
+      {hasDetails && (
+        <ChevronRight className="reconnect-chevron" aria-hidden="true" />
+      )}
+    </>
+  );
+  const className = `provider-attempts ${state}${unavailable ? " unavailable" : ""}`;
+  if (!hasDetails) return <div className={className}>{heading}</div>;
+  return (
+    <details className={className}>
+      <summary>{heading}</summary>
       <ol>
+        {attempts.length === 0 && (
+          <li>
+            <p>{retry?.errorMessage}</p>
+          </li>
+        )}
         {attempts.map(({ entry, content }) => (
           <li key={entry.key} data-history-entry={entry.entryId ?? entry.key}>
             <p>{entry.message.errorMessage || t("modelFailureUnknown")}</p>
@@ -377,33 +451,11 @@ function providerFailures(entries: DisplayEntry[], running: boolean) {
   return { finalErrors, groups };
 }
 
-function iconForTool(name: string) {
-  const lowered = name.toLowerCase();
-  if (lowered === "bash") return <Terminal />;
-  if (lowered === "read") return <FileText />;
-  if (lowered === "write" || lowered === "edit") return <FilePenLine />;
-  if (lowered === "grep") return <Search />;
-  if (lowered === "glob" || lowered === "ls") return <Folder />;
-  if (lowered === "webfetch" || lowered === "websearch") return <Globe />;
-  return <Wrench />;
-}
-
 function toolSummary(name: string, args: Record<string, unknown>) {
-  const value =
-    name === "bash"
-      ? args.command
-      : ["read", "write", "edit", "ls"].includes(name)
-        ? args.path
-        : ["grep", "glob"].includes(name)
-          ? args.pattern
-          : name === "webfetch"
-            ? args.url
-            : name === "websearch"
-              ? args.query
-              : "";
-  return typeof value === "string"
-    ? compactSummary(value.split("\n").find(Boolean), 90)
-    : "";
+  return compactSummary(
+    toolActivityTarget(name, args).split("\n").find(Boolean),
+    120,
+  );
 }
 
 function thinkingPreview(body: string) {
@@ -419,7 +471,7 @@ function thinkingPreview(body: string) {
       .replace(/[*_~`]+/gu, "")
       .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
       .trim(),
-    110,
+    600,
   );
 }
 
@@ -430,33 +482,49 @@ function EvidenceDetails({
   status,
   summary,
   output,
-  thinking = false,
   defaultOpen = false,
 }: {
   body: string;
-  icon: ReactNode;
+  icon?: ReactNode;
   name: string;
   status: Status;
   summary?: string;
   output?: string;
-  thinking?: boolean;
   defaultOpen?: boolean;
 }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(defaultOpen);
+  useEffect(() => setExpanded(defaultOpen), [defaultOpen]);
+  const state =
+    status === "done"
+      ? "returned"
+      : status === "error"
+        ? "failed"
+        : status === "running"
+          ? "running"
+          : "unknown";
+  const showName =
+    ["read", "write", "edit"].includes(name) ||
+    toolActivity(name).action === "call";
   return (
     <details
-      className={`message-details tool-line ${status} ${thinking ? "thinking-line" : ""}`}
-      open={defaultOpen || undefined}
+      className={`message-details tool-line ${status}`}
+      data-tool={name}
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
       <summary>
-        <span className="details-mark" aria-hidden="true" />
         <span className="tool-icon" aria-hidden="true">
           {icon}
         </span>
         <span className="details-title">
-          <span className="tool-name">{name}</span>
+          {showName && <span className="tool-name">{name}</span>}
+          <span className="tool-action">
+            {toolActivityLabel(t, name, state)}
+          </span>
           {summary && <span className="tool-summary">{summary}</span>}
         </span>
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
       {output === undefined ? (
@@ -510,7 +578,7 @@ function ActivityCard({
           {meta && <span className="activity-meta">{meta}</span>}
         </span>
         <StatusMark status={status} />
-        <span className="details-mark" aria-hidden="true" />
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
       </summary>
       <pre className="details-body tool-evidence">{body}</pre>
     </details>
@@ -520,27 +588,44 @@ function ActivityCard({
 function familyCard(
   part: Extract<WebMessagePart, { type: "toolCall" }>,
   result?: WebLiveMessage,
-  subagents: readonly WebSubagentActivity[] = [],
-  onInspectSubagent?: (id: string) => void,
-  liveState?: EvidenceState,
-  defaultOpen = false,
+  options: {
+    sessionId: string;
+    subagents?: readonly WebSubagentActivity[];
+    records?: readonly RecordedSubagent[];
+    workflows?: readonly WebWorkflowActivity[];
+    onInspectSubagent?: (id: string, kind?: "workflows") => void;
+    liveState?: EvidenceState;
+    defaultOpen?: boolean;
+    observed?: boolean;
+  } = { sessionId: "" },
 ) {
+  const {
+    sessionId,
+    subagents = [],
+    records = [],
+    workflows = [],
+    onInspectSubagent,
+    liveState,
+    defaultOpen = false,
+    observed = true,
+  } = options;
   const name = part.name || "";
   const args = parseArguments(part.arguments);
   const details = record(result?.details);
-  const status = resultStatus(result, liveState);
+  const nativeStatus = resultStatus(result, liveState);
+  const status =
+    !observed && nativeStatus === "running" ? "unknown" : nativeStatus;
   if (name === "subagent_spawn") {
-    const meta = [args.agent_type, details.model || args.model]
-      .filter(Boolean)
-      .join(" · ");
     return (
       <SubagentCard
+        sessionId={sessionId}
         id={typeof details.id === "string" ? details.id : undefined}
         title={String(details.title || args.name || "subagent")}
-        meta={meta}
         body={result?.content || String(args.prompt || part.arguments)}
         activity={subagents.find((item) => item.id === details.id)}
+        saved={records.find((item) => item.id === details.id)}
         spawnFailed={result?.isError === true}
+        observed={observed}
         defaultOpen={defaultOpen}
         onInspect={onInspectSubagent}
       />
@@ -548,12 +633,14 @@ function familyCard(
   }
   if (name.startsWith("subagent")) {
     const action = name.replaceAll("_", " ").replace(/^subagent /u, "");
+    const child =
+      subagents.find((item) => item.id === args.id) ??
+      records.find((item) => item.id === args.id);
     return (
       <ActivityCard
         family="subagent"
         defaultOpen={defaultOpen}
-        title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} Subagent`}
-        meta={String(args.id || "")}
+        title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} · ${child?.title || args.id || "Subagent"}`}
         body={result?.content || part.arguments}
         status={status}
       />
@@ -568,6 +655,9 @@ function familyCard(
         "unnamed",
     );
     const agents = record(details.agents);
+    const children = workflows.find(
+      (item) => item.runId === details.runId,
+    )?.children;
     const meta = [
       details.runId,
       details.status,
@@ -578,13 +668,21 @@ function familyCard(
       .filter(Boolean)
       .join(" · ");
     return (
-      <ActivityCard
-        family="workflow"
-        title={`Workflow · ${workflowName}`}
-        meta={meta}
-        body={result?.content || script}
-        status={status}
-      />
+      <>
+        <ActivityCard
+          family="workflow"
+          title={`Workflow · ${workflowName}`}
+          meta={meta}
+          body={result?.content || script}
+          status={status}
+        />
+        <WorkflowChildren
+          sessionId={sessionId}
+          tasks={children}
+          observed={observed}
+          onInspect={onInspectSubagent}
+        />
+      </>
     );
   }
   if (name.startsWith("workflow")) {
@@ -602,94 +700,191 @@ function familyCard(
 }
 
 function SubagentCard({
+  sessionId,
   id,
   title,
-  meta,
   body,
   activity,
+  saved,
   spawnFailed,
   onInspect,
   defaultOpen = false,
+  observed = true,
 }: {
+  sessionId: string;
   id?: string;
   title: string;
-  meta: string;
   body: string;
   activity?: WebSubagentActivity;
+  saved?: RecordedSubagent;
   spawnFailed: boolean;
   onInspect?: (id: string) => void;
   defaultOpen?: boolean;
+  observed?: boolean;
 }) {
   const { t } = useTranslation();
+  const nativeState =
+    activity?.outcome === "interrupted"
+      ? "interrupted"
+      : (activity?.status ??
+        (saved?.state === "running" ? undefined : saved?.state));
   const state =
-    activity?.outcome === "interrupted" ? "interrupted" : activity?.status;
-  const label = state
-    ? t(`subagentState_${state}`)
-    : spawnFailed
-      ? t("subagentSpawnFailed")
-      : id
-        ? t("subagentStateUnavailable")
-        : t("subagentStarting");
+    !observed && (nativeState === "running" || (!nativeState && !spawnFailed))
+      ? "unknown"
+      : nativeState;
+  const label =
+    state === "unknown"
+      ? t("toolState_unknown")
+      : state
+        ? t(`subagentState_${state}`)
+        : spawnFailed
+          ? t("subagentSpawnFailed")
+          : id
+            ? t("subagentStateUnavailable")
+            : t("subagentStarting");
   return (
-    <section className="message-details activity-card subagent">
-      <button
-        className="subagent-card-open"
-        type="button"
-        disabled={!id || !onInspect}
-        aria-label={t("inspectSubagent", { name: title })}
-        onClick={() => id && onInspect?.(id)}
-      >
-        <span className="activity-icon" aria-hidden="true">
-          <Bot />
-        </span>
-        <span className="activity-main">
-          <strong className="activity-title">{title}</strong>
-          {meta && <span className="activity-meta">{meta}</span>}
-        </span>
-        <span className={`subagent-state ${state ?? "unknown"}`}>{label}</span>
-        <span aria-hidden="true">›</span>
-      </button>
-      <details className="subagent-receipt" open={defaultOpen || undefined}>
-        <summary>{t("subagentSpawnReceipt")}</summary>
-        <p>{t("subagentSpawnReceiptHint")}</p>
-        <pre className="details-body tool-evidence">{body}</pre>
-      </details>
+    <section className="activity-card subagent subagent-activity">
+      <SubagentTaskRow
+        identity={`${sessionId}:${id ?? title}`}
+        title={title}
+        state={state}
+        label={label}
+        onInspect={id && onInspect ? () => onInspect(id) : undefined}
+      />
+      {(defaultOpen || spawnFailed) && (
+        <details className="subagent-receipt" open={defaultOpen || undefined}>
+          <summary>{t("subagentSpawnReceipt")}</summary>
+          <p>{t("subagentSpawnReceiptHint")}</p>
+          <pre className="details-body tool-evidence">{body}</pre>
+        </details>
+      )}
     </section>
+  );
+}
+
+function WorkflowChildren({
+  sessionId,
+  tasks,
+  observed,
+  onInspect,
+}: {
+  sessionId: string;
+  tasks: WebWorkflowActivity["children"];
+  observed: boolean;
+  onInspect?: (id: string, kind?: "workflows") => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {tasks?.items.map((child) => {
+        const state =
+          child.outcome === "interrupted"
+            ? "interrupted"
+            : !observed && child.status === "running"
+              ? "unknown"
+              : child.status;
+        return (
+          <SubagentTaskRow
+            key={child.id}
+            identity={`${sessionId}:${child.id}`}
+            title={child.title}
+            state={state}
+            label={t(
+              state === "unknown"
+                ? "toolState_unknown"
+                : `subagentState_${state}`,
+            )}
+            onInspect={
+              onInspect ? () => onInspect(child.id, "workflows") : undefined
+            }
+          />
+        );
+      })}
+      {Boolean(tasks?.omitted) && (
+        <p className="inspection-note">
+          {t("subagentListTruncated", { count: tasks?.omitted })}
+        </p>
+      )}
+    </>
   );
 }
 
 function ThinkingEvidence({
   body,
   duration,
-  active,
+  status,
   level,
   defaultOpen,
+  truncated,
+  source,
 }: {
   body: string;
   duration?: number;
-  active: boolean;
+  status: "running" | "done" | "unknown";
   level?: string;
   defaultOpen: boolean;
+  truncated?: boolean;
+  source?: WebHistoryAnchor & { partIndex: number };
 }) {
   const { t } = useTranslation();
+  const active = status === "running";
+  const [expanded, setExpanded] = useState(defaultOpen);
+  const [fullText, setFullText] = useState<string>();
+  useEffect(() => setExpanded(defaultOpen), [defaultOpen]);
   const settled = duration !== undefined ? formatElapsedMs(0, duration) : "";
   const preview = thinkingPreview(body);
+  const name = [
+    status === "unknown"
+      ? t("toolState_unknown")
+      : active
+        ? level
+          ? t("thinkingActiveLevel", { level })
+          : t("thinkingActive")
+        : t("thinkingDone"),
+    settled,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <EvidenceDetails
-      body={body}
-      icon={<Lightbulb />}
-      name={
-        active
-          ? level
-            ? t("thinkingActiveLevel", { level })
-            : t("thinkingActive")
-          : t("thinkingDone")
-      }
-      status={active ? "running" : "done"}
-      summary={[preview, settled].filter(Boolean).join(" · ") || undefined}
-      thinking
-      defaultOpen={defaultOpen}
-    />
+    <details
+      className={`message-details tool-line thinking-line ${status}`}
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary
+        aria-label={[name, preview].filter(Boolean).join(" · ")}
+        title={preview}
+      >
+        <span className="tool-icon" aria-hidden="true">
+          <Lightbulb />
+        </span>
+        <span className="details-title">
+          <span className="tool-summary">{preview || name}</span>
+        </span>
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
+      </summary>
+      {expanded && (
+        <div className="details-body thinking-evidence">
+          {truncated && source && !active ? (
+            <FullMessageText
+              {...source}
+              preview={body}
+              markdown
+              purpose="thinking"
+              fullText={fullText}
+              onComplete={setFullText}
+            />
+          ) : (
+            <>
+              <Markdown>{body}</Markdown>
+              {truncated && (
+                <p className="evidence-warning">{t("thinkingPreviewOnly")}</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -875,9 +1070,13 @@ function MessageActions({
 function CustomResult({
   message,
   fullSubagent = false,
+  sessionId,
+  onInspectSubagent,
 }: {
   message: WebLiveMessage;
   fullSubagent?: boolean;
+  sessionId: string;
+  onInspectSubagent?: (id: string) => void;
 }) {
   const { t } = useTranslation();
   if (message.customType === "openpi-web-command-feedback")
@@ -912,46 +1111,52 @@ function CustomResult({
     const results = Array.isArray(details.results)
       ? details.results.map(record)
       : [details];
-    const statuses = results.map((result) =>
-      result.outcome === "interrupted"
-        ? "warn"
-        : canonicalStatus(result.status),
+    const ownedIds = new Set(
+      recordedSubagents([message]).map((item) => item.id),
     );
-    const status: Status = statuses.includes("error")
-      ? "error"
-      : statuses.includes("warn")
-        ? "warn"
-        : statuses.includes("running")
-          ? "running"
-          : statuses.length > 0 && statuses.every((value) => value === "done")
-            ? "done"
-            : "unknown";
     return (
-      <ActivityCard
-        family="subagent"
-        title={t("subagentBackgroundResult", { count: results.length })}
-        defaultOpen={fullSubagent}
-        meta={results
-          .map((result) =>
-            [
-              String(result.title || result.id || ""),
-              result.outcome === "interrupted"
-                ? t("subagentState_interrupted")
-                : ["running", "done", "error"].includes(String(result.status))
-                  ? t(`subagentState_${result.status}`)
-                  : t("unknownState"),
-            ]
-              .filter(Boolean)
-              .join(" · "),
-          )
-          .join(" / ")}
-        body={
-          !fullSubagent && typeof details.displayContent === "string"
-            ? details.displayContent
-            : message.content
-        }
-        status={status}
-      />
+      <section className="activity-card subagent subagent-activity">
+        {results.map((result) => {
+          const id = typeof result.id === "string" ? result.id : "";
+          const state =
+            result.outcome === "interrupted"
+              ? "interrupted"
+              : result.status === "done" ||
+                  result.status === "error" ||
+                  result.status === "running"
+                ? result.status
+                : "unknown";
+          return (
+            <SubagentTaskRow
+              key={id || JSON.stringify(result)}
+              identity={`${sessionId}:${id}`}
+              title={String(result.title || id || t("subagentDetails"))}
+              state={state}
+              label={t(
+                state === "unknown" ? "unknownState" : `subagentState_${state}`,
+              )}
+              onInspect={
+                onInspectSubagent && ownedIds.has(id)
+                  ? () => onInspectSubagent(id)
+                  : undefined
+              }
+            />
+          );
+        })}
+        <details
+          className="subagent-result-evidence"
+          open={fullSubagent || undefined}
+        >
+          <summary>
+            {t("subagentBackgroundResult", { count: results.length })}
+          </summary>
+          <pre className="details-body tool-evidence">
+            {!fullSubagent && typeof details.displayContent === "string"
+              ? details.displayContent
+              : message.content}
+          </pre>
+        </details>
+      </section>
     );
   }
   if (message.customType === "workflow-result") {
@@ -1107,7 +1312,12 @@ function buildEntries(
         .filter((part) => message.role !== "user" || part.type !== "text")
         .map((part) =>
           part.type === "image"
-            ? [part.type, part.mimeType, part.name]
+            ? [
+                part.type,
+                part.mimeType,
+                // Pi persists user image data and MIME type without its filename.
+                message.role === "user" ? undefined : part.name,
+              ]
             : part.type,
         ),
       message.stopReason,
@@ -1315,35 +1525,95 @@ function buildEntries(
 function ProcessSequence({
   rows,
   active,
-  defaultOpen,
 }: {
   rows: RenderRow[];
   active: boolean;
-  defaultOpen: boolean;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(active || defaultOpen);
-  const previous = useRef({ active, defaultOpen });
+  let thinkingMessageKey: string | undefined;
+  const [open, setOpen] = useState(active);
+  const single = rows.length === 1;
+  const previousSingle = useRef(single);
+  const viewport = useRef<HTMLElement>(null);
+  const following = useRef(true);
+  const lastScrollTop = useRef(0);
+  const touchY = useRef<number | undefined>(undefined);
+  const [edges, setEdges] = useState({ above: false, below: false });
+  const updateEdges = useCallback(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const above = element.scrollTop > 1;
+    const below =
+      element.scrollHeight - element.clientHeight - element.scrollTop > 1;
+    setEdges((previous) =>
+      previous.above === above && previous.below === below
+        ? previous
+        : { above, below },
+    );
+  }, []);
+  useEffect(() => setOpen(active), [active]);
+  useLayoutEffect(() => {
+    const element = viewport.current;
+    const promoted = previousSingle.current && !single;
+    previousSingle.current = single;
+    if (!element || single || !open || rows.length === 0) return;
+    // A native bookmark can move this scrollport before its scroll event arrives.
+    if (
+      !promoted &&
+      element.scrollTop !== lastScrollTop.current &&
+      element.scrollHeight - element.clientHeight - element.scrollTop > 24
+    )
+      following.current = false;
+    if (promoted && !following.current)
+      element.scrollTop = lastScrollTop.current;
+    if (active && following.current) {
+      element.scrollTop = element.scrollHeight;
+      lastScrollTop.current = element.scrollTop;
+    }
+    updateEdges();
+  }, [rows, active, open, single, updateEdges]);
   useEffect(() => {
-    const prior = previous.current;
-    if (active && !prior.active) setOpen(true);
-    else if (!active && prior.active) setOpen(defaultOpen);
-    else if (!active && defaultOpen !== prior.defaultOpen) setOpen(defaultOpen);
-    previous.current = { active, defaultOpen };
-  }, [active, defaultOpen]);
-  const thinking = rows.filter((row) => row.processType === "thinking").length;
+    const element = viewport.current;
+    const content = element?.firstElementChild;
+    if (!element || !content || single || typeof ResizeObserver === "undefined")
+      return;
+    const observer = new ResizeObserver(() => {
+      if (open && active && following.current) {
+        element.scrollTop = element.scrollHeight;
+        lastScrollTop.current = element.scrollTop;
+      }
+      updateEdges();
+    });
+    observer.observe(element);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [active, open, single, updateEdges]);
+  const thoughts = rows.filter((row) => row.processType === "thinking").length;
   const tools = rows.filter((row) => row.processType === "tool").length;
   const activities = rows.filter(
     (row) => row.processType === "activity",
   ).length;
   const counts = [
-    thinking ? t("processThinkingCount", { count: thinking }) : "",
+    thoughts ? t("processThinkingCount", { count: thoughts }) : "",
     tools ? t("processToolCount", { count: tools }) : "",
     activities ? t("processActivityCount", { count: activities }) : "",
   ].filter(Boolean);
-  const preview = rows.find((row) => row.processPreview)?.processPreview;
+  const current = [...rows]
+    .reverse()
+    .find((row) => row.processStatus === "running");
+  const preview =
+    current?.processPreview ??
+    (active ? [...rows].reverse() : rows).find((row) => row.processPreview)
+      ?.processPreview;
+  const previewText =
+    current?.processToolName &&
+    ["read", "write", "edit"].includes(current.processToolName)
+      ? preview?.slice(
+          Math.max(preview.lastIndexOf("/"), preview.lastIndexOf("\\")) + 1,
+        )
+      : preview;
   const failed = rows.some((row) => row.error || row.processStatus === "error");
-  const status: Status = active
+  const status: Status = current
     ? "running"
     : failed
       ? "error"
@@ -1352,57 +1622,197 @@ function ProcessSequence({
         : rows.every((row) => row.processStatus === "done")
           ? "done"
           : "unknown";
+  const toolNames = rows.flatMap((row) =>
+    row.processToolName ? [row.processToolName] : [],
+  );
+  const actions = [
+    ...new Set(toolNames.map((name) => toolActivity(name).action)),
+  ];
+  const actionLabels = actions.map((action) => t(`toolActionGroup_${action}`));
+  const groupTitle = actions.length
+    ? t(
+        `toolGroup_${status === "done" ? "done" : status === "running" ? "running" : "unknown"}`,
+        {
+          actions: actionLabels.join(t("toolGroupSeparator")),
+        },
+      )
+    : t(status === "running" ? "processRunning" : "processDetails");
+  const title = current?.processToolName
+    ? toolActivityLabel(t, current.processToolName, "running")
+    : current?.processType === "thinking"
+      ? t("thinkingActive")
+      : groupTitle;
+  const representative =
+    current?.processToolName ??
+    toolNames.find((name) => toolActivity(name).action === "web") ??
+    toolNames.find((name) => name === "edit" || name === "write") ??
+    toolNames[0];
+  const Icon = representative ? toolActivity(representative).Icon : Wrench;
   return (
     <details
-      className={`process-sequence ${status}`}
-      open={open}
+      className={`process-sequence ${single ? "single-process " : ""}${status}`}
+      open={single || open}
       data-status={status}
-      data-running={active ? "true" : undefined}
+      data-running={status === "running" ? "true" : undefined}
       data-history-entry={rows[0]?.key}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => {
+        if (!single) setOpen(event.currentTarget.open);
+      }}
     >
-      <summary>
-        <span className="details-mark" aria-hidden="true" />
-        <span className="process-sequence-title">
-          <strong>{t(active ? "processRunning" : "processDetails")}</strong>
-          {counts.length > 0 && <small>{counts.join(" · ")}</small>}
+      <summary
+        hidden={single}
+        aria-label={[title, current ? preview : "", ...counts]
+          .filter(Boolean)
+          .join(" · ")}
+      >
+        <span className="tool-icon" aria-hidden="true">
+          <Icon />
         </span>
-        {preview && <span className="process-sequence-preview">{preview}</span>}
+        <span
+          className="process-sequence-title"
+          title={[actionLabels.join(t("toolGroupSeparator")), ...counts]
+            .filter(Boolean)
+            .join(" · ")}
+        >
+          <strong>{title}</strong>
+        </span>
+        {preview && (current || !actions.length) && (
+          <span className="process-sequence-preview" title={preview}>
+            {previewText}
+          </span>
+        )}
+        <span className="process-sequence-counts">{counts.join(" · ")}</span>
+        <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
-      <div className="process-sequence-body">
-        <div>
-          {rows.map((row) => (
-            <div
-              className={`process-step ${row.processStatus ?? "unknown"}`}
-              data-status={row.processStatus ?? "unknown"}
-              key={row.key}
-            >
-              {row.content}
-            </div>
-          ))}
+      <section
+        ref={viewport}
+        className="process-sequence-scroll"
+        aria-label={
+          single ? undefined : [t("processDetails"), ...counts].join(" · ")
+        }
+        tabIndex={single ? undefined : 0}
+        data-scroll-above={edges.above || undefined}
+        data-scroll-below={edges.below || undefined}
+        onScrollCapture={(event) => {
+          const target = event.target;
+          if (
+            single &&
+            target instanceof HTMLElement &&
+            target.classList.contains("thinking-evidence")
+          ) {
+            const top =
+              target.getBoundingClientRect().top -
+              event.currentTarget.getBoundingClientRect().top +
+              target.scrollTop;
+            const downward = top > lastScrollTop.current;
+            lastScrollTop.current = top;
+            following.current =
+              (following.current || downward) &&
+              target.scrollHeight - target.clientHeight - target.scrollTop <=
+                24;
+          }
+        }}
+        onScroll={(event) => {
+          if (single) return;
+          const element = event.currentTarget;
+          const downward = element.scrollTop > lastScrollTop.current;
+          lastScrollTop.current = element.scrollTop;
+          following.current =
+            (following.current || downward) &&
+            element.scrollHeight - element.clientHeight - element.scrollTop <=
+              24;
+          updateEdges();
+        }}
+        onWheel={(event) => {
+          if (
+            !event.defaultPrevented &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            event.deltaY < 0 &&
+            (single ||
+              upwardInputReachesConversation(
+                event.nativeEvent,
+                event.currentTarget,
+              ))
+          )
+            following.current = false;
+        }}
+        onKeyDown={(event) => {
+          const target = event.target;
+          if (
+            !event.defaultPrevented &&
+            !event.altKey &&
+            !event.metaKey &&
+            (!event.ctrlKey || event.key === "Home") &&
+            (["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+              (event.key === " " && event.shiftKey)) &&
+            target instanceof HTMLElement &&
+            !target.isContentEditable &&
+            !target.closest("input, textarea, select") &&
+            !(event.key === " " && target.closest("button, summary")) &&
+            (single ||
+              upwardInputReachesConversation(
+                event.nativeEvent,
+                event.currentTarget,
+              ))
+          )
+            following.current = false;
+        }}
+        onTouchStart={(event) => {
+          touchY.current = event.touches[0]?.clientY;
+        }}
+        onTouchMove={(event) => {
+          const next = event.touches[0]?.clientY;
+          if (
+            next !== undefined &&
+            touchY.current !== undefined &&
+            next > touchY.current &&
+            (single ||
+              upwardInputReachesConversation(
+                event.nativeEvent,
+                event.currentTarget,
+              ))
+          )
+            following.current = false;
+          touchY.current = next;
+        }}
+      >
+        <div className="process-sequence-body">
+          {rows.map((row) => {
+            // Native message order establishes this visual association;
+            // chronological proximity across messages does not.
+            if (row.processType === "thinking")
+              thinkingMessageKey = row.processMessageKey;
+            else if (row.processMessageKey !== thinkingMessageKey)
+              thinkingMessageKey = undefined;
+            const followsThinking =
+              thinkingMessageKey !== undefined &&
+              row.processType !== "thinking";
+            return (
+              <div
+                className={`process-step ${single ? "single-tool-step " : ""}${followsThinking ? "thought-tool-step " : ""}${row.processStatus ?? "unknown"}`}
+                data-status={row.processStatus ?? "unknown"}
+                key={row.key}
+              >
+                {row.content}
+              </div>
+            );
+          })}
         </div>
-      </div>
+      </section>
     </details>
   );
 }
 
-function groupRows(
-  rows: RenderRow[],
-  active: boolean,
-  defaultOpen: boolean,
-  disclosure?: { open: boolean; id: string },
-) {
+function groupRows(rows: RenderRow[], active: boolean) {
   const blocks: Array<{ process: boolean; rows: RenderRow[] }> = [];
   for (const row of rows) {
     const last = blocks.at(-1);
-    if (row.kind === "process" && last?.process) last.rows.push(row);
-    else blocks.push({ process: row.kind === "process", rows: [row] });
+    const process = row.kind === "process";
+    if (process && last?.process) last.rows.push(row);
+    else blocks.push({ process, rows: [row] });
   }
-  let lastProcess = -1;
-  blocks.forEach((block, index) => {
-    if (block.process) lastProcess = index;
-  });
   return blocks.flatMap((block, index) => {
     const blockKey = `${block.process ? "process" : "rows"}-${block.rows[0]?.key}`;
     if (!block.process) {
@@ -1410,31 +1820,11 @@ function groupRows(
         <Fragment key={row.key}>{row.content}</Fragment>
       ));
     }
-    if (disclosure)
-      return (
-        <div
-          key={blockKey}
-          className="turn-process-body"
-          hidden={!disclosure.open}
-          id={`${disclosure.id}-${index}`}
-        >
-          {block.rows.map((row) => (
-            <div
-              key={row.key}
-              className={`process-step ${row.processStatus ?? "unknown"}`}
-              data-status={row.processStatus ?? "unknown"}
-            >
-              {row.content}
-            </div>
-          ))}
-        </div>
-      );
     return (
       <ProcessSequence
         key={blockKey}
         rows={block.rows}
-        active={active && index === lastProcess}
-        defaultOpen={defaultOpen}
+        active={active && index === blocks.length - 1}
       />
     );
   });
@@ -1445,31 +1835,40 @@ function TurnRun({
   rows,
   timing,
   active,
-  expandProcesses,
   timedTurn,
 }: {
   rows: RenderRow[];
   timing?: WebTurnTiming;
   active: boolean;
-  expandProcesses: boolean;
   timedTurn?: ActiveTurn;
 }) {
   const { t } = useTranslation();
   const id = useId();
-  const [open, setOpen] = useState(active || expandProcesses);
-  useEffect(
-    () => setOpen(active || expandProcesses),
-    [active, expandProcesses],
-  );
-  const processIds: string[] = [];
-  let blockIndex = -1;
-  rows.forEach((row, index) => {
-    if (row.kind !== "process" || rows[index - 1]?.kind !== "process") {
-      blockIndex++;
-      if (row.kind === "process") processIds.push(`${id}-${blockIndex}`);
-    }
-  });
+  const [open, setOpen] = useState(timing?.outcome !== "completed");
+  const previousOutcome = useRef(timing?.outcome);
+  useEffect(() => {
+    if (
+      previousOutcome.current !== timing?.outcome &&
+      timing?.outcome === "completed"
+    )
+      setOpen(false);
+    previousOutcome.current = timing?.outcome;
+  }, [timing?.outcome]);
   const hasTiming = Boolean(timing || timedTurn);
+  const blocks: Array<{ foldable: boolean; rows: RenderRow[] }> = [];
+  for (const row of rows) {
+    if (row.content === null) continue;
+    const final = timing?.resultEntryId
+      ? row.responseEntryId === timing.resultEntryId && row.final !== false
+      : !active && row.final;
+    const foldable = row.kind !== "prompt" && !final;
+    const previous = blocks.at(-1);
+    if (foldable && previous?.foldable) previous.rows.push(row);
+    else blocks.push({ foldable, rows: [row] });
+  }
+  const bodies = blocks.filter((block) => block.foldable);
+  const bodyId = (index: number) => (index === 0 ? id : `${id}-${index}`);
+  const hasProcess = bodies.length > 0;
   const elapsed = timing ? (
     <SettledTurnElapsed timing={timing} />
   ) : timedTurn ? (
@@ -1488,12 +1887,12 @@ function TurnRun({
     <>
       {hasTiming && (
         <header className="turn-duration" data-outcome={timing?.outcome}>
-          {processIds.length > 0 ? (
+          {hasProcess ? (
             <button
               type="button"
               className="turn-duration-toggle"
               aria-expanded={open}
-              aria-controls={processIds.join(" ")}
+              aria-controls={bodies.map((_, index) => bodyId(index)).join(" ")}
               onClick={() => setOpen((value) => !value)}
             >
               {elapsed}
@@ -1509,12 +1908,24 @@ function TurnRun({
           )}
         </header>
       )}
-      {groupRows(
-        rows,
-        active,
-        expandProcesses,
-        hasTiming ? { open, id } : undefined,
-      )}
+      {hasTiming
+        ? blocks.map((block) =>
+            block.foldable ? (
+              <div
+                className="turn-response-body"
+                key={block.rows[0]!.key}
+                id={bodyId(bodies.indexOf(block))}
+                hidden={!open}
+              >
+                {groupRows(block.rows, active && block === bodies.at(-1))}
+              </div>
+            ) : (
+              <Fragment key={block.rows[0]!.key}>
+                {groupRows(block.rows, false)}
+              </Fragment>
+            ),
+          )
+        : groupRows(rows, active)}
     </>
   );
 }
@@ -1523,7 +1934,7 @@ function ConversationTurn({
   id,
   rows,
   active,
-  expandProcesses,
+  observed = true,
   changes,
   session,
   timedTurn,
@@ -1532,7 +1943,7 @@ function ConversationTurn({
   id: number;
   rows: RenderRow[];
   active: boolean;
-  expandProcesses: boolean;
+  observed?: boolean;
   changes?: WebTurnChanges;
   session?: WebSessionProjection;
   timedTurn?: ActiveTurn;
@@ -1554,7 +1965,9 @@ function ConversationTurn({
       ),
   );
   const status = active
-    ? "running"
+    ? observed
+      ? "running"
+      : "unknown"
     : outcome === "failed"
       ? "failed"
       : outcome === "interrupted" || outcome === "cancelled"
@@ -1572,7 +1985,8 @@ function ConversationTurn({
           : status === "complete"
             ? "success"
             : "neutral";
-  const statusLabel = t(`turnState_${status}`);
+  const statusLabel =
+    status === "unknown" ? t("toolState_unknown") : t(`turnState_${status}`);
   // A settled snapshot can arrive before the run-status notification.
   const currentTimedTurn = rows.some(
     (row) =>
@@ -1592,7 +2006,6 @@ function ConversationTurn({
         rows={runRows}
         timing={timing}
         active={active && current}
-        expandProcesses={expandProcesses}
         timedTurn={current ? currentTimedTurn : undefined}
       />,
     );
@@ -1600,8 +2013,8 @@ function ConversationTurn({
   };
   for (const row of rows) {
     if (row.kind === "prompt") {
-      if (runRows.length) appendRun();
-      content.push(<Fragment key={row.key}>{row.content}</Fragment>);
+      if (runRows.length) runRows.push(row);
+      else content.push(<Fragment key={row.key}>{row.content}</Fragment>);
     } else if (row.timing) appendRun(row.timing);
     else runRows.push(row);
   }
@@ -1645,23 +2058,46 @@ function ConversationTurn({
 function renderTurns(
   rows: RenderRow[],
   running: boolean,
-  expandProcesses: boolean,
   activeCommandId?: string,
   changesByPrompt?: Map<string, WebTurnChanges>,
   session?: WebSessionProjection,
   timedTurn?: ActiveTurn,
   onReviewTurn?: OpenTurnReview,
+  observed = true,
 ) {
+  const owners = new Map<RenderRow, number>();
+  const attachRun = (promptEntryId: string | undefined, end: number) => {
+    if (!promptEntryId) return;
+    const start = rows.findIndex(
+      (row) => row.kind === "prompt" && row.promptEntryId === promptEntryId,
+    );
+    if (start < 0 || start >= end) return;
+    if (rows.slice(start + 1, end).some((row) => row.timing)) return;
+    for (let index = start; index <= end; index++) {
+      const row = rows[index]!;
+      if (!row.pendingPrompt) owners.set(row, rows[start]!.turn);
+    }
+  };
+  rows.forEach((row, index) => {
+    if (row.timing) attachRun(row.timing.promptEntryId, index);
+  });
+  if (running && timedTurn) attachRun(timedTurn.promptEntryId, rows.length - 1);
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
+    const id = owners.get(row) ?? row.turn;
     const current = turns.at(-1);
-    if (current?.id === row.turn) current.rows.push(row);
-    else turns.push({ id: row.turn, rows: [row] });
+    if (current?.id === id) current.rows.push(row);
+    else turns.push({ id, rows: [row] });
   }
   if (turns.length === 0 && running) turns.push({ id: 0, rows: [] });
   const confirmedTurn = activeCommandId
     ? turns.find((turn) =>
-        turn.rows.some((row) => row.promptCommandId === activeCommandId),
+        turn.rows.some(
+          (row) =>
+            row.promptCommandId === activeCommandId ||
+            (timedTurn?.promptEntryId &&
+              row.promptEntryId === timedTurn.promptEntryId),
+        ),
       )
     : undefined;
   let nativeTurnIndex = turns.length - 1;
@@ -1680,9 +2116,7 @@ function renderTurns(
       id={turn.id}
       rows={turn.rows}
       active={running && turn.id === activeTurn}
-      expandProcesses={
-        expandProcesses || turn.rows.some((row) => row.defaultOpen)
-      }
+      observed={observed}
       changes={changesByPrompt?.get(
         turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
           ?.promptEntryId ?? "",
@@ -1700,20 +2134,48 @@ function captureReadingPosition(
   pinned: boolean,
   session?: WebSessionProjection,
 ) {
-  const top = element.getBoundingClientRect().top;
-  const anchor = Array.from(
+  const viewportBounds = element.getBoundingClientRect();
+  const top = viewportBounds.top;
+  const candidates = Array.from(
     element.querySelectorAll<HTMLElement>(
       "[data-history-entry], [data-history-message], [data-history-result]",
     ),
-  ).find((item) => {
+  ).filter((item) => {
     const bounds = item.getBoundingClientRect();
-    return bounds.height > 0 && bounds.bottom > top;
+    let visibleTop = Math.max(bounds.top, viewportBounds.top);
+    let visibleBottom = Math.min(bounds.bottom, viewportBounds.bottom);
+    for (
+      let parent: HTMLElement | null = item;
+      parent && parent !== element;
+      parent = parent.parentElement
+    ) {
+      if (parent.hidden) return false;
+      if (
+        parent instanceof HTMLDetailsElement &&
+        !parent.open &&
+        parent !== item &&
+        !parent.querySelector(":scope > summary")?.contains(item)
+      )
+        return false;
+      if (parent === item) continue;
+      const style = getComputedStyle(parent);
+      if (!/^(auto|scroll|overlay|hidden|clip)$/.test(style.overflowY))
+        continue;
+      const clip = parent.getBoundingClientRect();
+      visibleTop = Math.max(visibleTop, clip.top);
+      visibleBottom = Math.min(visibleBottom, clip.bottom);
+    }
+    return visibleBottom > visibleTop;
   });
+  const anchor = candidates.find(
+    (item) =>
+      !candidates.some((child) => child !== item && item.contains(child)),
+  );
   const key =
+    anchor?.dataset.historyResult ??
     anchor?.dataset.historyEntry ??
-    anchor?.dataset.historyMessage ??
-    anchor?.dataset.historyResult;
-  const owner = anchor?.dataset.historyMessage ?? anchor?.dataset.historyResult;
+    anchor?.dataset.historyMessage;
+  const owner = anchor?.dataset.historyResult ?? anchor?.dataset.historyMessage;
   let entryId = session?.entries.find(
     (entry) => entry.id === owner || entry.id === key,
   )?.id;
@@ -1734,6 +2196,66 @@ function captureReadingPosition(
   };
 }
 
+function revealReadingAncestors(target: HTMLElement, root: HTMLElement) {
+  let deferred = false;
+  for (
+    let parent = target.parentElement;
+    parent && parent !== root;
+    parent = parent.parentElement
+  ) {
+    if (parent instanceof HTMLDetailsElement) parent.open = true;
+    if (parent.classList.contains("turn-response-body") && parent.hidden) {
+      const toggle = Array.from(
+        root.querySelectorAll<HTMLButtonElement>("button[aria-controls]"),
+      ).find((button) =>
+        button.getAttribute("aria-controls")?.split(" ").includes(parent!.id),
+      );
+      if (toggle) {
+        toggle.click();
+        deferred = true;
+      }
+    }
+  }
+  return deferred;
+}
+
+function readingAnchorTop(
+  target: HTMLElement,
+  root: HTMLElement,
+  position?: Pick<ReadingPosition, "offset" | "scrollTop">,
+) {
+  target.scrollIntoView?.({
+    block: "nearest",
+    inline: "nearest",
+    behavior: "instant",
+  });
+  if (position) {
+    root.scrollTop = position.scrollTop;
+    for (
+      let parent = target.parentElement;
+      parent && parent !== root;
+      parent = parent.parentElement
+    ) {
+      if (
+        !/^(auto|scroll|overlay)$/.test(getComputedStyle(parent).overflowY) ||
+        parent.scrollHeight <= parent.clientHeight
+      )
+        continue;
+      parent.scrollTop +=
+        target.getBoundingClientRect().top -
+        root.getBoundingClientRect().top -
+        position.offset;
+    }
+  }
+  return Math.max(
+    0,
+    root.scrollTop +
+      target.getBoundingClientRect().top -
+      root.getBoundingClientRect().top -
+      (position?.offset ?? 24),
+  );
+}
+
 function upwardInputReachesConversation(event: Event, root: HTMLElement) {
   for (const node of event.composedPath()) {
     if (node === root) return true;
@@ -1752,8 +2274,10 @@ function upwardInputReachesConversation(event: Event, root: HTMLElement) {
 export function Transcript(props: TranscriptProps) {
   const { t } = useTranslation();
   const viewport = useRef<HTMLDivElement>(null);
+  const conversationContent = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastScrollTop = useRef(0);
+  const touchY = useRef<number | undefined>(undefined);
   const savePositionTimer = useRef(0);
   const restorePending = useRef(props.readingRestorePending);
   restorePending.current = props.readingRestorePending;
@@ -1893,6 +2417,14 @@ export function Transcript(props: TranscriptProps) {
     (selectedExecution
       ? selectedExecution.status === "running"
       : active && props.snapshot.runtime.status === "running");
+  const retry =
+    !historyPaused && running
+      ? selectedExecution
+        ? selectedExecution.retry
+        : active
+          ? (props.liveRetry ?? undefined)
+          : undefined
+      : undefined;
   const nativeRowKeys = useRef({
     scope: hydrationScope,
     keys: new Map<string, string>(),
@@ -1932,15 +2464,20 @@ export function Transcript(props: TranscriptProps) {
       } else {
         element.scrollTop = element.scrollHeight;
       }
+      lastScrollTop.current = element.scrollTop;
     });
     observer.observe(element);
+    if (conversationContent.current)
+      observer.observe(conversationContent.current);
     return () => observer.disconnect();
   }, []);
 
   const { rows, turns } = useMemo(() => {
+    const records = recordedSubagents(entries.map((entry) => entry.message));
     const failures = providerFailures(entries, running && !historyPaused);
     const lastFinalError = [...failures.finalErrors].at(-1);
     const attemptContents = new Map<string, RenderRow[]>();
+    let retryRowKey: string | undefined;
     const results = new Map<string, DisplayEntry>();
     const pairedToolIds = new Set<string>();
     const liveTools = historyPaused
@@ -2069,6 +2606,8 @@ export function Transcript(props: TranscriptProps) {
                 <div className="message-content">
                   <CustomResult
                     message={message}
+                    sessionId={selectedId ?? ""}
+                    onInspectSubagent={props.onInspectSubagent}
                     fullSubagent={
                       props.snapshot.preferences.subagentResultDisplay ===
                       "full"
@@ -2210,6 +2749,57 @@ export function Transcript(props: TranscriptProps) {
             .join("");
         const detailRows: RenderRow[] = [];
         const parts = message.parts ?? [];
+        const searches = message.webSearch ?? [];
+        const searchPosition = (search: (typeof searches)[number]) =>
+          Math.min(parts.length, search.beforePartIndex ?? 0);
+        const appendSearches = (beforePartIndex: number) => {
+          for (const [searchIndex, search] of searches.entries()) {
+            if (searchPosition(search) !== beforePartIndex) continue;
+            const status =
+              search.status === "completed"
+                ? "done"
+                : search.status === "failed"
+                  ? "error"
+                  : "warn";
+            detailRows.push({
+              key: `${entry.key}-native-search-${searchIndex}`,
+              turn,
+              kind: "process",
+              processType: "tool",
+              processMessageKey: entry.key,
+              processToolName: "web_search",
+              processPreview: search.query,
+              processStatus: status,
+              error: search.status === "failed",
+              content: (
+                <article
+                  className="message-row assistant detail-only"
+                  data-history-entry={`${entry.entryId ?? entry.key}-native-search-${searchIndex}-body`}
+                  data-history-message={entry.entryId ?? entry.key}
+                  tabIndex={-1}
+                >
+                  <div className="message-content">
+                    <EvidenceDetails
+                      body={search.query}
+                      icon={<Globe />}
+                      name="web_search"
+                      summary={search.query}
+                      status={status}
+                    />
+                  </div>
+                </article>
+              ),
+            });
+          }
+        };
+        const lastVisiblePart = parts.reduce(
+          (last, part, partIndex) =>
+            (part.type === "thinking" || part.type === "text") &&
+            !part.text.trim()
+              ? last
+              : partIndex,
+          -1,
+        );
         const lastTextIndex = parts.reduce(
           (last, part, partIndex) => (part.type === "text" ? partIndex : last),
           -1,
@@ -2235,6 +2825,11 @@ export function Transcript(props: TranscriptProps) {
             key,
             turn,
             kind: "response",
+            responseEntryId: entry.entryId,
+            final:
+              actions &&
+              (message.stopReason === "stop" ||
+                message.stopReason === "length"),
             content: (
               <article
                 className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
@@ -2320,10 +2915,18 @@ export function Transcript(props: TranscriptProps) {
           });
         };
         message.parts?.forEach((part, partIndex) => {
-          if (part.type === "text" && parts[partIndex - 1]?.type !== "text") {
+          appendSearches(partIndex);
+          if (
+            part.type === "text" &&
+            (parts[partIndex - 1]?.type !== "text" ||
+              searches.some((search) => searchPosition(search) === partIndex))
+          ) {
             let text = part.text;
             let end = partIndex + 1;
-            while (parts[end]?.type === "text") {
+            while (
+              parts[end]?.type === "text" &&
+              !searches.some((search) => searchPosition(search) === end)
+            ) {
               const next = parts[end];
               if (next?.type === "text") text += next.text;
               end++;
@@ -2337,18 +2940,31 @@ export function Transcript(props: TranscriptProps) {
           // Some providers return only an opaque reasoning signature. An
           // empty part is not a visible reasoning note or disclosure body.
           if (part.type === "thinking" && part.text.trim()) {
-            const isLive =
-              !historyPaused && running && index === entries.length - 1;
+            const current =
+              !historyPaused &&
+              !retry &&
+              !message.stopReason &&
+              selectedExecution?.compaction?.state !== "running" &&
+              running &&
+              index === entries.length - 1 &&
+              partIndex === lastVisiblePart;
+            const status = current
+              ? props.activityObserved === false
+                ? "unknown"
+                : "running"
+              : "done";
             detailRows.push({
               key: `${entry.key}-thinking-${partIndex}`,
               turn,
               kind: "process",
               processType: "thinking",
+              processMessageKey: entry.key,
               processPreview: thinkingPreview(part.text),
-              processStatus: isLive ? "running" : "done",
+              processStatus: status,
               content: (
                 <article
                   className="message-row assistant detail-only"
+                  data-history-entry={`${entry.entryId ?? entry.key}-thinking-${partIndex}-body`}
                   data-history-message={entry.entryId ?? entry.key}
                   data-history-highlighted={
                     (highlightedEntry && entry.entryId === highlightedEntry) ||
@@ -2358,10 +2974,32 @@ export function Transcript(props: TranscriptProps) {
                 >
                   <div className="message-content">
                     <ThinkingEvidence
+                      key={JSON.stringify([
+                        selectedId,
+                        selectedPath,
+                        entry.key,
+                        partIndex,
+                      ])}
                       body={part.text}
-                      active={isLive}
+                      truncated={part.textTruncated}
+                      source={
+                        entry.entryId &&
+                        selectedId &&
+                        selectedPath &&
+                        part.sourcePartIndex !== undefined
+                          ? {
+                              sessionId: selectedId,
+                              sessionPath: selectedPath,
+                              entryId: entry.entryId,
+                              partIndex: part.sourcePartIndex,
+                            }
+                          : undefined
+                      }
+                      status={status}
                       level={
-                        isLive ? props.snapshot.thinking?.level : undefined
+                        status === "running"
+                          ? props.snapshot.thinking?.level
+                          : undefined
                       }
                       duration={
                         props.thinkingDurations[entry.timingKey ?? entry.key]
@@ -2391,6 +3029,12 @@ export function Transcript(props: TranscriptProps) {
               : undefined;
             const persistedResult = persistedResultEntry?.message;
             const result = persistedResult ?? live?.result;
+            const liveState = persistedResult ? undefined : live?.state;
+            const nativeStatus = resultStatus(result, liveState);
+            const status =
+              props.activityObserved === false && nativeStatus === "running"
+                ? "unknown"
+                : nativeStatus;
             const card =
               part.name === "plan_ready" &&
               result &&
@@ -2407,27 +3051,31 @@ export function Transcript(props: TranscriptProps) {
                   key={`${entry.key}-${part.id || partIndex}-evidence`}
                   call={part}
                   result={result}
-                  liveState={persistedResult ? undefined : live?.state}
+                  liveState={liveState}
+                  observed={props.activityObserved}
                   cwd={selectedCwd}
                   defaultOpen={defaultOpen}
                 />
               ) : (
-                familyCard(
-                  part,
-                  result,
-                  active
+                familyCard(part, result, {
+                  sessionId: selectedId ?? "",
+                  subagents: active
                     ? props.snapshot.runtime.capabilities.subagents?.items
                     : undefined,
-                  props.onInspectSubagent,
-                  persistedResult ? undefined : live?.state,
+                  workflows: active
+                    ? props.snapshot.runtime.capabilities.workflows?.items
+                    : undefined,
+                  records,
+                  onInspectSubagent: props.onInspectSubagent,
+                  liveState,
                   defaultOpen,
-                )
+                  observed: props.activityObserved !== false,
+                })
               );
             const args = parseArguments(part.arguments);
-            const toolIcon = iconForTool(part.name);
-            const status = resultStatus(
-              result,
-              persistedResult ? undefined : live?.state,
+            const { Icon, action } = toolActivity(part.name);
+            const toolIcon = (
+              <Icon key={`${entry.key}-${part.id || partIndex}-icon`} />
             );
             detailRows.push({
               key: `${entry.key}-tool-${part.id || partIndex}`,
@@ -2435,12 +3083,18 @@ export function Transcript(props: TranscriptProps) {
               kind:
                 part.name === "plan_ready" && result && planPresentation(result)
                   ? "response"
-                  : "process",
+                  : part.name === "subagent_spawn" || part.name === "workflow"
+                    ? "custom"
+                    : "process",
               processType: /^(subagent|workflow)/u.test(part.name)
                 ? "activity"
                 : "tool",
+              processMessageKey: entry.key,
+              processToolName: part.name,
+              processPreview: toolActivityTarget(part.name, args)
+                .split("\n")
+                .find(Boolean),
               processStatus: status,
-              defaultOpen,
               error: Boolean(result?.isError),
               content: (
                 <article
@@ -2467,8 +3121,11 @@ export function Transcript(props: TranscriptProps) {
                         icon={toolIcon}
                         name={part.name || "tool"}
                         summary={
-                          result && part.id && pairedToolIds.has(part.id)
-                            ? compactSummary(result.content)
+                          action === "search" && typeof args.path === "string"
+                            ? t("toolSearchTarget", {
+                                path: args.path,
+                                pattern: toolSummary(part.name, args),
+                              })
                             : toolSummary(part.name, args)
                         }
                         output={
@@ -2486,6 +3143,7 @@ export function Transcript(props: TranscriptProps) {
             });
           }
         });
+        appendSearches(parts.length);
         if (lastTextIndex < 0)
           appendText(message.content, `${entry.key}-answer`, true);
         if (
@@ -2497,8 +3155,10 @@ export function Transcript(props: TranscriptProps) {
         }
         const attempts = failures.groups.get(index);
         if (attempts) {
+          if (attempts.state === "retrying" && retry)
+            retryRowKey = `${attempts.attempts[0]!.key}-attempts`;
           detailRows.push({
-            key: `${entry.key}-attempts`,
+            key: `${attempts.attempts[0]!.key}-attempts`,
             turn,
             kind: "outcome",
             outcome:
@@ -2507,6 +3167,11 @@ export function Transcript(props: TranscriptProps) {
               <article className="message-row assistant outcome-row">
                 <ProviderAttempts
                   state={attempts.state}
+                  retry={attempts.state === "retrying" ? retry : undefined}
+                  observed={
+                    props.activityObserved !== false &&
+                    selectedExecution?.status !== "unknown"
+                  }
                   attempts={attempts.attempts.map((attempt) => ({
                     entry: attempt,
                     content: attemptContents.get(attempt.key),
@@ -2593,7 +3258,11 @@ export function Transcript(props: TranscriptProps) {
           : message.toolName?.startsWith("workflow")
             ? "workflow"
             : null;
-        const status = resultStatus(message);
+        const nativeStatus = resultStatus(message);
+        const status =
+          props.activityObserved === false && nativeStatus === "running"
+            ? "unknown"
+            : nativeStatus;
         const toolName = message.toolName || "tool";
         const defaultOpen =
           family === "subagent"
@@ -2603,14 +3272,8 @@ export function Transcript(props: TranscriptProps) {
               : toolName === "write" || toolName === "edit"
                 ? props.snapshot.preferences.fileMutationDisplay === "full"
                 : false;
-        const icon =
-          family === "subagent" ? (
-            <Bot key={`${entry.key}-icon`} />
-          ) : family === "workflow" ? (
-            <Workflow key={`${entry.key}-icon`} />
-          ) : (
-            iconForTool(toolName)
-          );
+        const { Icon } = toolActivity(toolName);
+        const icon = <Icon key={`${entry.key}-icon`} />;
         const content = family ? (
           <ActivityCard
             key={`${entry.key}-card`}
@@ -2648,12 +3311,13 @@ export function Transcript(props: TranscriptProps) {
                 ? "response"
                 : "process",
             processType: family ? "activity" : "tool",
+            processToolName: toolName,
             processStatus: status,
-            defaultOpen,
             error: status === "error",
             content: (
               <article
                 className="message-row assistant detail-only"
+                data-history-entry={`${entry.entryId ?? entry.key}-body`}
                 data-history-message={entry.entryId ?? entry.key}
                 data-history-highlighted={
                   (highlightedEntry && entry.entryId === highlightedEntry) ||
@@ -2669,11 +3333,77 @@ export function Transcript(props: TranscriptProps) {
       }
       return [];
     });
+    let nativeEnd = rendered.length;
+    while (nativeEnd > 0 && rendered[nativeEnd - 1]!.pendingPrompt) nativeEnd--;
+    const pendingPreviews = rendered.length - nativeEnd;
+    const nativeTurn = rendered[nativeEnd - 1]?.turn ?? 0;
+    if (retry && !retryRowKey) {
+      retryRowKey = "native-retry";
+      rendered.splice(nativeEnd, 0, {
+        key: "native-retry",
+        turn: nativeTurn,
+        kind: "outcome",
+        content: (
+          <article className="message-row assistant outcome-row">
+            <ProviderAttempts
+              attempts={[]}
+              state="retrying"
+              retry={retry}
+              observed={
+                props.activityObserved !== false &&
+                selectedExecution?.status !== "unknown"
+              }
+            />
+          </article>
+        ),
+      });
+    }
+    const compaction = !historyPaused && selectedExecution?.compaction;
+    if (compaction && compaction.state !== "completed") {
+      const retryIndex = rendered.findIndex((row) => row.key === retryRowKey);
+      const compactionRow: RenderRow = {
+        key: `native-compaction-${compaction.startedAt ?? compaction.state}`,
+        turn: rendered[retryIndex]?.turn ?? nativeTurn,
+        kind: "custom",
+        content: (
+          <CompactionStatus
+            compaction={compaction}
+            observed={
+              props.activityObserved !== false &&
+              selectedExecution?.status !== "unknown"
+            }
+          />
+        ),
+      };
+      // Keep the current compaction before the observed reconnect status.
+      // Completed compactions continue to use Pi's chronological entries.
+      rendered.splice(
+        retryIndex < 0 ? nativeEnd : retryIndex,
+        0,
+        compactionRow,
+      );
+      if (compaction.state === "failed" && compaction.errorMessage)
+        rendered.splice(rendered.length - pendingPreviews, 0, {
+          key: "native-compaction-error",
+          turn: compactionRow.turn,
+          kind: "custom",
+          content: (
+            <article className="message-row assistant outcome-row">
+              <ErrorNotice
+                label={t("compactionFailed")}
+                message={compaction.errorMessage}
+              />
+            </article>
+          ),
+        });
+    }
     return { rows: rendered, turns: turnItems };
   }, [
     active,
     running,
     selectedExecution,
+    retry,
+    props.activityObserved,
     historyPaused,
     entries,
     props.onResend,
@@ -2684,6 +3414,7 @@ export function Transcript(props: TranscriptProps) {
     props.forkPending,
     props.onInspectSubagent,
     props.snapshot.runtime.capabilities.subagents,
+    props.snapshot.runtime.capabilities.workflows?.items,
     props.snapshot.preferences.expandThinking,
     props.snapshot.preferences.subagentResultDisplay,
     props.snapshot.preferences.bashToolDisplay,
@@ -2813,26 +3544,45 @@ export function Transcript(props: TranscriptProps) {
         : null);
     prependAnchor.current = null;
     if (saved && (!changed || restored) && !requested) {
-      const anchor = Array.from(
-        element.querySelectorAll<HTMLElement>("[data-history-entry]"),
-      ).find(
-        (item) =>
-          item.dataset.historyEntry === saved.key &&
-          item.getBoundingClientRect().height > 0,
+      const candidates = Array.from(
+        element.querySelectorAll<HTMLElement>(
+          "[data-history-entry], [data-history-message], [data-history-result]",
+        ),
       );
-      const top = anchor
-        ? element.scrollTop +
-          anchor.getBoundingClientRect().top -
-          element.getBoundingClientRect().top -
-          saved.offset
-        : saved.scrollTop + element.scrollHeight - saved.scrollHeight;
-      if (typeof element.scrollTo === "function")
-        element.scrollTo({ top, behavior: "instant" });
-      else element.scrollTop = top;
-      lastScrollTop.current = element.scrollTop;
+      const anchor =
+        saved.key === undefined
+          ? undefined
+          : (candidates.find(
+              (item) => item.dataset.historyEntry === saved.key,
+            ) ??
+            candidates
+              .reverse()
+              .find(
+                (item) =>
+                  item.dataset.historyMessage === saved.key ||
+                  item.dataset.historyResult === saved.key,
+              ));
       pinned.current = false;
       setReadingHistory(true);
       lastPath.current = identity;
+      const locate = () => {
+        if (anchor && !element.contains(anchor)) return;
+        if (prependAnchor.current === saved) prependAnchor.current = null;
+        const top = anchor
+          ? readingAnchorTop(anchor, element, saved)
+          : saved.scrollTop + element.scrollHeight - saved.scrollHeight;
+        if (typeof element.scrollTo === "function")
+          element.scrollTo({ top, behavior: "instant" });
+        else element.scrollTop = top;
+        lastScrollTop.current = element.scrollTop;
+      };
+      if (anchor && revealReadingAncestors(anchor, element)) {
+        // The elapsed disclosure is React-owned; measure after its native toggle.
+        prependAnchor.current = saved;
+        const frame = requestAnimationFrame(locate);
+        return () => cancelAnimationFrame(frame);
+      }
+      locate();
       return;
     }
     if (changed || requested || pinned.current) {
@@ -2881,52 +3631,41 @@ export function Transcript(props: TranscriptProps) {
         item.dataset.historyResult === navigation.entryId,
     );
     const restoredTarget = navigation.restorePosition?.key
-      ? candidates.find(
+      ? (candidates.find(
           (item) =>
-            item.dataset.historyEntry === navigation.restorePosition!.key ||
-            item.dataset.historyMessage === navigation.restorePosition!.key ||
-            item.dataset.historyResult === navigation.restorePosition!.key,
-        )
+            item.dataset.historyEntry === navigation.restorePosition!.key,
+        ) ??
+        [...candidates]
+          .reverse()
+          .find(
+            (item) =>
+              item.dataset.historyMessage === navigation.restorePosition!.key ||
+              item.dataset.historyResult === navigation.restorePosition!.key,
+          ))
       : undefined;
     const target =
       restoredTarget ??
       matches.find((item) => item.classList.contains("response")) ??
+      matches.find(
+        (item) =>
+          item.dataset.historyMessage === navigation.entryId ||
+          item.dataset.historyResult === navigation.entryId,
+      ) ??
       matches[0];
     if (!target) return;
     // Native details retain their disclosure state; reveal only the ancestors
     // needed to make this particular message reachable.
-    for (
-      let parent = target.parentElement;
-      parent && parent !== element;
-      parent = parent.parentElement
-    ) {
-      if (parent instanceof HTMLDetailsElement) parent.open = true;
-      if (parent.classList.contains("turn-process-body") && parent.hidden) {
-        const toggle = Array.from(
-          element.querySelectorAll<HTMLButtonElement>("button[aria-controls]"),
-        ).find((button) =>
-          button.getAttribute("aria-controls")?.split(" ").includes(parent!.id),
-        );
-        toggle?.click();
-      }
-    }
+    revealReadingAncestors(target, element);
     const locate = () => {
       if (
         !element.contains(target) ||
         (navigation.restorePosition && lastNavigation.current === navigationKey)
       )
         return;
-      const top = Math.max(
-        0,
-        element.scrollTop +
-          target.getBoundingClientRect().top -
-          element.getBoundingClientRect().top -
-          (navigation.restorePosition &&
-          (target.dataset.historyEntry === navigation.restorePosition.key ||
-            target.dataset.historyMessage === navigation.restorePosition.key ||
-            target.dataset.historyResult === navigation.restorePosition.key)
-            ? navigation.restorePosition.offset
-            : 24),
+      const top = readingAnchorTop(
+        target,
+        element,
+        restoredTarget ? navigation.restorePosition : undefined,
       );
       element.scrollTo?.({ top, behavior: "instant" });
       if (typeof element.scrollTo !== "function") element.scrollTop = top;
@@ -2955,143 +3694,6 @@ export function Transcript(props: TranscriptProps) {
       if (frame !== undefined) cancelAnimationFrame(frame);
     };
   }, [selected, navigation, navigationKey, readingCache]);
-
-  const reportedCompletion = useRef<string | null>(null);
-  useEffect(() => {
-    const element = viewport.current;
-    const turn = props.snapshot.sessions.find(
-      (session) =>
-        session.id === selected?.id && session.path === selected?.path,
-    )?.execution?.lastTurn;
-    if (
-      !element ||
-      !selected ||
-      !props.onCompletedResultSeen ||
-      props.resultExposureEnabled === false ||
-      props.activityObserved === false ||
-      historyPaused ||
-      turn?.outcome !== "completed" ||
-      !turn.resultEntryId
-    )
-      return;
-    const resultIndex = selected.entries.findIndex(
-      (entry) => entry.id === turn.resultEntryId,
-    );
-    const result = selected.entries[resultIndex]?.message;
-    const timingIndex = selected.entries.findIndex(
-      (entry) =>
-        entry.turnTiming?.sessionId === selected.id &&
-        entry.turnTiming.commandId === turn.commandId &&
-        entry.turnTiming.finishedAt === turn.finishedAt &&
-        entry.turnTiming.outcome === "completed" &&
-        (!entry.turnTiming.resultEntryId ||
-          entry.turnTiming.resultEntryId === turn.resultEntryId),
-    );
-    if (
-      resultIndex < 0 ||
-      timingIndex <= resultIndex ||
-      result?.role !== "assistant" ||
-      !["stop", "length"].includes(result.stopReason ?? "")
-    )
-      return;
-    const exposure: CompletedResultExposure = {
-      sessionId: selected.id,
-      sessionPath: selected.path,
-      commandId: turn.commandId,
-      finishedAt: turn.finishedAt,
-      resultEntryId: turn.resultEntryId,
-    };
-    const key = JSON.stringify(exposure);
-    let frame: number | undefined;
-    const check = () => {
-      frame = undefined;
-      if (
-        reportedCompletion.current === key ||
-        document.visibilityState !== "visible" ||
-        !element.isConnected ||
-        element.closest("[hidden], [inert], [aria-hidden='true']") ||
-        document.querySelector("dialog[open]")
-      )
-        return;
-      const bounds = element.getBoundingClientRect();
-      const top = Math.max(0, bounds.top);
-      const bottom = Math.min(window.innerHeight, bounds.bottom);
-      const left = Math.max(0, bounds.left);
-      const right = Math.min(window.innerWidth, bounds.right);
-      if (
-        bottom <= top ||
-        right <= left ||
-        element.checkVisibility?.() === false
-      )
-        return;
-      const exposed = Array.from(
-        element.querySelectorAll<HTMLElement>(
-          ".message-row.assistant.response[data-history-message]",
-        ),
-      ).some((article) => {
-        if (
-          article.dataset.historyMessage !== exposure.resultEntryId ||
-          article.closest(
-            "details:not([open]), [hidden], [inert], [aria-hidden='true']",
-          )
-        )
-          return false;
-        const content = article.querySelector<HTMLElement>(".message-content");
-        if (!content || !content.textContent?.trim()) return false;
-        const style = getComputedStyle(content);
-        if (
-          style.display === "none" ||
-          style.visibility === "hidden" ||
-          article.checkVisibility?.() === false
-        )
-          return false;
-        const resultBounds = content.getBoundingClientRect();
-        return (
-          resultBounds.height > 0 &&
-          resultBounds.width > 0 &&
-          resultBounds.bottom > top &&
-          resultBounds.top < bottom &&
-          resultBounds.right > left &&
-          resultBounds.left < right
-        );
-      });
-      if (!exposed) return;
-      reportedCompletion.current = key;
-      props.onCompletedResultSeen?.(exposure);
-    };
-    const schedule = () => {
-      if (frame === undefined) frame = requestAnimationFrame(check);
-    };
-    schedule();
-    element.addEventListener("scroll", schedule);
-    document.addEventListener("visibilitychange", schedule);
-    document.addEventListener("close", schedule, true);
-    window.addEventListener("resize", schedule);
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? undefined
-        : new ResizeObserver(schedule);
-    observer?.observe(element);
-    for (const content of element.querySelectorAll<HTMLElement>(
-      ".message-content",
-    ))
-      observer?.observe(content);
-    return () => {
-      if (frame !== undefined) cancelAnimationFrame(frame);
-      observer?.disconnect();
-      element.removeEventListener("scroll", schedule);
-      document.removeEventListener("visibilitychange", schedule);
-      document.removeEventListener("close", schedule, true);
-      window.removeEventListener("resize", schedule);
-    };
-  }, [
-    selected,
-    props.snapshot.sessions,
-    props.onCompletedResultSeen,
-    props.resultExposureEnabled,
-    props.activityObserved,
-    historyPaused,
-  ]);
 
   const runningLabel = !active
     ? t("backgroundSessionRunning")
@@ -3134,9 +3736,14 @@ export function Transcript(props: TranscriptProps) {
     )
       void history.loadOlder();
   };
+  const pauseFollowing = () => {
+    pinned.current = false;
+    setReadingHistory(true);
+    history.retainReading();
+  };
 
   return (
-    <>
+    <div className="transcript-surface">
       <div
         ref={viewport}
         className="conversation"
@@ -3148,9 +3755,24 @@ export function Transcript(props: TranscriptProps) {
           if (navigation?.restorePosition)
             lastNavigation.current = navigationKey;
         }}
-        onTouchStartCapture={() => {
+        onTouchStartCapture={(event) => {
+          touchY.current = event.touches[0]?.clientY;
           if (navigation?.restorePosition)
             lastNavigation.current = navigationKey;
+        }}
+        onTouchMove={(event) => {
+          const next = event.touches[0]?.clientY;
+          if (
+            next !== undefined &&
+            touchY.current !== undefined &&
+            next > touchY.current &&
+            upwardInputReachesConversation(
+              event.nativeEvent,
+              event.currentTarget,
+            )
+          )
+            pauseFollowing();
+          touchY.current = next;
         }}
         onScroll={(event) => {
           const element = event.currentTarget;
@@ -3159,10 +3781,14 @@ export function Transcript(props: TranscriptProps) {
           lastScrollTop.current = element.scrollTop;
           // Keep an explicit reveal unpinned through its first smooth frames.
           // An older page restored at the bottom may resume normal following.
-          pinned.current =
-            (!highlightedEntry || pinned.current || downward) &&
+          const nearBottom =
             element.scrollTop + element.clientHeight >=
-              element.scrollHeight - 48;
+            element.scrollHeight - 48;
+          // A shrinking viewport can emit scroll before ResizeObserver.
+          // Only upward movement should interrupt an existing bottom follow.
+          pinned.current = pinned.current
+            ? !upward || nearBottom
+            : downward && nearBottom;
           if (!pinned.current) history.retainReading();
           setReadingHistory(!pinned.current);
           window.clearTimeout(savePositionTimer.current);
@@ -3195,8 +3821,10 @@ export function Transcript(props: TranscriptProps) {
               event.nativeEvent,
               event.currentTarget,
             )
-          )
+          ) {
+            pauseFollowing();
             readEarlierNearTop(event.currentTarget);
+          }
         }}
         onKeyDown={(event) => {
           if (
@@ -3222,103 +3850,96 @@ export function Transcript(props: TranscriptProps) {
               (event.key === " " && event.shiftKey)) &&
             target instanceof HTMLElement &&
             !target.isContentEditable &&
-            !target.closest("input, textarea, select, button, summary") &&
+            !target.closest("input, textarea, select") &&
+            !(event.key === " " && target.closest("button, summary")) &&
             upwardInputReachesConversation(
               event.nativeEvent,
               event.currentTarget,
             )
-          )
+          ) {
+            pauseFollowing();
             readEarlierNearTop(event.currentTarget);
+          }
         }}
       >
-        {selected?.rerun && props.onOpenOriginal && (
-          <div className="message-branch-origin">
-            <button
-              type="button"
-              onClick={() => void props.onOpenOriginal!(selected.rerun!.source)}
-            >
-              <GitBranch aria-hidden="true" /> {t("openOriginalConversation")}
-            </button>
-            <span>{t("messageRerunWorkspaceHint")}</span>
-          </div>
-        )}
-        {(history.hasMore || history.error || history.verifying) && (
-          <div className="conversation-history">
-            {history.error && <p role="alert">{t(history.error)}</p>}
-            {history.error && history.error !== "historyChanged" && (
+        <div ref={conversationContent} className="conversation-content">
+          {selected?.rerun && props.onOpenOriginal && (
+            <div className="message-branch-origin">
               <button
                 type="button"
-                className="secondary"
-                disabled={history.loading}
-                onClick={() => void history.loadOlder()}
+                onClick={() =>
+                  void props.onOpenOriginal!(selected.rerun!.source)
+                }
               >
-                {t("retryAdmissionCheck")}
+                <GitBranch aria-hidden="true" /> {t("openOriginalConversation")}
               </button>
-            )}
-            {history.loading && <p role="status">{t("historyLoading")}</p>}
-            {history.verifying && !history.error && !history.loading && (
-              <p role="status">{t("historyVerifying")}</p>
-            )}
-            {history.hasMore && (
-              <span>
-                {t("historyOmitted", {
-                  count: selected?.truncation.entriesOmitted ?? 0,
-                })}
-              </span>
-            )}
-          </div>
-        )}
-        {renderTurns(
-          rows,
-          running &&
-            !historyPaused &&
-            selectedExecution?.compaction?.state !== "running",
-          props.snapshot.preferences.expandThinking === true,
-          activeTurn?.commandId,
-          changesByPrompt,
-          selected,
-          props.activityObserved !== false && !historyPaused
-            ? timedTurn
-            : undefined,
-          props.onReviewTurn,
-        )}
-        {selectedExecution?.compaction &&
-          selectedExecution.compaction.state !== "completed" && (
-            <CompactionStatus
-              key={JSON.stringify([
-                selected?.id,
-                selected?.path,
-                selectedExecution.compaction.startedAt,
-              ])}
-              compaction={selectedExecution.compaction}
-              observed={
-                props.activityObserved !== false &&
-                selectedExecution.status !== "unknown"
-              }
-            />
+              <span>{t("messageRerunWorkspaceHint")}</span>
+            </div>
           )}
-        {running && selectedExecution?.compaction?.state !== "running" && (
-          <div
-            className="conversation-running"
-            role="status"
-            aria-live="polite"
-          >
-            <span className="conversation-running-dot" />
-            <span>{runningLabel}</span>
-            {observedRunningTools > 0 && (
-              <span>
-                {t("observedSessionTools", { count: observedRunningTools })}
-              </span>
+          {(history.hasMore || history.error || history.verifying) && (
+            <div className="conversation-history">
+              {history.error && <p role="alert">{t(history.error)}</p>}
+              {history.error && history.error !== "historyChanged" && (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={history.loading}
+                  onClick={() => void history.loadOlder()}
+                >
+                  {t("retryAdmissionCheck")}
+                </button>
+              )}
+              {history.loading && <p role="status">{t("historyLoading")}</p>}
+              {history.verifying && !history.error && !history.loading && (
+                <p role="status">{t("historyVerifying")}</p>
+              )}
+              {history.hasMore && (
+                <span>
+                  {t("historyOmitted", {
+                    count: selected?.truncation.entriesOmitted ?? 0,
+                  })}
+                </span>
+              )}
+            </div>
+          )}
+          {renderTurns(
+            rows,
+            running &&
+              !historyPaused &&
+              selectedExecution?.compaction?.state !== "running",
+            activeTurn?.commandId,
+            changesByPrompt,
+            selected,
+            props.activityObserved !== false && !historyPaused
+              ? timedTurn
+              : undefined,
+            props.onReviewTurn,
+            props.activityObserved !== false,
+          )}
+          {running &&
+            props.activityObserved !== false &&
+            selectedExecution?.compaction?.state !== "running" && (
+              <div
+                className="conversation-execution-status sr-only"
+                role="status"
+                aria-live="polite"
+              >
+                <span>{runningLabel}</span>
+                {observedRunningTools > 0 && (
+                  <span>
+                    {t("observedSessionTools", { count: observedRunningTools })}
+                  </span>
+                )}
+                {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
+                  <span>
+                    {t("pendingFollowUpsHint", {
+                      count: selectedExecution!.pendingFollowUps,
+                    })}
+                  </span>
+                )}
+              </div>
             )}
-            {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
-              <span>
-                {t("pendingFollowUpsHint", {
-                  count: selectedExecution!.pendingFollowUps,
-                })}
-              </span>
-            )}
-          </div>
-        )}
+        </div>
       </div>
       {(readingHistory || history.hasNewer) && rows.length > 0 && (
         <button
@@ -3334,9 +3955,29 @@ export function Transcript(props: TranscriptProps) {
             setHighlightedNavigation(null);
             history.resetToLatest();
             element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+            // Returning from a reading window can replace its rows in this commit.
+            queueMicrotask(() => {
+              if (viewport.current !== element) return;
+              const latest = Array.from(
+                element.querySelectorAll<HTMLElement>(
+                  '.message-row[tabindex="-1"]',
+                ),
+              )
+                .reverse()
+                .find((row) => !row.closest("[hidden], details:not([open])"));
+              (latest ?? element).focus({ preventScroll: true });
+            });
           }}
         >
-          <ArrowDown aria-hidden="true" /> {t("jumpToLatest")}
+          {running && props.activityObserved !== false ? (
+            <span className="latest-activity-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          ) : (
+            <ArrowDown aria-hidden="true" />
+          )}
         </button>
       )}
       <TurnNavigation
@@ -3349,6 +3990,6 @@ export function Transcript(props: TranscriptProps) {
         readingHistory={readingHistory || history.hasNewer}
         onNavigate={navigateTurn}
       />
-    </>
+    </div>
   );
 }

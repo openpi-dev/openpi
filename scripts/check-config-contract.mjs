@@ -8,6 +8,69 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CONFIG_FIELD_CONTRACT = [
   {
+    path: "codeMode.enabled",
+    writerTokens: ["params.code_mode_enabled"],
+    statusTokens: ["config.codeMode.enabled"],
+    readmeTerms: ["code_mode_enabled"],
+    setupTerms: ["code_mode_enabled"],
+  },
+  {
+    path: "webSearch.enabled",
+    writerTokens: ["params.web_search_enabled"],
+    statusTokens: ["config.webSearch.enabled"],
+    readmeTerms: ["web_search_enabled"],
+    setupTerms: ["web_search_enabled"],
+  },
+  {
+    path: "webSearch.modelSupport",
+    writerTokens: ["params.web_search_model_support"],
+    statusTokens: ["config.webSearch.modelSupport"],
+    readmeTerms: ["web_search_model_support"],
+    setupTerms: ["web_search_model_support"],
+  },
+  {
+    path: "response.verbosity",
+    writerTokens: ["params.response_verbosity"],
+    statusTokens: ["config.response.verbosity"],
+    readmeTerms: ["response_verbosity"],
+    setupTerms: ["response_verbosity"],
+  },
+  {
+    path: "response.reasoningSummary",
+    writerTokens: ["params.response_reasoning_summary"],
+    statusTokens: ["config.response.reasoningSummary"],
+    readmeTerms: ["response_reasoning_summary"],
+    setupTerms: ["response_reasoning_summary"],
+  },
+  {
+    path: "browser.embedded",
+    writerTokens: ["params.browser_embedded"],
+    statusTokens: ["config.browser.embedded"],
+    readmeTerms: ["browser_embedded"],
+    setupTerms: ["browser_embedded"],
+  },
+  {
+    path: "browser.defaultBrowser",
+    writerTokens: ["params.browser_default"],
+    statusTokens: ["config.browser.defaultBrowser"],
+    readmeTerms: ["browser_default"],
+    setupTerms: ["browser_default"],
+  },
+  {
+    path: "browser.externalBrowsers",
+    writerTokens: ["params.browser_external"],
+    statusTokens: ["config.browser.externalBrowsers"],
+    readmeTerms: ["browser_external"],
+    setupTerms: ["browser_external"],
+  },
+  {
+    path: "browser.control",
+    writerTokens: ["params.browser_control"],
+    statusTokens: ["config.browser.control"],
+    readmeTerms: ["browser_control"],
+    setupTerms: ["browser_control"],
+  },
+  {
     path: "capabilities.discovery",
     writerTokens: ["params.capability_discovery"],
     statusTokens: ["config.capabilities.discovery"],
@@ -68,6 +131,13 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["Web theme"],
   },
   {
+    path: "ui.webAppearance",
+    writerTokens: ["params.ui_web_appearance"],
+    statusTokens: ["config.ui.webAppearance"],
+    readmeTerms: ["ui.webAppearance"],
+    setupTerms: ["ui.webAppearance"],
+  },
+  {
     path: "ui.webChatWidth",
     writerTokens: ["params.ui_web_chat_width"],
     statusTokens: ["config.ui.webChatWidth"],
@@ -101,6 +171,13 @@ const CONFIG_FIELD_CONTRACT = [
     statusTokens: ["config.ui.webExpandThinking"],
     readmeTerms: ["思考块"],
     setupTerms: ["thinking blocks"],
+  },
+  {
+    path: "ui.webHiddenThinkingLevels",
+    writerTokens: ["params.web_hidden_thinking_levels"],
+    statusTokens: ["config.ui.webHiddenThinkingLevels"],
+    readmeTerms: ["web_hidden_thinking_levels"],
+    setupTerms: ["web_hidden_thinking_levels"],
   },
   {
     path: "ui.webPinnedSort",

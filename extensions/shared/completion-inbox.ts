@@ -31,6 +31,8 @@ export interface CompletionDeadLetter {
   readonly failure: "owner-unavailable" | "stale-owner";
 }
 
+const MAX_DEAD_LETTERS = 64;
+
 function sameOwner(left: CompletionOwner, right: CompletionOwner) {
   return (
     Boolean(left.sessionId) &&
@@ -77,6 +79,7 @@ export function createCompletionInbox<T>() {
     envelope: CompletionEnvelope<T>,
     failure: CompletionDeadLetter["failure"],
   ) => {
+    if (deadLetters.length >= MAX_DEAD_LETTERS) deadLetters.shift();
     deadLetters.push({
       deliveryId: envelope.deliveryId,
       producer: envelope.producer,
