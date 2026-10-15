@@ -14,6 +14,8 @@ pi install git:github.com/openpi-dev/openpi
 
 Pi installs the package dependencies automatically. Restart Pi or run `/reload` after installation.
 
+Before choosing package extensions in Pi, read the [extension selection and prerequisites guide](CAPABILITY_GUIDE.md). It separates the 35 selectable entries, six runtime discovery groups, and actual execution prerequisites; selecting an extension is not proof of a working model, binary, permission, or connection.
+
 ## Optional web search
 
 The repository-owned `extensions/web-search/` Pi extension is off by default. **Settings → Web search** or `/openpi-setup enable web search` sets `web_search_enabled`. Search defaults to the current Session model and reuses Pi's actual protocol, connection, and credentials. It is a provider-hosted tool in the same model request, without a second model/provider stack, independent summary request, external search key, or OpenPI capability group. The model decides when to search. No provider, protocol, or model fallback is performed.
