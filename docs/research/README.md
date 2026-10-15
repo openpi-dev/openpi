@@ -2,6 +2,8 @@
 
 Research records preserve sourced investigation and distinguish observations, inferences, recommendations, and unknowns. They are not accepted Decisions or proof of runtime behavior by themselves.
 
+New governed records start from [`TEMPLATE.md`](TEMPLATE.md), retain the required metadata, and link back to their source Issue. The checker currently enforces this contract for `docs/research` and `docs/benchmarks`; existing paths recorded in `scripts/knowledge-legacy-records.json` remain legacy until a scoped review explicitly migrates them. New paths require metadata. A byte change alone does not migrate a legacy record.
+
 ## Source-verified designs
 
 - [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection ([#446](https://github.com/openpi-dev/openpi/issues/446)).
@@ -126,3 +128,5 @@ The following records predate [`Decision 0001`](../decisions/0001-documentation-
 - [`CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md) — version-scoped Workflow contract interview and evidence boundary.
 
 When research changes a project constraint, preserve the adopted choice in a Decision. Amend or supersede a historical record rather than silently rewriting its original conclusion.
+
+The fixed-main legacy baseline is supplemented only by explicit historical integration admissions in `scripts/knowledge-historical-admissions.json`, with public source commits and scoped PR review provenance. These admissions preserve legacy status; they do not validate content or admit new sibling paths.

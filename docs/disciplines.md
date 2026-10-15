@@ -32,6 +32,7 @@ reachability, not adoption or evidence-validation state.
 | OP-10 | Lint warnings fail the validation round | enforced | yes | `bun run lint` |
 | OP-11 | TypeScript is checked without emitting files | enforced | yes | `bun run typecheck` |
 | OP-12 | Runtime provenance is verified before diagnosis | manual | no | `bun run provenance` |
+| OP-13 | Governed research and Benchmark records are well-formed, indexed, and link-valid | enforced | yes | `bun run check:knowledge-contract` |
 
 `manual` rows are intentional: they document a contributor action that cannot
 be proved by a repository-only check without changing the installed Pi state.
