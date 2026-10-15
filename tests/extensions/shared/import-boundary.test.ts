@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import test from "node:test";
 import { stripTypeScriptTypes } from "node:module";
+import { posix, relative, resolve, sep, win32 } from "node:path";
+import test from "node:test";
 import { parse } from "acorn";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -57,17 +57,25 @@ function runtimeImports(source: string) {
   });
 }
 
-function violatesSearchBoundary(file: string, source: string) {
+function violatesSearchBoundary(
+  file: string,
+  source: string,
+  paths = { resolve, relative, sep },
+  root = ROOT,
+) {
   return runtimeImports(source).filter((specifier) => {
     if (!specifier.startsWith(".")) return false;
-    const target = resolve(ROOT, file, "..", specifier);
+    const target = paths
+      .relative(root, paths.resolve(root, file, "..", specifier))
+      .split(paths.sep)
+      .join("/");
     if (SEARCH_SHARED.includes(file)) {
       return (
-        target.startsWith(resolve(ROOT, "extensions") + "/") &&
-        !target.startsWith(resolve(ROOT, "extensions/shared") + "/")
+        target.startsWith("extensions/") &&
+        !target.startsWith("extensions/shared/")
       );
     }
-    return /\/extensions\/file-search\/src\/(?:output|process)\.ts$/.test(
+    return /^extensions\/file-search\/src\/(?:output|process)\.ts$/.test(
       target,
     );
   });
@@ -88,37 +96,76 @@ test("shared search implementations and their consumers keep the extracted bound
   }
 });
 
-test("search guard rejects value/mixed imports and re-exports, permits pure types", () => {
-  for (const source of [
-    'import { x } from "../file-search/src/output.ts";',
-    'import { type as value } from "../file-search/src/output.ts";',
-    'import { type T, x } from "../file-search/src/output.ts";',
-    'export * from "../file-search/src/output.ts";',
-    'export { x } from "../file-search/src/output.ts";',
-    'import "../file-search/src/output.ts";',
-  ])
-    assert.equal(
-      violatesSearchBoundary(SEARCH_SHARED[0]!, source).length,
-      1,
-      source,
-    );
-  for (const source of [
-    'import type { T } from "../subagents/src/domain.ts";',
-    'import { type T } from "../subagents/src/domain.ts";',
-    'export type { T } from "../subagents/src/domain.ts";',
-    'export { type T } from "../subagents/src/domain.ts";',
-    'import { x } from "./search-output.ts";',
-  ])
-    assert.deepEqual(
-      violatesSearchBoundary(SEARCH_SHARED[0]!, source),
-      [],
-      source,
-    );
-  assert.equal(
-    violatesSearchBoundary(
-      CONSUMERS[1]!,
-      'export * from "../file-search/src/process.ts";',
-    ).length,
-    1,
-  );
-});
+for (const [platform, paths, root] of [
+  ["posix", posix, "/review/repo"],
+  ["win32", win32, "C:/review/repo"],
+] as const) {
+  test(`${platform} search guard rejects values/re-exports and permits pure types`, () => {
+    const violations = (file: string, source: string) =>
+      violatesSearchBoundary(file, source, paths, root);
+    for (const source of [
+      'import { x } from "../file-search/src/output.ts";',
+      'import { type as value } from "../file-search/src/output.ts";',
+      'import { type T, x } from "../file-search/src/output.ts";',
+      'export * from "../file-search/src/output.ts";',
+      'export { x } from "../file-search/src/output.ts";',
+      'import "../file-search/src/output.ts";',
+    ])
+      assert.equal(violations(SEARCH_SHARED[0]!, source).length, 1, source);
+    for (const source of [
+      'import type { T } from "../subagents/src/domain.ts";',
+      'import { type T } from "../subagents/src/domain.ts";',
+      'export type { T } from "../subagents/src/domain.ts";',
+      'export { type T } from "../subagents/src/domain.ts";',
+      'import { x } from "./search-output.ts";',
+    ])
+      assert.deepEqual(violations(SEARCH_SHARED[0]!, source), [], source);
+    for (const file of CONSUMERS) {
+      for (const name of ["output", "process"]) {
+        const relativeSpecifier = paths
+          .relative(
+            paths.resolve(root, file, ".."),
+            paths.resolve(root, `extensions/file-search/src/${name}.ts`),
+          )
+          .split(paths.sep)
+          .join("/");
+        const specifier = relativeSpecifier.startsWith(".")
+          ? relativeSpecifier
+          : `./${relativeSpecifier}`;
+        for (const clause of [
+          "import { x } from",
+          "import { type as value } from",
+          "import { type T, x } from",
+          "export * from",
+          "export { x } from",
+          "import",
+        ]) {
+          const source = `${clause} "${specifier}";`;
+          assert.equal(
+            violations(file, source).length,
+            1,
+            `${file}: ${source}`,
+          );
+        }
+        for (const clause of [
+          "import type { T } from",
+          "import { type T } from",
+          "export type { T } from",
+          "export { type T } from",
+        ]) {
+          const source = `${clause} "${specifier}";`;
+          assert.deepEqual(violations(file, source), [], `${file}: ${source}`);
+        }
+      }
+    }
+    // Unrelated modules, sibling path prefixes and parent directories are not
+    // this seam's private implementation. Existing shared seams remain valid.
+    for (const source of [
+      'import { x } from "../../extensions-other/file.ts";',
+      'import { x } from "../../other/extensions/file-search/src/process.ts";',
+      'import { x } from "../file-search/src/other.ts";',
+      'import { x } from "../shared/agent-tool-renderer.ts";',
+    ])
+      assert.deepEqual(violations(CONSUMERS[1]!, source), [], source);
+  });
+}
