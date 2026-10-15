@@ -203,9 +203,11 @@ it("dismisses only the focused Files tooltip before its preview and Workbar, lea
     ),
   );
   await open("files");
-  fireEvent.click(await screen.findByRole("button", { name: "README.md" }));
-  await screen.findByRole("heading", { name: "Read me" });
   const workbar = view.container.querySelector<HTMLElement>(".workbar-panel")!;
+  fireEvent.click(
+    await within(workbar).findByRole("button", { name: "README.md" }),
+  );
+  await screen.findByRole("heading", { name: "Read me" });
   const preview = view.container.querySelector<HTMLElement>(".artifact-panel")!;
   const copy = within(preview).getByRole("button", {
     name: i18n.t("copyFilePath"),
