@@ -10,7 +10,13 @@ it("encodes the archived Session query and opaque cursor and forwards cancellati
   const request = vi.spyOn(client, "request").mockResolvedValue({});
   const controller = new AbortController();
   await client.listArchivedSessions(
-    { query: "word & space", cursor: "opaque+/=", limit: 25 },
+    {
+      query: "word & space",
+      cursor: "opaque+/=",
+      limit: 25,
+      sort: "created",
+      cwd: "/projects/word & space",
+    },
     controller.signal,
   );
   const [path, options] = request.mock.calls[0]!;
@@ -19,6 +25,8 @@ it("encodes the archived Session query and opaque cursor and forwards cancellati
   expect(url.searchParams.get("q")).toBe("word & space");
   expect(url.searchParams.get("cursor")).toBe("opaque+/=");
   expect(url.searchParams.get("limit")).toBe("25");
+  expect(url.searchParams.get("sort")).toBe("created");
+  expect(url.searchParams.get("cwd")).toBe("/projects/word & space");
   expect(options?.signal).toBe(controller.signal);
 });
 

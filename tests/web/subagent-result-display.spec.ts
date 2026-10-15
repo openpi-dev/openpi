@@ -149,8 +149,11 @@ it("shows exact background result batches once and keeps the parent's historical
   expect(container.textContent).not.toContain("model transport instruction");
   const cards = container.querySelectorAll(".activity-card.subagent");
   expect(cards).toHaveLength(2);
-  expect(cards[0]?.querySelector('[aria-label="completed"]')).toBeTruthy();
-  expect(cards[1]?.querySelector('[aria-label="completed"]')).toBeTruthy();
+  expect(screen.getAllByText(i18n.t("subagentState_done"))).toHaveLength(3);
+  for (const name of ["agent-1", "agent-2", "agent-3"])
+    expect(
+      screen.getByText(name).closest(".subagent-card-open")?.textContent,
+    ).toContain(i18n.t("subagentState_done"));
   expect(cards[0]?.querySelector("summary")?.textContent).toContain(
     i18n.t("subagentBackgroundResult", { count: 2 }),
   );
@@ -165,7 +168,7 @@ it("shows exact background result batches once and keeps the parent's historical
 
 it.each([
   [{ status: "error" }, "error"],
-  [{ status: "error", outcome: "interrupted" }, "warn"],
+  [{ status: "error", outcome: "interrupted" }, "interrupted"],
   [{ status: "running" }, "running"],
   [{}, "unknown"],
 ] as const)(
@@ -180,19 +183,14 @@ it.each([
       }),
     ]);
     const { container } = render(view(value));
-    if (expected !== "unknown")
-      expect(
-        container.querySelector(`.activity-card .status-mark.${expected}`),
-      ).toBeTruthy();
-    else
-      expect(container.querySelector(".activity-card .status-mark")).toBeNull();
-    if ("outcome" in result && result.outcome === "interrupted")
-      expect(
-        container.querySelector(".activity-card summary")?.textContent,
-      ).toContain(i18n.t("subagentState_interrupted"));
-    expect(
-      container.querySelector('.activity-card [aria-label="completed"]'),
-    ).toBeNull();
+    const second = screen.getByText("sa-2").closest(".subagent-card-open");
+    expect(second?.textContent).toContain(
+      i18n.t(
+        expected === "unknown" ? "unknownState" : `subagentState_${expected}`,
+      ),
+    );
+    expect(second?.textContent).not.toContain(i18n.t("subagentState_done"));
+    expect(container.querySelector(".subagent-activity > summary")).toBeNull();
   },
 );
 
@@ -215,10 +213,19 @@ it("keeps visible reasoning evidence while ignoring whitespace-only provider par
   ]);
   const { container } = render(view(value));
   expect(container.querySelectorAll(".thinking-line")).toHaveLength(1);
-  expect(container.querySelector(".thinking-line pre")?.textContent).toBe(
-    "Checked the tools.",
-  );
-  expect(container.querySelector(".process-sequence small")?.textContent).toBe(
-    i18n.t("processThinkingCount", { count: 1 }),
-  );
+  expect(container.querySelector(".thinking-line .markdown")).toBeNull();
+  expect(
+    container.querySelector(".thinking-line summary")?.textContent,
+  ).toContain("Checked the tools.");
+  expect(
+    container.querySelector(".thinking-line .tool-icon .lucide-lightbulb"),
+  ).not.toBeNull();
+  expect(container.querySelector(".thinking-line .tool-name")).toBeNull();
+  expect(
+    container.querySelector(".process-sequence:not(.single-process)"),
+  ).toBeNull();
+  const sequence =
+    container.querySelector<HTMLDetailsElement>(".single-process")!;
+  expect(sequence.open).toBe(true);
+  expect(sequence.querySelector("summary")?.hidden).toBe(true);
 });

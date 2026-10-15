@@ -75,6 +75,7 @@ import {
   frameConnectMessage,
   streamCursor,
 } from "../../../extensions/ai-providers/cursor/provider.ts";
+import { CURSOR_PI_TOOLS_SYSTEM_PROMPT } from "../../../extensions/ai-providers/cursor/tool-bridge.ts";
 
 const MODEL: Model<Api> = {
   ...CURSOR_MODELS[0]!,
@@ -359,6 +360,38 @@ test("Cursor image-path conversion is scoped to interactive Cursor input", async
     } as ExtensionContext),
     { action: "continue" },
   );
+});
+
+test("Cursor image-path conversion requires literal GIF and WebP signature bytes", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-cursor-signatures-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const signature of ["GIF87a", "GIF89a", "RIFF\0\0\0\0WEBP"]) {
+    const bytes = Buffer.from(signature);
+    const path = join(
+      directory,
+      signature.startsWith("GIF") ? "fixture.gif" : "fixture.webp",
+    );
+    const event = {
+      type: "input" as const,
+      source: "interactive" as const,
+      text: JSON.stringify(path),
+    };
+    const context = { model: { provider: "cursor" } } as ExtensionContext;
+    await writeFile(path, bytes);
+    const valid = await transformCursorImageInput(event, context);
+    assert.equal(valid.action, "transform");
+    for (let index = 0; index < bytes.length; index++) {
+      if (signature.startsWith("RIFF") && index >= 4 && index < 8) continue;
+      const corrupted = Buffer.from(bytes);
+      corrupted[index]! |= 0x80;
+      await writeFile(path, corrupted);
+      assert.deepEqual(
+        await transformCursorImageInput(event, context),
+        { action: "continue" },
+        `signature byte ${index}`,
+      );
+    }
+  }
 });
 
 test("Cursor multi-turn request omits prior thinking outside OMP's Kimi-only replay", async () => {
@@ -1394,6 +1427,12 @@ for (const scenario of REQUEST_CONTEXT_CASES) {
     assert.equal(advertisedRules?.[0]?.content, scenario.expectedSystemPrompt);
     assert.equal(advertisedRules?.[0]?.fullPath, "/pi/system-prompt.mdc");
     assert.equal(advertisedRules?.[1]?.fullPath, "/pi/cursor-tools.mdc");
+    assert.equal(advertisedRules?.[1]?.content, CURSOR_PI_TOOLS_SYSTEM_PROMPT);
+    assert.match(advertisedRules?.[1]?.content ?? "", /read, rg, or bash/u);
+    assert.doesNotMatch(
+      advertisedRules?.[1]?.content ?? "",
+      /openpi MCP tools/u,
+    );
     assert.equal(
       advertised?.every(
         ({ providerIdentifier }) => providerIdentifier === "openpi",

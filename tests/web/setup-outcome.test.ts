@@ -101,21 +101,28 @@ test("only the latest setup episode is projected, independent of transcript leng
   );
 });
 
-test("a queued request rejected before delivery replaces a prior successful receipt", () => {
-  const entries = [
-    request(),
-    saved([]),
-    {
-      type: "custom_message",
-      id: "blocked",
-      customType: "openpi-setup-closed",
-      content: "Exit Plan mode before changing settings.",
-      details: { reason: "plan_mode_active" },
-    },
-  ];
-  assert.deepEqual(projectSetupOutcome(entries, false), {
-    requestId: "blocked",
-    status: "failed",
-    error: "Exit Plan mode before changing settings.",
-  });
+test("a request rejected before delivery replaces a prior successful receipt with an exact canonical failure", () => {
+  for (const reason of [
+    "plan_mode_active",
+    "writer_activation_failed",
+    "config_read_failed",
+  ]) {
+    const entries = [
+      request(),
+      saved([]),
+      {
+        type: "custom_message",
+        id: "blocked",
+        customType: "openpi-setup-closed",
+        content: "Exit Plan mode before changing settings.",
+        details: { reason },
+      },
+    ];
+    assert.deepEqual(projectSetupOutcome(entries, false), {
+      requestId: "blocked",
+      status: "failed",
+      error: "Exit Plan mode before changing settings.",
+    });
+    assert.equal(projectSetupOutcome(entries, true)?.status, "failed");
+  }
 });

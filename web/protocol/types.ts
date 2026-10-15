@@ -1,10 +1,14 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { WebAppearancePreference } from "../../extensions/shared/setup-config.ts";
+export type { WebAppearancePreference } from "../../extensions/shared/setup-config.ts";
 import { readTurnTiming, WEB_TURN_TIMING_ENTRY } from "./turn-timing.ts";
 import { readTurnChangesDetail, summarizeTurnChanges, WEB_TURN_CHANGES_ENTRY, type WebTurnChanges } from "./turn-changes.ts";
 import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK, WEB_COMMAND_HANDLED } from "../../extensions/shared/web-command-feedback.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
+import type { MyPiSetupConfig, ReasoningLevel } from "../../extensions/shared/setup-config.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
+import { readNativeSearchEvidence, type NativeSearchActivity } from "../../extensions/web-search/native.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
@@ -24,6 +28,7 @@ export const WEB_MAX_ARCHIVED_SESSION_PAGE = 50;
 export const WEB_MAX_ARCHIVED_SESSION_QUERY = 160;
 export const WEB_MAX_ARCHIVED_SESSION_CURSOR = 512;
 export const WEB_MAX_ARCHIVED_SESSION_SCAN = 5_000;
+export const WEB_MAX_ARCHIVED_SESSION_CWD = 4_096;
 export const WEB_MAX_MODEL_SEARCH_RESULTS = 50;
 export const WEB_MAX_MODEL_SEARCH_BYTES = 64 * 1024;
 export const WEB_MAX_MODEL_QUERY = 200;
@@ -151,6 +156,8 @@ export interface WebSettingsSkillSummary {
   scope: "user" | "project" | "temporary";
   origin: "package" | "top-level";
   disableModelInvocation: boolean;
+  /** False when a bounded projection cannot retain an exact operation target. */
+  canManage?: boolean;
 }
 
 export interface WebSettingsExtensionSummary {
@@ -166,6 +173,16 @@ export interface WebSettingsPluginSummary {
   scope: "user" | "project" | "temporary";
   origin: "package" | "top-level";
   baseDir?: string;
+  /** Native configuration on disk, distinct from this Session's loaded resources. */
+  configured?: boolean;
+  /** False when a bounded projection cannot retain an exact operation target. */
+  canManage?: boolean;
+  enabled?: boolean;
+  installed?: boolean;
+  name?: string;
+  installedVersion?: string;
+  configuredVersion?: string;
+  diagnostics?: string[];
   extensions: WebSettingsExtensionSummary[];
   skills: string[];
   prompts: string[];
@@ -182,6 +199,7 @@ export interface WebSettingsResourceCatalog {
     themes: number;
   };
   diagnostics: {
+    settingsErrors?: number;
     extensionErrors: number;
     skillErrors: number;
   };
@@ -194,6 +212,8 @@ export interface WebSettingsResourceCatalog {
 }
 
 export interface WebOpenPiSetupProjection {
+  webSearch?: { enabled: boolean };
+  response?: MyPiSetupConfig["response"];
   capabilities: {
     discovery: "explicit" | "adaptive";
   };
@@ -211,11 +231,13 @@ export interface WebOpenPiSetupProjection {
   };
   ui: {
     webTheme: WebThemePreference;
+    webAppearance?: WebAppearancePreference;
     webChatWidth: number;
     webSidebarWidth?: number;
     webAuxiliaryWidth?: number;
     webChatFontSize: number;
     webExpandThinking: boolean;
+    webHiddenThinkingLevels?: readonly ReasoningLevel[];
     webPinnedSort?: "manual" | "updated";
     showHeader: boolean;
     customFooter: boolean;
@@ -236,12 +258,28 @@ export interface WebOpenPiSetupProjection {
 }
 
 export interface WebSettingsCatalog {
+  webSearch?: { available: boolean; reason?: string; model?: string; provider?: string };
+  responseSupport?: { verbosity: boolean; reasoningSummary: boolean };
+  thinking?: WebThinkingState;
+  setupWritable?: boolean;
+  setupDiagnostics?: readonly { severity: "error" | "warning"; path: string; message: string }[];
+  setupDiagnosticsOmitted?: number;
   sessionId: string;
+  sessionPath?: string;
   setup: WebOpenPiSetupProjection;
   resources: WebSettingsResourceCatalog;
 }
 
+export interface WebArchivedSessionQuery {
+  readonly query?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly sort?: "updated" | "created";
+  readonly cwd?: string;
+}
+
 export interface WebSettingsPreferencesPatch {
+  hiddenThinkingLevels?: readonly ReasoningLevel[];
   subagentResultDisplay?: "full" | "compact";
   bashToolDisplay?: "full" | "compact";
   fileMutationDisplay?: "full" | "compact";
@@ -249,6 +287,7 @@ export interface WebSettingsPreferencesPatch {
   footerStyle?: "plain" | "powerline" | "powerline-mono";
   pinnedSort?: "manual" | "updated";
   theme?: WebThemePreference;
+  appearance?: WebAppearancePreference;
   chatWidth?: number;
   sidebarWidth?: number;
   auxiliaryWidth?: number;
@@ -345,6 +384,7 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  webSearch?: (NativeSearchActivity & { beforePartIndex?: number })[];
   timestamp?: number;
   commandId?: string;
   terminalReceipt?: ReturnType<typeof bashReceipt>;
@@ -378,7 +418,7 @@ export type WebMessagePart =
       previewUrl?: string;
       sourcePartIndex?: number;
     }
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; text: string; sourcePartIndex?: number; textTruncated?: true }
   | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
 
 export interface WebSnapshotTruncation {
@@ -487,12 +527,14 @@ export interface WebSnapshot {
   cursor: number;
   preferences: {
     theme: WebThemePreference;
+    appearance?: WebAppearancePreference;
     /** Optional for compatibility with snapshots emitted before Web display preferences existed. */
     chatWidth?: number;
     sidebarWidth?: number;
     auxiliaryWidth?: number;
     chatFontSize?: number;
     expandThinking?: boolean;
+    hiddenThinkingLevels?: readonly ReasoningLevel[];
     subagentResultDisplay?: "full" | "compact";
     bashToolDisplay?: "full" | "compact";
     fileMutationDisplay?: "full" | "compact";
@@ -611,9 +653,12 @@ function boundedStructuredValue(
     if (value.length > length) budget.truncated = true;
     const projected: unknown[] = [];
     for (let index = 0; index < length; index++) {
+      if (budget.nodes <= 0 || budget.bytes <= 0) {
+        budget.truncated = true;
+        break;
+      }
       const item = boundedStructuredValue(value[index], budget, depth + 1);
       if (item !== undefined) projected.push(item);
-      if (budget.nodes <= 0 || budget.bytes <= 0) break;
     }
     return projected;
   }
@@ -625,6 +670,10 @@ function boundedStructuredValue(
       break;
     }
     if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    if (budget.nodes <= 0 || budget.bytes <= 0) {
+      budget.truncated = true;
+      break;
+    }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor || !("value" in descriptor)) {
       budget.truncated = true;
@@ -632,8 +681,14 @@ function boundedStructuredValue(
     }
     const boundedKey = consumeStructuredText(key, budget);
     const item = boundedStructuredValue(descriptor.value, budget, depth + 1);
-    if (item !== undefined) projected[boundedKey] = item;
-    if (budget.nodes <= 0 || budget.bytes <= 0) break;
+    if (item !== undefined) {
+      Object.defineProperty(projected, boundedKey, {
+        value: item,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
   }
   return projected;
 }
@@ -737,7 +792,8 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       typeof typed.thinking === "string"
     ) {
       const text = boundedTextProjection(typed.thinking, WEB_MAX_TEXT);
-      projected = { type: "thinking", text: text.value };
+      projected = { type: "thinking", text: text.value, sourcePartIndex: index,
+        ...(text.truncated ? { textTruncated: true as const } : {}) };
       textTruncated ||= text.truncated;
     } else if (typed.type === "toolCall") {
       const argumentsBudget: StructuredBudget = {
@@ -808,12 +864,35 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
   };
 }
 
+function projectNativeSearch(message: unknown, partCount: number) {
+  const evidence = readNativeSearchEvidence(message);
+  if (!evidence?.activities.length) return undefined;
+  // Pi 0.99.1 emits one normalized content part for each of these provider
+  // blocks. Hosted calls/results are omitted by Pi, so retain their positions
+  // separately without inventing executable function calls.
+  const normalizedTypes = evidence.adapter === "responses"
+    ? ["message", "reasoning", "function_call", "custom_tool_call"]
+    : ["text", "thinking", "redacted_thinking", "tool_use"];
+  const positions = new Map<string, number>();
+  let beforePartIndex = 0;
+  for (const item of evidence.output) {
+    if (normalizedTypes.includes(String(item.type)))
+      beforePartIndex = Math.min(partCount, beforePartIndex + 1);
+    else if (typeof item.id === "string") positions.set(item.id, beforePartIndex);
+  }
+  return evidence.activities.slice(0, 32).map((item) => ({
+    id: item.id.slice(0, 128), status: item.status, query: item.query.slice(0, 500),
+    beforePartIndex: positions.get(item.id) ?? 0,
+  }));
+}
+
 export function projectMessage(message: unknown, resolvePath?: (path: string) => string | undefined): WebLiveMessage {
   const value =
     message && typeof message === "object"
       ? (message as Record<string, unknown>)
       : {};
   const content = projectContent(value, resolvePath);
+  const webSearch = projectNativeSearch(value, content.parts.length);
   const details = detailsProjection(value.details);
   const role =
     typeof value.role === "string"
@@ -849,6 +928,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
+    ...(webSearch ? { webSearch } : {}),
     ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
     ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,
@@ -898,6 +978,26 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
   if (entry.type === "custom" && entry.customType === WEB_TURN_CHANGES_ENTRY) {
     const detail = readTurnChangesDetail(entry.data);
     if (detail) return { type: entry.type, ...metadata, turnChanges: summarizeTurnChanges(detail) };
+  }
+  if (entry.type === "custom" && entry.customType === "subagent-finished") {
+    // The owner persists settlement before deferred parent result delivery.
+    // Retain only display facts; private evidence locators stay in Pi's record.
+    const own = (value: unknown, key: string): unknown => value && typeof value === "object"
+      ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;
+    const id = own(entry.data, "id");
+    const status = own(entry.data, "status");
+    if (typeof id === "string" && id.length > 0 && id.length <= 160 &&
+      !/[\u0000-\u001f\u007f]/u.test(id) && (status === "done" || status === "error")) {
+      const title = own(entry.data, "title");
+      const titleProjection = typeof title === "string" ? boundedTextProjection(title, WEB_MAX_METADATA_TEXT) : undefined;
+      const outcome = own(own(own(entry.data, "completion"), "observed"), "outcome");
+      return { type: "message", ...metadata, message: {
+        role: "custom", customType: entry.customType, content: "", display: false,
+        details: { id, status, ...(titleProjection ? { title: titleProjection.value } : {}),
+          ...(outcome === "cancelled" ? { outcome: "interrupted" } : outcome === "uncertain" ? { outcome } : {}) },
+        ...(titleProjection?.truncated ? { truncation: { truncated: true as const, text: true as const } } : {}),
+      } };
+    }
   }
   if (entry.type === "custom" && entry.customType === "subagent-result") {
     // Pi persists the user-facing receipt separately from its hidden model
