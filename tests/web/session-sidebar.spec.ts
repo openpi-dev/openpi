@@ -1461,7 +1461,7 @@ it("distinguishes identical names by path and marks only a snapshot-confirmed se
   ).toBe("location");
   const select = vi.spyOn(actions, "selectSession").mockResolvedValue();
   fireEvent.click(secondButton);
-  expect(select).toHaveBeenCalledWith(second.path);
+  expect(select).toHaveBeenCalledWith(second.path, second.id);
 });
 
 it("keeps a failed rename draft editable and saves it on retry", async () => {
@@ -1854,4 +1854,115 @@ it("reports an empty archived query as bounded when older records remain unscann
     screen.getByText(i18n.t("archiveScanBounded", { count: 12 })),
   ).toBeTruthy();
   expect(screen.queryByText(i18n.t("noMatching"))).toBeNull();
+});
+
+it("metadata results beyond the snapshot retain named first-text matches and exact selection identity", async () => {
+  const hit = {
+    ...session("/sessions/old.jsonl", "/repos/long-example", "Named oldest"),
+    id: "native-old",
+    firstMessage: "unique needle",
+  };
+  const query = vi
+    .spyOn(WebClient.prototype, "listMetadataSessions")
+    .mockResolvedValue({
+      sessions: [hit],
+      truncation: {
+        truncated: false,
+        recordsUnscanned: 0,
+        maxPageSize: 100,
+        maxScanned: 5000,
+      },
+    });
+  const actions = createWebStore().getState().actions;
+  const select = vi.spyOn(actions, "selectSession").mockResolvedValue(true);
+  mount(snapshot([]), { query: "needle", searchOpen: true, actions });
+  const row = await screen.findByRole("button", {
+    name: /Named oldest · \/sessions\/old/,
+  });
+  fireEvent.click(row);
+  expect(select).toHaveBeenCalledWith(hit.path, hit.id);
+  expect(query).toHaveBeenCalledWith(
+    { query: "needle", limit: 50 },
+    expect.any(AbortSignal),
+  );
+});
+
+it("metadata pagination exposes an empty scan continuation and requires refresh after409", async () => {
+  const query = vi
+    .spyOn(WebClient.prototype, "listMetadataSessions")
+    .mockResolvedValueOnce({
+      sessions: [],
+      nextCursor: "empty-window",
+      truncation: {
+        truncated: true,
+        recordsUnscanned: 1,
+        maxPageSize: 100,
+        maxScanned: 5000,
+      },
+    })
+    .mockRejectedValueOnce(
+      new WebApiError("changed", 409, "CATALOG_CURSOR_STALE"),
+    )
+    .mockResolvedValueOnce({
+      sessions: [],
+      truncation: {
+        truncated: false,
+        recordsUnscanned: 0,
+        maxPageSize: 100,
+        maxScanned: 5000,
+      },
+    });
+  mount(snapshot([]), { query: "needle", searchOpen: true });
+  fireEvent.click(
+    await screen.findByRole("button", { name: i18n.t("metadataMore") }),
+  );
+  expect(await screen.findByText(i18n.t("metadataStale"))).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("metadataMore") }),
+  ).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("refreshArchives") }),
+  );
+  await waitFor(() => expect(query).toHaveBeenCalledTimes(3));
+  expect(query.mock.calls[1]?.[0].cursor).toBe("empty-window");
+  expect(query.mock.calls[2]?.[0].cursor).toBeUndefined();
+});
+
+it("metadata chooser aborts changed query and workspace scope and ignores late replies", async () => {
+  let settle!: (
+    value: Awaited<ReturnType<WebClient["listMetadataSessions"]>>,
+  ) => void;
+  const query = vi
+    .spyOn(WebClient.prototype, "listMetadataSessions")
+    .mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          settle = done;
+        }),
+    )
+    .mockImplementation(() => new Promise(() => {}));
+  const view = mount(snapshot([]), {
+    query: "old",
+    searchOpen: true,
+    selectedWorkspace: "/one",
+  });
+  await waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  const signal = query.mock.calls[0]?.[1];
+  view.rerender({ query: "new", selectedWorkspace: "/two" });
+  expect(signal?.aborted).toBe(true);
+  await act(async () =>
+    settle({
+      sessions: [session("/stale", "/one", "stale result")],
+      truncation: {
+        truncated: false,
+        recordsUnscanned: 0,
+        maxPageSize: 100,
+        maxScanned: 5000,
+      },
+    }),
+  );
+  await waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText("stale result")).toBeNull();
+  view.unmount();
+  expect(query.mock.calls[1]?.[1]?.aborted).toBe(true);
 });

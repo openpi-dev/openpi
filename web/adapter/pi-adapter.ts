@@ -45,6 +45,8 @@ import {
   WEB_PROMPT_IMAGE_MAX_BASE64_CHARS,
   type WebSessionProjection,
   type WebArchivedSessionQuery,
+  type WebMetadataSessionQuery,
+  type WebMetadataSessionPage,
   type WebSessionHistoryPage,
   type WebSessionPromptHistoryPage,
   type WebSessionPromptPreview,
@@ -76,6 +78,17 @@ export class WebReadOnlySessionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WebReadOnlySessionError";
+  }
+}
+
+export class WebMetadataQueryError extends Error {
+  readonly code: "INVALID_METADATA_QUERY" | "CATALOG_CURSOR_STALE" | "METADATA_QUERY_BUSY";
+  readonly statusCode: 400 | 409 | 429;
+  constructor(message: string, code: WebMetadataQueryError["code"], statusCode: WebMetadataQueryError["statusCode"]) {
+    super(message);
+    this.code = code;
+    this.statusCode = statusCode;
+    this.name = "WebMetadataQueryError";
   }
 }
 
@@ -1254,6 +1267,99 @@ export class PiWebAdapter {
           projected.length,
       ),
     };
+  }
+
+  private metadataQueryPending = false;
+
+  async listMetadataSessions(options: WebMetadataSessionQuery, signal?: AbortSignal): Promise<WebMetadataSessionPage> {
+    const invalid = () => new WebMetadataQueryError("Metadata query is invalid or exceeds its bounds", "INVALID_METADATA_QUERY", 400);
+    const stale = () => new WebMetadataQueryError("Catalog changed; restart this metadata query", "CATALOG_CURSOR_STALE", 409);
+    const raw = options.query;
+    if (raw.length > 200 || /[\u0000-\u001f\u007f]/u.test(raw)) throw invalid();
+    const query = raw.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+    const limit = options.limit ?? 50;
+    if (!query || raw.length > 200 || query.length > 200 || /[\u0000-\u001f\u007f]/u.test(raw) ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+      (options.cwd !== undefined && (!isAbsolute(options.cwd) || options.cwd.length > 4096 || /[\u0000-\u001f\u007f]/u.test(options.cwd)))) throw invalid();
+    const cwd = options.cwd === undefined ? undefined : resolve(options.cwd);
+    const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    const contextHash = digest(["metadata", query, "active-web", cwd ?? null, "modified-path-id-v1", limit]);
+    let cursor: { contextHash: string; revision: string; pathHash: string; id: string } | undefined;
+    if (options.cursor !== undefined) {
+      try {
+        if (!options.cursor || options.cursor.length > 1024) throw invalid();
+        const bytes = Buffer.from(options.cursor, "base64url");
+        const parsed = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+        if (bytes.toString("base64url") !== options.cursor || !parsed || Array.isArray(parsed) ||
+          Object.keys(parsed).sort().join(",") !== "contextHash,id,kind,pathHash,revision,version" ||
+          parsed.kind !== "metadata" || parsed.version !== 1 ||
+          typeof parsed.id !== "string" || !parsed.id || parsed.id.length > 128 ||
+          ![parsed.contextHash, parsed.revision, parsed.pathHash].every((value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value))) throw invalid();
+        cursor = { contextHash: parsed.contextHash as string, revision: parsed.revision as string, pathHash: parsed.pathHash as string, id: parsed.id };
+      } catch { throw invalid(); }
+      if (cursor.contextHash !== contextHash) throw stale();
+    }
+    signal?.throwIfAborted();
+    if (this.metadataQueryPending) throw new WebMetadataQueryError("A metadata query is already running", "METADATA_QUERY_BUSY", 429);
+    this.metadataQueryPending = true;
+    try {
+      await this.ensureWorkspaceStateLoaded();
+      await this.ensureArchivesLoaded();
+      // Native discovery reads complete JSONL files. The window below bounds
+      // matching/projection, not discovery IO, bytes or native memory.
+      const catalog = await SessionManager.listAll(this.runtime.sessionDirectory, undefined, signal);
+      signal?.throwIfAborted();
+      const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
+      catalog.sort((left, right) => right.modified.getTime() - left.modified.getTime() || compare(left.path, right.path) || compare(left.id, right.id));
+      const scopeState = () => digest([
+        [...this.archivedSessions].sort(), [...this.hiddenWorkspaces].sort(), [...this.ungroupedSessions].sort(),
+      ]);
+      const scope = scopeState();
+      const revisionHash = createHash("sha256").update(scope);
+      for (const [index, session] of catalog.entries()) {
+        signal?.throwIfAborted();
+        // Custom fork/session-info entries need not change native activity time.
+        // Stat witnesses avoid opening every full branch again for a revision.
+        const info = await lstat(session.path).catch(() => undefined);
+        revisionHash.update(JSON.stringify([session.path, session.id, session.cwd, session.name ?? null, session.firstMessage.slice(0, 2000), session.modified.getTime(), session.created.getTime(), session.messageCount, info ? [info.size, info.mtimeMs, info.ctimeMs, info.isSymbolicLink()] : null]));
+        if (index % 100 === 0) await new Promise<void>((done) => setImmediate(done));
+      }
+      const revision = revisionHash.digest("hex");
+      if (scopeState() !== scope) throw stale();
+      if (cursor && cursor.revision !== revision) throw stale();
+      let start = 0;
+      if (cursor) {
+        const index = catalog.findIndex((session) => digest(session.path) === cursor.pathHash && session.id === cursor.id);
+        if (index < 0) throw stale();
+        start = index + 1;
+      }
+      const sessions: WebSessionSummary[] = [];
+      let end = start;
+      const maxEnd = Math.min(catalog.length, start + 5000);
+      while (end < maxEnd && sessions.length < limit) {
+        signal?.throwIfAborted();
+        const session = catalog[end++]!;
+        if (end % 50 === 0) await new Promise<void>((done) => setImmediate(done));
+        const path = resolve(session.path);
+        if (this.archivedSessions.has(path) || cwd !== undefined && resolve(session.cwd) !== cwd) continue;
+        const fields = [session.name ?? "", session.cwd, session.firstMessage.slice(0, 2000)];
+        if (!fields.some((field) => field.normalize("NFKC").toLocaleLowerCase("en-US").includes(query))) continue;
+        const state = this.sidebarState(session);
+        if (!this.ungroupedSessions.has(path) && this.hiddenWorkspaces.has(resolve(state.workspacePath ?? session.cwd))) continue;
+        const pinOrder = this.sidebarPins.findIndex((pin) => pin.kind === "session" && pin.path === session.path && pin.id === session.id);
+        sessions.push({ id: session.id, path: session.path, cwd: resolve(session.cwd), source: "web-session", origin: "web", controller: this.isCurrentSession(session) ? "web" : "none", readOnly: false,
+          ...(session.name ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) } : {}),
+          modified: session.modified.toISOString(), created: session.created.toISOString(), messageCount: session.messageCount,
+          firstMessage: boundedText(session.firstMessage, WEB_MAX_SESSION_PREVIEW),
+          ...(this.ungroupedSessions.has(path) ? { ungrouped: true } : {}), ...(pinOrder >= 0 ? { pinOrder } : {}), ...state });
+      }
+      signal?.throwIfAborted();
+      if (scopeState() !== scope) throw stale();
+      const anchor = end < catalog.length ? catalog[end - 1] : undefined;
+      return { sessions,
+        ...(anchor ? { nextCursor: Buffer.from(JSON.stringify({ kind: "metadata", version: 1, contextHash, revision, pathHash: digest(anchor.path), id: anchor.id })).toString("base64url") } : {}),
+        truncation: { truncated: end < catalog.length, recordsUnscanned: catalog.length - end, maxPageSize: 100, maxScanned: 5000 } };
+    } finally { this.metadataQueryPending = false; }
   }
 
   async listSessions(pinnedPath?: string): Promise<WebSessionSummary[]> {

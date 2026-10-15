@@ -28,6 +28,8 @@ import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebArchivedSessionQuery,
+  type WebMetadataSessionQuery,
+  type WebMetadataSessionPage,
   type WebCommandDiscoveryResult,
   type WebGitReviewResult,
   type WebHistoryAnchor,
@@ -217,6 +219,16 @@ export class WebClient {
     }
     const suffix = query.size ? `?${query}` : "";
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
+  }
+
+  listMetadataSessions(options: WebMetadataSessionQuery, signal?: AbortSignal) {
+    const params = new URLSearchParams({ mode: "metadata", q: options.query });
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.cursor !== undefined) params.set("cursor", options.cursor);
+    if (options.cwd !== undefined) params.set("cwd", options.cwd);
+    return this.request<WebMetadataSessionPage>(`/api/sessions?${params}`, {
+      signal,
+    });
   }
 
   searchTranscripts(

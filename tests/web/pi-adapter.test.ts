@@ -3714,3 +3714,299 @@ test("invalid sidebar metadata remains untouched and blocks later sidebar writes
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("metadata catalog finds canonical sessions beyond500 and matches named first text independently", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-metadata-catalog-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sessions = join(root, "sessions");
+  await mkdir(sessions);
+  const current = SessionManager.create(root, sessions);
+  persistSession(current, "current", 9000);
+  for (let index = 0; index < 501; index++) {
+    const manager = SessionManager.create(root, sessions);
+    persistSession(
+      manager,
+      index === 0 ? "unique first needle" : "ordinary",
+      index + 1,
+    );
+    if (index === 0) manager.appendSessionInfo("named oldest");
+  }
+  const adapter = new PiWebAdapter(runtimeFor(root, sessions, current));
+  const bare = await adapter.listSessionProjection();
+  assert.equal(bare.sessions.length, 500);
+  assert.equal(
+    bare.sessions.some((row) => row.name === "named oldest"),
+    false,
+  );
+  const page = await adapter.listMetadataSessions({
+    query: "ｕｎｉｑｕｅ first needle",
+    limit: 1,
+  });
+  assert.equal(page.sessions.length, 1);
+  assert.equal(page.sessions[0]!.name, "named oldest");
+  assert.equal(page.nextCursor, undefined);
+  assert.equal(page.sessions[0]!.source, "web-session");
+});
+
+test("metadata cursors bind scope and detect rename even without native activity changes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-metadata-cursor-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sessions = join(root, "sessions");
+  const current = SessionManager.create(root, sessions);
+  persistSession(current, "needle", 1);
+  const other = SessionManager.create(root, sessions);
+  persistSession(other, "needle", 2);
+  const adapter = new PiWebAdapter(runtimeFor(root, sessions, current));
+  const first = await adapter.listMetadataSessions({
+    query: "needle",
+    limit: 1,
+  });
+  assert.ok(first.nextCursor);
+  const second = await adapter.listMetadataSessions({
+    query: "needle",
+    limit: 1,
+    cursor: first.nextCursor,
+  });
+  assert.equal(second.sessions.length, 1);
+  assert.notEqual(second.sessions[0]!.path, first.sessions[0]!.path);
+  await assert.rejects(
+    adapter.listMetadataSessions({
+      query: "other",
+      limit: 1,
+      cursor: first.nextCursor,
+    }),
+    { code: "CATALOG_CURSOR_STALE" },
+  );
+  await assert.rejects(
+    adapter.listMetadataSessions({
+      query: "needle",
+      limit: 2,
+      cursor: first.nextCursor,
+    }),
+    { code: "CATALOG_CURSOR_STALE" },
+  );
+  other.appendSessionInfo("renamed without activity");
+  await assert.rejects(
+    adapter.listMetadataSessions({
+      query: "needle",
+      limit: 1,
+      cursor: first.nextCursor,
+    }),
+    { code: "CATALOG_CURSOR_STALE" },
+  );
+});
+
+test("metadata empty scan windows continue and exact final pages have no phantom cursor", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-metadata-window-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const current = SessionManager.create(root, join(root, "sessions"));
+  const catalog = Array.from({ length: 5001 }, (_, index) => ({
+    id: `session-${index}`,
+    path: join(root, `${index}.jsonl`),
+    cwd: root,
+    created: new Date(1),
+    modified: new Date(10000 - index),
+    messageCount: 1,
+    firstMessage: index === 5000 ? "late needle" : "ordinary",
+    allMessagesText: "body-only secret",
+  }));
+  t.mock.method(SessionManager, "listAll", async () => catalog.slice());
+  const adapter = new PiWebAdapter(
+    runtimeFor(root, join(root, "sessions"), current),
+  );
+  const first = await adapter.listMetadataSessions({
+    query: "needle",
+    limit: 1,
+  });
+  assert.deepEqual(first.sessions, []);
+  assert.equal(first.truncation.recordsUnscanned, 1);
+  assert.ok(first.nextCursor);
+  const last = await adapter.listMetadataSessions({
+    query: "needle",
+    limit: 1,
+    cursor: first.nextCursor,
+  });
+  assert.equal(last.sessions[0]!.id, "session-5000");
+  assert.equal(last.nextCursor, undefined);
+  assert.equal(last.truncation.truncated, false);
+  assert.deepEqual(
+    (await adapter.listMetadataSessions({ query: "body-only" })).sessions,
+    [],
+  );
+});
+
+test("metadata rejects ambiguous queries and owns cancellation without a pending queue", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-metadata-cancel-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const current = SessionManager.create(root, join(root, "sessions"));
+  const adapter = new PiWebAdapter(
+    runtimeFor(root, join(root, "sessions"), current),
+  );
+  for (const options of [
+    { query: " " },
+    { query: "x\n" },
+    { query: "ﬃ".repeat(67) },
+    { query: "x", limit: 101 },
+    { query: "x", cursor: "garbage" },
+    { query: "x", cwd: "relative" },
+  ]) {
+    await assert.rejects(adapter.listMetadataSessions(options), {
+      code: "INVALID_METADATA_QUERY",
+    });
+  }
+  const controller = new AbortController();
+  let entered!: () => void;
+  const entry = new Promise<void>((done) => {
+    entered = done;
+  });
+  t.mock.method(
+    SessionManager,
+    "listAll",
+    async (_dir: unknown, _progress: unknown, signal?: AbortSignal) => {
+      assert.equal(signal, controller.signal);
+      entered();
+      await new Promise<void>((_done, reject) =>
+        signal?.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        }),
+      );
+      return [];
+    },
+  );
+  const pending = adapter.listMetadataSessions(
+    { query: "x" },
+    controller.signal,
+  );
+  await entry;
+  await assert.rejects(adapter.listMetadataSessions({ query: "x" }), {
+    code: "METADATA_QUERY_BUSY",
+  });
+  controller.abort(new Error("cancel native discovery"));
+  await assert.rejects(pending, /cancel native discovery/);
+  t.mock.restoreAll();
+  assert.deepEqual(
+    (await adapter.listMetadataSessions({ query: "x" })).sessions,
+    [],
+  );
+});
+
+test("metadata HTTP mode is explicit and preserves bare catalog and transcript contracts", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-metadata-http-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const current = SessionManager.create(root, join(root, "sessions"));
+  persistSession(current, "first needle", 1);
+  current.appendSessionInfo("Named");
+  const host = new WebHost({
+    runtime: runtimeFor(root, join(root, "sessions"), current),
+  });
+  await host.start();
+  t.after(() => host.stop());
+  const url = new URL(host.url);
+  const headers = {
+    Authorization: `Bearer ${new URLSearchParams(url.hash.slice(1)).get("token")}`,
+  };
+  const request = (suffix: string) =>
+    fetch(`${url.origin}${suffix}`, { headers });
+  const bare = await request("/api/sessions");
+  assert.equal(bare.status, 200);
+  assert.equal((await bare.json()).sessions.length, 1);
+  const metadata = await request(
+    "/api/sessions?mode=metadata&q=needle&limit=1",
+  );
+  assert.equal(metadata.status, 200);
+  assert.equal((await metadata.json()).sessions[0].name, "Named");
+  for (const suffix of [
+    "q=needle",
+    "mode=metadata&q=needle&q=other",
+    "mode=metadata&q=needle&limit=1.0",
+    "mode=metadata&q=needle&limit=101",
+    "mode=metadata&q=needle&archived=1",
+    "mode=metadata&q=needle&source=terminal",
+    "mode=metadata&q=needle&cursor=bad",
+  ]) {
+    assert.equal(
+      (await request(`/api/sessions?${suffix}`)).status,
+      400,
+      suffix,
+    );
+  }
+  assert.equal(
+    (await request("/api/sessions/search?q=needle&limit=1")).status,
+    400,
+  );
+  assert.equal((await request("/api/sessions/archived")).status, 200);
+  assert.equal(
+    (
+      await fetch(`${url.origin}/api/sessions?mode=metadata&q=needle`, {
+        method: "POST",
+        headers,
+      })
+    ).status,
+    405,
+  );
+});
+
+test("metadata excludes archives and hidden projects but preserves explicit ungrouped visibility", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-metadata-visibility-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const dir = join(root, "sessions");
+  const hidden = join(root, "hidden");
+  const current = SessionManager.create(root, dir);
+  persistSession(current, "needle current", 10);
+  const hiddenSession = SessionManager.create(hidden, dir);
+  persistSession(hiddenSession, "needle hidden", 2);
+  const archived = SessionManager.create(root, dir);
+  persistSession(archived, "needle archive", 3);
+  await writeFile(
+    join(dir, "workspace-state.json"),
+    JSON.stringify({
+      version: 1,
+      hiddenWorkspaces: [hidden],
+      ungroupedSessions: [],
+      workspaceNames: {},
+      importedWorkspaces: [root],
+      workspaceOrder: [],
+    }),
+  );
+  await writeFile(
+    join(dir, "archived-sessions.json"),
+    JSON.stringify([archived.getSessionFile()]),
+  );
+  const adapter = new PiWebAdapter(runtimeFor(root, dir, current));
+  const page = await adapter.listMetadataSessions({
+    query: "needle",
+    limit: 1,
+  });
+  assert.equal(page.sessions[0]!.path, current.getSessionFile());
+  assert.ok(page.nextCursor);
+  const rest = await adapter.listMetadataSessions({
+    query: "needle",
+    limit: 1,
+    cursor: page.nextCursor,
+  });
+  assert.deepEqual(rest.sessions, []);
+  assert.equal(rest.nextCursor, undefined);
+  assert.deepEqual(
+    (await adapter.listMetadataSessions({ query: "needle", cwd: hidden }))
+      .sessions,
+    [],
+  );
+  await writeFile(
+    join(dir, "workspace-state.json"),
+    JSON.stringify({
+      version: 1,
+      hiddenWorkspaces: [hidden],
+      ungroupedSessions: [hiddenSession.getSessionFile()],
+      workspaceNames: {},
+      importedWorkspaces: [root],
+      workspaceOrder: [],
+    }),
+  );
+  const restored = new PiWebAdapter(runtimeFor(root, dir, current));
+  const ungrouped = await restored.listMetadataSessions({
+    query: "needle",
+    cwd: hidden,
+  });
+  assert.equal(ungrouped.sessions[0]!.path, hiddenSession.getSessionFile());
+  assert.equal(ungrouped.sessions[0]!.ungrouped, true);
+});

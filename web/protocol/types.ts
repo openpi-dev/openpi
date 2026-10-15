@@ -291,6 +291,24 @@ export interface WebSettingsCatalog {
   resources: WebSettingsResourceCatalog;
 }
 
+/** Read-only active Web catalog search; does not search transcript bodies. */
+export interface WebMetadataSessionQuery {
+  query: string;
+  limit?: number;
+  cursor?: string;
+  cwd?: string;
+}
+export interface WebMetadataSessionPage {
+  sessions: WebSessionSummary[];
+  nextCursor?: string;
+  truncation: {
+    truncated: boolean;
+    recordsUnscanned: number;
+    maxPageSize: number;
+    maxScanned: number;
+  };
+}
+
 export interface WebArchivedSessionQuery {
   readonly query?: string;
   readonly cursor?: string;
