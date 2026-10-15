@@ -153,30 +153,31 @@ export function ToolEvidence({
         <span className="evidence-status">{statusLabel}</span>
       </summary>
       <div className="evidence-content">
-        {(fileReference || view.displayPath || view.pathUnavailable) && !view.diff && (
-          <p>
-            <strong>{t("toolRequestedFile")}</strong>{" "}
-            {artifacts && fileReference ? (
-              <button
-                className="artifact-link"
-                type="button"
-                onClick={() => artifacts.open(fileReference)}
-              >
+        {(fileReference || view.displayPath || view.pathUnavailable) &&
+          !view.diff && (
+            <p>
+              <strong>{t("toolRequestedFile")}</strong>{" "}
+              {artifacts && fileReference ? (
+                <button
+                  className="artifact-link"
+                  type="button"
+                  onClick={() => artifacts.open(fileReference)}
+                >
+                  <code>{fileLabel}</code>
+                </button>
+              ) : (
                 <code>{fileLabel}</code>
-              </button>
-            ) : (
-              <code>{fileLabel}</code>
-            )}
-            {cwd && (
-              <>
-                <br />
-                <small>
-                  {t("toolWorkspace")}: {cwd}
-                </small>
-              </>
-            )}
-          </p>
-        )}
+              )}
+              {cwd && (
+                <>
+                  <br />
+                  <small>
+                    {t("toolWorkspace")}: {cwd}
+                  </small>
+                </>
+              )}
+            </p>
+          )}
         {view.pathUnavailable && (
           <p className="evidence-warning">{view.pathUnavailable}</p>
         )}
