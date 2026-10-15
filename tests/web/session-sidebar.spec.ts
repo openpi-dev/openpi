@@ -307,7 +307,7 @@ it("shows only running, unread completion and attention; stopped and unknown rem
   expect(document.querySelector(".session-state-running")).toBeNull();
 });
 
-it("acknowledges only an exact exposed result and keeps a new turn unread", () => {
+it("acknowledges a confirmed loaded view and keeps a new background completion unread", () => {
   vi.useFakeTimers();
   try {
     const completed = session(
@@ -339,28 +339,21 @@ it("acknowledges only an exact exposed result and keeps a new turn unread", () =
         truncated: false,
       },
     };
-    const view = mount(data, { selectedPath: completed.path, connected: true });
-    // Selection and elapsed time cannot prove that even an empty view was read.
+    const view = mount(data, {
+      selectedPath: completed.path,
+      connected: true,
+      sessionViewVisible: false,
+    });
+    // Selecting a path is insufficient until its loaded view is visible.
     act(() => vi.advanceTimersByTime(5000));
     expect(document.querySelector(".session-state-completed")).toBeTruthy();
     view.rerender({
-      completedResultSeen: {
-        sessionId: completed.id,
-        sessionPath: completed.path,
-        commandId: "first",
-        finishedAt: 1,
-        resultEntryId: "wrong-result",
-      },
+      sessionViewVisible: true,
+      selectedPath: "/not-loaded",
     });
     expect(document.querySelector(".session-state-completed")).toBeTruthy();
     view.rerender({
-      completedResultSeen: {
-        sessionId: completed.id,
-        sessionPath: completed.path,
-        commandId: "first",
-        finishedAt: 1,
-        resultEntryId: "first-result",
-      },
+      selectedPath: completed.path,
     });
     expect(document.querySelector(".session-state-completed")).toBeNull();
     completed.execution.lastTurn = {
@@ -369,7 +362,7 @@ it("acknowledges only an exact exposed result and keeps a new turn unread", () =
       outcome: "completed",
       resultEntryId: "second-result",
     };
-    view.rerender({ snapshot: { ...data } });
+    view.rerender({ snapshot: { ...data }, sessionViewVisible: false });
     expect(document.querySelector(".session-state-completed")).toBeTruthy();
     view.unmount();
   } finally {

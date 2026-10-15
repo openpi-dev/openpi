@@ -4083,6 +4083,56 @@ describe("OpenPI Web store", () => {
     },
   );
 
+  it("does not let retry events from a copied Session path change the current run", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const identity = {
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+    };
+    stream.emit(
+      runtimeEvent(5, "auto_retry_start", {
+        ...identity,
+        attempt: 1,
+        maxAttempts: 3,
+      }),
+    );
+    expect(store.getState().liveRetry).toEqual({ attempt: 1, maxAttempts: 3 });
+    stream.emit(
+      runtimeEvent(6, "auto_retry_end", {
+        ...identity,
+        sessionPath: "/tmp/ws/copied.jsonl",
+        attempt: 1,
+        success: true,
+      }),
+    );
+    expect(store.getState().liveRetry).toEqual({ attempt: 1, maxAttempts: 3 });
+    stream.emit(
+      runtimeEvent(7, "auto_retry_start", {
+        ...identity,
+        sessionPath: "/tmp/ws/copied.jsonl",
+        attempt: 2,
+        maxAttempts: 5,
+      }),
+    );
+    expect(store.getState().liveRetry).toEqual({ attempt: 1, maxAttempts: 3 });
+    stream.emit(
+      runtimeEvent(8, "auto_retry_end", {
+        ...identity,
+        attempt: 1,
+        success: true,
+      }),
+    );
+    expect(store.getState().liveRetry).toBeNull();
+    store.getState().actions.stop();
+  });
+
   it("starts a new admission identity only after a definite rejection", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));
@@ -4194,6 +4244,31 @@ it("restores the exact archived path without selecting it and refreshes canonica
   ).toBe(true);
   expect(restore).toHaveBeenCalledWith("/tmp/ws/saved.jsonl");
   expect(client.selections).toEqual([]);
+  expect(store.getState().snapshot?.sessions[0]?.name).toBe("Restored");
+});
+
+it("confirms an accepted restore when a concurrent refresh supersedes its snapshot", async () => {
+  const client = new FakeClient();
+  vi.spyOn(client, "unarchiveSession").mockResolvedValue({
+    path: "/tmp/ws/saved.jsonl",
+    archived: false,
+  });
+  let releaseFirst!: (value: ReturnType<typeof snapshot>) => void;
+  client.snapshots.push(
+    new Promise((resolve) => {
+      releaseFirst = resolve;
+    }),
+  );
+  client.snapshots.push(Promise.resolve(snapshot("Concurrent")));
+  client.snapshots.push(Promise.resolve(snapshot("Restored")));
+  const store = createWebStore(client);
+  const restored = store
+    .getState()
+    .actions.unarchiveSession("/tmp/ws/saved.jsonl");
+  await vi.waitFor(() => expect(client.snapshotPaths.length).toBe(1));
+  await store.getState().actions.refreshSnapshot();
+  releaseFirst(snapshot("Superseded"));
+  expect(await restored).toBe(true);
   expect(store.getState().snapshot?.sessions[0]?.name).toBe("Restored");
 });
 

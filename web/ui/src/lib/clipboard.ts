@@ -1,7 +1,12 @@
 // Adapted from QuinnWan's clipboard fallback in PR #352.
-export async function copyText(text: string) {
+export async function copyText(text: string, targetDocument = document) {
+  const document = targetDocument;
+  const window =
+    (targetDocument.defaultView as (Window & typeof globalThis) | null) ??
+    globalThis.window;
+  const { HTMLInputElement, HTMLTextAreaElement, HTMLElement } = window;
   try {
-    await navigator.clipboard.writeText(text);
+    await window.navigator.clipboard.writeText(text);
     return true;
   } catch {
     // Older browsers and non-secure origins may only support the click fallback.

@@ -37,6 +37,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { shutdownAndDisposeChildSession } from "../../../extensions/shared/child-session.ts";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
+import {
+  webCapabilityDetail,
+  webCapabilitySnapshot,
+} from "../../../extensions/shared/web-observer-registry.ts";
 import { reclaimWorktree } from "../../../extensions/shared/worktree.ts";
 import { persistWorkflowJson } from "../../../extensions/workflows/artifacts.ts";
 import {
@@ -660,6 +664,8 @@ test("a settled launch card does not repaint while its detached run stays active
           invalidations += 1;
         },
         lastComponent: undefined,
+        ...{ durationMs: undefined },
+        ...{ outputPad: 0 },
         state: {},
         cwd: repoDir,
         executionStarted: true,
@@ -973,6 +979,156 @@ test("settled retention is bounded while status and artifacts remain observable"
   };
   assert.equal(lookup.details.runs[0]?.runId, oldestRunId);
   assert.equal(lookup.details.runs[0]?.status, "completed");
+});
+
+test("Web workflow children resolve only exact active or retained owner evidence", async () => {
+  const ownerTools = new Map<string, CapturedTool>();
+  const ownerHandlers = new Map<
+    string,
+    Array<(event: unknown, ctx: ExtensionContext) => unknown>
+  >();
+  const ownerCtx = {
+    ...ctx,
+    sessionManager: {
+      getSessionId: () => "wf-web-owner-session",
+      getEntries: () => [],
+    },
+  } as unknown as ExtensionContext;
+  workflows(
+    {
+      ...pi,
+      registerTool(tool: CapturedTool) {
+        ownerTools.set(tool.name, tool);
+      },
+      on(event: string, handler: unknown) {
+        ownerHandlers.set(event, [
+          ...(ownerHandlers.get(event) ?? []),
+          handler as (event: unknown, ctx: ExtensionContext) => unknown,
+        ]);
+      },
+    } as unknown as ExtensionAPI,
+    { settledRetention: { maxRuns: 8, maxBytes: 64 * 1024 } },
+  );
+  for (const handler of ownerHandlers.get("session_start") ?? []) {
+    await handler({}, { ...ownerCtx, mode: "print" } as ExtensionContext);
+  }
+  const ownerWorkflow = ownerTools.get("workflow")!;
+  const scope = ownerCtx.sessionManager;
+  let releasePrompt = () => {};
+  const promptGate = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  let prompted = false;
+  __setWorkflowTestAgentSessionFactory(async () => ({
+    session: fakeAgentSession("owned workflow answer", promptGate, () => {
+      prompted = true;
+    }),
+  }));
+
+  try {
+    const script =
+      'export const meta = { name: "web-owner" };\nreturn await agent("Inspect the fixture", { agent_type: "bounded-reviewer", label: "Inspector" });';
+    const launch = (await ownerWorkflow.execute(
+      "e2e-web-workflow-owner",
+      { script, wait: false },
+      undefined,
+      undefined,
+      ownerCtx,
+    )) as { details: { runId: string } };
+    const runId = launch.details.runId;
+    const id = `${runId}:call:1`;
+    await waitFor(() => prompted, "Web workflow active child");
+    const active = webCapabilitySnapshot(scope)?.workflows?.items.find(
+      (item) => item.runId === runId,
+    );
+    assert.equal(active?.children?.items[0]?.id, id);
+    assert.equal(active?.children?.items[0]?.status, "running");
+    const activeReceipt = webCapabilityDetail(scope, "workflows", id);
+    assert.equal(activeReceipt.status, "found");
+    assert.ok(
+      activeReceipt.status === "found" &&
+        activeReceipt.detail.kind === "workflows",
+    );
+    assert.equal(activeReceipt.detail.transcriptUnavailable, false);
+    assert.equal(
+      webCapabilityDetail({}, "workflows", id).status,
+      "unavailable",
+    );
+    assert.equal(
+      webCapabilityDetail(scope, "workflows", `${runId}:call:01`).status,
+      "missing",
+    );
+    assert.equal(
+      webCapabilityDetail(scope, "workflows", "Inspector").status,
+      "missing",
+    );
+
+    releasePrompt();
+    await waitFor(
+      () =>
+        webCapabilitySnapshot(scope)?.workflows?.items.find(
+          (item) => item.runId === runId,
+        )?.status === "completed",
+      "Web workflow retained child",
+    );
+    const settled = webCapabilityDetail(scope, "workflows", id);
+    assert.ok(
+      settled.status === "found" && settled.detail.kind === "workflows",
+    );
+    assert.equal(settled.detail.status, "done");
+    assert.equal(settled.detail.transcriptUnavailable, true);
+    assert.deepEqual(settled.detail.transcript, []);
+    assert.equal(settled.detail.finalText, "");
+    assert.equal(
+      JSON.stringify(settled).includes("owned workflow answer"),
+      false,
+    );
+    assert.ok(
+      readFileSync(join(runDirFor(runId), "transcripts.json"), "utf8").includes(
+        "owned workflow answer",
+      ),
+    );
+
+    const resumed = (await ownerWorkflow.execute(
+      "e2e-web-workflow-replay",
+      { script, resume_from_run_id: runId, wait: true },
+      undefined,
+      undefined,
+      ownerCtx,
+    )) as { details: WorkflowDetails };
+    const replayDetail = webCapabilityDetail(
+      scope,
+      "workflows",
+      `${resumed.details.runId}:call:1`,
+    );
+    assert.ok(
+      replayDetail.status === "found" &&
+        replayDetail.detail.kind === "workflows",
+    );
+    assert.notEqual(replayDetail.detail.id, id);
+    assert.equal(replayDetail.detail.replayed, true);
+    assert.equal(replayDetail.detail.transcriptUnavailable, true);
+    assert.equal(replayDetail.detail.finalText, "");
+
+    // Canonical disk evidence deliberately stays outside this in-memory Web seam.
+    for (let index = 0; index < 8; index++) {
+      await ownerWorkflow.execute(
+        `e2e-web-owner-eviction-${index}`,
+        { script: `return ${index};`, wait: true },
+        undefined,
+        undefined,
+        ownerCtx,
+      );
+    }
+    assert.equal(webCapabilityDetail(scope, "workflows", id).status, "missing");
+    assert.equal(existsSync(join(runDirFor(runId), "transcripts.json")), true);
+  } finally {
+    releasePrompt();
+    __setWorkflowTestAgentSessionFactory(undefined);
+    for (const handler of ownerHandlers.get("session_shutdown") ?? []) {
+      await handler({}, ownerCtx);
+    }
+  }
 });
 
 test("agent calls run through the injected session factory and resume replays the journal", async () => {

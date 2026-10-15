@@ -26,8 +26,14 @@ export function ThinkingPicker({
 }) {
   const { t } = useTranslation();
   const thinking = snapshot?.thinking;
-  const levels = thinking?.available ?? [];
   const shown = pending ?? thinking?.level ?? "";
+  const hidden = snapshot?.preferences.hiddenThinkingLevels ?? [];
+  const levels = (thinking?.available ?? []).filter(
+    (level) =>
+      !hidden.some((item) => item === level) ||
+      level === shown ||
+      level === thinking?.level,
+  );
   const [openedLevel] = useState(thinking?.level ?? "");
   const [preview, setPreview] = useState<number | null>(null);
   const previewRef = useRef<number | null>(null);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -16,12 +17,12 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import gitInfo from "../../../extensions/git-info/index.ts";
 import {
   GIT_INFO_CHANNEL,
-  isGitInfoState,
   type GitInfoState,
+  isGitInfoState,
 } from "../../../extensions/shared/dashboard-state.ts";
-import gitInfo from "../../../extensions/git-info/index.ts";
 
 interface RegisteredCommand {
   handler: (args: string, ctx: ExtensionContext) => Promise<void>;
@@ -108,6 +109,16 @@ printf '%s\\n' '{"number":42,"url":"https://example.test/pr/42","state":"OPEN","
     ]
       .filter(Boolean)
       .join(" ");
+    // A freshly copied Node executable pays a one-time cold start on Windows
+    // (image load and on-access scanning) that can exceed the extension's
+    // 3s Git budget. Launch each fixture once, untimed, so the refresh under
+    // test measures the extension rather than the fixture's first exec.
+    for (const fixture of [gitPath, ghPath]) {
+      execFileSync(fixture, ["rev-parse", "--is-inside-work-tree"], {
+        env: { ...process.env, GH_CALL_LOG: join(root, "warmup.log") },
+        stdio: "ignore",
+      });
+    }
   }
 
   const hooks = new Map<
