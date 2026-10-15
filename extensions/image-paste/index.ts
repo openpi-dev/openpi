@@ -182,8 +182,8 @@ function expandWith(text: string, attachments: Iterable<Attachment>) {
  * message Pi sends is byte-identical to unmodified Pi.
  *
  * Submitted clipboard files remain Pi-owned so the read tool can open them
- * later. Direct files that lose their final placeholder before submission are
- * reclaimed as abandoned draft state.
+ * later. Direct files remain referenced by live mappings or the bounded native
+ * Undo window, and are reclaimed only after their final reference is released.
  */
 export class ImageAttachmentStore {
   private nextAttachmentId = 1;
@@ -197,17 +197,23 @@ export class ImageAttachmentStore {
 
   attachClipboardPath(path: string, editorText: string) {
     if (!isPiClipboardImage(path)) return undefined;
+    const pathIdentity = normalizedPath(path);
+    const alreadyReferenced = [
+      ...this.draft.values(),
+      ...this.removed.values(),
+    ].some((attachment) => normalizedPath(attachment.path) === pathIdentity);
 
     let id = this.nextAttachmentId;
     while (this.draft.has(id) || editorText.includes(`[Image #${id}]`)) id += 1;
     const placeholder = `[Image #${id}]`;
     this.nextAttachmentId = id + 1;
     this.draft.set(id, { id, placeholder, path } satisfies Attachment);
-    this.directDraftPaths.add(path);
+    // Re-inserting a known adopted path must not claim a Pi-owned file.
+    if (!alreadyReferenced) this.directDraftPaths.add(pathIdentity);
     return placeholder;
   }
 
-  reconcileDraft(text: string, undo = false) {
+  reconcileDraft(text: string, undo = false, clearingForSubmit = false) {
     const occurrenceCounts = new Map<number, number>();
     for (const occurrence of placeholderOccurrences(text)) {
       occurrenceCounts.set(
@@ -235,7 +241,10 @@ export class ImageAttachmentStore {
       const oldest = this.removed.keys().next().value;
       if (oldest !== undefined) this.removed.delete(oldest);
     }
-    this.reclaimUnreferencedDirectDraftPaths();
+    // Native Enter reports the cleared buffer before onSubmit can hand off
+    // the snapshot. The input wrapper retires this provisional state if no
+    // submission follows, including when removal evicted an Undo reference.
+    if (!clearingForSubmit) this.reclaimUnreferencedDirectDraftPaths();
   }
 
   /**
@@ -260,17 +269,30 @@ export class ImageAttachmentStore {
   }
 
   clearDraft() {
+    // An active draft may be queued or handed to Pi through setText(""). Keep
+    // main's conservative handoff boundary, but retire older Undo-only files.
+    for (const attachment of this.draft.values()) {
+      this.directDraftPaths.delete(normalizedPath(attachment.path));
+    }
     this.draft.clear();
     this.removed.clear();
-    // A cleared draft can have been submitted, queued, or handed to another
-    // Pi delivery path. Release ownership without deleting those files.
-    this.directDraftPaths.clear();
+    this.reclaimUnreferencedDirectDraftPaths();
     this.nextAttachmentId = 1;
+  }
+
+  releaseDeliveredPaths(text: string) {
+    for (const match of text.matchAll(CLIPBOARD_PATH_IN_TEXT)) {
+      if (isPiClipboardPath(match[0])) {
+        this.directDraftPaths.delete(normalizedPath(match[0]));
+      }
+    }
   }
 
   private reclaimUnreferencedDirectDraftPaths() {
     const referencedPaths = new Set(
-      [...this.draft.values()].map((attachment) => attachment.path),
+      [...this.draft.values(), ...this.removed.values()].map((attachment) =>
+        normalizedPath(attachment.path),
+      ),
     );
     for (const path of this.directDraftPaths) {
       if (referencedPaths.has(path)) continue;
@@ -300,6 +322,9 @@ export class ImageAttachmentStore {
     );
     if (matches.length === 0) return undefined;
 
+    // A recalled/queued path can also occur in the previous Undo window.
+    // Release the incoming Pi-owned paths before retiring that window.
+    this.releaseDeliveredPaths(text);
     this.clearDraft();
     const reserved = new Set(placeholderOccurrences(text).map(({ id }) => id));
     // Build replacements in reverse document order so earlier indices stay
@@ -411,7 +436,11 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
         // recoverable mappings until onSubmit confirms the draft ended.
         if (text.length === 0) {
           this.submittedDraft = this.attachments.snapshotDraft();
-          this.attachments.reconcileDraft(text, this.restoringUndo);
+          this.attachments.reconcileDraft(
+            text,
+            this.restoringUndo,
+            this.submittedDraft !== undefined,
+          );
         } else {
           this.submittedDraft = undefined;
           // History recall uses setTextInternal (bypasses setText) and only
@@ -453,6 +482,9 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
           const expanded = snapshot
             ? expandWith(text, snapshot)
             : this.attachments.expandPlaceholders(text);
+          // Native Enter clears the buffer before this callback, so the paths
+          // being delivered may now be referenced only by removed mappings.
+          this.attachments.releaseDeliveredPaths(expanded);
           this.attachments.clearDraft();
           value(expanded);
         }
@@ -545,6 +577,10 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
     try {
       super.handleInput(data);
     } finally {
+      if (this.submittedDraft) {
+        this.submittedDraft = undefined;
+        this.attachments.reconcileDraft(this.getText(), this.restoringUndo);
+      }
       this.restoringUndo = false;
     }
   }

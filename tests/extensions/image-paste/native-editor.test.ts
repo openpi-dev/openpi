@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
   InteractiveMode,
+  type ExtensionAPI,
+  type ExtensionContext,
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -14,7 +16,7 @@ import {
   ProcessTerminal,
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
-import {
+import imagePaste, {
   ImageAttachmentEditor,
   ImageAttachmentStore,
 } from "../../../extensions/image-paste/index.ts";
@@ -107,16 +109,21 @@ test("native Undo recovers a removed attachment without reusing its identity", (
   const { editor, submitted } = harness();
   const first = image(),
     second = image();
+  const bytes = readFileSync(first);
   editor.insertTextAtCursor(first);
   editor.handleInput("\x15"); // Ctrl+U
   assert.equal(editor.getText(), "");
+  assert.deepEqual(readFileSync(first), bytes);
   editor.insertTextAtCursor(second);
   assert.equal(editor.getText(), "[Image #2]");
   editor.handleInput("\x1f"); // Undo second insertion
+  assert.equal(existsSync(second), false);
   editor.handleInput("\x1f"); // Undo Ctrl+U
   assert.equal(editor.getExpandedText(), first);
+  assert.deepEqual(readFileSync(first), bytes);
   editor.handleInput("\r");
   assert.deepEqual(submitted, [first]);
+  assert.deepEqual(readFileSync(first), bytes);
 });
 
 test("typing a removed token remains literal even after native Undo", () => {
@@ -134,12 +141,43 @@ test("typing a removed token remains literal even after native Undo", () => {
 test("explicit clear and cleanup cannot resurrect attachments through native Undo", () => {
   for (const reset of ["clear", "cleanup"] as const) {
     const { editor, store, submitted } = harness();
-    editor.insertTextAtCursor(image());
+    const path = image();
+    editor.insertTextAtCursor(path);
     if (reset === "clear") editor.setText("");
     else {
       editor.handleInput("\x15");
       store.cleanup();
     }
+    // Native setText("") can also mean queue handoff; only the proven
+    // removed-only cleanup window permits unlinking the file here.
+    assert.equal(existsSync(path), reset === "clear");
+    editor.handleInput("\x1f");
+    editor.handleInput("\r");
+    assert.deepEqual(submitted, ["[Image #1]"]);
+  }
+});
+
+test("native Undo cannot revive a removed PNG across extension Session boundaries", () => {
+  for (const boundary of ["session_start", "session_shutdown"]) {
+    const { editor, store, submitted } = harness();
+    const hooks = new Map<string, (...args: unknown[]) => unknown>();
+    imagePaste(
+      {
+        registerMarkdownTransformer() {},
+        on(event: string, handler: (...args: unknown[]) => unknown) {
+          hooks.set(event, handler);
+        },
+        events: { emit() {} },
+      } as unknown as ExtensionAPI,
+      store,
+    );
+    const path = image();
+    const bytes = readFileSync(path);
+    editor.insertTextAtCursor(path);
+    editor.handleInput("\x15");
+    assert.deepEqual(readFileSync(path), bytes);
+    hooks.get(boundary)?.({}, { mode: "rpc" } as ExtensionContext);
+    assert.equal(existsSync(path), false);
     editor.handleInput("\x1f");
     editor.handleInput("\r");
     assert.deepEqual(submitted, ["[Image #1]"]);
@@ -185,4 +223,154 @@ test("undoing a new insertion cannot bind an older cleared token to that image",
   editor.handleInput("\x1f");
   editor.handleInput("\r");
   assert.deepEqual(submitted, ["[Image #1]"]);
+});
+
+test("querying expanded text does not hand off a native insertion undone before delivery", () => {
+  const { editor } = harness();
+  const path = image();
+  editor.insertTextAtCursor(path);
+  assert.equal(editor.getExpandedText(), path);
+  assert.equal(editor.getExpandedText(), path);
+  editor.handleInput("\x1f");
+  assert.equal(existsSync(path), false);
+});
+
+test("128 removed references retain PNG bytes and eviction reclaims only the oldest file", () => {
+  const store = new ImageAttachmentStore();
+  const paths = Array.from({ length: 129 }, () => image());
+  const bytes = readFileSync(paths[0]!);
+  const tokens: string[] = [];
+  for (const path of paths) {
+    tokens.push(store.attachClipboardPath(path, "")!);
+    store.reconcileDraft("");
+  }
+  assert.equal(existsSync(paths[0]!), false);
+  for (const path of paths.slice(1))
+    assert.deepEqual(readFileSync(path), bytes);
+  store.reconcileDraft(`${tokens[0]} ${tokens.at(-1)}`, true);
+  assert.equal(
+    store.expandPlaceholders(`${tokens[0]} ${tokens.at(-1)}`),
+    `${tokens[0]} ${paths.at(-1)}`,
+  );
+  store.clearDraft();
+  assert.equal(existsSync(paths[1]!), false);
+  assert.deepEqual(readFileSync(paths.at(-1)!), bytes);
+});
+
+test("shared physical paths survive until their last eligible removed reference is revoked", () => {
+  const store = new ImageAttachmentStore();
+  const path = image();
+  const bytes = readFileSync(path);
+  const first = store.attachClipboardPath(path, "")!;
+  const second = store.attachClipboardPath(path, first)!;
+  store.reconcileDraft(second);
+  store.reconcileDraft(`${first} ${second}`);
+  assert.deepEqual(readFileSync(path), bytes);
+  store.reconcileDraft("");
+  assert.deepEqual(readFileSync(path), bytes);
+  store.reconcileDraft(`${second} ${second}`);
+  assert.equal(existsSync(path), false);
+});
+
+test("plain Enter transfers snapshot paths before reclaiming the old Undo window", () => {
+  const { editor, submitted } = harness();
+  const abandoned = image();
+  const delivered = image();
+  const bytes = readFileSync(delivered);
+  editor.insertTextAtCursor(abandoned);
+  editor.handleInput("\x15");
+  editor.insertTextAtCursor(delivered);
+  editor.handleInput("\r");
+  assert.deepEqual(submitted, [delivered]);
+  assert.deepEqual(readFileSync(delivered), bytes);
+  assert.equal(existsSync(abandoned), false);
+});
+
+test("native queue and history adoption preserve handed-off PNGs and reclaim unrelated removed files", async () => {
+  const { editor } = harness();
+  const abandoned = image();
+  const path = image();
+  const bytes = readFileSync(path);
+  editor.insertTextAtCursor(abandoned);
+  editor.handleInput("\x15");
+  editor.insertTextAtCursor(path);
+  assert.equal(await roundTrip(editor), path);
+  assert.equal(existsSync(abandoned), false);
+  assert.deepEqual(readFileSync(path), bytes);
+  editor.handleInput("\x15");
+  editor.handleInput("[Image #1]");
+  assert.deepEqual(readFileSync(path), bytes);
+  editor.setText(path);
+  editor.addToHistory(path);
+  editor.setText("");
+  editor.handleInput("\x1b[A");
+  assert.equal(editor.getExpandedText(), path);
+  editor.handleInput("\x15");
+  editor.handleInput("[Image #1]");
+  assert.deepEqual(readFileSync(path), bytes);
+});
+
+test("adoption protects an incoming path still referenced by the old removed window", () => {
+  const { editor } = harness();
+  const path = image();
+  const bytes = readFileSync(path);
+  editor.insertTextAtCursor(path);
+  editor.handleInput("\x15");
+  editor.setText(path);
+  editor.insertTextAtCursor(path);
+  editor.handleInput("\x15");
+  editor.setText("");
+  assert.deepEqual(readFileSync(path), bytes);
+});
+
+test("native typed and duplicate tokens revoke file ownership without Undo revival", () => {
+  for (const duplicate of [false, true]) {
+    const { editor } = harness();
+    const path = image();
+    editor.insertTextAtCursor(path);
+    if (!duplicate) editor.handleInput("\x15");
+    editor.handleInput("[Image #1]");
+    assert.equal(existsSync(path), false);
+    editor.handleInput("\x1f");
+    assert.doesNotMatch(editor.getExpandedText(), /pi-clipboard-/);
+  }
+});
+
+test("normalized aliases of the same physical PNG share direct-file ownership", () => {
+  const store = new ImageAttachmentStore();
+  const path = image();
+  const bytes = readFileSync(path);
+  const alias = path.replace(/([\\/])([^\\/]+)$/, "$1.$1$2");
+  const first = store.attachClipboardPath(path, "")!;
+  const second = store.attachClipboardPath(alias, first)!;
+  store.reconcileDraft(`${first}${first} ${second}`);
+  assert.deepEqual(readFileSync(alias), bytes);
+  store.reconcileDraft(`${second}${second}`);
+  assert.equal(existsSync(path), false);
+});
+
+test("native Enter hands off every active PNG even when the draft exceeds the Undo window", () => {
+  const { editor, submitted } = harness();
+  const paths = Array.from({ length: 129 }, () => image());
+  const bytes = readFileSync(paths[0]!);
+  for (const path of paths) editor.insertTextAtCursor(path);
+  editor.handleInput("\r");
+  assert.deepEqual(submitted, [paths.join("")]);
+  for (const path of paths) assert.deepEqual(readFileSync(path), bytes);
+});
+
+test("native non-submit clearing still retires references beyond the 128 Undo window", () => {
+  const { editor } = harness();
+  const paths = Array.from({ length: 129 }, () => image());
+  const bytes = readFileSync(paths[0]!);
+  for (const path of paths) editor.insertTextAtCursor(path);
+  editor.handleInput("\x15");
+  assert.equal(existsSync(paths[0]!), false);
+  for (const path of paths.slice(1))
+    assert.deepEqual(readFileSync(path), bytes);
+  editor.handleInput("\x1f");
+  assert.equal(
+    editor.getExpandedText(),
+    `[Image #1]${paths.slice(1).join("")}`,
+  );
 });
