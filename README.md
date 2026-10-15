@@ -68,6 +68,8 @@ pi install npm:@tt-a1i/openpi
 pi install npm:@tt-a1i/openpi
 ```
 
+想先决定 Pi 配置表单中的扩展勾选项，见[扩展选择与运行前提指南](CAPABILITY_GUIDE.md)：35 个入口、6 个运行时发现组及可组合的起点。
+
 重启 Pi，或在当前 Session 运行 `/reload`。然后直接描述真实任务：
 
 ```text

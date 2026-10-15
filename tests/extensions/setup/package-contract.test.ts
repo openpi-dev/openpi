@@ -138,5 +138,6 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
     "README.md",
     "SETUP.md",
     "THIRD_PARTY_NOTICES.md",
+    "CAPABILITY_GUIDE.md",
   ]);
 });

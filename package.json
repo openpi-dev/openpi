@@ -39,7 +39,8 @@
     "scripts/prepare-effect-tsgo.mjs",
     "README.md",
     "SETUP.md",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "CAPABILITY_GUIDE.md"
   ],
   "publishConfig": {
     "access": "public"
