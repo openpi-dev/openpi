@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateToolArguments } from "@earendil-works/pi-ai";
+import { type ToolCall, validateToolArguments } from "@earendil-works/pi-ai";
 import {
   type AgentToolResult,
   type ExtensionAPI,
@@ -113,7 +113,7 @@ test("workflow launch schema recommends wait while preserving only the published
   );
   assert.equal(parameters.additionalProperties, false);
 
-  const toolCall = (args: Record<string, unknown>) => ({
+  const toolCall = (args: ToolCall["arguments"]) => ({
     type: "toolCall" as const,
     id: "call-schema",
     name: "workflow",
@@ -148,6 +148,8 @@ test("workflow call rendering labels an explicit inline wait", () => {
     toolCallId: "call-inline-wait",
     invalidate() {},
     lastComponent: undefined,
+    ...{ durationMs: undefined },
+    ...{ outputPad: 0 },
     state: {},
     cwd: process.cwd(),
     executionStarted: true,
@@ -174,6 +176,8 @@ test("workflow call rendering gives legacy callers an actionable migration", () 
     toolCallId: "call-legacy-background",
     invalidate() {},
     lastComponent: undefined,
+    ...{ durationMs: undefined },
+    ...{ outputPad: 0 },
     state: {},
     cwd: process.cwd(),
     executionStarted: true,
@@ -203,6 +207,8 @@ test("workflow tool errors with malformed details fall back to plain text", (t) 
       invalidations += 1;
     },
     lastComponent: undefined,
+    ...{ durationMs: undefined },
+    ...{ outputPad: 0 },
     state: {},
     cwd: process.cwd(),
     executionStarted: true,
@@ -249,6 +255,8 @@ test("running workflow cards request and render each shared spinner frame", (t) 
         invalidations += 1;
       },
       lastComponent: undefined,
+      ...{ durationMs: undefined },
+      ...{ outputPad: 0 },
       state: {},
       cwd: process.cwd(),
       executionStarted: true,
@@ -560,5 +568,177 @@ test("batch completion foregrounds abnormal evidence within width", () => {
       component.render(width).every((row) => visibleWidth(row) <= width),
       `width ${width}`,
     );
+  }
+});
+
+test("completion severities follow structured worktree facts and execution errors", () => {
+  const { message } = captureRenderers();
+  const base = finishedWorkflow().agents[0]!;
+  const cleanup = {
+    removed: false,
+    branchDeleted: false,
+    branch: "pi/test",
+    detached: false,
+    commits: 1,
+    dirty: true,
+    untracked: true,
+    ignored: false,
+    // Deliberately contains error words: classification must not parse this.
+    reason: "error ENOBUFS failed labels in an ordinary retained checkout",
+  };
+  const details = finishedWorkflow({
+    agents: [
+      {
+        ...base,
+        label: "committed",
+        worktreeHandoffArtifact: "worktrees/a.json",
+        worktreeCleanup: {
+          ...cleanup,
+          removed: true,
+          dirty: false,
+          untracked: false,
+          reason: undefined,
+        },
+      },
+      {
+        ...base,
+        label: "dirty",
+        worktreePath: "/repo/dirty",
+        worktreeHandoffArtifact: "worktrees/b.json",
+        worktreeCleanup: cleanup,
+      },
+      {
+        ...base,
+        label: "capture",
+        worktreePath: "/repo/capture",
+        worktreeCleanup: {
+          ...cleanup,
+          commits: undefined,
+          dirty: undefined,
+          untracked: undefined,
+          reason: "spawnSync git ENOBUFS",
+        },
+      },
+      {
+        ...base,
+        label: "remove",
+        worktreePath: "/repo/remove",
+        worktreeHandoffArtifact: "worktrees/d.json",
+        worktreeCleanup: {
+          ...cleanup,
+          dirty: false,
+          untracked: false,
+          reason: "git declined to remove",
+        },
+      },
+      {
+        ...base,
+        label: "finalize",
+        worktreePath: "/repo/finalize",
+        worktreeCleanup: cleanup,
+      },
+      {
+        ...base,
+        label: "removed-finalize",
+        worktreeCleanup: {
+          ...cleanup,
+          removed: true,
+          reason: "finalization failed after removal",
+        },
+      },
+      { ...base, label: "execution", state: "error", error: "child failed" },
+    ],
+    result: { review: "blocked", tests: "not run" },
+  });
+  const frozen = structuredClone(details);
+  const display = buildWorkflowCompletionDisplay([
+    { deliveryId: "mixed", details, runDir: "/repo/run" },
+  ]);
+  assert.deepEqual(details, frozen);
+  const entry = display.entries[0]!;
+  const severityFor = (text: string) =>
+    entry.alertSeverities![
+      entry.alerts.findIndex((alert) => alert.includes(text))
+    ];
+  assert.equal(severityFor("Worktree handoff [committed]"), "info");
+  assert.equal(severityFor("Retained worktree [dirty]"), "info");
+  assert.equal(severityFor("Retained worktree [capture]"), "warning");
+  assert.equal(severityFor("Retained worktree [remove]"), "warning");
+  assert.equal(severityFor("Retained worktree [finalize]"), "warning");
+  assert.equal(
+    severityFor("Worktree handoff needs inspection [removed-finalize]"),
+    "warning",
+  );
+  assert.equal(severityFor("Failed agents: execution"), "error");
+  assert.equal(isWorkflowCompletionDisplay(display), true);
+  assert.equal(
+    isWorkflowCompletionDisplay({
+      ...display,
+      entries: [{ ...entry, alertSeverities: ["info"] }],
+    }),
+    false,
+  );
+  const legacy = {
+    ...display,
+    entries: [{ ...entry, alertSeverities: undefined }],
+  };
+  assert.equal(isWorkflowCompletionDisplay(legacy), true);
+  for (const themeName of ["dark", "light"] as const) {
+    initTheme(themeName, false);
+    const colors: Array<{ color: string; text: string }> = [];
+    const semanticTheme = {
+      ...theme,
+      fg(color: string, text: string) {
+        colors.push({ color, text });
+        return text;
+      },
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const input = {
+      role: "custom" as const,
+      customType: "workflow-result",
+      content: "model report",
+      display: true,
+      details: display,
+      timestamp: 1,
+    };
+    const rendered = message(
+      input,
+      { expanded: false, outputPad: 0 },
+      semanticTheme,
+    )!;
+    const plain = rendered.render(160).join("\n");
+    assert.match(plain, /\[info\] Worktree handoff \[committed\]/);
+    assert.match(plain, /\[warning\] Retained worktree \[capture\].*ENOBUFS/);
+    assert.match(plain, /\[error\] Failed agents: execution/);
+    assert.ok(
+      colors.some(
+        ({ color, text }) =>
+          color === "muted" && text.includes("Worktree handoff [committed]"),
+      ),
+    );
+    assert.ok(
+      colors.some(
+        ({ color, text }) =>
+          color === "warning" && text.includes("Retained worktree [capture]"),
+      ),
+    );
+    for (const width of [1, 8, 32, 56])
+      assert.ok(
+        rendered.render(width).every((row) => visibleWidth(row) <= width),
+      );
+    const expanded = message(
+      input,
+      { expanded: true, outputPad: 0 },
+      semanticTheme,
+    )!
+      .render(160)
+      .join("\n");
+    assert.match(expanded, /execution\/call settlement only/);
+    assert.match(
+      expanded,
+      /\[warning\] Retained worktree \[capture\].*ENOBUFS/,
+    );
+    assert.match(expanded, /"review": "blocked"/);
   }
 });

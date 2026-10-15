@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, resolve } from "node:path";
 import type {
@@ -180,12 +180,14 @@ function expandWith(text: string, attachments: Iterable<Attachment>) {
  * shows `[Image #1]`, submission expands it back to the real path, and the
  * message Pi sends is byte-identical to unmodified Pi.
  *
- * Nothing here owns the temporary file. Pi leaves clipboard images in tmpdir so
- * the read tool can still open them later, and that contract is preserved.
+ * Submitted clipboard files remain Pi-owned so the read tool can open them
+ * later. Direct files that lose their final placeholder before submission are
+ * reclaimed as abandoned draft state.
  */
 export class ImageAttachmentStore {
   private nextAttachmentId = 1;
   private readonly draft = new Map<number, Attachment>();
+  private readonly directDraftPaths = new Set<string>();
 
   get hasDraft() {
     return this.draft.size > 0;
@@ -199,6 +201,7 @@ export class ImageAttachmentStore {
     const placeholder = `[Image #${id}]`;
     this.nextAttachmentId = id + 1;
     this.draft.set(id, { id, placeholder, path } satisfies Attachment);
+    this.directDraftPaths.add(path);
     return placeholder;
   }
 
@@ -213,10 +216,12 @@ export class ImageAttachmentStore {
     for (const id of [...this.draft.keys()]) {
       // Placeholder text is user-editable, so only an unambiguous single
       // occurrence keeps its mapping. Duplicated or removed tokens degrade to
-      // ordinary text; the underlying file is left alone either way.
+      // ordinary text; direct files that no longer have any draft reference
+      // are abandoned and can be reclaimed.
       if (occurrenceCounts.get(id) === 1) continue;
       this.draft.delete(id);
     }
+    this.reclaimUnreferencedDirectDraftPaths();
     this.nextAttachmentId =
       this.draft.size === 0 ? 1 : Math.max(...this.draft.keys()) + 1;
   }
@@ -244,7 +249,26 @@ export class ImageAttachmentStore {
 
   clearDraft() {
     this.draft.clear();
+    // A cleared draft can have been submitted, queued, or handed to another
+    // Pi delivery path. Release ownership without deleting those files.
+    this.directDraftPaths.clear();
     this.nextAttachmentId = 1;
+  }
+
+  private reclaimUnreferencedDirectDraftPaths() {
+    const referencedPaths = new Set(
+      [...this.draft.values()].map((attachment) => attachment.path),
+    );
+    for (const path of this.directDraftPaths) {
+      if (referencedPaths.has(path)) continue;
+      this.directDraftPaths.delete(path);
+      try {
+        rmSync(path, { force: true });
+      } catch {
+        // Editor input remains usable if a temporary file disappeared or the
+        // operating system declines the cleanup.
+      }
+    }
   }
 
   /**
@@ -531,6 +555,7 @@ export default function imagePaste(
   );
 
   pi.on("session_start", (_event, ctx) => {
+    attachments.clearDraft();
     installImagePasteEditor(pi, ctx, attachments);
   });
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -73,6 +74,7 @@ const BACKGROUND_EXTENSION = extensionPath(
 const PLAN_EXTENSION = extensionPath("../../../extensions/plan-mode/index.ts");
 const OPENPI_EXTENSION_PATHS = [
   extensionPath("../../../extensions/ask-user/index.ts"),
+  extensionPath("../../../extensions/browser/index.ts"),
   BACKGROUND_EXTENSION,
   CAPABILITIES_EXTENSION,
   "../../../extensions/context-pivot/index.ts",
@@ -80,6 +82,7 @@ const OPENPI_EXTENSION_PATHS = [
   "../../../extensions/git-read/index.ts",
   "../../../extensions/goal/index.ts",
   PLAN_EXTENSION,
+  "../../../extensions/runtime-snapshot/index.ts",
   "../../../extensions/setup/index.ts",
   SUBAGENTS_EXTENSION,
   "../../../extensions/tasks/index.ts",
@@ -304,7 +307,7 @@ test("real Pi session exposes one stable subagent family when delegate loads", a
         { groups: ["delegate"] },
         undefined,
         undefined,
-        session.createReplacedSessionContext(),
+        toolExecutionContext(session.createReplacedSessionContext()),
       );
       assert.deepEqual(session.getActiveToolNames(), [
         "read",
@@ -333,6 +336,37 @@ test("real Pi session exposes one stable subagent family when delegate loads", a
   );
 });
 
+test("real Pi activates runtime inspection only through the capability gateway", async () => {
+  await withSession(
+    [EXPLICIT_CAPABILITIES_EXTENSION],
+    async (session) => {
+      const ordinary = ["read", "bash", "edit", "write"];
+      assert.deepEqual(session.getActiveToolNames(), ordinary);
+      assert.equal(
+        session.getToolDefinition("runtime_snapshot")?.defaultActive,
+        false,
+      );
+      const gateway = session.getToolDefinition("openpi_load_tools");
+      assert.ok(gateway);
+      const ctx = toolExecutionContext(session.createReplacedSessionContext());
+      await gateway.execute("list", {}, undefined, undefined, ctx);
+      assert.deepEqual(session.getActiveToolNames(), ordinary);
+      await gateway.execute(
+        "load-runtime",
+        { groups: ["runtime"] },
+        undefined,
+        undefined,
+        ctx,
+      );
+      assert.deepEqual(session.getActiveToolNames(), [
+        ...ordinary,
+        "runtime_snapshot",
+      ]);
+    },
+    [extensionPath("../../../extensions/runtime-snapshot/index.ts")],
+  );
+});
+
 test("real Pi search capability exposes file and git tools as one group", async () => {
   await withSession(
     [EXPLICIT_CAPABILITIES_EXTENSION],
@@ -350,7 +384,7 @@ test("real Pi search capability exposes file and git tools as one group", async 
         { groups: ["search"] },
         undefined,
         undefined,
-        session.createReplacedSessionContext(),
+        toolExecutionContext(session.createReplacedSessionContext()),
       );
       assert.deepEqual(session.getActiveToolNames(), [
         "read",
@@ -391,7 +425,7 @@ test("separate owner wrappers cannot remove each other's lifecycle tools", async
         { groups: ["delegate", "background"] },
         undefined,
         undefined,
-        session.createReplacedSessionContext(),
+        toolExecutionContext(session.createReplacedSessionContext()),
       );
 
       patchOwnedTools(controller, "subagents", {

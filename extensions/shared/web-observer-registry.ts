@@ -1,3 +1,11 @@
+import type {
+  LiveToolState,
+  SubagentSnapshot,
+  TranscriptItem,
+  TranscriptPart,
+} from "../subagents/src/domain.ts";
+import type { ChildExecutionAdmissionSnapshot } from "./child-execution-admission.ts";
+
 export type WebCapabilityKind =
   | "subagents"
   | "workflows"
@@ -16,10 +24,22 @@ const WEB_MAX_TERMINAL_STDERR_BYTES = 8 * 1024;
 export interface WebSubagentActivity {
   readonly id: string;
   readonly title: string;
+  readonly origin?: "model" | "btw";
   readonly status: "running" | "done" | "error";
   readonly outcome?: "completed" | "failed" | "interrupted";
   readonly createdAt: number;
   readonly settledAt?: number;
+}
+
+export interface WebWorkflowAgentActivity {
+  readonly id: string;
+  readonly runId: string;
+  readonly title: string;
+  readonly status: WebSubagentActivity["status"] | "unknown";
+  readonly outcome?: WebSubagentActivity["outcome"];
+  readonly createdAt: number;
+  readonly settledAt?: number;
+  readonly replayed?: boolean;
 }
 
 export interface WebWorkflowActivity {
@@ -37,6 +57,7 @@ export interface WebWorkflowActivity {
     readonly uncertain: number;
     readonly omitted?: number;
   };
+  readonly children?: WebCapabilityProjection<WebWorkflowAgentActivity>;
 }
 
 export interface WebBackgroundTerminalActivity {
@@ -77,7 +98,58 @@ export interface WebBackgroundTerminalDetail {
   readonly truncated: boolean;
 }
 
-export type WebCapabilityDetail = WebBackgroundTerminalDetail;
+export interface WebSubagentDetail extends WebSubagentActivity {
+  readonly kind: "subagents";
+  readonly cwd: string;
+  readonly model?: string;
+  readonly prompt: string;
+  readonly transcript: readonly TranscriptItem[];
+  readonly liveAssistant?: { readonly text: string; readonly thinking: string };
+  readonly liveTools: readonly LiveToolState[];
+  readonly finalText: string;
+  readonly errorText?: string;
+  readonly truncated: boolean;
+  readonly omittedEntries: number;
+}
+
+export interface WebWorkflowAgentDetail
+  extends WebWorkflowAgentActivity,
+    Omit<WebSubagentDetail, keyof WebSubagentActivity | "kind"> {
+  readonly kind: "workflows";
+  /** Retained summaries and replay records may lack a child conversation. */
+  readonly transcriptUnavailable: boolean;
+}
+
+export type WebCapabilityActionRequest =
+  | {
+      readonly kind: "subagents";
+      readonly action: "spawn-btw";
+      readonly prompt: string;
+    }
+  | {
+      readonly kind: "subagents";
+      readonly action: "send-btw";
+      readonly id: string;
+      readonly text: string;
+    }
+  | {
+      readonly kind: "subagents";
+      readonly action: "cancel-btw";
+      readonly id: string;
+    };
+
+export interface WebCapabilityActionProvider {
+  readonly kind: WebCapabilityKind;
+  readonly run: (
+    request: WebCapabilityActionRequest,
+    signal?: AbortSignal,
+  ) => Promise<WebCapabilityDetail>;
+}
+
+export type WebCapabilityDetail =
+  | WebBackgroundTerminalDetail
+  | WebSubagentDetail
+  | WebWorkflowAgentDetail;
 
 export type WebCapabilityDetailReceipt =
   | { readonly status: "found"; readonly detail: WebCapabilityDetail }
@@ -95,6 +167,8 @@ export interface WebCapabilityProjection<
   readonly omitted: number;
   /** Records were omitted or a user-visible string was shortened. */
   readonly truncated: boolean;
+  /** Session-local child admission state, never a task prompt or transcript. */
+  readonly childExecutionAdmission?: ChildExecutionAdmissionSnapshot;
 }
 
 export interface WebCapabilitySnapshot {
@@ -116,11 +190,14 @@ interface BoundedActivityText {
 }
 
 function boundedActivityText(value: string): BoundedActivityText {
-  if (value.length <= WEB_MAX_ACTIVITY_TEXT) {
+  // Cut on code points: a UTF-16 unit cut can split a surrogate pair and emit a
+  // lone surrogate, which the JSON capability snapshot cannot represent.
+  const characters = [...value];
+  if (characters.length <= WEB_MAX_ACTIVITY_TEXT) {
     return { value, truncated: false };
   }
   return {
-    value: `${value.slice(0, WEB_MAX_ACTIVITY_TEXT - 1)}…`,
+    value: `${characters.slice(0, WEB_MAX_ACTIVITY_TEXT - 1).join("")}…`,
     truncated: true,
   };
 }
@@ -230,19 +307,22 @@ export function projectSubagentCapability(
   source: readonly {
     readonly id: string;
     readonly title: string;
+    readonly origin?: WebSubagentActivity["origin"];
     readonly status: WebSubagentActivity["status"];
     readonly outcome?: WebSubagentActivity["outcome"];
     readonly createdAt: number;
     readonly settledAt?: number;
   }[],
+  childExecutionAdmission?: ChildExecutionAdmissionSnapshot,
 ): WebCapabilityProjection<WebSubagentActivity> {
-  return boundedActivityProjection(source, (value) => {
+  const projection = boundedActivityProjection(source, (value) => {
     const id = boundedActivityText(value.id);
     const title = boundedActivityText(value.title);
     return {
       item: {
         id: id.value,
         title: title.value,
+        ...(value.origin ? { origin: value.origin } : {}),
         status: value.status,
         ...(value.outcome ? { outcome: value.outcome } : {}),
         createdAt: value.createdAt,
@@ -253,6 +333,257 @@ export function projectSubagentCapability(
       truncated: id.truncated || title.truncated,
     };
   });
+  return {
+    ...projection,
+    ...(childExecutionAdmission ? { childExecutionAdmission } : {}),
+  };
+}
+
+/** Project only manager-owned display data; never load child session files. */
+export function projectSubagentDetail(
+  source: SubagentSnapshot,
+): WebSubagentDetail {
+  return {
+    kind: "subagents",
+    ...boundedAgentDetail({ ...source, model: source.meta.modelLabel }),
+  };
+}
+
+function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
+  source: Omit<
+    WebSubagentDetail,
+    "kind" | "status" | "truncated" | "omittedEntries"
+  > & { readonly status: Status },
+) {
+  let remainingBytes = 64 * 1024;
+  let truncated = false;
+  const text = (value: string, maxBytes = 4 * 1024) => {
+    if (remainingBytes === 0) {
+      truncated ||= value.length > 0;
+      return "";
+    }
+    const bounded = boundedUtf8Tail(value, Math.min(maxBytes, remainingBytes));
+    remainingBytes -= bounded.bytes;
+    truncated ||= bounded.truncated;
+    return bounded.value;
+  };
+  const title = text(source.title, 640);
+  const cwd = text(source.cwd, 2 * 1024);
+  const model =
+    source.model === undefined ? undefined : text(source.model, 640);
+  const prompt = text(source.prompt);
+  const finalText = text(source.finalText, 8 * 1024);
+  const errorText =
+    source.errorText === undefined ? undefined : text(source.errorText);
+  const liveAssistant = source.liveAssistant && {
+    text: text(source.liveAssistant.text, 8 * 1024),
+    thinking: text(source.liveAssistant.thinking),
+  };
+  // Pairing identities must survive byte bounds exactly, never as shared tails.
+  const toolIdentity = (id: string) => {
+    const bytes = new TextEncoder().encode(id).byteLength;
+    if (
+      !id ||
+      bytes > 640 ||
+      bytes > remainingBytes ||
+      /[\u0000-\u001f\u007f]/u.test(id)
+    ) {
+      truncated = true;
+      return undefined;
+    }
+    remainingBytes -= bytes;
+    return id;
+  };
+  const liveTools = source.liveTools.slice(-16).flatMap((tool) => {
+    const toolId = toolIdentity(tool.toolId);
+    if (toolId === undefined) return [];
+    return [
+      {
+        toolId,
+        name: text(tool.name, 640),
+        ...(tool.argsPreview !== undefined
+          ? { argsPreview: text(tool.argsPreview) }
+          : {}),
+        ...(tool.outputPreview !== undefined
+          ? { outputPreview: text(tool.outputPreview) }
+          : {}),
+        ...(tool.done !== undefined ? { done: tool.done } : {}),
+        ...(tool.isError !== undefined ? { isError: tool.isError } : {}),
+      },
+    ];
+  });
+  // Spend the remaining budget on recent activity first, then restore chronology.
+  const selected = source.transcript.slice(-64);
+  const transcript: TranscriptItem[] = selected
+    .reverse()
+    .flatMap((item): TranscriptItem[] => {
+      if (item.kind === "user")
+        return [{ kind: "user", text: text(item.text) }];
+      if (item.kind === "toolResult") {
+        const toolId = toolIdentity(item.toolId);
+        if (toolId === undefined) return [];
+        return [
+          {
+            kind: "toolResult",
+            toolId,
+            name: text(item.name, 640),
+            isError: item.isError,
+            ...(item.outputPreview !== undefined
+              ? { outputPreview: text(item.outputPreview) }
+              : {}),
+          },
+        ];
+      }
+      truncated ||= item.parts.length > 32;
+      const parts = item.parts.slice(-32).flatMap((part): TranscriptPart[] => {
+        if (part.type === "toolCall") {
+          const toolId = toolIdentity(part.toolId);
+          if (toolId === undefined) return [];
+          return [
+            {
+              type: "toolCall",
+              toolId,
+              name: text(part.name, 640),
+              ...(part.argsPreview !== undefined
+                ? { argsPreview: text(part.argsPreview) }
+                : {}),
+            },
+          ];
+        }
+        if (part.type === "thinking")
+          return [
+            {
+              type: "thinking",
+              text: part.redacted ? "" : text(part.text),
+              ...(part.redacted !== undefined
+                ? { redacted: part.redacted }
+                : {}),
+            },
+          ];
+        return [{ type: "text", text: text(part.text) }];
+      });
+      return [{ kind: "assistant", parts }];
+    })
+    .reverse();
+  const omittedEntries = source.transcript.length - transcript.length;
+  return {
+    id: source.id,
+    title,
+    origin: source.origin,
+    status: source.status,
+    ...(source.outcome !== undefined ? { outcome: source.outcome } : {}),
+    createdAt: source.createdAt,
+    ...(source.settledAt !== undefined ? { settledAt: source.settledAt } : {}),
+    cwd,
+    ...(model !== undefined ? { model } : {}),
+    prompt,
+    transcript,
+    ...(liveAssistant ? { liveAssistant } : {}),
+    liveTools,
+    finalText,
+    ...(errorText !== undefined ? { errorText } : {}),
+    truncated:
+      truncated ||
+      omittedEntries > 0 ||
+      source.liveTools.length > liveTools.length,
+    omittedEntries,
+  };
+}
+
+interface WorkflowAgentSource {
+  readonly index?: number;
+  readonly label?: string;
+  readonly state: string;
+  readonly startedAt?: number;
+  readonly finishedAt?: number;
+  readonly executionOutcome?: string;
+  readonly completion?: { readonly observed: { readonly outcome: string } };
+  readonly replayed?: boolean;
+}
+
+function workflowAgentStatus(source: WorkflowAgentSource) {
+  const observed = source.completion?.observed.outcome;
+  if (
+    source.state === "uncertain" ||
+    observed === "uncertain" ||
+    source.executionOutcome === "uncertain"
+  )
+    return "unknown" as const;
+  // Native execution success does not erase a failure at the owner's result boundary.
+  if (source.state === "running" || source.state === "error")
+    return source.state;
+  const outcome = observed ?? source.executionOutcome;
+  if (outcome === "cancelled" || outcome === "failure") return "error" as const;
+  if (outcome === "success" || outcome === "replayed") return "done" as const;
+  return source.state === "done" ? source.state : ("unknown" as const);
+}
+
+function workflowAgentActivity(runId: string, source: WorkflowAgentSource) {
+  const id = `${runId}:call:${source.index}`;
+  if (
+    !/^wf_[0-9a-f]+$/i.test(runId) ||
+    !Number.isSafeInteger(source.index) ||
+    source.index === undefined ||
+    source.index < 1 ||
+    id.length > WEB_MAX_CAPABILITY_ID
+  )
+    return undefined;
+  const title = boundedActivityText(source.label ?? `Agent ${source.index}`);
+  const status = workflowAgentStatus(source);
+  const outcome =
+    status === "done"
+      ? ("completed" as const)
+      : status === "error"
+        ? (source.completion?.observed.outcome ?? source.executionOutcome) ===
+          "cancelled"
+          ? ("interrupted" as const)
+          : ("failed" as const)
+        : undefined;
+  const item: WebWorkflowAgentActivity = {
+    id,
+    runId,
+    title: title.value,
+    status,
+    ...(outcome ? { outcome } : {}),
+    createdAt: source.startedAt ?? 0,
+    ...(source.finishedAt !== undefined
+      ? { settledAt: source.finishedAt }
+      : {}),
+    ...(source.replayed !== undefined ? { replayed: source.replayed } : {}),
+  };
+  return { item, truncated: title.truncated };
+}
+
+/** Read-only projection of existing owner evidence, never a preview as a result. */
+export function projectWorkflowAgentDetail(
+  runId: string,
+  source: WorkflowAgentSource & {
+    readonly cwd?: string;
+    readonly model?: string;
+    readonly errorText?: string;
+    readonly transcript: readonly TranscriptItem[];
+    readonly transcriptUnavailable: boolean;
+  },
+): WebWorkflowAgentDetail | undefined {
+  const activity = workflowAgentActivity(runId, source);
+  if (!activity) return undefined;
+  const detail = boundedAgentDetail({
+    ...activity.item,
+    cwd: source.cwd ?? "",
+    model: source.model,
+    prompt: source.transcript.find((item) => item.kind === "user")?.text ?? "",
+    transcript: source.transcript,
+    liveTools: [],
+    finalText: "",
+    errorText: source.errorText,
+  });
+  return {
+    kind: "workflows",
+    ...activity.item,
+    ...detail,
+    transcriptUnavailable: source.transcriptUnavailable,
+    truncated: detail.truncated || activity.truncated,
+  };
 }
 
 export function projectWorkflowCapability(
@@ -263,9 +594,10 @@ export function projectWorkflowCapability(
     readonly currentPhase?: string;
     readonly startedAt: number;
     readonly finishedAt?: number;
-    readonly agents: readonly {
-      readonly state: keyof WebWorkflowActivity["agents"] | string;
-    }[];
+    readonly agents: readonly WorkflowAgentSource[];
+    readonly memoryProjection?: {
+      readonly omitted: { readonly agents: number };
+    };
   }[],
 ): WebCapabilityProjection<WebWorkflowActivity> {
   return boundedActivityProjection(source, (value) => {
@@ -275,7 +607,8 @@ export function projectWorkflowCapability(
       ? boundedActivityText(value.currentPhase)
       : undefined;
     const counts = {
-      total: value.agents.length,
+      total:
+        value.agents.length + (value.memoryProjection?.omitted.agents ?? 0),
       running: 0,
       done: 0,
       error: 0,
@@ -286,12 +619,37 @@ export function projectWorkflowCapability(
       WEB_MAX_WORKFLOW_AGENTS_SCANNED,
     );
     for (const agent of scannedAgents) {
-      if (agent.state === "running") counts.running++;
-      else if (agent.state === "done") counts.done++;
-      else if (agent.state === "error") counts.error++;
+      const status = workflowAgentStatus(agent);
+      if (status === "running") counts.running++;
+      else if (status === "done") counts.done++;
+      else if (status === "error") counts.error++;
       else counts.uncertain++;
     }
-    const agentsOmitted = value.agents.length - scannedAgents.length;
+    const agentsOmitted = counts.total - scannedAgents.length;
+    const indexCounts = new Map<number, number>();
+    for (const agent of scannedAgents) {
+      if (agent.index !== undefined)
+        indexCounts.set(agent.index, (indexCounts.get(agent.index) ?? 0) + 1);
+    }
+    const projectedChildren = scannedAgents.flatMap((agent) => {
+      if (agent.index === undefined || indexCounts.get(agent.index) !== 1)
+        return [];
+      const activity = workflowAgentActivity(value.runId, agent);
+      return activity
+        ? [{ ...activity.item, truncated: activity.truncated }]
+        : [];
+    });
+    const selectedChildren = boundedActivityProjection(
+      projectedChildren,
+      ({ truncated, ...item }) => ({ item, truncated }),
+    );
+    const children: WebCapabilityProjection<WebWorkflowAgentActivity> = {
+      ...selectedChildren,
+      omitted: counts.total - selectedChildren.items.length,
+      truncated:
+        selectedChildren.truncated ||
+        counts.total > selectedChildren.items.length,
+    };
     return {
       item: {
         runId: runId.value,
@@ -306,12 +664,14 @@ export function projectWorkflowCapability(
           ...counts,
           ...(agentsOmitted > 0 ? { omitted: agentsOmitted } : {}),
         },
+        children,
       },
       truncated:
         runId.truncated ||
         name?.truncated === true ||
         phase?.truncated === true ||
-        agentsOmitted > 0,
+        agentsOmitted > 0 ||
+        children.truncated,
     };
   });
 }
@@ -434,6 +794,10 @@ interface WebObserverRegistry {
     WebCapabilityScope,
     Map<WebCapabilityKind, WebCapabilityProvider>
   >;
+  readonly actions: Map<
+    WebCapabilityScope,
+    Map<WebCapabilityKind, WebCapabilityActionProvider>
+  >;
   readonly listeners: Map<CapabilityListener, ProviderSubscriptions>;
 }
 
@@ -453,11 +817,21 @@ function sharedWebObserverRegistry(): WebObserverRegistry {
     ) {
       throw new Error("Incompatible OpenPI Web observer registry");
     }
-    return existing as WebObserverRegistry;
+    const registry = existing as WebObserverRegistry;
+    if (!(registry.actions instanceof Map)) {
+      Object.defineProperty(registry, "actions", {
+        value: new Map(),
+        configurable: false,
+        enumerable: true,
+        writable: false,
+      });
+    }
+    return registry;
   }
   const registry: WebObserverRegistry = {
     version: 1,
     providers: new Map(),
+    actions: new Map(),
     listeners: new Map(),
   };
   Object.defineProperty(globalThis, WEB_OBSERVER_REGISTRY_KEY, {
@@ -472,7 +846,35 @@ function sharedWebObserverRegistry(): WebObserverRegistry {
 // Pi may load package extensions from a managed install while the standalone
 // CLI runs from a global npm install. Symbol.for keeps those same-process module
 // copies on one versioned registry without adding a second persistence layer.
-const { providers, listeners } = sharedWebObserverRegistry();
+const { providers, actions, listeners } = sharedWebObserverRegistry();
+
+export function registerWebCapabilityActions(
+  scope: WebCapabilityScope,
+  provider: WebCapabilityActionProvider,
+) {
+  let scopedActions = actions.get(scope);
+  if (!scopedActions) {
+    scopedActions = new Map();
+    actions.set(scope, scopedActions);
+  }
+  scopedActions.set(provider.kind, provider);
+  return () => {
+    const current = actions.get(scope);
+    if (current?.get(provider.kind) !== provider) return;
+    current.delete(provider.kind);
+    if (current.size === 0) actions.delete(scope);
+  };
+}
+
+export async function runWebCapabilityAction(
+  scope: WebCapabilityScope,
+  request: WebCapabilityActionRequest,
+  signal?: AbortSignal,
+) {
+  const provider = actions.get(scope)?.get(request.kind);
+  if (!provider) return undefined;
+  return provider.run(request, signal);
+}
 
 function connect(
   scope: WebCapabilityScope,
@@ -538,11 +940,14 @@ export function subscribeWebCapabilities(listener: CapabilityListener) {
 
 export function webCapabilitySnapshot(
   scope: WebCapabilityScope,
+  kind?: WebCapabilityKind,
 ): WebCapabilitySnapshot {
   const scopedProviders = providers.get(scope);
   if (!scopedProviders) return {};
   return Object.fromEntries(
-    [...scopedProviders].map(([kind, provider]) => [kind, provider.snapshot()]),
+    [...scopedProviders]
+      .filter(([providerKind]) => kind === undefined || providerKind === kind)
+      .map(([providerKind, provider]) => [providerKind, provider.snapshot()]),
   );
 }
 

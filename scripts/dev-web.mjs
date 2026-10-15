@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { openBrowser } from "../web/host/browser-launcher.ts";
 import {
+  createDevelopmentTokenPlugin,
   createBackendStartupMonitor,
   resolveDevelopmentPorts,
   waitForBackend,
@@ -87,12 +88,13 @@ try {
   await waitForBackend({ backendOrigin, token, startup });
   ui = await createServer({
     configFile: viteConfig,
+    plugins: [createDevelopmentTokenPlugin(token)],
     server: { port: ports.ui.port, strictPort: true },
   });
   await ui.listen();
   const uiUrl = ui.resolvedUrls?.local?.[0];
   if (!uiUrl) throw new Error("Vite did not expose a local URL");
-  const browserUrl = `${uiUrl}#token=${token}`;
+  const browserUrl = uiUrl;
   console.log(`OpenPI Web development UI: ${browserUrl}`);
   console.log(`API/SSE backend: ${backendOrigin}`);
   console.log(

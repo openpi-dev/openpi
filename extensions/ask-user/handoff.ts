@@ -6,6 +6,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { MAX_ANSWER_DRAFT_UTF8_BYTES, answerDraftFits } from "./limits.ts";
+import { askWebQuestions } from "./web-bridge.ts";
 
 const COMPLETE = "Done — resume and verify";
 const UNABLE = "Unable to complete";
@@ -130,7 +131,6 @@ export function createHumanHandoffToolDefinition(): ToolDefinition<
         } satisfies HumanHandoffDetails,
       });
 
-      if (!ctx.hasUI) return reply("unavailable");
       if (signal?.aborted) return reply("cancelled");
 
       const title = safeSingleLine(params.title);
@@ -140,6 +140,51 @@ export function createHumanHandoffToolDefinition(): ToolDefinition<
         throw new Error(
           "human_handoff title, instructions, and completionSignal must contain visible text.",
         );
+      }
+
+      if (!ctx.hasUI) {
+        const pending = askWebQuestions(
+          ctx.sessionManager,
+          _toolCallId,
+          [
+            {
+              id: "handoff",
+              header: title,
+              question: title,
+              options: [
+                {
+                  label: COMPLETE,
+                  description:
+                    "I performed the action. The agent must still verify the expected signal.",
+                },
+                {
+                  label: UNABLE,
+                  description:
+                    "The action could not be completed; explain the blocker in an optional note.",
+                },
+              ],
+            },
+          ],
+          signal,
+          { title, instructions, completionSignal },
+        );
+        if (!pending) return reply("unavailable");
+        const outcome = await pending;
+        if (signal?.aborted) return reply("cancelled");
+        if (outcome.kind === "answered") {
+          const answer = outcome.answers[0];
+          if (
+            outcome.answers.length !== 1 ||
+            answer?.id !== "handoff" ||
+            !answerDraftFits(answer.note ?? "")
+          )
+            return reply("cancelled");
+          if (answer.selected === COMPLETE)
+            return reply("completed", answer.note);
+          if (answer.selected === UNABLE) return reply("unable", answer.note);
+          return reply("cancelled");
+        }
+        return reply(outcome.kind === "expired" ? "cancelled" : outcome.kind);
       }
 
       const options = signal ? { signal } : undefined;
