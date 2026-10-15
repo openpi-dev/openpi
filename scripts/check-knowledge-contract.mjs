@@ -121,18 +121,23 @@ function markdownEvidence(source) {
     if (node.type === "definition" && !definitions.has(node.identifier))
       definitions.set(node.identifier, node.url);
   }
+  function targets(node) {
+    if (node.type === "link" || node.type === "image") return [node.url];
+    if (node.type === "linkReference" || node.type === "imageReference") {
+      const target = definitions.get(node.identifier);
+      return target ? [target] : [];
+    }
+    return [];
+  }
   return {
     headings: nodes
       .filter((node) => node.type === "heading" && node.depth === 2)
       .map((node) => text(node).trim().toLowerCase()),
-    links: nodes.flatMap((node) => {
-      if (node.type === "link" || node.type === "image") return [node.url];
-      if (node.type === "linkReference" || node.type === "imageReference") {
-        const target = definitions.get(node.identifier);
-        return target ? [target] : [];
-      }
-      return [];
-    }),
+    // Images need valid local targets, but only real links provide navigation.
+    links: nodes.flatMap(targets),
+    navigationLinks: nodes
+      .filter((node) => node.type === "link" || node.type === "linkReference")
+      .flatMap(targets),
   };
 }
 
@@ -332,7 +337,7 @@ export function checkKnowledgeContract(root = REPOSITORY_ROOT) {
       }
 
       if (
-        !markdownLinkTargets(indexSource).some((target) => {
+        !markdownEvidence(indexSource).navigationLinks.some((target) => {
           if (!isRepositoryReference(canonicalRoot, indexPath, target))
             return false;
           return (

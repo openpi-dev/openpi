@@ -595,3 +595,36 @@ test("reference link evidence uses the first real Markdown definition", () => {
     ),
   );
 });
+
+test("index navigation requires a real link while body images still require valid targets", () => {
+  for (const index of [
+    "![record](record.md)\n",
+    "![record][entry]\n\n[entry]: record.md\n",
+  ]) {
+    const root = fixture();
+    writeFileSync(join(root, "docs/research/README.md"), index);
+    assert.ok(
+      checkKnowledgeContract(root).problems.includes(
+        "docs/research/record.md: not reachable from docs/research/README.md",
+      ),
+      index,
+    );
+  }
+  const root = fixture();
+  writeFileSync(join(root, "docs/research/record.svg"), "<svg/>\n");
+  writeFileSync(
+    join(root, "docs/research/README.md"),
+    "[![record](record.svg)](record.md)\n",
+  );
+  assert.deepEqual(checkKnowledgeContract(root).problems, []);
+  const record = join(root, "docs/research/record.md");
+  writeFileSync(
+    record,
+    readFileSync(record, "utf8") + "\n![missing image](missing.svg)\n",
+  );
+  assert.ok(
+    checkKnowledgeContract(root).problems.includes(
+      "docs/research/record.md: broken repository link missing.svg",
+    ),
+  );
+});
