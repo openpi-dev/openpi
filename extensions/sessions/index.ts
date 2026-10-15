@@ -1,4 +1,5 @@
 // Adapted from pi-agent-extensions (MIT); see THIRD_PARTY_NOTICES.md.
+import path from "node:path";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -41,6 +42,7 @@ import {
   buildSessionLabel,
   buildSessionPreview,
   buildSessionSearchEntries,
+  deleteSessionFile,
   filterSessionEntries,
   formatRelativeTime,
   getSessionPaneLayout,
@@ -604,6 +606,31 @@ async function showSessionPicker(
       let focus: "list" | "preview" = "list";
       let showAllWorkspaces = false;
       let isLoading = false;
+      let confirmingDeletePath: string | null = null;
+
+      const handleDelete = async (sessionPath: string) => {
+        const result = await deleteSessionFile(sessionPath);
+        if (result.ok) {
+          sorted = sorted.filter((s) => s.path !== sessionPath);
+          sessionByPath.delete(sessionPath);
+          statsUniverseVersion++;
+          entries = buildSessionSearchEntries(sorted);
+          rebuild();
+          schedulePreviewLoad();
+          ctx.ui.notify(
+            result.method === "trash"
+              ? "Session moved to trash"
+              : "Session deleted",
+            "info",
+          );
+        } else {
+          ctx.ui.notify(
+            `Failed to delete session: ${result.error ?? "unknown error"}`,
+            "error",
+          );
+        }
+        tui.requestRender();
+      };
 
       const cancelPreviewLoad = () => {
         previewSeq++;
@@ -823,21 +850,20 @@ async function showSessionPicker(
           selectList.onSelectionChange = (item) => setSelectedPath(item.value);
           container.addChild(selectList);
         }
-        container.addChild(
-          new Text(
-            hintLine(
-              theme,
-              [
-                ["↑↓", "navigate"],
-                ["enter", "open"],
-                ["esc", "cancel"],
-              ],
-              Math.max(1, width - 2),
-            ),
-            1,
-            0,
-          ),
-        );
+        const singlePaneHints =
+          confirmingDeletePath !== null
+            ? theme.fg("error", "Delete session? Enter confirm · Esc cancel")
+            : hintLine(
+                theme,
+                [
+                  ["↑↓", "navigate"],
+                  ["enter", "open"],
+                  ["ctrl+d", "delete"],
+                  ["esc", "cancel"],
+                ],
+                Math.max(1, width - 2),
+              );
+        container.addChild(new Text(singlePaneHints, 1, 0));
         container.addChild(
           new DynamicBorder((text: string) => theme.fg("accent", text)),
         );
@@ -930,31 +956,30 @@ async function showSessionPicker(
           previewScrollOffset,
           renderedPreview.maxScroll,
         );
-        // Hints live on their own line under the frame instead of being packed
-        // into the bottom border, where they had to compete with the border for
-        // the same row and lost the keys in a wall of dim text.
-        const hints = hintLine(
-          theme,
+        const hintItems = [
+          renderedPreview.maxScroll > 0
+            ? ([
+                "",
+                `${previewScrollOffset + 1}-${Math.min(previewScrollOffset + contentHeight, renderedPreview.totalLines)}/${renderedPreview.totalLines}`,
+              ] as const)
+            : undefined,
+          renderedPreview.maxScroll > 0
+            ? (["pgup/pgdn", "scroll"] as const)
+            : undefined,
+          ["t", toolsExpanded ? "compact" : "tools"] as const,
+          ["h", thinkingVisible ? "hide thinking" : "thinking"] as const,
           [
-            renderedPreview.maxScroll > 0
-              ? ([
-                  "",
-                  `${previewScrollOffset + 1}-${Math.min(previewScrollOffset + contentHeight, renderedPreview.totalLines)}/${renderedPreview.totalLines}`,
-                ] as const)
-              : undefined,
-            renderedPreview.maxScroll > 0
-              ? (["pgup/pgdn", "scroll"] as const)
-              : undefined,
-            ["t", toolsExpanded ? "compact" : "tools"],
-            ["h", thinkingVisible ? "hide thinking" : "thinking"],
-            [
-              "opt+w/ctrl+t",
-              showAllWorkspaces ? "current workspace" : "all workspaces",
-            ],
-            ["esc", "close"],
-          ],
-          width,
-        );
+            "opt+w/ctrl+t",
+            showAllWorkspaces ? "current workspace" : "all workspaces",
+          ] as const,
+          ["ctrl+d", "delete"] as const,
+          ["esc", "close"] as const,
+        ];
+
+        const hints =
+          confirmingDeletePath !== null
+            ? theme.fg("error", "Delete session? Enter confirm · Esc cancel")
+            : hintLine(theme, hintItems, width);
 
         const lines = [buildTopBorder(layout.listWidth, layout.previewWidth)];
         for (let i = 0; i < contentHeight; i++) {
@@ -989,6 +1014,29 @@ async function showSessionPicker(
         },
         dispose: disposePicker,
         handleInput: (data) => {
+          if (confirmingDeletePath !== null) {
+            if (
+              matchesKey(data, Key.enter) ||
+              kb.matches(data, "tui.select.confirm")
+            ) {
+              const target = confirmingDeletePath;
+              confirmingDeletePath = null;
+              void handleDelete(target);
+              return;
+            }
+            if (
+              matchesKey(data, Key.escape) ||
+              kb.matches(data, "tui.select.cancel")
+            ) {
+              confirmingDeletePath = null;
+              tui.requestRender();
+              return;
+            }
+            confirmingDeletePath = null;
+            tui.requestRender();
+            return;
+          }
+
           const currentLayout = getSessionPaneLayout(
             tui.terminal?.columns ?? 80,
           );
@@ -1088,6 +1136,31 @@ async function showSessionPicker(
           }
 
           if (focus === "list") {
+            if (
+              matchesKey(data, Key.ctrl("d")) ||
+              kb.matches(data, "app.session.delete") ||
+              data === "\u0004"
+            ) {
+              const selectedSession = sessionByPath.get(selectedPath);
+              if (selectedSession) {
+                const activeSessionPath = ctx.sessionManager.getSessionFile();
+                if (
+                  activeSessionPath &&
+                  path.resolve(selectedSession.path) ===
+                    path.resolve(activeSessionPath)
+                ) {
+                  ctx.ui.notify(
+                    "Cannot delete the currently active session",
+                    "error",
+                  );
+                  return;
+                }
+                confirmingDeletePath = selectedSession.path;
+                tui.requestRender();
+                return;
+              }
+            }
+
             if (isPrintable(data)) {
               filter += data;
               rebuild();
