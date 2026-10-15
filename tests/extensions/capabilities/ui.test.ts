@@ -15,6 +15,7 @@ import {
   colorCapabilityKeyword,
   highlightCapabilityNames,
   isLightNamedTheme,
+  supportsDynamicCapabilityShimmer,
 } from "../../../extensions/capabilities/src/ui.ts";
 import { capabilitiesRequestedByPrompt } from "../../../extensions/shared/capability-intent.ts";
 import {
@@ -398,4 +399,21 @@ test("unknown custom editor geometry preserves output without guessing hint owne
     (name) => `[${name}]`,
   );
   assert.deepEqual(wrapped.render(9), ["workflow", "workflow hint"]);
+});
+
+test("dynamic shimmer requires proven interactive output", () => {
+  for (const isTTY of [false, undefined]) {
+    for (const term of [undefined, "xterm-256color", "dumb"]) {
+      assert.equal(supportsDynamicCapabilityShimmer({ isTTY, term }), false);
+    }
+  }
+  assert.equal(
+    supportsDynamicCapabilityShimmer({ isTTY: true, term: "DUMB" }),
+    false,
+  );
+  assert.equal(
+    supportsDynamicCapabilityShimmer({ isTTY: true, term: "xterm-256color" }),
+    true,
+  );
+  assert.equal(supportsDynamicCapabilityShimmer({ isTTY: true }), true);
 });

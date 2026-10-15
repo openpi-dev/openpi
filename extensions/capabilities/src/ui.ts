@@ -36,6 +36,16 @@ const LIGHT_SHIMMER_PALETTE: readonly Rgb[] = [
   [130, 80, 223],
 ];
 
+/** Unknown/noninteractive output must never own an animation timer. */
+export function supportsDynamicCapabilityShimmer(
+  terminal: { isTTY?: boolean; term?: string } = {
+    isTTY: process.stdout.isTTY,
+    term: process.env.TERM,
+  },
+) {
+  return terminal.isTTY === true && terminal.term?.toLowerCase() !== "dumb";
+}
+
 export function isLightNamedTheme(name: string | undefined) {
   return name !== undefined && /(?:^|[-_])light(?:$|[-_])/iu.test(name);
 }

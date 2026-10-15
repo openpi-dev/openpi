@@ -28,6 +28,7 @@ import {
   CapabilityIntentHighlightEditor,
   colorCapabilityKeyword,
   isLightNamedTheme,
+  supportsDynamicCapabilityShimmer,
 } from "./src/ui.ts";
 
 const CapabilitySchema = Type.Unsafe<OpenPiCapability>({
@@ -77,6 +78,7 @@ function skillGuidance(capabilities: readonly OpenPiCapability[]) {
 interface CapabilityExtensionDependencies {
   readonly loadConfig: () => Pick<MyPiSetupConfig, "capabilities">;
   readonly sourcePath?: string;
+  readonly supportsDynamicShimmer?: () => boolean;
 }
 
 export function createCapabilitiesExtension(
@@ -134,6 +136,11 @@ export function createCapabilitiesExtension(
         id: "capability-intent-highlight",
         order: 150,
         wrap: (base, tui, _theme, keybindings) => {
+          const canAnimate = () =>
+            (
+              dependencies.supportsDynamicShimmer ??
+              supportsDynamicCapabilityShimmer
+            )() && ctx.ui.theme.getColorMode() === "truecolor";
           return new CapabilityIntentHighlightEditor(
             base,
             keybindings,
@@ -144,9 +151,12 @@ export function createCapabilitiesExtension(
                   colorMode: ctx.ui.theme.getColorMode(),
                   light: isLightNamedTheme(ctx.ui.theme.name),
                 },
-                shimmerPhase,
+                canAnimate() ? shimmerPhase : undefined,
               ),
-            (active) => setShimmerActive(active, () => tui.requestRender()),
+            (active) =>
+              setShimmerActive(active && canAnimate(), () =>
+                tui.requestRender(),
+              ),
           );
         },
       });
