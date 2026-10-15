@@ -594,15 +594,16 @@ test("an included regular file replaced by a symlink is never followed or copied
 test("failed initialization cleans an unchanged checkout and removes private snapshot files", async (t) => {
   const { repo, root } = fixture(t);
   fs.writeFileSync(path.join(repo, "packages", "app", "file.txt"), "dirty\n");
-  const scratchBefore = new Set(
-    fs
-      .readdirSync(os.tmpdir())
-      .filter((name) => name.startsWith("openpi-session-worktree-")),
+  const scratchWitness = path.join(root, "operation-scratch.json");
+  const otherScratch = path.join(
+    os.tmpdir(),
+    `openpi-session-worktree-${path.basename(root)}-other-owner`,
   );
+  t.after(() => fs.rmSync(otherScratch, { recursive: true, force: true }));
   gitBoundary(
     t,
     root,
-    `if(isApply){process.stderr.write('injected apply failure');process.exit(42);} ${runReal}`,
+    `if(isApply){const path=require('node:path');fs.writeFileSync(${JSON.stringify(scratchWitness)},JSON.stringify({patch:args.at(-1)}));fs.mkdirSync(${JSON.stringify(otherScratch)});fs.writeFileSync(path.join(${JSON.stringify(otherScratch)},'other-owner.txt'),'must survive');process.stderr.write('injected apply failure');process.exit(42);} ${runReal}`,
   );
   await assert.rejects(
     createSessionWorktree(repo, "apply-failure"),
@@ -612,15 +613,17 @@ test("failed initialization cleans an unchanged checkout and removes private sna
     git(repo, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length,
     1,
   );
-  assert.deepEqual(
-    fs
-      .readdirSync(os.tmpdir())
-      .filter(
-        (name) =>
-          name.startsWith("openpi-session-worktree-") &&
-          !scratchBefore.has(name),
-      ),
-    [],
+  const { patch } = JSON.parse(fs.readFileSync(scratchWitness, "utf8")) as {
+    patch: string;
+  };
+  assert.ok(path.isAbsolute(patch));
+  assert.equal(path.basename(patch), "working-tree.patch");
+  const ownedScratch = path.dirname(patch);
+  assert.ok(path.basename(ownedScratch).startsWith("openpi-session-worktree-"));
+  assert.equal(fs.existsSync(ownedScratch), false);
+  assert.equal(
+    fs.readFileSync(path.join(otherScratch, "other-owner.txt"), "utf8"),
+    "must survive",
   );
   assert.equal(
     fs.readFileSync(path.join(repo, "packages", "app", "file.txt"), "utf8"),
