@@ -27,7 +27,7 @@
 | 记录 Session 任务与显式长期目标 | `capabilities` + `tasks` 和/或 `goal` | 原生 Session 与对应任务/目标状态。 | `session` 组内两个 owner 可分开选择。任务和目标记录不是执行或验收证据；UI 数据源可另选。 |
 | 终端信息工作台 | `ui-customization`，按需加 `model-info`、`git-info`、`turn-time` | 交互式 TUI；Git/PR 信息还有下表的外部前提。 | 缺信息发布者会少相应指标，不会因此获得委派、Workflow 或后台工具。它们也不是运行这些工具的前置。 |
 
-例：同时需要结构化搜索、直接委派和后台服务器，可以合并前三类所需的 owner，保留一个 `capabilities`。只需要 Workflow 时，不必再选直接委派或终端装饰项。组合不会扩大 Pi Trust、子工具权限或已有安全门禁。
+例：同时需要结构化搜索、直接委派和后台服务器，选择 `capabilities`、`file-search`、`git-read`、`subagents`、`background-terminals` 这五个入口。只需要 Workflow 时，不必再选直接委派或终端装饰项。组合不会扩大 Pi Trust、子工具权限或已有安全门禁。
 
 向模型明确提出“用 fd/rg 搜索”“用子代理调查”或“启动后台命令”等实际任务，`explicit` 发现会按既有规则加载相应组；如果网关已可用，模型也可调用 `openpi_load_tools`。只列出可用组不会执行任务。主动选用 `adaptive` 只是让小型网关可常驻，由模型判断是否加载；不是默认安装策略。
 
