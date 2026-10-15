@@ -132,3 +132,114 @@ test("a successful start exposes lifecycle tools but a rejected start does not",
     }
   }
 });
+
+test("FAIL: an aborted multi-id bg_kill still delivers the terminal that already settled", {
+  skip: process.platform === "win32",
+}, async () => {
+  const tools = new Map<string, CapturedTool>();
+  const handlers = new Map<
+    string,
+    Array<(event: unknown, ctx: ExtensionContext) => unknown>
+  >();
+  const sent: Array<{
+    content: string;
+    details: { id?: string; results?: Array<{ id: string }> };
+  }> = [];
+  let active: string[] = [];
+  const pi = {
+    on(event: string, handler: unknown) {
+      handlers.set(event, [
+        ...(handlers.get(event) ?? []),
+        handler as (event: unknown, ctx: ExtensionContext) => unknown,
+      ]);
+    },
+    registerTool(tool: CapturedTool) {
+      tools.set(tool.name, tool);
+    },
+    getActiveTools: () => [...active],
+    setActiveTools(names: string[]) {
+      active = [...names];
+    },
+    registerMessageRenderer() {},
+    registerCommand() {},
+    sendMessage(message: (typeof sent)[number]) {
+      sent.push(message);
+    },
+  } as unknown as ExtensionAPI;
+  let idle = false;
+  const ctx = {
+    cwd: process.cwd(),
+    hasUI: false,
+    isIdle: () => idle,
+    sessionManager: { getSessionId: () => "bg-kill-abort" },
+  } as unknown as ExtensionContext;
+  const emit = async (event: string) => {
+    for (const handler of handlers.get(event) ?? []) await handler({}, ctx);
+  };
+  const call = (
+    name: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) =>
+    tools.get(name)!.execute(name, params, signal, undefined, ctx) as Promise<{
+      details: {
+        id: string;
+        terminals?: Array<{ id: string; status: string }>;
+      };
+    }>;
+  // bg_list, unlike bg_status, never hands a settlement to the model itself.
+  const statusOf = async (id: string) =>
+    (await call("bg_list", {})).details.terminals?.find(
+      (terminal) => terminal.id === id,
+    )?.status;
+  const waitFor = async (check: () => Promise<boolean> | boolean) => {
+    const deadline = Date.now() + 10_000;
+    while (!(await check())) {
+      if (Date.now() > deadline) throw new Error("timed out");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  };
+
+  backgroundTerminals(pi);
+  await emit("session_start");
+  try {
+    const fast = await call("bg_start", { command: "sleep 30", title: "fast" });
+    const slow = await call("bg_start", {
+      command: "trap '' TERM; sleep 30",
+      title: "slow",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const abort = new AbortController();
+    const killing = call(
+      "bg_kill",
+      { ids: [fast.details.id, slow.details.id] },
+      abort.signal,
+    );
+    await waitFor(async () => (await statusOf(fast.details.id)) === "killed");
+    abort.abort();
+    await assert.rejects(killing, /termination continues in the background/);
+
+    await waitFor(async () => (await statusOf(slow.details.id)) !== "running");
+    idle = true;
+    await emit("agent_settled");
+    const deliveredIds = () =>
+      sent.flatMap(({ details }) =>
+        details.results
+          ? details.results.map((result) => result.id)
+          : details.id
+            ? [details.id]
+            : [],
+      );
+    await waitFor(() =>
+      [fast.details.id, slow.details.id].every((id) =>
+        deliveredIds().includes(id),
+      ),
+    );
+    // Leave room for a duplicate batch to show up before counting.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual(deliveredIds().sort(), [fast.details.id, slow.details.id]);
+  } finally {
+    await emit("session_shutdown");
+  }
+});

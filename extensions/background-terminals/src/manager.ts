@@ -125,6 +125,9 @@ interface Entry {
   /** Completed exactly once when the entry settles. Kill callers and the scope
    * finalizer can all await the same result without missing a notification. */
   settled: Deferred.Deferred<void>;
+  /** Settled while a bg_kill held interest, so the automatic follow-up was
+   * skipped, and no kill has returned that result yet. */
+  awaitingKillReport: boolean;
 }
 
 interface SpillFile {
@@ -761,6 +764,7 @@ function* makeManager(maxSpillBytesPerSession: number) {
     // ensuring blocks release interest. Snapshot consumption first so the
     // settle hook observes the interest that existed when settlement won.
     const consumed = (killInterest.get(s.id) ?? 0) > 0;
+    entry.awaitingKillReport = consumed;
     Deferred.doneUnsafe(entry.settled, Effect.void);
     notify(s.id);
     try {
@@ -999,6 +1003,7 @@ function* makeManager(maxSpillBytesPerSession: number) {
           terminationFailed: false,
           exitCleanupStarted: false,
           settled,
+          awaitingKillReport: false,
         };
 
         if (options.timeoutSeconds !== undefined) {
@@ -1213,6 +1218,7 @@ function* makeManager(maxSpillBytesPerSession: number) {
       // Mark consumed before signaling so this kill's settlements are not
       // ALSO queued as automatic follow-up messages to the model.
       addKillInterest(runningIds);
+      let reported = false;
       const work = Effect.gen(function* () {
         yield* Effect.forEach(running, killEntry, {
           concurrency: "unbounded",
@@ -1227,7 +1233,7 @@ function* makeManager(maxSpillBytesPerSession: number) {
         );
         // Capture the report BEFORE the ensuring below releases interest and
         // prunes — a just-settled entry must not vanish out from under it.
-        return unique.map((id): KillResult => {
+        const report = unique.map((id): KillResult => {
           const sourceEntry = byId.get(id);
           const snapshot = sourceEntry?.snapshot;
           const history = settledHistory.get(id);
@@ -1252,11 +1258,33 @@ function* makeManager(maxSpillBytesPerSession: number) {
               : (history?.exit ?? "unknown"),
           };
         });
+        for (const entry of running) entry.awaitingKillReport = false;
+        reported = true;
+        return report;
       });
       return work.pipe(
         Effect.ensuring(
           Effect.sync(() => {
             releaseKillInterest(runningIds);
+            // An interrupted kill (Esc while another id waits for SIGKILL)
+            // returns nothing. Hand every result it suppressed back to the
+            // automatic follow-up path, unless another kill still owns it.
+            if (!reported && !disposed) {
+              for (const entry of running) {
+                if (
+                  !entry.awaitingKillReport ||
+                  killInterest.has(entry.snapshot.id)
+                ) {
+                  continue;
+                }
+                entry.awaitingKillReport = false;
+                try {
+                  onSettled?.(entry.snapshot, false);
+                } catch {
+                  // The parent session may be unavailable; settlement stays final.
+                }
+              }
+            }
             pruneSettled();
           }),
         ),

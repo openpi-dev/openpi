@@ -789,6 +789,113 @@ test("a settle during an in-flight kill reports consumed: true", async () => {
   });
 });
 
+test("FAIL: an aborted multi-id kill hands already-settled results back exactly once", {
+  skip: process.platform === "win32",
+}, async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; status: string; consumed: boolean }> =
+      [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ id: snap.id, status: snap.status, consumed }),
+    );
+    const fast = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd("setInterval(() => {}, 1000)"),
+        title: "fast",
+        cwd,
+      }),
+    );
+    const slow = await runTool(
+      runtime,
+      manager.start({
+        command: `exec ${nodeCmd(
+          'process.on("SIGTERM", () => {}); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);',
+        )}`,
+        title: "slow",
+        cwd,
+      }),
+    );
+    assert.ok(
+      await pollUntil(() =>
+        (manager.view.get(slow.id)?.stdout.text ?? "").includes("ready"),
+      ),
+    );
+
+    // `fast` dies on SIGTERM; `slow` holds the kill open until SIGKILL. The
+    // user aborts the tool call inside that window.
+    const abort = new AbortController();
+    const killing = runTool(runtime, manager.kill([fast.id, slow.id]), {
+      signal: abort.signal,
+    });
+    assert.ok(
+      await pollUntil(() => manager.view.get(fast.id)?.status === "killed"),
+    );
+    abort.abort();
+    await assert.rejects(killing);
+
+    // The aborted kill returned nothing, so `fast` must flow back as an
+    // automatic result instead of disappearing.
+    assert.deepEqual(settled, [
+      { id: fast.id, status: "killed", consumed: true },
+      { id: fast.id, status: "killed", consumed: false },
+    ]);
+    await settlement(manager, slow.id);
+    assert.ok(await pollUntil(() => settled.length === 3));
+    assert.deepEqual(settled[2], {
+      id: slow.id,
+      status: "killed",
+      consumed: false,
+    });
+  });
+});
+
+test("an aborted kill does not redeliver results another kill returned", {
+  skip: process.platform === "win32",
+}, async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ id: snap.id, consumed }),
+    );
+    const fast = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd("setInterval(() => {}, 1000)"),
+        title: "fast",
+        cwd,
+      }),
+    );
+    const slow = await runTool(
+      runtime,
+      manager.start({
+        command: `exec ${nodeCmd(
+          'process.on("SIGTERM", () => {}); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);',
+        )}`,
+        title: "slow",
+        cwd,
+      }),
+    );
+    assert.ok(
+      await pollUntil(() =>
+        (manager.view.get(slow.id)?.stdout.text ?? "").includes("ready"),
+      ),
+    );
+
+    const abort = new AbortController();
+    const aborted = runTool(runtime, manager.kill([fast.id, slow.id]), {
+      signal: abort.signal,
+    });
+    // A second kill of `fast` alone returns its result to its own caller.
+    const [returned] = await runTool(runtime, manager.kill([fast.id]));
+    assert.equal(returned.status, "killed");
+    abort.abort();
+    await assert.rejects(aborted);
+
+    assert.deepEqual(settled, [{ id: fast.id, consumed: true }]);
+  });
+});
+
 test("UI requestKill settles as killed and is NOT consumed", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; status: string; consumed: boolean }> =
