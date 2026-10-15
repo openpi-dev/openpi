@@ -664,8 +664,8 @@ test("a settled launch card does not repaint while its detached run stays active
           invalidations += 1;
         },
         lastComponent: undefined,
-        durationMs: undefined,
-        outputPad: 0,
+        ...{ durationMs: undefined },
+        ...{ outputPad: 0 },
         state: {},
         cwd: repoDir,
         executionStarted: true,

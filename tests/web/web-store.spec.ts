@@ -4547,6 +4547,31 @@ it("restores the exact archived path without selecting it and refreshes canonica
   expect(store.getState().snapshot?.sessions[0]?.name).toBe("Restored");
 });
 
+it("confirms an accepted restore when a concurrent refresh supersedes its snapshot", async () => {
+  const client = new FakeClient();
+  vi.spyOn(client, "unarchiveSession").mockResolvedValue({
+    path: "/tmp/ws/saved.jsonl",
+    archived: false,
+  });
+  let releaseFirst!: (value: ReturnType<typeof snapshot>) => void;
+  client.snapshots.push(
+    new Promise((resolve) => {
+      releaseFirst = resolve;
+    }),
+  );
+  client.snapshots.push(Promise.resolve(snapshot("Concurrent")));
+  client.snapshots.push(Promise.resolve(snapshot("Restored")));
+  const store = createWebStore(client);
+  const restored = store
+    .getState()
+    .actions.unarchiveSession("/tmp/ws/saved.jsonl");
+  await vi.waitFor(() => expect(client.snapshotPaths.length).toBe(1));
+  await store.getState().actions.refreshSnapshot();
+  releaseFirst(snapshot("Superseded"));
+  expect(await restored).toBe(true);
+  expect(store.getState().snapshot?.sessions[0]?.name).toBe("Restored");
+});
+
 it("keeps archive restoration failure observable without pretending to refresh", async () => {
   const client = new FakeClient();
   vi.spyOn(client, "unarchiveSession").mockRejectedValue(
