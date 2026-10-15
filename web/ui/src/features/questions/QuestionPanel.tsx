@@ -21,6 +21,25 @@ import type {
 } from "../../../../protocol/questions.ts";
 import { WebClient } from "../../protocol/client.ts";
 
+// Only an exact transient receipt target survives reload: no file paths or approval preference.
+function cleanupReceiptTarget(sessionId: string, requestId?: string | null) {
+  const key = `openpi:cleanup-receipt:${sessionId}`;
+  try {
+    if (requestId === null) sessionStorage.removeItem(key);
+    else if (requestId !== undefined) {
+      const keys = Object.keys(sessionStorage).filter((k) =>
+        k.startsWith("openpi:cleanup-receipt:"),
+      );
+      if (!sessionStorage.getItem(key) && keys.length >= 32)
+        sessionStorage.removeItem(keys[0]!);
+      sessionStorage.setItem(key, requestId);
+    }
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 type Draft = {
   choice: number | "custom" | null;
   custom: string;
@@ -170,7 +189,11 @@ export function QuestionCard({
   );
   const complete = drafts.every((d) => d.choice !== null) && !overflow;
   const choiceLabel = (label: string | undefined, index: number) =>
-    request.handoff ? t(index === 0 ? "handoffDone" : "handoffUnable") : label;
+    request.cleanup
+      ? t(index === 0 ? "cleanupApprove" : "cleanupDeny")
+      : request.handoff
+        ? t(index === 0 ? "handoffDone" : "handoffUnable")
+        : label;
 
   useEffect(() => () => controller.current?.abort(), []);
   const commitWorking = (next: QuestionWorkingPosition) => {
@@ -247,6 +270,12 @@ export function QuestionCard({
       className="question-card"
       aria-labelledby={`${id}-title`}
       aria-busy={busy}
+      onKeyDown={(event) => {
+        if (request.cleanup && event.key === "Escape" && !locked) {
+          event.preventDefault();
+          void send(true);
+        }
+      }}
     >
       <header className="question-card-header">
         <span className="question-eyebrow">
@@ -274,8 +303,19 @@ export function QuestionCard({
       </header>
       <div className="question-card-body">
         <h2 id={`${id}-title`} ref={heading} tabIndex={-1}>
-          {review ? t("questionReviewTitle") : question.question}
+          {review
+            ? t("questionReviewTitle")
+            : request.cleanup
+              ? t("cleanupPrompt")
+              : question.question}
         </h2>
+        {request.cleanup && (
+          <pre className="cleanup-targets">
+            {request.cleanup.workspace}
+            {"\n"}
+            {request.cleanup.paths.join("\n")}
+          </pre>
+        )}
         {request.handoff && (
           <div className="handoff-instructions">
             <p>{request.handoff.instructions}</p>
@@ -341,15 +381,17 @@ export function QuestionCard({
                   <span className="question-choice-copy">
                     <strong>{choiceLabel(option.label, i)}</strong>
                     <span>
-                      {request.handoff
-                        ? t(i === 0 ? "handoffDoneHelp" : "handoffUnableHelp")
-                        : option.description}
+                      {request.cleanup
+                        ? t(i === 0 ? "cleanupApproveHelp" : "cleanupDenyHelp")
+                        : request.handoff
+                          ? t(i === 0 ? "handoffDoneHelp" : "handoffUnableHelp")
+                          : option.description}
                     </span>
                   </span>
                 </label>
               ))}
             </fieldset>
-            {typeof draft.choice === "number" && (
+            {typeof draft.choice === "number" && !request.cleanup && (
               <div className="question-extras">
                 <button
                   type="button"
@@ -454,7 +496,7 @@ export function QuestionCard({
         )}
       </div>
       <footer className="question-card-footer">
-        {!review && !request.handoff && (
+        {!review && !request.handoff && !request.cleanup && (
           <label
             className={`question-custom ${draft.choice === "custom" ? "is-selected" : ""} ${locked ? "is-disabled" : ""}`}
           >
@@ -568,21 +610,48 @@ export function QuestionPanel({
   // biome-ignore lint/correctness/useExhaustiveDependencies: canonical snapshot revisions and explicit retries refresh pending questions.
   useEffect(() => {
     const controller = new AbortController();
-    void client.pendingQuestions(sessionId, controller.signal).then(
-      ({ pending: next }) => {
-        if (controller.signal.aborted) return;
-        const visible = next?.requestId === settled.current ? null : next;
-        // Read ownership must change before React unmounts the old form.
-        currentRequest.current = visible?.requestId ?? null;
-        setFailed(false);
-        retireWorking(cache, sessionId, sessionPath, next?.requestId);
-        setPending(visible);
-        if (next && next.requestId !== settled.current) setReceipt(null);
-      },
-      () => {
+    void client
+      .pendingQuestions(sessionId, controller.signal)
+      .then(
+        async ({ pending: next }) => {
+          if (controller.signal.aborted) return;
+          const previousTarget = cleanupReceiptTarget(sessionId);
+          if (
+            previousTarget &&
+            previousTarget !== next?.requestId &&
+            previousTarget !== settled.current
+          ) {
+            const recovered = await client.questionReceipt(
+              sessionId,
+              previousTarget,
+              controller.signal,
+            );
+            if (controller.signal.aborted) return;
+            setReceipt(
+              recovered.receipt ?? {
+                state: "stale",
+                cleanupDecision: "unknown",
+              },
+            );
+            settled.current = previousTarget;
+          }
+          if (next?.cleanup) cleanupReceiptTarget(sessionId, next.requestId);
+          const visible = next?.requestId === settled.current ? null : next;
+          // Read ownership must change before React unmounts the old form.
+          currentRequest.current = visible?.requestId ?? null;
+          setFailed(false);
+          retireWorking(cache, sessionId, sessionPath, next?.requestId);
+          setPending(visible);
+          if (next?.cleanup && next.requestId !== settled.current)
+            setReceipt(null);
+        },
+        () => {
+          if (!controller.signal.aborted) setFailed(true);
+        },
+      )
+      .catch(() => {
         if (!controller.signal.aborted) setFailed(true);
-      },
-    );
+      });
     return () => controller.abort();
   }, [client, sessionId, sessionPath, cache, revision, retry]);
   if (!pending && !receipt && !failed) return null;
@@ -603,24 +672,47 @@ export function QuestionPanel({
             currentRequest.current = null;
             settled.current = pending.requestId;
             setPending(null);
-            setReceipt(result.state === "answered" ? null : result);
+            if (pending.cleanup) cleanupReceiptTarget(sessionId, null);
+            setReceipt(
+              result.state === "answered" && !result.cleanupDecision
+                ? null
+                : result,
+            );
             setRetry((n) => n + 1);
           }}
         />
-      ) : receipt ? (
-        <div className="question-receipt" role="status">
+      ) : null}
+      {receipt ? (
+        <div
+          className={`question-receipt${receipt.cleanupDecision ? " cleanup-receipt" : ""}`}
+          role="status"
+        >
           <Check aria-hidden="true" />
-          <span>{t(`questionState_${receipt.state}`)}</span>
+          <span>
+            {receipt.cleanupDecision
+              ? t(`cleanupDecision_${receipt.cleanupDecision}`)
+              : t(`questionState_${receipt.state}`)}
+          </span>
+          {receipt.cleanupTarget && (
+            <pre>
+              {receipt.cleanupTarget.workspace}
+              {"\n"}
+              {receipt.cleanupTarget.paths.join("\n")}
+            </pre>
+          )}
           <button
             type="button"
             className="question-icon"
             aria-label={t("questionCloseReceipt")}
-            onClick={() => setReceipt(null)}
+            onClick={() => {
+              cleanupReceiptTarget(sessionId, null);
+              setReceipt(null);
+            }}
           >
             <X />
           </button>
         </div>
-      ) : (
+      ) : !pending && failed ? (
         <div className="question-receipt" role="alert">
           <span>{t("questionLoadFailed")}</span>
           <button
@@ -631,7 +723,7 @@ export function QuestionPanel({
             {t("questionRetryLoad")}
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

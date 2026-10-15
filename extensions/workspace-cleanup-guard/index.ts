@@ -2,6 +2,7 @@ import {
   type ExtensionAPI,
   isToolCallEventType,
 } from "@earendil-works/pi-coding-agent";
+import { requestWebCleanupConfirmation } from "../shared/web-cleanup-confirmation.ts";
 import { createWorkspaceCleanupGuard } from "./workspace-provenance.ts";
 
 const DELETE_CONFIRMATION_TITLE = "Delete pre-existing workspace files?";
@@ -29,11 +30,18 @@ export default function workspaceCleanupGuard(pi: ExtensionAPI) {
       command: event.input.command,
       cwd: ctx.cwd,
       confirmDelete: (paths) =>
-        ctx.ui.confirm(
-          DELETE_CONFIRMATION_TITLE,
-          deleteConfirmationMessage(paths),
-          { signal: ctx.signal },
-        ),
+        ctx.hasUI === false
+          ? requestWebCleanupConfirmation(
+              ctx.sessionManager,
+              event.toolCallId,
+              { workspace: ctx.cwd, paths },
+              ctx.signal,
+            )
+          : ctx.ui.confirm(
+              DELETE_CONFIRMATION_TITLE,
+              deleteConfirmationMessage(paths),
+              { signal: ctx.signal },
+            ),
     });
     if (cleanupDecision.kind === "block") {
       return { block: true, reason: cleanupDecision.reason };

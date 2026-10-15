@@ -684,6 +684,8 @@ OpenPI 的 `/plan` 调研通过 `plan_ready` 成功提交计划后，Web 会在�
 
 Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和 `auth` 等固定子命令，package 不能注册新的顶层子命令。因此 Web 入口是独立 CLI 的 `openpi web`，不是会被 Pi 当成初始 Prompt 的 `pi open`。Web 进程仍沿用 Pi 的 Provider、模型、凭据、Settings、Trust、Session 格式和 extension 资源加载，不引入第二套 Provider 或 Session 存储。
 
+Web 的检查面板只读展示当前工作区的 Pi Trust 状态，不在浏览器内变更 Trust。cleanup guard 能准确识别的预存文件删除通过现有提问卡向发起命令的标签展示完整目标，固定批准仅作用于原 Session、运行轮次和请求；普通聊天中的“同意”不构成确认。其他标签不能答复，未决确认在超时、取消、切换会话或关闭 Host 时失效；没有界面或同 Session 的 Web 通道时阻止本次删除。响应丢失或刷新后，同一标签可以按原请求核对有界内存回执，已记录的批准不会因运行结束而变成拒绝，也不会再次执行命令。浏览器只暂存 Session/request 标识，不保存删除路径或批准偏好；Host 重启或回执淘汰后只能报告无法核实。批准是操作决定，实际删除仍须核对原生工具结果与文件。本切片不扩展 guard 的命令识别范围，也不提供任意扩展的自定义 TUI 界面。
+
 ### 命令速查
 
 | 命令                       | 作用                                           |

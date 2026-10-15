@@ -1,5 +1,6 @@
+import { cleanupQuestions } from "../../extensions/shared/web-cleanup-confirmation.ts";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import type { WebQuestionOutcome, WebHandoffPresentation } from "../../extensions/ask-user/web-bridge.ts";
+import type { WebQuestionOutcome, WebHandoffPresentation, WebCleanupTarget } from "../../extensions/ask-user/web-bridge.ts";
 import {
   parseWebQuestionAnswers,
   validateWebQuestions,
@@ -13,6 +14,7 @@ import {
 
 export interface QuestionOwner {
   workspace: string;
+  sessionPath?: string;
   sessionId: string;
   commandId: string;
   epoch: number;
@@ -20,7 +22,7 @@ export interface QuestionOwner {
 }
 
 function sameOwner(a: QuestionOwner, b: QuestionOwner | undefined) {
-  return b !== undefined && a.workspace === b.workspace && a.sessionId === b.sessionId &&
+  return b !== undefined && a.workspace === b.workspace && a.sessionPath === b.sessionPath && a.sessionId === b.sessionId &&
     a.commandId === b.commandId && a.epoch === b.epoch && a.controllerId === b.controllerId;
 }
 
@@ -36,7 +38,7 @@ export class WebQuestionBroker {
     request: WebQuestionRequest;
     settle: (state: WebQuestionState, answers?: NonNullable<ReturnType<typeof parseWebQuestionAnswers>>) => void;
   };
-  private readonly terminal = new Map<string, { owner: QuestionOwner; state: WebQuestionState }>();
+  private readonly terminal = new Map<string, { owner: QuestionOwner; receipt: WebQuestionReceipt }>();
   private readonly owner: () => QuestionOwner | undefined;
   private readonly changed: () => void;
   private readonly timeoutMs: number;
@@ -51,12 +53,16 @@ export class WebQuestionBroker {
     this.timeoutMs = timeoutMs;
   }
 
-  request(toolCallId: string, questions: WebQuestions, signal?: AbortSignal, handoff?: WebHandoffPresentation) {
+  request(toolCallId: string, questions: WebQuestions, signal?: AbortSignal, handoff?: WebHandoffPresentation, cleanup?: WebCleanupTarget) {
     this.reconcile();
-    const owner = this.owner();
+    const candidate = this.owner();
+    const owner = candidate && structuredClone(candidate);
     if (!owner || this.pending || !validateWebQuestions(questions) || toolCallId.length > 256 || (handoff && !validHandoff(handoff))) {
       return Promise.resolve<WebQuestionOutcome>({ kind: "unavailable" });
     }
+    if (cleanup && (handoff || cleanup.workspace !== owner.workspace || !Array.isArray(cleanup.paths) ||
+        !cleanup.paths.length || cleanup.paths.some((p) => typeof p !== "string" || !p || /[\r\n\0]/u.test(p)) ||
+        JSON.stringify(questions) !== JSON.stringify(cleanupQuestions(cleanup)))) return Promise.resolve<WebQuestionOutcome>({ kind: "unavailable" });
     if (signal?.aborted) return Promise.resolve<WebQuestionOutcome>({ kind: "cancelled" });
     const request: WebQuestionRequest = {
       requestId: randomUUID(),
@@ -65,6 +71,7 @@ export class WebQuestionBroker {
       expiresAt: Date.now() + this.timeoutMs,
       questions: structuredClone(questions),
       ...(handoff ? { handoff: structuredClone(handoff) } : {}),
+      ...(cleanup ? { cleanup: structuredClone(cleanup) } : {}),
     };
     return new Promise<WebQuestionOutcome>((resolve) => {
       const cancel = () => settle("cancelled");
@@ -76,7 +83,10 @@ export class WebQuestionBroker {
         clearTimeout(timer);
         signal?.removeEventListener("abort", cancel);
         if (this.terminal.size >= 128) this.terminal.delete(this.terminal.keys().next().value!);
-        this.terminal.set(request.requestId, { owner, state });
+        const cleanupDecision = request.cleanup ? state === "answered"
+          ? answers?.[0]?.selected === "Approve exact deletion" ? "approved" : "denied"
+          : state === "dismissed" ? "denied" : state : undefined;
+        this.terminal.set(request.requestId, { owner, receipt: { state, ...(cleanupDecision ? { cleanupDecision, cleanupTarget: structuredClone(request.cleanup) } : {}) } });
         resolve(state === "answered" && answers
           ? { kind: "answered", answers }
           : { kind: state === "stale" || state === "answered" ? "cancelled" : state });
@@ -100,6 +110,13 @@ export class WebQuestionBroker {
       ? structuredClone(p.request) : null;
   }
 
+  receipt(sessionId: string, requestId: string, controllerId: string) {
+    this.reconcile();
+    const terminal = this.terminal.get(requestId);
+    return terminal && terminal.owner.sessionId === sessionId && isController(terminal.owner, controllerId)
+      ? structuredClone({ ...terminal.receipt, replayed: true }) : null;
+  }
+
   waitingSessionId() {
     this.reconcile();
     return this.pending?.owner.sessionId;
@@ -112,16 +129,16 @@ export class WebQuestionBroker {
     const owner = p?.owner ?? terminal?.owner;
     if (!owner || owner.sessionId !== sessionId) return { status: 409, body: { state: "stale", code: "STALE_QUESTION" } } as const;
     if (!isController(owner, controllerId)) return { status: 403, body: { error: "Only the initiating tab can answer", code: "NOT_CONTROLLER" } } as const;
-    if (terminal) return { status: 200, body: { state: terminal.state, replayed: true } satisfies WebQuestionReceipt };
+    if (terminal) return { status: 200, body: { ...terminal.receipt, replayed: true } satisfies WebQuestionReceipt };
     if (!p) return { status: 409, body: { state: "stale", code: "STALE_QUESTION" } } as const;
     if (action === "dismiss" && input === undefined) {
       p.settle("dismissed");
-      return { status: 200, body: { state: "dismissed" } satisfies WebQuestionReceipt };
+      return { status: 200, body: { state: "dismissed", ...(p.request.cleanup ? { cleanupDecision: "denied" as const, cleanupTarget: structuredClone(p.request.cleanup) } : {}) } satisfies WebQuestionReceipt };
     }
     const answers = action === "answer" ? parseWebQuestionAnswers(p.request.questions, input) : undefined;
-    if (!answers || (p.request.handoff && answers.some((answer) => !answer.selected))) return { status: 400, body: { error: "Answers must match every question and its allowed choices", code: "INVALID_ANSWERS" } } as const;
+    if (!answers || (p.request.handoff && answers.some((answer) => !answer.selected)) || (p.request.cleanup && answers.some((answer) => !answer.selected || answer.note !== undefined))) return { status: 400, body: { error: "Answers must match every question and its allowed choices", code: "INVALID_ANSWERS" } } as const;
     p.settle("answered", answers);
-    return { status: 200, body: { state: "answered" } satisfies WebQuestionReceipt };
+    return { status: 200, body: { state: "answered", ...(p.request.cleanup ? { cleanupTarget: structuredClone(p.request.cleanup), cleanupDecision: answers[0]?.selected === "Approve exact deletion" ? "approved" as const : "denied" as const } : {}) } satisfies WebQuestionReceipt };
   }
 
   cancel() {
