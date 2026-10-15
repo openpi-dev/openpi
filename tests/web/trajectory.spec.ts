@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import {
   buildTrajectory,
   defaultTrajectoryNode,
+  groupTrajectory,
 } from "../../web/ui/src/features/trajectory/trajectory.ts";
 import type { WebLiveMessage } from "../../web/protocol/types.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
@@ -115,4 +116,32 @@ it("defaults to the latest meaningful record instead of a metadata-only event", 
     "Tool returned a result.",
   );
   expect(i18n.getFixedT("zh")("trajectory_returned")).toBe("工具已返回结果。");
+});
+
+it("groups retained prompts and consecutive events without moving or re-pairing any record", () => {
+  const nodes = buildTrajectory([
+    entry("prefix", result("old")),
+    { id: "change1", type: "model_change", timestamp: "now" },
+    { id: "change2", type: "thinking_level_change", timestamp: "now" },
+    entry("u1", { role: "user", content: "again" }),
+    entry("a1", call("t1")),
+    entry("r1", result("t1")),
+    { id: "change3", type: "model_change", timestamp: "now" },
+    entry("u2", { role: "user", content: "again" }),
+    { id: "change4", type: "thinking_level_change", timestamp: "now" },
+  ]);
+  const groups = groupTrajectory(nodes);
+  expect(groups.map((group) => group.prompt?.key)).toEqual([
+    undefined,
+    "u1",
+    "u2",
+  ]);
+  expect(groups[0]?.runs.map((run) => run.map((node) => node.key))).toEqual([
+    ["prefix"],
+    ["change1", "change2"],
+  ]);
+  expect(groups.flatMap((group) => group.runs.flat())).toEqual(nodes);
+  expect(nodes.find((node) => node.kind === "call")?.result?.toolCallId).toBe(
+    "t1",
+  );
 });

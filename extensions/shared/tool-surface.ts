@@ -68,6 +68,7 @@ export const OPENPI_TOOL_SURFACE = {
     entry: [],
     deferred: ["context_pivot"],
   },
+  browser: { entry: [], deferred: ["openpi_browser"] },
 } as const;
 
 export type OpenPiToolOwner = keyof typeof OPENPI_TOOL_SURFACE;
@@ -165,6 +166,7 @@ export const OPENPI_OWNER_SOURCE_PATHS = {
   plan: fileURLToPath(new URL("../plan-mode/index.ts", import.meta.url)),
   setup: fileURLToPath(new URL("../setup/index.ts", import.meta.url)),
   context: fileURLToPath(new URL("../context-pivot/index.ts", import.meta.url)),
+  browser: fileURLToPath(new URL("../browser/index.ts", import.meta.url)),
 } as const satisfies Record<OpenPiToolOwner, string>;
 
 const states = new WeakMap<object, ToolSurfaceState>();

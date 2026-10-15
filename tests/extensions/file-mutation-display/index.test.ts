@@ -138,6 +138,8 @@ test("overrides all seven activity renderers without changing model-facing defin
       toolCallId: "write-render",
       invalidate() {},
       lastComponent: undefined,
+      ...{ durationMs: undefined },
+      ...{ outputPad: 0 },
       state: {},
       cwd,
       executionStarted: false,
@@ -241,8 +243,13 @@ test("real ToolExecutionComponent toggles between one activity row and native ev
   assert.equal(nonEmpty().length, 1);
 });
 
-test("native grep on a newline-containing filename keeps collapsed rows physical", async () => {
-  if (process.platform === "win32") return;
+test("native grep on a newline-containing filename keeps collapsed rows physical", async (t) => {
+  if (process.platform === "win32") {
+    t.skip(
+      "Windows filenames cannot contain LF; native pathname witness is POSIX-only",
+    );
+    return;
+  }
   const cwd = await mkdtemp(path.join(tmpdir(), "pi-newline-label-"));
   try {
     const args = { pattern: "alpha", path: "合法\nfile.txt" };
