@@ -8,7 +8,10 @@ import {
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Data, Effect, FileSystem } from "effect";
-import { COMPLETE_OUTPUT_MAX_BYTES, type CapturedOutput } from "./output.ts";
+import {
+  COMPLETE_OUTPUT_MAX_BYTES,
+  type CapturedOutput,
+} from "./search-output.ts";
 
 const STDERR_MAX_BYTES = 64 * 1024;
 
