@@ -25,6 +25,16 @@ export default defineConfig({
   root: fileURLToPath(new URL("./ui/", import.meta.url)),
   publicDir: fileURLToPath(new URL("./ui/public/", import.meta.url)),
   plugins: [react(), tailwindcss()],
+  worker: {
+    format: "es",
+    rollupOptions: {
+      output: {
+        entryFileNames: "app-[name]-[hash].js",
+        chunkFileNames: "app-[name]-[hash].js",
+        assetFileNames: "[name][extname]",
+      },
+    },
+  },
   build: {
     outDir: fileURLToPath(new URL("./dist/", import.meta.url)),
     emptyOutDir: true,

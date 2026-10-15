@@ -1,0 +1,1 @@
+var e=`/pdf.worker.min.mjs`;export{e as default};

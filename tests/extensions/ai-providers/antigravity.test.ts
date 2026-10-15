@@ -36,6 +36,7 @@ import {
   streamAntigravity,
 } from "../../../extensions/ai-providers/antigravity/provider.ts";
 import { collapseAntigravityModels } from "../../../extensions/ai-providers/antigravity/routing.ts";
+import { resolveTranscript } from "../../../extensions/ai-providers/transcript.ts";
 
 const GEMINI_MODEL: Model<Api> = {
   id: "gemini-3.1-pro",
@@ -358,6 +359,118 @@ test("OAuth callback ignores a wrong state without consuming the real waiter", a
   assert.equal(credentials.projectId, "project");
 });
 
+test("manual OAuth denial with matching state preserves the authorization error", async () => {
+  let requests = 0;
+  globalThis.fetch = (async () => {
+    requests++;
+    throw new Error("No token exchange expected for denied authorization");
+  }) as typeof fetch;
+  const controller = new AbortController();
+  let callback: URL | undefined;
+  let prompts = 0;
+  try {
+    await assert.rejects(
+      loginAntigravity({
+        signal: controller.signal,
+        onAuth({ url }) {
+          const auth = new URL(url);
+          callback = new URL(auth.searchParams.get("redirect_uri")!);
+          callback.searchParams.set("state", auth.searchParams.get("state")!);
+          callback.searchParams.set("error", "access_denied");
+        },
+        onDeviceCode() {},
+        onPrompt: async () => "",
+        onSelect: async () => undefined,
+        onManualCodeInput: async () => {
+          prompts++;
+          // Bound the pre-fix loop without a timer-dependent failure.
+          if (prompts > 1) controller.abort("unexpected repeat prompt");
+          assert.ok(callback);
+          return callback.href;
+        },
+      }),
+      /Authorization failed: access_denied/,
+    );
+    assert.equal(prompts, 1);
+    assert.equal(requests, 0);
+  } finally {
+    controller.abort();
+  }
+});
+
+for (const scenario of [
+  "raw code",
+  "matching callback",
+  "callback without state",
+  "denial with wrong state",
+  "denial without state",
+] as const) {
+  test(`manual OAuth accepts valid authorization after ${scenario}`, async () => {
+    let exchangedCode: string | null | undefined;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("oauth2.googleapis.com/token")) {
+        assert.ok(init?.body instanceof URLSearchParams);
+        exchangedCode = init.body.get("code");
+        return Response.json({
+          access_token: "access",
+          refresh_token: "refresh",
+          expires_in: 3_600,
+        });
+      }
+      if (url.includes("v1internal:loadCodeAssist")) {
+        return Response.json({
+          currentTier: { id: "free-tier" },
+          paidTier: null,
+          cloudaicompanionProject: "project",
+        });
+      }
+      if (url.includes("googleapis.com/oauth2/v1/userinfo")) {
+        return Response.json({ email: "user@example.test" });
+      }
+      throw new Error(`Unexpected OAuth fetch: ${url}`);
+    }) as typeof fetch;
+    let callback: URL | undefined;
+    let prompts = 0;
+    const controller = new AbortController();
+    try {
+      const credentials = await loginAntigravity({
+        signal: controller.signal,
+        onAuth({ url }) {
+          const auth = new URL(url);
+          callback = new URL(auth.searchParams.get("redirect_uri")!);
+          if (scenario === "matching callback") {
+            callback.searchParams.set("state", auth.searchParams.get("state")!);
+          } else if (scenario === "denial with wrong state") {
+            callback.searchParams.set("state", "unrelated-login");
+          }
+          callback.searchParams.set(
+            scenario.startsWith("denial") ? "error" : "code",
+            scenario.startsWith("denial") ? "access_denied" : "valid-code",
+          );
+        },
+        onDeviceCode() {},
+        onPrompt: async () => "",
+        onSelect: async () => undefined,
+        onManualCodeInput: async () => {
+          prompts++;
+          if (prompts > 2) controller.abort("unexpected repeat prompt");
+          assert.ok(callback);
+          return scenario === "raw code" || prompts > 1
+            ? "valid-code"
+            : callback.href;
+        },
+      });
+      assert.equal(prompts, scenario.startsWith("denial") ? 2 : 1);
+      assert.equal(exchangedCode, "valid-code");
+      assert.equal(credentials.access, "access");
+      assert.equal(credentials.projectId, "project");
+    } finally {
+      controller.abort();
+    }
+  });
+}
+
 test("OAuth refresh preserves provider metadata and the old refresh token", async () => {
   const originalFetch = globalThis.fetch;
   try {
@@ -646,6 +759,161 @@ test("buildRequestBody honors disabled and forced tool choices", () => {
   );
 });
 
+// --- transcript input shape (Pi 0.86+) -------------------------------------
+
+const TRANSCRIPT_TOOLS = [
+  {
+    name: "read",
+    description: "Read file contents",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "bash",
+    description: "Execute bash commands",
+    parameters: { type: "object", properties: {} },
+  },
+];
+
+/**
+ * Pi 0.86+ hands a custom provider a TranscriptContext: `systemPrompt` and `tools`
+ * are folded into a leading system message, and later system messages carry
+ * prompt/tool deltas. `content` is empty in that leading message.
+ */
+function transcriptContext(extraSystem: Record<string, unknown>[] = []) {
+  return {
+    messages: [
+      {
+        role: "system",
+        content: "",
+        sections: {
+          preamble: "You are an expert coding assistant.",
+          rules: "- be concise",
+        },
+        toolsAdded: TRANSCRIPT_TOOLS,
+        timestamp: 0,
+      },
+      ...extraSystem,
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+    ],
+  } as unknown as Context;
+}
+
+test("resolveTranscript replays the system prompt and tools from a Pi 0.86+ transcript", () => {
+  const resolved = resolveTranscript(transcriptContext());
+  assert.deepEqual(resolved.systemPrompts, [
+    "You are an expert coding assistant.\n\n- be concise",
+  ]);
+  assert.deepEqual(
+    resolved.tools?.map((tool) => tool.name),
+    ["read", "bash"],
+  );
+  assert.deepEqual(
+    resolved.messages.map((message) => message.role),
+    ["user"],
+  );
+});
+
+test("resolveTranscript applies tool removals and section patches in order", () => {
+  const resolved = resolveTranscript(
+    transcriptContext([
+      {
+        role: "system",
+        content: "Second instruction.",
+        sections: { rules: null, docs: "docs section" },
+        toolsAdded: [
+          {
+            name: "edit",
+            description: "Edit files",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+        toolsRemoved: [{ name: "read" }],
+        timestamp: 2,
+      },
+    ]),
+  );
+  // Matches Pi's own getCurrentSystemPrompt(): all content first, then the
+  // sections still in effect, in first-insertion order.
+  assert.deepEqual(resolved.systemPrompts, [
+    "Second instruction.\n\nYou are an expert coding assistant.\n\ndocs section",
+  ]);
+  assert.deepEqual(
+    resolved.tools?.map((tool) => tool.name),
+    ["bash", "edit"],
+  );
+});
+
+test("resolveTranscript accepts Pi's shorthand Context input", () => {
+  const resolved = resolveTranscript(SIMPLE_CONTEXT);
+  assert.deepEqual(resolved.systemPrompts, ["You are helpful."]);
+  assert.equal(resolved.tools, undefined);
+  assert.deepEqual(resolved.messages, SIMPLE_CONTEXT.messages);
+});
+
+test("buildRequestBody reads the system prompt and tools from a Pi 0.86+ transcript", () => {
+  const body = buildRequestBody(
+    GEMINI_MODEL,
+    transcriptContext(),
+    undefined,
+    "p",
+  ) as {
+    request: {
+      contents: { role: string; parts: { text?: string }[] }[];
+      systemInstruction: { role: string; parts: { text: string }[] };
+      tools: { functionDeclarations: { name: string }[] }[];
+    };
+  };
+  assert.equal(
+    body.request.systemInstruction.parts[0]!.text,
+    "You are an expert coding assistant.\n\n- be concise",
+  );
+  assert.deepEqual(
+    body.request.tools[0]!.functionDeclarations.map(
+      (declaration) => declaration.name,
+    ),
+    ["read", "bash"],
+  );
+  assert.deepEqual(body.request.contents, [
+    { role: "user", parts: [{ text: "hello" }] },
+  ]);
+});
+
+test("convertMessages never turns a transcript system message into a functionResponse", () => {
+  // The regression: a leading system message with empty content used to reach the
+  // tool-result branch and produce `{ functionResponse: { response: ... } }` with no
+  // name, which Cloud Code Assist rejects as contents[0].parts[0].
+  const contents = convertMessages(GEMINI_MODEL, transcriptContext());
+  assert.deepEqual(contents, [{ role: "user", parts: [{ text: "hello" }] }]);
+  assert.equal(
+    contents.some((content) =>
+      content.parts.some((part) => part.functionResponse !== undefined),
+    ),
+    false,
+  );
+});
+
+test("convertMessages keeps a nameless tool result out of the functionResponse path", () => {
+  const contents = convertMessages(GEMINI_MODEL, {
+    messages: [
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "",
+        content: [{ type: "text", text: "tool output" }],
+        isError: false,
+        timestamp: 0,
+      },
+    ],
+  } as unknown as Context);
+  assert.deepEqual(contents, [
+    { role: "user", parts: [{ text: "tool output" }] },
+  ]);
+});
+
 test("discovery collapses wire variants and validates advertised capabilities", async () => {
   globalThis.fetch = (async () =>
     new Response(
@@ -737,6 +1005,57 @@ test("variant collapse drops a family when discovery only exposes a retired memb
   ]);
   assert.deepEqual(collapsed, []);
 });
+
+for (const [logicalId, retiredId, liveId] of [
+  ["claude-opus-4-6", "claude-opus-4-6", "claude-opus-4-6-thinking"],
+  ["claude-sonnet-4-6", "claude-sonnet-4-6-thinking", "claude-sonnet-4-6"],
+  ["gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low"],
+] as const) {
+  for (const [scenario, wireIds] of [
+    ["retired only", [retiredId]],
+    ["live only", [liveId]],
+    ["retired and live", [retiredId, liveId]],
+  ] as const) {
+    test(`discovery respects ${logicalId} retirement: ${scenario}`, async () => {
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            models: Object.fromEntries(
+              wireIds.map((id) => [
+                id,
+                { supportsThinking: true, supportsImages: true },
+              ]),
+            ),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        )) as typeof fetch;
+      const models = await fetchAntigravityModels({
+        allowNetwork: true,
+        credential: {
+          type: "oauth",
+          refresh: "refresh",
+          access: "access",
+          expires: Date.now() + 60_000,
+        },
+        publish: async () => true,
+        signal: new AbortController().signal,
+      });
+      if (scenario === "retired only") {
+        assert.deepEqual(models, []);
+      } else {
+        assert.equal(models.length, 1);
+        assert.equal(models[0]?.id, logicalId);
+        const body = buildRequestBody(
+          { ...GEMINI_MODEL, ...models[0] },
+          SIMPLE_CONTEXT,
+          { reasoning: "low" },
+          "p",
+        );
+        assert.equal(body.model, liveId);
+      }
+    });
+  }
+}
 
 test("Claude discovery and request output tokens are capped at 64000", async () => {
   globalThis.fetch = (async () =>
@@ -1005,6 +1324,34 @@ test("streamAntigravity truncates and cancels an oversized error body", async ()
   assert.ok(error && error.type === "error");
   assert.match(error.error.errorMessage ?? "", /\[truncated\]$/);
   assert.ok((error.error.errorMessage?.length ?? 0) < 70 * 1024);
+});
+
+test("streamAntigravity preserves an error body that exactly fits the byte limit", async () => {
+  let cancellations = 0;
+  const body = "x".repeat(64 * 1024);
+  globalThis.fetch = (async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(body));
+          controller.close();
+        },
+        cancel() {
+          cancellations++;
+        },
+      }),
+      { status: 400 },
+    )) as typeof fetch;
+
+  const events = await collectEvents(
+    streamAntigravity(GEMINI_MODEL, SIMPLE_CONTEXT, { apiKey: API_KEY }),
+  );
+  assert.equal(cancellations, 0);
+  const error = events.find((event) => event.type === "error");
+  assert.ok(error && error.type === "error");
+  const message = error.error.errorMessage ?? "";
+  assert.ok(message.endsWith(body));
+  assert.equal(message.endsWith("… [truncated]"), false);
 });
 
 test("streamAntigravity fails over after a transient error in a 200 stream", async () => {

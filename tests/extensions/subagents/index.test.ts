@@ -7,6 +7,7 @@ import type {
   EntryRenderer,
   ExtensionAPI,
   ExtensionContext,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { encodeStructuredResult } from "../../../extensions/shared/structured-output.ts";
@@ -17,10 +18,15 @@ import subagents, {
   truncatedOutput,
 } from "../../../extensions/subagents/index.ts";
 import { projectResult } from "../../../extensions/subagents/src/result-artifact.ts";
+import {
+  delegationCompletionText,
+  projectDelegationCompletion,
+} from "../../../extensions/shared/delegation-completion.ts";
 
 import {
   type AgentSession,
   createAgentSession,
+  createSyntheticSourceInfo,
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
@@ -29,6 +35,7 @@ import { shutdownAndDisposeChildSession } from "../../../extensions/shared/child
 import { makePiBackend } from "../../../extensions/subagents/src/backends/pi.ts";
 import { __setSubagentTestBackends } from "../../../extensions/subagents/src/runtime.ts";
 import { createPiAgentSessionHarness } from "../../support/pi-agent-session-harness.ts";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 
 initTheme("dark", false);
 
@@ -68,6 +75,13 @@ test("subagent results render before the hidden wake-up message", () => {
     },
   ]);
 
+  const completion = projectDelegationCompletion({
+    owner: "direct",
+    referenceKind: "fingerprint",
+    outcome: "uncertain",
+    effectiveCwd: process.cwd(),
+    isolation: "shared",
+  });
   assert.deepEqual(events, [
     {
       kind: "entry",
@@ -79,6 +93,7 @@ test("subagent results render before the hidden wake-up message", () => {
           title: "investigate plan mode",
           status: "done",
           elapsed: "1s",
+          completion,
         },
       },
     },
@@ -86,14 +101,14 @@ test("subagent results render before the hidden wake-up message", () => {
       kind: "message",
       message: {
         customType: "subagent-result",
-        content:
-          'Subagent sa-3 "investigate plan mode" finished.\n\nreport\n\n(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)',
+        content: `Subagent sa-3 "investigate plan mode" finished.\n\nreport\n\n${delegationCompletionText(completion)}\n\n(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)`,
         display: false,
         details: {
           id: "sa-3",
           title: "investigate plan mode",
           status: "done",
           elapsed: "1s",
+          completion,
           displayContent:
             'Subagent sa-3 "investigate plan mode" finished.\n\nreport',
         },
@@ -105,6 +120,7 @@ test("subagent results render before the hidden wake-up message", () => {
 
 test("automatic delivery exposes structured data and its canonical artifact", () => {
   let entry: { content: string; details: Record<string, unknown> } | undefined;
+  let sent: { content: string } | undefined;
   const pi = {
     appendEntry(
       _customType: string,
@@ -112,7 +128,9 @@ test("automatic delivery exposes structured data and its canonical artifact", ()
     ) {
       entry = data;
     },
-    sendMessage() {},
+    sendMessage(message: { content: string }) {
+      sent = message;
+    },
   } as unknown as ExtensionAPI;
   const dispatch = createSubagentResultDispatcher(pi);
   dispatch([
@@ -127,7 +145,10 @@ test("automatic delivery exposes structured data and its canonical artifact", ()
       outcome: "completed",
       createdAt: 0,
       settledAt: 1_000,
-      meta: { backend: "pi" },
+      meta: {
+        backend: "pi",
+        sessionFilePath: "/Users/private-host/.pi/child.jsonl",
+      },
       usage: {},
       transcriptVersion: 0,
       transcript: [],
@@ -147,6 +168,12 @@ test("automatic delivery exposes structured data and its canonical artifact", ()
   assert.match(entry?.content ?? "", /\{"verdict":"pass"\}/);
   assert.deepEqual(entry?.details.structured, { verdict: "pass" });
   assert.equal(entry?.details.structuredArtifactPath, "/tmp/structured.json");
+  assert.ok(sent);
+  assert.equal(
+    sent.content.includes("/Users/private-host/.pi/child.jsonl"),
+    false,
+  );
+  assert.equal(sent.content.includes("/tmp/structured.json"), false);
 });
 
 test("automatic delivery keeps large structured values in runtime details, not parent model text", () => {
@@ -1155,6 +1182,20 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
             ctx,
           );
         assert.match(JSON.stringify(waited), /intercom boundary verified/);
+        const queried = await tools
+          .get("subagent_check")!
+          .execute("check", { id: spawned.details.id });
+        const waitedProjection = waited as {
+          details: { results: Array<{ completion: unknown }> };
+        };
+        const queriedProjection = queried as {
+          details: { completion: unknown };
+        };
+        assert.deepEqual(
+          queriedProjection.details.completion,
+          waitedProjection.details.results[0]?.completion,
+        );
+        assert.match(JSON.stringify(waited), /verification=unknown/);
         assert.deepEqual(parent.getActiveToolNames(), ["read", "intercom"]);
       }
       assert.equal(prompts, 2);
@@ -1162,6 +1203,125 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
       await hooks.get("session_shutdown")?.({}, ctx);
       __setSubagentTestBackends(undefined);
       await shutdownAndDisposeChildSession(parent);
+    }
+  });
+});
+
+test("Direct spawn tolerates inherited misses but rejects a missing explicit role tool before prompting", async () => {
+  await withTempDir(async (cwd) => {
+    const agentDir = process.env.PI_CODING_AGENT_DIR!;
+    await mkdir(path.join(agentDir, "agents"), { recursive: true });
+    await writeFile(
+      path.join(agentDir, "agents", "explicit-fixture.md"),
+      "---\nname: explicit-fixture\ndescription: Requires a parent-only fixture\ntools: [read, parent_fixture]\n---\nUse parent_fixture to verify the result.\n",
+    );
+    const model = {
+      provider: "fixture",
+      id: "model",
+      name: "fixture",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 100,
+    } as NonNullable<AgentSession["model"]>;
+    let prompts = 0;
+    __setSubagentTestBackends([
+      makePiBackend({
+        sessionFactory: async (options) => {
+          assert.deepEqual(options?.tools, ["read", "parent_fixture"]);
+          const harness = createPiAgentSessionHarness({
+            model,
+            activeTools: ["read"],
+            prompt: async (_text, child) => {
+              prompts++;
+              child.emit({ type: "agent_start" });
+              const message = child.emitAssistant("inherited surface narrowed");
+              child.emit({
+                type: "agent_end",
+                messages: [message],
+                willRetry: false,
+              });
+              child.emit({ type: "agent_settled", ...{ aborted: false } });
+            },
+          });
+          return { session: harness.session };
+        },
+      }),
+    ]);
+    const tools = new Map<string, ToolDefinition>();
+    const hooks = new Map<string, (...args: unknown[]) => unknown>();
+    const pi = {
+      events: { on() {}, emit() {} },
+      on(name: string, handler: (...args: unknown[]) => unknown) {
+        hooks.set(name, handler);
+      },
+      registerTool(tool: ToolDefinition) {
+        tools.set(tool.name, tool);
+      },
+      registerCommand() {},
+      registerMessageRenderer() {},
+      registerEntryRenderer() {},
+      appendEntry() {},
+      sendMessage() {},
+      setActiveTools() {},
+      getActiveTools: () => ["read", "parent_fixture"],
+      getAllTools: () =>
+        ["read", "parent_fixture"].map((name) => ({
+          name,
+          sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, {
+            source: "sdk",
+          }),
+        })),
+      getThinkingLevel: () => "off",
+    } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd,
+      hasUI: false,
+      isProjectTrusted: () => false,
+      model,
+      getContextUsage: () => undefined,
+      modelRegistry: { find: () => model, getAll: () => [model] },
+      sessionManager: SessionManager.inMemory(cwd),
+    } as unknown as ExtensionContext;
+    const toolCtx = toolExecutionContext(ctx);
+    try {
+      subagents(pi);
+      await hooks.get("session_start")?.({}, ctx);
+      const spawn = tools.get("subagent_spawn")!;
+      const inherited = await spawn.execute(
+        "inherited",
+        { prompt: "inspect", name: "inherited" },
+        undefined,
+        undefined,
+        toolCtx,
+      );
+      const id = (inherited.details as { id: string }).id;
+      const waited = await tools
+        .get("subagent_wait")!
+        .execute("wait", { ids: [id] }, undefined, undefined, toolCtx);
+      assert.match(JSON.stringify(waited), /inherited surface narrowed/);
+      assert.equal(prompts, 1);
+      await assert.rejects(
+        spawn.execute(
+          "explicit",
+          {
+            prompt: "inspect",
+            name: "explicit",
+            agent_type: "explicit-fixture",
+          },
+          undefined,
+          undefined,
+          toolCtx,
+        ),
+        /Child tool preflight failed: requested tool "parent_fixture" is unavailable/,
+      );
+      assert.equal(prompts, 1, "an explicit miss must fail before prompting");
+    } finally {
+      await hooks.get("session_shutdown")?.({}, ctx);
+      __setSubagentTestBackends(undefined);
     }
   });
 });

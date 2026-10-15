@@ -14,7 +14,12 @@ import {
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+  DefaultResourceLoader,
+  SettingsManager,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import { createPiBuiltinExtensionFactories } from "../../../extensions/shared/pi-builtin-extensions.ts";
 import { Type } from "typebox";
 import { agentCallKey } from "../../../extensions/workflows/journal.ts";
 import {
@@ -669,5 +674,73 @@ test("fingerprint inability fails closed", () => {
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("unknown inline and built-in extension identities disable replay", async () => {
+  const cwd = repository();
+  const agentDir = mkdtempSync(path.join(tmpdir(), "pi-replay-inline-"));
+  try {
+    for (const [name, builtin, instruction] of [
+      ["behavior-a", false, "Answer ALPHA"],
+      ["behavior-b", false, "Answer BETA"],
+      ["unreviewed", true, "Answer GAMMA"],
+    ] as const) {
+      const resourceLoader = new DefaultResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager: SettingsManager.inMemory(),
+        extensionFactories: [
+          {
+            name,
+            builtin,
+            factory: (pi) => {
+              pi.on("before_agent_start", (event) => ({
+                systemPrompt: `${event.systemPrompt}\n${instruction}`,
+              }));
+            },
+          },
+        ],
+      });
+      await resourceLoader.reload();
+      assert.equal(resourceLoader.getExtensions().errors.length, 0);
+      assert.equal(resourceLoader.getExtensions().extensions.length, 1);
+      assert.equal(
+        createReplayIdentity(cwd, resourceLoader, true),
+        undefined,
+        "unverifiable extension behavior must not produce a reusable result identity",
+      );
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("reviewed Pi built-ins remain fingerprintable and their enabled identities distinguish replay keys", async () => {
+  const cwd = repository();
+  const agentDir = mkdtempSync(path.join(tmpdir(), "pi-replay-builtin-"));
+  try {
+    const keys = [];
+    for (const factory of createPiBuiltinExtensionFactories()) {
+      const resourceLoader = new DefaultResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager: SettingsManager.inMemory(),
+        extensionFactories: [factory],
+      });
+      await resourceLoader.reload();
+      assert.equal(resourceLoader.getExtensions().errors.length, 0);
+      assert.equal(resourceLoader.getExtensions().extensions.length, 1);
+      const identity = createReplayIdentity(cwd, resourceLoader, true);
+      assert.ok(identity, "reviewed built-ins must not disable journaling");
+      keys.push(
+        agentCallKey("inspect", { execution: { replayIdentity: identity } }),
+      );
+    }
+    assert.equal(new Set(keys).size, keys.length);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(agentDir, { recursive: true, force: true });
   }
 });

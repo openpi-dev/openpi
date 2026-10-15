@@ -333,6 +333,15 @@ export class BelowEditorNavigationEditor implements EditorComponent, Focusable {
     this.base.setPaddingX?.(padding);
   }
 
+  getPaddingX() {
+    const child = this.base as EditorComponent & {
+      getPaddingX?: () => number | undefined;
+    };
+    return typeof child.getPaddingX === "function"
+      ? child.getPaddingX()
+      : undefined;
+  }
+
   setAutocompleteMaxVisible(maxVisible: number) {
     this.base.setAutocompleteMaxVisible?.(maxVisible);
   }

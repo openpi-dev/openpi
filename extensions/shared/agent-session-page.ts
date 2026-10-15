@@ -87,6 +87,7 @@ export class AgentSessionPage implements Component, Focusable {
   private rowCount = 0;
   private viewportSize = 1;
   private toolsExpanded: boolean;
+  private availableRows?: (width: number) => number;
   /**
    * Whether the opening anchor has been decided. A page opens on a transcript
    * that already exists, so the first render is the only moment that can tell
@@ -120,12 +121,15 @@ export class AgentSessionPage implements Component, Focusable {
     keybindings: KeybindingsManager,
     source: AgentSessionPageSource,
     options?: AgentSessionPageOptions,
+    /** Native editor mounts may reserve rows for the host footer and widgets. */
+    availableRows?: (width: number) => number,
   ) {
     this.tui = tui;
     this.theme = theme;
     this.keybindings = keybindings;
     this.source = source;
     this.toolsExpanded = options?.toolsExpanded === true;
+    this.availableRows = availableRows;
   }
 
   handleInput(data: string) {
@@ -248,7 +252,30 @@ export class AgentSessionPage implements Component, Focusable {
 
   render(width: number) {
     const state = this.source.getState();
-    const height = Math.max(1, this.tui.terminal.rows || 30);
+    const height = Math.max(
+      1,
+      this.availableRows?.(width) ?? (this.tui.terminal.rows || 30),
+    );
+    if (height < 4) {
+      // A native editor can temporarily leave only one row after its widgets.
+      // Keep the exit binding visible without changing the transcript anchor;
+      // normal rendering will resume when the host gives us enough space.
+      const summary = state
+        ? `${state.status} · ${safeLine(state.title) || safeLine(state.id)}`
+        : "child is no longer tracked";
+      return [
+        this.theme.fg(
+          "dim",
+          `${configuredKeys(this.keybindings, "app.interrupt")} back · ${summary}`,
+        ),
+        this.theme.fg("dim", "Resize terminal to read transcript"),
+        state?.errorText
+          ? this.theme.fg("error", safeLine(state.errorText))
+          : "",
+      ]
+        .slice(0, height)
+        .map((line) => truncateToWidth(line, Math.max(1, width)));
+    }
     if (!state) {
       const border = this.theme.fg(
         "borderAccent",
@@ -293,14 +320,16 @@ export class AgentSessionPage implements Component, Focusable {
     });
     this.rowCount = transcript.length;
     this.viewportSize = transcriptCapacity;
-    // A child page opens on work that already happened. Following the end would
-    // start a long answer partway through, hiding its beginning, so the first
-    // render anchors at the start of anything that already overflows. A page
-    // that opens on a short or empty transcript keeps following, so streaming
-    // output still scrolls into view as it arrives.
+    // Running children open at their latest output and keep following. Settled,
+    // failed, and uncertain history opens at the beginning so the question and
+    // first answer remain readable. Decide once: settlement must not move a
+    // reader who is already following or has deliberately paused.
     if (!this.anchored) {
       this.anchored = true;
-      if (transcript.length > transcriptCapacity) {
+      if (
+        state.status !== "running" &&
+        transcript.length > transcriptCapacity
+      ) {
         this.viewport.scrollToTop(transcript.length, transcriptCapacity);
       }
     }
@@ -348,6 +377,11 @@ export class AgentSessionPage implements Component, Focusable {
     // Both directions are reported so hidden output is discoverable whether
     // the reader is at the opening, following new output, or paused between.
     const overflowNote = [
+      state.status === "running"
+        ? this.viewport.followingEnd
+          ? "following"
+          : "paused · End/G to follow"
+        : "",
       linesAbove > 0 ? `↑ ${linesAbove}` : "",
       linesBelow > 0 ? `↓ ${linesBelow}` : "",
     ]

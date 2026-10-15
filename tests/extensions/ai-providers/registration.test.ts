@@ -9,6 +9,7 @@ import type {
   Provider,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { decodeApiKey } from "../../../extensions/ai-providers/antigravity/credentials.ts";
 import authProviders from "../../../extensions/ai-providers/index.ts";
 import { createOAuthAuth } from "../../../extensions/ai-providers/oauth-adapter.ts";
@@ -252,8 +253,8 @@ test("native stream and streamSimple both dispatch to provider implementations",
     const model = provider.getModels()[0];
     assert.ok(model);
     for (const stream of [
-      provider.stream(model, { messages: [] }),
-      provider.streamSimple(model, { messages: [] }),
+      provider.stream(model, normalizeContext({ messages: [] })),
+      provider.streamSimple(model, normalizeContext({ messages: [] })),
     ]) {
       const events = await collectEvents(stream);
       const final = events.at(-1);

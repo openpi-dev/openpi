@@ -13,12 +13,9 @@ function utf8Prefix(content: string, maxBytes: number) {
   const bytes = Buffer.from(content, "utf8");
   if (bytes.length <= maxBytes) return content;
   let end = Math.max(0, maxBytes);
-  while (end > 0) {
-    const value = bytes.subarray(0, end).toString("utf8");
-    if (!value.endsWith("�")) return value;
-    end -= 1;
-  }
-  return "";
+  // Back up over an incomplete UTF-8 sequence, preserving literal U+FFFD.
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString("utf8");
 }
 
 function boundedHead(content: string, maxBytes: number, maxLines: number) {

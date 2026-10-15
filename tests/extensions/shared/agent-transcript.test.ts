@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
+import { stripVTControlCharacters } from "node:util";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { AgentTranscriptRenderer } from "../../../extensions/shared/agent-transcript.ts";
 import type {
@@ -54,17 +57,14 @@ const call = (toolId: string, name = "read"): AgentTranscriptItem => ({
   ],
 });
 
-const result = (
-  toolId: string,
-  isError = false,
-  name = "read",
-): AgentTranscriptItem => ({
-  kind: "toolResult",
-  toolId,
-  name,
-  isError,
-  outputPreview: `out-${toolId}`,
-});
+const result = (toolId: string, isError = false, name = "read") =>
+  ({
+    kind: "toolResult",
+    toolId,
+    name,
+    isError,
+    outputPreview: `out-${toolId}`,
+  }) satisfies AgentTranscriptItem;
 
 /** Fresh renderer per call so itemCache never leaks between cases. */
 const render = (items: AgentTranscriptItem[], width = 60) =>
@@ -204,5 +204,127 @@ test("cached tool paths follow the document working directory", () => {
     );
     assert.deepEqual(warm, cold, "cached paths must match the current cwd");
     if (cwd === otherCwd) assert.notDeepEqual(warm, initial);
+  }
+});
+
+test("legacy expanded tools disclose previews and unavailable evidence without inventing details", () => {
+  const items = [call("legacy"), result("legacy", true)];
+  const renderer = new AgentTranscriptRenderer();
+  const document = { items };
+  const compact = renderer.render(document, 60, theme).join("\n");
+  assert.doesNotMatch(compact, /Output preview:/);
+  const expanded = renderer
+    .render(document, 60, theme, { expanded: true })
+    .join("\n");
+  assert.match(expanded, /native details unavailable/);
+  assert.match(expanded, /Arguments preview:\s*legacy/);
+  assert.match(expanded, /Output preview:\s*out-legacy/);
+  assert.match(expanded, /Failed/);
+  assert.doesNotMatch(expanded, /exit code|diff/i);
+  assert.equal(renderer.render(document, 60, theme).join("\n"), compact);
+  const unavailable = renderer
+    .render(
+      { items: [{ ...result("orphan"), outputPreview: undefined }] },
+      60,
+      theme,
+      { expanded: true },
+    )
+    .join("\n");
+  assert.match(unavailable, /Arguments preview unavailable/);
+  assert.match(unavailable, /Output preview unavailable/);
+});
+
+test("preview expansion is bounded and safely wrapped, including control characters and CJK", () => {
+  const outputPreview = "\x1b[2J汉字\tfirst\x07\n" + "long汉字".repeat(1500);
+  const renderer = new AgentTranscriptRenderer();
+  const lines = renderer.render(
+    { items: [{ ...result("safe"), outputPreview }] },
+    24,
+    theme,
+    { expanded: true },
+  );
+  const text = lines.join("\n");
+  assert.match(text, /preview truncated/);
+  assert.doesNotMatch(text, /\x1b\[2J|\x07|\t/);
+  assert.ok(lines.every((line) => visibleWidth(line) <= 24));
+  assert.ok(text.length < 6000);
+});
+
+test("expanded fallback refreshes when a later immutable result changes without changing phase", () => {
+  const shared = call("changing");
+  const renderer = new AgentTranscriptRenderer();
+  const first = renderer
+    .render(
+      {
+        items: [
+          shared,
+          { ...result("changing"), outputPreview: "old-preview" },
+        ],
+      },
+      60,
+      theme,
+      { expanded: true },
+    )
+    .join("\n");
+  const second = renderer
+    .render(
+      {
+        items: [
+          shared,
+          { ...result("changing"), outputPreview: "new-preview" },
+        ],
+      },
+      60,
+      theme,
+      { expanded: true },
+    )
+    .join("\n");
+  assert.match(first, /old-preview/);
+  assert.match(second, /new-preview/);
+  assert.doesNotMatch(second, /old-preview/);
+});
+
+test("shared native messages, thinking and expanded previews survive theme invalidation at narrow widths", () => {
+  const renderer = new AgentTranscriptRenderer();
+  const document: AgentTranscriptDocument = {
+    items: [
+      { kind: "user", text: "读取中文代码\x1b[2J" },
+      {
+        kind: "assistant",
+        parts: [
+          { type: "thinking", text: "思考细节" },
+          {
+            type: "text",
+            text: "## 中文标题\n\n```ts\nconst 名字 = '你好';\n```\n\n**完成**",
+          },
+        ],
+      },
+      call("theme"),
+      result("theme"),
+    ],
+  };
+  try {
+    for (const name of ["dark", "light", "dark"]) {
+      initTheme(name, false);
+      renderer.invalidate();
+      for (const width of [12, 24, 80]) {
+        const warm = renderer.render(document, width, theme, {
+          expanded: true,
+          now: 0,
+        });
+        const cold = new AgentTranscriptRenderer().render(
+          document,
+          width,
+          theme,
+          { expanded: true, now: 0 },
+        );
+        assert.deepEqual(warm, cold);
+        assert.ok(warm.every((line) => visibleWidth(line) <= width));
+        assert.match(stripVTControlCharacters(warm.join("\n")), /完成/);
+        assert.doesNotMatch(warm.join("\n"), /\x1b\[2J/);
+      }
+    }
+  } finally {
+    initTheme("dark", false);
   }
 });
