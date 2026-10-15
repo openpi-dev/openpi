@@ -3,6 +3,7 @@ import { browserAddress } from "./browser-address.ts";
 
 interface BrowserPageState {
   id: string;
+  document?: string;
   url: string;
   title: string;
   canGoBack: boolean;
@@ -51,6 +52,8 @@ export function useBrowserBridge(
       if (message.type === "state" && typeof message.title === "string") {
         const state = {
           id,
+          document:
+            typeof message.document === "string" ? message.document : undefined,
           url,
           title: message.title.slice(0, 256),
           canGoBack: message.canGoBack === true,

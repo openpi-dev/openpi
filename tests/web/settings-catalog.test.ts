@@ -83,10 +83,19 @@ test("projects canonical Web appearance values without exposing the post-edit co
     parseSetupConfig({
       ui: {
         webTheme: "pine",
+        webAppearance: {
+          palette: "rose",
+          accent: "#123ABC",
+          background: "",
+          foreground: "#123456",
+          font: "mono",
+        },
         webChatWidth: 960,
         webChatFontSize: 16,
         webExpandThinking: true,
+        webHiddenThinkingLevels: ["minimal", "xhigh"],
       },
+      response: { verbosity: "high", reasoningSummary: "none" },
       postEdit: { command: "npm run format" },
     }),
   );
@@ -94,12 +103,20 @@ test("projects canonical Web appearance values without exposing the post-edit co
   assert.deepEqual(
     {
       webTheme: projection.ui.webTheme,
+      webAppearance: projection.ui.webAppearance,
       webChatWidth: projection.ui.webChatWidth,
       webChatFontSize: projection.ui.webChatFontSize,
       webExpandThinking: projection.ui.webExpandThinking,
     },
     {
       webTheme: "pine",
+      webAppearance: {
+        palette: "rose",
+        accent: "#123ABC",
+        background: "",
+        foreground: "#123456",
+        font: "mono",
+      },
       webChatWidth: 960,
       webChatFontSize: 16,
       webExpandThinking: true,
@@ -107,4 +124,23 @@ test("projects canonical Web appearance values without exposing the post-edit co
   );
   assert.equal(projection.postEditConfigured, true);
   assert.equal("command" in projection, false);
+  assert.deepEqual(projection.response, {
+    verbosity: "high",
+    reasoningSummary: "none",
+  });
+  assert.deepEqual(projection.ui.webHiddenThinkingLevels, ["minimal", "xhigh"]);
+});
+
+test("older configuration still projects a complete default Web appearance", () => {
+  assert.deepEqual(
+    projectWebSetupConfig(parseSetupConfig({ ui: { webTheme: "mist" } })).ui
+      .webAppearance,
+    {
+      palette: "default",
+      accent: "",
+      background: "",
+      foreground: "",
+      font: "system",
+    },
+  );
 });

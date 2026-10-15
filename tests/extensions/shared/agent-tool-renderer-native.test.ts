@@ -197,11 +197,7 @@ test("child tool cards equal the main public renderer chain, without changing ex
     settingsManager.setHideThinkingBlock(false);
     assert.equal(ledger.messagePresentation?.hideThinking, false);
     assert.match(rendered(), /thinking-sentinel/);
-    t.diagnostic(
-      runner.resolveToolRenderers
-        ? "public renderer resolver exercised"
-        : "older SDK presentation-only compatibility exercised",
-    );
+    t.diagnostic("public renderer resolver exercised");
   } finally {
     session.dispose();
     await rm(cwd, { recursive: true, force: true });

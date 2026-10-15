@@ -440,23 +440,59 @@ test("prefetched native history loads on upward reading without moving the visib
       body: JSON.stringify({ beforeLive, afterLive }, null, 2),
       contentType: "application/json",
     });
-    // The long single-turn fixture reaches the bottom while restoring its
-    // prepended process. At the bottom, new content must remain followed.
+    // Prepending preserves the reader's anchor; expanded activity can leave
+    // that anchor far above the bottom. Streaming must preserve it as well.
+    expect(afterLive.rows[0]?.key).toBe(beforeLive.rows[0]?.key);
     expect(
-      Math.abs(
-        beforeLive.scrollTop +
-          beforeLive.clientHeight -
-          beforeLive.scrollHeight,
-      ),
+      Math.abs(afterLive.rows[0]!.top - beforeLive.rows[0]!.top),
     ).toBeLessThanOrEqual(2);
     expect(
-      Math.abs(
-        afterLive.scrollTop + afterLive.clientHeight - afterLive.scrollHeight,
-      ),
+      Math.abs(afterLive.scrollTop - beforeLive.scrollTop),
     ).toBeLessThanOrEqual(2);
 
+    // Enter follow mode explicitly before checking that new output stays pinned.
+    await page.getByRole("button", { name: "跳至最新" }).click();
+    await expect
+      .poll(async () => {
+        const measured = await measureReading();
+        return Math.abs(
+          measured.scrollTop + measured.clientHeight - measured.scrollHeight,
+        );
+      })
+      .toBeLessThanOrEqual(2);
+    fixture.host.publish("message_update", {
+      sessionId: fixture.manager.getSessionId(),
+      messageKey: "live-answer",
+      message: {
+        role: "assistant",
+        content:
+          "A new streamed answer is growing. Following the latest output.",
+      },
+    });
+    await expect(
+      conversation.getByText(
+        "A new streamed answer is growing. Following the latest output.",
+        { exact: true },
+      ),
+    ).toHaveCount(1);
+    await expect
+      .poll(async () => {
+        const measured = await measureReading();
+        return Math.abs(
+          measured.scrollTop + measured.clientHeight - measured.scrollHeight,
+        );
+      })
+      .toBeLessThanOrEqual(2);
+
+    // Jump to latest discards the old reading window. Read the old page again
+    // before verifying that new output preserves an older native anchor.
     await conversation.hover();
-    await page.mouse.wheel(0, -1_000);
+    await page.mouse.wheel(0, -100_000);
+    await expect(
+      conversation.getByText("Original question unique to the old branch", {
+        exact: true,
+      }),
+    ).toHaveCount(1);
     await expect(page.getByRole("button", { name: "跳至最新" })).toBeVisible();
     await expect
       .poll(async () => {

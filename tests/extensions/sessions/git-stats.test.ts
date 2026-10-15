@@ -277,6 +277,26 @@ test("canonical workspace discovery is bounded and reused for one universe", asy
   assert.equal(maxActive, 8);
 });
 
+test("canonical workspace lookups use the same bounded LRU policy as stats", async () => {
+  const sessions = makeSessions(3);
+  let calls = 0;
+  const loader = createSessionStatsLoader({
+    maxCache: 2,
+    canonicalizeCwd: async (cwd) => {
+      calls++;
+      return cwd;
+    },
+    runGit: async () => "",
+  });
+
+  for (const session of sessions) {
+    await loader.reconcile([session], [session], () => undefined);
+  }
+  await loader.reconcile([sessions[0]!], [sessions[0]!], () => undefined);
+
+  assert.equal(calls, 4);
+});
+
 test("cancelling canonical discovery stops scheduling undiscovered workspaces", async () => {
   const sessions = makeSessions(1_000);
   const releases: Array<() => void> = [];
