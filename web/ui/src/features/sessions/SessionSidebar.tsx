@@ -1045,7 +1045,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   ];
   const organizationItems: DropdownMenuOption[] = [
     {
-      label: t("sidebarFilterList"),
+      label: t(archived ? "sidebarFilterList" : "metadataFilter"),
       icon: <Search />,
       onClick: () => {
         setActivityOpen(false);
@@ -2138,10 +2138,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     ref={searchInput}
                     type="search"
                     value={props.query}
-                    placeholder={t("searchPlaceholder")}
-                    maxLength={
-                      archived ? WEB_MAX_ARCHIVED_SESSION_QUERY : undefined
-                    }
+                    placeholder={t(
+                      archived ? "searchPlaceholder" : "metadataPlaceholder",
+                    )}
+                    maxLength={archived ? WEB_MAX_ARCHIVED_SESSION_QUERY : 200}
                     aria-label={t("searchConversations")}
                     onChange={(event) =>
                       props.actions.setQuery(event.target.value)
@@ -2163,11 +2163,17 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     />
                   )}
                   {
-                    <Tooltip content={t("sidebarFilterList")}>
+                    <Tooltip
+                      content={t(
+                        archived ? "sidebarFilterList" : "metadataFilter",
+                      )}
+                    >
                       <button
                         className="icon-button"
                         type="button"
-                        aria-label={t("sidebarFilterList")}
+                        aria-label={t(
+                          archived ? "sidebarFilterList" : "metadataFilter",
+                        )}
                         onClick={() => props.actions.setSearchOpen(true)}
                       >
                         <Search />
@@ -2227,7 +2233,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     }
                   >
                     {t(
-                      metadata.error === "stale" ? "refreshArchives" : "retry",
+                      metadata.error === "stale" ? "metadataRefresh" : "retry",
                     )}
                   </button>
                 )}
@@ -2300,7 +2306,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
               )}
             {!archived && !metadataMatched && loadedHistoryBounded && (
               <p className="sidebar-scope-note">
-                {t("loadedHistoryBounded", {
+                {t("metadataCatalogAvailable", {
                   sessions: snapshot?.truncation.sessionsOmitted,
                   workspaces: snapshot?.truncation.workspacesOmitted,
                 })}
@@ -2438,7 +2444,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 <div
                   className="empty"
                   hidden={
-                    archived && (archiveLoading || Boolean(scopedArchiveError))
+                    archived
+                      ? archiveLoading || Boolean(scopedArchiveError)
+                      : metadata.active &&
+                        (metadata.loading ||
+                          !metadata.page ||
+                          Boolean(metadata.error) ||
+                          Boolean(metadata.page.nextCursor))
                   }
                 >
                   {props.query.trim()

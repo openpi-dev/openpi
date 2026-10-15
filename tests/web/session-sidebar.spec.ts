@@ -1374,7 +1374,9 @@ it("searches the current loaded list and the separate archived query without cha
   ).toBeTruthy();
   expect(screen.queryByText("Old")).toBeNull();
   expect(screen.getByText("/repos/long-example")).toBeTruthy();
-  expect(screen.getByText(/12 more sessions.*loaded list only/)).toBeTruthy();
+  expect(
+    screen.getByText(/12 conversations.*not loaded.*active catalog/),
+  ).toBeTruthy();
   expect(
     screen
       .getByRole("button", { name: /Shared.*long-example/ })
@@ -1921,7 +1923,7 @@ it("metadata pagination exposes an empty scan continuation and requires refresh 
     screen.queryByRole("button", { name: i18n.t("metadataMore") }),
   ).toBeNull();
   fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("refreshArchives") }),
+    screen.getByRole("button", { name: i18n.t("metadataRefresh") }),
   );
   await waitFor(() => expect(query).toHaveBeenCalledTimes(3));
   expect(query.mock.calls[1]?.[0].cursor).toBe("empty-window");
@@ -1972,7 +1974,7 @@ it("opens active metadata filtering through the existing visible list control", 
   const open = vi.spyOn(actions, "setSearchOpen");
   mount(snapshot([]), { actions });
   fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("sidebarFilterList") }),
+    screen.getByRole("button", { name: i18n.t("metadataFilter") }),
   );
   expect(open).toHaveBeenCalledWith(true);
 });
