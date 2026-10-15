@@ -13,7 +13,7 @@ import contextPivot, {
   MIN_CONTEXT_PIVOT_TOKENS,
 } from "../../../extensions/context-pivot/index.ts";
 
-test("context_pivot is visible only when the next run starts above its threshold", () => {
+test("context_pivot visibility follows session and run context usage", () => {
   let active = ["read", "third_party_tool"];
   const handlers = new Map<
     string,
@@ -36,9 +36,20 @@ test("context_pivot is visible only when the next run starts above its threshold
     registerCommand() {},
   } as unknown as ExtensionAPI;
   contextPivot(pi);
-  for (const handler of handlers.get("session_start") ?? []) {
-    handler({}, {} as ExtensionContext);
-  }
+  const emitSessionStart = (tokens: number | null) => {
+    const ctx = {
+      getContextUsage: () => ({
+        tokens,
+        contextWindow: 200_000,
+        percent: tokens === null ? null : (tokens / 200_000) * 100,
+      }),
+    } as unknown as ExtensionContext;
+    for (const handler of handlers.get("session_start") ?? []) {
+      handler({}, ctx);
+    }
+  };
+
+  emitSessionStart(null);
   assert.deepEqual(active, ["read", "third_party_tool"]);
 
   const emitAgentStart = (tokens: number | null) => {
@@ -56,6 +67,8 @@ test("context_pivot is visible only when the next run starts above its threshold
 
   emitAgentStart(29_999);
   assert.deepEqual(active, ["read", "third_party_tool"]);
+  emitSessionStart(30_000);
+  assert.deepEqual(active, ["read", "third_party_tool", "context_pivot"]);
   emitAgentStart(30_000);
   assert.deepEqual(active, ["read", "third_party_tool", "context_pivot"]);
   emitAgentStart(2_000);

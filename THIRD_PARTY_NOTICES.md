@@ -1,5 +1,13 @@
 # Third-Party Notices
 
+The embedded browser control operations in `web/browser-extension/computer-use.js`
+adapt the CDP element resolve/click/text/scroll pattern from
+[`@injaneity/pi-computer-use`](https://github.com/injaneity/pi-computer-use)
+version `0.5.1` (MIT, Copyright (c) 2026 Zane Chee). The complete notice is
+included in [`web/browser-extension/LICENSE.pi-computer-use`](web/browser-extension/LICENSE.pi-computer-use).
+OpenPI supplies the frame-specific Chrome transport and Pi Session ownership;
+it does not install or activate the package's desktop helper.
+
 ## Project origins and acknowledgments
 
 The Web model settings page adapts the provider cards, inline editors and model
@@ -8,6 +16,14 @@ selection interactions of `@deepseek-ai/dsh-client-ui-settings-models` version
 The styles are adapted to OpenPI's existing settings shell and theme tokens;
 configuration and authentication remain owned by Pi. The applicable MIT notice
 is reproduced in [`web/ui/src/features/settings/LICENSE.dsh`](web/ui/src/features/settings/LICENSE.dsh).
+
+Provider and app brand SVGs in the Web model settings are adapted from
+[OpenCode](https://github.com/anomalyco/opencode/tree/388406238bd5ca15564a762840a2362c3a45bd9c/packages/ui/src/assets/icons),
+revision `388406238bd5ca15564a762840a2362c3a45bd9c`. The original mark geometry is
+retained; Cursor's app background and Antigravity's color filters are omitted for
+a monochrome mask that follows OpenPI's theme. These are presentation assets,
+not a provider registry. The MIT notice is reproduced in
+[`web/ui/src/features/settings/provider-icons/LICENSE.opencode`](web/ui/src/features/settings/provider-icons/LICENSE.opencode).
 
 The workspace Files explorer and preview interactions were informed by
 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar), revision

@@ -207,6 +207,51 @@ it("starts with compact provider rows and only expands the requested card", asyn
   expect((control("Model 1 name") as HTMLInputElement).value).toBe("Model A");
 });
 
+it("makes native account providers discoverable without adding a custom endpoint", async () => {
+  vi.mocked(WebClient.prototype.providerAuth).mockResolvedValue({
+    ...auth,
+    providers: [
+      ...auth.providers,
+      {
+        id: "openai",
+        name: "OpenAI",
+        authMethods: ["api_key", "oauth"],
+        configured: false,
+        subscription: false,
+        nameTruncated: false,
+        custom: false,
+      },
+    ],
+  });
+  vi.spyOn(WebClient.prototype, "providerLogin").mockResolvedValue(null);
+  mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: i18n.t("providerAdd") }),
+  );
+  expect(screen.queryByRole("button", { name: "Edit OpenAI" })).toBeNull();
+  expect(
+    screen
+      .getByRole("button", { name: i18n.t("accountLoginTab") })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(
+    screen.queryByRole("group", { name: i18n.t("accountLoginMethod") }),
+  ).toBeNull();
+  expect(
+    screen.getByRole("button", {
+      name: i18n.t("accountLoginStart"),
+    }),
+  ).toBeTruthy();
+  expect(screen.queryByLabelText(i18n.t("providerApiKey"))).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("providerSave") }),
+  ).toBeNull();
+  expect(document.querySelector("details.models-customized")).toBeNull();
+  expect(
+    WebClient.prototype.changeProviderConfiguration,
+  ).not.toHaveBeenCalled();
+});
+
 it("preserves per-provider credentials and model drafts across cards and settings tabs", async () => {
   mount();
   await edit();
@@ -228,6 +273,81 @@ it("preserves per-provider credentials and model drafts across cards and setting
     "alpha-private-draft",
   );
   expect(WebClient.prototype.modelConfigurations).toHaveBeenCalledOnce();
+});
+
+it("keeps the active account flow visible until native cancellation settles", async () => {
+  vi.mocked(WebClient.prototype.providerAuth).mockResolvedValue({
+    ...auth,
+    providers: [
+      ...auth.providers,
+      {
+        id: "openai",
+        name: "OpenAI",
+        authMethods: ["oauth"],
+        configured: false,
+        subscription: false,
+        nameTruncated: false,
+      },
+    ],
+  });
+  let state: Awaited<ReturnType<WebClient["startProviderLogin"]>> | null = null;
+  vi.spyOn(WebClient.prototype, "providerLogin").mockImplementation(
+    async () => state,
+  );
+  vi.spyOn(WebClient.prototype, "startProviderLogin").mockImplementation(
+    async () => {
+      state = {
+        id: "flow-a",
+        sessionId: "session-a",
+        provider: "openai",
+        status: "running",
+        expiresAt: Date.now() + 60_000,
+        messages: [],
+        device: {
+          code: "FIXTURE-CODE",
+          url: "https://accounts.example/device",
+        },
+      };
+      return state;
+    },
+  );
+  const cancellation =
+    Promise.withResolvers<
+      Awaited<ReturnType<WebClient["cancelProviderLogin"]>>
+    >();
+  vi.spyOn(WebClient.prototype, "cancelProviderLogin").mockReturnValue(
+    cancellation.promise,
+  );
+  mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: i18n.t("providerAdd") }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("accountLoginStart") }),
+  );
+  await screen.findByText("FIXTURE-CODE");
+  const skills = screen.getByRole<HTMLButtonElement>("tab", {
+    name: i18n.t("skillsSettings"),
+  });
+  await waitFor(() => expect(skills.disabled).toBe(true));
+  for (const name of [
+    "accountLoginTab",
+    "providerAddCatalog",
+    "providerAddCustom",
+  ])
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: i18n.t(name) })
+        .disabled,
+    ).toBe(true);
+  fireEvent.click(skills);
+  expect(screen.getByText("FIXTURE-CODE")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("accountLoginCancel") }),
+  );
+  expect(skills.disabled).toBe(true);
+  state = { ...state!, status: "cancelled" };
+  await act(async () => cancellation.resolve(state!));
+  await waitFor(() => expect(skills.disabled).toBe(false));
 });
 
 it("edits K/M capacities without rewriting keystrokes and keeps independent expanded rows", async () => {
@@ -351,17 +471,54 @@ it("guards closing dirty settings and allows closing after every edit is reverte
   expect(props.onClose).toHaveBeenCalledOnce();
 });
 
-it("keeps both add-mode drafts and writes nothing when cancelled", async () => {
+it("keeps API drafts across all three add modes and writes nothing when cancelled", async () => {
+  vi.mocked(WebClient.prototype.providerAuth).mockResolvedValue({
+    ...auth,
+    providers: [
+      ...auth.providers,
+      {
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        authMethods: ["oauth"],
+        configured: false,
+        subscription: false,
+        nameTruncated: false,
+      },
+    ],
+  });
+  vi.spyOn(WebClient.prototype, "providerLogin").mockResolvedValue(null);
   mount();
   fireEvent.click(
     await screen.findByRole("button", { name: i18n.t("providerAdd") }),
   );
+  const account = screen.getByRole("button", {
+    name: i18n.t("accountLoginTab"),
+  });
+  fireEvent.keyDown(account, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", { name: i18n.t("providerAddCatalog") }),
+  );
+  const provider = screen.getByRole("combobox", { name: i18n.t("provider") });
+  fireEvent.click(provider);
+  expect(screen.queryByRole("option", { name: "GitHub Copilot" })).toBeNull();
+  fireEvent.keyDown(provider, { key: "Escape" });
   change("API key", "gamma-draft");
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("providerAddCustom") }),
   );
   change(i18n.t("modelConfig_provider"), "new-provider");
   change("Provider name", "New Provider");
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: i18n.t("providerAddCustom") }),
+    { key: "Home" },
+  );
+  expect(document.activeElement).toBe(account);
+  expect(
+    screen.getByText("GitHub Copilot", { selector: "strong" }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("providerSave") }),
+  ).toBeNull();
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("providerAddCatalog") }),
   );

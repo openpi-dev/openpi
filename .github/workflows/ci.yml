@@ -75,7 +75,7 @@ jobs:
             --extension "$package/extensions/git-info/index.ts" \
             --extension "$package/extensions/ai-providers/index.ts" \
             </dev/null
-      - name: Smoke-test packed Web CLI with locked Pi host
+      - name: Smoke-test managed Web CLI with a separate locked Pi host
         run: |
           root="$(mktemp -d)"
           server_pid=""
@@ -92,19 +92,12 @@ jobs:
           npm pack --ignore-scripts --silent --pack-destination "$root" >/dev/null
           tarballs=("$root"/*.tgz)
           test "${#tarballs[@]}" -eq 1
-          pi_ai_version="$(node -p 'require("./node_modules/@earendil-works/pi-ai/package.json").version')"
-          pi_agent_version="$(node -p 'require("./node_modules/@earendil-works/pi-coding-agent/package.json").version')"
-          pi_tui_version="$(node -p 'require("./node_modules/@earendil-works/pi-tui/package.json").version')"
-          typebox_version="$(node -p 'require("./node_modules/typebox/package.json").version')"
-          npm install --prefix "$root/app" --ignore-scripts --no-audit --no-fund \
-            "@earendil-works/pi-ai@$pi_ai_version" \
-            "@earendil-works/pi-coding-agent@$pi_agent_version" \
-            "@earendil-works/pi-tui@$pi_tui_version" \
-            "typebox@$typebox_version" \
-            "${tarballs[0]}"
+          npm install --prefix "$root/app" --ignore-scripts --legacy-peer-deps --no-audit --no-fund "${tarballs[0]}"
+          test ! -e "$root/app/node_modules/@earendil-works/pi-ai"
+          test ! -e "$root/app/node_modules/@earendil-works/pi-coding-agent"
           test ! -e "$root/app/node_modules/@earendil-works/pi-server"
-          (cd "$root/app" && node --input-type=module -e 'await import("@earendil-works/pi-coding-agent")')
           PI_CODING_AGENT_DIR="$root/agent" \
+          OPENPI_PI_CODING_AGENT_ENTRY="$PWD/node_modules/@earendil-works/pi-coding-agent/dist/index.js" \
           OPENPI_WEB_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             "$root/app/node_modules/.bin/openpi" web "$root/workspace" --port 0 --no-open \
             >"$root/host.log" 2>&1 &
@@ -158,12 +151,8 @@ jobs:
           test ! -e "$root/source/node_modules/@earendil-works/pi-coding-agent"
           # Exercise the CLI with the lockfile's Pi host, not package-owned peers.
           mkdir -p "$root/source/node_modules/@earendil-works"
-          for peer in pi-ai pi-coding-agent pi-tui; do
-            ln -s \
-              "$PWD/node_modules/@earendil-works/$peer" \
-              "$root/source/node_modules/@earendil-works/$peer"
-          done
-          ln -s "$PWD/node_modules/typebox" "$root/source/node_modules/typebox"
+          ln -s "$PWD/node_modules/@earendil-works/pi-coding-agent" \
+            "$root/source/node_modules/@earendil-works/pi-coding-agent"
           OPENPI_WEB_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             node "$root/source/bin/openpi.js" web "$root/workspace" --port 0 --no-open \
             >"$root/host.log" 2>&1 &
