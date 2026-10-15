@@ -460,7 +460,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     ).toBeVisible();
     await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
     await page.getByRole("button", { name: "Missing", exact: true }).click();
-    await expect(artifactPanel).toContainText("File no longer exists");
+    await expect(artifactPanel).toContainText("文件已不存在。");
     await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
     await page
       .getByRole("button", { name: "Other worktree", exact: true })

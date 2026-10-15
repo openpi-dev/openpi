@@ -37,6 +37,7 @@ import { sniffPromptImageMime } from "../composer/image-attachments.ts";
 import { FileContent, hasVisualFilePreview } from "../files/FileContent.tsx";
 import { useFileEditor } from "../files/use-file-editor.ts";
 import { ArtifactContext } from "./context.ts";
+import { artifactErrorText, type ArtifactFailure } from "./artifact-errors.ts";
 import { useWorkbarReadingState } from "../workbar/workbar-reading-state.ts";
 import "../files/files.css";
 
@@ -55,7 +56,7 @@ function ArtifactImagePreview({
   const [image, setImage] = useState<{ url: string; loaded: boolean } | null>(
     null,
   );
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ArtifactFailure | null>(null);
   const [original, setOriginal] = useState(false);
   const { sessionId, handle, revision } = artifact;
   useEffect(() => {
@@ -70,29 +71,33 @@ function ArtifactImagePreview({
           new Uint8Array(await blob.slice(0, 12).arrayBuffer()),
         );
         if (controller.signal.aborted) return;
-        if (!mime) throw new Error(t("artifactImagePreviewFailed"));
+        if (!mime) {
+          setError({
+            reason: undefined,
+            fallback: "artifactImagePreviewFailed",
+          });
+          return;
+        }
         url = URL.createObjectURL(new Blob([blob], { type: mime }));
         setImage({ url, loaded: false });
       })
       .catch((reason: unknown) => {
         if (!controller.signal.aborted)
-          setError(
-            reason instanceof Error
-              ? reason.message
-              : t("artifactImagePreviewFailed"),
-          );
+          setError({ reason, fallback: "artifactImagePreviewFailed" });
       });
     return () => {
       controller.abort();
       if (url) URL.revokeObjectURL(url);
     };
-  }, [sessionId, handle, revision, client, t]);
+  }, [sessionId, handle, revision, client]);
 
   if (error)
     return (
       <div role="alert" className="evidence-warning">
         <p>{t("artifactImagePreviewFailed")}</p>
-        {error !== t("artifactImagePreviewFailed") && <small>{error}</small>}
+        {artifactErrorText(error, t) !== t("artifactImagePreviewFailed") && (
+          <small>{artifactErrorText(error, t)}</small>
+        )}
       </div>
     );
   return (
@@ -125,7 +130,12 @@ function ArtifactImagePreview({
                 current ? { ...current, loaded: true } : null,
               )
             }
-            onError={() => setError(t("artifactImagePreviewFailed"))}
+            onError={() =>
+              setError({
+                reason: undefined,
+                fallback: "artifactImagePreviewFailed",
+              })
+            }
           />
         )}
       </div>
@@ -180,7 +190,7 @@ export const ArtifactProvider = forwardRef<
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
   const [source, setSource] = useState(savedReading?.source ?? false);
   const [editing, setEditing] = useState(savedReading?.editing ?? false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ArtifactFailure | null>(null);
   const [accessDenied, setAccessDenied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(
@@ -423,10 +433,7 @@ export const ArtifactProvider = forwardRef<
             reason instanceof WebApiError && reason.code === "ARTIFACT_DENIED",
           );
         delay = Math.min(delay * 2, 30_000);
-        if (!stopped)
-          setError(
-            reason instanceof Error ? reason.message : "Unable to read file",
-          );
+        if (!stopped) setError({ reason, fallback: "filesReadFailed" });
         if (revoked) stopped = true;
       } finally {
         // One outstanding read per open preview. No server watcher survives it.
@@ -500,7 +507,7 @@ export const ArtifactProvider = forwardRef<
       }, 1_000);
     } catch (reason) {
       if (!controller.signal.aborted)
-        setError(reason instanceof Error ? reason.message : "Download failed");
+        setError({ reason, fallback: "artifactDownloadFailed" });
     } finally {
       if (!controller.signal.aborted) setBusy(false);
     }
@@ -527,9 +534,7 @@ export const ArtifactProvider = forwardRef<
         );
     } catch (reason) {
       if (!controller.signal.aborted)
-        setError(
-          reason instanceof Error ? reason.message : t("filesReadFailed"),
-        );
+        setError({ reason, fallback: "filesReadFailed" });
     } finally {
       if (moreAbort.current === controller) {
         moreAbort.current = null;
@@ -764,7 +769,7 @@ export const ArtifactProvider = forwardRef<
               {error && (
                 <p role="status" className="evidence-warning">
                   {preview ? t("artifactOlderPreview") : ""}
-                  {error}
+                  {artifactErrorText(error, t)}
                 </p>
               )}
               {changed && (
