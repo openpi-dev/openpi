@@ -38,6 +38,7 @@ import {
   streamAntigravity,
 } from "../../../extensions/ai-providers/antigravity/provider.ts";
 import { collapseAntigravityModels } from "../../../extensions/ai-providers/antigravity/routing.ts";
+import { createStructuredOutputTool } from "../../../extensions/shared/structured-output.ts";
 import { resolveTranscript } from "../../../extensions/ai-providers/transcript.ts";
 
 const GEMINI_MODEL: Model<Api> = {
@@ -1036,6 +1037,68 @@ test("buildRequestBody budgets sparse literal array slots before expansion", () 
       ),
     /expansion limits/,
   );
+});
+
+test("buildRequestBody counts synthetic conjunction nodes before cloning", () => {
+  const requestWithProperties = (count: number) => () =>
+    buildRequestBody(
+      GEMINI_MODEL,
+      {
+        ...SIMPLE_CONTEXT,
+        tools: [
+          createStructuredOutputTool(
+            {
+              type: "object",
+              properties: Object.fromEntries(
+                Array.from({ length: count }, (_, index) => [
+                  `p${index}`,
+                  { $ref: "#/$defs/X", description: "x" },
+                ]),
+              ),
+              $defs: { X: { type: "string" } },
+            },
+            () => {},
+          ),
+        ],
+      },
+      undefined,
+      "p",
+    );
+  assert.doesNotThrow(requestWithProperties(1_500));
+  assert.throws(requestWithProperties(2_000), /expansion limits/);
+});
+
+test("buildRequestBody counts synthetic conjunction output depth", () => {
+  const requestAtDepth = (depth: number) => {
+    const definitions: Record<string, unknown> = { X0: { type: "string" } };
+    for (let index = 1; index <= depth; index++) {
+      definitions[`X${index}`] = {
+        $ref: `#/$defs/X${index - 1}`,
+        description: "x",
+      };
+    }
+    return () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            createStructuredOutputTool(
+              {
+                type: "object",
+                properties: { answer: { $ref: `#/$defs/X${depth}` } },
+                $defs: definitions,
+              },
+              () => {},
+            ),
+          ],
+        },
+        undefined,
+        "p",
+      );
+  };
+  assert.doesNotThrow(requestAtDepth(10));
+  assert.throws(requestAtDepth(12), /expansion limits/);
 });
 
 test("convertTools rejects unsafe local refs before the request", () => {

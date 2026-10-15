@@ -531,18 +531,21 @@ function expandLocalSchemaRefs(schema: unknown): unknown {
       );
     }
   };
-  const measure = (
-    value: unknown,
-    depth: number,
-    active: Set<string>,
-    position: Position,
-  ): void => {
+  const measureNode = (depth: number) => {
     assertDepth(depth);
     if (++nodes > MAX_SCHEMA_REF_NODES) {
       throw new Error(
         "Antigravity tool schema exceeds local $ref expansion limits",
       );
     }
+  };
+  const measure = (
+    value: unknown,
+    depth: number,
+    active: Set<string>,
+    position: Position,
+  ): void => {
+    measureNode(depth);
     if (value === null || typeof value !== "object") {
       append(JSON.stringify(value) ?? "null");
       return;
@@ -568,12 +571,14 @@ function expandLocalSchemaRefs(schema: unknown): unknown {
         measure(pointer(ref), depth + 1, active, "schema");
       else {
         append('{"allOf":[');
-        measure(pointer(ref), depth + 1, active, "schema");
+        measureNode(depth + 1); // Generated allOf array.
+        measure(pointer(ref), depth + 2, active, "schema");
         append(",{");
+        measureNode(depth + 2); // Generated siblings object.
         siblings.forEach(([key, entry], index) => {
           if (index > 0) append(",");
           append(`${JSON.stringify(key)}:`);
-          measure(entry, depth + 2, active, childPosition(position, key));
+          measure(entry, depth + 3, active, childPosition(position, key));
         });
         append("}]}");
       }
@@ -607,11 +612,16 @@ function expandLocalSchemaRefs(schema: unknown): unknown {
         throw new Error(`Antigravity tool schema has recursive $ref: ${ref}`);
       active.add(ref);
       try {
-        const target = visit(pointer(ref), depth + 1, "schema");
+        const siblingEntries = siblingsOf(object);
+        const target = visit(
+          pointer(ref),
+          depth + (siblingEntries.length === 0 ? 1 : 2),
+          "schema",
+        );
         const siblings = Object.fromEntries(
-          siblingsOf(object).map(([key, entry]) => [
+          siblingEntries.map(([key, entry]) => [
             key,
-            visit(entry, depth + 2, childPosition(position, key)),
+            visit(entry, depth + 3, childPosition(position, key)),
           ]),
         );
         return Object.keys(siblings).length === 0

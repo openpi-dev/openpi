@@ -32,7 +32,8 @@ Schemas without schema references retain the existing fast path. When expansion
 is needed, all emitted values, including opaque payloads, are measured against
 limits of depth 24, 10,000 nodes and 256 KiB serialized bytes before cloning any
 referenced subtree. Sparse array slots are counted as their serialized `null`
-values. JSON Pointers use own-property traversal and decode `~0` and
+values. Generated `allOf` arrays and sibling objects count toward node and
+depth budgets as well. JSON Pointers use own-property traversal and decode `~0` and
 `~1`. Reference siblings form an `allOf` conjunction rather than overwriting the
 target; boolean targets retain their value.
 
@@ -46,7 +47,7 @@ produces an empty `{}` property. An unbounded expansion could amplify output.
 The production `buildRequestBody` regressions cover literal local/external-looking
 references, mixed real references, escaped pointers, applicator/property
 positions, no-reference compatibility and output limits. The focused Antigravity
-suite passed 81 tests on 2026-10-15 with the frozen Pi 1.2.0 development dependency.
+suite passed 83 tests on 2026-10-15 with the frozen Pi 1.2.0 development dependency.
 The PR validation receipt separately records the required repository checks.
 No live provider call or user credential change was used for this verification.
 
