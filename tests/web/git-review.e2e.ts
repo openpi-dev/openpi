@@ -121,7 +121,9 @@ test("explicit review bases recover missing/deleted refs and lazy detail drift u
     await page.keyboard.press("Space");
     await expect(featureViewed).toBeChecked();
     await expect(review.getByRole("figure")).toHaveCount(0);
-    await expect(review).toContainText("已查看 1 / 已加载 1 个文件");
+    await expect(review.locator(".review-summary")).toContainText(
+      "1 个文件已更改",
+    );
     await page.screenshot({
       path: testInfo.outputPath("review-explicit-release.png"),
     });
@@ -357,7 +359,7 @@ test("real Git rename details and index-only edits refresh the open browser diff
       path: testInfo.outputPath("review-tree-wide.png"),
     });
     await workbar
-      .getByRole("button", { name: "恢复会话", exact: true })
+      .getByRole("button", { name: "返回聊天", exact: true })
       .click();
     await expect(draft).toHaveValue("保留正在编辑的草稿");
     await page.setViewportSize({ width: 390, height: 844 });

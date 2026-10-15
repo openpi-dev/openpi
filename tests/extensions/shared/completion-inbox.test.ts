@@ -207,3 +207,16 @@ test("an unowned completion cannot match any session and dead-letters fail-close
   assert.equal(inbox.size(), 0);
   assert.equal(inbox.inspectDeadLetters()[0]?.failure, "stale-owner");
 });
+
+test("dead-letter diagnostics retain a bounded newest window", () => {
+  const inbox = createCompletionInbox<{ value: string }>();
+
+  for (let index = 0; index < 65; index += 1) {
+    inbox.defer(envelope(`sa-${index}`), undefined);
+  }
+
+  const deadLetters = inbox.inspectDeadLetters();
+  assert.equal(deadLetters.length, 64);
+  assert.equal(deadLetters[0]?.producerId, "sa-1");
+  assert.equal(deadLetters.at(-1)?.producerId, "sa-64");
+});

@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -347,14 +348,19 @@ export class PiWebRuntime {
   }
 });
 
-test("installed CLI aliases the Pi peer package to the handed-over entry", async () => {
-  const temporaryRoot = await mkdtemp(join(process.cwd(), ".openpi-cli-test-"));
+test("managed CLI resolves Pi and provider imports from a separate host install", async () => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "openpi-cli-test-"));
   const packageRoot = join(temporaryRoot, "node_modules", "@tt-a1i", "openpi");
   try {
     await mkdir(join(packageRoot, "bin"), { recursive: true });
     await mkdir(join(packageRoot, "web", "host"), { recursive: true });
     await mkdir(join(packageRoot, "web", "runtime"), { recursive: true });
     await copyStandaloneLoader(packageRoot);
+    await cp(
+      new URL("../../node_modules/jiti", import.meta.url),
+      join(packageRoot, "node_modules", "jiti"),
+      { recursive: true, dereference: true },
+    );
     await writeFile(
       join(packageRoot, "package.json"),
       JSON.stringify({ type: "module" }),
@@ -371,6 +377,20 @@ test("installed CLI aliases the Pi peer package to the handed-over entry", async
     );
     const stubEntry = join(handedRoot, "dist", "index.js");
     await writeFile(stubEntry, 'export const PI_ENTRY_STUB = "handed-over";\n');
+    const aiRoot = join(handedRoot, "node_modules", "@earendil-works", "pi-ai");
+    await mkdir(join(aiRoot, "dist", "providers"), { recursive: true });
+    await writeFile(
+      join(aiRoot, "package.json"),
+      JSON.stringify({
+        name: "@earendil-works/pi-ai",
+        type: "module",
+        exports: { "./providers/*": { import: "./dist/providers/*.js" } },
+      }),
+    );
+    await writeFile(
+      join(aiRoot, "dist", "providers", "all.js"),
+      'export const getBuiltinProviders = () => ["host-provider"];\n',
+    );
     await writeFile(
       join(packageRoot, "web", "host", "browser-launcher.ts"),
       "export async function openBrowser(): Promise<boolean> { return false; }\n",
@@ -396,11 +416,12 @@ test("installed CLI aliases the Pi peer package to the handed-over entry", async
       join(packageRoot, "web", "runtime", "pi-runtime.ts"),
       `import { writeFile } from "node:fs/promises";
 import { PI_ENTRY_STUB } from "@earendil-works/pi-coding-agent";
+import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 
 export class PiWebRuntime {
   static async createWithoutWorkspace(): Promise<{ cwd: string; dispose(): Promise<void> }> {
     const marker = process.env.OPENPI_CLI_PI_ENTRY_MARKER;
-    if (marker) await writeFile(marker, PI_ENTRY_STUB);
+    if (marker) await writeFile(marker, PI_ENTRY_STUB + ":" + getBuiltinProviders().join(","));
     return {
       cwd: "/web-owned-bootstrap",
       async dispose(): Promise<void> {},
@@ -427,7 +448,10 @@ export class PiWebRuntime {
       },
     );
     assert.match(stdout, /ready http:\/\/127\.0\.0\.1:12346/u);
-    assert.equal(await readFile(entryMarker, "utf8"), "handed-over");
+    assert.equal(
+      await readFile(entryMarker, "utf8"),
+      "handed-over:host-provider",
+    );
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

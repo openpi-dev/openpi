@@ -158,6 +158,7 @@ export function createCapabilitiesExtension(
     });
 
     pi.on("before_agent_start", (event) => {
+      if (!("prompt" in event)) return;
       if (requestsCapabilityGateway(event.prompt)) {
         patchOwnedTools(pi, "capabilities", {
           enable: OPENPI_TOOL_SURFACE.capabilities.entry,

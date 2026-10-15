@@ -16,6 +16,7 @@ import type {
 } from "../../store/web-store.ts";
 import { modelIdentity } from "./model-identity.ts";
 import { ThinkingPicker } from "./ThinkingPicker.tsx";
+import { ProviderIcon } from "../settings/ProviderIcon.tsx";
 
 interface ModelPickerProps {
   openRequest?: number;
@@ -210,6 +211,7 @@ export function ModelPicker(props: ModelPickerProps) {
       value={selected ? `${selected.provider}/${selected.id}` : ""}
       triggerLabel={
         <span className="model-thinking-label" title={triggerLabel}>
+          {selected && <ProviderIcon id={selected.provider} />}
           <span className="model-picker-label">
             {selected?.name || selected?.id || triggerLabel}
           </span>
@@ -431,6 +433,7 @@ export function ModelPicker(props: ModelPickerProps) {
                           optionRefs.current[moveTo]?.focus();
                         }}
                       >
+                        <ProviderIcon id={model.provider} />
                         <span className="model-menu-item-text">
                           <span className="model-menu-item-label">
                             {model.name || model.id}
