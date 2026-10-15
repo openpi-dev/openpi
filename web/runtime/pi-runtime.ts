@@ -178,6 +178,18 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function projectModelSummary(model: { provider: string; id: string; name: string; contextWindow?: number; reasoning?: boolean; input?: readonly string[] }, current: { provider: string; id: string } | undefined) {
+  const contextWindow = Math.round(model.contextWindow ?? NaN);
+  return {
+    provider: model.provider, id: model.id, name: model.name,
+    label: model.name || `${model.provider}/${model.id}`,
+    current: current?.provider === model.provider && current.id === model.id,
+    ...(Number.isSafeInteger(contextWindow) && contextWindow > 0 ? { contextWindow } : {}),
+    ...(model.reasoning === true ? { reasoning: true } : {}),
+    ...(model.input?.includes("image") === true ? { imageInput: true } : {}),
+  };
+}
+
 function safeProviderId(value: string) {
   return value.length > 0 &&
     value.length <= WEB_MAX_PROVIDER_ID_LENGTH &&
@@ -735,13 +747,7 @@ export class PiWebRuntime implements WebRuntimeController {
     ) {
       available.unshift(current);
     }
-    return available.map((model) => ({
-      provider: model.provider,
-      id: model.id,
-      name: model.name,
-      label: model.name || `${model.provider}/${model.id}`,
-      current: current?.provider === model.provider && current.id === model.id,
-    }));
+    return available.map((model) => projectModelSummary(model, current));
   }
 
   searchModels(query: string, limit?: number, provider?: string) {
@@ -1251,14 +1257,7 @@ export class PiWebRuntime implements WebRuntimeController {
       const current = agentRuntime.session.model;
       const selected = modelRuntime
         .getAvailableSnapshot()
-        .map((item) => ({
-          provider: item.provider,
-          id: item.id,
-          name: item.name,
-          label: item.name || `${item.provider}/${item.id}`,
-          current:
-            current?.provider === item.provider && current.id === item.id,
-        }))
+        .map((item) => projectModelSummary(item, current))
         .find((item) => item.current);
       if (!selected) throw new Error("Model selection was not confirmed");
       this.emit("model_select", { provider, modelId });

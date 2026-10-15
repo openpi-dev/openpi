@@ -680,3 +680,41 @@ test("Web steering preserves native handled and queued input dispositions", {
     release.resolve();
   }
 });
+
+test("native catalog metadata and colon-bearing provider identity survive list/search/selection without generation", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  const { runtime, modelRuntime, session } = await nativeRuntime(
+    t,
+    () => undefined,
+    [],
+  );
+  const provider = fauxProvider({
+    provider: "catalog:extra",
+    models: [
+      {
+        id: "rich",
+        name: "Rich",
+        contextWindow: 128000,
+        reasoning: true,
+        input: ["text", "image"],
+      },
+    ],
+  });
+  modelRuntime.registerNativeProvider(provider.provider);
+  await modelRuntime.setRuntimeApiKey(provider.provider.id, "fixture-key");
+  const native = modelRuntime.getModel(provider.provider.id, "rich");
+  assert.ok(native);
+  const list = runtime
+    .listModels()
+    .find((row) => row.provider === native.provider);
+  assert.ok(list);
+  assert.equal(list.contextWindow, native.contextWindow);
+  assert.equal(list.reasoning, true);
+  assert.equal(list.imageInput, true);
+  const search = runtime.searchModels("", 1, native.provider).models[0];
+  assert.deepEqual(search, list);
+  const selected = await runtime.setModel(native.provider, native.id);
+  assert.deepEqual(selected, { ...list, current: true });
+  assert.equal(session.messages.length, 0);
+});

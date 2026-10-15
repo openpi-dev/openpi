@@ -452,6 +452,7 @@ class FakeClient extends WebClient {
   });
   modelSearchResults: Array<Promise<WebModelSearchResult>> = [];
   modelSearchQueries: Array<{
+    provider?: string;
     query: string;
     sessionId?: string;
   }> = [];
@@ -524,8 +525,13 @@ class FakeClient extends WebClient {
     query: string,
     sessionId?: string,
     _signal?: AbortSignal,
+    provider?: string,
   ) {
-    this.modelSearchQueries.push({ query, sessionId });
+    this.modelSearchQueries.push({
+      query,
+      sessionId,
+      ...(provider ? { provider } : {}),
+    });
     return (
       this.modelSearchResults.shift() ??
       Promise.resolve({
@@ -5580,4 +5586,43 @@ describe("thinking level selection", () => {
     ]);
     store.getState().actions.stop();
   });
+});
+
+it("owns model searches by provider as well as text and accepts blank provider queries", async () => {
+  const client = new FakeClient();
+  const a = deferred<WebModelSearchResult>();
+  const b = deferred<WebModelSearchResult>();
+  client.modelSearchResults.push(a.promise, b.promise);
+  const store = createWebStore(client);
+  store.setState({ snapshot: snapshot() });
+  const first = store.getState().actions.searchModels("", "alpha");
+  const second = store.getState().actions.searchModels("", "beta");
+  const result: WebModelSearchResult = {
+    models: [],
+    totalAvailable: 0,
+    totalMatches: 0,
+    truncation: {
+      truncated: false,
+      matchesOmitted: 0,
+      maxResults: 50,
+      maxBytes: 65536,
+      bytes: 0,
+    },
+  };
+  b.resolve(result);
+  await second;
+  a.resolve({ ...result, models: snapshot().models });
+  await first;
+  expect(client.modelSearchQueries).toEqual([
+    { query: "", sessionId: "session-1", provider: "alpha" },
+    { query: "", sessionId: "session-1", provider: "beta" },
+  ]);
+  expect(store.getState().modelSearch).toMatchObject({
+    query: "",
+    provider: "beta",
+    status: "ready",
+    models: [],
+  });
+  store.getState().actions.clearModelSearch();
+  expect(store.getState().modelSearch.provider).toBeUndefined();
 });

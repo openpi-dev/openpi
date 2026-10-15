@@ -96,6 +96,9 @@ export interface WebWorkspaceSummary {
 }
 
 export interface WebModelSummary {
+  contextWindow?: number;
+  reasoning?: boolean;
+  imageInput?: boolean;
   provider: string;
   id: string;
   name: string;

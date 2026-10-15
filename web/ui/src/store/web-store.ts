@@ -287,7 +287,7 @@ export interface WebStoreActions {
   ) => Promise<void>;
   unarchiveSession: (path: string) => Promise<boolean>;
   selectModel: (value: string) => Promise<boolean>;
-  searchModels: (query: string) => Promise<void>;
+  searchModels: (query: string, provider?: string) => Promise<void>;
   clearModelSearch: () => void;
   selectThinking: (level: string) => void;
   cancelActiveTurn: () => Promise<void>;
@@ -321,6 +321,7 @@ export interface WebStoreActions {
 
 export interface ModelSearchState {
   query: string;
+  provider?: string;
   status: "idle" | "loading" | "ready" | "error";
   models: WebModelSummary[];
   totalMatches: number;
@@ -2043,9 +2044,9 @@ export function createWebStore(
           state.selectedPath,
         );
       },
-      async searchModels(query) {
+      async searchModels(query, provider) {
         const normalized = query.trim();
-        if (!normalized) {
+        if (!normalized && !provider) {
           set(resetModelSearch());
           return;
         }
@@ -2058,6 +2059,7 @@ export function createWebStore(
         set({
           modelSearch: {
             query: normalized,
+            ...(provider ? { provider } : {}),
             status: "loading",
             models: [],
             totalMatches: 0,
@@ -2070,6 +2072,7 @@ export function createWebStore(
             normalized,
             sessionId,
             controller.signal,
+            provider,
           );
           if (
             controller.signal.aborted ||
@@ -2080,6 +2083,7 @@ export function createWebStore(
           set({
             modelSearch: {
               query: normalized,
+              ...(provider ? { provider } : {}),
               status: "ready",
               models: result.models,
               totalMatches: result.totalMatches,
@@ -2097,6 +2101,7 @@ export function createWebStore(
           set({
             modelSearch: {
               query: normalized,
+              ...(provider ? { provider } : {}),
               status: "error",
               models: [],
               totalMatches: 0,

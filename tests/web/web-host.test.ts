@@ -554,9 +554,22 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         label: "Other",
         current: false,
       },
+      {
+        provider: "catalog:extra",
+        id: "rich",
+        name: "Rich",
+        label: "Rich",
+        current: false,
+      },
     ],
-    searchModels: (query, limit) =>
-      projectWebModelSearch(runtime.listModels(), query, limit),
+    searchModels: (query, limit, provider) =>
+      projectWebModelSearch(
+        runtime
+          .listModels()
+          .filter((model) => !provider || model.provider === provider),
+        query,
+        limit,
+      ),
     getProjectTrustStatus: () => ({
       source: "pi-project-trust",
       workspace: runtimeCwd,
@@ -970,6 +983,32 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.deepEqual((await filteredModels.json()).models, [
       snapshot.models[1],
     ]);
+    const exactProvider = await fetch(
+      `${launched.origin}/api/models?provider=catalog%3Aextra`,
+      { headers: authorized },
+    );
+    assert.equal(exactProvider.status, 200);
+    assert.deepEqual((await exactProvider.json()).models, [snapshot.models[2]]);
+    const prefixProvider = await fetch(
+      `${launched.origin}/api/models?provider=catalog`,
+      { headers: authorized },
+    );
+    assert.deepEqual((await prefixProvider.json()).models, []);
+    for (const params of [
+      "provider=",
+      "provider=alpha&provider=beta",
+      "provider=%00",
+      `provider=${"x".repeat(161)}`,
+    ]) {
+      assert.equal(
+        (
+          await fetch(`${launched.origin}/api/models?${params}`, {
+            headers: authorized,
+          })
+        ).status,
+        400,
+      );
+    }
     const invalidQuery = await fetch(
       `${launched.origin}/api/models?query=${"x".repeat(201)}`,
       { headers: authorized },

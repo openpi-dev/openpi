@@ -1720,6 +1720,7 @@ test("model projection preserves a real selected model named unknown outside the
       name: "unknown",
       label: "unknown",
       current: true,
+      contextWindow: 8192,
     },
   ]);
 });
@@ -3439,4 +3440,46 @@ test("a merged thinking selection rejects callers whose expected session changed
   );
   // Only the still-active Session's intent is written.
   assert.deepEqual(fixture.state.calls, ["minimal"]);
+});
+
+test("model summaries preserve only valid native capability metadata in list and search", () => {
+  const base = new Agent({
+    streamFn: () => assert.fail("catalog projection must not generate"),
+  }).state.model;
+  const rich = {
+    ...base,
+    provider: "alpha",
+    id: "rich",
+    name: "Rich",
+    contextWindow: 128000,
+    reasoning: true,
+    input: ["text" as const, "image" as const],
+  };
+  const models = [
+    rich,
+    { provider: "beta", id: "bare", name: "Bare" },
+    { ...rich, id: "invalid", contextWindow: NaN, reasoning: false, input: [] },
+  ];
+  const runtime = Object.assign(Object.create(PiWebRuntime.prototype), {
+    runtime: {
+      session: { model: rich },
+      services: { modelRuntime: { getAvailableSnapshot: () => models } },
+    },
+  }) as PiWebRuntime;
+  const rows = runtime.listModels();
+  assert.deepEqual(rows[0], {
+    provider: "alpha",
+    id: "rich",
+    name: "Rich",
+    label: "Rich",
+    current: true,
+    contextWindow: 128000,
+    reasoning: true,
+    imageInput: true,
+  });
+  assert.equal(rows[1]?.contextWindow, undefined);
+  assert.equal(rows[1]?.imageInput, undefined);
+  assert.equal(rows[2]?.contextWindow, undefined);
+  assert.equal(rows[2]?.reasoning, undefined);
+  assert.deepEqual(runtime.searchModels("rich", 1, "alpha").models, [rows[0]]);
 });

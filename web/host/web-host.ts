@@ -2139,7 +2139,7 @@ export class WebHost {
         const limit = limitText === null ? WEB_MAX_MODEL_SEARCH_RESULTS : Number(limitText);
         const sessionId = url.searchParams.get("sessionId");
         const provider = url.searchParams.get("provider") ?? undefined;
-        if (provider !== undefined && (!/^[a-zA-Z0-9._-]{1,160}$/u.test(provider) || url.searchParams.getAll("provider").length !== 1)) {
+        if (provider !== undefined && ((provider.length === 0 || provider.length > 160 || /[\u0000-\u001f\u007f]/u.test(provider)) || url.searchParams.getAll("provider").length !== 1)) {
           return this.json(response, 400, { error: "Invalid model provider" });
         }
         if (query.length > WEB_MAX_MODEL_QUERY) {
