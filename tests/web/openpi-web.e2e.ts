@@ -14,6 +14,7 @@ import {
 import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
+import type { WebProviderAuthProjection } from "../../web/runtime/types.ts";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
@@ -791,7 +792,9 @@ test("left divider still expands after the workbar takes the main view", async (
   await save;
   await workbar.getByRole("button", { name: "返回聊天", exact: true }).click();
   await expect(right).toHaveCount(1);
-  await workbar.getByRole("button", { name: "关闭", exact: true }).click();
+  await workbar
+    .getByRole("button", { name: "收起工具栏", exact: true })
+    .click();
   await expect(sidebar).toHaveCSS("width", "300px");
   await page.reload();
   await expect(sidebar).toHaveCSS("width", "300px");
@@ -892,6 +895,107 @@ test("file reference validation can be cancelled without changing the draft", as
     release();
     await page.unrouteAll({ behavior: "wait" });
   }
+});
+
+test("side conversation shows one editor in narrow layouts and preserves both drafts", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  const mainInput = page.getByRole("textbox", { name: "描述任务" });
+  await mainInput.fill("Keep the main conversation draft");
+  const workbar = await openWorkbarTool(page, "侧边对话");
+  const sideInput = workbar.getByPlaceholder("提出一个侧边问题…");
+  await sideInput.fill("Keep the side conversation draft");
+  const mainForm = mainInput.locator("..");
+  const sideForm = workbar.locator(".side-conversation-composer");
+  await page.addStyleTag({
+    content: ".composer { transition: none !important; }",
+  });
+  const surfaceStyle = (form: typeof sideForm) =>
+    form.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return Object.fromEntries(
+        [
+          "borderRadius",
+          "borderWidth",
+          "borderColor",
+          "backgroundColor",
+          "boxShadow",
+          "paddingTop",
+          "paddingRight",
+          "paddingBottom",
+          "paddingLeft",
+          "minHeight",
+        ].map((property) => [
+          property,
+          style[property as keyof CSSStyleDeclaration],
+        ]),
+      );
+    });
+  await mainInput.click();
+  const mainFocus = await surfaceStyle(mainForm);
+  await sideInput.click();
+  expect(await surfaceStyle(sideForm)).toEqual(mainFocus);
+  await workbar
+    .locator(".workbar-tab > button:first-child")
+    .filter({ hasText: "侧边对话" })
+    .click();
+  expect(await surfaceStyle(sideForm)).toEqual(await surfaceStyle(mainForm));
+  await sideForm
+    .getByRole("button", { name: "添加上下文", exact: true })
+    .click();
+  const fileReference = page.getByRole("dialog", { name: "引用工作区文件" });
+  await expect(fileReference).toBeVisible();
+  await fileReference
+    .getByRole("button", { name: "取消", exact: true })
+    .click();
+  await expect(sideInput).toHaveValue("Keep the side conversation draft");
+
+  for (const width of [783, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(mainInput).toBeHidden();
+    await expect(sideInput).toBeVisible();
+    await expect(page.locator("textarea:visible")).toHaveCount(1);
+    await expect(sideInput).toHaveValue("Keep the side conversation draft");
+    await sideInput.click();
+    await expect(sideInput).toBeFocused();
+    await expect(sideInput).toHaveCSS("outline-style", "none");
+    expect(
+      await sideForm.evaluate((element) => {
+        const toolbar = element.querySelector(".composer-toolbar")!;
+        return (
+          toolbar.getBoundingClientRect().right <=
+          element.getBoundingClientRect().right
+        );
+      }),
+    ).toBe(true);
+  }
+
+  await workbar.getByRole("button", { name: "打开工具", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^浏览器/u }).click();
+  await expect(mainInput).toBeVisible();
+  await expect(mainInput).toHaveValue("Keep the main conversation draft");
+  await expect(page.locator("textarea:visible")).toHaveCount(1);
+  await workbar
+    .locator(".workbar-tab > button:first-child")
+    .filter({ hasText: "侧边对话" })
+    .click();
+  await expect(mainInput).toBeHidden();
+  await expect(sideInput).toHaveValue("Keep the side conversation draft");
+
+  await workbar.getByRole("button", { name: "返回聊天" }).click();
+  await expect(mainInput).toBeVisible();
+  await expect(mainInput).toHaveValue("Keep the main conversation draft");
+  await expect(mainInput).toBeFocused();
+  await expect(page.locator("textarea:visible")).toHaveCount(1);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbarTool(page, "侧边对话");
+  await expect(mainInput).toBeVisible();
+  await expect(sideInput).toBeVisible();
+  await expect(sideInput).toHaveValue("Keep the side conversation draft");
+  await expect(mainInput).toHaveValue("Keep the main conversation draft");
 });
 
 test("workbar exposes five tools and completes a side conversation lifecycle", async ({
@@ -999,6 +1103,14 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
   await question.fill("Inspect this in isolation");
   await question.press("Enter");
   await expect(workbar.getByText("Side response")).toBeVisible();
+  await expect(workbar.locator(".model-picker-label")).toHaveText(
+    "fixture/model",
+  );
+  await workbar.getByRole("button", { name: "模型: fixture/model" }).click();
+  await expect(
+    page.getByText("这是当前侧边对话使用的模型。", { exact: true }),
+  ).toBeVisible();
+  await workbar.getByRole("button", { name: "模型: fixture/model" }).click();
   await expect(
     page.getByRole("button", { name: "停止当前轮次", exact: true }),
   ).toBeVisible();
@@ -1045,14 +1157,13 @@ test("terminal launcher creates independent real workspace shells and closes onl
     .poll(() => terminal.locator(".xterm-rows").textContent())
     .toContain("OPENPI_WEB_TERMINAL_OK");
   await workbar.locator(".workbar-add-tab").click();
-  const launcher = workbar.getByRole("region", { name: "打开工具" });
+  const launcher = page.getByRole("menu");
   await expect(launcher).toBeVisible();
-  await expect(launcher.getByRole("button")).toHaveCount(5);
-  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(launcher.getByRole("menuitem")).toHaveCount(5);
   await page.screenshot({
     path: testInfo.outputPath("multi-terminal-launcher.png"),
   });
-  await launcher.getByRole("button", { name: /^终端/u }).click();
+  await launcher.getByRole("menuitem", { name: /^新建终端/u }).click();
   const second = workbar.locator(
     '[data-tab^="terminal:"] .interactive-terminal',
   );
@@ -1108,7 +1219,7 @@ test("terminal launcher creates independent real workspace shells and closes onl
   });
   await workbar
     .getByRole("toolbar")
-    .getByRole("button", { name: "关闭 开发服务", exact: true })
+    .getByRole("button", { name: "关闭 开发服务 并结束进程", exact: true })
     .click();
   await expect(workbar.locator('[data-tool="terminal"]')).toHaveCount(1);
   await expect(second).toBeVisible();
@@ -1139,10 +1250,11 @@ test("model configuration drafts survive switching settings tabs", async ({
   const dialog = page.getByRole("dialog", { name: "设置" });
   const generalTab = dialog.getByRole("tab", { name: "常规", exact: true });
   await generalTab.focus();
-  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowDown");
   await expect(
-    dialog.getByRole("tab", { name: "模型", exact: true }),
+    dialog.getByRole("tab", { name: "外观", exact: true }),
   ).toBeFocused();
+  await dialog.getByRole("tab", { name: "模型", exact: true }).click();
   await dialog
     .getByRole("button", { name: "添加模型提供商", exact: true })
     .click();
@@ -1159,7 +1271,7 @@ test("model configuration drafts survive switching settings tabs", async ({
   await dialog.getByRole("tab", { name: "技能", exact: true }).click();
   await page.keyboard.press("End");
   await expect(
-    dialog.getByRole("tab", { name: "插件", exact: true }),
+    dialog.getByRole("tab", { name: "浏览器", exact: true }),
   ).toBeFocused();
   await page.keyboard.press("Home");
   await expect(generalTab).toBeFocused();
@@ -1255,9 +1367,9 @@ test("native iframe browser supports input, selection, scrolling and independent
     await workbar
       .getByRole("button", { name: "打开工具", exact: true })
       .click();
-    await workbar
-      .locator(".workbar-launcher")
-      .getByRole("button", { name: /^文件/u })
+    await page
+      .getByRole("menu")
+      .getByRole("menuitem", { name: /^文件/u })
       .click();
     await expect(workbar.locator('div[data-tool="browser"]')).toHaveAttribute(
       "inert",
@@ -1299,7 +1411,9 @@ test("native iframe browser supports input, selection, scrolling and independent
       "src",
       `${origin}/toolbar`,
     );
-    await workbar.getByRole("button", { name: "关闭", exact: true }).click();
+    await workbar
+      .getByRole("button", { name: "收起工具栏", exact: true })
+      .click();
     await expect(page.locator(".workbar-panel iframe")).toHaveCount(0);
     await page
       .locator('button.task-tools-trigger[aria-label="打开工具"]')
@@ -2463,9 +2577,10 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
 }, testInfo) => {
   const sessionId = "inspection-browser-session";
   const reads: string[] = [];
+  let baselineSnapshot: Promise<string> | undefined;
   await page.route("**/api/snapshot**", async (route) => {
-    const response = await route.fetch();
-    const snapshot = await response.json();
+    baselineSnapshot ??= route.fetch().then((response) => response.text());
+    const snapshot = JSON.parse(await baselineSnapshot);
     snapshot.currentSessionId = sessionId;
     snapshot.workspaces = [
       { path: "/inspection", name: "Inspection", current: true },
@@ -2526,7 +2641,7 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
       },
     ];
     alignControlledSessionFixture(snapshot);
-    await route.fulfill({ response, json: snapshot });
+    await route.fulfill({ json: snapshot });
   });
   await page.route("**/events?**", (route) =>
     route.fulfill({
@@ -2554,12 +2669,24 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
                 refreshRequired: false,
               }
             : endpoint === "providers/auth-status"
-              ? {
+              ? ({
                   providers: [
-                    { id: "example", name: "Example", configured: true },
+                    {
+                      id: "example",
+                      name: "Example",
+                      configured: true,
+                      authMethods: ["api_key"],
+                      subscription: false,
+                      nameTruncated: false,
+                    },
                   ],
-                  truncation: { truncated: false },
-                }
+                  truncation: {
+                    truncated: false,
+                    providersOmitted: 0,
+                    namesTruncated: 0,
+                    maxProviders: 200,
+                  },
+                } satisfies WebProviderAuthProjection)
               : {
                   sessionId,
                   detail: {
@@ -3035,6 +3162,201 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
   await page.getByRole("button", { name: "对话", exact: true }).click();
   await expect(view).toHaveCount(0);
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`trajectory keeps native evidence searchable and adapts to panel width in ${theme}`, async ({
+    page,
+  }, testInfo) => {
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = (await response.json()) as WebSnapshot;
+      snapshot.preferences = {
+        ...snapshot.preferences,
+        theme,
+        sidebarWidth: 420,
+      };
+      snapshot.runtime = { status: "idle", capabilities: {} };
+      snapshot.currentSessionId = "trajectory-reading";
+      snapshot.selectedSession = {
+        id: "trajectory-reading",
+        path: "/trajectory/reading.jsonl",
+        cwd: "/trajectory",
+        bytes: 1000,
+        truncation: {
+          truncated: false,
+          entriesOmitted: 0,
+          messagesTruncated: 0,
+          messagePartsOmitted: 0,
+          maxBytes: 2097152,
+        },
+        entries: [
+          {
+            id: "model",
+            type: "model_change",
+            timestamp: "2026-10-12T08:00:00Z",
+          },
+          {
+            id: "effort",
+            type: "thinking_level_change",
+            timestamp: "2026-10-12T08:00:00Z",
+          },
+          {
+            id: "question",
+            type: "message",
+            timestamp: "2026-10-12T08:00:01Z",
+            message: { role: "user", content: "检查项目配置，再运行检查。" },
+          },
+          {
+            id: "inspect",
+            type: "message",
+            timestamp: "2026-10-12T08:00:02Z",
+            message: {
+              role: "assistant",
+              content: "",
+              parts: [
+                { type: "thinking", text: "先读取配置，再核对检查结果。" },
+                {
+                  type: "toolCall",
+                  id: "read-config",
+                  name: "read",
+                  arguments: '{"path":"package.json"}',
+                },
+              ],
+            },
+          },
+          {
+            id: "config",
+            type: "message",
+            timestamp: "2026-10-12T08:00:03Z",
+            message: {
+              role: "toolResult",
+              toolCallId: "read-config",
+              toolName: "read",
+              content: "项目使用 bun run check 校验配置。",
+              isError: false,
+              details: { lines: 42 },
+            },
+          },
+          {
+            id: "verify",
+            type: "message",
+            timestamp: "2026-10-12T08:00:04Z",
+            message: {
+              role: "assistant",
+              content: "",
+              parts: [
+                {
+                  type: "toolCall",
+                  id: "run-checks",
+                  name: "bash",
+                  arguments: '{"command":"bun run check"}',
+                },
+              ],
+            },
+          },
+          {
+            id: "verified",
+            type: "message",
+            timestamp: "2026-10-12T08:00:05Z",
+            message: {
+              role: "toolResult",
+              toolCallId: "run-checks",
+              toolName: "bash",
+              content: "配置与类型检查通过。",
+              isError: false,
+              details: { exitCode: 0 },
+            },
+          },
+          {
+            id: "answer",
+            type: "message",
+            timestamp: "2026-10-12T08:00:06Z",
+            message: {
+              role: "assistant",
+              content: "已核对项目配置，检查通过。",
+              stopReason: "stop",
+            },
+          },
+        ],
+      };
+      alignControlledSessionFixture(snapshot);
+      snapshot.sessions[0]!.name = "核对项目配置";
+      snapshot.workspaces[0]!.name = "openpi";
+      await route.fulfill({ response, json: snapshot });
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await openWorkbench(page);
+    await page.getByRole("button", { name: "执行轨迹", exact: true }).click();
+    const view = page.getByRole("region", { name: "执行轨迹", exact: true });
+    const ledger = view.locator(".trajectory-ledger");
+    const inspector = view.getByRole("region", {
+      name: "记录详情",
+      exact: true,
+    });
+    const changes = view.locator(".trajectory-event-group details");
+    await expect(changes).toHaveJSProperty("open", false);
+    await changes.locator("summary").click();
+    await view.getByRole("button", { name: /切换模型/ }).click();
+    await inspector.getByText("记录信息", { exact: true }).click();
+    await expect(inspector).toContainText("model_change");
+    await changes.locator("summary").click();
+    await view
+      .locator(".trajectory-record.call")
+      .filter({ hasText: "read" })
+      .click();
+    await inspector.getByRole("tab", { name: "输入", exact: true }).click();
+    await expect(inspector.getByRole("tabpanel")).toContainText("package.json");
+    await expect(inspector.getByRole("tabpanel")).not.toContainText("项目使用");
+    await inspector
+      .getByRole("tab", { name: "输入", exact: true })
+      .press("ArrowRight");
+    await expect(
+      inspector.getByRole("tab", { name: "结果", exact: true }),
+    ).toBeFocused();
+    await expect(inspector.getByRole("tabpanel")).toContainText("项目使用");
+    await expect(inspector.getByRole("tabpanel")).not.toContainText(
+      "package.json",
+    );
+    const search = view.getByRole("searchbox", { name: "搜索已加载记录" });
+    await search.fill("配置与类型检查通过");
+    await expect(view.locator(".trajectory-record")).toHaveCount(1);
+    await expect(inspector).toContainText("bun run check");
+    await search.fill("");
+    for (const width of [1440, 900, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await view
+        .locator(".trajectory-record.call")
+        .filter({ hasText: "read" })
+        .click();
+      await expect(inspector).toBeVisible();
+      const left = (await ledger.boundingBox())!;
+      const right = (await inspector.boundingBox())!;
+      if (width === 1440)
+        expect(right.x).toBeGreaterThan(left.x + left.width - 1);
+      else expect(right.y).toBeGreaterThanOrEqual(left.y + left.height);
+      expect(
+        await view.evaluate((node) => node.scrollWidth <= node.clientWidth),
+      ).toBe(true);
+      expect(
+        (
+          await new AxeBuilder({ page })
+            .include(".conversation-shell")
+            .analyze()
+        ).violations,
+      ).toEqual([]);
+      await page.screenshot({
+        path: testInfo.outputPath(`trajectory-${theme}-${width}.png`),
+        animations: "disabled",
+      });
+    }
+  });
+}
 
 test("fresh browser contexts open the bare address and can request workspace selection", async ({
   browser,

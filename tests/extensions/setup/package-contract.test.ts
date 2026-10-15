@@ -76,6 +76,19 @@ test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () 
   assert.equal(manifest.devDependencies?.["pi-intercom"], undefined);
 });
 
+test("web search remains an optional native Pi package without a bundled tool group", () => {
+  assert.equal(manifest.dependencies?.["pi-web-access"], undefined);
+  assert.equal(manifest.devDependencies?.["pi-web-access"], undefined);
+  const surface = readFileSync(
+    new URL("../../../extensions/shared/tool-surface.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    surface,
+    /web_search|fetch_content|web_enable|source_check/u,
+  );
+});
+
 test("the public OpenPI package has complete gallery and registry metadata", () => {
   assert.equal(manifest.name, "@tt-a1i/openpi");
   assert.equal(manifest.private, undefined);

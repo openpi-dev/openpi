@@ -1,6 +1,6 @@
 # Feishu PR notifications
 
-The Feishu group bot notification is triggered by `.github/workflows/feishu-pr-notification.yml`. The caller follows the reusable implementation on the [`openpi-dev/automation`](https://github.com/openpi-dev/automation) `main` branch.
+The Feishu group bot notification is triggered by `.github/workflows/feishu-pr-notification.yml`. The caller uses the reusable implementation from [`openpi-dev/automation`](https://github.com/openpi-dev/automation), pinned to a full commit SHA from its `main` branch, so automation changes reach this privileged `pull_request_target` workflow only through a reviewed OpenPI pull request that updates the SHA.
 
 To enable it:
 

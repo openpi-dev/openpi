@@ -240,6 +240,12 @@ export default function cron(
   });
 
   pi.on("session_start", (_event, ctx) => {
+    // Pi emits session_start for /new and /resume without requiring the
+    // extension instance to be recreated. Cron jobs are deliberately scoped
+    // to the previous in-memory session, so they must not cross that boundary.
+    stopTicker();
+    jobs = [];
+    nextId = 1;
     context = ctx;
   });
 
