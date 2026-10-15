@@ -151,6 +151,17 @@ export function ToolEvidence({
         <span className="evidence-status">{statusLabel}</span>
       </summary>
       <div className="evidence-content">
+        {view.durationMs !== undefined && (
+          <p
+            className="evidence-duration"
+            title={t("toolExecutionDurationHelp")}
+          >
+            <strong>{t("toolExecutionDuration")}</strong>{" "}
+            <data value={String(view.durationMs)}>
+              {t("toolExecutionDurationValue", { duration: view.durationMs })}
+            </data>
+          </p>
+        )}
         {view.path && !view.diff && (
           <p>
             <strong>{t("toolRequestedFile")}</strong>{" "}

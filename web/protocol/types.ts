@@ -8,7 +8,7 @@ import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK, WEB_COMMAND_HANDLED } from "..
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
 import type { MyPiSetupConfig, ReasoningLevel } from "../../extensions/shared/setup-config.ts";
-import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
+import { bashReceipt, nativeExecuteDurationMs, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
 import { readNativeSearchEvidence, type NativeSearchActivity } from "../../extensions/web-search/native.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
@@ -411,6 +411,8 @@ export interface WebMessageTruncation {
 export interface WebLiveMessage {
   /** Pi's bounded native child ledger. Child result bodies are not persisted by Pi. */
   nestedCalls?: { calls: WebNestedToolCall[]; complete: boolean };
+  /** Native Pi execute() milliseconds; absent when unavailable or the tool did not execute. */
+  durationMs?: number;
   webSearch?: (NativeSearchActivity & { beforePartIndex?: number })[];
   timestamp?: number;
   commandId?: string;
@@ -990,6 +992,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     ? projectAssistantError(value.errorMessage)
     : undefined;
   const forkSnapshotToolResult = isForkSnapshotToolBoundary(value);
+  const durationMs = value.role === "toolResult" && !forkSnapshotToolResult ? nativeExecuteDurationMs(value.durationMs) : undefined;
   const metadataTruncated =
     role?.truncated === true ||
     toolName?.truncated === true ||
@@ -1002,6 +1005,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
+    ...(durationMs !== undefined ? { durationMs } : {}),
     ...(nestedCalls ? { nestedCalls } : {}),
     ...(webSearch ? { webSearch } : {}),
     ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),

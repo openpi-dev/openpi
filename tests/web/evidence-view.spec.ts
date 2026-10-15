@@ -521,3 +521,46 @@ it("polls metadata with backoff, retains changed text until refresh, and stops o
     vi.useRealTimers();
   }
 });
+
+it("shows native execution milliseconds including zero, with raw precision and no invented missing duration", async () => {
+  await i18n.changeLanguage("en");
+  const call = {
+    type: "toolCall" as const,
+    id: "timed",
+    name: "read",
+    arguments: '{"path":"file.txt"}',
+  };
+  const result = {
+    role: "toolResult",
+    toolCallId: "timed",
+    toolName: "read",
+    content: "value",
+    isError: false,
+    durationMs: 0,
+  };
+  const { container, rerender } = render(
+    createElement(ToolEvidence, { call, result, defaultOpen: true }),
+  );
+  expect(screen.getByText("Pi execution duration")).toBeTruthy();
+  expect(screen.getByText("0 ms")).toBeTruthy();
+  expect(container.textContent).toContain('"durationMs":0');
+  rerender(
+    createElement(ToolEvidence, {
+      call,
+      result: { ...result, durationMs: 12.125 },
+      defaultOpen: true,
+    }),
+  );
+  expect(screen.getByText("12.125 ms")).toBeTruthy();
+  await act(() => i18n.changeLanguage("zh"));
+  expect(screen.getByText("Pi 执行耗时")).toBeTruthy();
+  rerender(
+    createElement(ToolEvidence, {
+      call,
+      result: { ...result, durationMs: undefined },
+      defaultOpen: true,
+    }),
+  );
+  expect(container.querySelector(".evidence-duration")).toBeNull();
+  await act(() => i18n.changeLanguage("en"));
+});

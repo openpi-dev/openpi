@@ -262,3 +262,100 @@ test("background process outcomes require literal status identities and integral
     );
   }
 });
+
+test("live execution duration belongs only to the matching terminal result", () => {
+  const read = call("read");
+  let tools = reduceLiveTools([], "tool_execution_start", {
+    toolCallId: "call",
+    toolName: "read",
+    call: read,
+  });
+  tools = reduceLiveTools(tools, "tool_execution_update", {
+    toolCallId: "call",
+    toolName: "read",
+    result: { role: "toolResult", content: "partial", durationMs: 999 },
+  });
+  assert.equal(tools[0]?.result?.durationMs, undefined);
+  const before = tools;
+  tools = reduceLiveTools(tools, "tool_execution_end", {
+    toolCallId: "call",
+    toolName: "write",
+    result: {
+      role: "toolResult",
+      toolName: "write",
+      toolCallId: "call",
+      content: "other",
+      durationMs: 7,
+    },
+    isError: false,
+  });
+  assert.deepEqual(tools, before);
+  tools = reduceLiveTools(tools, "tool_execution_end", {
+    toolCallId: "call",
+    toolName: "read",
+    result: {
+      role: "toolResult",
+      toolName: "read",
+      toolCallId: "call",
+      content: "done",
+      durationMs: 0,
+    },
+    isError: false,
+  });
+  assert.equal(tools[0]?.result?.durationMs, 0);
+  assert.equal(projectToolEvidence(read, tools[0]?.result).durationMs, 0);
+  assert.equal(
+    projectToolEvidence({ ...read, name: "write" }, tools[0]?.result)
+      .durationMs,
+    undefined,
+  );
+  assert.deepEqual(reduceLiveTools(tools, "session_switched", {}), []);
+});
+
+test("parallel durations stay on exact calls in start order and cannot survive a new owner", () => {
+  const first = { ...call("read"), id: "first" },
+    second = { ...call("write"), id: "second" };
+  let tools = reduceLiveTools([], "tool_execution_start", {
+    toolCallId: first.id,
+    toolName: first.name,
+    call: first,
+  });
+  tools = reduceLiveTools(tools, "tool_execution_start", {
+    toolCallId: second.id,
+    toolName: second.name,
+    call: second,
+  });
+  for (const [part, durationMs] of [
+    [second, 8],
+    [first, 3],
+  ] as const) {
+    tools = reduceLiveTools(tools, "tool_execution_end", {
+      toolCallId: part.id,
+      toolName: part.name,
+      result: {
+        role: "toolResult",
+        toolCallId: part.id,
+        toolName: part.name,
+        content: "done",
+        durationMs,
+      },
+      isError: false,
+    });
+  }
+  assert.deepEqual(
+    tools.map((item) => [item.call.id, item.result?.durationMs]),
+    [
+      ["first", 3],
+      ["second", 8],
+    ],
+  );
+  const before = tools;
+  tools = reduceLiveTools(tools, "tool_execution_end", {
+    toolCallId: first.id,
+    toolName: first.name,
+    result: { content: "late", durationMs: 999 },
+    isError: false,
+  });
+  assert.deepEqual(tools, before);
+  assert.deepEqual(reduceLiveTools(tools, "session_created", {}), []);
+});

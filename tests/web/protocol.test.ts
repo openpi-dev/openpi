@@ -608,3 +608,67 @@ test("entry projection rolls retained message truncation into aggregate evidence
   assert.equal(projected.truncation.messagesTruncated, 1);
   assert.equal(projected.truncation.truncated, true);
 });
+
+test("native top-level execute duration keeps zero and rejects invalid or non-result metadata", () => {
+  for (const durationMs of [0, 0.125, 42, Number.MAX_SAFE_INTEGER]) {
+    const input = {
+      role: "toolResult",
+      toolName: "read",
+      toolCallId: "duration",
+      content: "ok",
+      durationMs,
+    };
+    assert.equal(projectMessage(input).durationMs, durationMs);
+    assert.equal(input.durationMs, durationMs);
+  }
+  for (const durationMs of [
+    undefined,
+    null,
+    "12",
+    -1,
+    NaN,
+    Infinity,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    assert.equal(
+      projectMessage({ role: "toolResult", content: "ok", durationMs })
+        .durationMs,
+      undefined,
+    );
+  }
+  for (const role of ["assistant", "user", "custom", undefined]) {
+    assert.equal(
+      projectMessage({ role, content: "ok", durationMs: 5 }).durationMs,
+      undefined,
+    );
+  }
+});
+
+test("synthetic fork boundaries never acquire a native execution duration", () => {
+  const projected = projectMessage({
+    role: "toolResult",
+    toolName: "read",
+    toolCallId: "fork-tool",
+    content: "snapshot only",
+    isError: true,
+    durationMs: 23,
+    details: {
+      openpiForkSnapshot: {
+        version: 1,
+        toolCallId: "fork-tool",
+        source: {
+          sessionId: "source",
+          sessionPath: "/source.jsonl",
+          entryId: "entry",
+        },
+        snapshot: {
+          kind: "persisted-prefix",
+          interrupted: true,
+          capturedAt: 1,
+        },
+      },
+    },
+  });
+  assert.equal(projected.forkSnapshotToolResult, true);
+  assert.equal(projected.durationMs, undefined);
+});

@@ -2812,9 +2812,9 @@ export class PiWebRuntime implements WebRuntimeController {
           ...("parentToolCallId" in event && typeof event.parentToolCallId === "string"
             ? { parentToolCallId: event.parentToolCallId } : {}),
           ...(event.type === "tool_execution_end"
-            ? { isError: event.isError, result: projectMessage({ ...event.result, role: "toolResult", toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError }) }
+            ? { isError: event.isError, result: projectMessage({ ...event.result, durationMs: "durationMs" in event ? event.durationMs : undefined, role: "toolResult", toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError }) }
             : { call: projectMessage({ content: [{ type: "toolCall", id: event.toolCallId, name: event.toolName, arguments: event.args }] }).parts?.[0],
-                ...(event.type === "tool_execution_update" ? { result: projectMessage({ ...event.partialResult, role: "toolResult", toolName: event.toolName, toolCallId: event.toolCallId }) } : {}) }),
+                ...(event.type === "tool_execution_update" ? { result: projectMessage({ ...event.partialResult, durationMs: undefined, role: "toolResult", toolName: event.toolName, toolCallId: event.toolCallId }) } : {}) }),
         });
         break;
     }

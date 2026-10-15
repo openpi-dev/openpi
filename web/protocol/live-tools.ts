@@ -1,4 +1,4 @@
-import { evidenceRecord, LIVE_TOOL_LIMIT, type LiveToolEvidence } from "./evidence.ts";
+import { evidenceRecord, LIVE_TOOL_LIMIT, nativeExecuteDurationMs, type LiveToolEvidence } from "./evidence.ts";
 import type { WebLiveMessage, WebMessagePart } from "./types.ts";
 
 /** Input is the bounded Host protocol; partial results are complete snapshots. */
@@ -10,13 +10,15 @@ export function reduceLiveTools(current: LiveToolEvidence[], type: string, detai
   if (typeof id !== "string" || id.length > 500) return current;
   const existing = current.find((item) => item.call.id === id);
   if (existing && existing.state !== "running" && !(existing.state === "unknown" && type === "tool_execution_end")) return current;
+  if (existing && typeof detail.toolName === "string" && existing.call.name !== detail.toolName) return current;
   const rawCall = evidenceRecord(detail.call);
   const call = rawCall.type === "toolCall" && typeof rawCall.name === "string" && typeof rawCall.arguments === "string"
     ? rawCall as Extract<WebMessagePart, { type: "toolCall" }>
     : existing?.call;
-  if (!call || call.evidenceTruncated && call.id?.includes("[truncated]")) return current;
+  if (!call || call.id !== id || existing && call.name !== existing.call.name || call.evidenceTruncated && call.id?.includes("[truncated]")) return current;
   const rawResult = evidenceRecord(detail.result);
-  const result = typeof rawResult.content === "string" ? rawResult as unknown as WebLiveMessage : existing?.result;
+  if (typeof rawResult.toolCallId === "string" && rawResult.toolCallId !== id || typeof rawResult.toolName === "string" && rawResult.toolName !== call.name) return current;
+  const result = typeof rawResult.content === "string" ? { ...rawResult, durationMs: type === "tool_execution_end" ? nativeExecuteDurationMs(rawResult.durationMs) : undefined } as unknown as WebLiveMessage : existing?.result;
   const parentToolCallId = typeof detail.parentToolCallId === "string" && detail.parentToolCallId.length <= 500 ? detail.parentToolCallId : existing?.parentToolCallId;
   const item: LiveToolEvidence = { call, result, ...(parentToolCallId ? { parentToolCallId } : {}), state: type === "tool_execution_end" ? detail.isError === true ? "failed" : "returned" : "running" };
   // A parallel call finishing first must not move ahead of calls started earlier.
