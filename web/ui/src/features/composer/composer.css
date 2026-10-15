@@ -326,3 +326,7 @@
   .composer-m02 .composer-toolbar-context { gap: 4px; }
   .composer-m02 .model-picker-wrap { max-width: 42vw; }
 }
+
+.model-provider-filter { display: flex; align-items: center; gap: 8px; margin: 8px 4px; color: var(--muted); font-size: 12px; }
+.model-provider-filter select { flex: 1; min-width: 0; max-width: 100%; color: var(--text); background: var(--page); border: 1px solid var(--border); border-radius: 5px; padding: 4px; font: inherit; }
+.model-menu-item-meta { color: var(--muted); font-size: 11px; white-space: normal; }

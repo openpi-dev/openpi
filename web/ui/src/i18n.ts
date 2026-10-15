@@ -1723,6 +1723,12 @@ const resources = {
       searchModelsPlaceholder: "Search provider, model name, or ID...",
       searchingModels: "Searching models...",
       noMatchingModels: "No matching models",
+      modelProviderFilter: "Provider",
+      allProviders: "All loaded providers",
+      modelProviderChoicesPartial:
+        "Provider choices come from the loaded catalog; more providers may exist.",
+      modelMetaReasoning: "Reasoning",
+      modelMetaImageInput: "Image input",
       modelSearchFailed: "Could not search models. Try again.",
       retryModelSearch: "Retry model search",
       fileReferenceDraftChanged:
@@ -3447,6 +3453,12 @@ const resources = {
       searchModelsPlaceholder: "搜索服务商、模型名称或 ID...",
       searchingModels: "正在搜索模型...",
       noMatchingModels: "没有匹配的模型",
+      modelProviderFilter: "服务商",
+      allProviders: "全部已加载服务商",
+      modelProviderChoicesPartial:
+        "服务商选项来自已加载目录，可能还有其他服务商。",
+      modelMetaReasoning: "思考",
+      modelMetaImageInput: "图片输入",
       modelSearchFailed: "模型搜索失败，请重试。",
       retryModelSearch: "重试模型搜索",
       fileReferenceDraftChanged: "草稿已变化，请重新打开文件引用。",

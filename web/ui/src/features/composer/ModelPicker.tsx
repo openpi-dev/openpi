@@ -16,6 +16,7 @@ import type {
 } from "../../store/web-store.ts";
 import { modelIdentity } from "./model-identity.ts";
 import { ThinkingPicker } from "./ThinkingPicker.tsx";
+import { modelMetadata } from "./model-metadata.ts";
 import { ProviderIcon } from "../settings/ProviderIcon.tsx";
 
 interface ModelPickerProps {
@@ -41,6 +42,7 @@ const MODEL_SEARCH_DEBOUNCE_MS = 250;
 export function ModelPicker(props: ModelPickerProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
+  const [provider, setProvider] = useState<string | undefined>();
   const [view, setView] = useState<"models" | "thinking" | null>(null);
   const [open, setOpen] = useState(false);
   const preparationStarted = useRef(false);
@@ -62,12 +64,15 @@ export function ModelPicker(props: ModelPickerProps) {
   const canSearch = (props.snapshot?.truncation.modelsOmitted ?? 0) > 0;
   const hasCatalog = snapshotModels.length > 0 || canSearch;
   const normalizedQuery = query.trim();
-  const searchMatchesQuery = props.modelSearch.query === normalizedQuery;
+  const searchRequested = Boolean(normalizedQuery || provider);
+  const searchMatchesQuery =
+    props.modelSearch.query === normalizedQuery &&
+    props.modelSearch.provider === provider;
   const searchPending =
     canSearch &&
-    Boolean(normalizedQuery) &&
+    searchRequested &&
     (!searchMatchesQuery || props.modelSearch.status === "loading");
-  const matchingModels = normalizedQuery
+  const matchingModels = searchRequested
     ? canSearch
       ? searchMatchesQuery
         ? props.modelSearch.models
@@ -80,8 +85,19 @@ export function ModelPicker(props: ModelPickerProps) {
           ),
         )
     : snapshotModels;
+  const filteredModels = provider
+    ? matchingModels.filter((model) => model.provider === provider)
+    : matchingModels;
+  const providers = [
+    ...new Set(
+      [...snapshotModels, ...props.modelSearch.models].map(
+        (model) => model.provider,
+      ),
+    ),
+  ];
+  if (provider && !providers.includes(provider)) providers.push(provider);
   const groups = new Map<string, WebModelSummary[]>();
-  for (const model of matchingModels) {
+  for (const model of filteredModels) {
     const group = groups.get(model.provider);
     if (group) group.push(model);
     else groups.set(model.provider, [model]);
@@ -89,23 +105,38 @@ export function ModelPicker(props: ModelPickerProps) {
   const models = [...groups.values()].flat();
   const searchModels = props.actions.searchModels;
   const searchQuery = props.modelSearch.query;
+  const searchProvider = props.modelSearch.provider;
   const searchStatus = props.modelSearch.status;
 
   useEffect(() => {
     if (
       !canSearch ||
-      !normalizedQuery ||
-      (searchQuery === normalizedQuery && searchStatus !== "idle")
+      !searchRequested ||
+      (searchQuery === normalizedQuery &&
+        searchProvider === provider &&
+        searchStatus !== "idle")
     )
       return;
     const timer = window.setTimeout(() => {
-      void searchModels(normalizedQuery);
+      void (provider
+        ? searchModels(normalizedQuery, provider)
+        : searchModels(normalizedQuery));
     }, MODEL_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [canSearch, normalizedQuery, searchModels, searchQuery, searchStatus]);
+  }, [
+    canSearch,
+    normalizedQuery,
+    provider,
+    searchRequested,
+    searchModels,
+    searchQuery,
+    searchProvider,
+    searchStatus,
+  ]);
 
   const resetSearch = () => {
     setQuery("");
+    setProvider(undefined);
     props.actions.clearModelSearch();
   };
 
@@ -301,7 +332,8 @@ export function ModelPicker(props: ModelPickerProps) {
                   onChange={(event) => {
                     const next = event.currentTarget.value;
                     setQuery(next);
-                    if (!next.trim()) props.actions.clearModelSearch();
+                    if (!next.trim() && !provider)
+                      props.actions.clearModelSearch();
                   }}
                   onKeyDown={(event) => {
                     if (event.nativeEvent.isComposing || event.keyCode === 229)
@@ -319,13 +351,35 @@ export function ModelPicker(props: ModelPickerProps) {
                 />
               </label>
             )}
+            {providers.length > 1 && (
+              <label
+                className="model-provider-filter"
+                title={canSearch ? t("modelProviderChoicesPartial") : undefined}
+              >
+                <span>{t("modelProviderFilter")}</span>
+                <select
+                  aria-label={t("modelProviderFilter")}
+                  value={provider ?? ""}
+                  onChange={(event) =>
+                    setProvider(event.currentTarget.value || undefined)
+                  }
+                >
+                  <option value="">{t("allProviders")}</option>
+                  {providers.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {searchPending && (
               <p className="model-search-status" role="status">
                 {t("searchingModels")}
               </p>
             )}
             {canSearch &&
-              normalizedQuery &&
+              searchRequested &&
               searchMatchesQuery &&
               props.modelSearch.status === "error" && (
                 <p
@@ -338,14 +392,18 @@ export function ModelPicker(props: ModelPickerProps) {
                     className="model-search-retry"
                     aria-label={t("retryModelSearch")}
                     title={t("retryModelSearch")}
-                    onClick={() => void searchModels(normalizedQuery)}
+                    onClick={() =>
+                      void (provider
+                        ? searchModels(normalizedQuery, provider)
+                        : searchModels(normalizedQuery))
+                    }
                   >
                     <RotateCcw aria-hidden="true" />
                   </button>
                 </p>
               )}
             {hasCatalog &&
-              normalizedQuery &&
+              searchRequested &&
               (!canSearch ||
                 (searchMatchesQuery && props.modelSearch.status === "ready")) &&
               models.length === 0 && (
@@ -354,7 +412,7 @@ export function ModelPicker(props: ModelPickerProps) {
                 </p>
               )}
             {canSearch &&
-              normalizedQuery &&
+              searchRequested &&
               searchMatchesQuery &&
               props.modelSearch.status === "ready" &&
               props.modelSearch.matchesOmitted > 0 && (
@@ -373,6 +431,7 @@ export function ModelPicker(props: ModelPickerProps) {
                 aria-busy={searchPending}
               >
                 {models.map((model, index) => {
+                  const metadata = modelMetadata(model, t);
                   const isSelected =
                     selected?.provider === model.provider &&
                     selected.id === model.id;
@@ -394,6 +453,9 @@ export function ModelPicker(props: ModelPickerProps) {
                         role="option"
                         aria-selected={isSelected}
                         aria-label={modelIdentity(model)}
+                        aria-describedby={
+                          metadata ? `${optionsId}-meta-${index}` : undefined
+                        }
                         title={modelIdentity(model)}
                         ref={(element) => {
                           optionRefs.current[index] = element;
@@ -438,6 +500,14 @@ export function ModelPicker(props: ModelPickerProps) {
                           <span className="model-menu-item-label">
                             {model.name || model.id}
                           </span>
+                          {metadata && (
+                            <span
+                              id={`${optionsId}-meta-${index}`}
+                              className="model-menu-item-meta"
+                            >
+                              {metadata}
+                            </span>
+                          )}
                           {model.name && model.name !== model.id && (
                             <span className="model-menu-item-sub">
                               {model.id}

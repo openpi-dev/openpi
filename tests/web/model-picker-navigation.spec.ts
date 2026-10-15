@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { type ComponentProps, createElement } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -214,7 +215,7 @@ it("keeps a provider together when the current model is prepended to the catalog
   const ui = setup({ snapshot: catalog });
   await ui.open();
   expect(
-    screen
+    within(screen.getByRole("listbox"))
       .getAllByRole("option")
       .map((option) => option.getAttribute("aria-label")),
   ).toEqual([
@@ -223,7 +224,9 @@ it("keeps a provider together when the current model is prepended to the catalog
     "River (beta/river)",
     "Kite (beta/kite/model)",
   ]);
-  expect(screen.getAllByText("alpha")).toHaveLength(1);
+  expect(
+    within(screen.getByRole("listbox")).getAllByText("alpha"),
+  ).toHaveLength(1);
 });
 
 it("does not treat an unreceived catalog as an empty one", () => {
@@ -367,9 +370,13 @@ it("filters complete catalogs locally by provider, name and slash-bearing id", a
   const ui = setup();
   const input = await ui.open();
   fireEvent.change(input, { target: { value: "BETA" } });
-  expect(screen.getAllByRole("option")).toHaveLength(2);
+  expect(
+    within(screen.getByRole("listbox")).getAllByRole("option"),
+  ).toHaveLength(2);
   fireEvent.change(input, { target: { value: "kite/model" } });
-  expect(screen.getAllByRole("option")).toHaveLength(1);
+  expect(
+    within(screen.getByRole("listbox")).getAllByRole("option"),
+  ).toHaveLength(1);
   fireEvent.click(
     screen.getByRole("option", { name: "Kite (beta/kite/model)" }),
   );
@@ -382,15 +389,19 @@ it("reports an empty local search and restores all options when cleared", async 
   const input = await ui.open();
   fireEvent.change(input, { target: { value: "missing" } });
   expect(screen.getByText(i18n.t("noMatchingModels"))).toBeTruthy();
-  expect(screen.queryAllByRole("option")).toHaveLength(0);
+  expect(
+    within(screen.getByRole("listbox")).queryAllByRole("option"),
+  ).toHaveLength(0);
   fireEvent.change(input, { target: { value: "" } });
-  expect(screen.getAllByRole("option")).toHaveLength(3);
+  expect(
+    within(screen.getByRole("listbox")).getAllByRole("option"),
+  ).toHaveLength(3);
 });
 
 it("moves between search and options and consumes only the picker Escape", async () => {
   const ui = setup();
   const input = await ui.open();
-  const options = screen.getAllByRole("option");
+  const options = within(screen.getByRole("listbox")).getAllByRole("option");
   fireEvent.keyDown(input, { key: "ArrowDown" });
   expect(document.activeElement).toBe(options[0]);
   fireEvent.keyDown(options[0]!, { key: "End" });
@@ -624,4 +635,64 @@ it("reports a native workspace removal failure without claiming success", async 
     false,
   );
   expect(read).not.toHaveBeenCalled();
+});
+
+it("filters the complete catalog locally and displays native metadata without changing identity", async () => {
+  const catalog = snapshot();
+  catalog.models[0] = {
+    ...catalog.models[0]!,
+    contextWindow: 128000,
+    reasoning: true,
+    imageInput: true,
+  };
+  const picker = setup({ snapshot: catalog });
+  await picker.open();
+  expect(screen.getByText(/128k ctx/)).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+    target: { value: "beta" },
+  });
+  expect(screen.queryByRole("option", { name: "Zen (alpha/zen)" })).toBeNull();
+  expect(
+    screen.getByRole("option", { name: "River (beta/river)" }),
+  ).toBeTruthy();
+  expect(picker.searchModels).not.toHaveBeenCalled();
+  expect(picker.selectModel).not.toHaveBeenCalled();
+});
+it("requests a selected provider before server caps even with blank search", async () => {
+  const catalog = snapshot();
+  catalog.truncation.modelsOmitted = 100;
+  const picker = setup({ snapshot: catalog });
+  await picker.open();
+  fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+    target: { value: "beta" },
+  });
+  await waitFor(() =>
+    expect(picker.searchModels).toHaveBeenCalledWith("", "beta"),
+  );
+  picker.update({
+    modelSearch: {
+      query: "",
+      provider: "alpha",
+      status: "ready",
+      models: catalog.models,
+      totalMatches: 3,
+      matchesOmitted: 0,
+      error: null,
+    },
+  });
+  expect(
+    screen.queryByRole("option", { name: "River (beta/river)" }),
+  ).toBeNull();
+  picker.update({
+    modelSearch: {
+      query: "",
+      provider: "beta",
+      status: "ready",
+      models: [],
+      totalMatches: 0,
+      matchesOmitted: 0,
+      error: null,
+    },
+  });
+  expect(screen.getByText(i18n.t("noMatchingModels"))).toBeTruthy();
 });
