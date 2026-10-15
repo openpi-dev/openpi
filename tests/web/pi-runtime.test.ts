@@ -1,11 +1,25 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
+import { Agent } from "@earendil-works/pi-agent-core";
+import type {
+  AgentSessionServices,
+  ExtensionAPI,
+  PromptOptions,
+  SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
 import { jsonByteLength } from "../../web/protocol/types.ts";
+import {
+  createCommandDiscoveryBridge,
+  registerCommandDiscoveryBridge,
+} from "../../web/runtime/command-discovery.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
+import { matchesSessionIdentity } from "../../web/runtime/session-identity.ts";
 import {
   type WebRuntimeEvent,
   WebRuntimeRequestError,
@@ -46,9 +60,110 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-type PromptOptions = {
-  preflightResult?: (accepted: boolean) => void;
-};
+async function copiedSessionManagers(t: TestContext) {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-copied-runtime-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const originalPath = join(directory, "original.jsonl");
+  const copiedPath = join(directory, "copied.jsonl");
+  await writeFile(
+    originalPath,
+    `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "copied-session",
+      timestamp: new Date().toISOString(),
+      cwd: directory,
+    })}\n`,
+  );
+  await copyFile(originalPath, copiedPath);
+  const original = SessionManager.open(originalPath);
+  const copied = SessionManager.open(copiedPath);
+  assert.equal(original.getSessionId(), copied.getSessionId());
+  assert.notEqual(original.getSessionFile(), copied.getSessionFile());
+  return { original, copied, originalPath, copiedPath };
+}
+
+function assertSessionConflict(error: unknown) {
+  assert.ok(error instanceof WebRuntimeRequestError);
+  assert.equal(error.code, "SESSION_CONFLICT");
+  assert.equal(error.statusCode, 409);
+  return true;
+}
+
+test("Session identity normalizes file paths and keeps copied files distinct", async (t) => {
+  const { original, copied, originalPath } = await copiedSessionManagers(t);
+  const expected = {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath.replace(
+      "original.jsonl",
+      "unused/../original.jsonl",
+    ),
+  };
+  assert.equal(matchesSessionIdentity(original, expected), true);
+  assert.equal(matchesSessionIdentity(copied, expected), false);
+  assert.equal(
+    matchesSessionIdentity(original, {
+      ...expected,
+      expectedSessionId: "different-session",
+    }),
+    false,
+  );
+});
+
+test("an in-memory Session accepts only its own current identity token", () => {
+  const session = SessionManager.inMemory(process.cwd());
+  assert.equal(session.getSessionFile(), undefined);
+  assert.equal(
+    matchesSessionIdentity(session, {
+      expectedSessionId: session.getSessionId(),
+      expectedSessionPath: `current:${session.getSessionId()}`,
+    }),
+    true,
+  );
+  assert.equal(
+    matchesSessionIdentity(session, {
+      expectedSessionPath: "current:another-session",
+    }),
+    false,
+  );
+  assert.equal(matchesSessionIdentity(session), true);
+});
+
+test("projects current Pi token and context statistics without inference", () => {
+  const getSessionUsage = PiWebRuntime.prototype.getSessionUsage;
+  const usage = getSessionUsage.call({
+    runtime: {
+      session: {
+        getSessionStats: () => ({
+          tokens: {
+            input: 53_000,
+            output: 13_000,
+            cacheRead: 480_000,
+            cacheWrite: 2_000,
+            total: 548_000,
+          },
+          contextUsage: {
+            tokens: 43_520,
+            contextWindow: 272_000,
+            percent: 16,
+          },
+        }),
+      },
+    },
+  } as unknown as PiWebRuntime);
+  assert.deepEqual(usage, {
+    input: 53_000,
+    output: 13_000,
+    cacheRead: 480_000,
+    cacheWrite: 2_000,
+    total: 548_000,
+    context: {
+      tokens: 43_520,
+      contextWindow: 272_000,
+      percent: 16,
+    },
+  });
+});
 
 function promptSession(sessionId: string) {
   const calls: Array<{
@@ -64,10 +179,24 @@ function promptSession(sessionId: string) {
     }) => void
   >();
   let followUpMessages: string[] = [];
+  let steeringMessages: string[] = [];
+  const steeringCalls: Array<{ content: string; images?: unknown[] }> = [];
   return {
     isStreaming: false,
+    isCompacting: false,
+    isRetrying: false,
+    state: { pendingToolCalls: new Set<string>() },
+    get isIdle() {
+      return !this.isStreaming && !this.isCompacting;
+    },
     pendingMessageCount: 0,
-    sessionManager: { getSessionId: () => sessionId },
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: (): string | undefined => undefined,
+      getBranch: (): SessionEntry[] => [],
+      appendCustomEntry: (_customType: string, _data?: unknown) =>
+        "fixture-entry",
+    },
     abort: async (): Promise<void> => undefined,
     subscribe(
       listener: (event: {
@@ -80,10 +209,33 @@ function promptSession(sessionId: string) {
       return () => listeners.delete(listener);
     },
     getFollowUpMessages: () => followUpMessages,
+    getSteeringMessages: () => steeringMessages,
+    async steer(content: string, images?: unknown[]) {
+      steeringCalls.push({ content, images });
+      steeringMessages.push(content);
+      for (const listener of listeners) {
+        listener({
+          type: "queue_update",
+          steering: steeringMessages,
+          followUp: followUpMessages,
+        });
+      }
+      return "queued" as const;
+    },
+    clearQueue() {
+      const steering = steeringMessages;
+      followUpMessages = [];
+      steeringMessages = [];
+      return { steering, followUp: [] };
+    },
     emitFollowUpQueue(messages: string[]) {
       followUpMessages = messages;
       for (const listener of listeners) {
-        listener({ type: "queue_update", steering: [], followUp: messages });
+        listener({
+          type: "queue_update",
+          steering: steeringMessages,
+          followUp: messages,
+        });
       }
     },
     prompt(content: string, options: PromptOptions) {
@@ -92,15 +244,20 @@ function promptSession(sessionId: string) {
       return run.promise;
     },
     calls,
+    steeringCalls,
   };
 }
 
 type PromptSession = ReturnType<typeof promptSession>;
 type FakeAgentRuntime = {
   session: PromptSession;
+  services?: AgentSessionServices;
   dispose: () => Promise<void>;
 };
 type PromptRuntimeHarness = {
+  setPlanMode: PiWebRuntime["setPlanMode"];
+  preparePlanImplementation: PiWebRuntime["preparePlanImplementation"];
+  listCommands: PiWebRuntime["listCommands"];
   runtime: FakeAgentRuntime;
   listeners: Set<(event: WebRuntimeEvent) => void>;
   retainedRuntimes: Set<FakeAgentRuntime>;
@@ -241,7 +398,7 @@ function lifecycleHarness(runtime: LifecycleRuntime) {
   harness.disposed = false;
   harness.dispatcherLease = { release: async () => undefined };
   harness.webHostLease = { release: async () => undefined };
-  harness.webSessionDirectory = "/tmp/openpi-test-sessions";
+  harness.webSessionDirectory = join(tmpdir(), "openpi-test-sessions");
   return harness;
 }
 
@@ -288,6 +445,685 @@ function promptHarness(session: ReturnType<typeof promptSession>) {
   return harness;
 }
 
+function finishCompaction(
+  runtime: PromptRuntimeHarness,
+  session: PromptSession,
+  detail: Record<string, unknown> = {},
+) {
+  session.isCompacting = false;
+  (
+    runtime as unknown as {
+      observeCompaction(session: object, event: object): void;
+    }
+  ).observeCompaction(session, { type: "compaction_end", ...detail });
+}
+
+test("native steering is admitted to the exact active turn and projects its actual queue", async () => {
+  const session = promptSession("steering");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "running",
+    sessionId: "steering",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 4,
+  };
+  const image = {
+    data: "aGVsbG8=",
+    mimeType: "image/png" as const,
+    name: "instruction.png",
+  };
+  const receipt = await runtime.sendPrompt("use this approach", {
+    commandId: "instruction",
+    streamingBehavior: "steer",
+    expectedTurnCommandId: "running",
+    expectedSessionId: "steering",
+    expectedSessionPath: "current:steering",
+    images: [image],
+  });
+  assert.deepEqual(receipt, {
+    pendingFollowUps: 0,
+    pendingSteering: 1,
+    delivery: "steer",
+  });
+  assert.equal(session.calls.length, 0);
+  assert.deepEqual(session.steeringCalls, [
+    { content: "use this approach", images: [{ type: "image", ...image }] },
+  ]);
+  const execution = (runtime as unknown as PiWebRuntime).getSessionExecution(
+    "steering",
+    "current:steering",
+  );
+  assert.equal(execution.activeTurn?.commandId, "running");
+  assert.equal(execution.pendingFollowUps, 0);
+  assert.deepEqual(execution.steeringMessages, ["use this approach"]);
+  assert.equal(execution.pendingSteering, 1);
+  await Promise.all(runtime.promptOperations);
+});
+
+test("stale, compacting and cancelling steering targets reject without turning the draft into a prompt", async () => {
+  for (const reason of [
+    "stale",
+    "compacting",
+    "cancelling",
+    "finished",
+    "plan",
+  ] as const) {
+    const session = promptSession("steering");
+    session.isStreaming = reason !== "finished";
+    session.isCompacting = reason === "compacting";
+    const runtime = promptHarness(session);
+    runtime.activePromptTrace = {
+      commandId: "running",
+      sessionId: "steering",
+      startedAt: 1,
+      started: true,
+      queued: false,
+      epoch: 4,
+    };
+    if (reason === "cancelling")
+      runtime.turnAbortOperations.set(
+        "steering\u0000running\u00004",
+        Promise.resolve(),
+      );
+    await assert.rejects(
+      runtime.sendPrompt("keep this draft", {
+        commandId: "instruction",
+        streamingBehavior: "steer",
+        expectedTurnCommandId: reason === "stale" ? "previous" : "running",
+        ...(reason === "plan" ? { planRevision: "plan-revision" } : {}),
+      }),
+      (error) =>
+        error instanceof WebRuntimeRequestError &&
+        error.code === "TURN_CONFLICT",
+    );
+    assert.equal(session.calls.length, 0, reason);
+    assert.equal(session.steeringCalls.length, 0, reason);
+  }
+});
+
+test("steering rechecks its target after waiting for an earlier prompt admission", async () => {
+  const session = promptSession("steering");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "running",
+    sessionId: "steering",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 4,
+  };
+  const earlier = deferred();
+  runtime.promptAdmission = earlier.promise;
+  const admission = runtime.sendPrompt("do not start a new turn", {
+    commandId: "instruction",
+    streamingBehavior: "steer",
+    expectedTurnCommandId: "running",
+  });
+  session.isStreaming = false;
+  runtime.activePromptTrace = undefined;
+  earlier.resolve();
+  await assert.rejects(
+    admission,
+    (error) =>
+      error instanceof WebRuntimeRequestError && error.code === "TURN_CONFLICT",
+  );
+  assert.equal(session.calls.length, 0);
+  assert.equal(session.steeringCalls.length, 0);
+  await Promise.all(runtime.promptOperations);
+});
+
+test("a retained compaction follow-up queue does not convert current-turn steering into another follow-up", async () => {
+  const session = promptSession("steering");
+  session.isCompacting = true;
+  const runtime = promptHarness(session);
+  await runtime.sendPrompt("the next task", { commandId: "follow-up" });
+  session.isCompacting = false;
+  session.isStreaming = true;
+  runtime.activePromptTrace = {
+    commandId: "running",
+    sessionId: "steering",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 4,
+  };
+  const receipt = await runtime.sendPrompt("current instruction", {
+    commandId: "instruction",
+    streamingBehavior: "steer",
+    expectedTurnCommandId: "running",
+  });
+  assert.deepEqual(receipt, {
+    pendingFollowUps: 0,
+    pendingSteering: 1,
+    delivery: "steer",
+  });
+  const execution = (runtime as unknown as PiWebRuntime).getSessionExecution(
+    "steering",
+    "current:steering",
+  );
+  assert.deepEqual(execution.queuedMessages, ["the next task"]);
+  assert.deepEqual(execution.steeringMessages, ["current instruction"]);
+  assert.equal(session.calls.length, 0);
+  await Promise.all(runtime.promptOperations);
+});
+
+test("compaction-held messages preserve order and images through native admission", async () => {
+  const session = promptSession("queue");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  session.isCompacting = true;
+  const image = {
+    data: "aGVsbG8=",
+    mimeType: "image/png" as const,
+    name: "queued-diagram.png",
+  };
+  await runtime.sendPrompt("first", { commandId: "q1", images: [image] });
+  await runtime.sendPrompt("second", { commandId: "q2" });
+  assert.equal(session.calls.length, 0);
+  assert.deepEqual(
+    api.getSessionExecution("queue", "current:queue").queuedMessages,
+    ["first", "second"],
+  );
+  finishCompaction(runtime, session);
+  await new Promise(setImmediate);
+  assert.equal(session.calls.length, 1);
+  assert.equal(session.calls[0]!.content, "first");
+  assert.deepEqual(
+    (session.calls[0]!.options as { images: unknown[] }).images,
+    [{ type: "image", ...image }],
+  );
+  session.isStreaming = true;
+  session.calls[0]!.options.preflightResult!("started");
+  await new Promise(setImmediate);
+  assert.equal(session.calls[1]!.content, "second");
+  assert.equal(
+    (session.calls[1]!.options as { streamingBehavior: string })
+      .streamingBehavior,
+    "followUp",
+  );
+  session.emitFollowUpQueue(["second"]);
+  session.calls[1]!.options.preflightResult!("queued");
+  await new Promise(setImmediate);
+  assert.deepEqual(
+    api.getSessionExecution("queue", "current:queue").queuedMessages,
+    ["second"],
+  );
+  for (const call of session.calls) call.run.resolve();
+  await Promise.all(runtime.promptOperations);
+});
+
+test("compaction and admission failure retain queued text until explicit retry or clear", async () => {
+  const session = promptSession("retry");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  const identity = { sessionId: "retry", sessionPath: "current:retry" };
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  session.isCompacting = true;
+  await runtime.sendPrompt("retained draft", { commandId: "retry-1" });
+  finishCompaction(runtime, session, { errorMessage: "provider unavailable" });
+  await new Promise(setImmediate);
+  assert.equal(session.calls.length, 0);
+  assert.equal(
+    api.getSessionExecution(identity.sessionId, identity.sessionPath)
+      .promptQueueBlocked,
+    true,
+  );
+  api.updatePromptQueue({ ...identity, action: "retry" });
+  await new Promise(setImmediate);
+  session.calls[0]!.run.reject(new Error("provider unavailable"));
+  await new Promise(setImmediate);
+  assert.deepEqual(
+    api.getSessionExecution(identity.sessionId, identity.sessionPath)
+      .queuedMessages,
+    ["retained draft"],
+  );
+  assert.equal(runtime.activePromptTrace, undefined);
+  assert.equal(
+    events.some((event) => event.type === "prompt_failed"),
+    false,
+  );
+  api.updatePromptQueue({ ...identity, action: "retry" });
+  await new Promise(setImmediate);
+  assert.equal(session.calls[1]!.content, "retained draft");
+  session.emitFollowUpQueue(["retained draft"]);
+  session.calls[1]!.options.preflightResult!("queued");
+  session.calls[1]!.run.resolve();
+  await new Promise(setImmediate);
+  api.updatePromptQueue({ ...identity, action: "clear" });
+  assert.deepEqual(session.getFollowUpMessages(), []);
+  assert.equal(runtime.activePromptTrace, undefined);
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "prompt_discarded" &&
+        event.detail?.commandId === "retry-1",
+    ),
+  );
+});
+
+test("held queues are bounded and validate exact Session identity before acceptance", async () => {
+  const session = promptSession("bounded");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  session.isCompacting = true;
+  await assert.rejects(
+    runtime.sendPrompt("wrong", { expectedSessionId: "other" }),
+    /active Web session/,
+  );
+  await assert.rejects(
+    runtime.sendPrompt("wrong", {
+      expectedSessionId: "bounded",
+      expectedSessionPath: "/copied.jsonl",
+    }),
+    /active Web session/,
+  );
+  await assert.rejects(
+    runtime.sendPrompt("x".repeat(16 * 1024 * 1024)),
+    /queue is full/,
+  );
+  for (let index = 0; index < 16; index++)
+    await runtime.sendPrompt(`message ${index}`);
+  await assert.rejects(runtime.sendPrompt("overflow"), /queue is full/);
+  assert.equal(
+    api.getSessionExecution("bounded", "current:bounded").pendingFollowUps,
+    16,
+  );
+  assert.throws(
+    () =>
+      api.updatePromptQueue({
+        sessionId: "bounded",
+        sessionPath: "/copied.jsonl",
+        action: "clear",
+      }),
+    /active Web session/,
+  );
+  api.updatePromptQueue({
+    sessionId: "bounded",
+    sessionPath: "current:bounded",
+    action: "clear",
+  });
+  finishCompaction(runtime, session);
+  await new Promise(setImmediate);
+  assert.equal(session.calls.length, 0);
+  assert.equal(runtime.inFlightRuntimes.size, 0);
+});
+
+test("a held message stays with its retained runtime after switching Sessions", async () => {
+  const session = promptSession("original");
+  const runtime = promptHarness(session);
+  const original = runtime.runtime;
+  session.isCompacting = true;
+  await runtime.sendPrompt("original only", { commandId: "original-command" });
+  runtime.retainedRuntimes.add(original);
+  const other = promptSession("other");
+  runtime.runtime = { session: other, dispose: async () => undefined };
+  finishCompaction(runtime, session);
+  await new Promise(setImmediate);
+  assert.equal(session.calls[0]!.content, "original only");
+  assert.equal(other.calls.length, 0);
+  session.calls[0]!.options.preflightResult!("started");
+  session.calls[0]!.run.resolve();
+  await new Promise(setImmediate);
+  assert.equal(runtime.activePromptTrace, undefined);
+  assert.equal(runtime.inFlightRuntimes.size, 0);
+});
+
+test("manual compaction uses Pi's compact lifecycle and holds concurrent sends", async () => {
+  const session = promptSession("manual");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  const compacted = deferred();
+  let calls = 0;
+  Object.assign(session, {
+    compact: async () => {
+      calls++;
+      session.isCompacting = true;
+      await compacted.promise;
+      finishCompaction(runtime, session);
+    },
+  });
+  await assert.rejects(
+    api.compactSession({ sessionId: "manual", sessionPath: "/copied" }),
+    /active Web session/,
+  );
+  const operation = api.compactSession({
+    sessionId: "manual",
+    sessionPath: "current:manual",
+  });
+  await new Promise(setImmediate);
+  assert.equal(calls, 1);
+  await runtime.sendPrompt("after manual compact");
+  assert.equal(session.calls.length, 0);
+  compacted.resolve();
+  await operation;
+  await new Promise(setImmediate);
+  assert.equal(session.calls[0]!.content, "after manual compact");
+  session.calls[0]!.options.preflightResult!("started");
+  session.calls[0]!.run.resolve();
+  await Promise.all(runtime.promptOperations);
+});
+
+test("compaction is busy, accepts a held prompt, and projects native outcomes without Session writes", async () => {
+  const session = promptSession("compacting-session");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  // Private projection methods are exercised through their native subscriber seam.
+  const projection = runtime as unknown as {
+    projectEvent(session: object, event: object): void;
+    getCompaction(
+      session: object,
+    ): { state: string; startedAt?: number; elapsedMs?: number } | undefined;
+  };
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  let writes = 0;
+  session.sessionManager.appendCustomEntry = () => {
+    writes++;
+    return "unexpected";
+  };
+  session.isCompacting = true;
+  assert.equal(api.isIdle(), false);
+  assert.deepEqual(projection.getCompaction(session), { state: "running" });
+  assert.deepEqual(
+    await runtime.sendPrompt("extra", {
+      expectedSessionId: "compacting-session",
+    }),
+    { pendingFollowUps: 1 },
+  );
+  api.updatePromptQueue({
+    sessionId: "compacting-session",
+    sessionPath: "current:compacting-session",
+    action: "clear",
+  });
+  assert.equal(session.calls.length, 0);
+  for (const [detail, state] of [
+    [{ result: { summary: "private summary" } }, "completed"],
+    [{ aborted: true }, "cancelled"],
+    [{ errorMessage: "private provider error" }, "failed"],
+    [{}, "unchanged"],
+  ] as const) {
+    projection.projectEvent(session, {
+      type: "compaction_start",
+      reason: "overflow",
+    });
+    const running = projection.getCompaction(session)!;
+    assert.equal(running.state, "running");
+    assert.ok(running.startedAt! > 0);
+    assert.ok(running.elapsedMs! >= 0);
+    projection.projectEvent(session, {
+      type: "compaction_end",
+      reason: "overflow",
+      result: undefined,
+      aborted: false,
+      willRetry: false,
+      ...detail,
+    });
+    assert.equal(projection.getCompaction(session)?.state, state);
+  }
+  assert.equal(writes, 0);
+  assert.equal(
+    events.filter((event) => event.type === "session_progress").length,
+    10,
+  );
+  assert.doesNotMatch(JSON.stringify(events), /private/);
+  assert.equal(
+    projection.getCompaction(promptSession("another-session")),
+    undefined,
+  );
+  session.isCompacting = false;
+  session.sessionManager.getSessionFile = () => "/different-copy.jsonl";
+  assert.equal(projection.getCompaction(session), undefined);
+  assert.equal(api.isIdle(), true);
+});
+
+test("compaction failure details remain bounded, redacted and local to the observed Session", () => {
+  const session = promptSession("compaction-error");
+  let path = "/tmp/compaction-error.jsonl";
+  session.sessionManager.getSessionFile = () => path;
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  const errorMessage =
+    "503 Service Unavailable\nhttp://127.0.0.1:8080/v1/responses Bearer fixture-secret; token=fixture-token";
+  const projectedError =
+    "503 Service Unavailable [redacted URL] Bearer [redacted]; token=[redacted]";
+  finishCompaction(runtime, session, { errorMessage });
+  const failed = { state: "failed", errorMessage: projectedError };
+  assert.deepEqual(
+    api.getSessionExecution("compaction-error", path).compaction,
+    failed,
+  );
+  assert.deepEqual(
+    api.getSessionExecution("compaction-error", path).compaction,
+    failed,
+  );
+  assert.equal(
+    api.getSessionExecution("compaction-error", "/tmp/copied.jsonl").compaction,
+    undefined,
+  );
+  path = "/tmp/copied.jsonl";
+  assert.equal(
+    api.getSessionExecution("compaction-error", path).compaction,
+    undefined,
+  );
+  path = "/tmp/compaction-error.jsonl";
+  session.sessionManager.getSessionId = () => "different-session";
+  assert.equal(
+    api.getSessionExecution("different-session", path).compaction,
+    undefined,
+  );
+  session.sessionManager.getSessionId = () => "compaction-error";
+  const restarted = promptHarness(session) as unknown as PiWebRuntime;
+  assert.equal(
+    restarted.getSessionExecution("compaction-error", path).compaction,
+    undefined,
+  );
+  finishCompaction(runtime, session, { aborted: true, errorMessage });
+  assert.deepEqual(
+    api.getSessionExecution("compaction-error", path).compaction,
+    {
+      state: "cancelled",
+      errorMessage: projectedError,
+    },
+  );
+  finishCompaction(runtime, session, {
+    errorMessage: `${errorMessage}; ${"detail ".repeat(100)}`,
+  });
+  const bounded = api.getSessionExecution("compaction-error", path).compaction!
+    .errorMessage!;
+  assert.ok(bounded.length <= 512);
+  assert.ok(bounded.endsWith("[truncated]"));
+  assert.doesNotMatch(bounded, /fixture-secret|fixture-token|127\.0\.0\.1/);
+  for (const detail of [
+    {},
+    { aborted: true },
+    { result: { summary: "private summary" } },
+  ]) {
+    finishCompaction(runtime, session, detail);
+    assert.equal(
+      api.getSessionExecution("compaction-error", path).compaction
+        ?.errorMessage,
+      undefined,
+    );
+  }
+  finishCompaction(runtime, session, { errorMessage });
+  (
+    runtime as unknown as { projectEvent(session: object, event: object): void }
+  ).projectEvent(session, { type: "compaction_start", reason: "overflow" });
+  assert.equal(
+    api.getSessionExecution("compaction-error", path).compaction?.errorMessage,
+    undefined,
+  );
+});
+
+test("Plan control targets the active idle owned Session without admitting a prompt", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  runtime.listCommands = () =>
+    ({ commands: [{ name: "plan", support: "plan" }] }) as ReturnType<
+      PiWebRuntime["listCommands"]
+    >;
+  let calls = 0;
+  const controlActions: string[] = [];
+  const unregister = registerPlanControl(session.sessionManager, (request) => {
+    calls++;
+    controlActions.push(request.action);
+    if (request.action === "prepare")
+      return {
+        status: "ready",
+        revision: "revision",
+        hasPrompt: true,
+        prompt: "Implement the approved plan",
+      };
+    if (request.action === "authorize" || request.action === "cancel")
+      return {
+        status: "ready",
+        revision: "revision",
+        hasPrompt: true,
+      };
+    if (request.action === "implement")
+      return {
+        status: "inactive",
+        revision: "inactive-revision",
+        hasPrompt: false,
+        prompt: "Implement the approved plan",
+      };
+    return { status: "planning", revision: "revision", hasPrompt: false };
+  });
+  try {
+    const request = {
+      sessionId: "session-a",
+      sessionPath: "current:session-a",
+      enabled: true,
+      expectedRevision: null,
+    };
+    assert.equal((await runtime.setPlanMode(request)).status, "planning");
+    assert.equal(calls, 1);
+    assert.equal(session.calls.length, 0);
+    const prepared = await runtime.preparePlanImplementation({
+      sessionId: "session-a",
+      sessionPath: "current:session-a",
+      expectedRevision: "revision",
+    });
+    assert.equal(prepared.prompt, "Implement the approved plan");
+    assert.equal(prepared.status, "ready");
+    assert.equal(calls, 2);
+    const submitting = runtime.sendPrompt("Implement the approved plan", {
+      commandId: "implementation",
+      expectedSessionId: "session-a",
+      expectedSessionPath: "current:session-a",
+      planRevision: "revision",
+    });
+    await Promise.resolve();
+    assert.equal(calls, 3);
+    assert.deepEqual(controlActions, ["mode", "prepare", "authorize"]);
+    assert.equal(session.calls.length, 1);
+    assert.equal(session.calls[0]!.content, "Implement the approved plan");
+    session.calls[0]!.options.preflightResult?.("started");
+    assert.equal(calls, 4);
+    assert.equal(controlActions.at(-1), "implement");
+    assert.deepEqual(await submitting, { pendingFollowUps: 0 });
+    session.calls[0]!.run.resolve();
+    await assert.rejects(
+      runtime.preparePlanImplementation({
+        sessionId: "session-a",
+        sessionPath: "current:another-session",
+        expectedRevision: "revision",
+      }),
+      { code: "SESSION_CONFLICT" },
+    );
+    await assert.rejects(
+      runtime.setPlanMode({ ...request, sessionId: "old" }),
+      { code: "SESSION_CONFLICT" },
+    );
+    session.isStreaming = true;
+    await assert.rejects(runtime.setPlanMode(request), { code: "PLAN_BUSY" });
+    session.isStreaming = false;
+    const preparing = Promise.resolve();
+    runtime.promptOperations.add(preparing);
+    await assert.rejects(runtime.setPlanMode(request), { code: "PLAN_BUSY" });
+    runtime.promptOperations.delete(preparing);
+    runtime.listCommands = () =>
+      ({ commands: [] }) as unknown as ReturnType<PiWebRuntime["listCommands"]>;
+    await assert.rejects(runtime.setPlanMode(request), {
+      code: "PLAN_CONTROL_UNAVAILABLE",
+    });
+    assert.equal(calls, 4);
+  } finally {
+    unregister();
+  }
+});
+
+test("Plan approval stays ready when Pi rejects preflight or handles input without starting a run", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  let planStatus: "ready" | "inactive" = "ready";
+  const actions: string[] = [];
+  const unregister = registerPlanControl(session.sessionManager, (request) => {
+    actions.push(request.action);
+    if (request.action === "implement") planStatus = "inactive";
+    if (request.action === "authorize" || request.action === "cancel")
+      return { status: planStatus, revision: "revision", hasPrompt: false };
+    return {
+      status: planStatus,
+      revision: "revision",
+      hasPrompt: false,
+      prompt: "Implement the approved plan",
+    };
+  });
+
+  try {
+    const rejected = runtime.sendPrompt("Implement the approved plan", {
+      commandId: "rejected-implementation",
+      expectedSessionId: "session-a",
+      expectedSessionPath: "current:session-a",
+      planRevision: "revision",
+    });
+    await Promise.resolve();
+    assert.deepEqual(actions, ["authorize"]);
+    assert.equal(planStatus, "ready");
+    session.calls[0]!.run.reject(new Error("authentication unavailable"));
+    await assert.rejects(rejected, { code: "PROMPT_REJECTED" });
+    await Promise.resolve();
+    assert.deepEqual(actions, ["authorize", "cancel"]);
+    assert.equal(planStatus, "ready");
+
+    const thrown = runtime.sendPrompt("Implement the approved plan", {
+      commandId: "thrown-implementation",
+      expectedSessionId: "session-a",
+      expectedSessionPath: "current:session-a",
+      planRevision: "revision",
+    });
+    await Promise.resolve();
+    assert.equal(planStatus, "ready");
+    session.calls[1]!.run.reject(new Error("prompt setup failed"));
+    await assert.rejects(thrown, { code: "PROMPT_REJECTED" });
+    await Promise.resolve();
+    assert.deepEqual(actions, ["authorize", "cancel", "authorize", "cancel"]);
+    assert.equal(planStatus, "ready");
+
+    const handled = runtime.sendPrompt("Implement the approved plan", {
+      commandId: "handled-implementation",
+      expectedSessionId: "session-a",
+      expectedSessionPath: "current:session-a",
+      planRevision: "revision",
+    });
+    await Promise.resolve();
+    session.calls[2]!.options.preflightResult?.("handled");
+    assert.deepEqual(await handled, { pendingFollowUps: 0 });
+    session.calls[2]!.run.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(planStatus, "ready");
+    assert.deepEqual(actions.slice(-2), ["authorize", "cancel"]);
+  } finally {
+    unregister();
+  }
+});
+
 test("prompt admission waits for Pi preflight acceptance", async () => {
   const session = promptSession("session-a");
   const runtime = promptHarness(session);
@@ -305,12 +1141,91 @@ test("prompt admission waits for Pi preflight acceptance", async () => {
   assert.equal(session.calls.length, 1);
   assert.equal(settled, false);
 
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("started");
   assert.deepEqual(await admission, { pendingFollowUps: 0 });
   assert.equal(settled, true);
 
   session.calls[0].run.resolve();
   await Promise.resolve();
+});
+
+test("native prompt dispositions distinguish handled input from started or queued runs", async (t) => {
+  for (const disposition of ["started", "queued", "handled"] as const) {
+    await t.test(disposition, async () => {
+      const session = promptSession("session-a");
+      const runtime = promptHarness(session);
+      const events: WebRuntimeEvent[] = [];
+      runtime.subscribe((event) => events.push(event));
+      const admission = runtime.sendPrompt("hello", { commandId: "command-a" });
+      await Promise.resolve();
+      // A queued input can replace an existing queue item without increasing its length.
+      session.calls[0].options.preflightResult?.(disposition);
+      assert.deepEqual(await admission, { pendingFollowUps: 0 });
+      session.calls[0].run.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.deepEqual(
+        events,
+        disposition === "handled"
+          ? [
+              {
+                type: "prompt_settled",
+                detail: {
+                  commandId: "command-a",
+                  sessionId: "session-a",
+                  outcome: "handled",
+                },
+              },
+            ]
+          : [],
+      );
+      if (disposition === "queued")
+        assert.equal(runtime.activePromptTrace?.queued, true);
+    });
+  }
+});
+
+test("a terminal-only extension command is rejected before Pi dispatch and trace admission", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  const bridge = createCommandDiscoveryBridge();
+  const api = {
+    getCommands: () => [
+      {
+        name: "sessions",
+        source: "extension",
+        sourceInfo: {
+          path: fileURLToPath(
+            new URL("../../extensions/sessions/index.ts", import.meta.url),
+          ),
+          source: "fixture",
+          scope: "user",
+          origin: "package",
+        },
+      },
+    ],
+  } as ExtensionAPI;
+  await (typeof bridge.extension === "function"
+    ? bridge.extension(api)
+    : bridge.extension.factory(api));
+  registerCommandDiscoveryBridge(services, bridge);
+  await assert.rejects(
+    runtime.sendPrompt("/sessions hello", {
+      commandId: "blocked-command",
+      expectedSessionId: "session-a",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebRuntimeRequestError);
+      assert.equal(error.code, "PROMPT_REJECTED");
+      assert.equal(error.statusCode, 422);
+      assert.match(error.message, /not available in the Web runtime/u);
+      return true;
+    },
+  );
+  assert.equal(session.calls.length, 0);
+  assert.equal(runtime.activePromptTrace, undefined);
+  assert.deepEqual(runtime.pendingPromptTraces, []);
 });
 
 test("prompt admission snapshots Pi follow-up messages", async () => {
@@ -323,7 +1238,7 @@ test("prompt admission snapshots Pi follow-up messages", async () => {
   });
   await Promise.resolve();
   session.emitFollowUpQueue(["queued"]);
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("started");
   assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
@@ -342,7 +1257,7 @@ test("prompt admission snapshots a follow-up queue that shrinks before it grows"
 
   session.emitFollowUpQueue([]);
   session.emitFollowUpQueue(["queued"]);
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("queued");
   assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
@@ -362,13 +1277,13 @@ test("prompt admission observes streaming after an earlier admission gate", asyn
   });
   await Promise.resolve();
 
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("started");
   session.isStreaming = true;
   assert.deepEqual(await first, { pendingFollowUps: 0 });
   session.calls[0].run.resolve();
   await Promise.resolve();
   session.emitFollowUpQueue(["second"]);
-  session.calls[1].options.preflightResult?.(true);
+  session.calls[1].options.preflightResult?.("queued");
   assert.deepEqual(await second, { pendingFollowUps: 1 });
 
   session.calls[1].run.resolve();
@@ -379,17 +1294,114 @@ test("handled input snapshots an externally pending follow-up without claiming o
   const session = promptSession("session-a");
   session.isStreaming = true;
   const runtime = promptHarness(session);
-  const admission = runtime.sendPrompt("/handled", {
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  registerCommandDiscoveryBridge(services, {
+    extension: () => undefined,
+    read: () => [
+      {
+        name: "openpi-setup",
+        source: "extension",
+        sourceInfo: {
+          path: fileURLToPath(
+            new URL("../../extensions/setup/index.ts", import.meta.url),
+          ),
+          source: "fixture",
+          scope: "user",
+          origin: "package",
+        },
+      },
+    ],
+  });
+  const admission = runtime.sendPrompt("/openpi-setup", {
     commandId: "command-handled",
     expectedSessionId: "session-a",
   });
   await Promise.resolve();
 
   session.emitFollowUpQueue(["external delivery"]);
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("handled");
   assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
+});
+
+test("an extension triggerTurn retains its admitted identity until delayed native agent_start", async (t) => {
+  let clock = 100;
+  t.mock.method(performance, "now", () => clock);
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  registerCommandDiscoveryBridge(services, {
+    extension: () => undefined,
+    read: () => [
+      {
+        name: "openpi-setup",
+        source: "extension",
+        sourceInfo: {
+          path: fileURLToPath(
+            new URL("../../extensions/setup/index.ts", import.meta.url),
+          ),
+          source: "fixture",
+          scope: "user",
+          origin: "package",
+        },
+      },
+    ],
+  });
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  const admission = runtime.sendPrompt("/openpi-setup change theme", {
+    commandId: "setup-command",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  // sendCustomMessage has entered _runAgentPrompt, but extension listeners
+  // have not yet finished delivering the agent_start event to Web.
+  session.isStreaming = true;
+  session.calls[0].options.preflightResult?.("started");
+  session.calls[0].run.resolve();
+  await admission;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    events.some((event) => event.type === "prompt_settled"),
+    false,
+  );
+  assert.equal(runtime.activePromptTrace?.commandId, "setup-command");
+  assert.equal(runtime.activePromptTrace?.started, false);
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: PromptRuntimeHarness,
+        session: object,
+        event: object,
+      ): void;
+    }
+  ).projectEvent;
+  clock = 1100;
+  projectEvent.call(runtime, session, { type: "agent_start" });
+  assert.equal(
+    events.find((event) => event.type === "turn_started")?.detail?.commandId,
+    "setup-command",
+  );
+  assert.equal(
+    events.find((event) => event.type === "turn_started")?.detail?.elapsedMs,
+    0,
+  );
+  runtime.activePromptTrace!.outcome = "completed";
+  clock = 3600;
+  session.isStreaming = false;
+  projectEvent.call(runtime, session, { type: "agent_settled" });
+  assert.equal(
+    events.find((event) => event.type === "turn_settled")?.detail?.elapsedMs,
+    2500,
+  );
+  assert.equal(
+    events.find((event) => event.type === "turn_settled")?.detail?.outcome,
+    "completed",
+  );
+  assert.equal(runtime.activePromptTrace, undefined);
 });
 
 test("prompt preflight rejection is a typed non-admission", async () => {
@@ -401,7 +1413,7 @@ test("prompt preflight rejection is a typed non-admission", async () => {
   });
   await Promise.resolve();
 
-  session.calls[0].options.preflightResult?.(false);
+  session.calls[0].run.reject(new Error("no model selected"));
   const outcome = await Promise.race([
     admission.then(
       () => "resolved" as const,
@@ -409,7 +1421,6 @@ test("prompt preflight rejection is a typed non-admission", async () => {
     ),
     new Promise<"pending">((resolve) => setImmediate(() => resolve("pending"))),
   ]);
-  session.calls[0].run.reject(new Error("no model selected"));
   await Promise.resolve();
   assert.ok(outcome instanceof WebRuntimeRequestError);
   assert.equal(outcome.code, "PROMPT_REJECTED");
@@ -432,7 +1443,7 @@ test("prompt completion without a Pi preflight result fails closed", async () =>
   });
 });
 
-test("queued prompts stay bound to the Session captured at submission", async () => {
+test("unadmitted queued prompts reject after the active Session changes even if the old runtime is retained", async () => {
   const sessionA = promptSession("session-a");
   const sessionB = promptSession("session-b");
   const runtime = promptHarness(sessionA);
@@ -442,21 +1453,52 @@ test("queued prompts stay bound to the Session captured at submission", async ()
   const second = runtime.sendPrompt("belongs-to-a", {
     expectedSessionId: "session-a",
   });
+  runtime.retainedRuntimes.add(runtime.runtime);
   runtime.runtime = { session: sessionB, dispose: async () => undefined };
 
-  sessionA.calls[0].options.preflightResult?.(true);
+  sessionA.calls[0].options.preflightResult?.("started");
   await first;
   await Promise.resolve();
   assert.deepEqual(
     sessionA.calls.map((call) => call.content),
-    ["first", "belongs-to-a"],
+    ["first"],
   );
   assert.equal(sessionB.calls.length, 0);
 
-  sessionA.calls[1].options.preflightResult?.(true);
-  await second;
+  await assert.rejects(second, assertSessionConflict);
   for (const call of sessionA.calls) call.run.resolve();
   await Promise.resolve();
+});
+
+test("copied Session rejects a queued prompt before admission", async (t) => {
+  const { original, originalPath, copiedPath } = await copiedSessionManagers(t);
+  const session = {
+    ...promptSession(original.getSessionId()),
+    sessionManager: original,
+  };
+  const harness = promptHarness(session);
+  const gate = deferred();
+  harness.promptAdmission = gate.promise;
+  const admission = harness
+    .sendPrompt("belongs-to-original", {
+      expectedSessionId: original.getSessionId(),
+      expectedSessionPath: originalPath,
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+  // Pi may select another file without replacing the runtime or SessionManager.
+  original.setSessionFile(copiedPath);
+  gate.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (const call of session.calls) {
+    call.options.preflightResult?.("started");
+    call.run.resolve();
+  }
+  assertSessionConflict(await admission);
+  assert.equal(session.calls.length, 0);
 });
 
 test("stale expected Session fails before prompt dispatch", async () => {
@@ -487,6 +1529,8 @@ test("provider auth projection is bounded and never serializes credentials", () 
   }));
   const modelRuntime = {
     getProviders: () => providers,
+    getModels: () => [],
+    getRegisteredProviderIds: () => [],
     getProviderAuthStatus: () => ({
       configured: true,
       source: "stored" as const,
@@ -513,6 +1557,7 @@ test("provider auth projection is bounded and never serializes credentials", () 
     source: "stored",
     subscription: false,
     nameTruncated: true,
+    custom: true,
   });
   assert.deepEqual(projection.providers[1]?.authMethods, ["api_key", "oauth"]);
   assert.equal(projection.providers[1]?.subscription, true);
@@ -525,6 +1570,7 @@ test("model selection and Session activation are serialized", async () => {
   const model = { provider: "fixture", id: "model-a", name: "Model A" };
   const sessionA = {
     isStreaming: false,
+    sessionManager: { getSessionId: () => "session-a" },
     model: undefined as typeof model | undefined,
     subscribe: () => () => undefined,
     async setModel(selected: typeof model) {
@@ -597,6 +1643,121 @@ test("model selection and Session activation are serialized", async () => {
       detail: { provider: "fixture", modelId: "model-a" },
     },
   ]);
+});
+
+test("model projection omits Pi's unselected Agent placeholder", () => {
+  const agent = new Agent({
+    streamFn: () => assert.fail("model projection must not call a model"),
+  });
+  const available = [
+    {
+      ...agent.state.model,
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid",
+      input: ["text"],
+    },
+  ];
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model: typeof agent.state.model };
+      services: {
+        modelRuntime: { getAvailableSnapshot: () => typeof available };
+      };
+    };
+    listModels: PiWebRuntime["listModels"];
+  };
+  harness.runtime = {
+    session: { model: agent.state.model },
+    services: { modelRuntime: { getAvailableSnapshot: () => [] } },
+  };
+  assert.deepEqual(harness.listModels(), []);
+  harness.runtime.services.modelRuntime.getAvailableSnapshot = () => available;
+  assert.deepEqual(harness.listModels(), [
+    {
+      provider: "unknown",
+      id: "unknown",
+      name: "unknown",
+      label: "unknown",
+      current: false,
+    },
+  ]);
+  assert.equal(agent.state.model.api, "unknown");
+});
+
+test("model projection preserves a real selected model named unknown outside the available catalog", () => {
+  const agent = new Agent({
+    streamFn: () => assert.fail("model projection must not call a model"),
+  });
+  const selected = {
+    ...agent.state.model,
+    api: "openai-completions" as const,
+    baseUrl: "https://fixture.invalid",
+    input: ["text" as const],
+    contextWindow: 8192,
+    maxTokens: 1024,
+  };
+  const selectedAgent = new Agent({
+    initialState: { model: selected },
+    streamFn: () => assert.fail("model projection must not call a model"),
+  });
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model: typeof selectedAgent.state.model };
+      services: {
+        modelRuntime: { getAvailableSnapshot: () => (typeof selected)[] };
+      };
+    };
+    listModels: PiWebRuntime["listModels"];
+  };
+  harness.runtime = {
+    session: { model: selectedAgent.state.model },
+    services: { modelRuntime: { getAvailableSnapshot: () => [] } },
+  };
+  assert.deepEqual(harness.listModels(), [
+    {
+      provider: "unknown",
+      id: "unknown",
+      name: "unknown",
+      label: "unknown",
+      current: true,
+    },
+  ]);
+});
+
+test("model projection does not classify other Pi model shapes by unknown identity or API alone", () => {
+  const placeholder = new Agent({
+    streamFn: () => assert.fail("model projection must not call a model"),
+  }).state.model;
+  const models = [
+    { ...placeholder, provider: "fixture-native" },
+    { ...placeholder, id: "custom" },
+    { ...placeholder, name: "Custom" },
+    { ...placeholder, api: "openai-completions" as const },
+    { ...placeholder, baseUrl: "https://fixture.invalid" },
+    { ...placeholder, reasoning: true },
+    { ...placeholder, input: ["text" as const] },
+    { ...placeholder, contextWindow: 8192 },
+    { ...placeholder, maxTokens: 1024 },
+    { ...placeholder, cost: { ...placeholder.cost, input: 1 } },
+    { ...placeholder, cost: { ...placeholder.cost, output: 1 } },
+    { ...placeholder, cost: { ...placeholder.cost, cacheRead: 1 } },
+    { ...placeholder, cost: { ...placeholder.cost, cacheWrite: 1 } },
+  ];
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model: typeof placeholder };
+      services: { modelRuntime: { getAvailableSnapshot: () => typeof models } };
+    };
+    listModels: PiWebRuntime["listModels"];
+  };
+  harness.runtime = {
+    session: { model: placeholder },
+    services: { modelRuntime: { getAvailableSnapshot: () => [] } },
+  };
+  for (const model of models) {
+    harness.runtime.session.model = model;
+    assert.equal(harness.listModels()[0]?.current, true, JSON.stringify(model));
+  }
 });
 
 test("model search matches provider and identity fields within a bounded result", () => {
@@ -755,6 +1916,94 @@ test("a delayed model selection cannot target a newly activated Session", async 
   assert.equal(sessionBModelWrites, 0);
 });
 
+test("copied Session rejects a queued model selection before writing", async (t) => {
+  const { original, copied, originalPath } = await copiedSessionManagers(t);
+  const model = { provider: "fixture", id: "model-a", name: "Model A" };
+  let modelWrites = 0;
+  const session = {
+    ...promptSession(original.getSessionId()),
+    sessionManager: original,
+    model: undefined as typeof model | undefined,
+    async setModel(selected: typeof model) {
+      modelWrites += 1;
+      session.model = selected;
+      session.sessionManager.appendModelChange(selected.provider, selected.id);
+    },
+  };
+  const harness = promptHarness(session) as PromptRuntimeHarness & {
+    setModel: PiWebRuntime["setModel"];
+  };
+  Object.assign(harness.runtime, {
+    services: {
+      modelRuntime: {
+        getModel: () => model,
+        getAvailableSnapshot: () => [model],
+      },
+    },
+  });
+  const gate = deferred();
+  harness.controllerMutation = gate.promise;
+  const selection = harness.setModel("fixture", "model-a", {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath,
+  });
+  session.sessionManager = copied;
+  gate.resolve();
+  await assert.rejects(selection, assertSessionConflict);
+  assert.equal(modelWrites, 0);
+  assert.deepEqual(copied.getEntries(), []);
+});
+
+test("extension handler settlement is persisted only after the native handler returns", async (t) => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  registerCommandDiscoveryBridge(services, {
+    extension: () => undefined,
+    read: () => [
+      {
+        name: "plan",
+        source: "extension",
+        sourceInfo: {
+          path: fileURLToPath(
+            new URL("../../extensions/plan-mode/index.ts", import.meta.url),
+          ),
+          source: "fixture",
+          scope: "user",
+          origin: "package",
+        },
+      },
+    ],
+  });
+  const entries: { type: string; data: unknown }[] = [];
+  t.mock.method(
+    session.sessionManager,
+    "appendCustomEntry",
+    (type: string, data: unknown) => {
+      entries.push({ type, data });
+      return `entry-${entries.length}`;
+    },
+  );
+  const admission = runtime.sendPrompt("/plan off", {
+    commandId: "native-command",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  session.calls[0].options.preflightResult?.("handled");
+  await admission;
+  assert.deepEqual(
+    entries.map((entry) => entry.type),
+    ["openpi-web-command-input"],
+  );
+  session.calls[0].run.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(entries.at(-1), {
+    type: "openpi-web-command-handled",
+    data: { inputEntryId: "entry-1", commandId: "native-command" },
+  });
+});
+
 test("handled prompt emits a correlated settlement without agent events", async () => {
   const session = promptSession("session-a");
   const runtime = promptHarness(session);
@@ -766,7 +2015,7 @@ test("handled prompt emits a correlated settlement without agent events", async 
     expectedSessionId: "session-a",
   });
   await Promise.resolve();
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("handled");
   await admission;
   session.calls[0].run.resolve();
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -783,6 +2032,54 @@ test("handled prompt emits a correlated settlement without agent events", async 
   ]);
 });
 
+test("a command's delayed native turn retains its origin without lending it to another run", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  registerCommandDiscoveryBridge(services, {
+    extension: () => undefined,
+    read: () => [],
+  });
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  const project = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: PromptRuntimeHarness,
+        session: object,
+        event: object,
+      ): void;
+    }
+  ).projectEvent;
+  const delayed = deferred();
+  session.prompt = async (_content, options) => {
+    options.preflightResult?.("handled");
+    // Created inside the real sendPrompt invocation, after handler return.
+    setImmediate(() => {
+      project.call(runtime, session, { type: "agent_start" });
+      delayed.resolve();
+    });
+  };
+  await runtime.sendPrompt("/command", {
+    commandId: "owner",
+    expectedSessionId: "session-a",
+  });
+  await delayed.promise;
+  assert.equal(runtime.activePromptTrace?.commandId, "owner");
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "agent_start" &&
+        (event.detail?.activeTurn as { commandId?: string })?.commandId ===
+          "owner",
+    ),
+  );
+  project.call(runtime, session, { type: "agent_settled" });
+  project.call(runtime, session, { type: "agent_start" });
+  assert.equal(events.at(-1)?.detail?.activeTurn, undefined);
+});
+
 test("later prompt failures retain their command and Session correlation", async () => {
   const session = promptSession("session-a");
   const runtime = promptHarness(session);
@@ -797,7 +2094,7 @@ test("later prompt failures retain their command and Session correlation", async
     expectedSessionId: "session-a",
   });
   await Promise.resolve();
-  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].options.preflightResult?.("started");
   await admission;
   session.calls[0].run.reject(new Error("provider failed"));
 
@@ -1005,21 +2302,20 @@ test("retained Session cleanup waits for all of its prompt operations", async ()
 
   const first = runtime.sendPrompt("first", { expectedSessionId: "session-a" });
   await Promise.resolve();
+  sessionA.calls[0].options.preflightResult?.("started");
+  await first;
   const second = runtime.sendPrompt("second", {
     expectedSessionId: "session-a",
   });
+  await Promise.resolve();
+  sessionA.calls[1].options.preflightResult?.("started");
+  await second;
   runtime.runtime = {
     session: sessionB,
     dispose: async () => undefined,
   };
   runtime.retainedRuntimes.add(retainedRuntime);
   runtime.retainedSubscriptions.set(retainedRuntime, () => undefined);
-
-  sessionA.calls[0].options.preflightResult?.(true);
-  await first;
-  await Promise.resolve();
-  sessionA.calls[1].options.preflightResult?.(true);
-  await second;
 
   sessionA.calls[0].run.resolve();
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1365,8 +2661,12 @@ test("runtime creation failure releases the Web Host lease", async () => {
   }
 });
 
-test("message_end and queued prompts do not settle a running turn", () => {
-  const session = { sessionManager: { getSessionId: () => "session" } };
+test("message_end and queued prompts do not settle a running turn", (t) => {
+  t.mock.method(Date, "now", () => 10000);
+  t.mock.method(performance, "now", () => 100);
+  const session = {
+    sessionManager: { getSessionId: () => "session", getBranch: () => [] },
+  };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
   harness.pendingPromptTraces = [];
@@ -1478,15 +2778,20 @@ test("message_end and queued prompts do not settle a running turn", () => {
     queued: false,
   };
   projectEvent.call(harness, session, { type: "agent_start" });
-  projectEvent.call(harness, session, userMessage("third"));
+  const thirdInput = userMessage("third");
+  projectEvent.call(harness, session, thirdInput);
   assert.deepEqual(harness.activePromptTrace, {
     commandId: "third",
     sessionId: "session",
     startedAt: 5,
     started: true,
     queued: false,
+    promptMessage: thirdInput.message,
     userMessageObserved: true,
     epoch: 2,
+    executionStartedAt: 10000,
+    executionClock: 100,
+    sessionPath: "current:session",
   });
   assert.deepEqual(
     events
@@ -1495,7 +2800,14 @@ test("message_end and queued prompts do not settle a running turn", () => {
     [
       {
         type: "turn_started",
-        detail: { sessionId: "session", commandId: "first", epoch: 1 },
+        detail: {
+          sessionId: "session",
+          commandId: "first",
+          epoch: 1,
+          startedAt: 10000,
+          elapsedMs: 0,
+          sessionPath: "current:session",
+        },
       },
       {
         type: "turn_settled",
@@ -1504,82 +2816,264 @@ test("message_end and queued prompts do not settle a running turn", () => {
           commandId: "first",
           epoch: 1,
           outcome: "cancelled",
+          startedAt: 10000,
+          elapsedMs: 0,
+          sessionPath: "current:session",
         },
       },
       {
         type: "turn_started",
-        detail: { sessionId: "session", commandId: "third", epoch: 2 },
+        detail: {
+          sessionId: "session",
+          commandId: "third",
+          epoch: 2,
+          startedAt: 10000,
+          elapsedMs: 0,
+          sessionPath: "current:session",
+        },
       },
     ],
   );
 });
 
-test("toolUse message_end without a terminal result settles as uncertain", () => {
-  const session = { sessionManager: { getSessionId: () => "session" } };
-  const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
-  harness.runtime = { session };
-  harness.pendingPromptTraces = [];
-  harness.liveMessageSequence = 0;
-  harness.listeners = new Set();
-  harness.nextTurnEpoch = 0;
-  harness.terminalTurnKeys = new Set();
-  harness.turnSettlementWaiters = new Map();
-  harness.turnAbortOperations = new Map();
-  const events: WebRuntimeEvent[] = [];
-  harness.listeners.add((event) => events.push(event));
-  harness.activePromptTrace = {
-    commandId: "tool-use",
-    sessionId: "session",
-    startedAt: 1,
-    started: false,
-    queued: false,
-  };
+for (const aborted of [false, true]) {
+  test(`toolUse without a terminal result preserves native aborted=${aborted}`, (t) => {
+    t.mock.method(Date, "now", () => 10000);
+    t.mock.method(performance, "now", () => 100);
+    const session = { sessionManager: { getSessionId: () => "session" } };
+    const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
+    harness.runtime = { session };
+    harness.pendingPromptTraces = [];
+    harness.liveMessageSequence = 0;
+    harness.listeners = new Set();
+    harness.nextTurnEpoch = 0;
+    harness.terminalTurnKeys = new Set();
+    harness.turnSettlementWaiters = new Map();
+    harness.turnAbortOperations = new Map();
+    const events: WebRuntimeEvent[] = [];
+    harness.listeners.add((event) => events.push(event));
+    harness.activePromptTrace = {
+      commandId: "tool-use",
+      sessionId: "session",
+      startedAt: 1,
+      started: false,
+      queued: false,
+    };
 
+    const projectEvent = (
+      PiWebRuntime.prototype as unknown as {
+        projectEvent(
+          this: RuntimeHarness,
+          session: object,
+          event: object,
+        ): void;
+      }
+    ).projectEvent;
+
+    projectEvent.call(harness, session, { type: "agent_start" });
+    projectEvent.call(harness, session, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "toolUse",
+        timestamp: 2,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+      },
+    });
+    projectEvent.call(harness, session, { type: "agent_settled", aborted });
+
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "turn_settled")
+        .map((event) => event.detail),
+      [
+        {
+          sessionId: "session",
+          commandId: "tool-use",
+          epoch: 1,
+          outcome: aborted ? "cancelled" : "uncertain",
+          startedAt: 10000,
+          elapsedMs: 0,
+          sessionPath: "current:session",
+        },
+      ],
+    );
+  });
+}
+
+test("native retry completion preserves success, exhaustion and backoff cancellation at settlement", () => {
   const projectEvent = (
     PiWebRuntime.prototype as unknown as {
       projectEvent(this: RuntimeHarness, session: object, event: object): void;
     }
   ).projectEvent;
-
-  projectEvent.call(harness, session, { type: "agent_start" });
-  projectEvent.call(harness, session, {
-    type: "message_end",
-    message: {
-      role: "assistant",
-      content: [],
-      stopReason: "toolUse",
-      timestamp: 2,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
+  for (const outcome of ["completed", "failed", "cancelled"] as const) {
+    const timings: unknown[] = [];
+    const session = {
+      sessionManager: {
+        getSessionId: () => "session",
+        getSessionFile: () => undefined,
+        appendCustomEntry: (_type: string, data: unknown) => timings.push(data),
+        getBranch: () => [],
       },
-    },
-  });
-  projectEvent.call(harness, session, { type: "agent_settled" });
-
-  assert.deepEqual(
-    events
-      .filter((event) => event.type === "turn_settled")
-      .map((event) => event.detail),
-    [
+    };
+    const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
+    harness.runtime = { session };
+    harness.pendingPromptTraces = [];
+    harness.liveMessageSequence = 0;
+    harness.listeners = new Set();
+    harness.nextTurnEpoch = 0;
+    harness.terminalTurnKeys = new Set();
+    harness.turnSettlementWaiters = new Map();
+    harness.turnAbortOperations = new Map();
+    harness.activePromptTrace = {
+      commandId: outcome,
+      sessionId: "session",
+      startedAt: 1,
+      started: false,
+      queued: false,
+    };
+    const events: WebRuntimeEvent[] = [];
+    harness.listeners.add((event) => events.push(event));
+    projectEvent.call(harness, session, { type: "agent_start" });
+    projectEvent.call(harness, session, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "502",
+      },
+    });
+    projectEvent.call(harness, session, {
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 1,
+      errorMessage: "502",
+    });
+    projectEvent.call(harness, session, {
+      type: "auto_retry_end",
+      attempt: 1,
+      success: outcome === "completed",
+      ...(outcome === "cancelled"
+        ? { finalError: "Retry cancelled" }
+        : outcome === "failed"
+          ? { finalError: "502 exhausted" }
+          : {}),
+    });
+    if (outcome === "completed") {
+      projectEvent.call(harness, session, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Recovered" }],
+          stopReason: "stop",
+        },
+      });
+    }
+    assert.equal(
+      events.some((event) => event.type === "turn_settled"),
+      false,
+    );
+    projectEvent.call(harness, session, { type: "agent_settled" });
+    assert.equal(
+      events.find((event) => event.type === "turn_settled")?.detail?.outcome,
+      outcome,
+    );
+    assert.equal((timings[0] as { outcome: string }).outcome, outcome);
+    assert.deepEqual(
+      events.find((event) => event.type === "auto_retry_end")?.detail,
       {
         sessionId: "session",
-        commandId: "tool-use",
-        epoch: 1,
-        outcome: "uncertain",
+        sessionPath: "current:session",
+        attempt: 1,
+        success: outcome === "completed",
+        ...(outcome === "cancelled"
+          ? { finalError: "Retry cancelled" }
+          : outcome === "failed"
+            ? { finalError: "502 exhausted" }
+            : {}),
       },
-    ],
+    );
+  }
+});
+
+test("retry snapshots retain native counts and redacted reasons across reconnects, with exact Session ownership", () => {
+  const session = promptSession("retry-session");
+  session.isStreaming = true;
+  let path = "/tmp/retry-session.jsonl";
+  session.sessionManager.getSessionFile = () => path;
+  const harness = promptHarness(session);
+  const api = harness as unknown as PiWebRuntime;
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: PromptRuntimeHarness,
+        session: object,
+        event: object,
+      ): void;
+    }
+  ).projectEvent;
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  projectEvent.call(harness, session, {
+    type: "auto_retry_start",
+    attempt: 2,
+    maxAttempts: 4,
+    delayMs: 100,
+    errorMessage: "stream closed; Bearer fixture-secret; token=fixture-token",
+  });
+  const retry = {
+    attempt: 2,
+    maxAttempts: 4,
+    errorMessage: "stream closed; Bearer [redacted]; token=[redacted]",
+  };
+  assert.deepEqual(api.getSessionExecution("retry-session", path).retry, retry);
+  assert.deepEqual(api.getSessionExecution("retry-session", path).retry, retry);
+  assert.deepEqual(
+    events.find((event) => event.type === "auto_retry_start")?.detail,
+    {
+      sessionId: "retry-session",
+      sessionPath: path,
+      ...retry,
+      delayMs: 100,
+    },
   );
+  assert.equal(
+    api.getSessionExecution("retry-session", "/tmp/copied.jsonl").retry,
+    undefined,
+  );
+  path = "/tmp/copied.jsonl";
+  assert.equal(api.getSessionExecution("retry-session", path).retry, undefined);
+  path = "/tmp/retry-session.jsonl";
+  projectEvent.call(harness, session, {
+    type: "auto_retry_end",
+    attempt: 2,
+    success: true,
+  });
+  assert.equal(api.getSessionExecution("retry-session", path).retry, undefined);
+  assert.equal(
+    api.getSessionExecution("retry-session", path).status,
+    "running",
+  );
+  session.isRetrying = true;
+  assert.deepEqual(api.getSessionExecution("retry-session", path).retry, {});
+  session.isRetrying = false;
 });
 
 type ThinkingHarness = {
@@ -1591,9 +3085,10 @@ type ThinkingHarness = {
   hasSelectedWorkspace: boolean;
   thinkingMutationInFlight: boolean;
   thinkingMutationPending?: {
-    level: string;
-    options?: { expectedSessionId?: string };
     waiters: Array<{
+      level: string;
+      expectedSessionId?: string;
+      expectedSessionPath?: string;
       resolve: (projection: {
         level: string;
         available: readonly string[];
@@ -1683,6 +3178,52 @@ test("thinking state projects the Pi supported flag", () => {
     available: ["off"],
     supported: false,
   });
+});
+
+test("response support follows the current native API and reasoning capability without model-name guessing", () => {
+  const cases = [
+    {
+      api: "openai-responses",
+      reasoning: true,
+      expected: { verbosity: true, reasoningSummary: true },
+    },
+    {
+      api: "openai-codex-responses",
+      reasoning: false,
+      expected: { verbosity: true, reasoningSummary: false },
+    },
+    {
+      api: "openai-completions",
+      reasoning: true,
+      expected: { verbosity: false, reasoningSummary: false },
+    },
+    {
+      api: "azure-openai-responses",
+      reasoning: true,
+      expected: { verbosity: false, reasoningSummary: false },
+    },
+    {
+      api: "anthropic-messages",
+      reasoning: true,
+      expected: { verbosity: false, reasoningSummary: false },
+    },
+  ];
+  for (const { api, reasoning, expected } of cases) {
+    assert.deepEqual(
+      PiWebRuntime.prototype.getResponseSupport.call({
+        assertActive() {},
+        runtime: { session: { model: { id: "same-name", api, reasoning } } },
+      } as unknown as PiWebRuntime),
+      expected,
+    );
+  }
+  assert.deepEqual(
+    PiWebRuntime.prototype.getResponseSupport.call({
+      assertActive() {},
+      runtime: { session: { model: undefined } },
+    } as unknown as PiWebRuntime),
+    { verbosity: false, reasoningSummary: false },
+  );
 });
 
 test("setThinkingLevel applies and confirms an available level without retaining", async () => {
@@ -1795,6 +3336,62 @@ test("concurrent thinking selections coalesce to the last target", async () => {
   assert.equal(fixture.state.level, "high");
   assert.equal(results.at(-1)?.level, "high");
   assert.equal(retained(), 0);
+});
+
+test("copied Session rejects a queued thinking selection before writing", async (t) => {
+  const { original, copied, originalPath } = await copiedSessionManagers(t);
+  const fixture = thinkingSession();
+  const session = Object.assign(fixture.session, { sessionManager: original });
+  const { harness } = thinkingHarness(session);
+  const gate = deferred();
+  harness.controllerMutation = gate.promise;
+  const selection = harness.setThinkingLevel("high", {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath,
+  });
+  session.sessionManager = copied;
+  gate.resolve();
+  await assert.rejects(selection, assertSessionConflict);
+  assert.deepEqual(fixture.state.calls, []);
+});
+
+test("copied Session stale last thinking waiter cannot overwrite a valid level", async (t) => {
+  const { original, copied, originalPath, copiedPath } =
+    await copiedSessionManagers(t);
+  const fixture = thinkingSession();
+  const session = Object.assign(fixture.session, { sessionManager: original });
+  const { harness } = thinkingHarness(session);
+  const gate = deferred();
+  harness.controllerMutation = gate.promise;
+  const first = harness.setThinkingLevel("high", {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath,
+  });
+  const valid = harness.setThinkingLevel("low", {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath,
+  });
+  session.sessionManager = copied;
+  const staleLast = harness.setThinkingLevel("medium", {
+    expectedSessionId: copied.getSessionId(),
+    expectedSessionPath: copiedPath,
+  });
+  session.sessionManager = original;
+  gate.resolve();
+
+  const [firstResult, validResult, staleResult] = await Promise.allSettled([
+    first,
+    valid,
+    staleLast,
+  ]);
+  assert.equal(firstResult.status, "fulfilled");
+  assert.equal(validResult.status, "fulfilled");
+  assert.equal(staleResult.status, "rejected");
+  if (staleResult.status === "rejected")
+    assertSessionConflict(staleResult.reason);
+  if (validResult.status === "fulfilled")
+    assert.equal(validResult.value.level, "low");
+  assert.deepEqual(fixture.state.calls, ["high", "low"]);
 });
 
 test("a merged thinking selection rejects callers whose expected session changed", async () => {

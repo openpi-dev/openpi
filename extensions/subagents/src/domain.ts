@@ -36,6 +36,8 @@ export type SubagentOutcome = "completed" | "failed" | "interrupted";
 /** Parent-session context resolved by the tool layer and passed opaquely. */
 export interface ParentContext {
   readonly parentCwd: string;
+  readonly sessionId?: string;
+  readonly originEntryId?: string | null;
   readonly projectTrusted: boolean;
   /** Parent pi model, for the pi backend's "inherit" default. */
   readonly inheritedModel?: { readonly provider: string; readonly id: string };
@@ -67,6 +69,12 @@ export interface SpawnTask {
    * denylist, so this can only narrow. Omitted = the normal child tool set.
    */
   readonly tools?: readonly string[];
+  /**
+   * True when `tools` was projected from the parent's live tool surface rather
+   * than declared by an agent type. A name the child cannot expose then
+   * narrows the child instead of failing the spawn.
+   */
+  readonly inheritedTools?: boolean;
   /** Agent type that supplied the above, for the session label. */
   readonly agentTypeName?: string;
   /** Optional JSON Schema for one terminating, validated child result. */
@@ -163,8 +171,13 @@ export type RunOutcome =
  */
 export type SubagentEvent =
   // lifecycle (a session can run multiple turns via send())
-  | { readonly _tag: "RunStarted" }
-  | { readonly _tag: "RunSettled"; readonly outcome: RunOutcome }
+  | { readonly _tag: "RunStarted"; readonly generation?: number }
+  | {
+      readonly _tag: "RunSettled";
+      readonly outcome: RunOutcome;
+      readonly evidence?: DirectEvidenceBinding;
+      readonly notStarted?: boolean;
+    }
   // transcript building blocks
   | { readonly _tag: "UserMessage"; readonly text: string }
   | {
@@ -223,7 +236,18 @@ export interface SubagentSnapshot {
   readonly cwd: string;
   readonly status: SubagentStatus;
   readonly outcome?: SubagentOutcome;
+  /** Terminal presentation after a stop deadline is not proof of quiescence. */
+  readonly executionUncertain?: boolean;
   readonly worktreeBranch?: string;
+  readonly worktreeBaseSha?: string;
+  readonly requestedCwd?: string;
+  /** Session-local execution generation; absent on legacy snapshots. */
+  readonly runGeneration?: number;
+  /** Generation that supplied the settled output/evidence; legacy data is unknown. */
+  readonly completionGeneration?: number;
+  readonly evidence?: DirectEvidenceBinding;
+  /** Absolute transcript item offset at the start of this execution. */
+  readonly runTranscriptStart?: number;
   readonly createdAt: number;
   readonly settledAt?: number;
   readonly errorText?: string;
@@ -242,6 +266,27 @@ export interface SubagentSnapshot {
   readonly structuredResult?: StructuredSubagentResult;
   /** Count of finalized assistant messages (for subagent_check). */
   readonly turns: number;
+}
+
+/** Private owner binding, persisted only in the parent's subagent-finished entry. */
+export interface DirectEvidenceBinding {
+  readonly generation: number;
+  readonly sessionId: string;
+  readonly sessionPath?: string;
+  /** SessionManager's file name alone is not proof that evidence reached disk. */
+  readonly sessionPersistence?: "unknown";
+  readonly startEntryId: string | null;
+  readonly endEntryId: string | null;
+  readonly finalEntryId?: string;
+  readonly parentSessionId?: string;
+  readonly parentOriginEntryId?: string | null;
+  readonly sealed: boolean;
+  parentBound?: boolean;
+  readonly structured: {
+    readonly status: "saved" | "failed" | "not-run";
+    readonly path?: string;
+    readonly digest?: string;
+  };
 }
 
 export interface StructuredSubagentResult {

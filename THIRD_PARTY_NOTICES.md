@@ -1,6 +1,41 @@
 # Third-Party Notices
 
+The embedded browser control operations in `web/browser-extension/computer-use.js`
+adapt the CDP element resolve/click/text/scroll pattern from
+[`@injaneity/pi-computer-use`](https://github.com/injaneity/pi-computer-use)
+version `0.5.1` (MIT, Copyright (c) 2026 Zane Chee). The complete notice is
+included in [`web/browser-extension/LICENSE.pi-computer-use`](web/browser-extension/LICENSE.pi-computer-use).
+OpenPI supplies the frame-specific Chrome transport and Pi Session ownership;
+it does not install or activate the package's desktop helper.
+
 ## Project origins and acknowledgments
+
+The Web model settings page adapts the provider cards, inline editors and model
+selection interactions of `@deepseek-ai/dsh-client-ui-settings-models` version
+`0.1.7-rc.2`, from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+The styles are adapted to OpenPI's existing settings shell and theme tokens;
+configuration and authentication remain owned by Pi. The applicable MIT notice
+is reproduced in [`web/ui/src/features/settings/LICENSE.dsh`](web/ui/src/features/settings/LICENSE.dsh).
+
+Provider and app brand SVGs in the Web model settings are adapted from
+[OpenCode](https://github.com/anomalyco/opencode/tree/388406238bd5ca15564a762840a2362c3a45bd9c/packages/ui/src/assets/icons),
+revision `388406238bd5ca15564a762840a2362c3a45bd9c`. The original mark geometry is
+retained; Cursor's app background and Antigravity's color filters are omitted for
+a monochrome mask that follows OpenPI's theme. These are presentation assets,
+not a provider registry. The MIT notice is reproduced in
+[`web/ui/src/features/settings/provider-icons/LICENSE.opencode`](web/ui/src/features/settings/provider-icons/LICENSE.opencode).
+
+The workspace Files explorer and preview interactions were informed by
+[DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar), revision
+`9b5834f74ad197534c821c35b8357edac1ad3919`. OpenPI uses its own Session-bound
+file service and inline workbar layout; no DSH source is embedded.
+
+File preview bundles additionally include Mermaid, PDF.js, Mammoth, ExcelJS,
+fflate, fast-xml-parser, highlight.js, DOMPurify and rehype-raw. Their licenses
+and bundled dependency notices are reproduced in
+[`web/THIRD_PARTY_LICENSES.txt`](web/THIRD_PARTY_LICENSES.txt), included in the
+package alongside the Web assets. JSZip is used under its MIT option;
+DOMPurify is used under its Apache-2.0 option.
 
 OpenPI originated from [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) and is maintained as an independent distribution. Thanks to the original author for the starting point.
 
@@ -11,6 +46,28 @@ Web workbench contributions include:
 - [@seekskyworld](https://github.com/seekskyworld): request timeout protection ([#377](https://github.com/openpi-dev/openpi/pull/377)) and native cancellation proposals ([#358](https://github.com/openpi-dev/openpi/pull/358)), whose goals were integrated with the existing React transport and cancellation implementation, including additional regression coverage.
 
 The optional top-level Session communication package is [pi-intercom](https://github.com/nicobailon/pi-intercom).
+
+The Web workbench terminal lifecycle and presentation were informed by
+[`agegr/pi-web`](https://github.com/agegr/pi-web) revision `8366762` (MIT,
+Copyright (c) 2026 agegr). The browser tool's tab, navigation, and embedded
+viewport interactions were informed by [`apache/maka`](https://github.com/apache/maka)
+revision `ebeb961` (Apache License 2.0). OpenPI uses its own Web host protocol
+and headless Chromium/CDP implementation; it does not embed either project or
+copy Maka's Electron-only `WebContentsView`.
+
+The follow-up Git, file-preview and settings investigation also consulted
+`agegr/pi-web` revision `1eb5e66a37c468aca7f0d338edb23de4fd84433e` (MIT),
+`jmfederico/pi-web` revision `60a29acbfc710908e73b0df9857cb63b53b672d3` (MIT),
+and `apache/maka` revision `0dc1142aa90000e45627017e846b6d57d1e165e0`
+(Apache License 2.0). These are architectural references, not embedded packages.
+The General settings follow-up consulted `agegr/pi-web` revision
+`4a5081a3d9a993fa77553c62196cc0a2b48ed810` (MIT, Copyright (c) 2026 agegr)
+for inline switches, sliders, and immediate-save interactions. OpenPI keeps
+its existing canonical configuration fields and setup episode.
+
+The screencast sizing approach was informed by Chromium DevTools'
+[`ScreencastView.ts`](https://github.com/ChromeDevTools/devtools-frontend/blob/main/front_end/panels/screencast/ScreencastView.ts)
+(BSD-3-Clause). OpenPI retains its own bounded transport and Session authority.
 
 ## OAuth model providers
 
@@ -88,6 +145,15 @@ Copyright (c) Espen Hovlandsdal:
 Copyright (c) 2019 Paul Henschel:
 
 - `zustand@5.0.15`
+
+Copyright (c) 2017-2019, The xterm.js authors; Copyright (c) 2014-2016,
+SourceLair Private Company; Copyright (c) 2012-2013, Christopher Jeffrey:
+
+- `@xterm/xterm@6.0.0`
+
+Copyright (c) 2019, The xterm.js authors:
+
+- `@xterm/addon-fit@0.11.0`
 
 Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>
 (<https://sindresorhus.com>):
@@ -206,6 +272,17 @@ The MIT terms for the packages above are:
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+## Host runtime dependencies
+
+The Web host uses `node-pty@1.2.0-beta.15` to provide a real workspace PTY.
+It retains these MIT notices:
+
+- Copyright (c) 2012-2015, Christopher Jeffrey
+- Copyright (c) 2016, Daniel Imms
+- Copyright (c) 2018-present Microsoft Corporation
+
+The MIT terms are the same as reproduced above.
 
 ### ISC-licensed packages
 

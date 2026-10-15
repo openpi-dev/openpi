@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { UsageCache } from "./cache.ts";
+import { publishWebCommandFeedback } from "../shared/web-command-feedback.ts";
 import { redactIdentifier, renderUsageReport } from "./formatters.ts";
 import { DEFAULT_ADAPTERS } from "./providers/registry.ts";
 import { safeUsageError, waitForUsage } from "./providers/utils.ts";
@@ -111,7 +112,10 @@ export default function usage(pi: ExtensionAPI) {
         flags = parseUsageArgs(args);
       } catch {
         if (ctx.hasUI) ctx.ui.notify(USAGE_HELP, "warning");
-        else console.log(USAGE_HELP);
+        else if (
+          !publishWebCommandFeedback(ctx.sessionManager, USAGE_HELP, "warning")
+        )
+          console.log(USAGE_HELP);
         return;
       }
       const controller = new AbortController();
@@ -163,7 +167,8 @@ export default function usage(pi: ExtensionAPI) {
             useColor: ctx.mode === "tui",
           });
       if (!ctx.hasUI) {
-        console.log(output);
+        if (!publishWebCommandFeedback(ctx.sessionManager, output))
+          console.log(output);
         return;
       }
       if (ctx.mode !== "tui") {

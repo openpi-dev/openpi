@@ -4,11 +4,20 @@ export function sessionTitle(
   session: Partial<WebSessionSummary>,
   fallback: string,
 ) {
-  return session.name?.trim() || session.firstMessage?.trim() || fallback;
+  const name = session.name?.trim();
+  if (name) return name;
+  const first = session.firstMessage?.trim();
+  return first && first !== "(no messages)" ? first : fallback;
 }
 
 export function workspaceName(path: string) {
   return path.split(/[\\/]/u).filter(Boolean).at(-1) || path;
+}
+
+export function compactPath(path: string, segments = 2) {
+  const parts = path.split(/[\\/]/u).filter(Boolean);
+  if (parts.length <= segments) return path;
+  return `…/${parts.slice(-segments).join("/")}`;
 }
 
 export function compactSummary(value: unknown, limit = 96) {

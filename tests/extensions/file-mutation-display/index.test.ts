@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { stripVTControlCharacters } from "node:util";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,6 +21,7 @@ import {
   ToolExecutionComponent,
   type ExtensionContext,
   type Theme,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import fileMutationDisplay from "../../../extensions/file-mutation-display/index.ts";
@@ -64,6 +66,22 @@ async function withSession(
 
 test("overrides all seven activity renderers without changing model-facing definitions", async () => {
   await withSession(async (session, cwd) => {
+    type Presentation = Pick<
+      ToolDefinition,
+      "renderCall" | "renderResult" | "renderShell"
+    >;
+    const runner = session.extensionRunner as typeof session.extensionRunner & {
+      resolveToolRenderers?: (
+        name: string,
+        base: () => Presentation | undefined,
+      ) => Presentation | undefined;
+    };
+    const presentation = (name: string) => {
+      const definition = session.getToolDefinition(name);
+      return runner.resolveToolRenderers
+        ? runner.resolveToolRenderers(name, () => definition)
+        : definition;
+    };
     const native = Object.fromEntries(
       [
         createBashToolDefinition(cwd),
@@ -81,7 +99,7 @@ test("overrides all seven activity renderers without changing model-facing defin
       const expected = native[name];
       assert.ok(actual, name);
       assert.ok(expected, name);
-      assert.equal(actual.renderShell, "self", name);
+      assert.equal(presentation(name)?.renderShell, "self", name);
       assert.equal(actual.name, expected.name, name);
       assert.equal(actual.label, expected.label, name);
       assert.equal(actual.description, expected.description, name);
@@ -98,7 +116,7 @@ test("overrides all seven activity renderers without changing model-facing defin
     const write = session.getToolDefinition("write");
     const edit = session.getToolDefinition("edit");
 
-    const renderWrite = write?.renderCall;
+    const renderWrite = presentation("write")?.renderCall;
     assert.ok(renderWrite);
     const identityTheme = new Proxy(
       {},
@@ -120,6 +138,8 @@ test("overrides all seven activity renderers without changing model-facing defin
       toolCallId: "write-render",
       invalidate() {},
       lastComponent: undefined,
+      ...{ durationMs: undefined },
+      ...{ outputPad: 0 },
       state: {},
       cwd,
       executionStarted: false,
@@ -153,7 +173,7 @@ test("overrides all seven activity renderers without changing model-facing defin
       { command: "printf native-bash" },
       undefined,
       undefined,
-      ctx,
+      toolExecutionContext(ctx),
     );
     assert.equal(bashResult.content[0]?.type, "text");
     assert.match(
@@ -165,7 +185,7 @@ test("overrides all seven activity renderers without changing model-facing defin
       { path: "fixture.txt", content: "before\n" },
       undefined,
       undefined,
-      ctx,
+      toolExecutionContext(ctx),
     );
     await edit!.execute(
       "edit-1",
@@ -175,7 +195,7 @@ test("overrides all seven activity renderers without changing model-facing defin
       },
       undefined,
       undefined,
-      ctx,
+      toolExecutionContext(ctx),
     );
     assert.equal(
       await readFile(path.join(cwd, "fixture.txt"), "utf8"),

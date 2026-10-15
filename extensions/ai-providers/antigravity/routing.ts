@@ -226,7 +226,11 @@ export function collapseAntigravityModels<T extends AntigravityModelDefinition>(
     );
     if (logical?.requestModelId && !retired.has(logical.requestModelId)) {
       liveWireIds.add(logical.requestModelId);
-    } else if (logical && family.members.includes(family.id)) {
+    } else if (
+      logical &&
+      family.members.includes(family.id) &&
+      !retired.has(family.id)
+    ) {
       liveWireIds.add(family.id);
     }
     // A discovery response containing only a retired deployment is unusable;

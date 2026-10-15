@@ -1,0 +1,220 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { promisify } from "node:util";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { GitReviewBaselineStore } from "../../web/host/git-review.ts";
+import { WebHost } from "../../web/host/web-host.ts";
+import type { WebGitReviewResult } from "../../web/protocol/types.ts";
+import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
+import type { WebRuntimeController } from "../../web/runtime/types.ts";
+
+const execFileAsync = promisify(execFile);
+
+test("Git review HTTP access authenticates and binds the exact Session", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-git-review-http-"));
+  const baselineDirectory = await mkdtemp(
+    join(tmpdir(), "openpi-git-review-http-baseline-"),
+  );
+  const sessionManager = SessionManager.inMemory(cwd);
+  const runtime: WebRuntimeController = {
+    searchModels: (query, limit) =>
+      projectWebModelSearch(runtime.listModels(), query, limit),
+    cwd,
+    workspaceSelected: true,
+    sessionManager,
+    sessionDirectory: cwd,
+    isIdle: () => true,
+    getActiveTurn: () => undefined,
+    listModels: () => [],
+    subscribe: () => () => undefined,
+    dispose: async () => undefined,
+    sendPrompt: async () => ({ pendingFollowUps: 0 }),
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
+    newSession: async () => ({
+      cancelled: true,
+      sessionId: sessionManager.getSessionId(),
+    }),
+    switchSession: async () => ({ cancelled: true }),
+    setModel: async () => {
+      throw new Error("unused");
+    },
+  };
+  const host = new WebHost({
+    runtime,
+    gitReviews: new GitReviewBaselineStore(cwd, baselineDirectory),
+  });
+  try {
+    await execFileAsync("git", ["-C", cwd, "init", "-b", "main"]);
+    await writeFile(join(cwd, "review.txt"), "review\n", "utf8");
+    await host.start();
+    const token = new URL(host.url).hash.slice("#token=".length);
+    const headers = { Authorization: `Bearer ${token}` };
+    const sessions = (await (
+      await fetch(`${host.origin}/api/sessions`, { headers })
+    ).json()) as { sessions: Array<{ id: string; path: string }> };
+    const session = sessions.sessions.find(
+      (candidate) => candidate.id === sessionManager.getSessionId(),
+    );
+    assert.ok(session);
+    const query = new URLSearchParams({
+      sessionId: session.id,
+      path: session.path,
+      source: "session",
+    });
+
+    assert.equal(
+      (await fetch(`${host.origin}/api/git-review?${query}`)).status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(`${host.origin}/api/git-review?sessionId=${session.id}`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(
+          `${host.origin}/api/git-review?${new URLSearchParams({ sessionId: "stale", path: session.path })}`,
+          { headers },
+        )
+      ).status,
+      404,
+    );
+    const response = await fetch(`${host.origin}/api/git-review?${query}`, {
+      headers,
+    });
+    assert.equal(response.status, 200);
+    const result = (await response.json()) as {
+      ok: boolean;
+      snapshot?: { files: Array<{ path: string }> };
+    };
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.snapshot?.files, []);
+
+    await writeFile(
+      join(cwd, "review.txt"),
+      "review\nsession change\n",
+      "utf8",
+    );
+    const changedResponse = await fetch(
+      `${host.origin}/api/git-review?${query}`,
+      { headers },
+    );
+    assert.equal(changedResponse.status, 200);
+    const changed = (await changedResponse.json()) as {
+      ok: boolean;
+      snapshot?: {
+        comparison: string;
+        files: Array<{ path: string }>;
+      };
+    };
+    assert.equal(changed.ok, true);
+    assert.equal(changed.snapshot?.comparison, "session");
+    assert.deepEqual(
+      changed.snapshot?.files.map((file) => file.path),
+      ["review.txt"],
+    );
+    query.set("offset", "0");
+    const summary = (await (
+      await fetch(`${host.origin}/api/git-review?${query}`, { headers })
+    ).json()) as WebGitReviewResult;
+    assert.ok(summary.ok);
+    query.delete("offset");
+    query.set("file", "review.txt");
+    query.set("revision", summary.snapshot.revision);
+    const sessionDetailResponse = await fetch(
+      `${host.origin}/api/git-review?${query}`,
+      { headers },
+    );
+    assert.equal(sessionDetailResponse.status, 200);
+    const sessionDetail =
+      (await sessionDetailResponse.json()) as WebGitReviewResult;
+    assert.ok(sessionDetail.ok);
+    assert.equal(sessionDetail.summaryRevision, summary.snapshot.revision);
+    await writeFile(join(cwd, "review.txt"), "newer session change\n", "utf8");
+    const staleSession = await (
+      await fetch(`${host.origin}/api/git-review?${query}`, { headers })
+    ).json();
+    assert.deepEqual(staleSession, { ok: false, reason: "revision_changed" });
+
+    const listingQuery = new URLSearchParams({
+      sessionId: session.id,
+      path: session.path,
+      source: "unstaged",
+      offset: "0",
+    });
+    const listing = (await (
+      await fetch(`${host.origin}/api/git-review?${listingQuery}`, { headers })
+    ).json()) as WebGitReviewResult;
+    assert.equal(listing.ok, true);
+    if (!listing.ok) return;
+    const detailQuery = new URLSearchParams({
+      sessionId: session.id,
+      path: session.path,
+      source: "unstaged",
+      file: "review.txt",
+      revision: listing.snapshot.revision,
+    });
+    const detailResponse = await fetch(
+      `${host.origin}/api/git-review?${detailQuery}`,
+      { headers },
+    );
+    assert.equal(detailResponse.status, 200);
+    const detail = (await detailResponse.json()) as WebGitReviewResult;
+    assert.equal(detail.ok, true);
+    if (detail.ok)
+      assert.equal(detail.summaryRevision, listing.snapshot.revision);
+    await writeFile(join(cwd, "review.txt"), "changed after listing\n");
+    const stale = (await (
+      await fetch(`${host.origin}/api/git-review?${detailQuery}`, { headers })
+    ).json()) as WebGitReviewResult;
+    assert.deepEqual(stale, { ok: false, reason: "revision_changed" });
+    for (const extra of [
+      "baseRef=main",
+      "baseRef=refs%2Ftags%2Fmain",
+      "baseRef=refs%2Fheads%2Fmain",
+      "revision=invalid",
+    ]) {
+      assert.equal(
+        (
+          await fetch(
+            `${host.origin}/api/git-review?${listingQuery}&${extra}`,
+            { headers },
+          )
+        ).status,
+        400,
+      );
+    }
+    const branchQuery = new URLSearchParams({
+      sessionId: session.id,
+      path: session.path,
+      source: "branch",
+      baseRef: "refs/heads/missing",
+    });
+    const noHead = await fetch(`${host.origin}/api/git-review?${branchQuery}`, {
+      headers,
+    });
+    assert.equal(noHead.status, 200);
+    assert.equal((await noHead.json()).reason, "unborn_repository");
+    assert.equal(
+      (
+        await fetch(
+          `${host.origin}/api/git-review?${branchQuery}&baseRef=refs%2Fheads%2Fmain`,
+          { headers },
+        )
+      ).status,
+      400,
+    );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+    await rm(baselineDirectory, { recursive: true, force: true });
+  }
+});

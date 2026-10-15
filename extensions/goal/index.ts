@@ -7,6 +7,10 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
+  hasWebCommandFeedback,
+  notifyWebCommand,
+} from "../shared/web-command-feedback.ts";
+import {
   OPENPI_TOOL_SURFACE,
   loadOpenPiCapabilities,
   patchOwnedTools,
@@ -119,7 +123,8 @@ export default function sessionGoal(pi: ExtensionAPI) {
     message: string,
     level: "info" | "warning" | "error" = "info",
   ) => {
-    if (ctx.hasUI) ctx.ui.notify(message, level);
+    if (ctx.hasUI || hasWebCommandFeedback(ctx.sessionManager))
+      notifyWebCommand(ctx, message, level);
   };
 
   const assertUnlocked = () => {
@@ -330,7 +335,10 @@ export default function sessionGoal(pi: ExtensionAPI) {
           const goal = controller.pause();
           notify(ctx, goalUpdateMessage(goal!));
         } else if (parsed.action === "resume") {
-          if (ctx.mode === "print" || ctx.mode === "json") {
+          if (
+            (ctx.mode === "print" || ctx.mode === "json") &&
+            !hasWebCommandFeedback(ctx.sessionManager)
+          ) {
             throw new Error(`Goal automation is disabled in ${ctx.mode} mode.`);
           }
           controller.resume();

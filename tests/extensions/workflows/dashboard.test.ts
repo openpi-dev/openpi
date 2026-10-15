@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import fs from "node:fs";
-import {
+import fs, {
   chmodSync,
   existsSync,
   mkdirSync,
@@ -23,6 +22,7 @@ import {
 import type { TUI } from "@earendil-works/pi-tui";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import { WORKFLOW_COMMIT_FILE } from "../../../extensions/workflows/artifacts.ts";
+import { ExecutionTimingLedger } from "../../../extensions/workflows/execution-timing.ts";
 import type {
   Theme,
   WorkflowDetails,
@@ -1253,6 +1253,99 @@ test("direct workflow navigation drills right and returns left through every lev
   }
 });
 
+test("detail view surfaces transcriptsOmitted and the transcript view stops lying about it", () => {
+  // A dropped agent hydrates as an empty transcript. Without a run-level notice
+  // the detail page shows no evidence, and the transcript view's default
+  // "predates transcript capture" text is actively wrong (issue #558).
+  const details: WorkflowDetails = {
+    runId: "wf_0b17ed0123",
+    sessionId: SESSION,
+    name: "byte-budget",
+    description: "Exercise the omission notice",
+    background: true,
+    status: "completed",
+    startedAt: Date.now() - 2_000,
+    finishedAt: Date.now() - 1_000,
+    phases: [{ title: "Review" }],
+    agents: [
+      {
+        index: 12,
+        label: "review:tail",
+        phase: "Review",
+        state: "done",
+        startedAt: Date.now() - 1_900,
+        finishedAt: Date.now() - 1_100,
+        preview: "",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          turns: 1,
+        },
+        transcript: [],
+      },
+    ],
+    transcriptArtifact: "transcripts.json",
+    transcriptsOmitted: { agents: 3, entries: 606 },
+  };
+  const tui = {
+    terminal: { rows: 30 },
+    requestRender() {},
+  } as unknown as TUI;
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+  const keys = {
+    matches(data: string, binding: string) {
+      return data === binding.replace("tui.editor.cursor", "").toLowerCase();
+    },
+    getKeys(binding: string) {
+      const key = binding.split(".").at(-1) ?? binding;
+      return [key.toLowerCase()];
+    },
+  } as unknown as KeybindingsManager;
+  const dashboard = new WorkflowDashboard(
+    tui,
+    theme,
+    keys,
+    () => new Map([[details.runId, details]]),
+    SESSION,
+    new Set(),
+    0,
+    () => {},
+    details.runId,
+  );
+
+  try {
+    const detail = dashboard.render(120);
+    // The run-level notice is on the live detail page, not only in report.md.
+    assert.match(
+      detail.join("\n"),
+      /3 agent transcript\(s\) \(606 entries\) omitted from transcripts\.json/,
+    );
+    assert.doesNotMatch(detail.join("\n"), /full data on disk/);
+    // Reserving the notice row must not break the exact-height layout.
+    assert.equal(detail.length, 29);
+
+    dashboard.handleInput("right");
+    dashboard.handleInput("right");
+    const transcript = stripVTControlCharacters(
+      dashboard.render(120).join("\n"),
+    );
+    assert.match(
+      transcript,
+      /this run omitted 3 agent transcript\(s\).*stay within its byte budget/,
+    );
+    assert.doesNotMatch(transcript, /full data on disk/);
+    assert.doesNotMatch(transcript, /predates transcript capture/);
+  } finally {
+    dashboard.dispose();
+  }
+});
+
 test("Workflow transcript follows, pauses on its top row, and resumes", () => {
   const mouseModes: string[] = [];
   const transcript = Array.from({ length: 40 }, (_, index) => ({
@@ -1318,11 +1411,11 @@ test("Workflow transcript follows, pauses on its top row, and resumes", () => {
     dashboard.focused = true;
     dashboard.handleInput("right");
     dashboard.handleInput("right");
-    // A transcript page opens on the start of work that already happened.
+    // A running transcript opens at the latest output and follows by default.
     assert.equal(mouseModes.at(-1), "\x1b[?1000h\x1b[?1006h");
     const opened = dashboard.render(80).join("\n");
-    assert.match(opened, /line 0\b/);
-    assert.doesNotMatch(opened, /line 39/);
+    assert.match(opened, /line 39/);
+    assert.doesNotMatch(opened, /line 0\b/);
 
     dashboard.handleInput("G");
     const pinned = dashboard.render(80).join("\n");
@@ -1818,5 +1911,88 @@ test("retained history excluded by request time is not retried on animation tick
     assert.equal(read.mock.callCount(), 1);
   } finally {
     dashboard.dispose();
+  }
+});
+
+test("persisted timing survives reload and report inspection without making replay fresh execution", () => {
+  const ledger = new ExecutionTimingLedger(1, () => 0);
+  ledger.toolStart("id", "read");
+  ledger.toolEnd("id", "read", false);
+  ledger.eventsEnded();
+  const timing = ledger.snapshot("success").summary;
+  const raw = {
+    runId: "wf_timing",
+    background: false,
+    status: "completed",
+    startedAt: 1,
+    phases: [],
+    agents: [
+      {
+        index: 1,
+        label: "fixture",
+        state: "done",
+        startedAt: 1,
+        usage: {},
+        transcript: [],
+        timing,
+        timingArtifact: "agent-timing/agent-0001.json",
+        timingArtifactState: "saved",
+      },
+    ],
+  };
+  const restored = normalizePersistedWorkflowDetails("wf_timing", raw)!;
+  assert.deepEqual(restored.agents[0]?.timing, timing);
+  assert.match(buildWorkflowReport(restored), /0ms tool wall/);
+  assert.match(buildWorkflowReport(restored), /agent-timing\/agent-0001.json/);
+  raw.agents[0]!.timingArtifact = "../../private.json";
+  assert.equal(
+    normalizePersistedWorkflowDetails("wf_timing", raw)?.agents[0]
+      ?.timingArtifact,
+    undefined,
+  );
+  const replay = normalizePersistedWorkflowDetails("wf_timing", {
+    ...raw,
+    agents: [{ ...raw.agents[0], executionOutcome: "replayed" }],
+  });
+  assert.equal(replay?.agents[0]?.timing, undefined);
+});
+
+test("malformed timing enums in persisted JSON cannot break workflow reload", () => {
+  const timing = new ExecutionTimingLedger(1, () => 0).snapshot(
+    "failure",
+  ).summary;
+  for (const malformed of [
+    { outcome: ["success"] },
+    { coverage: ["unobserved"] },
+    { outcome: { toString: null } },
+    { coverage: { toString: null } },
+  ]) {
+    const raw: unknown = JSON.parse(
+      JSON.stringify({
+        background: false,
+        status: "completed",
+        startedAt: 1,
+        phases: [],
+        agents: [
+          {
+            index: 1,
+            label: "fixture",
+            state: "done",
+            startedAt: 1,
+            usage: {},
+            transcript: [],
+            timing: { ...timing, ...malformed },
+          },
+        ],
+      }),
+    );
+    assert.doesNotThrow(() => {
+      const restored = normalizePersistedWorkflowDetails(
+        "wf_malformed_timing",
+        raw,
+      );
+      assert.equal(restored?.agents.length, 1);
+      assert.equal(restored?.agents[0]?.timing, undefined);
+    });
   }
 });
