@@ -48,9 +48,13 @@ function normalizedPath(path: string) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-function physicalPath(path: string) {
+function physicalIdentity(path: string) {
   try {
-    return normalizedPath(realpathSync(path));
+    const stat = statSync(path, { bigint: true });
+    // Device/inode identify the existing file even when realpath preserves an
+    // alias's spelling. Birth time distinguishes subsequent inode generations.
+    if (!stat.isFile() || stat.ino === 0n) return undefined;
+    return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
   } catch {
     return undefined;
   }
@@ -60,28 +64,29 @@ function directFileSnapshot(path: string) {
   try {
     // Directory aliases are legitimate, but a foreign leaf symlink does not
     // grant ownership of its target. Keep submission paths unchanged.
-    const initial = lstatSync(path);
+    const initial = lstatSync(path, { bigint: true });
     if (!initial.isFile()) return undefined;
-    const canonical = physicalPath(path);
-    if (!canonical) return undefined;
-    const stat = lstatSync(canonical);
+    const canonical = realpathSync(path);
+    const stat = lstatSync(canonical, { bigint: true });
     if (
       !stat.isFile() ||
+      stat.ino === 0n ||
       initial.dev !== stat.dev ||
       initial.ino !== stat.ino ||
-      initial.birthtimeMs !== stat.birthtimeMs ||
-      initial.ctimeMs !== stat.ctimeMs ||
-      initial.mtimeMs !== stat.mtimeMs ||
+      initial.birthtimeNs !== stat.birthtimeNs ||
+      initial.ctimeNs !== stat.ctimeNs ||
+      initial.mtimeNs !== stat.mtimeNs ||
       initial.size !== stat.size
     )
       return undefined;
     return {
       path: canonical,
+      identity: `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`,
       dev: stat.dev,
       ino: stat.ino,
-      birthtimeMs: stat.birthtimeMs,
-      ctimeMs: stat.ctimeMs,
-      mtimeMs: stat.mtimeMs,
+      birthtimeNs: stat.birthtimeNs,
+      ctimeNs: stat.ctimeNs,
+      mtimeNs: stat.mtimeNs,
       size: stat.size,
     };
   } catch {
@@ -242,9 +247,9 @@ export class ImageAttachmentStore {
 
   attachClipboardPath(path: string, editorText: string) {
     if (!isPiClipboardImage(path)) return undefined;
-    const pathIdentity = physicalPath(path);
+    const pathIdentity = physicalIdentity(path);
     const references = [...this.draft.values(), ...this.removed.values()].map(
-      (attachment) => physicalPath(attachment.path),
+      (attachment) => physicalIdentity(attachment.path),
     );
     const alreadyReferenced =
       !pathIdentity ||
@@ -257,8 +262,8 @@ export class ImageAttachmentStore {
     this.draft.set(id, { id, placeholder, path } satisfies Attachment);
     // Re-inserting a known adopted path must not claim a Pi-owned file.
     const owned = !alreadyReferenced ? directFileSnapshot(path) : undefined;
-    if (owned && !this.directDraftPaths.has(owned.path)) {
-      this.directDraftPaths.set(owned.path, owned);
+    if (owned && !this.directDraftPaths.has(owned.identity)) {
+      this.directDraftPaths.set(owned.identity, owned);
     }
     return placeholder;
   }
@@ -322,7 +327,7 @@ export class ImageAttachmentStore {
     // An active draft may be queued or handed to Pi through setText(""). Keep
     // main's conservative handoff boundary, but retire older Undo-only files.
     for (const attachment of this.draft.values()) {
-      const identity = physicalPath(attachment.path);
+      const identity = physicalIdentity(attachment.path);
       if (!identity) {
         this.directDraftPaths.clear();
         break;
@@ -338,7 +343,7 @@ export class ImageAttachmentStore {
   releaseDeliveredPaths(text: string) {
     for (const match of text.matchAll(CLIPBOARD_PATH_IN_TEXT)) {
       if (isPiClipboardPath(match[0])) {
-        const identity = physicalPath(match[0]);
+        const identity = physicalIdentity(match[0]);
         if (!identity) {
           this.directDraftPaths.clear();
           return;
@@ -354,20 +359,20 @@ export class ImageAttachmentStore {
       ...this.draft.values(),
       ...this.removed.values(),
     ]) {
-      const identity = physicalPath(attachment.path);
+      const identity = physicalIdentity(attachment.path);
       // An unresolved reference might alias an owned path. It cannot authorize
       // reclamation, and an unresolved handoff relinquishes ownership above.
       if (!identity) return;
       referencedPaths.add(identity);
     }
-    for (const [path, owned] of this.directDraftPaths) {
-      if (referencedPaths.has(path)) continue;
-      this.directDraftPaths.delete(path);
+    for (const [identity, owned] of this.directDraftPaths) {
+      if (referencedPaths.has(identity)) continue;
+      this.directDraftPaths.delete(identity);
       // A move, replacement or external modification makes ownership uncertain.
       // Never unlink a new file or a substituted leaf symlink at an old name.
-      if (!isDeepStrictEqual(directFileSnapshot(path), owned)) continue;
+      if (!isDeepStrictEqual(directFileSnapshot(owned.path), owned)) continue;
       try {
-        rmSync(path, { force: true });
+        rmSync(owned.path, { force: true });
       } catch {
         // Editor input remains usable if a temporary file disappeared or the
         // operating system declines the cleanup.

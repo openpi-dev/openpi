@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   readFileSync,
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import {
   InteractiveMode,
@@ -412,6 +414,46 @@ test("macOS physical temp aliases share active, adopted, and delivered PNG owner
     assert.deepEqual(readFileSync(alias), bytes);
   }
 });
+
+for (const aliasKind of ["case", "hardlink"] as const) {
+  test(`${aliasKind} aliases share active, adopted, and delivered physical ownership`, (t) => {
+    for (const mode of ["active", "adopt", "deliver"]) {
+      const store = new ImageAttachmentStore();
+      const path = image();
+      const bytes = readFileSync(path);
+      const alias =
+        aliasKind === "case"
+          ? join(dirname(path), basename(path).toUpperCase())
+          : join(tmpdir(), `pi-clipboard-${randomUUID()}.png`);
+      if (aliasKind === "hardlink") {
+        linkSync(path, alias);
+        files.push(alias);
+      } else if (!existsSync(alias)) {
+        t.skip("filesystem is case sensitive");
+        return;
+      }
+      assert.equal(statSync(path).dev, statSync(alias).dev);
+      assert.equal(statSync(path).ino, statSync(alias).ino);
+      const first = store.attachClipboardPath(path, "")!;
+      if (mode === "active") {
+        const second = store.attachClipboardPath(alias, first)!;
+        store.reconcileDraft(`${first}${first} ${second}`);
+        assert.equal(store.expandPlaceholders(second), alias);
+      } else {
+        store.reconcileDraft("");
+        if (mode === "adopt") {
+          const token = store.adoptExpandedText(alias)!;
+          assert.equal(store.expandPlaceholders(token), alias);
+        } else {
+          store.releaseDeliveredPaths(alias);
+          store.clearDraft();
+        }
+      }
+      assert.deepEqual(readFileSync(path), bytes);
+      assert.deepEqual(readFileSync(alias), bytes);
+    }
+  });
+}
 
 test("cleanup preserves a replaced or externally modified clipboard file", () => {
   for (const replacement of [true, false]) {
