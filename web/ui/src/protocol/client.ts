@@ -13,13 +13,17 @@ import {
   type WorkspaceFileMutationResult,
   type WorkspaceTrashListing,
 } from "../../../protocol/artifacts.ts";
+import type {
+  WebPromptFilesResponse,
+  WebPromptFileUpload,
+} from "../../../protocol/prompt-files.ts";
+import type { WebProviderLogin } from "../../../protocol/provider-login.ts";
 import {
   type WebQuestionAnswers,
   type WebQuestionReceipt,
   type WebQuestionRequest,
 } from "../../../protocol/questions.ts";
 import type { WebSessionSources } from "../../../protocol/session-sources.ts";
-import type { WebProviderLogin } from "../../../protocol/provider-login.ts";
 import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
@@ -34,12 +38,13 @@ import {
   type WebPromptDelivery,
   type WebPromptImage,
   type WebSessionHistoryPage,
+  type WebSessionProjection,
   type WebSessionPromptHistoryPage,
   type WebSessionPromptPreview,
-  type WebSessionProjection,
   type WebSessionSummary,
   type WebSettingsCatalog,
   type WebSettingsPreferencesPatch,
+  type WebSidebarPinTarget,
   type WebSnapshot,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
@@ -49,14 +54,16 @@ import type {
   WebModelConfigurations,
   WebModelDefaults,
   WebProviderAuthProjection,
+  WebWorktreeReleaseRequest,
+  WebWorktreeReleaseResult,
+  WebRetainedWorktrees,
+  WebSessionDeleteRequest,
+  WebSessionDeleteResult,
   WebSessionForkRequest,
   WebSessionForkResult,
+  WebSessionForkOptions,
 } from "../../../runtime/types.ts";
 import type { WebTranscriptSearchResponse } from "../../../search/transcript-search.ts";
-import type {
-  WebPromptFileUpload,
-  WebPromptFilesResponse,
-} from "../../../protocol/prompt-files.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -196,9 +203,14 @@ export class WebClient {
     }
   }
 
-  snapshot(path?: string | null, historyAnchor?: WebHistoryAnchor) {
+  snapshot(
+    path?: string | null,
+    historyAnchor?: WebHistoryAnchor,
+    expectedSessionId?: string,
+  ) {
     const query = new URLSearchParams();
     if (path) query.set("path", path);
+    if (expectedSessionId) query.set("sessionId", expectedSessionId);
     if (historyAnchor && historyAnchor.sessionPath === path) {
       query.set("historyAnchor", historyAnchor.entryId);
       query.set("historySessionId", historyAnchor.sessionId);
@@ -657,10 +669,13 @@ export class WebClient {
     });
   }
 
-  selectSession(path: string) {
+  selectSession(path: string, expectedSessionId?: string) {
     return this.request<SessionMutationResult>("/api/sessions/select", {
       method: "POST",
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({
+        path,
+        ...(expectedSessionId ? { expectedSessionId } : {}),
+      }),
     });
   }
 
@@ -668,6 +683,70 @@ export class WebClient {
     return this.request<WebSessionForkResult>("/api/session/fork", {
       method: "POST",
       body: JSON.stringify(request),
+    });
+  }
+
+  deleteSession(request: WebSessionDeleteRequest) {
+    return this.request<
+      WebSessionDeleteResult & { metadataCleanupPending?: boolean }
+    >("/api/sessions/delete", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  workspaceWorktrees(path: string, cursor?: string) {
+    const query = new URLSearchParams({ path });
+    if (cursor !== undefined) query.set("cursor", cursor);
+    return this.request<WebRetainedWorktrees>(
+      `/api/workspaces/worktrees?${query}`,
+    );
+  }
+
+  releaseSessionWorktree(request: WebWorktreeReleaseRequest) {
+    return this.request<WebWorktreeReleaseResult>(
+      "/api/sessions/worktree-release",
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
+  }
+
+  sessionMarkdown(path: string, id: string) {
+    return this.request<{ markdown: string }>(
+      `/api/sessions/markdown?${new URLSearchParams({ sessionPath: path, sessionId: id })}`,
+    );
+  }
+
+  sessionOpenTargets(path: string, id: string) {
+    return this.request<{ targets: { id: string; label: string }[] }>(
+      `/api/sessions/open-targets?${new URLSearchParams({ sessionPath: path, sessionId: id })}`,
+    );
+  }
+
+  sessionForkOptions(path: string, id: string) {
+    return this.request<WebSessionForkOptions>(
+      `/api/sessions/fork-options?${new URLSearchParams({ sessionPath: path, sessionId: id })}`,
+    );
+  }
+
+  cancelSessionFork(
+    request: Pick<
+      WebSessionForkRequest,
+      "commandId" | "sessionId" | "sessionPath"
+    >,
+  ) {
+    return this.request<{ state: "requested" | "too-late" | "not-found" }>(
+      "/api/session/fork/cancel",
+      { method: "POST", body: JSON.stringify(request) },
+    );
+  }
+
+  openSessionIn(path: string, id: string, target: string) {
+    return this.request<{ opened: true }>("/api/sessions/open", {
+      method: "POST",
+      body: JSON.stringify({ sessionPath: path, sessionId: id, target }),
     });
   }
 
@@ -687,6 +766,52 @@ export class WebClient {
     return this.request<{ saved: true }>("/api/sessions/pin", {
       method: "POST",
       body: JSON.stringify({ path, id, pinned, before }),
+    });
+  }
+
+  setSidebarPin(
+    target: WebSidebarPinTarget,
+    pinned: boolean,
+    before?: WebSidebarPinTarget | null,
+  ) {
+    return this.request<{ saved: true }>("/api/sidebar/pin", {
+      method: "POST",
+      body: JSON.stringify({ target, pinned, before }),
+    });
+  }
+
+  setWorkspaceOrder(path: string, before?: string | null) {
+    return this.request<{ saved: true }>("/api/workspaces/order", {
+      method: "POST",
+      body: JSON.stringify({ path, before }),
+    });
+  }
+
+  setSessionOrder(
+    path: string,
+    id: string,
+    before?: { path: string; id: string } | null,
+  ) {
+    return this.request<{ saved: true }>("/api/sessions/order", {
+      method: "POST",
+      body: JSON.stringify({ path, id, before }),
+    });
+  }
+
+  setSessionRead(
+    path: string,
+    id: string,
+    read: boolean,
+    expectedRevision: string,
+  ) {
+    return this.request<{ saved: true }>("/api/sessions/read", {
+      method: "POST",
+      body: JSON.stringify({
+        path,
+        id,
+        read,
+        expectedRevision,
+      }),
     });
   }
 

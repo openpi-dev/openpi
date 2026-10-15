@@ -140,7 +140,7 @@ test("older configuration still projects a complete default Web appearance", () 
       accent: "",
       background: "",
       foreground: "",
-      font: "system",
+      font: "codex",
     },
   );
 });

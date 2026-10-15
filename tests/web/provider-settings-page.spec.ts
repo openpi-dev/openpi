@@ -11,7 +11,11 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import type { WebModelSummary } from "../../web/protocol/types.ts";
+import type {
+  WebModelSummary,
+  WebSettingsCatalog,
+} from "../../web/protocol/types.ts";
+import { AppearanceSettingsPanel } from "../../web/ui/src/features/settings/AppearanceSettingsPanel.tsx";
 import { ProviderSettingsPage } from "../../web/ui/src/features/settings/ProviderSettingsPage.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 
@@ -266,7 +270,12 @@ function settingsFetcher(payload = settingsPayload()) {
       Object.assign(payload.setup.ui, {
         ...(patch.theme !== undefined ? { webTheme: patch.theme } : {}),
         ...(patch.appearance !== undefined
-          ? { webAppearance: patch.appearance }
+          ? {
+              webAppearance: {
+                ...payload.setup.ui.webAppearance,
+                ...patch.appearance,
+              },
+            }
           : {}),
         ...(patch.chatWidth !== undefined
           ? { webChatWidth: patch.chatWidth }
@@ -525,7 +534,9 @@ it("C08 retains a failed reasoning display preference and retries through the pr
             JSON.stringify({ error: "Fixture save failure" }),
             { status: 500 },
           );
-        payload.setup.ui.webHiddenThinkingLevels = patch.hiddenThinkingLevels;
+        payload.setup.ui.webHiddenThinkingLevels = [
+          patch.thinkingLevelVisibility.level,
+        ];
         return reply({ saved: true, setup: payload.setup });
       }
       return fetcher(input, init);
@@ -553,8 +564,8 @@ it("C08 retains a failed reasoning display preference and retries through the pr
   await screen.findByText(i18n.t("settingsPreferencesSaved"));
   expect(max.getAttribute("aria-checked")).toBe("false");
   expect(patches).toEqual([
-    { hiddenThinkingLevels: ["max"] },
-    { hiddenThinkingLevels: ["max"] },
+    { thinkingLevelVisibility: { level: "max", visible: false } },
+    { thinkingLevelVisibility: { level: "max", visible: false } },
   ]);
   expect(configure).not.toHaveBeenCalled();
 });
@@ -718,6 +729,158 @@ it("filters settings by translated setting names and preserves the active page u
     screen.getByRole("button", { name: i18n.t("settingsClearSearch") }),
   );
   expect(screen.getAllByRole("tab")).toHaveLength(10);
+});
+
+it.each([
+  { setupWritable: false, settingsErrors: 0 },
+  { setupWritable: true, settingsErrors: 1 },
+])(
+  "blocks unreadable appearance preferences and recovers after refresh: %j",
+  ({ setupWritable, settingsErrors }) => {
+    const catalog = settingsPayload() as WebSettingsCatalog;
+    const onRefresh = vi.fn();
+    const onUpdatePreferences = vi.fn(async () => true);
+    const element = (unreadable: boolean) =>
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(AppearanceSettingsPanel, {
+          catalog: {
+            ...catalog,
+            setupWritable: unreadable ? setupWritable : true,
+            resources: {
+              ...catalog.resources,
+              diagnostics: {
+                ...catalog.resources.diagnostics,
+                settingsErrors: unreadable ? settingsErrors : 0,
+              },
+            },
+          },
+          theme: "system",
+          pending: false,
+          error: null,
+          onRefresh,
+          onUpdatePreferences,
+        }),
+      );
+    const view = render(element(true));
+    expect(screen.getByRole("alert").textContent).toContain(
+      i18n.t("configurationReadFailure"),
+    );
+    for (const radio of screen.getAllByRole<HTMLInputElement>("radio"))
+      expect(radio.disabled).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: i18n.t("appearanceTheme"),
+      }).disabled,
+    ).toBe(true);
+    expect(
+      screen.getByRole<HTMLInputElement>("textbox", {
+        name: i18n.t("appearanceBackground"),
+      }).disabled,
+    ).toBe(true);
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("retryAdmissionCheck") }),
+    );
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(onUpdatePreferences).not.toHaveBeenCalled();
+    view.rerender(element(false));
+    expect(screen.queryByRole("alert")).toBeNull();
+    const dark = screen.getByRole<HTMLInputElement>("radio", {
+      name: i18n.t("themeDark"),
+    });
+    expect(dark.disabled).toBe(false);
+    fireEvent.click(dark);
+    expect(onUpdatePreferences).toHaveBeenCalledWith({ theme: "dark" });
+  },
+);
+
+it.each([
+  { menu: "appearanceTheme", option: "themeMist", readonly: false },
+  { menu: "appearanceAccent", option: "appearanceAccent1", readonly: false },
+  { menu: "appearanceFont", option: "appearanceFont_serif", readonly: false },
+  { menu: "appearanceFont", option: "appearanceFont_serif", readonly: true },
+])(
+  "blocks an already-open appearance menu after pending/read-only changes: %j",
+  async ({ menu, option, readonly }) => {
+    const catalog = settingsPayload() as WebSettingsCatalog;
+    const onUpdatePreferences = vi.fn(async () => true);
+    const element = (blocked: boolean) =>
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(AppearanceSettingsPanel, {
+          catalog: {
+            ...catalog,
+            setupWritable: !(blocked && readonly),
+          },
+          theme: "system",
+          pending: blocked && !readonly,
+          error: null,
+          onRefresh: vi.fn(),
+          onUpdatePreferences,
+        }),
+      );
+    const view = render(element(false));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t(menu) }));
+    const choice = await screen.findByRole("menuitem", {
+      name: i18n.t(option),
+    });
+    view.rerender(element(true));
+    expect(choice.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(choice);
+    fireEvent.keyDown(choice, { key: "Enter" });
+    expect(onUpdatePreferences).not.toHaveBeenCalled();
+  },
+);
+
+it("sends only the edited appearance field or mode, including legacy themes", async () => {
+  const catalog = settingsPayload() as WebSettingsCatalog;
+  catalog.setup.ui.webTheme = "pine";
+  const onUpdatePreferences = vi.fn(async () => true);
+  render(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(AppearanceSettingsPanel, {
+        catalog,
+        theme: "pine",
+        pending: false,
+        error: null,
+        onRefresh: vi.fn(),
+        onUpdatePreferences,
+      }),
+    ),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("appearanceFont") }),
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", {
+      name: i18n.t("appearanceFont_serif"),
+    }),
+  );
+  expect(onUpdatePreferences).toHaveBeenLastCalledWith({
+    appearance: { font: "serif" },
+  });
+  fireEvent.change(
+    screen.getByRole("textbox", { name: i18n.t("appearanceBackground") }),
+    { target: { value: "#112233" } },
+  );
+  expect(onUpdatePreferences).toHaveBeenLastCalledWith({
+    appearance: { background: "#112233" },
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("appearanceTheme") }),
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: i18n.t("themeMist") }),
+  );
+  expect(onUpdatePreferences).toHaveBeenLastCalledWith({
+    appearance: { palette: "mist" },
+  });
+  fireEvent.click(screen.getByRole("radio", { name: i18n.t("themeLight") }));
+  expect(onUpdatePreferences).toHaveBeenLastCalledWith({ theme: "light" });
 });
 
 it("validates and cancels theme imports without writes; a failed valid import keeps its draft and saved mode", async () => {

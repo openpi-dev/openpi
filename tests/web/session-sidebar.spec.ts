@@ -11,7 +11,15 @@ import {
 } from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type {
   WebSessionSummary,
   WebSnapshot,
@@ -28,6 +36,13 @@ import { createWebStore } from "../../web/ui/src/store/web-store.ts";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+beforeEach(() => {
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  vi.spyOn(WebClient.prototype, "sessionOpenTargets").mockResolvedValue({
+    targets: [],
+  });
 });
 beforeAll(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -68,6 +83,7 @@ function session(
     created: "2026-09-18T10:00:00Z",
     messageCount: 1,
     firstMessage: "hello",
+    readRevision: `revision:${path}`,
   };
 }
 
@@ -76,7 +92,7 @@ function snapshot(sessions: WebSessionSummary[]): WebSnapshot {
     protocolVersion: 1,
     generatedAt: "2026-09-18T10:00:00Z",
     cursor: 1,
-    preferences: { theme: "system" },
+    preferences: { theme: "system", projectsInRecents: false },
     workspaces: [
       { path: "/repos/long-example", name: "Shared", current: true },
       { path: "/other/shared", name: "Shared", current: false },
@@ -166,6 +182,828 @@ function archivePage(
   };
 }
 
+function catalog(projectCount: number, firstProjectChats: number) {
+  const workspaces = Array.from({ length: projectCount }, (_, index) => ({
+    path: `/project-${index + 1}`,
+    name: `Project ${index + 1}`,
+    current: false,
+  }));
+  const data = snapshot(
+    workspaces.flatMap((project, projectIndex) =>
+      Array.from(
+        { length: projectIndex === 0 ? firstProjectChats : 1 },
+        (_, index) =>
+          session(
+            `${project.path}/${index}.jsonl`,
+            project.path,
+            `Chat ${projectIndex + 1}-${index + 1}`,
+          ),
+      ),
+    ),
+  );
+  data.workspaces = workspaces;
+  data.preferences = { theme: "system" };
+  return data;
+}
+
+function dragPointer(element: Element, type: string, y = 0) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    clientY: { value: y },
+    dataTransfer: {
+      value: { setData: vi.fn(), effectAllowed: "move", dropEffect: "move" },
+    },
+  });
+  fireEvent(element, event);
+}
+
+it("reorders projects when dropped over their child conversations using the full group midpoint", async () => {
+  const { actions } = mount(catalog(3, 1));
+  const order = vi.spyOn(actions, "setWorkspaceOrder").mockResolvedValue();
+  const source = screen.getByRole("region", { name: "Project 1" });
+  const destination = screen.getByRole("region", { name: "Project 2" });
+  vi.spyOn(destination, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 100, 300, 300),
+  );
+  dragPointer(source.querySelector(".workspace-button")!, "dragstart");
+  const child = within(destination).getByText("Chat 2-1");
+  dragPointer(child, "dragover", 320);
+  expect(destination.classList.contains("is-pin-drop-after")).toBe(true);
+  dragPointer(child, "drop", 320);
+  await waitFor(() =>
+    expect(order).toHaveBeenCalledWith("/project-1", "/project-3"),
+  );
+  expect(destination.classList.contains("is-pin-drop-after")).toBe(false);
+});
+
+it("offers an empty pin drop area during a project drag and suppresses the trailing pointer click", async () => {
+  const { actions } = mount(catalog(2, 1));
+  const pin = vi.spyOn(actions, "setSidebarPin").mockResolvedValue();
+  const toggle = vi
+    .spyOn(actions, "toggleWorkspace")
+    .mockImplementation(() => {});
+  const source = screen.getByRole("region", { name: "Project 1" });
+  expect(
+    screen.queryByRole("region", { name: i18n.t("pinnedConversations") }),
+  ).toBeNull();
+  dragPointer(source.querySelector(".workspace-button")!, "dragstart");
+  const pinned = await screen.findByRole("region", {
+    name: i18n.t("pinnedConversations"),
+  });
+  expect(within(pinned).getByText(i18n.t("sidebarDropPin"))).toBeTruthy();
+  dragPointer(pinned, "dragover");
+  dragPointer(pinned, "drop");
+  await waitFor(() =>
+    expect(pin).toHaveBeenCalledWith(
+      { kind: "workspace", path: "/project-1" },
+      true,
+      null,
+    ),
+  );
+  const label = within(source).getByRole("button", { name: "Project 1" });
+  fireEvent.click(label, { detail: 1 });
+  expect(toggle).not.toHaveBeenCalled();
+  fireEvent.click(label, { detail: 0 });
+  expect(toggle).toHaveBeenCalledWith("/project-1");
+  expect(toggle).toHaveBeenCalledTimes(1);
+  fireEvent.pointerDown(label);
+  fireEvent.click(label, { detail: 1 });
+  expect(toggle).toHaveBeenCalledTimes(2);
+});
+
+it("cancels project dragging with Escape without reviving a delayed frame or persisting a later drop", async () => {
+  const { actions } = mount(catalog(2, 1));
+  let frame: FrameRequestCallback | undefined;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    frame = callback;
+    return 1;
+  });
+  const order = vi.spyOn(actions, "setWorkspaceOrder").mockResolvedValue();
+  const source = screen.getByRole("region", { name: "Project 1" });
+  const destination = screen.getByRole("region", { name: "Project 2" });
+  dragPointer(source.querySelector(".workspace-button")!, "dragstart");
+  dragPointer(destination, "dragover");
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(frame).toBeDefined();
+  await act(async () => frame!(0));
+  expect(destination.classList.contains("is-pin-drop-target")).toBe(false);
+  expect(
+    screen.queryByRole("region", { name: i18n.t("sidebarDropProjectLast") }),
+  ).toBeNull();
+  dragPointer(destination, "drop");
+  expect(order).not.toHaveBeenCalled();
+});
+
+it("moves a pinned project to the ordinary project tail in one atomic order action", async () => {
+  const data = catalog(2, 1);
+  data.workspaces[0].pinOrder = 0;
+  const { actions } = mount(data);
+  const order = vi.spyOn(actions, "setWorkspaceOrder").mockResolvedValue();
+  const pin = vi.spyOn(actions, "setSidebarPin").mockResolvedValue();
+  const source = screen.getByRole("region", { name: "Project 1" });
+  dragPointer(source.querySelector(".workspace-button")!, "dragstart");
+  const tail = await screen.findByRole("region", {
+    name: i18n.t("sidebarDropProjectLast"),
+  });
+  dragPointer(tail, "dragover");
+  dragPointer(tail, "drop");
+  await waitFor(() => expect(order).toHaveBeenCalledWith("/project-1", null));
+  expect(pin).not.toHaveBeenCalled();
+});
+
+it("shows project conversations in Recent by default while excluding individually pinned and pinned-project duplicates", () => {
+  const project = session("/normal/chat.jsonl", "/normal", "Project chat");
+  const pinned = {
+    ...session("/normal/pin.jsonl", "/normal", "Pinned chat"),
+    pinOrder: 0,
+  };
+  const pinnedProject = session(
+    "/pinned/chat.jsonl",
+    "/pinned",
+    "Pinned project chat",
+  );
+  const loose = {
+    ...session("/loose/chat.jsonl", "/loose", "Loose chat"),
+    ungrouped: true,
+  };
+  const data = snapshot([project, pinned, pinnedProject, loose]);
+  data.preferences = { theme: "system" };
+  data.workspaces = [
+    { path: "/normal", name: "Normal project", current: false },
+    { path: "/pinned", name: "Pinned project", current: false, pinOrder: 1 },
+  ];
+  const view = mount(data);
+  const recent = screen.getByRole("region", { name: i18n.t("sidebarRecent") });
+  expect(
+    screen.getAllByRole("button", { name: `Project chat · ${project.path}` }),
+  ).toHaveLength(2);
+  expect(
+    within(screen.getByRole("region", { name: "Normal project" })).getByText(
+      "Project chat",
+    ),
+  ).toBeTruthy();
+  expect(within(recent).getByText("Project chat")).toBeTruthy();
+  expect(within(recent).getByText("Loose chat")).toBeTruthy();
+  expect(within(recent).queryByText("Pinned chat")).toBeNull();
+  expect(within(recent).queryByText("Pinned project chat")).toBeNull();
+  expect(
+    screen.getAllByRole("button", { name: `Pinned chat · ${pinned.path}` }),
+  ).toHaveLength(1);
+  expect(
+    screen.getAllByRole("button", {
+      name: `Pinned project chat · ${pinnedProject.path}`,
+    }),
+  ).toHaveLength(1);
+  view.rerender({
+    snapshot: {
+      ...data,
+      preferences: { ...data.preferences, projectsInRecents: false },
+    },
+  });
+  expect(
+    screen.getAllByRole("button", { name: `Project chat · ${project.path}` }),
+  ).toHaveLength(1);
+  expect(within(recent).queryByText("Project chat")).toBeNull();
+  expect(within(recent).getByText("Loose chat")).toBeTruthy();
+});
+
+it("initially shows five projects, five chats per project and ten Recent chats, then reveals each list independently", () => {
+  mount(catalog(7, 7));
+  expect(screen.getAllByRole("region", { name: /^Project \d+$/ })).toHaveLength(
+    5,
+  );
+  expect(screen.queryByRole("region", { name: "Project 6" })).toBeNull();
+  const project = screen.getByRole("region", { name: "Project 1" });
+  const recent = screen.getByRole("region", { name: i18n.t("sidebarRecent") });
+  expect(
+    within(project).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(5);
+  expect(
+    within(recent).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(10);
+  fireEvent.click(
+    within(project).getByRole("button", { name: i18n.t("sidebarShowMore") }),
+  );
+  expect(
+    within(project).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(7);
+  expect(
+    within(recent).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(10);
+  fireEvent.click(
+    within(project).getByRole("button", { name: i18n.t("sidebarShowLess") }),
+  );
+  expect(
+    within(project).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(5);
+  const projectsMore = document.querySelector<HTMLButtonElement>(
+    ".workspace-tree > .sidebar-show-more",
+  );
+  if (!projectsMore) throw new Error("Project disclosure is missing");
+  fireEvent.click(projectsMore);
+  expect(screen.getAllByRole("region", { name: /^Project \d+$/ })).toHaveLength(
+    7,
+  );
+  fireEvent.click(
+    within(recent).getByRole("button", { name: i18n.t("sidebarShowMore") }),
+  );
+  expect(
+    within(recent).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(13);
+  expect(
+    within(recent).queryByRole("button", { name: i18n.t("sidebarShowMore") }),
+  ).toBeNull();
+});
+
+it("shows a single overflow item without requiring Show more for projects, project chats or Recent", () => {
+  mount(catalog(6, 6));
+  expect(screen.getAllByRole("region", { name: /^Project \d+$/ })).toHaveLength(
+    6,
+  );
+  expect(
+    within(screen.getByRole("region", { name: "Project 1" })).getAllByRole(
+      "button",
+      { name: /^Chat \d/ },
+    ),
+  ).toHaveLength(6);
+  expect(
+    within(
+      screen.getByRole("region", { name: i18n.t("sidebarRecent") }),
+    ).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(11);
+  expect(
+    screen.queryByRole("button", { name: i18n.t("sidebarShowMore") }),
+  ).toBeNull();
+});
+
+it("keeps the exact current conversation and its project visible beyond each list limit without expanding other rows", () => {
+  const data = catalog(8, 8);
+  const selected = data.sessions.at(-1)!;
+  data.selectedSession = {
+    id: selected.id,
+    path: selected.path,
+    cwd: selected.cwd,
+    entries: [],
+    bytes: 0,
+    truncation: {
+      maxBytes: 4 * 1024 * 1024,
+      entriesOmitted: 0,
+      messagesTruncated: 0,
+      messagePartsOmitted: 0,
+      truncated: false,
+    },
+  };
+  const view = mount(data, { selectedPath: selected.path });
+  expect(screen.getAllByRole("region", { name: /^Project \d+$/ })).toHaveLength(
+    6,
+  );
+  expect(screen.getByRole("region", { name: "Project 8" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Project 6" })).toBeNull();
+  const recent = screen.getByRole("region", { name: i18n.t("sidebarRecent") });
+  expect(
+    within(recent).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(11);
+  expect(
+    within(recent)
+      .getByRole("button", { name: `${selected.name} · ${selected.path}` })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+  expect(within(recent).queryByText("Chat 4-1")).toBeNull();
+  expect(
+    within(recent).getByRole("button", { name: i18n.t("sidebarShowMore") }),
+  ).toBeTruthy();
+
+  const projectChat = data.sessions[7]!;
+  const selectedSession = {
+    ...data.selectedSession,
+    id: projectChat.id,
+    path: projectChat.path,
+    cwd: projectChat.cwd,
+  };
+  view.rerender({
+    snapshot: { ...data, selectedSession },
+    selectedPath: projectChat.path,
+  });
+  const project = screen.getByRole("region", { name: "Project 1" });
+  expect(
+    within(project).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(6);
+  expect(
+    within(project)
+      .getByRole("button", {
+        name: `${projectChat.name} · ${projectChat.path}`,
+      })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+  expect(within(project).queryByText("Chat 1-6")).toBeNull();
+  expect(
+    within(project).getByRole("button", { name: i18n.t("sidebarShowMore") }),
+  ).toBeTruthy();
+  view.rerender({
+    snapshot: {
+      ...data,
+      selectedSession: { ...selectedSession, id: "another-native-session" },
+    },
+  });
+  expect(within(project).queryByText("Chat 1-8")).toBeNull();
+  expect(
+    within(project).getAllByRole("button", { name: /^Chat \d/ }),
+  ).toHaveLength(5);
+});
+
+it("keeps a selected worktree chat in its original project and highlights that folder without reordering projects", () => {
+  const data = catalog(2, 1);
+  const selected = data.sessions[1]!;
+  selected.workspacePath = selected.cwd;
+  selected.cwd = "/worktrees/fork/app";
+  selected.worktree = {
+    path: "/worktrees/fork",
+    baseSha: "a".repeat(40),
+    sourceRoot: "/project-2",
+  };
+  data.preferences.projectsInRecents = false;
+  data.selectedSession = {
+    id: selected.id,
+    path: selected.path,
+    cwd: selected.cwd,
+    entries: [],
+    bytes: 0,
+    truncation: {
+      maxBytes: 1_000_000,
+      entriesOmitted: 0,
+      messagesTruncated: 0,
+      messagePartsOmitted: 0,
+      truncated: false,
+    },
+  };
+  mount(data, { selectedPath: selected.path, selectedWorkspace: selected.cwd });
+  const projects = screen.getAllByRole("region", { name: /^Project \d$/ });
+  expect(projects.map((project) => project.getAttribute("aria-label"))).toEqual(
+    ["Project 1", "Project 2"],
+  );
+  const current = within(projects[1]!).getByRole("button", {
+    name: "Project 2",
+  });
+  expect(current.getAttribute("aria-current")).toBe("location");
+  expect(current.getAttribute("aria-expanded")).toBe("true");
+  const chat = within(projects[1]!).getByRole("button", {
+    name: `${selected.name} · ${selected.path}`,
+  });
+  expect(chat.getAttribute("aria-current")).toBe("page");
+  expect(chat.querySelector(".sidebar-worktree-icon")).toBeNull();
+  expect(within(projects[0]!).queryByText(selected.name!)).toBeNull();
+  expect(
+    screen.queryByRole("region", { name: "/worktrees/fork/app" }),
+  ).toBeNull();
+});
+
+it("replaces the sidebar list with activity and returns without changing the confirmed conversation", () => {
+  const current = session("/current", "/repos/long-example", "Current reader");
+  const unread = {
+    ...session("/done", "/other/shared", "Finished work"),
+    unread: true,
+    execution: {
+      status: "idle" as const,
+      lastTurn: {
+        commandId: "done",
+        finishedAt: 1,
+        outcome: "completed" as const,
+      },
+    },
+  };
+  const data = snapshot([current, unread]);
+  data.selectedSession = {
+    id: current.id,
+    path: current.path,
+    cwd: current.cwd,
+  } as WebSnapshot["selectedSession"];
+  const { actions } = mount(data, { selectedPath: current.path });
+  const select = vi.spyOn(actions, "selectSession").mockResolvedValue();
+  const bell = screen.getByRole("button", {
+    name: i18n.t("sidebarViewActivity"),
+  });
+  expect(bell.querySelector(".sidebar-unread-dot")).toBeTruthy();
+  fireEvent.click(bell);
+  const activity = screen.getByRole("region", {
+    name: i18n.t("sidebarActivity"),
+  });
+  expect(within(activity).getByText("Finished work")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: `Current reader · ${current.path}` }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole("region", { name: i18n.t("sidebarRecent") }),
+  ).toBeNull();
+  expect(select).not.toHaveBeenCalled();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sidebarViewChats") }),
+  );
+  expect(
+    screen.queryByRole("region", { name: i18n.t("sidebarActivity") }),
+  ).toBeNull();
+  expect(
+    screen
+      .getByRole("button", { name: `Current reader · ${current.path}` })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+  expect(select).not.toHaveBeenCalled();
+});
+
+it("retains a newly read Priority row until cleared and merges Priority into dated activity without changing session metadata", async () => {
+  const finishedAt = Date.now();
+  const entries = ["Opened result", "Still unread"].map((name, index) => ({
+    ...session(`/activity-${index}`, "/repos/long-example", name),
+    unread: true,
+    execution: {
+      status: "idle" as const,
+      lastTurn: { commandId: name, finishedAt, outcome: "completed" as const },
+    },
+  }));
+  const data = snapshot(entries);
+  const view = mount(data);
+  const read = vi.spyOn(view.actions, "setSessionRead").mockResolvedValue();
+  const archive = vi.spyOn(view.actions, "archiveSession").mockResolvedValue();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sidebarViewActivity") }),
+  );
+  const activity = screen.getByRole("region", {
+    name: i18n.t("sidebarActivity"),
+  });
+  const confirmed = {
+    ...data,
+    sessions: [{ ...entries[0]!, unread: false }, entries[1]!],
+  };
+  view.rerender({ snapshot: confirmed });
+  expect(
+    within(activity)
+      .getByRole("region", { name: i18n.t("sidebarPriority") })
+      .querySelector(".session-title")?.textContent,
+  ).toBe("Opened result");
+  expect(
+    within(activity).getByRole("region", { name: i18n.t("sidebarPriority") })
+      .textContent,
+  ).toContain("Opened result");
+  fireEvent.click(
+    within(activity).getByRole("button", { name: i18n.t("sidebarClearRead") }),
+  );
+  const priority = within(activity).getByRole("region", {
+    name: i18n.t("sidebarPriority"),
+  });
+  expect(within(priority).queryByText("Opened result")).toBeNull();
+  expect(within(priority).getByText("Still unread")).toBeTruthy();
+  const dated = within(activity).getByRole("region", {
+    name: i18n.t("sidebarToday"),
+  });
+  expect(within(dated).getByText("Opened result")).toBeTruthy();
+  fireEvent.click(
+    within(activity).getByRole("button", {
+      name: i18n.t("sidebarActivityOptions"),
+    }),
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: i18n.t("sidebarPriority") }),
+  );
+  expect(
+    within(activity).queryByRole("region", { name: i18n.t("sidebarPriority") }),
+  ).toBeNull();
+  expect(within(dated).getByText("Still unread")).toBeTruthy();
+  fireEvent.click(
+    within(activity).getByRole("button", {
+      name: i18n.t("sidebarActivityOptions"),
+    }),
+  );
+  const markRead = await screen.findByRole("menuitem", {
+    name: i18n.t("sidebarMarkAllRead"),
+  });
+  expect(markRead.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(markRead);
+  fireEvent.keyDown(markRead, { key: "Escape" });
+  expect(
+    confirmed.sessions.map((entry) => ({
+      path: entry.path,
+      unread: entry.unread,
+    })),
+  ).toEqual([
+    { path: "/activity-0", unread: false },
+    { path: "/activity-1", unread: true },
+  ]);
+  expect(read).not.toHaveBeenCalled();
+  expect(archive).not.toHaveBeenCalled();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sidebarViewChats") }),
+  );
+  expect(
+    screen.getByText("Opened result", { selector: ".session-title" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByText("Still unread", { selector: ".session-title" }),
+  ).toBeTruthy();
+});
+
+it("keeps Priority order after reading and appends existing arrivals but prepends new conversations", () => {
+  const at = Date.now();
+  const entries: WebSessionSummary[] = [
+    {
+      ...session("/active", "/repos/long-example", "Active"),
+      execution: { status: "running" as const },
+    },
+    { ...session("/unread", "/repos/long-example", "Unread"), unread: true },
+    {
+      ...session("/waiting", "/repos/long-example", "Waiting"),
+      execution: { status: "running" as const, waitingForInput: true },
+    },
+    session("/existing", "/repos/long-example", "Existing"),
+  ].map((entry, index) => ({
+    ...entry,
+    modified: new Date(at - index * 1000).toISOString(),
+  }));
+  const data = snapshot(entries);
+  const view = mount(data);
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sidebarViewActivity") }),
+  );
+  const priority = screen.getByRole("region", {
+    name: i18n.t("sidebarPriority"),
+  });
+  const titles = () =>
+    [...priority.querySelectorAll(".session-title")].map(
+      (node) => node.textContent,
+    );
+  expect(titles()).toEqual(["Waiting", "Unread", "Active"]);
+  const updated = entries.map((entry) => ({
+    ...entry,
+    unread: entry.path === "/existing",
+  }));
+  view.rerender({ snapshot: { ...data, sessions: updated } });
+  expect(titles()).toEqual(["Waiting", "Unread", "Active", "Existing"]);
+  const created = {
+    ...session("/new", "/repos/long-example", "New"),
+    created: new Date(at + 1000).toISOString(),
+    unread: true,
+  };
+  view.rerender({ snapshot: { ...data, sessions: [...updated, created] } });
+  expect(titles()).toEqual(["New", "Waiting", "Unread", "Active", "Existing"]);
+});
+
+it("shows an expanded project's empty state only when the loaded catalog is complete", () => {
+  const data = snapshot([]);
+  data.workspaces = [{ path: "/empty", name: "Empty", current: false }];
+  const view = mount(data);
+  const project = screen.getByRole("region", { name: "Empty" });
+  expect(project.querySelector(".workspace-empty")?.textContent).toBe(
+    i18n.t("noConversations"),
+  );
+  view.rerender({ collapsed: new Set(["/empty"]) });
+  expect(project.querySelector(".workspace-empty")).toBeNull();
+  view.rerender({
+    collapsed: new Set(),
+    snapshot: {
+      ...data,
+      truncation: { ...data.truncation, sessionsOmitted: 1, truncated: true },
+    },
+  });
+  expect(project.querySelector(".workspace-empty")).toBeNull();
+});
+
+it("keeps an earlier unread failure visible and dates its activity by that result after a later cancellation", async () => {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setHours(12, 0, 0, 0);
+  const entry: WebSessionSummary = {
+    ...session("/earlier-failure", "/repos/long-example", "Earlier failure"),
+    unread: true,
+    firstUnread: {
+      type: "turn",
+      commandId: "failed-turn",
+      finishedAt: yesterday.getTime(),
+      outcome: "failed",
+      resultEntryId: "failed-result",
+    },
+    execution: {
+      status: "idle",
+      lastTurn: {
+        commandId: "later-cancelled-turn",
+        finishedAt: Date.now(),
+        outcome: "cancelled",
+      },
+    },
+  };
+  mount(snapshot([entry]));
+  expect(
+    screen
+      .getByRole("button", { name: /^Earlier failure ·/ })
+      .querySelector(".session-state-attention"),
+  ).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sidebarViewActivity") }),
+  );
+  const activity = screen.getByRole("region", {
+    name: i18n.t("sidebarActivity"),
+  });
+  fireEvent.click(
+    within(activity).getByRole("button", {
+      name: i18n.t("sidebarActivityOptions"),
+    }),
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: i18n.t("sidebarPriority") }),
+  );
+  const dated = within(activity).getByRole("region", {
+    name: i18n.t("sidebarYesterday"),
+  });
+  expect(
+    within(dated)
+      .getByRole("button", { name: /^Earlier failure ·/ })
+      .querySelector(".session-state-attention"),
+  ).toBeTruthy();
+  expect(
+    within(activity).queryByRole("region", { name: i18n.t("sidebarToday") }),
+  ).toBeNull();
+});
+
+it("includes seven local calendar dates from midnight and retains older unread or running activity", () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-12T15:30:00"));
+  try {
+    const dates = [
+      "2026-10-12",
+      "2026-10-11",
+      "2026-10-10",
+      "2026-10-09",
+      "2026-10-08",
+      "2026-10-07",
+      "2026-10-06",
+    ];
+    const entries = dates.map((date) => ({
+      ...session(`/read-${date}`, "/repos/long-example", `Read ${date}`),
+      unread: false,
+      execution: {
+        status: "idle" as const,
+        lastTurn: {
+          commandId: date,
+          finishedAt: new Date(`${date}T00:00:00`).getTime(),
+          outcome: "completed" as const,
+        },
+      },
+    }));
+    const previousDay = {
+      ...session("/previous-day", "/repos/long-example", "Before midnight"),
+      unread: false,
+      execution: {
+        status: "idle" as const,
+        lastTurn: {
+          commandId: "previous-day",
+          finishedAt: new Date("2026-10-05T23:59:59.999").getTime(),
+          outcome: "failed" as const,
+        },
+      },
+    };
+    const oldUnread = {
+      ...session("/old-unread", "/repos/long-example", "Old unread"),
+      unread: true,
+      execution: {
+        status: "idle" as const,
+        lastTurn: {
+          commandId: "old-unread",
+          finishedAt: new Date("2026-10-01T12:00:00").getTime(),
+          outcome: "completed" as const,
+        },
+      },
+    };
+    const oldRunning = {
+      ...session("/old-running", "/repos/long-example", "Old running"),
+      unread: false,
+      execution: { status: "running" as const },
+    };
+    const { actions } = mount(
+      snapshot([...entries, previousDay, oldUnread, oldRunning]),
+    );
+    const read = vi.spyOn(actions, "setSessionRead").mockResolvedValue();
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("sidebarViewActivity") }),
+    );
+    const activity = screen.getByRole("region", {
+      name: i18n.t("sidebarActivity"),
+    });
+    for (const date of dates)
+      expect(within(activity).getByText(`Read ${date}`)).toBeTruthy();
+    expect(within(activity).queryByText("Before midnight")).toBeNull();
+    const priority = within(activity).getByRole("region", {
+      name: i18n.t("sidebarPriority"),
+    });
+    expect(within(priority).getByText("Old unread")).toBeTruthy();
+    expect(within(priority).getByText("Old running")).toBeTruthy();
+    expect(read).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("loads the next activity rows when the scroll tail becomes visible and keeps them when a new unread receipt arrives", () => {
+  let onIntersection:
+    | ((entries: { isIntersecting: boolean }[]) => void)
+    | undefined;
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: typeof onIntersection) {
+        onIntersection = callback;
+      }
+      observe = observe;
+      disconnect = disconnect;
+    },
+  );
+  const now = Date.now();
+  const entries = Array.from({ length: 12 }, (_, index) => ({
+    ...session(
+      `/record-${index}`,
+      "/repos/long-example",
+      `Record ${index + 1}`,
+    ),
+    unread: false,
+    execution: {
+      status: "idle" as const,
+      lastTurn: {
+        commandId: `turn-${index}`,
+        finishedAt: now - (index + 1) * 1000,
+        outcome: "completed" as const,
+      },
+    },
+  }));
+  const expired = {
+    ...entries[0]!,
+    id: "expired",
+    path: "/expired",
+    name: "Expired read result",
+    execution: {
+      status: "idle" as const,
+      lastTurn: {
+        commandId: "expired",
+        finishedAt: now - 8 * 86400000,
+        outcome: "completed" as const,
+      },
+    },
+  };
+  const data = snapshot([...entries, expired]);
+  const view = mount(data);
+  const read = vi.spyOn(view.actions, "setSessionRead").mockResolvedValue();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sidebarViewActivity") }),
+  );
+  const activity = screen.getByRole("region", {
+    name: i18n.t("sidebarActivity"),
+  });
+  expect(
+    within(activity).getAllByRole("button", { name: /^Record \d+ ·/ }),
+  ).toHaveLength(10);
+  expect(within(activity).queryByText("Expired read result")).toBeNull();
+  const tail = within(activity).getByRole("status", {
+    name: i18n.t("loading"),
+  });
+  expect(observe).toHaveBeenCalledWith(tail);
+  act(() => onIntersection?.([{ isIntersecting: false }]));
+  expect(
+    within(activity).getAllByRole("button", { name: /^Record \d+ ·/ }),
+  ).toHaveLength(10);
+  act(() => onIntersection?.([{ isIntersecting: true }]));
+  expect(
+    within(activity).getAllByRole("button", { name: /^Record \d+ ·/ }),
+  ).toHaveLength(12);
+  const incoming = {
+    ...entries[0]!,
+    id: "incoming",
+    path: "/incoming",
+    name: "Incoming",
+    unread: true,
+    execution: {
+      status: "idle" as const,
+      lastTurn: {
+        commandId: "new-turn",
+        finishedAt: now,
+        outcome: "completed" as const,
+      },
+    },
+  };
+  view.rerender({
+    snapshot: { ...data, sessions: [incoming, ...data.sessions] },
+  });
+  expect(
+    within(activity).getAllByRole("button", { name: /^Record \d+ ·/ }),
+  ).toHaveLength(12);
+  expect(
+    within(
+      within(activity).getByRole("region", { name: i18n.t("sidebarPriority") }),
+    ).getByText("Incoming"),
+  ).toBeTruthy();
+  expect(
+    within(activity).queryByRole("status", { name: i18n.t("loading") }),
+  ).toBeNull();
+  expect(disconnect).toHaveBeenCalled();
+  expect(read).not.toHaveBeenCalled();
+});
+
 it("groups pins once, sorts, collapses, and submits identity-bound manual moves", async () => {
   const a = {
     ...session("/a.jsonl", "/repos/long-example", "Older pin"),
@@ -173,13 +1011,19 @@ it("groups pins once, sorts, collapses, and submits identity-bound manual moves"
   };
   const b = {
     ...session("/b.jsonl", "/other/shared", "Newer pin"),
-    pinOrder: 1,
+    pinOrder: 2,
     modified: "2026-09-29T10:00:00Z",
   };
   const ordinary = session("/c.jsonl", "/repos/long-example", "Ordinary");
   const data = snapshot([b, ordinary, a]);
+  data.workspaces[0] = {
+    ...data.workspaces[0]!,
+    name: "Pinned project",
+    pinOrder: 1,
+  };
   const actions = createWebStore().getState().actions;
   const pin = vi.spyOn(actions, "setSessionPin").mockResolvedValue();
+  const movePin = vi.spyOn(actions, "setSidebarPin").mockResolvedValue();
   const refresh = vi.spyOn(actions, "refreshSnapshot").mockResolvedValue(true);
   const save = vi
     .spyOn(WebClient.prototype, "savePreferences")
@@ -188,20 +1032,39 @@ it("groups pins once, sorts, collapses, and submits identity-bound manual moves"
   const section = screen.getByRole("region", { name: "Pinned" });
   expect(
     within(section)
-      .getAllByText(/Older pin|Newer pin/)
+      .getAllByText(/^(Older pin|Pinned project|Newer pin)$/)
       .map((node) => node.textContent),
-  ).toEqual(["Older pin", "Newer pin"]);
-  expect(screen.getAllByText("Older pin")).toHaveLength(1);
+  ).toEqual(["Older pin", "Pinned project", "Newer pin"]);
+  expect(
+    screen.getAllByRole("button", { name: `Older pin · ${a.path}` }),
+  ).toHaveLength(1);
   fireEvent.click(within(section).getByRole("button", { name: "Pinned" }));
   expect(within(section).queryByText("Older pin")).toBeNull();
   fireEvent.click(within(section).getByRole("button", { name: "Pinned" }));
   fireEvent.click(
     within(section).getAllByRole("button", {
       name: "Conversation options",
-    })[1]!,
+    })[2]!,
   );
   fireEvent.click(await screen.findByRole("menuitem", { name: "Move up" }));
-  await waitFor(() => expect(pin).toHaveBeenCalledWith(b.path, b.id, true, a));
+  await waitFor(() =>
+    expect(movePin).toHaveBeenCalledWith(
+      { kind: "session", path: b.path, id: b.id },
+      true,
+      { kind: "workspace", path: ordinary.cwd },
+    ),
+  );
+  fireEvent.click(
+    within(section).getByRole("button", { name: "Workspace options" }),
+  );
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Move up" }));
+  await waitFor(() =>
+    expect(movePin).toHaveBeenLastCalledWith(
+      { kind: "workspace", path: ordinary.cwd },
+      true,
+      { kind: "session", path: a.path, id: a.id },
+    ),
+  );
   fireEvent.click(
     within(section).getByRole("button", { name: "Pinned options" }),
   );
@@ -209,21 +1072,23 @@ it("groups pins once, sorts, collapses, and submits identity-bound manual moves"
     await screen.findByRole("menuitem", { name: "Recently updated" }),
   );
   await waitFor(() =>
-    expect(screen.getByRole("alert").textContent).toContain("Could not save"),
+    expect(screen.getByRole("alert").textContent).toBe(
+      i18n.t("sidebarSaveFailed"),
+    ),
   );
   expect(save).toHaveBeenCalledWith({ pinnedSort: "updated" });
   expect(refresh).not.toHaveBeenCalled();
   view.rerender({
     snapshot: {
       ...data,
-      preferences: { theme: "system", pinnedSort: "updated" },
+      preferences: { ...data.preferences, pinnedSort: "updated" },
     },
   });
   expect(
     within(section)
-      .getAllByText(/Older pin|Newer pin/)
+      .getAllByText(/^(Older pin|Pinned project|Newer pin)$/)
       .map((node) => node.textContent),
-  ).toEqual(["Newer pin", "Older pin"]);
+  ).toEqual(["Newer pin", "Older pin", "Pinned project"]);
   fireEvent.click(
     within(section).getAllByRole("button", {
       name: "Unpin conversation",
@@ -235,9 +1100,7 @@ it("groups pins once, sorts, collapses, and submits identity-bound manual moves"
   view.rerender({ query: "Older" });
   expect(within(section).queryByText("Newer pin")).toBeNull();
   expect(within(section).getByText("Older pin")).toBeTruthy();
-  expect(screen.getByText(i18n.t("noMatching")).hasAttribute("hidden")).toBe(
-    true,
-  );
+  expect(screen.queryByText(i18n.t("noMatching"))).toBeNull();
 });
 
 it("shows per-Session running and queue facts without borrowing global runtime state", () => {
@@ -287,6 +1150,7 @@ it("shows only running, unread completion and attention; stopped and unknown rem
     ["completed", "failed", "cancelled", "uncertain"] as const
   ).map((outcome) => ({
     ...session(`/${outcome}`, "/repos/long-example", outcome),
+    unread: outcome === "completed" || outcome === "failed",
     execution: {
       status: "idle" as const,
       lastTurn: { commandId: outcome, finishedAt: 1, outcome },
@@ -307,67 +1171,153 @@ it("shows only running, unread completion and attention; stopped and unknown rem
   expect(document.querySelector(".session-state-running")).toBeNull();
 });
 
-it("acknowledges a confirmed loaded view and keeps a new background completion unread", () => {
-  vi.useFakeTimers();
-  try {
-    const completed = session(
-      "/completion-receipt",
-      "/repos/long-example",
-      "Done",
-    );
-    completed.execution = {
-      status: "unknown",
-      lastTurn: {
-        commandId: "first",
-        finishedAt: 1,
-        outcome: "completed",
-        resultEntryId: "first-result",
-      },
-    };
-    const data = snapshot([completed]);
-    data.selectedSession = {
-      id: completed.id,
-      path: completed.path,
-      cwd: completed.cwd,
-      entries: [],
-      bytes: 0,
-      truncation: {
-        maxBytes: 4 * 1024 * 1024,
-        entriesOmitted: 0,
-        messagesTruncated: 0,
-        messagePartsOmitted: 0,
-        truncated: false,
-      },
-    };
-    const view = mount(data, {
-      selectedPath: completed.path,
-      connected: true,
-      sessionViewVisible: false,
-    });
-    // Selecting a path is insufficient until its loaded view is visible.
-    act(() => vi.advanceTimersByTime(5000));
-    expect(document.querySelector(".session-state-completed")).toBeTruthy();
-    view.rerender({
-      sessionViewVisible: true,
-      selectedPath: "/not-loaded",
-    });
-    expect(document.querySelector(".session-state-completed")).toBeTruthy();
-    view.rerender({
-      selectedPath: completed.path,
-    });
-    expect(document.querySelector(".session-state-completed")).toBeNull();
-    completed.execution.lastTurn = {
-      commandId: "second",
-      finishedAt: 2,
+it("acknowledges the exact loaded revision and waits for backend read state while a new background receipt remains unread", async () => {
+  const completed = session(
+    "/completion-receipt",
+    "/repos/long-example",
+    "Done",
+  );
+  completed.unread = true;
+  completed.execution = {
+    status: "unknown",
+    lastTurn: {
+      commandId: "first",
+      finishedAt: 1,
       outcome: "completed",
-      resultEntryId: "second-result",
-    };
-    view.rerender({ snapshot: { ...data }, sessionViewVisible: false });
-    expect(document.querySelector(".session-state-completed")).toBeTruthy();
-    view.unmount();
-  } finally {
-    vi.useRealTimers();
-  }
+      resultEntryId: "first-result",
+    },
+  };
+  const data = snapshot([completed]);
+  data.selectedSession = {
+    id: completed.id,
+    path: completed.path,
+    cwd: completed.cwd,
+    entries: [],
+    bytes: 0,
+    truncation: {
+      maxBytes: 4 * 1024 * 1024,
+      entriesOmitted: 0,
+      messagesTruncated: 0,
+      messagePartsOmitted: 0,
+      truncated: false,
+    },
+  };
+  const actions = createWebStore().getState().actions;
+  const read = vi.spyOn(actions, "setSessionRead").mockResolvedValue();
+  const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  const view = mount(data, {
+    actions,
+    selectedPath: completed.path,
+    connected: true,
+    sessionViewVisible: false,
+  });
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+  expect(read).not.toHaveBeenCalled();
+  view.rerender({ sessionViewVisible: true, selectedPath: "/not-loaded" });
+  expect(read).not.toHaveBeenCalled();
+  view.rerender({ selectedPath: completed.path });
+  expect(read).not.toHaveBeenCalled();
+  fireEvent(window, new Event("focus"));
+  expect(read).not.toHaveBeenCalled();
+  focus.mockReturnValue(true);
+  fireEvent(window, new Event("focus"));
+  await waitFor(() =>
+    expect(read).toHaveBeenCalledExactlyOnceWith(
+      completed.path,
+      completed.id,
+      true,
+      completed.readRevision,
+    ),
+  );
+  // A successful write request does not replace the server's reading projection.
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+  view.rerender({
+    snapshot: {
+      ...data,
+      sessions: [
+        { ...completed, unread: false, readRevision: "confirmed-read" },
+      ],
+    },
+  });
+  expect(document.querySelector(".session-state-completed")).toBeNull();
+  const newer = {
+    ...completed,
+    readRevision: "second-completion",
+    execution: {
+      ...completed.execution,
+      lastTurn: {
+        commandId: "second",
+        finishedAt: 2,
+        outcome: "completed" as const,
+        resultEntryId: "second-result",
+      },
+    },
+  };
+  view.rerender({
+    snapshot: { ...data, sessions: [newer] },
+    sessionViewVisible: false,
+  });
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+  expect(read).toHaveBeenCalledOnce();
+});
+
+it("keeps a visible conversation manually marked unread elsewhere unread until the user opens it again", async () => {
+  const viewed = session("/viewed", "/repos/long-example", "Viewed chat");
+  viewed.unread = false;
+  viewed.execution = {
+    status: "idle",
+    lastTurn: { commandId: "viewed-turn", finishedAt: 1, outcome: "completed" },
+  };
+  const data = snapshot([viewed]);
+  data.selectedSession = {
+    id: viewed.id,
+    path: viewed.path,
+    cwd: viewed.cwd,
+    entries: [],
+    bytes: 0,
+    truncation: {
+      maxBytes: 4 * 1024 * 1024,
+      entriesOmitted: 0,
+      messagesTruncated: 0,
+      messagePartsOmitted: 0,
+      truncated: false,
+    },
+  };
+  const actions = createWebStore().getState().actions;
+  const read = vi.spyOn(actions, "setSessionRead").mockResolvedValue();
+  vi.spyOn(actions, "selectSession").mockResolvedValue();
+  const view = mount(data, {
+    actions,
+    selectedPath: viewed.path,
+    connected: true,
+    sessionViewVisible: true,
+  });
+  expect(
+    screen
+      .getByRole("button", { name: `Viewed chat · ${viewed.path}` })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+  expect(read).not.toHaveBeenCalled();
+  const externallyUnread = {
+    ...viewed,
+    unread: true,
+    readRevision: "marked-unread-elsewhere",
+  };
+  view.rerender({ snapshot: { ...data, sessions: [externallyUnread] } });
+  fireEvent(document, new Event("visibilitychange"));
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+  expect(read).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: /^Viewed chat ·/ }));
+  await waitFor(() =>
+    expect(read).toHaveBeenCalledExactlyOnceWith(
+      viewed.path,
+      viewed.id,
+      true,
+      externallyUnread.readRevision,
+    ),
+  );
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
 });
 
 it("clears sidebar execution markers when the runtime releases the Session", () => {
@@ -419,7 +1369,9 @@ it("searches the current loaded list and the separate archived query without cha
     query: "long-example",
     searchOpen: true,
   });
-  expect(screen.getByText("First")).toBeTruthy();
+  expect(
+    screen.getByText("First", { selector: ".session-title" }),
+  ).toBeTruthy();
   expect(screen.queryByText("Old")).toBeNull();
   expect(screen.getByText("/repos/long-example")).toBeTruthy();
   expect(screen.getByText(/12 more sessions.*loaded list only/)).toBeTruthy();
@@ -430,10 +1382,14 @@ it("searches the current loaded list and the separate archived query without cha
   ).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Archived" }));
   expect(await screen.findByText("Old")).toBeTruthy();
-  expect(screen.queryByText("First")).toBeNull();
+  expect(
+    screen.queryByText("First", { selector: ".session-title" }),
+  ).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Current" }));
   rerender({ query: "" });
-  expect(screen.queryByText("First")).toBeNull();
+  expect(
+    screen.queryByText("First", { selector: ".session-title" }),
+  ).toBeNull();
   expect(
     screen
       .getByRole("button", { name: /Shared.*long-example/ })
@@ -447,7 +1403,9 @@ it("does not claim zero unloaded records during a complete-list search", () => {
   ]);
   mount(data, { query: "first", searchOpen: true });
 
-  expect(screen.getByText("First")).toBeTruthy();
+  expect(
+    screen.getByText("First", { selector: ".session-title" }),
+  ).toBeTruthy();
   expect(screen.queryByText(/loaded list only/iu)).toBeNull();
   expect(screen.queryByText(/0 more sessions/iu)).toBeNull();
 });
@@ -516,10 +1474,8 @@ it("keeps a failed rename draft editable and saves it on retry", async () => {
     .mockRejectedValueOnce(new Error("offline"))
     .mockResolvedValueOnce();
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(
-    await screen.findByRole("menuitem", { name: "Rename conversation" }),
-  );
-  const input = screen.getByRole<HTMLInputElement>("textbox", {
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+  const input = await screen.findByRole<HTMLInputElement>("textbox", {
     name: "Conversation name",
   });
   fireEvent.change(input, { target: { value: "Revised" } });
@@ -560,16 +1516,12 @@ it("keeps an archived row available after an unconfirmed restore", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Archived" }));
   await screen.findByText("Old");
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(
-    await screen.findByRole("menuitem", { name: "Restore conversation" }),
-  );
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Restore" }));
   await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
   expect(screen.getByText("Old")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
   await act(async () =>
-    fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Restore conversation" }),
-    ),
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restore" })),
   );
   expect(restore).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole("alert")).toBeNull();
@@ -611,6 +1563,13 @@ it.each([false, true])(
     ).toBe("location");
     rerender({ selectedPath: controller.path });
     expect(selected.getAttribute("aria-current")).toBeNull();
+    expect(
+      document.querySelector('.workspace-label[aria-current="location"]'),
+    ).toBeNull();
+    rerender({ selectedPath: null, selectedWorkspace: controller.cwd });
+    expect(
+      document.querySelector('.workspace-label[aria-current="location"]'),
+    ).toBeNull();
   },
 );
 
@@ -648,8 +1607,8 @@ it("shows archive loading without an empty result and disables duplicate reads",
     );
   mount(snapshot([]));
   fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  expect(screen.getByRole("status").textContent).toBe(
-    i18n.t("loadingArchives"),
+  expect(screen.getByText(i18n.t("loadingArchives")).getAttribute("role")).toBe(
+    "status",
   );
   expect(
     screen.queryByText(i18n.t("noArchivedSessions"))?.closest("[hidden]"),
@@ -785,7 +1744,7 @@ it("refreshes archives after restoration without selecting the restored Session"
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
   fireEvent.click(
     await screen.findByRole("menuitem", {
-      name: i18n.t("restoreConversation"),
+      name: i18n.t("sidebarRestore"),
     }),
   );
   await screen.findByText(i18n.t("noArchivedSessions"));
@@ -812,7 +1771,7 @@ it("does not expose a restore failure from a previous archive query", async () =
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
   fireEvent.click(
     await screen.findByRole("menuitem", {
-      name: i18n.t("restoreConversation"),
+      name: i18n.t("sidebarRestore"),
     }),
   );
   view.rerender({ query: "beta" });
@@ -871,7 +1830,7 @@ it("does not start another archive read after a restore settles beyond unmount",
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
   fireEvent.click(
     await screen.findByRole("menuitem", {
-      name: i18n.t("restoreConversation"),
+      name: i18n.t("sidebarRestore"),
     }),
   );
   view.unmount();

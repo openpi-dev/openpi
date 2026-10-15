@@ -17,8 +17,10 @@ export function reduceLiveTools(current: LiveToolEvidence[], type: string, detai
   if (!call || call.evidenceTruncated && call.id?.includes("[truncated]")) return current;
   const rawResult = evidenceRecord(detail.result);
   const result = typeof rawResult.content === "string" ? rawResult as unknown as WebLiveMessage : existing?.result;
-  const item: LiveToolEvidence = { call, result, state: type === "tool_execution_end" ? detail.isError === true ? "failed" : "returned" : "running" };
-  const next = [...current.filter((entry) => entry.call.id !== id), item].slice(-LIVE_TOOL_LIMIT);
+  const parentToolCallId = typeof detail.parentToolCallId === "string" && detail.parentToolCallId.length <= 500 ? detail.parentToolCallId : existing?.parentToolCallId;
+  const item: LiveToolEvidence = { call, result, ...(parentToolCallId ? { parentToolCallId } : {}), state: type === "tool_execution_end" ? detail.isError === true ? "failed" : "returned" : "running" };
+  // A parallel call finishing first must not move ahead of calls started earlier.
+  const next = (existing ? current.map((entry) => entry.call.id === id ? item : entry) : [...current, item]).slice(-LIVE_TOOL_LIMIT);
   while (next.length > 0 && new TextEncoder().encode(JSON.stringify(next)).byteLength > 512 * 1024) next.shift();
   return next;
 }

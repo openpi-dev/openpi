@@ -652,12 +652,18 @@ test("post-edit stays off or preserved unless the setup request changes it", asy
     ui_web_auxiliary_width: 600,
     ui_web_chat_font_size: 16,
     ui_web_expand_thinking: true,
+    ui_web_sidebar_grouping: "list",
+    ui_web_chats_sort: "manual",
+    ui_web_projects_in_recents: false,
   });
   assert.equal(loadSetupConfig().ui.webChatWidth, 960);
   assert.equal(loadSetupConfig().ui.webSidebarWidth, 320);
   assert.equal(loadSetupConfig().ui.webAuxiliaryWidth, 600);
   assert.equal(loadSetupConfig().ui.webChatFontSize, 16);
   assert.equal(loadSetupConfig().ui.webExpandThinking, true);
+  assert.equal(loadSetupConfig().ui.webSidebarGrouping, "list");
+  assert.equal(loadSetupConfig().ui.webChatsSort, "manual");
+  assert.equal(loadSetupConfig().ui.webProjectsInRecents, false);
 
   await apply({ post_edit_command: "  npm run format  " });
   assert.equal(loadSetupConfig().postEdit.command, "npm run format");
@@ -1538,7 +1544,7 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   );
   assert.match(message, /complete ui_web_appearance object defaults/);
   assert.match(message, /palette supports default\/mist\/rose\/pine/);
-  assert.match(message, /font supports system\/sans\/serif\/mono/);
+  assert.match(message, /font supports codex\/sans\/serif\/mono/);
   assert.match(message, /empty for the theme default or #RRGGBB/);
   assert.match(message, /Legacy ui_web_theme.*take precedence/);
   assert.match(message, /ui_web_theme=dark/);

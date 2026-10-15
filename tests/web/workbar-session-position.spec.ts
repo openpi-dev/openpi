@@ -462,7 +462,13 @@ it("hydrates saved widths, clamps small windows without saving, and saves explic
       webStore.setState({
         snapshot: {
           ...current,
-          preferences: { ...current.preferences, ...patch },
+          preferences: {
+            ...current.preferences,
+            sidebarWidth:
+              patch.sidebarWidth ?? current.preferences.sidebarWidth,
+            auxiliaryWidth:
+              patch.auxiliaryWidth ?? current.preferences.auxiliaryWidth,
+          },
         },
       });
     });
@@ -512,6 +518,8 @@ it("hydrates saved widths, clamps small windows without saving, and saves explic
   expect(save).toHaveBeenCalledOnce();
 });
 
+// More than 32 full-App selections already take ~19 seconds on Windows CI.
+// Budget for that workload without changing the default for ordinary UI cases.
 it("bounds remembered tools to 32 exact Session identities while keeping a recently revisited position", async () => {
   const view = render(createElement(Providers, null, createElement(App)));
   await open("browser");
@@ -697,9 +705,9 @@ it("keeps a resized width when save completes with a stale refreshed snapshot", 
     screen.getByRole("separator", { name: i18n.t("resizeSidebar") }),
     { key: "Enter" },
   );
-  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("340px");
   await waitFor(() => expect(save).toHaveBeenCalledOnce());
-  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("340px");
 });
 
 it("keeps the latest operator width when later snapshots contain an older saved choice", async () => {
@@ -720,7 +728,13 @@ it("keeps the latest operator width when later snapshots contain an older saved 
       webStore.setState({
         snapshot: {
           ...current,
-          preferences: { ...current.preferences, ...patch },
+          preferences: {
+            ...current.preferences,
+            sidebarWidth:
+              patch.sidebarWidth ?? current.preferences.sidebarWidth,
+            auxiliaryWidth:
+              patch.auxiliaryWidth ?? current.preferences.auxiliaryWidth,
+          },
         },
       });
     });
@@ -739,7 +753,7 @@ it("keeps the latest operator width when later snapshots contain an older saved 
   fireEvent.keyDown(handle, { key: "Enter" });
   await waitFor(() =>
     expect(save).toHaveBeenLastCalledWith({
-      sidebarWidth: 280,
+      sidebarWidth: 340,
       auxiliaryWidth: 520,
     }),
   );
@@ -752,6 +766,42 @@ it("keeps the latest operator width when later snapshots contain an older saved 
       },
     });
   });
-  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("280px");
+  expect(shell.style.getPropertyValue("--sidebar-width")).toBe("340px");
   expect(save).toHaveBeenCalledTimes(2);
 });
+
+it.each([220, 230])(
+  "renders the canonical saved sidebar width %i and supports keyboard minimum 220",
+  async (width) => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600,
+    });
+    const current = snapshot();
+    current.preferences = {
+      theme: "system",
+      sidebarWidth: width,
+      auxiliaryWidth: 520,
+    };
+    webStore.setState({ snapshot: current });
+    const save = vi
+      .spyOn(original.actions, "savePreferences")
+      .mockResolvedValue(undefined);
+    const view = render(createElement(Providers, null, createElement(App)));
+    const shell = view.container.querySelector<HTMLElement>(".app-shell")!;
+    const handle = screen.getByRole("separator", {
+      name: i18n.t("resizeSidebar"),
+    });
+    expect(shell.style.getPropertyValue("--sidebar-width")).toBe(`${width}px`);
+    expect(handle.getAttribute("aria-valuemin")).toBe("220");
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(shell.style.getPropertyValue("--sidebar-width")).toBe("220px");
+    if (width !== 220)
+      await waitFor(() =>
+        expect(save).toHaveBeenCalledWith({
+          sidebarWidth: 220,
+          auxiliaryWidth: 520,
+        }),
+      );
+  },
+);

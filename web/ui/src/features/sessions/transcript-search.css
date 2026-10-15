@@ -1,0 +1,51 @@
+dialog.transcript-search-modal {
+  --transcript-search-list-height: min(440px, max(120px, calc(90dvh - 64px)));
+  --transcript-search-hover: light-dark(color-mix(in oklab, var(--text) 5%, transparent), #ffffff14);
+  top: max(16px, calc((100dvh - var(--transcript-search-list-height) - 64px) / 2));
+  bottom: auto;
+  margin: 0 auto;
+  padding: 0;
+  max-width: 92vw;
+  border: 1px solid light-dark(transparent, var(--border));
+  border-radius: 16px;
+  background: var(--page);
+  color: var(--text);
+  box-shadow: 0 16px 32px -8px #00000030;
+  overflow: hidden;
+}
+dialog.transcript-search-modal::backdrop { background: #0002; backdrop-filter: none; }
+.transcript-search-dialog { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 4px; font-size: 14px; font-weight: 430; }
+.transcript-search-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.transcript-search-dialog .transcript-search-input { flex-shrink: 0; width: 100%; min-width: 0; height: auto; padding: 6px 10px; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; line-height: 20px; outline: none; box-shadow: none; }
+.transcript-search-dialog .transcript-search-input:focus-visible { outline: none; box-shadow: none; }
+.transcript-search-input::placeholder { color: var(--muted); }
+.transcript-search-input::-webkit-search-cancel-button { appearance: none; }
+.transcript-search-groups { min-height: 0; max-height: var(--transcript-search-list-height); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; scroll-padding-top: 32px; }
+.transcript-search-groups::-webkit-scrollbar { display: none; }
+.transcript-search-groups h3 { display: flex; align-items: center; gap: 6px; margin: 0; padding: 5px 8px; color: var(--muted); font-size: 12px; line-height: 18px; font-weight: 500; }
+.transcript-search-groups h3 svg { width: 12px; height: 12px; }
+.transcript-search-groups fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.transcript-search-groups fieldset + fieldset { margin-top: 4px; }
+.transcript-search-results { list-style: none; padding: 0; margin: 0; }
+.transcript-search-results button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 5px 8px; border: 0; border-radius: 10px; background: transparent; color: inherit; font: inherit; line-height: 20px; text-align: left; cursor: pointer; opacity: .75; }
+.transcript-search-results button[aria-selected="true"] { background: var(--transcript-search-hover); opacity: 1; }
+.transcript-search-results button:disabled { opacity: .25; cursor: wait; }
+.transcript-search-accessory { display: flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; }
+.transcript-search-accessory svg { width: 16px; height: 16px; }
+.transcript-search-accessory .transcript-search-unread { width: 7px; height: 7px; fill: currentColor; }
+.transcript-search-result-body { flex: 1; min-width: 0; }
+.transcript-search-result-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.transcript-search-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transcript-search-project { flex: 0 0 96px; width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--muted); font-size: 13px; }
+.transcript-search-snippet { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-top: 2px; color: var(--muted); font-size: 12px; line-height: 18px; }
+.transcript-search-feedback { display: flex; align-items: center; justify-content: center; height: 48px; color: var(--muted); font-size: 13px; }
+.transcript-search-feedback svg { width: 16px; height: 16px; }
+.transcript-search-empty-history { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; height: 144px; text-align: center; }
+.transcript-search-empty-history p { margin: 0; }
+.transcript-search-create { padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.transcript-search-create:hover { background: var(--transcript-search-hover); }
+.transcript-search-create:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.transcript-search-error, .transcript-search-partial { margin: 0; padding: 8px; font-size: 12px; line-height: 18px; }
+.transcript-search-error { color: var(--error); }
+.transcript-search-error button { margin-left: 8px; padding: 0; border: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; }
+.transcript-search-partial { color: var(--muted); }

@@ -75,6 +75,13 @@ export function toolActivityLabel(t: TFunction, name: string, state: string) {
   return t(`toolActivity_${labelState}`, { action: t(`toolAction_${action}`) });
 }
 
+export function toolActivityTag(name: string) {
+  const { action } = toolActivity(name);
+  if (action === "command") return "run";
+  if (action === "workflow") return "flow";
+  return action === "call" ? name : action;
+}
+
 export function toolActivityTarget(
   name: string,
   args: Record<string, unknown>,

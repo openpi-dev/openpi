@@ -333,7 +333,7 @@ it.each([
 
     const otherPath = "/project/other.jsonl";
     const selectionReceipt = deferred<{ cancelled: boolean }>();
-    let selecting = Promise.resolve();
+    let selecting = Promise.resolve<void | boolean>(undefined);
     if (target === "workspace") {
       actions.setWorkspace("/other");
     } else {
@@ -518,7 +518,7 @@ it("edits an older saved question, confirms its native child, and sends the prep
         thinkingStarts: {},
         thinkingDurations: {},
         scrollToBottom: 0,
-        onResend: store.getState().actions.sendPrompt,
+        onResend: (content) => store.getState().actions.sendPrompt(content),
         onEdit: edit,
         onRegenerate: store.getState().actions.regenerateMessage,
         forkAvailable: true,
@@ -769,7 +769,7 @@ it("forks the exact message into a new empty composer, preserves the original dr
           thinkingStarts: {},
           thinkingDurations: {},
           scrollToBottom: state.scrollToBottom,
-          onResend: state.actions.sendPrompt,
+          onResend: (content) => state.actions.sendPrompt(content),
           onFork: state.actions.forkMessage,
           forkAvailable: true,
           forkPending: state.sessionForkPending,

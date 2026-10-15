@@ -9,6 +9,8 @@ export interface WebTurnTiming {
   finishedAt: number;
   elapsedMs: number;
   outcome: "completed" | "cancelled" | "failed" | "uncertain";
+  /** A live terminal publication may seed unread state; history discovery may not. */
+  unreadEligible?: boolean;
   /** Exact native input that began this execution, before any steering input. */
   promptEntryId?: string;
   resultEntryId?: string;
@@ -36,7 +38,33 @@ export function readTurnTiming(value: unknown): WebTurnTiming | undefined {
     finishedAt: Number(record.finishedAt),
     elapsedMs: Number(record.elapsedMs),
     outcome: record.outcome as WebTurnTiming["outcome"],
+    ...(typeof record.unreadEligible === "boolean" ? { unreadEligible: record.unreadEligible } : {}),
     ...(typeof record.promptEntryId === "string" ? { promptEntryId: record.promptEntryId } : {}),
     ...(typeof record.resultEntryId === "string" ? { resultEntryId: record.resultEntryId } : {}),
   };
 }
+
+/** Recover exact branch evidence. Reading it neither publishes nor acknowledges activity. */
+export function readSessionTurnEvidence(branch: readonly SessionEntry[], sessionId: string, includeLegacyResults = false) {
+  let preceding: SessionEntry | undefined;
+  let lastTurn: { commandId: string; finishedAt: number; outcome: WebTurnTiming["outcome"]; resultEntryId?: string } | undefined;
+  const results = [];
+  const seen = new Set<string>();
+  for (const entry of branch) {
+    if (entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY) {
+      const timing = readTurnTiming(entry.data);
+      if (timing?.sessionId === sessionId) {
+        const resultEntryId = timing.outcome === "completed" && preceding?.type === "message" && preceding.message.role === "assistant" && ["stop", "length"].includes(preceding.message.stopReason) && (!timing.resultEntryId || timing.resultEntryId === preceding.id) ? preceding.id : undefined;
+        lastTurn = { commandId: timing.commandId, finishedAt: timing.finishedAt, outcome: timing.outcome, ...(resultEntryId ? { resultEntryId } : {}) };
+        const identity = JSON.stringify([lastTurn.commandId, lastTurn.finishedAt]);
+        if ((timing.unreadEligible === true || timing.unreadEligible === undefined && includeLegacyResults) && (lastTurn.outcome === "completed" || lastTurn.outcome === "failed") && !seen.has(identity)) {
+          results.push({ ...lastTurn, outcome: lastTurn.outcome });
+          seen.add(identity);
+        }
+      } else lastTurn = undefined;
+      preceding = entry;
+    } else if (entry.type === "message") preceding = entry;
+  }
+  return { lastTurn, results };
+}
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";

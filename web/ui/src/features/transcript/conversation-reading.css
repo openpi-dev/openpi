@@ -1,4 +1,4 @@
-/* Response typography is separate from the existing execution evidence UI. */
+/* Chat typography must win over the component library's UI text presets. */
 .composer-session-notice {
   display: flex;
   align-items: center;
@@ -14,9 +14,14 @@
 }
 
 .conversation .message-row.response .markdown {
-  font-weight: 450;
-  line-height: 1.8;
-  letter-spacing: .005em;
+  line-height: 1.625;
+  letter-spacing: 0;
+}
+
+.conversation .message-row.response .markdown :is(p, ul, ol, li, table) {
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: inherit;
 }
 
 .conversation .message-row.response .message-content,
@@ -25,15 +30,25 @@
   width: 100%;
 }
 
-.conversation .message-row.assistant.final-response { padding-inline: 0; }
-.conversation .message-row.response .markdown p { margin-bottom: 1.15em; }
-.conversation .message-row.response .markdown :is(ul, ol) { margin-bottom: 1.15em; padding-left: 1.65em; }
+.conversation .message-row.response { margin: 0; padding: 0; }
+.conversation :is(.conversation-turn, .turn-response-body) > .process-sequence { margin: 0; }
+.conversation :is(.conversation-turn, .turn-response-body) > :is(.response, .process-sequence) + :is(.response, .process-sequence) { margin-top: 16px; }
+.conversation .turn-response-body:not([hidden]) + .response { margin-top: 16px; }
+.conversation .message-row.response .markdown p { margin-block: 0 1em; }
+.conversation .message-row.response .markdown :is(ul, ol) { margin-block: 0 1em; padding-left: 1.65em; }
 .conversation .message-row.response .markdown ul { list-style: disc outside; }
 .conversation .message-row.response .markdown ol { list-style: decimal outside; }
 .conversation .message-row.response .markdown .contains-task-list { list-style: none; }
-.conversation .message-row.response .markdown li + li { margin-top: .55em; }
-.conversation .message-row.response .markdown li > :is(p, ul, ol) { margin-bottom: .55em; }
-.conversation .message-row.response .markdown :is(h1, h2, h3, h4) { margin-top: 1.6em; margin-bottom: .65em; line-height: 1.45; }
+.conversation .message-row.response .markdown li + li { margin-top: 0; }
+.conversation .message-row.response .markdown li > :is(p, ul, ol) { margin-block: 0; }
+.conversation .message-row.response .markdown li > p + p { margin-top: 1em; }
+.conversation .message-row.response .markdown :is(h1, h2, h3, h4) { margin-top: 1.6em; margin-bottom: .65em; font-weight: 600; line-height: calc(var(--conversation-font-size) * 1.75); }
+.conversation .message-row.response .markdown h1 { font-size: 1.5em; line-height: calc(var(--conversation-font-size) * 2); }
+.conversation .message-row.response .markdown h2 { font-size: 1.25em; }
+.conversation .message-row.response .markdown h3 { font-size: 1.125em; }
+.conversation .message-row.response .markdown strong { font-weight: 600; }
+.conversation .message-row.response .markdown > :first-child { margin-top: 0; }
+.conversation .message-row.response .markdown > :last-child { margin-bottom: 0; }
 
 .conversation .message-row.response .markdown :not(pre) > code {
   padding: .08em .35em;
@@ -58,5 +73,5 @@
   border-radius: 22px;
   background: color-mix(in srgb, var(--text) 5%, var(--page));
   box-shadow: none;
-  line-height: 1.75;
+  line-height: 1.625;
 }
