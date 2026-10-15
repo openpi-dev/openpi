@@ -45,6 +45,7 @@
           signature = "";
           sync();
         } else if (message.type === "unavailable") status("unavailable");
+        else if (message.type === "control-result") emit(message);
         else if (
           frames().some(
             (frame) => frame.dataset.openpiBrowserPage === message.id,
@@ -90,6 +91,25 @@
           id: frame.dataset.openpiBrowserPage,
         });
       }
+    } else if (
+      event.source === window &&
+      event.origin === location.origin &&
+      event.data.source === "openpi-browser-ui" &&
+      event.data.type === "control-cancel"
+    ) {
+      port.postMessage({
+        type: "control-cancel",
+        requestId: event.data.requestId,
+      });
+    } else if (
+      event.source === window &&
+      event.origin === location.origin &&
+      event.data.source === "openpi-browser-ui" &&
+      event.data.type === "control"
+    ) {
+      const { id, document, requestId, request } = event.data;
+      if (frames().some((frame) => frame.dataset.openpiBrowserPage === id))
+        port.postMessage({ type: "control", id, document, requestId, request });
     } else if (
       event.source === window &&
       event.origin === location.origin &&

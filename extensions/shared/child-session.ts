@@ -44,20 +44,27 @@ export const CHILD_SAFE_PACKAGE_TOOL_NAMES = [
 ] as const;
 
 /**
+ * These optional packages are parent-only inside concurrent Pi sessions.
+ * pi-web-access owns shared UI/cache and optional execution/provider authority;
+ * exclude the whole package before import, including renamed tools and commands.
  * pi-intercom resources are unsafe inside concurrent in-process child sessions.
  * It stores session identity and optional supervisor bridge metadata in
  * process.env, which is shared by every Direct/Workflow child in this process.
  * Loading it in children can therefore cross-wire identities; the parent
  * extension remains loaded and fully usable.
  */
-function manifestNamesPiIntercom(manifestPath: string) {
+const PARENT_ONLY_PI_PACKAGES = ["pi-intercom", "pi-web-access"];
+
+function manifestNamesParentOnlyPackage(manifestPath: string) {
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
     return (
       typeof manifest === "object" &&
       manifest !== null &&
       !Array.isArray(manifest) &&
-      (manifest as Record<string, unknown>).name === "pi-intercom"
+      PARENT_ONLY_PI_PACKAGES.includes(
+        String((manifest as Record<string, unknown>).name),
+      )
     );
   } catch (error) {
     throw new Error(
@@ -67,15 +74,15 @@ function manifestNamesPiIntercom(manifestPath: string) {
   }
 }
 
-function installedPathNamesPiIntercom(installedPath: string) {
+function installedPathNamesParentOnlyPackage(installedPath: string) {
   try {
     const stats = statSync(installedPath);
     if (stats.isDirectory()) {
       const manifestPath = path.join(installedPath, "package.json");
       if (existsSync(manifestPath)) {
-        return manifestNamesPiIntercom(manifestPath);
+        return manifestNamesParentOnlyPackage(manifestPath);
       }
-      if (path.basename(installedPath) === "pi-intercom") {
+      if (PARENT_ONLY_PI_PACKAGES.includes(path.basename(installedPath))) {
         throw new Error(
           `Cannot verify child package identity from ${installedPath}`,
         );
@@ -89,16 +96,18 @@ function installedPathNamesPiIntercom(installedPath: string) {
     }
 
     let current = path.dirname(installedPath);
-    let hasIntercomDirectoryName = false;
+    let hasParentOnlyDirectoryName = false;
     while (true) {
-      hasIntercomDirectoryName ||= path.basename(current) === "pi-intercom";
+      hasParentOnlyDirectoryName ||= PARENT_ONLY_PI_PACKAGES.includes(
+        path.basename(current),
+      );
       const manifestPath = path.join(current, "package.json");
       if (existsSync(manifestPath)) {
-        return manifestNamesPiIntercom(manifestPath);
+        return manifestNamesParentOnlyPackage(manifestPath);
       }
       const parent = path.dirname(current);
       if (parent === current) {
-        if (hasIntercomDirectoryName) {
+        if (hasParentOnlyDirectoryName) {
           throw new Error(
             `Cannot verify child package identity from ${installedPath}`,
           );
@@ -121,7 +130,7 @@ function installedPathNamesPiIntercom(installedPath: string) {
   }
 }
 
-function piMatchesPublishedIntercomSource(options: {
+function piMatchesPublishedParentOnlySource(options: {
   source: string;
   cwd: string;
   agentDir: string;
@@ -138,11 +147,15 @@ function piMatchesPublishedIntercomSource(options: {
     packageManager.removeSourceFromSettings("npm:pi-intercom") ||
     packageManager.removeSourceFromSettings(
       "git:https://github.com/nicobailon/pi-intercom",
+    ) ||
+    packageManager.removeSourceFromSettings("npm:pi-web-access") ||
+    packageManager.removeSourceFromSettings(
+      "git:https://github.com/nicobailon/pi-web-access",
     )
   );
 }
 
-function createPiIntercomPackageMatcher(options: {
+function createParentOnlyPackageMatcher(options: {
   cwd: string;
   agentDir: string;
 }) {
@@ -151,7 +164,7 @@ function createPiIntercomPackageMatcher(options: {
   return (source: string, installedPath?: string) => {
     let sourceMatch = sourceMatches.get(source);
     if (sourceMatch === undefined) {
-      sourceMatch = piMatchesPublishedIntercomSource({
+      sourceMatch = piMatchesPublishedParentOnlySource({
         source,
         cwd: options.cwd,
         agentDir: options.agentDir,
@@ -163,7 +176,7 @@ function createPiIntercomPackageMatcher(options: {
     const resolvedPath = path.resolve(installedPath);
     let installedPathMatch = installedPathMatches.get(resolvedPath);
     if (installedPathMatch === undefined) {
-      installedPathMatch = installedPathNamesPiIntercom(resolvedPath);
+      installedPathMatch = installedPathNamesParentOnlyPackage(resolvedPath);
       installedPathMatches.set(resolvedPath, installedPathMatch);
     }
     return installedPathMatch;
@@ -182,7 +195,7 @@ function createBlockedChildPackagePolicy(options: {
     ...options,
     settingsManager: SettingsManager.inMemory(),
   });
-  const matches = createPiIntercomPackageMatcher(options);
+  const matches = createParentOnlyPackageMatcher(options);
   return (sourceInfo: Omit<SourceInfo, "path">) => {
     if (
       !sourceInfo ||
@@ -402,7 +415,7 @@ function blockedPackageSources(
   };
   // Configured packages can be absent in offline mode. Match their canonical
   // identity without demanding loaded-tool provenance from an unloaded package.
-  const matches = createPiIntercomPackageMatcher(options);
+  const matches = createParentOnlyPackageMatcher(options);
   for (const configured of packageManager.listConfiguredPackages()) {
     if (matches(configured.source, configured.installedPath)) {
       blocked[configured.scope].add(configured.source);
@@ -499,6 +512,8 @@ async function createChildSettingsManager(options: {
  * drift test in child-session.test.ts).
  */
 export const CHILD_EXCLUDED_TOOL_NAMES = [
+  // embedded browser — authority belongs to the initiating parent Web tab
+  "openpi_browser",
   // capability discovery mutates the parent model-facing tool surface
   "openpi_load_tools",
   // runtime inspection includes parent configuration and resource summaries
@@ -541,21 +556,28 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
 ] as const;
 
 const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
-  (Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
-    .filter((owner) => {
-      const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
-      const toolNames = [...entry, ...deferred];
-      return (
-        toolNames.length > 0 &&
-        toolNames.every((name) =>
-          CHILD_EXCLUDED_TOOL_NAMES.includes(name as never),
-        )
-      );
-    })
-    .map((owner) => canonicalExistingPath(OPENPI_OWNER_SOURCE_PATHS[owner]))
-    .filter(
-      (extensionPath): extensionPath is string => extensionPath !== undefined,
+  [
+    canonicalExistingPath(
+      fileURLToPath(new URL("../web-search/index.ts", import.meta.url)),
     ),
+    ...(Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
+      .filter((owner) => {
+        const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
+        const toolNames = [...entry, ...deferred];
+        return (
+          toolNames.length > 0 &&
+          toolNames.every((name) =>
+            CHILD_EXCLUDED_TOOL_NAMES.includes(name as never),
+          )
+        );
+      })
+      .map((owner) => canonicalExistingPath(OPENPI_OWNER_SOURCE_PATHS[owner]))
+      .filter(
+        (extensionPath): extensionPath is string => extensionPath !== undefined,
+      ),
+  ].filter(
+    (extensionPath): extensionPath is string => extensionPath !== undefined,
+  ),
 );
 
 function isVerifiedParentOnlyOpenPiExtension(extension: {

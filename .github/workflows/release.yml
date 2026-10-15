@@ -22,6 +22,6 @@ permissions:
 jobs:
   release:
     name: Release
-    uses: openpi-dev/automation/.github/workflows/openpi-release.yml@main
+    uses: openpi-dev/automation/.github/workflows/openpi-release.yml@ac8a4140e4ce458a2ed693c5ec9798946ccc0dda # main
     with:
       tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

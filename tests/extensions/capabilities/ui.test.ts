@@ -283,6 +283,10 @@ test("locked native editor preserves cursor, text and widths when a name is deco
     before.map(stripTerminalSequences),
   );
   assert.deepEqual(after.map(visibleWidth), before.map(visibleWidth));
+  assert.deepEqual(
+    after.join("\n").match(/\u001b_pi:(?:c|\/?fc)\u0007/gu),
+    before.join("\n").match(/\u001b_pi:(?:c|\/?fc)\u0007/gu),
+  );
   assert.equal(after.join("\n").split(CURSOR_MARKER).length, 2);
   assert.equal(before.join("\n").split(CURSOR_MARKER).length, 2);
   assert.match(after.join("\n"), /\u001b\[38;2;210;168;255m/u);

@@ -56,10 +56,12 @@ export function ActivityBar({
   snapshot,
   onInspectTerminal,
   onInspectSubagent,
+  observed = true,
 }: {
   snapshot: WebSnapshot | null;
   onInspectTerminal?: (id: string) => void;
   onInspectSubagent?: (id?: string) => void;
+  observed?: boolean;
 }) {
   const { t } = useTranslation();
   const [, tick] = useState(0);
@@ -74,15 +76,28 @@ export function ActivityBar({
     [snapshot?.selectedSession?.entries],
   );
   const liveSubagents = capabilities?.subagents;
+  const workflows = capabilities?.workflows?.items ?? [];
+  const workflowChildren = workflows.flatMap(
+    (item) => item.children?.items ?? [],
+  );
   const knownSubagentCount = new Set([
-    ...(liveSubagents?.items ?? []).map((item) => item.id),
-    ...saved.map((item) => item.id),
+    ...(liveSubagents?.items ?? []).map((item) => `subagents:${item.id}`),
+    ...saved.map((item) => `subagents:${item.id}`),
+    ...workflowChildren.map((item) => `workflows:${item.id}`),
   ]).size;
   const subagentCount = Math.max(
     knownSubagentCount,
-    (liveSubagents?.items.length ?? 0) + (liveSubagents?.omitted ?? 0),
+    (liveSubagents?.items.length ?? 0) +
+      (liveSubagents?.omitted ?? 0) +
+      workflowChildren.length +
+      workflows.reduce((sum, item) => sum + (item.children?.omitted ?? 0), 0),
   );
-  const subagents = subagentOverview(liveSubagents?.items ?? [], saved);
+  const subagents = subagentOverview(
+    liveSubagents?.items ?? [],
+    saved,
+    workflows,
+    observed,
+  );
   const activeSubagentCount = subagents.filter(
     (item) => item.state === "running",
   ).length;

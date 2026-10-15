@@ -9,8 +9,11 @@ import {
 } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { WebSubagentDetail } from "../../extensions/shared/web-observer-registry.ts";
-import type { WebSnapshot } from "../../web/protocol/types.ts";
+import type {
+  WebSubagentDetail,
+  WebWorkflowAgentDetail,
+} from "../../extensions/shared/web-observer-registry.ts";
+import { projectEntry, type WebSnapshot } from "../../web/protocol/types.ts";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
 import { recordedSubagents } from "../../web/ui/src/features/subagents/recorded-subagents.ts";
@@ -54,6 +57,66 @@ it("does not count saved running receipts as active or failed/interrupted childr
   expect(items.find((item) => item.id === "stopped")?.state).toBe(
     "interrupted",
   );
+});
+
+it("downgrades stale running projections in the overview without discarding confirmed terminal evidence", () => {
+  const items = subagentOverview(
+    [
+      { id: "running", title: "Running", status: "running", createdAt: 1 },
+      {
+        id: "done",
+        title: "Finished",
+        status: "done",
+        outcome: "completed",
+        createdAt: 1,
+      },
+    ],
+    [],
+    [],
+    false,
+  );
+  expect(items.find((item) => item.id === "running")?.state).toBeUndefined();
+  expect(items.find((item) => item.id === "done")?.state).toBe("done");
+});
+
+it("shows active tasks progressively without mixing omitted workflow counts with child counts", () => {
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(SubagentPanel, {
+        sessionId: "parent",
+        activity: {
+          items: Array.from({ length: 6 }, (_, index) => ({
+            id: `sa-${index}`,
+            title: `Active ${index}`,
+            status: "running" as const,
+            createdAt: index + 1,
+          })),
+          omitted: 2,
+          truncated: true,
+        },
+        workflows: { items: [], omitted: 3, truncated: true },
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+  expect(screen.getAllByRole("button", { name: /Active \d/ })).toHaveLength(4);
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("subagentShowMore", { count: 2 }),
+    }),
+  );
+  expect(screen.getAllByRole("button", { name: /Active \d/ })).toHaveLength(6);
+  expect(
+    screen.getByText(i18n.t("subagentListTruncated", { count: 2 })),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(i18n.t("subagentWorkflowsTruncated", { count: 3 })),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText(i18n.t("subagentListTruncated", { count: 5 })),
+  ).toBeNull();
 });
 
 it("reveals completed children progressively and preserves expanded rows and scroll on return", async () => {
@@ -144,6 +207,8 @@ function detail(overrides: Partial<WebSubagentDetail> = {}): WebSubagentDetail {
 function reply(value = detail(), sessionId = "session-a") {
   return { sessionId, detail: value };
 }
+const wrongKindReply = reply(detail({ finalText: "Wrong capability payload" }));
+Object.defineProperty(wrongKindReply.detail, "kind", { value: "workflows" });
 function showPanel() {
   return render(
     createElement(
@@ -224,8 +289,9 @@ it("opens a nonmodal grouped overview, then supports detail/back and Escape navi
 it.each([
   reply(detail({ finalText: "Wrong session payload" }), "session-b"),
   reply(detail({ id: "sa-other", finalText: "Wrong child payload" })),
+  wrongKindReply,
 ])(
-  "rejects detail whose Session or child identity changed",
+  "rejects detail whose Session, child or capability kind changed",
   async (response) => {
     const read = vi
       .spyOn(WebClient.prototype, "subagentDetail")
@@ -588,6 +654,97 @@ it("derives saved ownership from exact structured IDs, never spawn success or te
   ]);
 });
 
+it("recovers native completion before parent delivery, keeps result text and invalidates it on the next send", () => {
+  const finish = projectEntry({
+    type: "custom",
+    id: "finish",
+    parentId: "spawn",
+    timestamp: "2026-10-13T00:00:00Z",
+    customType: "subagent-finished",
+    data: { id: "sa-1", title: "Finished while parent busy", status: "done" },
+  }).message!;
+  const result = {
+    role: "custom",
+    customType: "subagent-result",
+    content: "Saved final answer",
+    details: { id: "sa-1", status: "done" },
+  };
+  expect(recordedSubagents([finish])).toEqual([
+    { id: "sa-1", title: "Finished while parent busy", state: "done" },
+  ]);
+  expect(recordedSubagents([result, finish])[0]?.result).toBe(
+    "Saved final answer",
+  );
+  const send = {
+    role: "toolResult",
+    toolName: "subagent_send",
+    content: "Accepted new turn",
+    details: { id: "sa-1", status: "done" },
+  };
+  expect(recordedSubagents([result, finish, send])[0]?.state).toBeUndefined();
+  expect(recordedSubagents([result, finish, send])[0]?.result).toBeUndefined();
+  expect(recordedSubagents([send, finish])[0]?.state).toBe("done");
+
+  const value = snapshot();
+  value.selectedSession = {
+    ...value.selectedSession!,
+    entries: [
+      ...value.selectedSession!.entries,
+      {
+        type: "message",
+        id: "finish",
+        timestamp: "2026-10-13T00:00:00Z",
+        message: finish,
+      },
+    ],
+  };
+  const view = render(
+    createElement(
+      Providers,
+      null,
+      createElement(Transcript, {
+        snapshot: value,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    ),
+  );
+  expect(view.container.textContent).not.toContain(
+    "Finished while parent busy",
+  );
+  expect(
+    view.container.querySelectorAll(".activity-card.subagent"),
+  ).toHaveLength(1);
+});
+
+it.each(["cancelled", "uncertain"])(
+  "preserves native %s completion facts after manager loss",
+  (outcome) => {
+    const finish = projectEntry({
+      type: "custom",
+      id: "finish",
+      parentId: null,
+      timestamp: "2026-10-13T00:00:00Z",
+      customType: "subagent-finished",
+      data: {
+        id: "sa-1",
+        title: "Cleanup result",
+        status: "error",
+        completion: { observed: { outcome } },
+      },
+    }).message!;
+    expect(recordedSubagents([finish])[0]?.state).toBe(
+      outcome === "cancelled" ? "interrupted" : undefined,
+    );
+  },
+);
+
 it("opens the child list without duplicating child records in the activity bar", () => {
   const inspect = vi.fn();
   render(
@@ -744,6 +901,146 @@ it("keeps a recently updated child inside the bounded saved list", () => {
     result: "Latest result",
   });
   expect(records.some((record) => record.id === "sa-1")).toBe(false);
+});
+
+it.each(["running", "done", "error"])(
+  "invalidates an earlier saved completion after send, even when its acknowledgement still samples %s",
+  (status) => {
+    const records = recordedSubagents([
+      {
+        role: "toolResult",
+        toolName: "subagent_spawn",
+        content: "Started",
+        details: { id: "same-child", title: "Review" },
+      },
+      {
+        role: "custom",
+        customType: "subagent-result",
+        content: "First turn completed",
+        details: { id: "same-child", status: "done", outcome: "completed" },
+      },
+      {
+        role: "toolResult",
+        toolName: "subagent_send",
+        content: "Next turn accepted",
+        details: { id: "same-child", status },
+      },
+    ]);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      title: "Review",
+      state: status === "running" ? "running" : undefined,
+    });
+    expect(records[0]?.result).toBeUndefined();
+    expect(subagentOverview([], records)[0]?.state).toBeUndefined();
+  },
+);
+
+it("recovers terminal child evidence in a compact task row without conflating it with the launch receipt", () => {
+  const value = snapshot();
+  value.runtime.capabilities = {};
+  value.selectedSession!.entries.push({
+    type: "message",
+    id: "completion",
+    timestamp: "2026-09-18T00:00:03Z",
+    message: {
+      role: "custom",
+      customType: "subagent-result",
+      display: true,
+      content: "Verified the package.",
+      details: { id: "sa-1", title: "Package review", status: "done" },
+    },
+  });
+  const inspect = vi.fn();
+  const { container } = render(
+    createElement(
+      Providers,
+      null,
+      createElement(Transcript, {
+        snapshot: value,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+        onInspectSubagent: inspect,
+      }),
+    ),
+  );
+  const task = screen.getAllByRole("button", { name: /Package review/ })[0]!;
+  expect(task.textContent).toContain(i18n.t("subagentState_done"));
+  expect(task.closest(".process-sequence")).toBeNull();
+  expect(container.querySelector(".subagent-receipt")).toBeNull();
+  expect(task.querySelector(".subagent-avatar")).toBeTruthy();
+  fireEvent.click(task);
+  expect(inspect).toHaveBeenCalledWith("sa-1");
+});
+
+it("inspects a workflow child through its exact owner and distinguishes a retained summary from an empty conversation", async () => {
+  const child = {
+    id: "wf_a123:call:7",
+    runId: "wf_a123",
+    title: "Inspect lifecycle",
+    status: "unknown" as const,
+    createdAt: 1,
+  };
+  const projection: WebWorkflowAgentDetail = {
+    ...detail(),
+    ...child,
+    kind: "workflows",
+    transcriptUnavailable: true,
+  };
+  const direct = vi.spyOn(WebClient.prototype, "subagentDetail");
+  const workflow = vi
+    .spyOn(WebClient.prototype, "workflowAgentDetail")
+    .mockResolvedValue({ sessionId: "session-a", detail: projection });
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(SubagentPanel, {
+        sessionId: "session-a",
+        workflows: {
+          omitted: 0,
+          truncated: false,
+          items: [
+            {
+              runId: "wf_a123",
+              name: "Review",
+              status: "uncertain",
+              startedAt: 1,
+              agents: {
+                total: 1,
+                running: 0,
+                done: 0,
+                error: 0,
+                uncertain: 1,
+                omitted: 0,
+              },
+              children: { items: [child], omitted: 0, truncated: false },
+            },
+          ],
+        },
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Inspect lifecycle/ }));
+  await flush();
+  expect(workflow).toHaveBeenCalledWith(
+    "session-a",
+    "wf_a123:call:7",
+    expect.any(AbortSignal),
+  );
+  expect(direct).not.toHaveBeenCalled();
+  expect(
+    screen.getByText(i18n.t("subagentTranscriptUnavailable")),
+  ).toBeTruthy();
+  expect(screen.queryByText(i18n.t("subagentNoMessages"))).toBeNull();
+  expect(screen.queryByText(i18n.t("subagentState_done"))).toBeNull();
 });
 
 it("keeps the overview entry reachable for saved children after the live manager is gone", () => {

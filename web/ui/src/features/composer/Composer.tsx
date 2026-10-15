@@ -102,6 +102,7 @@ interface ComposerProps {
     action: NonNullable<WebCommandSummary["action"]>,
   ) => boolean;
   onInspectSubagent?: (id?: string) => void;
+  activityObserved?: boolean;
   snapshot: WebSnapshot | null;
   selectedPath?: string | null;
   selectedWorkspace: string | null;
@@ -1469,6 +1470,7 @@ export function Composer(props: ComposerProps) {
       {active && (
         <ActivityBar
           snapshot={props.snapshot}
+          observed={props.activityObserved}
           onInspectTerminal={props.onInspect}
           onInspectSubagent={props.onInspectSubagent}
         />
