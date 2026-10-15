@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { createElement } from "react";
@@ -33,6 +34,39 @@ afterEach(() => {
 function withI18n(element: ReturnType<typeof createElement>) {
   return createElement(I18nextProvider, { i18n }, element);
 }
+
+it("rejects a thinking page from a different native part and keeps a retryable preview", async () => {
+  const read = vi.spyOn(WebClient.prototype, "sessionItem").mockResolvedValue({
+    entryId: "answer",
+    partIndex: 0,
+    text: "Wrong part must not be shown",
+    nextCursor: null,
+    totalChars: 28,
+  });
+  const rendered = render(
+    withI18n(
+      createElement(FullMessageText, {
+        preview: "Exact thinking preview",
+        sessionId: "session",
+        sessionPath: "/tmp/session",
+        entryId: "answer",
+        partIndex: 2,
+        purpose: "thinking",
+        markdown: true,
+      }),
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: i18n.t("thinkingLoadFailed") }),
+    ).toBeTruthy(),
+  );
+  expect(read).toHaveBeenCalledOnce();
+  expect(rendered.container.textContent).toContain("Exact thinking preview");
+  expect(rendered.container.textContent).not.toContain(
+    "Wrong part must not be shown",
+  );
+});
 
 it.each([true, false])(
   "recovers the exact native plan result with its call %s in the reading window",
