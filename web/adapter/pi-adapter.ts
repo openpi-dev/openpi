@@ -1008,10 +1008,12 @@ export class PiWebAdapter {
   }
 
   async listReadOnlyTerminalSessions(
-    options: { query?: string; cursor?: number; limit?: number; signal?: AbortSignal } = {},
+    options: { workspace?: string; query?: string; cursor?: number; limit?: number; signal?: AbortSignal } = {},
   ) {
     options.signal?.throwIfAborted();
-    const workspace = await this.requireSelectedWorkspace();
+    const workspace = options.workspace !== undefined
+      ? await this.requireWorkspace(options.workspace)
+      : await this.requireSelectedWorkspace();
     const query = options.query?.trim().toLocaleLowerCase() ?? "";
     const cursor = options.cursor ?? 0;
     const limit = options.limit ?? 50;
@@ -1055,9 +1057,11 @@ export class PiWebAdapter {
     };
   }
 
-  async getReadOnlyTerminalSession(path: string, options: { signal?: AbortSignal } = {}) {
+  async getReadOnlyTerminalSession(path: string, options: { workspace?: string; signal?: AbortSignal } = {}) {
     options.signal?.throwIfAborted();
-    const workspace = await this.requireSelectedWorkspace();
+    const workspace = options.workspace !== undefined
+      ? await this.requireWorkspace(options.workspace)
+      : await this.requireSelectedWorkspace();
     const canonical = resolve(path);
     const directory = defaultTerminalSessionDirectory(workspace);
     let session: ReadOnlyTerminalSessionInfo | undefined;

@@ -1,3 +1,4 @@
+import { TerminalHistory } from "./TerminalHistory.tsx";
 import { Dialog } from "@astryxdesign/core/Dialog";
 import type { DropdownMenuOption } from "@astryxdesign/core/DropdownMenu";
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
@@ -198,6 +199,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   ]);
   const client = useMemo(() => new WebClient(), []);
   const [archived, setArchived] = useState(false);
+  const [terminalHistoryOpen, setTerminalHistoryOpen] = useState(false);
   const [pinsCollapsed, setPinsCollapsed] = useState(false);
   const [pinSaving, setPinSaving] = useState(false);
   const pinInFlight = useRef(false);
@@ -1042,6 +1044,19 @@ export function SessionSidebar(props: SessionSidebarProps) {
             {t("transcriptSearch")}
           </button>
         )}
+        <button
+          type="button"
+          className="sidebar-content-search"
+          disabled={!props.selectedWorkspace}
+          onClick={() => setTerminalHistoryOpen(true)}
+        >
+          {t("terminalHistory")}
+        </button>
+        <TerminalHistory
+          open={terminalHistoryOpen}
+          workspace={props.selectedWorkspace}
+          onClose={() => setTerminalHistoryOpen(false)}
+        />
         <TranscriptSearchDialog
           open={transcriptSearchOpen}
           initialQuery={props.query}

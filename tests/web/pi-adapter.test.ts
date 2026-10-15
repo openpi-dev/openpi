@@ -1720,3 +1720,84 @@ test("a throwing or absent thinking getter is omitted without failing the snapsh
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("terminal history explicitly scopes known B while runtime remains A", async () => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "openpi-terminal-workspace-")),
+  );
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  try {
+    const a = join(root, "A");
+    const b = join(root, "B");
+    await mkdir(a);
+    await mkdir(b);
+    await mkdir(join(root, "web"));
+    const seed = (cwd: string) => {
+      const manager = SessionManager.create(cwd);
+      manager.appendMessage({
+        role: "user",
+        content: `${cwd} proof`,
+        timestamp: 1,
+      });
+      manager.appendMessage({
+        role: "assistant",
+        content: [],
+        api: "openai-completions",
+        provider: "fixture",
+        model: "fixture",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 2,
+      });
+      return manager;
+    };
+    const terminalA = seed(a);
+    const terminalB = seed(b);
+    const runtime = runtimeFor(
+      a,
+      join(root, "web"),
+      SessionManager.inMemory(a),
+    );
+    const adapter = new PiWebAdapter(runtime);
+    await adapter.importWorkspace(b);
+    const listed = await adapter.listReadOnlyTerminalSessions({ workspace: b });
+    assert.equal(listed.total, 1);
+    assert.equal(listed.sessions[0]?.path, terminalB.getSessionFile());
+    assert.equal(
+      (
+        await adapter.getReadOnlyTerminalSession(terminalB.getSessionFile()!, {
+          workspace: b,
+        })
+      ).cwd,
+      b,
+    );
+    await assert.rejects(
+      adapter.getReadOnlyTerminalSession(terminalA.getSessionFile()!, {
+        workspace: b,
+      }),
+    );
+    await assert.rejects(
+      adapter.listReadOnlyTerminalSessions({
+        workspace: join(root, "unknown"),
+      }),
+    );
+    await adapter.removeWorkspace(b);
+    await assert.rejects(
+      adapter.listReadOnlyTerminalSessions({ workspace: b }),
+    );
+    assert.equal(runtime.cwd, a);
+    assert.equal(runtime.sessionManager.getSessionFile(), undefined);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -1,4 +1,8 @@
 import type {
+  WebTerminalSessionPage,
+  WebTerminalSessionDetail,
+} from "../../../protocol/types.ts";
+import type {
   WebBackgroundTerminalDetail,
   WebCapabilityActionRequest,
   WebSubagentDetail,
@@ -716,6 +720,25 @@ export class WebClient {
     if (options.cwd !== undefined) query.set("cwd", options.cwd);
     return this.request<ArchivedSessionPage>(
       `/api/sessions/archived?${query}`,
+      { signal },
+    );
+  }
+
+  terminalSessions(
+    workspace: string,
+    query: string,
+    cursor = 0,
+    signal?: AbortSignal,
+  ) {
+    return this.request<WebTerminalSessionPage>(
+      `/api/terminal-sessions?${new URLSearchParams({ workspace, query, cursor: String(cursor), limit: "50" })}`,
+      { signal },
+    );
+  }
+
+  terminalSession(workspace: string, path: string, signal?: AbortSignal) {
+    return this.request<WebTerminalSessionDetail>(
+      `/api/terminal-sessions?${new URLSearchParams({ workspace, path })}`,
       { signal },
     );
   }

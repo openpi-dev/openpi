@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -1739,6 +1739,89 @@ test("serves terminal Sessions through a read-only bounded endpoint", async () =
       });
       assert.equal(rejected.status, 405);
     }
+    await mkdir(runtime.sessionDirectory, { recursive: true });
+    const other = join(root, "B");
+    await mkdir(other);
+    const imported = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: other }),
+    });
+    assert.equal(imported.status, 201);
+    const known = (await imported.json()) as { path: string };
+    const terminalB = SessionManager.create(known.path);
+    terminalB.appendMessage({
+      role: "user",
+      content: "native B proof",
+      timestamp: 1,
+    });
+    terminalB.appendMessage({
+      role: "assistant",
+      content: [],
+      api: "openai-completions",
+      provider: "fixture",
+      model: "fixture",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const bQuery = new URLSearchParams({ workspace: known.path });
+    const listB = await fetch(
+      `${launched.origin}/api/terminal-sessions?${bQuery}`,
+      { headers },
+    );
+    assert.equal(listB.status, 200);
+    const rowsB = (await listB.json()) as {
+      sessions: { path: string; cwd: string }[];
+    };
+    assert.equal(rowsB.sessions.length, 1);
+    assert.equal(rowsB.sessions[0]?.cwd, known.path);
+    const detailB = new URLSearchParams({
+      workspace: known.path,
+      path: terminalB.getSessionFile()!,
+    });
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/terminal-sessions?${detailB}`, {
+          headers,
+        })
+      ).status,
+      200,
+    );
+    detailB.set("path", terminal.getSessionFile()!);
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/terminal-sessions?${detailB}`, {
+          headers,
+        })
+      ).status,
+      404,
+    );
+    for (const query of [
+      `workspace=${encodeURIComponent(join(root, "unknown"))}`,
+      `workspace=${encodeURIComponent(known.path)}&workspace=${encodeURIComponent(root)}`,
+      "query=a&query=b",
+      "path=",
+      "cursor=1&cursor=2",
+    ]) {
+      const response = await fetch(
+        `${launched.origin}/api/terminal-sessions?${query}`,
+        { headers },
+      );
+      assert.ok([400, 404].includes(response.status), query);
+    }
+    assert.equal(runtime.cwd, root);
+    assert.equal(
+      runtime.sessionManager.getSessionId(),
+      sessionManager.getSessionId(),
+    );
     const capabilities = await fetch(`${launched.origin}/api/capabilities`, {
       headers,
     });

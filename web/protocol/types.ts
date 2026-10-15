@@ -89,6 +89,39 @@ export interface WebSessionSummary {
   };
 }
 
+export interface WebTerminalSessionSummary {
+  id: string;
+  path: string;
+  cwd: string;
+  name?: string;
+  modified: string;
+  created: string;
+  messageCount: number;
+  metadataPartial: boolean;
+  firstMessage: string;
+  source: "pi-default";
+  origin: "terminal";
+  readOnly: true;
+}
+
+export interface WebTerminalSessionPage {
+  sessions: WebTerminalSessionSummary[];
+  cursor: number;
+  nextCursor?: number;
+  total: number;
+  partial: boolean;
+}
+
+export interface WebTerminalSessionDetail extends WebTerminalSessionSummary {
+  preview: {
+    messages: { role: string; content?: unknown }[];
+    totalMessages: number;
+    bytesRead: number;
+    retainedBytes: number;
+    truncatedBytes: number;
+  };
+}
+
 export interface WebWorkspaceSummary {
   path: string;
   name: string;

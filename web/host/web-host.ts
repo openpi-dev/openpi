@@ -2003,8 +2003,23 @@ export class WebHost {
       });
     }
     if (url.pathname === "/api/terminal-sessions") {
+      const allowed = ["workspace", "query", "cursor", "limit", "path"];
+      if (request.method !== "GET" || [...url.searchParams.keys()].some((key) =>
+        !allowed.includes(key) || url.searchParams.getAll(key).length !== 1)) {
+        return this.json(response, 400, { code: "INVALID_TERMINAL_QUERY", error: "Invalid terminal history query" });
+      }
+      const workspace = url.searchParams.get("workspace") ?? undefined;
+      const detailPath = url.searchParams.get("path");
+      if ((workspace !== undefined && (!workspace.trim() || workspace.length > 4096 || /[\u0000-\u001f\u007f]/u.test(workspace))) ||
+        (detailPath !== null && (!detailPath.trim() || detailPath.length > 4096 || /[\u0000-\u001f\u007f]/u.test(detailPath)))) {
+        return this.json(response, 400, { code: "INVALID_TERMINAL_QUERY", error: "Invalid terminal history identity" });
+      }
+      if (workspace !== undefined) {
+        try { await this.adapter.requireWorkspace(workspace); }
+        catch { return this.json(response, 404, { code: "WORKSPACE_UNAVAILABLE", error: "Workspace is not available" }); }
+      }
       const query = url.searchParams.get("query") ?? "";
-      if (query.length > 200) {
+      if (query.length > 200 || /[\u0000-\u001f\u007f]/u.test(query)) {
         return this.json(response, 400, {
           code: "QUERY_TOO_LONG",
           error: "query must be at most 200 characters",
@@ -2036,13 +2051,14 @@ export class WebHost {
           return this.json(
             response,
             200,
-            await this.adapter.getReadOnlyTerminalSession(path, { signal }),
+            await this.adapter.getReadOnlyTerminalSession(path, { workspace, signal }),
           );
         }
         return this.json(
           response,
           200,
           await this.adapter.listReadOnlyTerminalSessions({
+            workspace,
             query,
             cursor: cursor.value,
             limit,
