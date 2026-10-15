@@ -21,3 +21,5 @@ Start from [`TEMPLATE.md`](TEMPLATE.md).
 - [`0003-local-web-browser-entry.md`](0003-local-web-browser-entry.md) — direct local browser entry with authenticated APIs and isolated document bootstrap ([#448](https://github.com/openpi-dev/openpi/issues/448)).
 
 - [`0004-capability-name-discovery.md`](0004-capability-name-discovery.md) — named delegate/workflow discovery with model-owned execution judgment and unchanged authority ([#655](https://github.com/openpi-dev/openpi/issues/655)).
+
+- [`0005-supported-pi-versions.md`](0005-supported-pi-versions.md) — proposed minimum/locked/latest host verification and the boundary of the open-ended peer range ([#328](https://github.com/openpi-dev/openpi/issues/328)).

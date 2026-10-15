@@ -18,13 +18,18 @@ env:
 
 jobs:
   test-node:
-    name: Runtime Node ${{ matrix.node-version }}
+    name: Runtime Node ${{ matrix.node-version }}${{ matrix.label }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.19.0, 24, 26]
+        include:
+          - { node-version: 22.19.0, pi-host: locked, label: "" }
+          - { node-version: 24, pi-host: locked, label: "" }
+          - { node-version: 26, pi-host: locked, label: "" }
+          - { node-version: 22.19.0, pi-host: minimum, label: " (Pi minimum)" }
+          - { node-version: 22.19.0, pi-host: latest, label: " (Pi latest)" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -37,6 +42,12 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
         run: bun install --frozen-lockfile
+      - name: Install and verify the selected Pi compatibility host
+        if: matrix.pi-host != 'locked'
+        env:
+          PI_HOST: ${{ matrix.pi-host }}
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
+        run: node scripts/select-pi-ci-host.mjs
       - run: bun run check
       - name: Verify committed Web build
         run: |
@@ -52,6 +63,7 @@ jobs:
           agent_dir="$(mktemp -d)"
           trap 'rm -rf "$agent_dir"' EXIT
           PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi install "$PWD"
+          PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi list
           output="$(PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi --offline --no-session --mode rpc </dev/null)"
           grep -q '"statusKey":"plan-mode"' <<<"$output"
           grep -q '"widgetKey":"session-tasks-panel"' <<<"$output"
@@ -75,7 +87,7 @@ jobs:
             --extension "$package/extensions/git-info/index.ts" \
             --extension "$package/extensions/ai-providers/index.ts" \
             </dev/null
-      - name: Smoke-test managed Web CLI with a separate locked Pi host
+      - name: Smoke-test managed Web CLI with a separate selected Pi host
         run: |
           root="$(mktemp -d)"
           server_pid=""
@@ -149,7 +161,7 @@ jobs:
           test -s "$root/source/web/dist/favicon.svg"
           npm install --prefix "$root/source" --ignore-scripts --omit=dev --no-audit --no-fund
           test ! -e "$root/source/node_modules/@earendil-works/pi-coding-agent"
-          # Exercise the CLI with the lockfile's Pi host, not package-owned peers.
+          # Exercise the CLI with this job's verified Pi host, not package-owned peers.
           mkdir -p "$root/source/node_modules/@earendil-works"
           ln -s "$PWD/node_modules/@earendil-works/pi-coding-agent" \
             "$root/source/node_modules/@earendil-works/pi-coding-agent"
