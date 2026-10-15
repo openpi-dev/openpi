@@ -320,7 +320,11 @@ it.each([401, 403, 410])(
     });
     expect(download).toHaveBeenCalledOnce();
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
-    expect(screen.getByText("File access revoked")).toBeTruthy();
+    expect(
+      screen.getByText(
+        i18n.t(status === 410 ? "artifactErrorExpired" : "artifactErrorDenied"),
+      ),
+    ).toBeTruthy();
     expect(view.container.querySelector(".artifact-image-preview")).toBeNull();
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
