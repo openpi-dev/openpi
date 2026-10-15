@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  fitLiveMessage,
+  jsonByteLength,
   projectEntries,
   projectEntry,
   projectMessage,
+  WEB_MAX_EVENT_BYTES,
   WEB_MAX_MESSAGE_PARTS,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
 } from "../../web/protocol/types.ts";
@@ -607,4 +610,78 @@ test("entry projection rolls retained message truncation into aggregate evidence
   assert.equal(projected.truncation.entriesOmitted, 0);
   assert.equal(projected.truncation.messagesTruncated, 1);
   assert.equal(projected.truncation.truncated, true);
+});
+
+test("FAIL: live messages fit the SSE event budget for ASCII, CJK, emoji, escapes and many parts", () => {
+  const budget = WEB_MAX_EVENT_BYTES - 200;
+  const cases = [
+    { name: "ascii", content: [{ type: "text", text: "a".repeat(12_000) }] },
+    { name: "cjk", content: [{ type: "text", text: "中".repeat(12_000) }] },
+    { name: "emoji", content: [{ type: "text", text: "😀".repeat(6_000) }] },
+    {
+      name: "escapes",
+      content: [{ type: "text", text: "\u0001".repeat(12_000) }],
+    },
+    {
+      name: "thinking and text",
+      content: [
+        { type: "thinking", thinking: "思".repeat(12_000) },
+        { type: "text", text: "中".repeat(12_000) },
+        { type: "text", text: "短" },
+      ],
+    },
+  ];
+  for (const { name, content } of cases) {
+    const projected = projectMessage({ role: "assistant", content });
+    const fitted = fitLiveMessage(projected, budget);
+    assert.ok(jsonByteLength(fitted) <= budget, `${name} fits`);
+    if (jsonByteLength(projected) <= budget) {
+      assert.equal(fitted, projected, `${name} is unchanged when it fits`);
+      continue;
+    }
+    assert.equal(fitted.truncation?.truncated, true, name);
+    assert.equal(fitted.truncation?.text, true, name);
+    // Every kept text is a whole-code-point prefix of the original.
+    for (const [index, part] of (fitted.parts ?? []).entries()) {
+      const original = projected.parts?.[index];
+      if (part.type !== "text" && part.type !== "thinking") continue;
+      assert.ok(original && "text" in original);
+      const kept = part.text.replace(/\n\[truncated\]$/, "");
+      assert.ok(original.text.startsWith(kept), `${name} part ${index}`);
+      // No code point was split: re-encoding loses nothing.
+      assert.equal(
+        new TextDecoder().decode(new TextEncoder().encode(kept)),
+        kept,
+        `${name} part ${index}`,
+      );
+    }
+  }
+
+  const mixed = fitLiveMessage(
+    projectMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "思".repeat(12_000) },
+        { type: "text", text: "中".repeat(12_000) },
+        { type: "text", text: "短" },
+      ],
+    }),
+    budget,
+  );
+  // A short part keeps its full text; the long ones share the remainder.
+  assert.deepEqual(mixed.parts?.[2], { type: "text", text: "短" });
+  assert.equal(
+    mixed.parts?.[0]?.type === "thinking" && mixed.parts[0].textTruncated,
+    true,
+  );
+  assert.equal(mixed.truncation?.visibleText, true);
+});
+
+test("live message fitting leaves metadata-only oversize to publish-time invalidation", () => {
+  const projected = projectMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "ok" }],
+  });
+  const tooSmall = jsonByteLength({ ...projected, content: "" }) - 1;
+  assert.equal(fitLiveMessage(projected, tooSmall), projected);
 });
