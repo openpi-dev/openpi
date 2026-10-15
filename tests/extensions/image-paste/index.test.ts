@@ -4,10 +4,15 @@ import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  KeybindingsManager,
+} from "@earendil-works/pi-coding-agent";
 import type { EditorComponent } from "@earendil-works/pi-tui";
 import {
   collapseClipboardPaths,
+  default as imagePaste,
   ImageAttachmentEditor,
   ImageAttachmentStore,
 } from "../../../extensions/image-paste/index.ts";
@@ -107,6 +112,27 @@ function harness() {
   return { store, base, editor, submitted };
 }
 
+test("new sessions do not retain prior image placeholder mappings", () => {
+  const store = new ImageAttachmentStore();
+  const path = temporaryImage("png", "previous-session");
+  store.attachClipboardPath(path, "");
+  const hooks = new Map<
+    string,
+    (event: unknown, ctx: ExtensionContext) => void
+  >();
+  const api = {
+    on(name: string, handler: (event: unknown, ctx: ExtensionContext) => void) {
+      hooks.set(name, handler);
+    },
+    registerMarkdownTransformer() {},
+  } as unknown as ExtensionAPI;
+
+  imagePaste(api, store);
+  hooks.get("session_start")?.({}, { mode: "rpc" } as ExtensionContext);
+
+  assert.equal(store.expandPlaceholders("[Image #1]"), "[Image #1]");
+});
+
 /**
  * Mirrors Pi's InteractiveMode.handleFollowUp(): it reads the text through
  * getExpandedText() *before* choosing a delivery path, and only the idle branch
@@ -184,7 +210,7 @@ test("backspace anywhere in an image placeholder removes it atomically", () => {
   assert.equal(base.setTextCalls, 0);
 });
 
-test("a removed placeholder is not expanded on submission", () => {
+test("removing a placeholder reclaims its unsubmitted clipboard file", () => {
   const path = temporaryImage("png", "image");
   const { base, editor, submitted } = harness();
 
@@ -195,7 +221,7 @@ test("a removed placeholder is not expanded on submission", () => {
   base.submit();
 
   assert.equal(submitted[0], "keep");
-  assert.equal(existsSync(path), true);
+  assert.equal(existsSync(path), false);
 });
 
 test("ordinary paths and unregistered placeholder text stay ordinary text", () => {
@@ -206,6 +232,24 @@ test("ordinary paths and unregistered placeholder text stay ordinary text", () =
   base.submit();
 
   assert.equal(submitted[0], "/tmp/example.png [Image #1]");
+});
+
+test("removing one of two draft attachments for the same file keeps it", () => {
+  const path = temporaryImage("png", "shared");
+  const { base, editor, submitted } = harness();
+
+  editor.insertTextAtCursor(path);
+  editor.insertTextAtCursor(" ");
+  editor.insertTextAtCursor(path);
+  base.cursor = 1;
+  editor.handleInput("BACKSPACE");
+
+  assert.equal(editor.getText(), " [Image #2]");
+  assert.equal(existsSync(path), true);
+
+  base.submit();
+  assert.equal(submitted[0], path);
+  assert.equal(existsSync(path), true);
 });
 
 test("duplicating a placeholder makes both copies ordinary text", () => {
@@ -219,7 +263,7 @@ test("duplicating a placeholder makes both copies ordinary text", () => {
 
   // An ambiguous token cannot own a path, so neither copy expands.
   assert.equal(submitted[0], "[Image #1] [Image #1]");
-  assert.equal(existsSync(path), true);
+  assert.equal(existsSync(path), false);
 });
 
 test("deleting the last image makes its number available to the next paste", () => {

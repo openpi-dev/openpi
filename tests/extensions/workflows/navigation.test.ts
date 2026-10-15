@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   WorkflowNavigationEditor,
+  workflowActivityFooter,
   workflowStripEntryKey,
   WorkflowStripState,
   WorkflowStripWidget,
@@ -298,4 +299,58 @@ test("workflow strip stops repainting after its entry settles", (t) => {
   } finally {
     widget.dispose();
   }
+});
+
+test("ordinary strip hides metrics without mutating canonical facts", () => {
+  const details = workflow();
+  const before = structuredClone(details);
+  const widget = new WorkflowStripWidget(
+    { requestRender() {} } as unknown as TUI,
+    theme,
+    new WorkflowStripState(),
+    () => ({ runId: details.runId, details }),
+  );
+  try {
+    const line = widget.render(100).join("\n");
+    assert.match(line, /repair-docs.*↓ to manage/);
+    assert.doesNotMatch(line, /Draft|Restore missing|agents|tokens|10s/);
+    assert.deepEqual(details, before);
+    for (const width of [1, 4, 16, 32]) {
+      assert.ok(
+        widget.render(width).every((row) => visibleWidth(row) <= width),
+      );
+    }
+    details.agents[0]!.state = "uncertain";
+    details.agents[0]!.worktreePath = "/repo/retained";
+    const attention = widget.render(100).join("\n");
+    assert.match(attention, /1 uncertain.*worktree retained/);
+    assert.notEqual(
+      workflowStripEntryKey({ runId: details.runId, details: before }),
+      workflowStripEntryKey({ runId: details.runId, details }),
+    );
+  } finally {
+    widget.dispose();
+  }
+});
+
+test("footer deduplicates ordinary TUI activity and preserves aggregate failures", () => {
+  assert.equal(
+    workflowActivityFooter(theme, { running: 2, done: 1, failed: 0 }, true),
+    undefined,
+  );
+  const exceptional = workflowActivityFooter(
+    theme,
+    { running: 2, done: 1, failed: 1 },
+    true,
+  );
+  assert.match(exceptional!, /1 failed.*\/workflows/);
+  assert.doesNotMatch(exceptional!, /running|done/);
+  assert.match(
+    workflowActivityFooter(theme, { running: 2, done: 0, failed: 0 }, false)!,
+    /2 running/,
+  );
+  assert.equal(
+    workflowActivityFooter(theme, { running: 0, done: 0, failed: 0 }, false),
+    undefined,
+  );
 });

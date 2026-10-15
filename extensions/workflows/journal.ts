@@ -19,6 +19,10 @@
  */
 
 import { createHash } from "node:crypto";
+import {
+  decodeDelegationReplayOrigin,
+  type DelegationReplayOrigin,
+} from "../shared/delegation-completion.ts";
 
 /** Cap on the whole journal artifact; oldest entries are dropped first. */
 export const JOURNAL_MAX_BYTES = 2 * 1024 * 1024;
@@ -31,6 +35,8 @@ export interface JournalEntry {
   readonly key: string;
   readonly output: string;
   readonly structured?: unknown;
+  /** Preserved across replay chains; absent on legacy journals. */
+  readonly origin?: DelegationReplayOrigin;
 }
 
 export interface WorkflowJournal {
@@ -313,10 +319,12 @@ export function parseJournal(value: unknown): WorkflowJournal | undefined {
     if (!isRecord(raw)) continue;
     if (typeof raw.key !== "string" || !raw.key) continue;
     if (typeof raw.output !== "string") continue;
+    const origin = decodeDelegationReplayOrigin(raw.origin);
     entries.push({
       key: raw.key,
       output: raw.output,
       ...(raw.structured !== undefined ? { structured: raw.structured } : {}),
+      ...(origin ? { origin } : {}),
     });
   }
   return { version: JOURNAL_VERSION, entries };

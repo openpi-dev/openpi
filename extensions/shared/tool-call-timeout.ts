@@ -33,7 +33,21 @@ export async function runWithToolCallTimeout<T>(
   timeoutMs: number,
   signal: AbortSignal | undefined,
   execute: (signal: AbortSignal) => Promise<T>,
+  onBoundary?: (outcome: "timeout" | "cancelled") => void,
 ) {
+  const observeBoundary = (outcome: "timeout" | "cancelled") => {
+    try {
+      onBoundary?.(outcome);
+    } catch {
+      /* Diagnostics cannot change tool execution. */
+    }
+  };
+  if (signal?.aborted) {
+    observeBoundary("cancelled");
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error(`Tool call "${toolName}" was aborted.`);
+  }
   const timeoutController = new AbortController();
   const executionSignal = signal
     ? AbortSignal.any([signal, timeoutController.signal])
@@ -42,6 +56,7 @@ export async function runWithToolCallTimeout<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
+      observeBoundary("timeout");
       reject(timeoutError);
       timeoutController.abort(timeoutError);
     }, timeoutMs);
@@ -51,6 +66,7 @@ export async function runWithToolCallTimeout<T>(
   const aborted = new Promise<never>((_resolve, reject) => {
     if (!signal) return;
     const onAbort = () => {
+      observeBoundary("cancelled");
       reject(
         signal.reason instanceof Error
           ? signal.reason
@@ -79,6 +95,7 @@ export async function runWithToolCallTimeout<T>(
  */
 export function createToolCallTimeoutGuard(
   timeoutMs = CHILD_TOOL_CALL_TIMEOUT_MS,
+  onBoundary?: (toolCallId: string, outcome: "timeout" | "cancelled") => void,
 ) {
   const wrapped = new WeakSet<ToolDefinition>();
 
@@ -88,8 +105,13 @@ export function createToolCallTimeoutGuard(
 
     const execute = definition.execute;
     definition.execute = async (toolCallId, params, signal, onUpdate, ctx) =>
-      runWithToolCallTimeout(definition.name, timeoutMs, signal, (signal) =>
-        execute.call(definition, toolCallId, params, signal, onUpdate, ctx),
+      runWithToolCallTimeout(
+        definition.name,
+        timeoutMs,
+        signal,
+        (signal) =>
+          execute.call(definition, toolCallId, params, signal, onUpdate, ctx),
+        (outcome) => onBoundary?.(toolCallId, outcome),
       );
   };
 

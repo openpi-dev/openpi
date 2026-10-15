@@ -6,7 +6,7 @@ import {
   GIT_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
 } from "../../../extensions/shared/dashboard-state.ts";
-import { SETUP_CONFIG_CHANGED_CHANNEL } from "../../../extensions/shared/setup-config.ts";
+import { SETUP_APPLY_CHANNEL } from "../../../extensions/shared/setup-apply.ts";
 
 const identityTheme = {
   fg: (_name: string, text: string) => text,
@@ -91,7 +91,7 @@ test("marks context occupancy unknown instead of guessing a percentage", () => {
   });
 
   const footer = harness.render().join("\n");
-  assert.match(footer, /\?%\/1\.0m/);
+  assert.match(footer, /\?%\/1\.0M/);
 });
 
 test("always renders operational activity while custom footer is enabled", () => {
@@ -118,7 +118,7 @@ test("shows the branch but omits changed-file counts", () => {
 test("config change event reinstalls footer for the active session", () => {
   const harness = createHarness();
   const before = harness.setFooterCount();
-  harness.emit(SETUP_CONFIG_CHANGED_CHANNEL, {});
+  harness.emit(SETUP_APPLY_CHANNEL, { tasks: [] });
   assert.ok(harness.setFooterCount() > before);
 });
 
@@ -126,7 +126,7 @@ test("session_shutdown clears active session so config events do not reinstall",
   const harness = createHarness();
   harness.hooks.get("session_shutdown")?.({}, harness.ctx);
   const before = harness.setFooterCount();
-  harness.emit(SETUP_CONFIG_CHANGED_CHANNEL, {});
+  harness.emit(SETUP_APPLY_CHANNEL, { tasks: [] });
   assert.equal(harness.setFooterCount(), before);
 });
 

@@ -46,55 +46,31 @@ import {
 } from "../shared/tool-surface.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { planBashDecision } from "./bash-policy.ts";
+import { notifyWebCommand } from "../shared/web-command-feedback.ts";
+import {
+  PlanControlError,
+  projectPlanControl,
+  registerPlanControl,
+} from "./control.ts";
 
-export const MAX_READY_PLAN_CHARS = 50_000;
-export const MAX_READY_PLAN_UTF8_BYTES = 48_000;
-/** Preview lines shown in the collapsed plan_ready result. */
+import {
+  MAX_READY_PLAN_CHARS,
+  MAX_READY_PLAN_UTF8_BYTES,
+  PLAN_MODE_STATE_ENTRY,
+  restorePlanModeState,
+  type PersistedPlanModeState,
+} from "./persisted-state.ts";
+export {
+  MAX_READY_PLAN_CHARS,
+  MAX_READY_PLAN_UTF8_BYTES,
+  PLAN_MODE_STATE_ENTRY,
+  restorePlanModeState,
+  type PersistedPlanModeState,
+  type RestoredPlanModeState,
+} from "./persisted-state.ts";
 const PLAN_PREVIEW_LINES = 10;
-export const PLAN_MODE_STATE_ENTRY = "my-pi-setup-plan-mode-state";
-
-export type PersistedPlanModeState =
-  | { version: 1; status: "inactive" | "planning" }
-  | { version: 1; status: "ready"; plan: string };
-
-export interface RestoredPlanModeState {
-  planning: boolean;
-  readyPlan?: string;
-  error?: string;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isBoundedReadyPlan(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    sanitizeTerminalText(value) === value &&
-    value.trim().length > 0 &&
-    value.length <= MAX_READY_PLAN_CHARS &&
-    new TextEncoder().encode(value.trim()).byteLength <=
-      MAX_READY_PLAN_UTF8_BYTES
-  );
-}
-
-function decodePlanModeState(data: unknown): RestoredPlanModeState | undefined {
-  if (
-    !isRecord(data) ||
-    data.version !== 1 ||
-    typeof data.status !== "string"
-  ) {
-    return;
-  }
-  const keys = Object.keys(data).sort().join(",");
-  if (data.status === "inactive" || data.status === "planning") {
-    if (keys !== "status,version") return;
-    return { planning: data.status === "planning" };
-  }
-  if (data.status === "ready" && keys === "plan,status,version") {
-    if (!isBoundedReadyPlan(data.plan)) return;
-    return { planning: true, readyPlan: data.plan.trim() };
-  }
 }
 
 export function latestAssistantToolCallCount(entries: readonly unknown[]) {
@@ -118,30 +94,6 @@ export function planReadyBatchDecision(toolName: string, callCount: number) {
     reason:
       "plan_ready must be the only tool call in its assistant message so Pi can terminate planning deterministically. Retry it alone after the other tool results return.",
   };
-}
-
-/** Restore only the newest branch-local state; malformed state fails closed. */
-export function restorePlanModeState(
-  entries: readonly unknown[],
-): RestoredPlanModeState {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index];
-    if (
-      !isRecord(entry) ||
-      entry.type !== "custom" ||
-      entry.customType !== PLAN_MODE_STATE_ENTRY
-    ) {
-      continue;
-    }
-    return (
-      decodePlanModeState(entry.data) ?? {
-        planning: true,
-        error:
-          "The latest persisted Plan Mode state is malformed; writes remain blocked. Use `/plan off` to clear it explicitly.",
-      }
-    );
-  }
-  return { planning: false };
 }
 
 export const PLAN_READY_ACTIONS = {
@@ -247,7 +199,11 @@ export function planToolCallDecision(
 
 export default function planMode(pi: ExtensionAPI) {
   let planning = false;
+  let unregisterControl: (() => void) | undefined;
   let readyPlan: string | undefined;
+  let pendingImplementationApproval:
+    | { revision: string | null; prompt: string; beforeAgentStart: boolean }
+    | undefined;
   const syncPlanTool = () =>
     patchOwnedTools(pi, "plan", {
       ...(planning && !readyPlan
@@ -299,7 +255,8 @@ export default function planMode(pi: ExtensionAPI) {
 
   const continuePlanning = (ctx: ExtensionCommandContext) => {
     commitPlanState({ version: 1, status: "planning" }, ctx);
-    ctx.ui.notify(
+    notifyWebCommand(
+      ctx,
       "Still in plan mode. Enter the revision you want; writes remain blocked.",
       "info",
     );
@@ -307,12 +264,13 @@ export default function planMode(pi: ExtensionAPI) {
 
   const implementHere = (ctx: ExtensionCommandContext) => {
     if (!readyPlan) {
-      ctx.ui.notify("No ready plan is available.", "warning");
+      notifyWebCommand(ctx, "No ready plan is available.", "warning");
       return;
     }
     if (!ctx.hasUI) {
-      ctx.ui.notify(
-        "Implementing a ready plan requires an interactive editor.",
+      notifyWebCommand(
+        ctx,
+        "Use the plan controls above the message box to review and submit the implementation prompt in Web.",
         "warning",
       );
       return;
@@ -320,7 +278,8 @@ export default function planMode(pi: ExtensionAPI) {
     const prompt = buildPlanImplementationPrompt(readyPlan);
     ctx.ui.setEditorText(prompt);
     clearPlan(ctx);
-    ctx.ui.notify(
+    notifyWebCommand(
+      ctx,
       "Plan mode is off. Review the implementation prompt, then submit it when ready.",
       "info",
     );
@@ -328,12 +287,13 @@ export default function planMode(pi: ExtensionAPI) {
 
   const implementFresh = async (ctx: ExtensionCommandContext) => {
     if (!readyPlan) {
-      ctx.ui.notify("No ready plan is available.", "warning");
+      notifyWebCommand(ctx, "No ready plan is available.", "warning");
       return;
     }
     if (!ctx.hasUI) {
-      ctx.ui.notify(
-        "Starting a fresh implementation requires an interactive editor.",
+      notifyWebCommand(
+        ctx,
+        "Web cannot start a fresh implementation session. The plan remains ready; use the plan controls above the message box to implement it in this session.",
         "warning",
       );
       return;
@@ -352,7 +312,8 @@ export default function planMode(pi: ExtensionAPI) {
       },
     });
     if (result.cancelled) {
-      ctx.ui.notify(
+      notifyWebCommand(
+        ctx,
         "Fresh session cancelled; the plan is still ready.",
         "info",
       );
@@ -361,12 +322,13 @@ export default function planMode(pi: ExtensionAPI) {
 
   const showReadyActions = async (ctx: ExtensionCommandContext) => {
     if (!readyPlan) {
-      ctx.ui.notify("No ready plan is available.", "warning");
+      notifyWebCommand(ctx, "No ready plan is available.", "warning");
       return;
     }
     if (!ctx.hasUI) {
-      ctx.ui.notify(
-        "Use `/plan implement`, `/plan fresh`, or `/plan off` in a UI session.",
+      notifyWebCommand(
+        ctx,
+        "Use the plan controls above the message box to prepare an implementation prompt, or `/plan off` to exit without implementing. Web does not support a fresh-session handoff.",
         "warning",
       );
       return;
@@ -383,7 +345,7 @@ export default function planMode(pi: ExtensionAPI) {
       await implementFresh(ctx);
     } else if (choice === PLAN_READY_ACTIONS.off) {
       clearPlan(ctx);
-      ctx.ui.notify("Plan mode is off.", "info");
+      notifyWebCommand(ctx, "Plan mode is off.", "info");
     }
   };
 
@@ -440,7 +402,8 @@ export default function planMode(pi: ExtensionAPI) {
         );
       }
       commitPlanState({ version: 1, status: "ready", plan }, ctx);
-      ctx.ui.notify(
+      notifyWebCommand(
+        ctx,
         "Plan ready. Run `/plan` to continue planning or prepare implementation.",
         "info",
       );
@@ -531,7 +494,11 @@ export default function planMode(pi: ExtensionAPI) {
 
       if (action === "off" || action === "cancel") {
         clearPlan(ctx);
-        ctx.ui.notify("Plan mode off. No implementation was started.", "info");
+        notifyWebCommand(
+          ctx,
+          "Plan mode off. No implementation was started.",
+          "info",
+        );
         return;
       }
 
@@ -551,7 +518,7 @@ export default function planMode(pi: ExtensionAPI) {
           return;
         }
         if (!planning) {
-          ctx.ui.notify("Plan mode is not active.", "warning");
+          notifyWebCommand(ctx, "Plan mode is not active.", "warning");
           return;
         }
         requestPlanFinalization();
@@ -565,7 +532,8 @@ export default function planMode(pi: ExtensionAPI) {
 
       if (planning) {
         if (!ctx.hasUI) {
-          ctx.ui.notify(
+          notifyWebCommand(
+            ctx,
             "Plan mode is already active. `/plan done` requests completion; `/plan off` cancels.",
             "info",
           );
@@ -576,7 +544,8 @@ export default function planMode(pi: ExtensionAPI) {
           [PLAN_READY_ACTIONS.continue, FINALIZE_NOW, PLAN_READY_ACTIONS.off],
         );
         if (choice === PLAN_READY_ACTIONS.continue) {
-          ctx.ui.notify(
+          notifyWebCommand(
+            ctx,
             "Plan mode is already active. `/plan done` requests completion; `/plan off` cancels.",
             "info",
           );
@@ -584,7 +553,7 @@ export default function planMode(pi: ExtensionAPI) {
           requestPlanFinalization();
         } else if (choice === PLAN_READY_ACTIONS.off) {
           clearPlan(ctx);
-          ctx.ui.notify("Plan mode is off.", "info");
+          notifyWebCommand(ctx, "Plan mode is off.", "info");
         }
         return;
       }
@@ -626,22 +595,166 @@ export default function planMode(pi: ExtensionAPI) {
   });
 
   const restoreRuntimeState = (ctx: ExtensionContext) => {
+    pendingImplementationApproval = undefined;
     const restored = restorePlanModeState(ctx.sessionManager.getBranch());
     planning = restored.planning;
     readyPlan = restored.readyPlan;
     setStatus(ctx);
-    if (restored.error) ctx.ui.notify(restored.error, "error");
+    if (restored.error) notifyWebCommand(ctx, restored.error, "error");
   };
+
+  const bindControl = (ctx: ExtensionContext) => {
+    unregisterControl?.();
+    unregisterControl = registerPlanControl(ctx.sessionManager, (request) => {
+      if (request.action === "cancel") {
+        if (
+          pendingImplementationApproval?.revision === request.expectedRevision
+        )
+          pendingImplementationApproval = undefined;
+        return projectPlanControl(ctx.sessionManager.getBranch());
+      }
+      // Pi 1.2 marks the run busy before the admitted prompt's preflight callback.
+      const admittedImplementation =
+        request.action === "implement" &&
+        pendingImplementationApproval?.revision === request.expectedRevision &&
+        pendingImplementationApproval.beforeAgentStart;
+      if (!ctx.isIdle() && !admittedImplementation)
+        throw new PlanControlError(
+          "Stop the current turn before changing Plan mode",
+          "PLAN_BUSY",
+          409,
+        );
+      const current = projectPlanControl(ctx.sessionManager.getBranch());
+      if (current.revision !== request.expectedRevision)
+        throw new PlanControlError(
+          "Plan mode changed. Refresh before trying again.",
+          "PLAN_CONFLICT",
+          409,
+        );
+      if (request.action === "prepare" || request.action === "implement") {
+        if (current.status !== "ready" || !readyPlan)
+          throw new PlanControlError(
+            "A ready plan is required before preparing implementation",
+            "PLAN_CONFLICT",
+            409,
+          );
+        const prompt = buildPlanImplementationPrompt(readyPlan);
+        if (request.action === "prepare") return { ...current, prompt };
+        if (!admittedImplementation)
+          throw new PlanControlError(
+            "Pi did not start the approved implementation prompt",
+            "PLAN_CONFLICT",
+            409,
+          );
+        clearPlan(ctx);
+        pendingImplementationApproval = undefined;
+        return {
+          ...projectPlanControl(ctx.sessionManager.getBranch()),
+          prompt,
+        };
+      }
+      if (request.action === "authorize") {
+        if (current.status !== "ready" || !readyPlan)
+          throw new PlanControlError(
+            "A ready plan is required before approving implementation",
+            "PLAN_CONFLICT",
+            409,
+          );
+        if (request.prompt.trim().length === 0)
+          throw new PlanControlError(
+            "An implementation prompt is required",
+            "PLAN_CONFLICT",
+            409,
+          );
+        pendingImplementationApproval = {
+          revision: request.expectedRevision,
+          prompt: request.prompt,
+          beforeAgentStart: false,
+        };
+        return current;
+      }
+      if (
+        request.enabled &&
+        (current.status === "ready" || current.status === "invalid")
+      )
+        throw new PlanControlError(
+          "Review or explicitly exit the current plan first",
+          "PLAN_CONFLICT",
+          409,
+        );
+      const target = request.enabled ? "planning" : "inactive";
+      if (current.status !== target)
+        commitPlanState({ version: 1, status: target }, ctx);
+      return projectPlanControl(ctx.sessionManager.getBranch());
+    });
+  };
+
+  // Project the current stance for user and custom-message turns at every
+  // provider call, without persisting a message or
+  // leaving an obsolete restriction in Pi's cached system prompt.
+  pi.on("context", (event, ctx) => {
+    if (!planning) {
+      if (
+        !ctx.sessionManager
+          .getBranch()
+          .some(
+            (entry) =>
+              entry.type === "custom" &&
+              entry.customType === PLAN_MODE_STATE_ENTRY,
+          )
+      )
+        return;
+    }
+    const content = !planning
+      ? "Current Session state: Plan mode is inactive. Earlier Plan-mode restrictions in this conversation are historical and no longer apply. Exiting Plan mode does not authorize implementation of a previous plan; follow the user's current request and normal permissions."
+      : readyPlan
+        ? "The plan is ready. All tools remain blocked until the user explicitly chooses a Plan action or exits planning. Do not start implementation."
+        : BLOCK_REASON;
+    return {
+      messages: [
+        ...event.messages.filter(
+          (message) =>
+            message.role !== "custom" ||
+            message.customType !== "openpi-plan-context",
+        ),
+        {
+          role: "custom" as const,
+          customType: "openpi-plan-context",
+          content,
+          display: false,
+          timestamp: 0,
+        },
+      ],
+    };
+  });
+
+  // before_agent_start carries the raw user prompt, so use it only to bind an
+  // explicit Web approval to the prompt Pi is about to admit. The context hook
+  // above remains the single source of Plan instructions for provider calls.
+  pi.on("before_agent_start", (event) => {
+    if (
+      "prompt" in event &&
+      planning &&
+      pendingImplementationApproval !== undefined &&
+      event.prompt === pendingImplementationApproval.prompt
+    )
+      pendingImplementationApproval.beforeAgentStart = true;
+  });
 
   pi.on("session_start", (_event, ctx) => {
     restoreRuntimeState(ctx);
+    bindControl(ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => {
     restoreRuntimeState(ctx);
+    bindControl(ctx);
   });
 
   pi.on("session_shutdown", () => {
+    unregisterControl?.();
+    unregisterControl = undefined;
+    pendingImplementationApproval = undefined;
     planning = false;
     readyPlan = undefined;
     syncPlanTool();

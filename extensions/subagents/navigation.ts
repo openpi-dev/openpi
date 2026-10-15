@@ -30,7 +30,9 @@ function cleanLine(value: string) {
 
 /** Normalize every title before it enters snapshots, artifacts, or the TUI. */
 export function normalizeSubagentTitle(value: string, fallback = "subagent") {
-  return cleanLine(value).slice(0, 160) || fallback;
+  // Bound on code points: `slice` measures UTF-16 units and can end on the high
+  // half of a surrogate pair, which then reaches snapshots and the TUI broken.
+  return [...cleanLine(value)].slice(0, 160).join("") || fallback;
 }
 
 /** Prefer the newest running child, then the newest unread settled child. */

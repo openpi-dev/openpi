@@ -1,0 +1,105 @@
+.provider-attempts {
+  color: var(--muted);
+  font-size: var(--conversation-font-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+div.provider-attempts,
+.provider-attempts > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  padding: 3px 0;
+}
+
+.provider-attempts > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.provider-attempts > summary::-webkit-details-marker {
+  display: none;
+}
+
+.provider-attempts > svg,
+.provider-attempts > summary > svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.65;
+  flex-shrink: 0;
+}
+
+.provider-attempts > summary > .reconnect-chevron {
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.provider-attempts > summary:hover > .reconnect-chevron,
+.provider-attempts > summary:focus-visible > .reconnect-chevron,
+.provider-attempts[open] > summary > .reconnect-chevron { opacity: 1; }
+
+.provider-attempts[open] > summary > .reconnect-chevron {
+  transform: rotate(90deg);
+}
+
+.provider-attempts ol {
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-attempts p { margin: 0; white-space: pre-wrap; font: inherit; color: inherit; }
+.provider-attempts.retrying > summary { color: var(--muted); }
+
+.execution-error {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  background: var(--page);
+  color: var(--text);
+  font-size: var(--conversation-font-size);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.execution-error > svg { width: 18px; height: 18px; flex: none; stroke-width: 1.8; }
+.execution-error-content { flex: 1; min-width: 0; }
+.conversation .execution-error p { margin: 0; white-space: pre-wrap; font: inherit; color: inherit; }
+
+@media (hover: none) {
+  .provider-attempts > summary > .reconnect-chevron { opacity: 1; }
+}
+
+@media (max-width: 720px) {
+  .execution-error { gap: 12px; padding: 14px 16px; border-radius: 16px; }
+}
+
+.provider-attempts li + li {
+  margin-top: 7px;
+}
+
+.provider-attempts > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.message-edit-hint {
+  margin: 7px 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-attempts > summary > .reconnect-chevron {
+    transition: none;
+  }
+}

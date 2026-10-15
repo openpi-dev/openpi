@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { registerWebCommandFeedback } from "../../../extensions/shared/web-command-feedback.ts";
 import test from "node:test";
 import type {
   ExtensionAPI,
@@ -210,6 +211,32 @@ function extensionHarness(options: { branch?: unknown[] } = {}) {
     },
   };
 }
+
+test("Web goal commands report results and start only after an explicit objective is submitted", async () => {
+  const h = extensionHarness();
+  Object.assign(h.ctx, { mode: "print", hasUI: false });
+  await h.emit("session_start", { reason: "startup" });
+  const feedback: string[] = [];
+  const detach = registerWebCommandFeedback(h.ctx.sessionManager, (text) =>
+    feedback.push(text),
+  );
+  try {
+    const command = h.commands.get("goal")!;
+    await command.handler("", h.ctx);
+    assert.match(feedback.at(-1)!, /No goal is currently set/);
+    assert.equal(h.messages.length, 0);
+    await command.handler("Verify the requested Web change", h.ctx);
+    assert.equal(h.messages.length, 1);
+    assert.ok(
+      feedback.some((text) => text.includes("Verify the requested Web change")),
+    );
+    await command.handler("pause", h.ctx);
+    await command.handler("resume", h.ctx);
+    assert.doesNotMatch(feedback.at(-1)!, /disabled in print/);
+  } finally {
+    detach();
+  }
+});
 
 test("goal lifecycle tools appear only after goal state exists", async () => {
   const h = extensionHarness();

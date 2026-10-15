@@ -116,6 +116,10 @@ export async function pollCursorAuth(
     url.searchParams.set("verifier", verifier);
     try {
       const response = await fetchWithTimeout(url.toString(), {}, signal);
+      if (!response.ok) {
+        // Release discarded bodies before the next poll needs a connection.
+        await response.body?.cancel().catch(() => {});
+      }
       if (response.status === 404) {
         consecutiveErrors = 0;
         delay = Math.min(delay * multiplier, maxDelay);

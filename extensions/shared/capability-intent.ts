@@ -3,18 +3,17 @@ import {
   type OpenPiCapability,
 } from "./tool-surface.ts";
 
-const CAPABILITY_INTENT = {
+// Runtime inspection is gateway-only; it has no prompt keyword activation.
+const CAPABILITY_INTENT: Partial<Record<OpenPiCapability, RegExp>> = {
   search:
     /\b(?:use|run)\s+(?:fd|rg)\b|\buse\s+(?:structured\s+)?(?:(?:file|code|content)\s+)?search\b|\b(?:structured|fast)\s+(?:file|code|content)\s+search\b|(?:使用|用|运行).{0,8}(?:fd|rg|git\s+(?:show|diff|log))|结构化(?:文件|代码|内容)搜索/iu,
   delegate:
-    /(?:^|[.!?]\s+)(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|^\s*(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:use|spawn|start)\s+(?:(?:a|multiple|several|[1-9]\d*)\s+)?subagents?\b|\bparallel\s+agents?\b|(?:使用|用|启动|调用).{0,8}subagents?\b|^\s*子代理\s*[,，:：]?\s*(?:(?:来|去|请|帮(?:我|忙)?|负责|给我)\s*)?(?:(?:先|全面|系统(?:性地)?|深入|快速|仔细)\s*)?(?:了解|查看|检查|审查|分析|研究|调研|梳理|探索|实现|修复|处理|执行|完成|阅读|总结)|(?:使用|用|启动|调用|来|开).{0,8}子代理|(?:多个?|多路)子代理|并行.{0,8}(?:代理|agent)|委派.{0,6}(?:任务|给|出去)/iu,
-  workflow:
-    /^\s*(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:use|run|start|create|build)\s+(?:a\s+)?workflows?\b|(?:使用|用|运行|创建|构建).{0,8}(?:工作流|workflows?)/iu,
+    /(?:^|[.!?]\s+)(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\bparallel\s+agents?\b|并行.{0,8}(?:代理|agent)|委派.{0,6}(?:任务|给|出去)/iu,
   background:
     /\b(?:run|start|keep)\b.{0,40}\b(?:in the background|background\s+(?:process|terminal|job))\b|后台.{0,8}(?:运行|启动|进程|终端|任务)/iu,
   session:
     /\b(?:create|set|update|track)\s+(?:an?\s+)?(?:session\s+)?(?:goal|task list|tasks)\b|(?:设置|创建|更新|跟踪|追踪).{0,8}(?:目标|任务)/iu,
-} as const satisfies Record<OpenPiCapability, RegExp>;
+};
 
 const CAPABILITY_GATEWAY_INTENT =
   /\bopenpi\s+(?:capabilit(?:y|ies)|tools?|features?)\b|openpi.{0,8}(?:能力|工具|功能)/iu;
@@ -30,20 +29,34 @@ function isExplicitClause(clause: string) {
   return !CONDITIONAL_OR_NEGATED_INTENT.test(clause);
 }
 
-/**
- * One fail-closed interpretation of explicit user capability intent. The
- * English capability names require an imperative request context; references
- * in identifiers, discussion, or comparisons stay inert. Negated or
- * conditional clauses remain inert. Runtime activation and
- * pre-submit UI feedback both cross this seam, so they cannot drift.
- */
+// Names select discovery, not execution. Keep identifier/path fragments inert.
+const CAPABILITY_NAMES =
+  /(?<![\w./\\-])(?:subagents?|workflows?|子代理|工作流)(?![\w/\\-]|\.[\p{L}\p{N}_])/giu;
+
+export function capabilityNameMentions(text: string) {
+  return [...text.matchAll(CAPABILITY_NAMES)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    capability: /^(?:subagents?|子代理)$/iu.test(match[0])
+      ? ("delegate" as const)
+      : ("workflow" as const),
+  }));
+}
+
+/** Mentioning a name loads its guidance/tools; the model decides whether to
+ * use them, including discussion, negation and conditional requests. Other
+ * capability groups retain their existing explicit request interpretation. */
 export function capabilitiesRequestedByPrompt(prompt: string) {
+  const mentioned = capabilityNameMentions(prompt);
   const promptClauses = clauses(prompt);
-  return OPENPI_CAPABILITY_NAMES.filter((capability) =>
-    promptClauses.some(
-      (clause) =>
-        isExplicitClause(clause) && CAPABILITY_INTENT[capability].test(clause),
-    ),
+  return OPENPI_CAPABILITY_NAMES.filter(
+    (capability) =>
+      mentioned.some((mention) => mention.capability === capability) ||
+      promptClauses.some(
+        (clause) =>
+          isExplicitClause(clause) &&
+          CAPABILITY_INTENT[capability]?.test(clause),
+      ),
   );
 }
 

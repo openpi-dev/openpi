@@ -19,3 +19,5 @@ Start from [`TEMPLATE.md`](TEMPLATE.md).
 - [`0002-native-skill-lifecycle.md`](0002-native-skill-lifecycle.md) — use Pi's native Skill loading and Session lifecycle without an OpenPI body-recovery layer.
 
 - [`0003-local-web-browser-entry.md`](0003-local-web-browser-entry.md) — direct local browser entry with authenticated APIs and isolated document bootstrap ([#448](https://github.com/openpi-dev/openpi/issues/448)).
+
+- [`0004-capability-name-discovery.md`](0004-capability-name-discovery.md) — named delegate/workflow discovery with model-owned execution judgment and unchanged authority ([#655](https://github.com/openpi-dev/openpi/issues/655)).

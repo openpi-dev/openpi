@@ -1,0 +1,11 @@
+.context-compaction {
+  margin: 8px auto;
+  width: 100%;
+  color: var(--muted);
+  font-size: var(--conversation-font-size);
+  line-height: 1.6;
+}
+.context-compaction-heading { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding:5px 0; }
+.context-compaction-label { display: inline-flex; align-items: center; gap: 9px; min-width:0; }
+.context-compaction-label > svg { width:18px; height:18px; flex:none; stroke-width:1.65; }
+.conversation .context-compaction p { margin: 6px 0 0 27px; color: var(--muted); }
