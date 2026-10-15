@@ -100,11 +100,15 @@ export function ReviewFileTree({
               data-review-file={file.path}
               title={file.path}
               aria-label={file.path}
+              aria-description={t(`gitFileStatus_${file.status}`)}
               aria-current={selectedPath === file.path ? "true" : undefined}
               onClick={() => onSelect(file.path)}
             >
               <Icon aria-hidden="true" className="review-tree-icon" />
               <span className="review-tree-name">{name}</span>
+              <span className="review-tree-status" aria-hidden="true">
+                {t(`gitFileStatus_${file.status}`)}
+              </span>
               <span className="session-review-stats" aria-hidden="true">
                 {file.binary ? (
                   <span>{t("gitReviewBinaryShort")}</span>
@@ -112,8 +116,16 @@ export function ReviewFileTree({
                   <span title={t("turnEditStatsUnknown")}>—</span>
                 ) : (
                   <>
-                    <span className="review-additions">+{file.additions}</span>
-                    <span className="review-deletions">-{file.deletions}</span>
+                    {file.additions > 0 && (
+                      <span className="review-additions">
+                        +{file.additions}
+                      </span>
+                    )}
+                    {file.deletions > 0 && (
+                      <span className="review-deletions">
+                        -{file.deletions}
+                      </span>
+                    )}
                   </>
                 )}
               </span>

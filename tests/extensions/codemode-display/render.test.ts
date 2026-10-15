@@ -36,6 +36,8 @@ function context(expanded = false, isError = false, showImages = false) {
     toolCallId: "code-1",
     invalidate() {},
     lastComponent: undefined,
+    durationMs: undefined,
+    outputPad: 0,
     state: {},
     cwd: "/workspace",
     executionStarted: true,

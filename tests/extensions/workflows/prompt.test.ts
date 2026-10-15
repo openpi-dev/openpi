@@ -80,8 +80,12 @@ test("completion batches share one bounded fair projection budget", () => {
   }
 });
 
+// Long delivery ids and run dirs make the delivery-facts manifest dominate the
+// 48 KiB transport bound, so a few dozen deliveries force a split and fill a
+// batch to the exact byte limit. Batching re-projects every candidate prefix,
+// so fixture size grows test cost quadratically without adding protection.
 test("oversized completion batches split into bounded messages without losing delivery facts", () => {
-  const entries = Array.from({ length: 128 }, (_, index) => {
+  const entries = Array.from({ length: 32 }, (_, index) => {
     const details: WorkflowDetails = {
       runId: `wf_large_${index.toString(16).padStart(4, "0")}`,
       status: "completed",
@@ -93,7 +97,7 @@ test("oversized completion batches split into bounded messages without losing de
       result: { evidence: "x".repeat(8_000) },
     };
     return {
-      deliveryId: `delivery-large-${index}-${"d".repeat(600)}`,
+      deliveryId: `delivery-large-${index}-${"d".repeat(2_000)}`,
       details,
       runDir: `/tmp/${details.runId}`,
     };
@@ -116,6 +120,43 @@ test("oversized completion batches split into bounded messages without losing de
       1,
     );
   }
+  let offset = 0;
+  for (const batch of batches) {
+    offset += batch.entries.length;
+    if (offset === entries.length) continue;
+    assert.throws(
+      () =>
+        buildProjectedWorkflowCompletionBatch(
+          [...batch.entries, entries[offset]!],
+          { tokens: 10_000, contextWindow: 100_000 },
+        ),
+      /delivery facts exceed the transport payload limit/,
+    );
+  }
+});
+
+test("completion batching preserves the manifest error for one oversized delivery", () => {
+  const details: WorkflowDetails = {
+    runId: "wf_oversized",
+    status: "completed",
+    background: true,
+    startedAt: 1,
+    finishedAt: 2,
+    phases: [],
+    agents: [],
+  };
+  const entries = [
+    {
+      deliveryId: `delivery-${"x".repeat(48 * 1024)}`,
+      details,
+      runDir: "/tmp/wf_oversized",
+    },
+  ];
+
+  assert.throws(
+    () => buildProjectedWorkflowCompletionBatches(entries),
+    /delivery facts exceed the transport payload limit/,
+  );
 });
 
 test("completion batching keeps small and large deliveries grouped", () => {
@@ -133,7 +174,7 @@ test("completion batching keeps small and large deliveries grouped", () => {
     return {
       deliveryId: `delivery-grouped-${index}`,
       details,
-      runDir: `/tmp/${details.runId}/${"r".repeat(600)}`,
+      runDir: `/tmp/${details.runId}/${"r".repeat(2_000)}`,
     };
   };
 
@@ -145,7 +186,7 @@ test("completion batching keeps small and large deliveries grouped", () => {
     smallEntries.map((entry) => entry.deliveryId),
   );
 
-  const largeEntries = Array.from({ length: 128 }, (_, index) =>
+  const largeEntries = Array.from({ length: 32 }, (_, index) =>
     makeEntry(index, 8_000),
   );
   const largeBatches = buildProjectedWorkflowCompletionBatches(largeEntries, {
