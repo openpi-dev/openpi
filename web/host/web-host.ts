@@ -37,6 +37,7 @@ import { projectSetupOutcome } from "../protocol/setup-outcome.ts";
 import { registerWebCommandFeedback, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import {
   PiWebAdapter,
+  WebMetadataQueryError,
   WEB_SESSION_MARKDOWN_MAX_BYTES,
   WebReadOnlySessionError,
 } from "../adapter/pi-adapter.ts";
@@ -1056,6 +1057,10 @@ export class WebHost {
       await this.adapter.removeWorkspace(path);
       this.publish("workspace_removed", { path });
       return this.json(response, 200, { path, removed: true });
+    }
+    // A query-mode request must never fall through to Session mutation routes.
+    if (url.pathname === "/api/sessions" && url.searchParams.has("mode") && request.method !== "GET") {
+      return this.json(response, 405, { error: "Metadata queries require GET" });
     }
     if (url.pathname === "/api/sessions" && request.method === "POST") {
       const body = await this.readJson(request);
@@ -2188,6 +2193,42 @@ export class WebHost {
           ...(baseRef === null ? {} : { baseRef }),
         }),
       );
+    }
+    if (url.pathname === "/api/sessions" && url.searchParams.get("mode") === "metadata") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "Metadata queries require GET" });
+      const allowed = ["mode", "q", "limit", "cursor", "cwd"];
+      const rawLimit = url.searchParams.get("limit");
+      if ([...url.searchParams.keys()].some((key) => !allowed.includes(key) || url.searchParams.getAll(key).length !== 1) ||
+        url.searchParams.getAll("q").length !== 1 || rawLimit !== null && !/^[1-9][0-9]{0,2}$/u.test(rawLimit)) {
+        return this.json(response, 400, { code: "INVALID_METADATA_QUERY", error: "Metadata query parameters must be unambiguous" });
+      }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      const deadline = setTimeout(() => controller.abort(new Error("Metadata query deadline")), 15_000);
+      deadline.unref();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      const signal = AbortSignal.any([controller.signal, this.chooserAbort.signal]);
+      try {
+        const page = await this.adapter.listMetadataSessions({ query: url.searchParams.get("q")!,
+          ...(rawLimit !== null ? { limit: Number(rawLimit) } : {}),
+          ...(url.searchParams.has("cursor") ? { cursor: url.searchParams.get("cursor")! } : {}),
+          ...(url.searchParams.has("cwd") ? { cwd: url.searchParams.get("cwd")! } : {}),
+        }, signal);
+        signal.throwIfAborted();
+        return this.json(response, 200, page);
+      } catch (error) {
+        if (error instanceof WebMetadataQueryError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
+        if (controller.signal.aborted && !response.destroyed) return this.json(response, 504, { code: "METADATA_QUERY_TIMEOUT", error: "Metadata discovery did not complete; retry this query" });
+        throw error;
+      } finally {
+        clearTimeout(deadline);
+        request.off("aborted", abort);
+        response.off("close", abort);
+      }
+    }
+    if (url.pathname === "/api/sessions" && ["mode", "q", "limit", "cursor", "cwd"].some((key) => url.searchParams.has(key))) {
+      return this.json(response, 400, { code: "INVALID_METADATA_QUERY", error: "Explicit metadata mode is required" });
     }
     if (url.pathname === "/api/sessions") {
       const projection = await this.adapter.listSessionProjection(undefined, loadSetupConfig().ui.webChatsSort);

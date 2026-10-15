@@ -52,6 +52,7 @@ import {
 } from "../../protocol/client.ts";
 import type { WebStoreActions } from "../../store/web-store.ts";
 import { ConversationMenu, captureSidebarFocus } from "./ConversationMenu.tsx";
+import { useMetadataSessions } from "./useMetadataSessions.ts";
 import { TranscriptSearchDialog } from "./TranscriptSearchDialog.tsx";
 import { ManagedWorktreesDialog } from "./ManagedWorktreesDialog.tsx";
 import {
@@ -261,6 +262,22 @@ export function SessionSidebar(props: SessionSidebarProps) {
   ]);
   const client = useMemo(() => new WebClient(), []);
   const [archived, setArchived] = useState(false);
+  const metadata = useMetadataSessions(
+    client,
+    props.query,
+    !archived && props.searchOpen,
+    JSON.stringify([
+      props.selectedWorkspace,
+      props.selectedPath,
+      snapshot?.selectedSession?.id,
+    ]),
+  );
+  const catalogSessions =
+    metadata.active && metadata.page
+      ? metadata.page.sessions
+      : (snapshot?.sessions ?? []);
+  const metadataMatched = metadata.active && Boolean(metadata.page);
+
   const [pinsCollapsed, setPinsCollapsed] = useState(false);
   const [pinSaving, setPinSaving] = useState(false);
   const pinInFlight = useRef(false);
@@ -279,7 +296,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const pinnedSort = snapshot?.preferences.pinnedSort ?? "manual";
   const grouping = snapshot?.preferences.sidebarGrouping ?? "project";
   const chatsSort = snapshot?.preferences.chatsSort ?? "updated";
-  const pinnedSessions = (snapshot?.sessions ?? [])
+  const pinnedSessions = catalogSessions
     .filter((session) => session.pinOrder !== undefined && !session.archived)
     .sort(
       (a, b) =>
@@ -287,6 +304,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
         a.pinOrder! - b.pinOrder!,
     );
   const visiblePins = pinnedSessions.filter((session) => {
+    if (metadataMatched) return true;
     const workspace = snapshot?.workspaces.find(
       (workspace) => workspace.path === sessionProject(session),
     );
@@ -539,7 +557,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     const query = props.query.trim().toLowerCase();
     const sessions = archived
       ? (scopedArchivePage?.sessions ?? [])
-      : (snapshot?.sessions ?? []);
+      : catalogSessions;
     const visible = (workspacePath: string, workspaceMatches: boolean) =>
       sessions.filter(
         (session) =>
@@ -550,6 +568,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             : sessionProject(session) === workspacePath &&
               !session.ungrouped) &&
           (!query ||
+            metadataMatched ||
             archived ||
             workspaceMatches ||
             `${sessionTitle(session, t("untitledSession"))} ${session.cwd}`
@@ -602,7 +621,15 @@ export function SessionSidebar(props: SessionSidebarProps) {
         group.sessions.length > 0 ||
         (!archived && !group.ungrouped && (!query || group.matches)),
     );
-  }, [archived, props.query, scopedArchivePage, snapshot, t]);
+  }, [
+    archived,
+    props.query,
+    scopedArchivePage,
+    snapshot,
+    t,
+    catalogSessions,
+    metadataMatched,
+  ]);
 
   const sortChats = (sessions: SidebarSession[]) =>
     [...sessions].sort(
@@ -677,7 +704,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   if (selectedProject && !shownProjects.includes(selectedProject))
     shownProjects.push(selectedProject);
   const recentSessions = sortChats(
-    (snapshot?.sessions ?? []).filter(
+    catalogSessions.filter(
       (session) =>
         !session.archived &&
         session.pinOrder === undefined &&
@@ -692,7 +719,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
           !projectGroups.some(
             (project) => project.path === sessionProject(session),
           )) &&
-        (!props.query.trim() ||
+        (metadataMatched ||
+          !props.query.trim() ||
           `${sessionTitle(session, t("untitledSession"))} ${session.cwd} ${snapshot?.workspaces.find((workspace) => workspace.path === sessionProject(session))?.name ?? ""}`
             .toLowerCase()
             .includes(props.query.trim().toLowerCase())),
@@ -1017,6 +1045,14 @@ export function SessionSidebar(props: SessionSidebarProps) {
   ];
   const organizationItems: DropdownMenuOption[] = [
     {
+      label: t(archived ? "sidebarFilterList" : "metadataFilter"),
+      icon: <Search />,
+      onClick: () => {
+        setActivityOpen(false);
+        props.actions.setSearchOpen(true);
+      },
+    },
+    {
       label: t("sidebarGroupBy"),
       items: [
         {
@@ -1317,7 +1353,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
               props.connected !== false
             )
               void saveRead(session, true);
-            void props.actions.selectSession(session.path);
+            void props.actions.selectSession(session.path, session.id);
           }}
           onDoubleClick={(event) => {
             if (
@@ -2102,10 +2138,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     ref={searchInput}
                     type="search"
                     value={props.query}
-                    placeholder={t("searchPlaceholder")}
-                    maxLength={
-                      archived ? WEB_MAX_ARCHIVED_SESSION_QUERY : undefined
-                    }
+                    placeholder={t(
+                      archived ? "searchPlaceholder" : "metadataPlaceholder",
+                    )}
+                    maxLength={archived ? WEB_MAX_ARCHIVED_SESSION_QUERY : 200}
                     aria-label={t("searchConversations")}
                     onChange={(event) =>
                       props.actions.setQuery(event.target.value)
@@ -2126,18 +2162,24 @@ export function SessionSidebar(props: SessionSidebarProps) {
                       items={organizationItems}
                     />
                   )}
-                  {archived && (
-                    <Tooltip content={t("sidebarFilterList")}>
+                  {
+                    <Tooltip
+                      content={t(
+                        archived ? "sidebarFilterList" : "metadataFilter",
+                      )}
+                    >
                       <button
                         className="icon-button"
                         type="button"
-                        aria-label={t("sidebarFilterList")}
+                        aria-label={t(
+                          archived ? "sidebarFilterList" : "metadataFilter",
+                        )}
                         onClick={() => props.actions.setSearchOpen(true)}
                       >
                         <Search />
                       </button>
                     </Tooltip>
-                  )}
+                  }
                   {!archived && (
                     <Tooltip content={t("addWorkspace")}>
                       <button
@@ -2162,6 +2204,51 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 <Search aria-hidden="true" />
                 {t("transcriptSearch")}
               </button>
+            )}
+            {metadata.active && (
+              <div className="sidebar-archive-actions">
+                <p role="status">
+                  {t(
+                    metadata.loading || (!metadata.page && !metadata.error)
+                      ? "metadataSearching"
+                      : metadata.error === "stale"
+                        ? "metadataStale"
+                        : metadata.error
+                          ? "metadataFailed"
+                          : metadata.page?.truncation.recordsUnscanned
+                            ? "metadataPartial"
+                            : "metadataResults",
+                  )}
+                </p>
+                {metadata.error && (
+                  <button
+                    type="button"
+                    disabled={metadata.loading}
+                    onClick={() =>
+                      void metadata.load(
+                        metadata.error === "stale"
+                          ? undefined
+                          : metadata.cursor,
+                      )
+                    }
+                  >
+                    {t(
+                      metadata.error === "stale" ? "metadataRefresh" : "retry",
+                    )}
+                  </button>
+                )}
+                {metadata.page?.nextCursor && !metadata.error && (
+                  <button
+                    type="button"
+                    disabled={metadata.loading}
+                    onClick={() =>
+                      void metadata.load(metadata.page?.nextCursor)
+                    }
+                  >
+                    {t("metadataMore")}
+                  </button>
+                )}
+              </div>
             )}
             {archived && (
               <div className="sidebar-archive-actions">
@@ -2217,9 +2304,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
                   })}
                 </p>
               )}
-            {!archived && loadedHistoryBounded && (
+            {!archived && !metadataMatched && loadedHistoryBounded && (
               <p className="sidebar-scope-note">
-                {t("loadedHistoryBounded", {
+                {t("metadataCatalogAvailable", {
                   sessions: snapshot?.truncation.sessionsOmitted,
                   workspaces: snapshot?.truncation.workspacesOmitted,
                 })}
@@ -2357,7 +2444,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 <div
                   className="empty"
                   hidden={
-                    archived && (archiveLoading || Boolean(scopedArchiveError))
+                    archived
+                      ? archiveLoading || Boolean(scopedArchiveError)
+                      : metadata.active &&
+                        (metadata.loading ||
+                          !metadata.page ||
+                          Boolean(metadata.error) ||
+                          Boolean(metadata.page.nextCursor))
                   }
                 >
                   {props.query.trim()
@@ -2365,9 +2458,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
                         archived &&
                           scopedArchivePage?.truncation.recordsUnscanned
                           ? "noMatchingScannedArchives"
-                          : !archived && loadedHistoryBounded
-                            ? "noMatchingLoaded"
-                            : "noMatching",
+                          : metadataMatched
+                            ? metadata.page?.truncation.recordsUnscanned
+                              ? "metadataPartial"
+                              : "noMatching"
+                            : !archived && loadedHistoryBounded
+                              ? "noMatchingLoaded"
+                              : "noMatching",
                       )
                     : t(
                         archived
