@@ -2,174 +2,172 @@ import { expect, test } from "@playwright/test";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import type { WebSessionForkRequest } from "../../web/runtime/types.ts";
 
-test("older-message edit and successful regeneration use an exact new branch, retain attachments on rejection, and return to the original", async ({
-  page,
-}, testInfo) => {
-  const source = {
-    sessionId: "rerun-source",
-    sessionPath: "/mock/workspace/source.jsonl",
-    entryId: "older-question",
-  };
-  const images = [
-    {
-      mimeType: "image/png",
-      name: "original.png",
-      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
-    },
-  ];
-  let child = false;
-  let rejected = true;
-  const forks: WebSessionForkRequest[] = [];
-  const prompts: Array<{
-    sessionId: string;
-    sessionPath: string;
-    content: string;
-    images: typeof images;
-  }> = [];
-  let base: WebSnapshot | undefined;
-  const projection = () =>
-    ({
-      id: child ? `rerun-child-${forks.length}` : source.sessionId,
-      path: child
-        ? `/mock/workspace/child-${forks.length}.jsonl`
-        : source.sessionPath,
-      cwd: "/mock/workspace",
-      bytes: 10,
-      truncation: {
-        truncated: false,
-        entriesOmitted: 0,
-        messagesTruncated: 0,
-        messagePartsOmitted: 0,
-        maxBytes: 2_097_152,
-      },
-      history: {
-        leafEntryId: child ? null : "later-question",
-        beforeEntryId: null,
-      },
-      ...(child
-        ? { rerun: { source, mode: forks.at(-1)?.rerun?.mode ?? "edit" } }
-        : {}),
-      entries: child
-        ? []
-        : [
-            {
-              type: "message",
-              id: source.entryId,
-              timestamp: "2026-10-02T00:00:00Z",
-              message: { role: "user", content: "原来的第一条问题" },
-            },
-            {
-              type: "message",
-              id: "successful-answer",
-              timestamp: "2026-10-02T00:00:01Z",
-              message: {
-                role: "assistant",
-                stopReason: "stop",
-                content: "原回答，必须保留在原对话。",
-              },
-            },
-            {
-              type: "message",
-              id: "later-question",
-              timestamp: "2026-10-02T00:00:02Z",
-              message: { role: "user", content: "后来的第二条问题" },
-            },
-          ],
-    }) satisfies WebSnapshot["selectedSession"];
-  await page.route("**/events?**", (route) =>
-    route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }),
-  );
-  await page.route("**/api/snapshot**", async (route) => {
-    if (!base) base = (await (await route.fetch()).json()) as WebSnapshot;
-    const value = structuredClone(base);
-    const selected = projection();
-    value.workspaces = [
-      { path: selected.cwd, name: "Rerun fixture", current: true },
-    ];
-    value.sessions = [
+for (const width of [1440, 390]) {
+  test(`older-message edit and successful regeneration use an exact new branch, retain attachments on rejection, and return to the original at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    const source = {
+      sessionId: "rerun-source",
+      sessionPath: "/mock/workspace/source.jsonl",
+      entryId: "older-question",
+    };
+    const images = [
       {
-        id: selected.id,
-        path: selected.path,
-        cwd: selected.cwd,
-        source: "web-session",
-        origin: "web",
-        controller: "web",
-        readOnly: false,
-        created: "2026-10-02T00:00:00Z",
-        modified: "2026-10-02T00:00:00Z",
-        messageCount: selected.entries.length,
-        firstMessage: "原来的第一条问题",
+        mimeType: "image/png",
+        name: "original.png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
       },
     ];
-    value.currentSessionId = selected.id;
-    value.currentSessionPath = selected.path;
-    value.selectedSession = selected;
-    value.selectedExecution = undefined;
-    value.runtime = { status: "idle", capabilities: {} };
-    await route.fulfill({ json: value });
-  });
-  await page.route("**/api/session/fork", async (route) => {
-    const request = route.request().postDataJSON() as WebSessionForkRequest;
-    forks.push(request);
-    child = true;
-    await route.fulfill({
-      json: {
-        state: "forked",
-        commandId: request.commandId,
-        source,
-        sessionId: `rerun-child-${forks.length}`,
-        sessionPath: `/mock/workspace/child-${forks.length}.jsonl`,
-        prompt: {
-          content:
-            request.rerun?.mode === "edit"
-              ? `${request.rerun.content}\n\n[attached.txt](</mock/workspace/original/attached.txt>)`
-              : "原来的第一条问题",
-          images,
+    let child = false;
+    let rejected = true;
+    const forks: WebSessionForkRequest[] = [];
+    const prompts: Array<{
+      sessionId: string;
+      sessionPath: string;
+      content: string;
+      images: typeof images;
+    }> = [];
+    let base: WebSnapshot | undefined;
+    const projection = () =>
+      ({
+        id: child ? `rerun-child-${forks.length}` : source.sessionId,
+        path: child
+          ? `/mock/workspace/child-${forks.length}.jsonl`
+          : source.sessionPath,
+        cwd: "/mock/workspace",
+        bytes: 10,
+        truncation: {
+          truncated: false,
+          entriesOmitted: 0,
+          messagesTruncated: 0,
+          messagePartsOmitted: 0,
+          maxBytes: 2_097_152,
         },
-      },
-    });
-  });
-  await page.route("**/api/prompt", async (route) => {
-    const body = route.request().postDataJSON();
-    prompts.push(body);
-    await route.fulfill(
-      rejected
-        ? {
-            status: 422,
-            json: { code: "PROMPT_REJECTED", error: "确定拒绝，未启动模型" },
-          }
-        : { status: 202, json: { id: body.commandId, accepted: true } },
+        history: {
+          leafEntryId: child ? null : "later-question",
+          beforeEntryId: null,
+        },
+        ...(child
+          ? { rerun: { source, mode: forks.at(-1)?.rerun?.mode ?? "edit" } }
+          : {}),
+        entries: child
+          ? []
+          : [
+              {
+                type: "message",
+                id: source.entryId,
+                timestamp: "2026-10-02T00:00:00Z",
+                message: { role: "user", content: "原来的第一条问题" },
+              },
+              {
+                type: "message",
+                id: "successful-answer",
+                timestamp: "2026-10-02T00:00:01Z",
+                message: {
+                  role: "assistant",
+                  stopReason: "stop",
+                  content: "原回答，必须保留在原对话。",
+                },
+              },
+              {
+                type: "message",
+                id: "later-question",
+                timestamp: "2026-10-02T00:00:02Z",
+                message: { role: "user", content: "后来的第二条问题" },
+              },
+            ],
+      }) satisfies WebSnapshot["selectedSession"];
+    await page.route("**/events?**", (route) =>
+      route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }),
     );
-  });
-  await page.route("**/api/sessions/select", async (route) => {
-    expect(route.request().postDataJSON().path).toBe(source.sessionPath);
-    child = false;
-    await route.fulfill({
-      json: {
-        cancelled: false,
-        sessionId: source.sessionId,
-        path: source.sessionPath,
-      },
+    await page.route("**/api/snapshot**", async (route) => {
+      if (!base) base = (await (await route.fetch()).json()) as WebSnapshot;
+      const value = structuredClone(base);
+      const selected = projection();
+      value.workspaces = [
+        { path: selected.cwd, name: "Rerun fixture", current: true },
+      ];
+      value.sessions = [
+        {
+          id: selected.id,
+          path: selected.path,
+          cwd: selected.cwd,
+          source: "web-session",
+          origin: "web",
+          controller: "web",
+          readOnly: false,
+          created: "2026-10-02T00:00:00Z",
+          modified: "2026-10-02T00:00:00Z",
+          messageCount: selected.entries.length,
+          firstMessage: "原来的第一条问题",
+        },
+      ];
+      value.currentSessionId = selected.id;
+      value.currentSessionPath = selected.path;
+      value.selectedSession = selected;
+      value.selectedExecution = undefined;
+      value.runtime = { status: "idle", capabilities: {} };
+      await route.fulfill({ json: value });
     });
-  });
-  await page.route("**/api/session/message-window**", (route) =>
-    route.fulfill({
-      json: {
-        session: {
-          ...projection(),
-          history: {
-            leafEntryId: "later-question",
-            beforeEntryId: null,
-            anchorEntryId: source.entryId,
-            anchorOnBranch: true,
+    await page.route("**/api/session/fork", async (route) => {
+      const request = route.request().postDataJSON() as WebSessionForkRequest;
+      forks.push(request);
+      child = true;
+      await route.fulfill({
+        json: {
+          state: "forked",
+          commandId: request.commandId,
+          source,
+          sessionId: `rerun-child-${forks.length}`,
+          sessionPath: `/mock/workspace/child-${forks.length}.jsonl`,
+          prompt: {
+            content:
+              request.rerun?.mode === "edit"
+                ? `${request.rerun.content}\n\n[attached.txt](</mock/workspace/original/attached.txt>)`
+                : "原来的第一条问题",
+            images,
           },
         },
-      },
-    }),
-  );
-  for (const width of [1440, 390]) {
-    child = false;
-    rejected = true;
+      });
+    });
+    await page.route("**/api/prompt", async (route) => {
+      const body = route.request().postDataJSON();
+      prompts.push(body);
+      await route.fulfill(
+        rejected
+          ? {
+              status: 422,
+              json: { code: "PROMPT_REJECTED", error: "确定拒绝，未启动模型" },
+            }
+          : { status: 202, json: { id: body.commandId, accepted: true } },
+      );
+    });
+    await page.route("**/api/sessions/select", async (route) => {
+      expect(route.request().postDataJSON().path).toBe(source.sessionPath);
+      child = false;
+      await route.fulfill({
+        json: {
+          cancelled: false,
+          sessionId: source.sessionId,
+          path: source.sessionPath,
+        },
+      });
+    });
+    await page.route("**/api/session/message-window**", (route) =>
+      route.fulfill({
+        json: {
+          session: {
+            ...projection(),
+            history: {
+              leafEntryId: "later-question",
+              beforeEntryId: null,
+              anchorEntryId: source.entryId,
+              anchorOnBranch: true,
+            },
+          },
+        },
+      }),
+    );
     await page.setViewportSize({ width, height: 1000 });
     await page.goto("/");
     const older = page.locator(`[data-history-entry="${source.entryId}"]`);
@@ -216,5 +214,5 @@ test("older-message edit and successful regeneration use an exact new branch, re
     await page.screenshot({
       path: testInfo.outputPath(`rerun-original-link-${width}.png`),
     });
-  }
-});
+  });
+}

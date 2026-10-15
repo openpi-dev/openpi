@@ -25,6 +25,7 @@ const agentDirectory = resolve(outputDirectory, "agent");
 seedAgentDirectory(agentDirectory, repositoryRoot);
 
 process.env.OPENPI_WEB_E2E_TOKEN = WEB_TOKEN;
+process.env.OPENPI_WEB_PROVIDER_AGENT_DIR = agentDirectory;
 
 export default defineConfig({
   testDir: repositoryRoot,
@@ -33,6 +34,7 @@ export default defineConfig({
     "tests/web/questions-provider.e2e.ts",
     "tests/web/plan-provider.e2e.ts",
     "tests/web/commands-provider.e2e.ts",
+    "tests/web/configuration-provider.e2e.ts",
   ],
   outputDir: outputDirectory,
   fullyParallel: false,

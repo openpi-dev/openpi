@@ -1,37 +1,38 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
+  open,
   readFile,
   rename,
   rm,
-  writeFile,
-  open,
   symlink,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
 import {
-  SessionManager,
-  DefaultResourceLoader,
-  ModelRuntime,
-  SettingsManager,
-  createAgentSessionFromServices,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
-import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
-import { createTurnChangeRecorder } from "../../web/runtime/turn-changes.ts";
 import {
-  WEB_TURN_CHANGES_ENTRY,
+  createAgentSessionFromServices,
+  DefaultResourceLoader,
+  type ExtensionAPI,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import {
   readTurnChangesDetail,
+  WEB_TURN_CHANGES_ENTRY,
 } from "../../web/protocol/turn-changes.ts";
+import { createTurnChangeRecorder } from "../../web/runtime/turn-changes.ts";
 
 const execFileAsync = promisify(execFile);
 const roots = new Set<string>();
@@ -225,6 +226,68 @@ test("recorder needs no Git baseline and ignores external changes", async () => 
   assert.equal(latest?.files[0]?.additions, 1);
 });
 
+test("write receipts describe each authorized operation while the turn keeps net changes", async () => {
+  const root = await repository();
+  const manager = SessionManager.create(root, await sessionDirectory());
+  const events = recorderEvents(manager, root);
+  await events.prompt("Create and revise notes");
+  const created = await events.write("notes.txt", "first\nsecond\n");
+  assert.ok("change" in created.details);
+  assert.equal(created.details.change, "created");
+  assert.match(created.details.diff, /^\+first$/mu);
+  assert.match(created.details.diff, /^\+second$/mu);
+  assert.equal("evidenceUnavailable" in created.details, false);
+
+  const overwritten = await events.write("notes.txt", "second\nthird\n");
+  assert.ok("change" in overwritten.details);
+  assert.equal(overwritten.details.change, "overwritten");
+  assert.match(overwritten.details.diff, /^-first$/mu);
+  assert.match(overwritten.details.diff, /^\+third$/mu);
+  assert.doesNotMatch(overwritten.details.diff, /^\+second$/mu);
+
+  const unchanged = await events.write("notes.txt", "second\nthird\n");
+  assert.deepEqual(unchanged.details, { change: "unchanged", diff: "" });
+  const empty = await events.write("empty.txt", "");
+  assert.deepEqual(empty.details, { change: "created", diff: "" });
+  await events.emit("agent_settled");
+  assert.equal(changes(manager)[0]?.additions, 2);
+  assert.equal(changes(manager)[0]?.deletions, 0);
+  assert.doesNotMatch(changes(manager)[0]?.files[0]?.diff ?? "", /first/u);
+
+  await events.prompt("Rewrite notes in another turn");
+  const later = await events.write("notes.txt", "fourth\n");
+  assert.ok("evidenceUnavailable" in later.details);
+  assert.equal("diff" in later.details, false);
+  assert.equal("change" in later.details, false);
+});
+
+test("a write receipt never reads an unknown baseline and only reuses uninterrupted own writes", async () => {
+  const root = await repository();
+  const manager = SessionManager.create(root, await sessionDirectory());
+  const events = recorderEvents(manager, root);
+  await writeFile(join(root, "file.txt"), "private old contents\n");
+  await events.prompt("Rewrite and revise");
+  const first = await events.write("file.txt", "known replacement\n");
+  assert.ok("evidenceUnavailable" in first.details);
+  assert.doesNotMatch(JSON.stringify(first), /private old contents/u);
+  const second = await events.write("file.txt", "known revision\n");
+  assert.ok("change" in second.details);
+  assert.equal(second.details.change, "overwritten");
+  assert.match(second.details.diff, /^-known replacement$/mu);
+  assert.match(second.details.diff, /^\+known revision$/mu);
+  await writeFile(join(root, "file.txt"), "outside contents\n");
+  const interrupted = await events.write("file.txt", "final\n");
+  assert.ok("evidenceUnavailable" in interrupted.details);
+  assert.equal("diff" in interrupted.details, false);
+  assert.doesNotMatch(JSON.stringify(interrupted), /outside contents/u);
+  await events.emit("agent_settled");
+  assert.equal(changes(manager)[0]?.files[0]?.diff, "");
+  assert.doesNotMatch(
+    JSON.stringify(changes(manager)),
+    /private old contents|outside contents/u,
+  );
+});
+
 test("changing Git repositories without a file tool never manufactures edited files", async () => {
   const root = await repository();
   const nested = join(root, "nested");
@@ -244,7 +307,9 @@ test("large files retain identity and do not discard a small edit", async () => 
   const manager = SessionManager.create(root, await sessionDirectory());
   const events = recorderEvents(manager, root);
   const id = await events.prompt("Write a large change");
-  await events.write("large.txt", `${"x".repeat(300_000)}\n`);
+  const large = await events.write("large.txt", `${"x".repeat(300_000)}\n`);
+  assert.ok("evidenceUnavailable" in large.details);
+  assert.equal("diff" in large.details, false);
   await events.write("hi.txt", "hi\n");
   events.answer("Large change done");
   await events.emit("agent_settled");
@@ -257,6 +322,17 @@ test("large files retain identity and do not discard a small edit", async () => 
   assert.equal(result?.additions, 1);
   assert.equal(result?.files[0]?.statsUnavailable, "content_limit");
   assert.equal(result?.files[1]?.additions, 1);
+});
+
+test("binary writes remain successful without fabricated text diff receipts", async () => {
+  const root = await repository();
+  const manager = SessionManager.create(root, await sessionDirectory());
+  const events = recorderEvents(manager, root);
+  await events.prompt("Write binary data");
+  const binary = await events.write("binary.txt", "text\0data");
+  assert.ok("evidenceUnavailable" in binary.details);
+  assert.equal("diff" in binary.details, false);
+  assert.equal(await readFile(join(root, "binary.txt"), "utf8"), "text\0data");
 });
 
 test("a 12000-file unborn workspace with 459 MiB of existing content records only the new file", async () => {
@@ -349,6 +425,30 @@ test("native failure and cancellation do not add files; completed edits remain w
   );
 });
 
+test("cancellation after a write preserves changed-file evidence without a successful call receipt", async () => {
+  const root = await repository();
+  const manager = SessionManager.create(root, await sessionDirectory());
+  const events = recorderEvents(manager, root);
+  await events.prompt("Write then observe cancellation");
+  const path = join(root, "cancelled-after-write.txt");
+  const controller = new AbortController();
+  // Deliver cancellation once the file exists, without racing a timer against I/O.
+  const signal = new Proxy(controller.signal, {
+    get(target, property) {
+      if (property === "aborted" && existsSync(path)) controller.abort();
+      return Reflect.get(target, property, target);
+    },
+  });
+  await assert.rejects(events.write(path, "written\n", signal), /aborted/u);
+  assert.equal(await readFile(path, "utf8"), "written\n");
+  await events.emit("agent_settled");
+  assert.equal(
+    changes(manager)[0]?.files[0]?.path,
+    "cancelled-after-write.txt",
+  );
+  assert.match(changes(manager)[0]?.files[0]?.diff ?? "", /^\+written$/mu);
+});
+
 test("native Pi admission, file tools and settled lifecycle persist one aggregate for a real Session", async () => {
   const cwd = await sessionDirectory();
   const agentDir = await sessionDirectory();
@@ -423,6 +523,37 @@ test("native Pi admission, file tools and settled lifecycle persist one aggregat
     assert.equal(result[0]?.deletions, 0);
     assert.match(result[0]?.files[0]?.diff ?? "", /\+hello/u);
     assert.equal(await readFile(join(cwd, "hi.txt"), "utf8"), "hello\n");
+    const writeResult = manager
+      .getBranch()
+      .find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "toolResult" &&
+          entry.message.toolCallId === "write-hi",
+      );
+    assert.ok(
+      writeResult?.type === "message" &&
+        writeResult.message.role === "toolResult",
+    );
+    assert.equal(writeResult.message.isError, false);
+    const details = writeResult.message.details as {
+      change?: string;
+      diff?: string;
+    };
+    assert.equal(details.change, "created");
+    assert.match(details.diff ?? "", /^\+hi$/mu);
+    assert.doesNotMatch(details.diff ?? "", /hello/u);
+    const file = manager.getSessionFile();
+    assert.ok(file);
+    const reopened = SessionManager.open(file, agentDir);
+    const restored = reopened
+      .getBranch()
+      .find((entry) => entry.id === writeResult.id);
+    assert.ok(
+      restored?.type === "message" && restored.message.role === "toolResult",
+    );
+    assert.deepEqual(restored.message.details, details);
+    assert.equal(restored.message.isError, false);
   } finally {
     session.dispose();
   }

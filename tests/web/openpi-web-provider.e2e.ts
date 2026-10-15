@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sourceReferenceTokens } from "../../web/protocol/session-sources.ts";
+import type { WebSnapshot } from "../../web/protocol/types.ts";
 import {
   MODEL_ID,
   PROVIDER_ID,
@@ -197,7 +198,7 @@ test("uploaded screenshots reach the real Host and provider without preview meta
   const provider = await startFakeProvider();
   const workspace = await mkdtemp(join(tmpdir(), "openpi-image-provider-"));
   const imageData =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/2uoAAAAASUVORK5CYII=";
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=";
   try {
     const imported = await page.request.post("/api/workspaces", {
       headers: authHeaders,
@@ -343,6 +344,28 @@ test("thinking level reaches the provider request end to end", async ({
     });
     expect(selected.status()).toBe(200);
 
+    // Model selection changes the native supported levels. The earlier
+    // snapshot only establishes Session identity, not the selected model.
+    const selectedSnapshotResponse = await page.request.get("/api/snapshot", {
+      headers: authHeaders,
+    });
+    expect(selectedSnapshotResponse.status()).toBe(200);
+    const selectedSnapshot =
+      (await selectedSnapshotResponse.json()) as WebSnapshot;
+    expect(selectedSnapshot.currentSessionId).toBe(sessionId);
+    expect(selectedSnapshot.selectedSession?.path).toBe(sessionPath);
+    expect(
+      selectedSnapshot.models.find((model) => model.current),
+    ).toMatchObject({
+      provider: PROVIDER_ID,
+      id: MODEL_ID,
+    });
+    expect(selectedSnapshot.thinking?.available).toEqual([
+      "off",
+      "low",
+      "high",
+    ]);
+
     // Load the real UI on the active Session. The thinking picker only exists
     // once a workspace and model are active.
     await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -358,7 +381,6 @@ test("thinking level reaches the provider request end to end", async ({
         response.request().method() === "POST",
     );
     await thinkingPicker.click();
-    expect(snapshot.thinking.available.at(-1)).toBe("high");
     await page.getByRole("slider", { name: "思考等级" }).press("End");
     expect((await thinkingWrite).status()).toBe(200);
     const thinkingWrap = page.locator(".model-picker-wrap");

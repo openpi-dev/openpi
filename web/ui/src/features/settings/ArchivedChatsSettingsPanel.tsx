@@ -175,9 +175,10 @@ export function ArchivedChatsSettingsPanel({
 
   const groups = new Map<string, ArchivedSessionPage["sessions"]>();
   for (const session of visiblePage?.sessions ?? []) {
-    const list = groups.get(session.cwd) ?? [];
+    const project = session.workspacePath ?? session.cwd;
+    const list = groups.get(project) ?? [];
     list.push(session);
-    groups.set(session.cwd, list);
+    groups.set(project, list);
   }
   const workspaceName = (path: string) =>
     workspaces.find((item) => item.path === path)?.name ??

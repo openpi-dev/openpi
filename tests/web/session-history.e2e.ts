@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, test } from "@playwright/test";
-import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
 import { WebHost } from "../../web/host/web-host.ts";
 import type {
   WebSessionHistoryPage,
@@ -21,6 +20,7 @@ const usage = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
 async function historyFixture(turnCount?: number, setupTurn = false) {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-history-browser-"));
   const manager = SessionManager.inMemory(cwd);
@@ -593,6 +593,11 @@ test("automatic native pages retain chronological turns with repeated provider t
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === "/api/session/history") reads++;
   });
+  let completedReads = 0;
+  page.on("requestfinished", (request) => {
+    if (new URL(request.url()).pathname === "/api/session/history")
+      completedReads++;
+  });
   try {
     await page.goto(fixture.host.origin);
     const conversation = page.locator(".conversation");
@@ -617,6 +622,13 @@ test("automatic native pages retain chronological turns with repeated provider t
     ]) {
       await conversation.hover();
       await page.mouse.wheel(0, -100_000);
+      if (from === 1) {
+        // The final one-entry root page is prefetched after the preceding 40.
+        // Consume it explicitly instead of relying on one wheel gesture timing.
+        await expect.poll(() => completedReads).toBe(requestCount);
+        await conversation.hover();
+        await page.mouse.wheel(0, -100_000);
+      }
       await expect(questions).toHaveCount(count + (from === 1 ? 1 : 0));
       await expect(answers).toHaveCount(count);
       await expect.poll(rowText).toEqual(expected(from));
@@ -725,24 +737,6 @@ test("native turn rail indexes unloaded prompts, lazily previews, and reveals ex
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => {
     release = resolve;
-  });
-  // Earlier appearance tests persist package-wide widths. This geometry
-  // fixture needs explicit pane/content widths, while keeping native history.
-  await page.route("**/api/snapshot**", async (route) => {
-    const response = await route.fetch();
-    const snapshot = (await response.json()) as WebSnapshot;
-    await route.fulfill({
-      response,
-      json: {
-        ...snapshot,
-        preferences: {
-          ...snapshot.preferences,
-          chatWidth: DEFAULT_SETUP_CONFIG.ui.webChatWidth,
-          sidebarWidth: DEFAULT_SETUP_CONFIG.ui.webSidebarWidth,
-          auxiliaryWidth: DEFAULT_SETUP_CONFIG.ui.webAuxiliaryWidth,
-        },
-      },
-    });
   });
   try {
     const nativeIds = fixture.manager

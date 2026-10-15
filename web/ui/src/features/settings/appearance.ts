@@ -4,14 +4,14 @@ import type {
 } from "../../../../protocol/types.ts";
 
 export const appearancePalettes = ["default", "mist", "rose", "pine"] as const;
-export const appearanceFonts = ["system", "sans", "serif", "mono"] as const;
+export const appearanceFonts = ["codex", "sans", "serif", "mono"] as const;
 export const appearanceModes = ["system", "light", "dark"] as const;
 export const defaultAppearance: WebAppearancePreference = {
   palette: "default",
   accent: "",
   background: "",
   foreground: "",
-  font: "system",
+  font: "codex",
 };
 
 export function appearanceMode(theme: WebThemePreference) {
@@ -81,7 +81,10 @@ export function parseAppearanceTheme(value: string) {
     )
       return null;
     const palette = appearancePalettes.find((item) => item === source.palette);
-    const font = appearanceFonts.find((item) => item === source.font);
+    const font =
+      source.font === "system"
+        ? "codex"
+        : appearanceFonts.find((item) => item === source.font);
     const { accent, background, foreground } = source;
     if (
       !palette ||

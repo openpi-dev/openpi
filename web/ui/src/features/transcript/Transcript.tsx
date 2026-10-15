@@ -60,13 +60,14 @@ import {
   formatTurnTime,
 } from "../../lib/format.ts";
 import { isControlledSession } from "../../lib/session-control.ts";
+import type { LiveEntry } from "../../store/web-store.ts";
 import {
-  recordedSubagents,
   type RecordedSubagent,
+  recordedSubagents,
 } from "../subagents/recorded-subagents.ts";
 import { SubagentTaskRow } from "../subagents/SubagentTaskRow.tsx";
-import type { LiveEntry } from "../../store/web-store.ts";
 import { CompactionStatus } from "./CompactionStatus.tsx";
+import { type CodemodeChild, codemodeChildren } from "./codemode-tools.ts";
 import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
 import {
@@ -82,6 +83,7 @@ import { TurnNavigation, type TurnNavigationItem } from "./TurnNavigation.tsx";
 import {
   toolActivity,
   toolActivityLabel,
+  toolActivityTag,
   toolActivityTarget,
 } from "./tool-activity.ts";
 import { UserImageAttachments } from "./UserImageAttachments.tsx";
@@ -97,6 +99,7 @@ type PersistedEntry = NonNullable<
 >["entries"][number];
 interface DisplayEntry {
   compaction?: true;
+  forkSnapshotBoundary?: true;
   key: string;
   entryId?: string;
   timingKey?: string;
@@ -111,6 +114,7 @@ interface TranscriptProps {
   snapshot: WebSnapshot;
   liveMessages: LiveEntry[];
   liveRunning: boolean;
+  liveActiveTurn?: ActiveTurn | null;
   livePhase: "idle" | "preparing" | "running";
   liveRetry: { attempt: number; maxAttempts: number } | null;
   thinkingStarts: Record<string, number>;
@@ -125,7 +129,7 @@ interface TranscriptProps {
         restorePosition?: ReadingPosition;
       })
     | null;
-  onResend: (content: string) => Promise<boolean>;
+  onResend: (content: string, retryEntryId?: string) => Promise<boolean>;
   onEdit?: (anchor: WebHistoryAnchor, content: string) => Promise<boolean>;
   onRegenerate?: (anchor: WebHistoryAnchor) => Promise<boolean>;
   onOpenOriginal?: (anchor: WebHistoryAnchor) => Promise<boolean>;
@@ -168,6 +172,7 @@ interface RenderRow {
   responseEntryId?: string;
   commandHandledInputId?: string;
   commandHandledCommandId?: string;
+  forkSnapshotBoundary?: true;
   timing?: WebTurnTiming;
 }
 
@@ -205,6 +210,7 @@ function resultStatus(
   message?: WebLiveMessage,
   liveState?: EvidenceState,
 ): Status {
+  if (message?.forkSnapshotToolResult) return "unknown";
   if (liveState === "running") return "running";
   if (liveState === "unknown") return "unknown";
   if (!message) return "unknown";
@@ -272,14 +278,16 @@ function ProviderOutcome({
   failed,
   error,
   retryPrompt,
+  retryEntryId,
   canRetry,
   onRetry,
 }: {
   failed: boolean;
   error?: string;
   retryPrompt?: string;
+  retryEntryId?: string;
   canRetry: boolean;
-  onRetry: (content: string) => Promise<boolean>;
+  onRetry: (content: string, retryEntryId?: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
@@ -294,14 +302,16 @@ function ProviderOutcome({
       label={t("modelRequestFailed")}
       message={error || t("modelFailureUnknown")}
     >
-      {retryPrompt && (
+      {retryPrompt !== undefined && retryEntryId && (
         <div className="provider-outcome-actions">
           <button
             type="button"
             disabled={!canRetry || retrying}
             onClick={() => {
               setRetrying(true);
-              void onRetry(retryPrompt).finally(() => setRetrying(false));
+              void onRetry(retryPrompt, retryEntryId).finally(() =>
+                setRetrying(false),
+              );
             }}
           >
             <RotateCcw aria-hidden="true" />
@@ -405,13 +415,20 @@ function providerFailures(entries: DisplayEntry[], running: boolean) {
   >();
   let failures: number[] = [];
   let lastAssistant = -1;
-  const finishRun = (timing?: WebTurnTiming, live = false) => {
+  const finishRun = (
+    timing?: WebTurnTiming,
+    live = false,
+    forkSnapshot = false,
+  ) => {
     if (failures.length > 0) {
       const terminal = entries[lastAssistant]?.message.stopReason;
       const interrupted =
         timing?.outcome === "cancelled" || terminal === "aborted";
       const finalError =
-        terminal === "error" && !interrupted && !(live && running);
+        terminal === "error" &&
+        !interrupted &&
+        !(live && running) &&
+        !forkSnapshot;
       if (finalError) finalErrors.add(lastAssistant);
       const collapsed = finalError ? failures.slice(0, -1) : failures;
       const groupIndex = collapsed.at(-1);
@@ -436,6 +453,7 @@ function providerFailures(entries: DisplayEntry[], running: boolean) {
   entries.forEach((entry, index) => {
     if (entry.optimistic) return;
     if (entry.timing) finishRun(entry.timing);
+    else if (entry.forkSnapshotBoundary) finishRun(undefined, false, true);
     else if (
       entry.message.role === "user" ||
       (entry.message.role === "custom" &&
@@ -482,6 +500,10 @@ function EvidenceDetails({
   status,
   summary,
   output,
+  evidenceState,
+  note,
+  rawDetails,
+  snapshotMissingResult = false,
   defaultOpen = false,
 }: {
   body: string;
@@ -490,22 +512,24 @@ function EvidenceDetails({
   status: Status;
   summary?: string;
   output?: string;
+  evidenceState?: EvidenceState;
+  note?: string;
+  rawDetails?: unknown;
+  snapshotMissingResult?: boolean;
   defaultOpen?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(defaultOpen);
   useEffect(() => setExpanded(defaultOpen), [defaultOpen]);
   const state =
-    status === "done"
+    evidenceState ??
+    (status === "done"
       ? "returned"
       : status === "error"
         ? "failed"
         : status === "running"
           ? "running"
-          : "unknown";
-  const showName =
-    ["read", "write", "edit"].includes(name) ||
-    toolActivity(name).action === "call";
+          : "unknown");
   return (
     <details
       className={`message-details tool-line ${status}`}
@@ -517,16 +541,28 @@ function EvidenceDetails({
         <span className="tool-icon" aria-hidden="true">
           {icon}
         </span>
+        <span
+          className="tool-kind"
+          aria-hidden={toolActivity(name).action !== "call"}
+          title={name}
+        >
+          {toolActivityTag(name)}
+        </span>
         <span className="details-title">
-          {showName && <span className="tool-name">{name}</span>}
           <span className="tool-action">
             {toolActivityLabel(t, name, state)}
           </span>
           {summary && <span className="tool-summary">{summary}</span>}
         </span>
+        {snapshotMissingResult && (
+          <span className="evidence-status">
+            {t("toolSnapshotMissingResult")}
+          </span>
+        )}
         <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
+      {note && <p className="evidence-note">{note}</p>}
       {output === undefined ? (
         <pre className="details-body tool-evidence">
           {evidenceText(body).text}
@@ -544,6 +580,12 @@ function EvidenceDetails({
             </pre>
           </figure>
         </>
+      )}
+      {rawDetails !== undefined && (
+        <details className="evidence-raw">
+          <summary>{t("toolRawEvidence")}</summary>
+          <pre>{evidenceText(JSON.stringify(rawDetails, null, 2)).text}</pre>
+        </details>
       )}
     </details>
   );
@@ -599,6 +641,7 @@ function familyCard(
     observed?: boolean;
   } = { sessionId: "" },
 ) {
+  if (result?.forkSnapshotToolResult) return null;
   const {
     sessionId,
     subagents = [],
@@ -1260,6 +1303,16 @@ function buildEntries(
     ]),
   );
   const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] => {
+    if (entry.forkSnapshotBoundary)
+      return [
+        {
+          key: entry.id,
+          entryId: entry.id,
+          timestamp: entry.timestamp,
+          forkSnapshotBoundary: true,
+          message: { role: "custom", content: "" },
+        },
+      ];
     if (entry.type === "compaction")
       return [
         {
@@ -1522,6 +1575,29 @@ function buildEntries(
   };
 }
 
+// Hold only presentation; terminal evidence and disclosure state never wait.
+function useProcessHeadline(current: RenderRow | undefined) {
+  const [held, setHeld] = useState(() => ({
+    row: current,
+    since: Date.now(),
+  }));
+  useEffect(() => {
+    if (current?.key === held.row?.key) return;
+    if (!current || !held.row) {
+      setHeld({ row: current, since: Date.now() });
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setHeld({ row: current, since: Date.now() }),
+      Math.max(0, 1000 - (Date.now() - held.since)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [current, held]);
+  return !current || current.key === held.row?.key
+    ? current
+    : (held.row ?? current);
+}
+
 function ProcessSequence({
   rows,
   active,
@@ -1601,13 +1677,14 @@ function ProcessSequence({
   const current = [...rows]
     .reverse()
     .find((row) => row.processStatus === "running");
+  const headline = useProcessHeadline(current);
   const preview =
-    current?.processPreview ??
+    headline?.processPreview ??
     (active ? [...rows].reverse() : rows).find((row) => row.processPreview)
       ?.processPreview;
   const previewText =
-    current?.processToolName &&
-    ["read", "write", "edit"].includes(current.processToolName)
+    headline?.processToolName &&
+    ["read", "write", "edit"].includes(headline.processToolName)
       ? preview?.slice(
           Math.max(preview.lastIndexOf("/"), preview.lastIndexOf("\\")) + 1,
         )
@@ -1637,17 +1714,18 @@ function ProcessSequence({
         },
       )
     : t(status === "running" ? "processRunning" : "processDetails");
-  const title = current?.processToolName
-    ? toolActivityLabel(t, current.processToolName, "running")
-    : current?.processType === "thinking"
+  const title = headline?.processToolName
+    ? toolActivityLabel(t, headline.processToolName, "running")
+    : headline?.processType === "thinking"
       ? t("thinkingActive")
       : groupTitle;
-  const representative =
-    current?.processToolName ??
-    toolNames.find((name) => toolActivity(name).action === "web") ??
-    toolNames.find((name) => name === "edit" || name === "write") ??
-    toolNames[0];
-  const Icon = representative ? toolActivity(representative).Icon : Wrench;
+  const representative = headline?.processToolName ?? toolNames[0];
+  const Icon =
+    headline?.processType === "thinking"
+      ? Lightbulb
+      : representative
+        ? toolActivity(representative).Icon
+        : Wrench;
   return (
     <details
       className={`process-sequence ${single ? "single-process " : ""}${status}`}
@@ -1964,17 +2042,20 @@ function ConversationTurn({
           row.commandHandledCommandId === prompt.promptCommandId,
       ),
   );
-  const status = active
-    ? observed
-      ? "running"
-      : "unknown"
-    : outcome === "failed"
-      ? "failed"
-      : outcome === "interrupted" || outcome === "cancelled"
-        ? "interrupted"
-        : outcome === "completed" || answered || commandHandled
-          ? "complete"
-          : "waiting";
+  const forkSnapshotBoundary = rows.some((row) => row.forkSnapshotBoundary);
+  const status = forkSnapshotBoundary
+    ? "forked"
+    : active
+      ? observed
+        ? "running"
+        : "unknown"
+      : outcome === "failed"
+        ? "failed"
+        : outcome === "interrupted" || outcome === "cancelled"
+          ? "interrupted"
+          : outcome === "completed" || answered || commandHandled
+            ? "complete"
+            : "waiting";
   const variant =
     status === "failed"
       ? "error"
@@ -2025,24 +2106,28 @@ function ConversationTurn({
       className={`conversation-turn${id === 0 ? " prelude" : ""}`}
       data-turn={id}
     >
-      {id > 0 && status !== "complete" && !hasTiming && (
-        <header className="turn-heading">
-          <span className="sr-only">{t("turnLabel", { number: id })}</span>
-          <span className={`turn-state ${status}`}>
-            <StatusDot
-              variant={variant}
-              label={statusLabel}
-              isPulsing={status === "running"}
-              icon={
-                status === "failed" || status === "interrupted" ? (
-                  <X aria-hidden="true" />
-                ) : undefined
-              }
-            />
-            {statusLabel}
-          </span>
-        </header>
-      )}
+      {id > 0 &&
+        status !== "complete" &&
+        (!hasTiming || forkSnapshotBoundary) && (
+          <header className="turn-heading">
+            <span className="sr-only">{t("turnLabel", { number: id })}</span>
+            <span className={`turn-state ${status}`}>
+              <StatusDot
+                variant={variant}
+                label={statusLabel}
+                isPulsing={status === "running"}
+                icon={
+                  status === "failed" || status === "interrupted" ? (
+                    <X aria-hidden="true" />
+                  ) : status === "forked" ? (
+                    <GitBranch aria-hidden="true" />
+                  ) : undefined
+                }
+              />
+              {statusLabel}
+            </span>
+          </header>
+        )}
       {content}
       {changes && session && (
         <TurnChangesCard
@@ -2072,7 +2157,12 @@ function renderTurns(
       (row) => row.kind === "prompt" && row.promptEntryId === promptEntryId,
     );
     if (start < 0 || start >= end) return;
-    if (rows.slice(start + 1, end).some((row) => row.timing)) return;
+    if (
+      rows
+        .slice(start + 1, end)
+        .some((row) => row.timing || row.forkSnapshotBoundary)
+    )
+      return;
     for (let index = start; index <= end; index++) {
       const row = rows[index]!;
       if (!row.pendingPrompt) owners.set(row, rows[start]!.turn);
@@ -2115,14 +2205,24 @@ function renderTurns(
     <ConversationTurn
       id={turn.id}
       rows={turn.rows}
-      active={running && turn.id === activeTurn}
+      active={
+        running &&
+        turn.id === activeTurn &&
+        !turn.rows.some((row) => row.forkSnapshotBoundary)
+      }
       observed={observed}
       changes={changesByPrompt?.get(
         turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
           ?.promptEntryId ?? "",
       )}
       session={session}
-      timedTurn={running && turn.id === activeTurn ? timedTurn : undefined}
+      timedTurn={
+        running &&
+        turn.id === activeTurn &&
+        !turn.rows.some((row) => row.forkSnapshotBoundary)
+          ? timedTurn
+          : undefined
+      }
       onReviewTurn={onReviewTurn}
       key={`turn-group-${turn.rows[0]?.key}`}
     />
@@ -2413,10 +2513,12 @@ export function Transcript(props: TranscriptProps) {
       ? props.snapshot.selectedExecution
       : undefined;
   const running =
-    (active && props.liveRunning) ||
-    (selectedExecution
-      ? selectedExecution.status === "running"
-      : active && props.snapshot.runtime.status === "running");
+    active && props.liveActiveTurn !== undefined
+      ? props.liveRunning
+      : (active && props.liveRunning) ||
+        (selectedExecution
+          ? selectedExecution.status === "running"
+          : active && props.snapshot.runtime.status === "running");
   const retry =
     !historyPaused && running
       ? selectedExecution
@@ -2476,14 +2578,35 @@ export function Transcript(props: TranscriptProps) {
     const records = recordedSubagents(entries.map((entry) => entry.message));
     const failures = providerFailures(entries, running && !historyPaused);
     const lastFinalError = [...failures.finalErrors].at(-1);
+    let lastAssistantIndex = -1;
+    for (let index = entries.length - 1; index >= 0; index--) {
+      if (entries[index]!.message.role === "assistant") {
+        lastAssistantIndex = index;
+        break;
+      }
+    }
     const attemptContents = new Map<string, RenderRow[]>();
     let retryRowKey: string | undefined;
     const results = new Map<string, DisplayEntry>();
     const pairedToolIds = new Set<string>();
+    // The native execution snapshot reconstructs pending top-level calls.
+    // Only the exact active controller owns Host-observed nested result bodies;
+    // prefer those events and supplement calls whose start was not observed.
+    const observedTools = active
+      ? (props.snapshot.runtime.liveTools ?? [])
+      : [];
+    const pendingTools = selectedExecution?.liveTools ?? [];
     const liveTools = historyPaused
       ? []
-      : (selectedExecution?.liveTools ??
-        (active ? (props.snapshot.runtime.liveTools ?? []) : []));
+      : [
+          ...observedTools,
+          ...pendingTools.filter(
+            (item) =>
+              !observedTools.some(
+                (observed) => observed.call.id === item.call.id,
+              ),
+          ),
+        ];
     entries.forEach((entry) => {
       const { message } = entry;
       if (message.role === "toolResult" && message.toolCallId)
@@ -2531,6 +2654,16 @@ export function Transcript(props: TranscriptProps) {
 
     const rendered = entries.flatMap((entry, index): RenderRow[] => {
       const message = entry.message;
+      if (entry.forkSnapshotBoundary)
+        return [
+          {
+            key: entry.key,
+            turn,
+            kind: "custom",
+            forkSnapshotBoundary: true,
+            content: null,
+          },
+        ];
       if (entry.timing)
         return [
           {
@@ -3014,133 +3147,227 @@ export function Transcript(props: TranscriptProps) {
             });
           }
           if (part.type === "toolCall") {
-            const defaultOpen = part.name.startsWith("subagent")
-              ? props.snapshot.preferences.subagentResultDisplay === "full"
-              : part.name === "bash"
-                ? props.snapshot.preferences.bashToolDisplay === "full"
-                : part.name === "write" || part.name === "edit"
-                  ? props.snapshot.preferences.fileMutationDisplay === "full"
-                  : false;
-            const live = part.id
-              ? liveTools.find((item) => item.call.id === part.id)
-              : undefined;
-            const persistedResultEntry = part.id
-              ? results.get(part.id)
-              : undefined;
-            const persistedResult = persistedResultEntry?.message;
-            const result = persistedResult ?? live?.result;
-            const liveState = persistedResult ? undefined : live?.state;
-            const nativeStatus = resultStatus(result, liveState);
-            const status =
-              props.activityObserved === false && nativeStatus === "running"
-                ? "unknown"
-                : nativeStatus;
-            const card =
-              part.name === "plan_ready" &&
-              result &&
-              planPresentation(result) ? (
-                <PlanCard
-                  key={`${entry.key}-${part.id || partIndex}-plan`}
-                  result={result}
-                  sessionId={selectedId}
-                  sessionPath={selectedPath}
-                  entryId={persistedResultEntry?.entryId}
-                />
-              ) : isEvidenceTool(part.name) ? (
-                <ToolEvidence
-                  key={`${entry.key}-${part.id || partIndex}-evidence`}
-                  call={part}
-                  result={result}
-                  liveState={liveState}
-                  observed={props.activityObserved}
-                  cwd={selectedCwd}
-                  defaultOpen={defaultOpen}
-                />
-              ) : (
-                familyCard(part, result, {
-                  sessionId: selectedId ?? "",
-                  subagents: active
-                    ? props.snapshot.runtime.capabilities.subagents?.items
-                    : undefined,
-                  workflows: active
-                    ? props.snapshot.runtime.capabilities.workflows?.items
-                    : undefined,
-                  records,
-                  onInspectSubagent: props.onInspectSubagent,
-                  liveState,
-                  defaultOpen,
-                  observed: props.activityObserved !== false,
-                })
-              );
-            const args = parseArguments(part.arguments);
-            const { Icon, action } = toolActivity(part.name);
-            const toolIcon = (
-              <Icon key={`${entry.key}-${part.id || partIndex}-icon`} />
+            const outer = part;
+            const outerLive = liveTools.find(
+              (item) => item.call.id === outer.id,
             );
-            detailRows.push({
-              key: `${entry.key}-tool-${part.id || partIndex}`,
-              turn,
-              kind:
-                part.name === "plan_ready" && result && planPresentation(result)
-                  ? "response"
-                  : part.name === "subagent_spawn" || part.name === "workflow"
-                    ? "custom"
-                    : "process",
-              processType: /^(subagent|workflow)/u.test(part.name)
-                ? "activity"
-                : "tool",
-              processMessageKey: entry.key,
-              processToolName: part.name,
-              processPreview: toolActivityTarget(part.name, args)
-                .split("\n")
-                .find(Boolean),
-              processStatus: status,
-              error: Boolean(result?.isError),
-              content: (
-                <article
-                  className="message-row assistant detail-only"
-                  data-history-message={entry.entryId ?? entry.key}
-                  data-history-result={persistedResultEntry?.entryId}
-                  data-history-highlighted={
-                    (highlightedEntry &&
-                      (entry.entryId === highlightedEntry ||
-                        persistedResultEntry?.entryId === highlightedEntry)) ||
-                    undefined
-                  }
-                  tabIndex={-1}
-                >
-                  <div className="message-content">
-                    {card || (
-                      <EvidenceDetails
-                        body={
-                          part.name === "bash" &&
-                          typeof args.command === "string"
-                            ? args.command
-                            : part.arguments
-                        }
-                        icon={toolIcon}
-                        name={part.name || "tool"}
-                        summary={
-                          action === "search" && typeof args.path === "string"
-                            ? t("toolSearchTarget", {
-                                path: args.path,
-                                pattern: toolSummary(part.name, args),
-                              })
-                            : toolSummary(part.name, args)
-                        }
-                        output={
-                          part.id && pairedToolIds.has(part.id)
-                            ? result?.content
-                            : undefined
-                        }
-                        status={status}
-                        defaultOpen={defaultOpen}
-                      />
-                    )}
-                  </div>
-                </article>
-              ),
-            });
+            const outerResultEntry = outer.id
+              ? results.get(outer.id)
+              : undefined;
+            const outerResult = outerResultEntry?.message ?? outerLive?.result;
+            const projection = codemodeChildren(
+              outer,
+              outerResult,
+              liveTools,
+              outerResultEntry ? undefined : outerLive?.state,
+            );
+            const projectedTools: {
+              call: typeof part;
+              child?: CodemodeChild;
+            }[] = projection
+              ? [
+                  ...projection.children.map((child) => ({
+                    call: child.call,
+                    child,
+                  })),
+                  ...(projection.showWrapper ? [{ call: outer }] : []),
+                ]
+              : [{ call: outer }];
+            for (const [
+              projectedIndex,
+              { call: part, child },
+            ] of projectedTools.entries()) {
+              const defaultOpen = part.name.startsWith("subagent")
+                ? props.snapshot.preferences.subagentResultDisplay === "full"
+                : part.name === "bash"
+                  ? props.snapshot.preferences.bashToolDisplay === "full"
+                  : part.name === "write" || part.name === "edit"
+                    ? props.snapshot.preferences.fileMutationDisplay === "full"
+                    : false;
+              const live = part.id
+                ? liveTools.find((item) => item.call.id === part.id)
+                : undefined;
+              const persistedResultEntry = child
+                ? outerResultEntry
+                : part.id
+                  ? results.get(part.id)
+                  : undefined;
+              const persistedResult = child
+                ? undefined
+                : persistedResultEntry?.message;
+              const result = child
+                ? child.result
+                : (persistedResult ?? live?.result);
+              const liveState = child
+                ? child.state
+                : persistedResult
+                  ? undefined
+                  : live?.state;
+              const nativeStatus = child
+                ? child.state === "returned"
+                  ? "done"
+                  : child.state === "failed"
+                    ? "error"
+                    : child.state === "cancelled" || child.state === "timed_out"
+                      ? "warn"
+                      : child.state
+                : resultStatus(result, liveState);
+              const status =
+                props.activityObserved === false && nativeStatus === "running"
+                  ? "unknown"
+                  : nativeStatus;
+              const card =
+                part.name === "plan_ready" &&
+                result &&
+                planPresentation(result) ? (
+                  <PlanCard
+                    key={`${entry.key}-${part.id || partIndex}-plan`}
+                    result={result}
+                    sessionId={selectedId}
+                    sessionPath={selectedPath}
+                    entryId={persistedResultEntry?.entryId}
+                  />
+                ) : isEvidenceTool(part.name) && !child?.outputMissing ? (
+                  <ToolEvidence
+                    key={`${entry.key}-${part.id || partIndex}-evidence`}
+                    call={part}
+                    result={result}
+                    liveState={liveState}
+                    observed={props.activityObserved}
+                    cwd={selectedCwd}
+                    defaultOpen={defaultOpen}
+                  />
+                ) : child?.outputMissing ? null : (
+                  familyCard(part, result, {
+                    sessionId: selectedId ?? "",
+                    subagents: active
+                      ? props.snapshot.runtime.capabilities.subagents?.items
+                      : undefined,
+                    workflows: active
+                      ? props.snapshot.runtime.capabilities.workflows?.items
+                      : undefined,
+                    records,
+                    onInspectSubagent: props.onInspectSubagent,
+                    liveState,
+                    defaultOpen,
+                    observed: props.activityObserved !== false,
+                  })
+                );
+              const args = parseArguments(part.arguments);
+              const { Icon, action } = toolActivity(part.name);
+              const toolIcon = (
+                <Icon key={`${entry.key}-${part.id || partIndex}-icon`} />
+              );
+              detailRows.push({
+                key: `${entry.key}-tool-${part.id || partIndex}`,
+                turn,
+                kind:
+                  part.name === "plan_ready" &&
+                  result &&
+                  planPresentation(result)
+                    ? "response"
+                    : card &&
+                        (part.name === "subagent_spawn" ||
+                          part.name === "workflow")
+                      ? "custom"
+                      : "process",
+                processType: /^(subagent|workflow)/u.test(part.name)
+                  ? "activity"
+                  : "tool",
+                processMessageKey: entry.key,
+                processToolName: part.name,
+                processPreview: toolActivityTarget(part.name, args)
+                  .split("\n")
+                  .find(Boolean),
+                processStatus: status,
+                error: status === "error",
+                content: (
+                  <article
+                    className="message-row assistant detail-only"
+                    data-history-message={entry.entryId ?? entry.key}
+                    data-history-result={persistedResultEntry?.entryId}
+                    data-history-highlighted={
+                      (highlightedEntry &&
+                        (entry.entryId === highlightedEntry ||
+                          persistedResultEntry?.entryId ===
+                            highlightedEntry)) ||
+                      undefined
+                    }
+                    tabIndex={-1}
+                  >
+                    <div className="message-content">
+                      {card || (
+                        <EvidenceDetails
+                          body={
+                            part.name === "bash" &&
+                            typeof args.command === "string"
+                              ? args.command
+                              : part.arguments
+                          }
+                          icon={toolIcon}
+                          name={part.name || "tool"}
+                          summary={
+                            action === "search" && typeof args.path === "string"
+                              ? t("toolSearchTarget", {
+                                  path: args.path,
+                                  pattern: toolSummary(part.name, args),
+                                })
+                              : toolSummary(part.name, args)
+                          }
+                          output={
+                            child
+                              ? (child.error ?? result?.content)
+                              : part.id && pairedToolIds.has(part.id)
+                                ? result?.content
+                                : undefined
+                          }
+                          status={status}
+                          evidenceState={
+                            props.activityObserved === false &&
+                            child?.state === "running"
+                              ? "unknown"
+                              : child?.state
+                          }
+                          rawDetails={
+                            projection?.showWrapper && part.id === outer.id
+                              ? outerResult?.details
+                              : undefined
+                          }
+                          note={
+                            child?.outputMissing
+                              ? t(
+                                  child.argumentsOmitted
+                                    ? "toolNestedArgumentsMissing"
+                                    : "toolNestedOutputMissing",
+                                )
+                              : undefined
+                          }
+                          snapshotMissingResult={result?.forkSnapshotToolResult}
+                          defaultOpen={defaultOpen}
+                        />
+                      )}
+                      {projection?.incomplete &&
+                        projectedIndex === projectedTools.length - 1 && (
+                          <p className="evidence-note" role="status">
+                            {t("toolNestedIncomplete")}
+                          </p>
+                        )}
+                      {projection &&
+                        projectedIndex === projectedTools.length - 1 &&
+                        !projection.showWrapper && (
+                          <details className="evidence-raw">
+                            <summary>{t("toolCodemodeDetails")}</summary>
+                            <pre>{evidenceText(outer.arguments).text}</pre>
+                            <pre>
+                              {evidenceText(outerResult?.content ?? "").text}
+                            </pre>
+                          </details>
+                        )}
+                    </div>
+                  </article>
+                ),
+              });
+            }
           }
         });
         appendSearches(parts.length);
@@ -3187,7 +3414,9 @@ export function Transcript(props: TranscriptProps) {
         ) {
           const failed = message.stopReason === "error";
           const retryPrompt =
-            latestUserIndex === lastUserIndex && index === lastFinalError
+            latestUserIndex === lastUserIndex &&
+            index === lastFinalError &&
+            index === lastAssistantIndex
               ? latestUserPrompt
               : undefined;
           detailRows.push({
@@ -3202,6 +3431,7 @@ export function Transcript(props: TranscriptProps) {
                   failed={failed}
                   error={message.errorMessage}
                   retryPrompt={retryPrompt}
+                  retryEntryId={entry.entryId}
                   canRetry={active && !historyPaused && !running}
                   onRetry={props.onResend}
                 />
@@ -3274,33 +3504,36 @@ export function Transcript(props: TranscriptProps) {
                 : false;
         const { Icon } = toolActivity(toolName);
         const icon = <Icon key={`${entry.key}-icon`} />;
-        const content = family ? (
-          <ActivityCard
-            key={`${entry.key}-card`}
-            family={family}
-            title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content)}`}
-            body={message.content}
-            status={status}
-            defaultOpen={defaultOpen}
-          />
-        ) : isEmptyToolOutput(message.content) ? (
-          <div className="tool-line-empty" key={`${entry.key}-empty`}>
-            <span className="tool-icon">{icon}</span>
-            <span className="tool-name">{toolName}</span>
-            <span className="tool-summary">{t("noOutput")}</span>
-            <StatusMark status={status} />
-          </div>
-        ) : (
-          <EvidenceDetails
-            key={`${entry.key}-evidence`}
-            body={message.content}
-            icon={icon}
-            name={toolName}
-            summary={compactSummary(message.content)}
-            status={status}
-            defaultOpen={defaultOpen}
-          />
-        );
+        const content =
+          family && !message.forkSnapshotToolResult ? (
+            <ActivityCard
+              key={`${entry.key}-card`}
+              family={family}
+              title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content)}`}
+              body={message.content}
+              status={status}
+              defaultOpen={defaultOpen}
+            />
+          ) : isEmptyToolOutput(message.content) &&
+            !message.forkSnapshotToolResult ? (
+            <div className="tool-line-empty" key={`${entry.key}-empty`}>
+              <span className="tool-icon">{icon}</span>
+              <span className="tool-name">{toolName}</span>
+              <span className="tool-summary">{t("noOutput")}</span>
+              <StatusMark status={status} />
+            </div>
+          ) : (
+            <EvidenceDetails
+              key={`${entry.key}-evidence`}
+              body={message.content}
+              icon={icon}
+              name={toolName}
+              summary={compactSummary(message.content)}
+              status={status}
+              snapshotMissingResult={message.forkSnapshotToolResult}
+              defaultOpen={defaultOpen}
+            />
+          );
         return [
           {
             key: entry.key,
@@ -3706,11 +3939,14 @@ export function Transcript(props: TranscriptProps) {
     ? (selectedExecution?.liveTools.filter((tool) => tool.state === "running")
         .length ?? 0)
     : 0;
-  const activeTurn = selectedExecution
-    ? selectedExecution.activeTurn
-    : active
-      ? props.snapshot.runtime.activeTurn
-      : undefined;
+  const activeTurn =
+    active && props.liveActiveTurn !== undefined
+      ? props.liveActiveTurn
+      : selectedExecution
+        ? selectedExecution.activeTurn
+        : active
+          ? props.snapshot.runtime.activeTurn
+          : undefined;
   const timedTurn =
     running &&
     activeTurn &&
@@ -3723,6 +3959,17 @@ export function Transcript(props: TranscriptProps) {
     Number.isFinite(activeTurn.elapsedMs) &&
     activeTurn.elapsedMs >= 0
       ? activeTurn
+      : undefined;
+  // Reading a verified earlier window does not end the native run. Keep its
+  // clock only when that exact owning prompt is present; never time an older
+  // turn merely because it is the last visible one.
+  const visibleTimedTurn =
+    !history.verifying &&
+    timedTurn &&
+    (!historyPaused ||
+      (timedTurn.promptEntryId &&
+        rows.some((row) => row.promptEntryId === timedTurn.promptEntryId)))
+      ? timedTurn
       : undefined;
 
   const readEarlierNearTop = (element: HTMLElement) => {
@@ -3905,14 +4152,12 @@ export function Transcript(props: TranscriptProps) {
           {renderTurns(
             rows,
             running &&
-              !historyPaused &&
+              (!historyPaused || Boolean(visibleTimedTurn)) &&
               selectedExecution?.compaction?.state !== "running",
             activeTurn?.commandId,
             changesByPrompt,
             selected,
-            props.activityObserved !== false && !historyPaused
-              ? timedTurn
-              : undefined,
+            props.activityObserved !== false ? visibleTimedTurn : undefined,
             props.onReviewTurn,
             props.activityObserved !== false,
           )}

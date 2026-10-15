@@ -980,11 +980,11 @@ test("complete Web appearance defaults and color/font choices round-trip without
     accent: "",
     background: "",
     foreground: "",
-    font: "system",
+    font: "codex",
   });
   assert.match(
     formatSetupConfig(parseSetupConfig({})),
-    /palette default · accent theme default \/ background theme default \/ foreground theme default · font system/u,
+    /palette default · accent theme default \/ background theme default \/ foreground theme default · font codex/u,
   );
   for (const webTheme of ["system", "light", "dark", "mist", "rose", "pine"]) {
     const original = JSON.stringify({
@@ -1030,6 +1030,34 @@ test("complete Web appearance defaults and color/font choices round-trip without
   }
 });
 
+test("legacy system fonts resolve to Codex without rewriting preferences on read", async () => {
+  const appearance = {
+    ...DEFAULT_WEB_APPEARANCE,
+    palette: "rose" as const,
+    accent: "#123456",
+    font: "system" as const,
+  };
+  const raw = JSON.stringify({
+    configVersion: 1,
+    ui: { webAppearance: appearance },
+  });
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  assert.equal(inspectSetupConfig().writable, true);
+  assert.deepEqual(loadSetupConfig().ui.webAppearance, {
+    ...appearance,
+    font: "codex",
+  });
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  for (const font of ["codex", "sans", "serif", "mono"] as const) {
+    const receipt = await updateSetupConfig((config) => ({
+      ...config,
+      ui: { ...config.ui, webAppearance: { ...appearance, font } },
+    }));
+    assert.equal(receipt.config.ui.webAppearance.font, font);
+    assert.equal(loadSetupConfig().ui.webAppearance.font, font);
+  }
+});
+
 test("Web appearance fields accept canonical bounds and remain known on explicit saves", async () => {
   for (const configVersion of [undefined, 1]) {
     for (const ui of [
@@ -1037,7 +1065,17 @@ test("Web appearance fields accept canonical bounds and remain known on explicit
       { webChatWidth: 960, webChatFontSize: 16, webExpandThinking: true },
       { webChatWidth: 2000, webChatFontSize: 24, webExpandThinking: true },
       { webSidebarWidth: 220, webAuxiliaryWidth: 360 },
-      { webSidebarWidth: 420, webAuxiliaryWidth: 720 },
+      { webSidebarWidth: 520, webAuxiliaryWidth: 720 },
+      {
+        webSidebarGrouping: "project",
+        webChatsSort: "updated",
+        webProjectsInRecents: true,
+      },
+      {
+        webSidebarGrouping: "list",
+        webChatsSort: "manual",
+        webProjectsInRecents: false,
+      },
     ]) {
       const raw = JSON.stringify({ configVersion, ui });
       writeFileSync(SETUP_CONFIG_PATH, raw);
@@ -1082,9 +1120,12 @@ test("invalid Web appearance values are diagnosed and block both stored and cand
     ],
     webChatWidth: [819, 2001, 960.5, "960", null, true, {}, []],
     webChatFontSize: [11, 25, 16.5, "16", null, false, {}, []],
-    webSidebarWidth: [219, 421, 320.5, "320", null, false],
+    webSidebarWidth: [219, 521, 320.5, "320", null, false],
     webAuxiliaryWidth: [359, 721, 520.5, "520", null, false],
     webExpandThinking: [0, 1, "true", null, {}, []],
+    webSidebarGrouping: ["connection", "unknown", false, null, {}, []],
+    webChatsSort: ["updated_at", "unknown", false, null, {}, []],
+    webProjectsInRecents: [0, 1, "true", null, {}, []],
   };
   for (const [key, values] of Object.entries(invalidValues)) {
     for (const value of values) {

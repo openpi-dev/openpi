@@ -551,6 +551,7 @@ class FakeClient extends WebClient {
     _retry = false,
     _images: readonly WebPromptImage[] = [],
     _planRevision?: string,
+    _delivery?: Parameters<WebClient["prompt"]>[7],
   ) {
     this.prompts.push({ sessionId, content });
     return this.promptResult;
@@ -650,7 +651,110 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it.each([true, false])(
+  "refreshes a stale reading edit (%s) without optimistically clearing or retrying it",
+  async (read) => {
+    const client = new FakeClient();
+    const first = snapshot();
+    first.sessions[0]!.unread = true;
+    first.sessions[0]!.readRevision = "first-revision";
+    first.sessions[0]!.execution = {
+      status: "idle",
+      lastTurn: { commandId: "first", finishedAt: 100, outcome: "completed" },
+    };
+    const second = snapshot();
+    second.sessions[0]!.unread = true;
+    second.sessions[0]!.readRevision = "second-revision";
+    second.sessions[0]!.execution = {
+      status: "idle",
+      lastTurn: { commandId: "second", finishedAt: 200, outcome: "completed" },
+    };
+    client.snapshots.push(Promise.resolve(first), Promise.resolve(second));
+    const mark = vi
+      .spyOn(client, "setSessionRead")
+      .mockRejectedValue(
+        new WebApiError(
+          "A newer result is available",
+          409,
+          "SESSION_READ_STATE_CHANGED",
+        ),
+      );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const session = first.sessions[0]!;
+    await expect(
+      store
+        .getState()
+        .actions.setSessionRead(
+          session.path,
+          session.id,
+          read,
+          session.readRevision!,
+        ),
+    ).rejects.toMatchObject({ code: "SESSION_READ_STATE_CHANGED" });
+    expect(mark).toHaveBeenCalledExactlyOnceWith(
+      session.path,
+      session.id,
+      read,
+      "first-revision",
+    );
+    expect(store.getState().snapshot?.sessions[0]?.unread).toBe(true);
+    expect(
+      store.getState().snapshot?.sessions[0]?.execution?.lastTurn?.commandId,
+    ).toBe("second");
+    expect(store.getState().notice).toBeNull();
+    store.getState().actions.stop();
+  },
+);
+
+it("does not move mixed pins before the metadata write is confirmed", async () => {
+  const client = new FakeClient();
+  const current = snapshot();
+  current.workspaces[0]!.pinOrder = 0;
+  current.sessions[0]!.pinOrder = 1;
+  client.snapshots.push(Promise.resolve(current));
+  const pending = deferred<{ saved: true }>();
+  vi.spyOn(client, "setSidebarPin").mockReturnValue(pending.promise);
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  const operation = store.getState().actions.setSidebarPin(
+    {
+      kind: "session",
+      path: current.sessions[0]!.path,
+      id: current.sessions[0]!.id,
+    },
+    true,
+    { kind: "workspace", path: current.workspaces[0]!.path },
+  );
+  expect(store.getState().snapshot?.workspaces[0]?.pinOrder).toBe(0);
+  expect(store.getState().snapshot?.sessions[0]?.pinOrder).toBe(1);
+  pending.reject(new Error("Persistence failed"));
+  await expect(operation).rejects.toThrow("Persistence failed");
+  expect(store.getState().snapshot?.workspaces[0]?.pinOrder).toBe(0);
+  expect(store.getState().snapshot?.sessions[0]?.pinOrder).toBe(1);
+  store.getState().actions.stop();
+});
+
 describe("search message navigation", () => {
+  it("does not load a message window after selection fails even if recovery selects the requested file", async () => {
+    const client = new FakeClient();
+    const target = snapshot();
+    client.snapshots.push(Promise.resolve(target));
+    vi.spyOn(client, "selectSession").mockRejectedValue(new Error("offline"));
+    const read = vi.spyOn(client, "sessionMessageWindow");
+    const store = createWebStore(client);
+    expect(
+      await store.getState().actions.navigateToMessage({
+        sessionId: target.selectedSession!.id,
+        sessionPath: target.selectedSession!.path,
+        entryId: "result",
+      }),
+    ).toBe(false);
+    expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
+    expect(read).not.toHaveBeenCalled();
+    expect(store.getState().historyNavigation).toBeNull();
+  });
+
   it("does not install a late window after its caller cancels for a loaded local navigation", async () => {
     const client = new FakeClient();
     const pending = deferred<ReturnType<typeof windowFor>>();
@@ -833,7 +937,11 @@ describe("sidebar Session navigation", () => {
       mobileSidebarOpen: true,
     });
     const before = store.getState();
-    await store.getState().actions.selectSession(current.selectedSession!.path);
+    expect(
+      await store
+        .getState()
+        .actions.selectSession(current.selectedSession!.path),
+    ).toBe(true);
     expect(client.selections).toEqual([]);
     expect(client.snapshotPaths).toHaveLength(1);
     expect(store.getState().liveMessages).toBe(before.liveMessages);
@@ -866,11 +974,87 @@ describe("sidebar Session navigation", () => {
       .actions.selectSession(target.selectedSession!.path);
     expect(store.getState().sessionSwitching).toBe(true);
     receipt.resolve({});
-    await Promise.all([first, second]);
+    expect(await Promise.all([first, second])).toEqual([true, true]);
     expect(client.selections).toEqual([target.selectedSession!.path]);
     expect(client.snapshotPaths).toHaveLength(2);
     expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
     expect(store.getState().sessionSwitching).toBe(false);
+  });
+
+  it.each(["cancelled", "failed", "different canonical file"] as const)(
+    "returns false for a %s selection even when its recovery snapshot is valid",
+    async (outcome) => {
+      const client = new FakeClient();
+      const current = snapshot();
+      client.snapshots.push(Promise.resolve(current), Promise.resolve(current));
+      if (outcome === "different canonical file")
+        client.snapshots.push(Promise.resolve(current));
+      if (outcome === "failed")
+        vi.spyOn(client, "selectSession").mockRejectedValue(
+          new Error("offline"),
+        );
+      else
+        client.selectionResults.push(
+          Promise.resolve({ cancelled: outcome === "cancelled" }),
+        );
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+
+      expect(
+        await store.getState().actions.selectSession("/tmp/ws/target.jsonl"),
+      ).toBe(false);
+      expect(store.getState().selectedPath).toBe(current.selectedSession!.path);
+      expect(store.getState().snapshot).toBe(current);
+      expect(store.getState().sessionSwitching).toBe(false);
+    },
+  );
+
+  it("shares a failed selection result with callers waiting for the same file", async () => {
+    const client = new FakeClient();
+    const current = snapshot();
+    client.snapshots.push(Promise.resolve(current), Promise.resolve(current));
+    const receipt = deferred<SessionMutationResult>();
+    client.selectionResults.push(receipt.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const first = store
+      .getState()
+      .actions.selectSession("/tmp/ws/target.jsonl");
+    await vi.waitFor(() => expect(client.selections).toHaveLength(1));
+    const second = store
+      .getState()
+      .actions.selectSession("/tmp/ws/target.jsonl");
+    receipt.reject(new Error("offline"));
+    expect(await Promise.all([first, second])).toEqual([false, false]);
+    expect(client.selections).toHaveLength(1);
+  });
+
+  it("does not clear a newer selected file when the previous selection refresh is superseded", async () => {
+    const client = new FakeClient();
+    const refresh = deferred<WebSnapshot>();
+    const second = deferred<SessionMutationResult>();
+    const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      refresh.promise,
+      Promise.resolve(target),
+    );
+    client.selectionResults.push(Promise.resolve({}), second.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const selectingA = store
+      .getState()
+      .actions.selectSession("/tmp/ws/a.jsonl");
+    await vi.waitFor(() => expect(client.snapshotPaths).toHaveLength(2));
+    const selectingB = store
+      .getState()
+      .actions.selectSession(target.selectedSession!.path);
+    refresh.resolve(activeSnapshot("A", "/tmp/ws/a.jsonl"));
+    expect(await selectingA).toBe(false);
+    expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
+    second.resolve({});
+    expect(await selectingB).toBe(true);
+    expect(store.getState().snapshot).toBe(target);
   });
 
   it.each([false, true])(
@@ -2786,39 +2970,46 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
-  it("keeps the newest Session selection when an older request settles late", async () => {
-    const client = new FakeClient();
-    client.snapshots.push(
-      Promise.resolve(snapshot()),
-      Promise.resolve(activeSnapshot("session-2", "/tmp/ws/b.jsonl")),
-    );
-    const first = deferred<SessionMutationResult>();
-    const second = deferred<SessionMutationResult>();
-    client.selectionResults.push(first.promise, second.promise);
-    const store = createWebStore(client);
-    await store.getState().actions.refreshSnapshot();
+  it.each(["success", "failure"] as const)(
+    "keeps the newest Session selection when an older request settles late with %s",
+    async (outcome) => {
+      const client = new FakeClient();
+      client.snapshots.push(
+        Promise.resolve(snapshot()),
+        Promise.resolve(activeSnapshot("session-2", "/tmp/ws/b.jsonl")),
+      );
+      const first = deferred<SessionMutationResult>();
+      const second = deferred<SessionMutationResult>();
+      client.selectionResults.push(first.promise, second.promise);
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
 
-    const selectingA = store
-      .getState()
-      .actions.selectSession("/tmp/ws/a.jsonl");
-    await vi.waitFor(() =>
-      expect(client.selections).toEqual(["/tmp/ws/a.jsonl"]),
-    );
-    const selectingB = store
-      .getState()
-      .actions.selectSession("/tmp/ws/b.jsonl");
-    first.reject(new Error("late A failure"));
-    await selectingA;
-    await vi.waitFor(() =>
-      expect(client.selections).toEqual(["/tmp/ws/a.jsonl", "/tmp/ws/b.jsonl"]),
-    );
-    second.resolve({});
-    await selectingB;
+      const selectingA = store
+        .getState()
+        .actions.selectSession("/tmp/ws/a.jsonl");
+      await vi.waitFor(() =>
+        expect(client.selections).toEqual(["/tmp/ws/a.jsonl"]),
+      );
+      const selectingB = store
+        .getState()
+        .actions.selectSession("/tmp/ws/b.jsonl");
+      if (outcome === "success") first.resolve({});
+      else first.reject(new Error("late A failure"));
+      expect(await selectingA).toBe(false);
+      await vi.waitFor(() =>
+        expect(client.selections).toEqual([
+          "/tmp/ws/a.jsonl",
+          "/tmp/ws/b.jsonl",
+        ]),
+      );
+      second.resolve({});
+      expect(await selectingB).toBe(true);
 
-    expect(store.getState().selectedPath).toBe("/tmp/ws/b.jsonl");
-    expect(store.getState().sessionSwitching).toBe(false);
-    expect(store.getState().notice).toBeNull();
-  });
+      expect(store.getState().selectedPath).toBe("/tmp/ws/b.jsonl");
+      expect(store.getState().sessionSwitching).toBe(false);
+      expect(store.getState().notice).toBeNull();
+    },
+  );
 
   it("ignores an old prompt admission after switching Sessions", async () => {
     const client = new FakeClient();
@@ -4005,6 +4196,106 @@ describe("OpenPI Web store", () => {
     expect(store.getState().activeTurn).toEqual(running.runtime.activeTurn);
   });
 
+  it("does not erase or resurrect a live turn with a snapshot older than its native event", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const turn = {
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+      commandId: "new-turn",
+      epoch: 1,
+      startedAt: 1000,
+      elapsedMs: 0,
+    };
+    const beforeStart = deferred<WebSnapshot>();
+    client.snapshots.push(beforeStart.promise);
+    const refresh = store.getState().actions.refreshSnapshot();
+    stream.emit(runtimeEvent(5, "turn_started", turn));
+    beforeStart.resolve(snapshot());
+    await refresh;
+    expect(store.getState().activeTurn).toEqual(turn);
+    expect(store.getState().liveRunning).toBe(true);
+    expect(store.getState().livePhase).toBe("running");
+
+    const beforeEnd = deferred<WebSnapshot>();
+    client.snapshots.push(beforeEnd.promise);
+    const settlingRefresh = store.getState().actions.refreshSnapshot();
+    stream.emit(
+      runtimeEvent(6, "turn_settled", { ...turn, outcome: "completed" }),
+    );
+    const staleRunning = snapshot();
+    staleRunning.cursor = 5;
+    staleRunning.runtime = {
+      ...staleRunning.runtime,
+      status: "running",
+      activeTurn: turn,
+    };
+    beforeEnd.resolve(staleRunning);
+    await settlingRefresh;
+    expect(store.getState().activeTurn).toBeNull();
+    expect(store.getState().liveRunning).toBe(false);
+    expect(store.getState().livePhase).toBe("idle");
+
+    // A new stream after a host restart can legitimately have a lower cursor.
+    client.snapshots.push(Promise.resolve({ ...staleRunning, cursor: 1 }));
+    await store.getState().actions.refreshSnapshot({ resetCursor: true });
+    expect(store.getState().activeTurn).toEqual(turn);
+    expect(store.getState().liveRunning).toBe(true);
+    store.getState().actions.stop();
+  });
+
+  it("submits a provider retry without projecting another user bubble", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const pending = deferred<CommandReceipt>();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(pending.promise);
+    const delivery = {
+      streamingBehavior: "followUp" as const,
+      retryEntryId: "failed-entry",
+    };
+    const sending = store
+      .getState()
+      .actions.sendPrompt("", [], undefined, delivery);
+    expect(store.getState().liveMessages).toEqual([]);
+    expect(store.getState().promptAdmissionPending).toBe(true);
+    expect(prompt.mock.calls[0]?.[7]).toEqual(delivery);
+    pending.resolve({ id: prompt.mock.calls[0]![2], accepted: true });
+    expect(await sending).toBe(true);
+    expect(store.getState().liveMessages).toEqual([]);
+    store.setState({
+      promptAdmissionRecovery: {
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+        commandId: "lost-receipt",
+        optimisticKey: "lost-preview",
+        content: "",
+        delivery,
+        phase: "ready",
+      },
+    });
+    stream.emit(
+      runtimeEvent(5, "prompt_accepted", {
+        sessionId: "session-1",
+        commandId: "lost-receipt",
+      }),
+    );
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().liveMessages).toEqual([]);
+    store.getState().actions.stop();
+  });
+
   it("cancels the exact active turn without optimistically ending it", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));
@@ -4018,8 +4309,17 @@ describe("OpenPI Web store", () => {
     });
     await store.getState().actions.refreshSnapshot();
     store.getState().actions.start();
-    const turn = { sessionId: "session-1", commandId: "turn", epoch: 4 };
+    const turn = {
+      sessionId: "session-1",
+      commandId: "turn",
+      epoch: 4,
+      sessionPath: "/tmp/ws/session.jsonl",
+      promptEntryId: "input",
+      startedAt: 10000,
+      elapsedMs: 1234,
+    };
     stream.emit(runtimeEvent(5, "turn_started", turn));
+    expect(store.getState().activeTurn).toEqual(turn);
     const stopping = store.getState().actions.cancelActiveTurn();
     expect(cancel).toHaveBeenCalledWith(turn);
     expect(store.getState().turnCancellationPending).toBe(true);
@@ -4319,6 +4619,86 @@ describe("draft model selection", () => {
     expect(client.creations).toHaveLength(0);
     expect(client.prompts).toHaveLength(0);
   });
+
+  it.each([false, true])(
+    "prepares the exact viewed conversation for explicit sending (copied id: %s)",
+    async (copiedId) => {
+      const client = new FakeClient();
+      const store = createWebStore(client);
+      const viewed = snapshot();
+      const observer = structuredClone(viewed);
+      observer.currentSessionId = copiedId ? "session-1" : "other";
+      observer.currentSessionPath = "/tmp/ws/other.jsonl";
+      observer.sessions[0]!.controller = "none";
+      const select = vi.spyOn(client, "selectSession");
+      store.setState({
+        snapshot: observer,
+        selectedPath: viewed.selectedSession!.path,
+        selectedWorkspace: "/tmp/ws",
+      });
+      expect(select).not.toHaveBeenCalled();
+      client.snapshots.push(Promise.resolve(viewed));
+      const target = await store.getState().actions.prepareSession();
+      expect(select).toHaveBeenCalledExactlyOnceWith(
+        "/tmp/ws/session.jsonl",
+        "session-1",
+      );
+      expect(target).toMatchObject({
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+        workspacePath: "/tmp/ws",
+      });
+      expect(client.creations).toHaveLength(0);
+      expect(client.prompts).toHaveLength(0);
+      expect(
+        await store
+          .getState()
+          .actions.sendPrompt(
+            "Continue the viewed conversation",
+            [],
+            undefined,
+            undefined,
+            target!,
+          ),
+      ).toBe(true);
+      expect(client.prompts).toEqual([
+        { sessionId: "session-1", content: "Continue the viewed conversation" },
+      ]);
+    },
+  );
+
+  it.each(["rejected", "control-lost", "navigated"])(
+    "does not prepare a stale target when reactivation is %s",
+    async (outcome) => {
+      const client = new FakeClient();
+      const store = createWebStore(client);
+      const viewed = snapshot();
+      const observer = structuredClone(viewed);
+      observer.currentSessionId = "other";
+      observer.currentSessionPath = "/tmp/ws/other.jsonl";
+      observer.sessions[0]!.controller = "none";
+      store.setState({
+        snapshot: observer,
+        selectedPath: viewed.selectedSession!.path,
+        selectedWorkspace: "/tmp/ws",
+      });
+      vi.spyOn(client, "selectSession").mockImplementation(async () => {
+        if (outcome === "rejected")
+          throw new WebApiError(
+            "Session is unavailable",
+            409,
+            "SESSION_CONFLICT",
+          );
+        if (outcome === "navigated")
+          store.getState().actions.setWorkspace("/tmp/other");
+        return {};
+      });
+      client.snapshots.push(Promise.resolve(observer));
+      expect(await store.getState().actions.prepareSession()).toBeNull();
+      expect(client.creations).toHaveLength(0);
+      expect(client.prompts).toHaveLength(0);
+    },
+  );
 
   it("rejects files prepared for an older Session selection, including a same-ID switch", async () => {
     const client = new FakeClient();

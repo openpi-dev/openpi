@@ -213,6 +213,7 @@ function viewed() {
   });
 }
 
+// Three full-app Session selections and diff loading exceed five seconds on Windows CI.
 it("isolates viewed marks for the same Session id across exact paths and restores A only for the displayed revision", async () => {
   render(createElement(Providers, null, createElement(App)));
   await openReview();
@@ -257,7 +258,7 @@ it("isolates viewed marks for the same Session id across exact paths and restore
   expect(requests.every((request) => request.sessionId === sessionId)).toBe(
     true,
   );
-});
+}, 15_000);
 
 it("clears the exact Session's viewed marks when the comparison source or concrete base changes, even with the same revision", async () => {
   render(createElement(Providers, null, createElement(App)));
