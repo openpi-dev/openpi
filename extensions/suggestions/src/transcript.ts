@@ -67,14 +67,18 @@ function capped(text: string, maxBytes: number, notice: string) {
 }
 
 export function redactSecrets(text: string) {
+  // Accept a complete quoted value at token or closing-punctuation boundaries.
+  // Closing punctuation must end the token, not join adjacent shell segments.
+  // Otherwise consume a whole token without crossing into a later field.
   return text
+    .replace(/(^|\r?\n)([ \t]*Cookie:)[ \t]*[^\r\n]*/gi, "$1$2 [REDACTED]")
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [REDACTED]")
     .replace(
       /\b(sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,})\b/g,
       "[REDACTED]",
     )
     .replace(
-      /(["']?(?:api[_-]?key|access[_-]?key|authorization|cookie|credential|password|passwd|private[_-]?key|secret|token)["']?\s*[:=]\s*)(["']?)[^\s,;}]+\2/gi,
+      /(["']?(?:api[_-]?key|access[_-]?key|authorization|cookie|credential|password|passwd|private[_-]?key|secret|token)["']?\s*[:=]\s*)(?:(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')(?=[)\].]*(?:$|[\s,;}]))|[^\s,;}]+)/gi,
       "$1[REDACTED]",
     )
     .replace(

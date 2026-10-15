@@ -62,7 +62,9 @@ async function settleWithin<T>(operation: Promise<T>, timeoutMs = 250) {
 
 function runnerHarness(options: {
   bind?: () => Promise<void>;
-  prompt?: () => Promise<void>;
+  prompt?: (
+    promptOptions?: Parameters<AgentSession["prompt"]>[1],
+  ) => Promise<void>;
   abort?: () => Promise<void>;
   shutdown?: () => Promise<void>;
   onMessageRead?: () => void;
@@ -101,9 +103,12 @@ function runnerHarness(options: {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async prompt() {
+    async prompt(
+      _text: string,
+      promptOptions?: Parameters<AgentSession["prompt"]>[1],
+    ) {
       prompts++;
-      await options.prompt?.();
+      await options.prompt?.(promptOptions);
     },
     async abort() {
       aborts++;
@@ -815,11 +820,43 @@ test("cancel during prompt owns the session and returns after bounded disposal",
   const outcome = await outcomePromise;
   assert.equal(outcome.ok, false);
   assert.equal(outcome.aborted, true);
+  assert.equal(outcome.retainAdmissionLease, true);
   assert.match(outcome.error ?? "", /aborted.*abort timed out/i);
   assert.equal(harness.aborts(), 1);
   assert.equal(harness.disposals(), 1);
   prompt.resolve();
   abort.resolve();
+});
+
+test("cancellation during prompt preflight does not enter the provider loop", async () => {
+  const preflightStarted = deferred<void>();
+  const preflightRelease = deferred<void>();
+  let providerCalls = 0;
+  const harness = runnerHarness({
+    prompt: async (promptOptions) => {
+      preflightStarted.resolve();
+      await preflightRelease.promise;
+      promptOptions?.preflightResult?.("started");
+      providerCalls++;
+    },
+  });
+  const controller = new AbortController();
+  const outcomePromise = runHarnessAgent(harness, {
+    signal: controller.signal,
+    shutdownTimeoutMs: 10,
+  });
+
+  await preflightStarted.promise;
+  controller.abort(new Error("cancel during prompt preflight"));
+  const outcome = await outcomePromise;
+  preflightRelease.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.aborted, true);
+  assert.equal(providerCalls, 0);
+  assert.equal(harness.aborts(), 1);
+  assert.equal(harness.disposals(), 1);
 });
 
 test("cancel during a hanging tool ignores late events and progress writers", async () => {
@@ -1164,4 +1201,43 @@ test("workflow children guard structured, normal, and dynamically registered too
   );
   assert.equal(dynamicSignal?.aborted, true);
   unsubscribe();
+});
+
+test("runAgent captures tools absent from messages and classifies cancellation independently", async () => {
+  let respond = () => {};
+  const controller = new AbortController();
+  const harness = runnerHarness({ prompt: async () => respond() });
+  respond = () => {
+    harness.emit({
+      type: "tool_execution_start",
+      toolCallId: "observed-only",
+      toolName: "read",
+      args: { private: "secret" },
+    });
+    harness.emit({
+      type: "tool_execution_end",
+      toolCallId: "observed-only",
+      toolName: "read",
+      result: {
+        content: [{ type: "text", text: "secret output" }],
+        details: {},
+      },
+      isError: false,
+    });
+    harness.emit({
+      type: "tool_execution_start",
+      toolCallId: "unfinished",
+      toolName: "read",
+      args: {},
+    });
+    controller.abort(new Error("fixture cancellation"));
+  };
+  const outcome = await runHarnessAgent(harness, { signal: controller.signal });
+  assert.equal(outcome.timing?.summary.tools.started, 2);
+  assert.equal(outcome.timing?.summary.tools.paired, 1);
+  assert.equal(outcome.timing?.summary.tools.unclosedStarts, 1);
+  assert.equal(outcome.timing?.summary.outcome, "cancelled");
+  assert.equal(outcome.timing?.summary.coverage, "partial-tool-events");
+  assert.equal(outcome.transcript.length, 0);
+  assert.ok(!JSON.stringify(outcome.timing).includes("secret"));
 });

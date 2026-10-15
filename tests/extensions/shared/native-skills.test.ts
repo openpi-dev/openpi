@@ -10,6 +10,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -76,7 +77,7 @@ async function withSession(
   });
   const capture = (context: Context) => {
     snapshots.push({
-      systemPrompt: context.systemPrompt,
+      systemPrompt: getCurrentSystemPrompt(context.messages),
       messages: structuredClone(context.messages),
     });
     return fauxAssistantMessage("Completed the fixture request.");
@@ -239,7 +240,7 @@ test("native slash invocation works through direct and streaming queued inputs",
     for (const direct of [false, true]) {
       await t.test(`${behavior}, direct=${direct}`, async () => {
         await withSession(async ({ session, snapshots, errors }) => {
-          let queued: Promise<void> | undefined;
+          let queued: Promise<unknown> | undefined;
           const unsubscribe = session.subscribe((event) => {
             if (
               event.type !== "message_end" ||

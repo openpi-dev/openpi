@@ -343,3 +343,36 @@ test("the marker always states that the model received the full content", () => 
   assert.ok(out.includes(MARKER));
   assert.ok(out.includes("full content was sent to the model"));
 });
+
+test("finalized user previews do not split a surrogate pair at the prose cutoff", () => {
+  for (const symbol of ["😀", "𠮷"]) {
+    const prefix = "x".repeat(1199);
+    const message = [prefix + symbol + "tail", ...numberedLines(21)].join("\n");
+    const rendered = transformUserMarkdown(message, {
+      messageType: "user",
+      isStreaming: false,
+    });
+    assert.equal(Buffer.from(rendered, "utf8").toString("utf8"), rendered);
+    assert.equal(rendered.split("\n")[0], prefix + "…");
+    assert.ok(rendered.includes(MARKER));
+    assert.equal(
+      transformUserMarkdown(message, {
+        messageType: "user",
+        isStreaming: true,
+      }),
+      message,
+    );
+  }
+});
+
+test("prose truncation preserves a complete pair and the existing code-unit budget", () => {
+  for (const prefix of ["x".repeat(1198) + "😀", "界".repeat(1200)]) {
+    const message = [prefix + "tail", ...numberedLines(21)].join("\n");
+    const rendered = transformUserMarkdown(message, {
+      messageType: "user",
+      isStreaming: false,
+    });
+    assert.equal(rendered.split("\n")[0], prefix + "…");
+    assert.equal(Buffer.from(rendered, "utf8").toString("utf8"), rendered);
+  }
+});

@@ -166,3 +166,16 @@ test("bounds the reported line when the stream has no newline", () => {
   assert.ok(hit);
   assert.ok(hit.line.length <= WATCH_LINE_MAX_CHARS + 1);
 });
+
+test("bounds the reported line on code points instead of splitting a surrogate pair", () => {
+  const emoji = "\u{1F680}";
+  const m = createChunkMatcher(compileWatchPattern("MATCH"));
+  const hit = m.push(`${"x".repeat(499)}${emoji}MATCH`, "stdout");
+  assert.ok(hit);
+
+  // The complete emoji survives the bound; a UTF-16 unit cut would have left a
+  // lone high surrogate in the transcript. The cap counts code points, so an
+  // astral character costs one position rather than two UTF-16 units.
+  assert.equal(hit.line, `${"x".repeat(499)}${emoji}\u2026`);
+  assert.ok([...hit.line].length <= WATCH_LINE_MAX_CHARS + 1);
+});

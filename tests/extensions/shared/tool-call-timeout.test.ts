@@ -3,9 +3,9 @@ import test from "node:test";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+  CHILD_TOOL_CALL_TIMEOUT_MS,
   createToolCallTimeoutGuard,
   runWithToolCallTimeout,
-  CHILD_TOOL_CALL_TIMEOUT_MS,
   ToolCallTimeoutError,
 } from "../../../extensions/shared/tool-call-timeout.ts";
 
@@ -52,6 +52,49 @@ test("parent cancellation still stops the timeout wrapper immediately", async ()
   controller.abort(reason);
 
   await assert.rejects(pending, (error: unknown) => error === reason);
+});
+
+test("already cancelled tool calls never execute or report success", async () => {
+  const controller = new AbortController();
+  const reason = new Error("cancelled before dispatch");
+  controller.abort(reason);
+  let calls = 0;
+
+  await assert.rejects(
+    runWithToolCallTimeout(
+      "cancelled_fixture",
+      60_000,
+      controller.signal,
+      async () => {
+        calls++;
+        return "must not execute";
+      },
+    ),
+    (error: unknown) => error === reason,
+  );
+
+  assert.equal(calls, 0);
+});
+
+test("already cancelled hung tools never start side effects", async () => {
+  const controller = new AbortController();
+  controller.abort("cancelled before dispatch");
+  let calls = 0;
+
+  await assert.rejects(
+    runWithToolCallTimeout(
+      "cancelled_fixture",
+      60_000,
+      controller.signal,
+      () => {
+        calls++;
+        return new Promise(() => {});
+      },
+    ),
+    { name: "Error", message: 'Tool call "cancelled_fixture" was aborted.' },
+  );
+
+  assert.equal(calls, 0);
 });
 
 test("the guard wraps each definition once and can discover later tools", () => {
@@ -114,4 +157,44 @@ test("the timeout is fresh for each tool call, not shared across calls", async (
 
   assert.equal(await execute(), "done");
   assert.equal(await execute(), "done");
+});
+
+test("diagnostics observe actual timeout and cancellation without inspecting tool payloads", async () => {
+  const outcomes: string[] = [];
+  await assert.rejects(
+    runWithToolCallTimeout(
+      "fixture",
+      5,
+      undefined,
+      () => new Promise(() => {}),
+      (outcome) => outcomes.push(outcome),
+    ),
+    ToolCallTimeoutError,
+  );
+  const controller = new AbortController();
+  const pending = runWithToolCallTimeout(
+    "fixture",
+    60_000,
+    controller.signal,
+    () => new Promise(() => {}),
+    (outcome) => outcomes.push(outcome),
+  );
+  controller.abort(new Error("fixture"));
+  await assert.rejects(pending, /fixture/);
+  assert.deepEqual(outcomes, ["timeout", "cancelled"]);
+});
+
+test("a failing diagnostic observer cannot prevent the actual timeout outcome", async () => {
+  await assert.rejects(
+    runWithToolCallTimeout(
+      "fixture",
+      5,
+      undefined,
+      () => new Promise(() => {}),
+      () => {
+        throw new Error("diagnostic failure");
+      },
+    ),
+    ToolCallTimeoutError,
+  );
 });
