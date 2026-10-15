@@ -380,3 +380,43 @@ it("polls metadata with backoff, retains changed text until refresh, and stops o
     vi.useRealTimers();
   }
 });
+
+it("shows observed image evidence in default collapsed native tool summaries", async () => {
+  await i18n.changeLanguage("en");
+  const result = {
+    role: "toolResult",
+    content: "mixed text remains",
+    isError: true,
+    parts: [
+      { type: "image" as const, mimeType: "image/png", sourcePartIndex: 3 },
+    ],
+    truncation: { truncated: true as const, partsOmitted: 9 },
+  };
+  const { container } = render(
+    createElement(ToolEvidence, {
+      call: {
+        type: "toolCall",
+        id: "native-1",
+        name: "read",
+        arguments: '{"path":"image.png"}',
+      },
+      result,
+    }),
+  );
+  const card = container.querySelector("details")!;
+  expect(card.open).toBe(false);
+  expect(card.querySelector("summary")?.textContent).toContain(
+    "1 observed image",
+  );
+  expect(card.querySelector("summary")?.textContent).toContain(
+    "image total unknown",
+  );
+  expect(card.getAttribute("data-state")).toBe("failed");
+  expect(card.textContent).toContain("mixed text remains");
+  expect(container.querySelector("img")).toBeNull();
+  await act(async () => {
+    await i18n.changeLanguage("zh");
+  });
+  expect(card.querySelector("summary")?.textContent).toContain("1 张图片");
+  await i18n.changeLanguage("en");
+});

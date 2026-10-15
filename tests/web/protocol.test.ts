@@ -608,3 +608,33 @@ test("entry projection rolls retained message truncation into aggregate evidence
   assert.equal(projected.truncation.messagesTruncated, 1);
   assert.equal(projected.truncation.truncated, true);
 });
+
+test("tool image evidence reuses bounded parts without transporting bodies", () => {
+  const content = Array.from(
+    { length: WEB_MAX_MESSAGE_PARTS + 3 },
+    (_, index) => ({
+      type: "image",
+      mimeType: index ? "image/png" : "x".repeat(10000),
+      data: "private-base64-sentinel",
+    }),
+  );
+  const result = projectMessage({
+    role: "toolResult",
+    toolName: "image",
+    toolCallId: "exact-native-id",
+    content,
+    isError: true,
+  });
+  assert.equal(result.toolCallId, "exact-native-id");
+  assert.equal(result.isError, true);
+  assert.equal(result.parts?.length, WEB_MAX_MESSAGE_PARTS);
+  assert.ok((result.truncation?.partsOmitted ?? 0) > 0);
+  assert.equal(
+    result.parts?.[0]?.type === "image" && result.parts[0].mimeType.length,
+    127,
+  );
+  assert.equal(
+    JSON.stringify(result).includes("private-base64-sentinel"),
+    false,
+  );
+});

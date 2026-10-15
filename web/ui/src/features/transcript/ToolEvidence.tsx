@@ -1,3 +1,4 @@
+import { ImageEvidence, imageEvidence } from "./ImageEvidence.tsx";
 import { type ReactNode, useContext, useState } from "react";
 import { Check, ChevronRight, Clipboard } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -122,6 +123,7 @@ export function ToolEvidence({
             {view.truncated && <span>{t("gitReviewPartialLabel")}</span>}
           </span>
         )}
+        <ImageEvidence message={result} />
         <ChevronRight className="evidence-chevron" aria-hidden="true" />
         <span className="evidence-status">{t(`toolState_${state}`)}</span>
       </summary>
@@ -173,7 +175,10 @@ export function ToolEvidence({
                 {copyFeedback === "copiedCode" ? <Check /> : <Clipboard />}
               </button>
             </figcaption>
-            <pre>{shellText || t("noOutput")}</pre>
+            <pre>
+              {shellText ||
+                (imageEvidence(result).present ? "" : t("noOutput"))}
+            </pre>
             <div className="evidence-process-meta">
               {t(`toolState_${state}`)}
               {view.exitCode !== undefined
@@ -247,7 +252,8 @@ export function ToolEvidence({
           </EvidenceBlock>
         ) : (
           <EvidenceBlock className="evidence-log" aria-label="Tool output">
-            {view.output || t("noOutput")}
+            {view.output ||
+              (imageEvidence(result).present ? "" : t("noOutput"))}
           </EvidenceBlock>
         )}
         {view.kind === "file" && view.truncated && <p>{t("toolReadMore")}</p>}

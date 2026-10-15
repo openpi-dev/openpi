@@ -1,3 +1,4 @@
+import { ImageEvidence, imageEvidence } from "./ImageEvidence.tsx";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import {
   ArrowDown,
@@ -158,6 +159,7 @@ interface RenderRow {
   processType?: "thinking" | "tool" | "activity";
   processPreview?: string;
   processToolName?: string;
+  imageMessage?: WebLiveMessage;
   processStatus?: Status;
   processMessageKey?: string;
   error?: boolean;
@@ -477,6 +479,7 @@ function thinkingPreview(body: string) {
 
 function EvidenceDetails({
   body,
+  result,
   icon,
   name,
   status,
@@ -485,6 +488,7 @@ function EvidenceDetails({
   defaultOpen = false,
 }: {
   body: string;
+  result?: WebLiveMessage;
   icon?: ReactNode;
   name: string;
   status: Status;
@@ -526,6 +530,7 @@ function EvidenceDetails({
         </span>
         <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
+        <ImageEvidence message={result} />
       </summary>
       {output === undefined ? (
         <pre className="details-body tool-evidence">
@@ -540,7 +545,8 @@ function EvidenceDetails({
           </figure>
           <figure aria-label={t("toolCallOutput")} style={{ margin: 0 }}>
             <pre className="details-body tool-evidence">
-              {evidenceText(output).text || t("noOutput")}
+              {evidenceText(output).text ||
+                (imageEvidence(result).present ? "" : t("noOutput"))}
             </pre>
           </figure>
         </>
@@ -551,6 +557,7 @@ function EvidenceDetails({
 
 function ActivityCard({
   body,
+  result,
   family,
   meta,
   status,
@@ -558,6 +565,7 @@ function ActivityCard({
   defaultOpen = false,
 }: {
   body: string;
+  result?: WebLiveMessage;
   family: "subagent" | "workflow";
   meta?: string;
   status: Status;
@@ -579,6 +587,7 @@ function ActivityCard({
         </span>
         <StatusMark status={status} />
         <ChevronRight className="tool-disclosure" aria-hidden="true" />
+        <ImageEvidence message={result} />
       </summary>
       <pre className="details-body tool-evidence">{body}</pre>
     </details>
@@ -638,6 +647,7 @@ function familyCard(
       records.find((item) => item.id === args.id);
     return (
       <ActivityCard
+        result={result}
         family="subagent"
         defaultOpen={defaultOpen}
         title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} · ${child?.title || args.id || "Subagent"}`}
@@ -670,6 +680,7 @@ function familyCard(
     return (
       <>
         <ActivityCard
+          result={result}
           family="workflow"
           title={`Workflow · ${workflowName}`}
           meta={meta}
@@ -688,6 +699,7 @@ function familyCard(
   if (name.startsWith("workflow")) {
     return (
       <ActivityCard
+        result={result}
         family="workflow"
         title={name.replaceAll("_", " ")}
         meta={String(args.runId || "")}
@@ -1681,6 +1693,7 @@ function ProcessSequence({
             {previewText}
           </span>
         )}
+        <ImageEvidence messages={rows.map((row) => row.imageMessage)} />
         <span className="process-sequence-counts">{counts.join(" · ")}</span>
         <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
@@ -1901,6 +1914,7 @@ function TurnRun({
           ) : (
             elapsed
           )}
+          <ImageEvidence messages={rows.map((row) => row.imageMessage)} />
           {timing && timing.outcome !== "completed" && (
             <span className="turn-duration-outcome">
               {t(`turnElapsedOutcome_${timing.outcome}`)}
@@ -3091,6 +3105,7 @@ export function Transcript(props: TranscriptProps) {
                 : "tool",
               processMessageKey: entry.key,
               processToolName: part.name,
+              imageMessage: result,
               processPreview: toolActivityTarget(part.name, args)
                 .split("\n")
                 .find(Boolean),
@@ -3112,6 +3127,7 @@ export function Transcript(props: TranscriptProps) {
                   <div className="message-content">
                     {card || (
                       <EvidenceDetails
+                        result={result}
                         body={
                           part.name === "bash" &&
                           typeof args.command === "string"
@@ -3277,13 +3293,15 @@ export function Transcript(props: TranscriptProps) {
         const content = family ? (
           <ActivityCard
             key={`${entry.key}-card`}
+            result={message}
             family={family}
             title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content)}`}
             body={message.content}
             status={status}
             defaultOpen={defaultOpen}
           />
-        ) : isEmptyToolOutput(message.content) ? (
+        ) : isEmptyToolOutput(message.content) &&
+          !imageEvidence(message).present ? (
           <div className="tool-line-empty" key={`${entry.key}-empty`}>
             <span className="tool-icon">{icon}</span>
             <span className="tool-name">{toolName}</span>
@@ -3293,6 +3311,7 @@ export function Transcript(props: TranscriptProps) {
         ) : (
           <EvidenceDetails
             key={`${entry.key}-evidence`}
+            result={message}
             body={message.content}
             icon={icon}
             name={toolName}
@@ -3312,6 +3331,7 @@ export function Transcript(props: TranscriptProps) {
                 : "process",
             processType: family ? "activity" : "tool",
             processToolName: toolName,
+            imageMessage: message,
             processStatus: status,
             error: status === "error",
             content: (

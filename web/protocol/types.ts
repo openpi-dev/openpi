@@ -783,7 +783,7 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
     ) {
       projected = {
         type: "image",
-        mimeType: typed.mimeType,
+        mimeType: typed.mimeType.slice(0, 127).replace(/[\u0000-\u001f\u007f]/gu, ""),
         sourcePartIndex: index,
         ...(typeof typed.name === "string" ? { name: typed.name.slice(0, 255) } : {}),
       };

@@ -1741,6 +1741,9 @@ const resources = {
       noMatching: "No matching conversations",
       noMatchingLoaded: "No matching conversations in the loaded history",
       noModels: "No models available",
+      toolImageEvidence: "{{count}} observed image(s) · preview unavailable",
+      toolImageEvidenceOmitted:
+        "Additional content unavailable; image total unknown",
       noOutput: "no output",
       noSessions: "No sessions",
       openSidebar: "Open sidebar",
@@ -3464,6 +3467,8 @@ const resources = {
       noMatching: "没有匹配的会话",
       noMatchingLoaded: "已加载历史中没有匹配的会话",
       noModels: "没有可用模型",
+      toolImageEvidence: "已观察到 {{count}} 张图片 · 暂无预览",
+      toolImageEvidenceOmitted: "更多内容不可用；图片总数未知",
       noOutput: "无输出",
       noSessions: "暂无会话",
       openSidebar: "打开侧边栏",
