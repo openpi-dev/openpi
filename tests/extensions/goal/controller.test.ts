@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { registerWebCommandFeedback } from "../../../extensions/shared/web-command-feedback.ts";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -56,6 +57,30 @@ function active(now = 100, tokenBudget?: number) {
     "goal_ctrl_1",
   );
 }
+
+test("print-mode goal automation requires the exact attached Web Session and stops scheduling after detach", () => {
+  const h = harness();
+  const ctx = { ...h.ctx, mode: "print" as const };
+  const controller = new GoalController(h.pi);
+  controller.restore(ctx);
+  controller.replace(active());
+  assert.equal(controller.kickoff(ctx), false);
+  const detachOther = registerWebCommandFeedback({}, () => {});
+  assert.equal(controller.kickoff(ctx), false);
+  detachOther();
+  const detach = registerWebCommandFeedback(ctx.sessionManager, () => {});
+  try {
+    assert.equal(controller.kickoff(ctx), true);
+    assert.equal(h.messages.length, 1);
+    controller.pause();
+    controller.resume();
+    detach();
+    assert.equal(controller.kickoff(ctx), false);
+    assert.equal(h.messages.length, 1);
+  } finally {
+    detach();
+  }
+});
 
 function assistant(totalTokens: number, stopReason = "stop") {
   return {
@@ -140,6 +165,42 @@ test("kickoff queues one Codex-style continuation without consuming usage", () =
   assert.match(content, /call update_goal with status "complete"/);
   assert.equal(controller.snapshot()?.tokensUsed, 0);
   assert.equal(controller.snapshot()?.continuationCount, 1);
+});
+
+test("kickoff preserves replacement syntax and template names in the objective", () => {
+  const objective =
+    "Fix $& / $` / $' / $$ and {{ objective }}, {{ tokens_used }}, " +
+    "{{ token_budget }}, {{ remaining_tokens }}, {{ time_used_seconds }} <tag>";
+  const h = harness();
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: createGoalSnapshot(
+        { objective, tokenBudget: 100 },
+        0,
+        100,
+        "goal_literal",
+      ),
+    },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => 101 });
+  controller.restore(h.ctx);
+
+  assert.equal(controller.kickoff(h.ctx), true);
+  const content = (h.messages[0]?.message as { content: string }).content;
+  assert.equal(
+    content.match(
+      /<untrusted_objective>\n([\s\S]*?)\n<\/untrusted_objective>/,
+    )?.[1],
+    "Fix $&amp; / $` / $' / $$ and {{ objective }}, {{ tokens_used }}, " +
+      "{{ token_budget }}, {{ remaining_tokens }}, {{ time_used_seconds }} &lt;tag&gt;",
+  );
+  assert.match(
+    content,
+    /Tokens used: 0\n- Token budget: 100\n- Tokens remaining: 100/,
+  );
+  assert.equal(controller.snapshot()?.objective, objective);
 });
 
 test("a goal created during a busy run accounts post-create work and continues after the absorbed steer", () => {

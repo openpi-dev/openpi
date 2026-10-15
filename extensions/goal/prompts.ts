@@ -106,12 +106,18 @@ function renderPrompt(template: string, goal: GoalSnapshot) {
     goal.tokenBudget === undefined
       ? "unbounded"
       : Math.max(0, goal.tokenBudget - goal.tokensUsed).toString();
-  return template
-    .replaceAll("{{ objective }}", escapeXmlText(goal.objective))
-    .replaceAll("{{ tokens_used }}", goal.tokensUsed.toString())
-    .replaceAll("{{ token_budget }}", tokenBudget)
-    .replaceAll("{{ remaining_tokens }}", remainingTokens)
-    .replaceAll("{{ time_used_seconds }}", goal.timeUsedSeconds.toString());
+  const values: Record<string, string> = {
+    objective: escapeXmlText(goal.objective),
+    tokens_used: goal.tokensUsed.toString(),
+    token_budget: tokenBudget,
+    remaining_tokens: remainingTokens,
+    time_used_seconds: goal.timeUsedSeconds.toString(),
+  };
+  // Substitute once so objective text is never interpreted as template syntax.
+  return template.replace(
+    /\{\{ (\w+) \}\}/g,
+    (placeholder, name: string) => values[name] ?? placeholder,
+  );
 }
 
 function escapeXmlText(value: string) {

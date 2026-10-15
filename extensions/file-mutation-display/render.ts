@@ -6,6 +6,15 @@ import type {
 import type { Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import { renderPaddedToolActivityLine } from "../shared/tool-activity.ts";
+import type { MyPiSetupConfig } from "../shared/setup-config.ts";
+
+export function activityEnabled(name: string, display: MyPiSetupConfig["ui"]) {
+  return name === "bash"
+    ? display.bashToolDisplay !== "full"
+    : name === "write" || name === "edit"
+      ? display.fileMutationDisplay !== "full"
+      : ["read", "grep", "find", "ls"].includes(name);
+}
 
 type ActivityStatus = "pending" | "success" | "error";
 
@@ -71,10 +80,26 @@ function activityComponent(
 export function withActivityRenderer<TParams extends TSchema, TDetails, TState>(
   definition: ToolDefinition<TParams, TDetails, TState>,
 ): ToolDefinition<TParams, TDetails, TState & ActivityRenderState<TDetails>> {
+  return {
+    ...definition,
+    ...activityRenderers(definition.name, definition),
+  };
+}
+
+/** Presentation-only projection, usable by headless child inspection too. */
+export function activityRenderers<TParams extends TSchema, TDetails, TState>(
+  name: string,
+  definition: Pick<
+    ToolDefinition<TParams, TDetails, TState>,
+    "renderCall" | "renderResult"
+  >,
+): Pick<
+  ToolDefinition<TParams, TDetails, TState & ActivityRenderState<TDetails>>,
+  "renderCall" | "renderResult" | "renderShell"
+> {
   const nativeRenderCall = definition.renderCall;
   const nativeRenderResult = definition.renderResult;
   return {
-    ...definition,
     renderShell: "self",
     renderCall(args, theme, context) {
       const state = context.state as TState & ActivityRenderState<TDetails>;
@@ -85,7 +110,7 @@ export function withActivityRenderer<TParams extends TSchema, TDetails, TState>(
       }
       if (
         context.executionStarted &&
-        definition.name === "bash" &&
+        name === "bash" &&
         activity.status === "pending" &&
         !context.expanded &&
         activity.interval === undefined
@@ -108,7 +133,7 @@ export function withActivityRenderer<TParams extends TSchema, TDetails, TState>(
         return component;
       }
       return activityComponent(
-        definition.name,
+        name,
         args,
         activity as NonNullable<ActivityRenderState<unknown>["openpiActivity"]>,
         theme,
@@ -127,7 +152,7 @@ export function withActivityRenderer<TParams extends TSchema, TDetails, TState>(
           : "success";
       if (
         options.isPartial &&
-        definition.name === "bash" &&
+        name === "bash" &&
         !options.expanded &&
         activity.interval === undefined
       ) {

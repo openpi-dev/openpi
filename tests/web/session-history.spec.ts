@@ -1,208 +1,697 @@
 // @vitest-environment jsdom
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { StrictMode } from "react";
+import { afterEach, expect, it, vi } from "vitest";
 import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
-import { createElement } from "react";
-import { I18nextProvider } from "react-i18next";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { SessionHistory } from "../../web/ui/src/features/sessions/SessionHistory.tsx";
-import { i18n } from "../../web/ui/src/i18n.ts";
+  jsonByteLength,
+  type WebSessionHistoryPage,
+  type WebSessionProjection,
+} from "../../web/protocol/types.ts";
+import {
+  rememberSessionReading,
+  type SessionReadingCache,
+  sessionReadingScope,
+} from "../../web/ui/src/features/transcript/session-reading-state.ts";
+import { useSessionHistory } from "../../web/ui/src/features/transcript/use-session-history.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
-import { createWebStore } from "../../web/ui/src/store/web-store.ts";
-
-beforeAll(() => {
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
-      this.open = true;
-    },
-  });
-  Object.defineProperty(HTMLDialogElement.prototype, "close", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
-      this.open = false;
-    },
-  });
-});
-afterAll(() => {
-  Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
-  Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
-});
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
-
-const archived = (id: string) => ({
-  id,
-  path: `/repo/${id}.jsonl`,
-  cwd: "/repo",
-  name: `Archive ${id}`,
-  modified: "2026-09-01T00:00:00Z",
-  created: "2026-09-01T00:00:00Z",
-  messageCount: 1,
-  firstMessage: "saved",
-  archived: true as const,
+const entry = (index: number) => ({
+  type: "message" as const,
+  id: `e${index}`,
+  parentId: index ? `e${index - 1}` : null,
+  timestamp: new Date(index).toISOString(),
+  message: {
+    role: index % 10 === 0 ? "user" : "assistant",
+    content: `Entry ${index}`,
+  },
 });
-const truncation = {
-  truncated: false,
-  matchesOmitted: 0,
-  recordsUnscanned: 0,
-  maxPageSize: 50,
-  maxScanned: 5000,
-};
-const terminal = (path: string) => ({
-  id: "terminal-id",
-  path,
-  cwd: "/repo",
-  name: "Terminal record",
-  created: "2026-09-01T00:00:00Z",
-  modified: "2026-09-01T00:00:00Z",
-  messageCount: 2,
-  metadataPartial: false,
-  firstMessage: "original request",
-  source: "pi-default" as const,
-  origin: "terminal" as const,
-  readOnly: true as const,
-});
-
-function view(node: ReturnType<typeof createElement>) {
-  return render(createElement(I18nextProvider, { i18n }, node));
+function session(
+  from = 2,
+  through = 3,
+  overrides: Partial<WebSessionProjection> = {},
+): WebSessionProjection {
+  const entries = Array.from({ length: through - from + 1 }, (_, index) =>
+    entry(from + index),
+  );
+  return {
+    id: "s",
+    path: "/sessions/s.jsonl",
+    cwd: "/workspace",
+    entries,
+    bytes: jsonByteLength(entries),
+    truncation: {
+      truncated: from > 0,
+      entriesOmitted: from,
+      messagesTruncated: 0,
+      messagePartsOmitted: 0,
+      maxBytes: 2 * 1024 * 1024,
+    },
+    history: {
+      leafEntryId: `e${through}`,
+      beforeEntryId: from > 0 ? `e${from}` : null,
+    },
+    ...overrides,
+  };
+}
+function page(
+  from = 0,
+  through = 1,
+  anchor = "e3",
+  before = "e2",
+): WebSessionHistoryPage {
+  return {
+    ...session(from, through),
+    anchorEntryId: anchor,
+    requestedBeforeEntryId: before,
+    history: {
+      leafEntryId: anchor,
+      beforeEntryId: from > 0 ? `e${from}` : null,
+      anchorEntryId: anchor,
+      anchorOnBranch: true,
+    },
+  };
+}
+function setup(
+  selected = session(),
+  callbacks = {},
+  readingCache?: SessionReadingCache,
+) {
+  const onAnchorChange = vi.fn();
+  const beforePrepend = vi.fn();
+  const onRefresh = vi.fn(async () => true);
+  return {
+    ...renderHook(
+      ({ selected }) =>
+        useSessionHistory(
+          selected,
+          {
+            onAnchorChange,
+            beforePrepend,
+            onRefresh,
+            ...callbacks,
+          },
+          readingCache,
+        ),
+      { initialProps: { selected } },
+    ),
+    onAnchorChange,
+    beforePrepend,
+    onRefresh,
+  };
 }
 
-it("pages archived Sessions without duplicating rows or activating them for restoration", async () => {
-  const list = vi
-    .spyOn(WebClient.prototype, "archivedSessions")
-    .mockResolvedValueOnce({
-      sessions: [archived("one")],
-      nextCursor: "page-2",
-      truncation,
-    })
-    .mockResolvedValueOnce({
-      sessions: [archived("one"), archived("two")],
-      truncation,
-    });
-  const actions = createWebStore().getState().actions;
-  const select = vi.spyOn(actions, "selectSession").mockResolvedValue();
-  const restore = vi.spyOn(actions, "unarchiveSession").mockResolvedValue(true);
-  view(
-    createElement(SessionHistory, {
-      kind: "archived",
-      query: "",
-      workspace: null,
-      actions,
+it("restores a verified reading window after leaving and returning to its exact Session", async () => {
+  vi.spyOn(WebClient.prototype, "sessionHistory").mockResolvedValue(page());
+  const cache: SessionReadingCache = new Map();
+  const first = setup(session(), {}, cache);
+  await act(() => first.result.current.loadOlder());
+  first.unmount();
+  const reader = setup(session(), {}, cache);
+  expect(reader.result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e0",
+    "e1",
+    "e2",
+    "e3",
+  ]);
+  expect(reader.result.current.engaged).toBe(true);
+  expect(reader.onRefresh).not.toHaveBeenCalled();
+  expect(reader.onAnchorChange).toHaveBeenLastCalledWith({
+    sessionId: "s",
+    sessionPath: "/sessions/s.jsonl",
+    entryId: "e3",
+  });
+  reader.rerender({
+    selected: session(2, 3, { path: "/sessions/copy.jsonl" }),
+  });
+  expect(reader.result.current.engaged).toBe(false);
+  reader.rerender({ selected: session() });
+  expect(reader.result.current.engaged).toBe(true);
+  expect(reader.result.current.session?.entries[0]?.id).toBe("e0");
+});
+
+it("retains the bounded snapshot only when the reader leaves bottom following", () => {
+  const read = vi.spyOn(WebClient.prototype, "sessionHistory");
+  const cache: SessionReadingCache = new Map();
+  const reader = setup(session(), {}, cache);
+  act(() => {
+    reader.result.current.retainReading();
+  });
+  reader.unmount();
+  const returned = setup(session(7, 8), {}, cache);
+  expect(returned.result.current.session?.entries[0]?.id).toBe("e2");
+  expect(returned.result.current.verifying).toBe(true);
+  expect(returned.onRefresh).toHaveBeenCalledOnce();
+  expect(read).not.toHaveBeenCalled();
+  returned.rerender({
+    selected: session(7, 8, {
+      history: {
+        leafEntryId: "e8",
+        beforeEntryId: "e7",
+        anchorEntryId: "e3",
+        anchorOnBranch: true,
+      },
     }),
+  });
+  expect(returned.result.current.verifying).toBe(false);
+  expect(returned.result.current.hasNewer).toBe(true);
+  expect(returned.result.current.session?.entries[0]?.id).toBe("e2");
+});
+
+it("discards a restored window and bookmark when native branch validation rejects its anchor", () => {
+  const cache: SessionReadingCache = new Map();
+  const reader = setup(session(), {}, cache);
+  act(() => {
+    reader.result.current.retainReading();
+  });
+  rememberSessionReading(cache, sessionReadingScope(session()), {
+    position: { key: "e2", offset: -5, scrollTop: 200, pinned: false },
+  });
+  reader.unmount();
+  const returned = setup(
+    session(7, 8, {
+      history: {
+        leafEntryId: "e8",
+        beforeEntryId: "e7",
+        anchorEntryId: "e3",
+        anchorOnBranch: false,
+      },
+    }),
+    {},
+    cache,
   );
-  expect(await screen.findByText("Archive one")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
-  expect(await screen.findByText("Archive two")).toBeTruthy();
-  expect(screen.getAllByText("Archive one")).toHaveLength(1);
-  expect(screen.getByText("End of available history")).toBeTruthy();
-  expect(list).toHaveBeenNthCalledWith(
-    2,
-    "",
-    "page-2",
+  expect(returned.result.current.engaged).toBe(false);
+  expect(returned.result.current.error).toBe("historyChanged");
+  expect(returned.result.current.session?.entries[0]?.id).toBe("e7");
+  expect(cache.has(sessionReadingScope(session()))).toBe(false);
+});
+
+it("aborts a pending older page on departure without writing its late result to the saved reader", async () => {
+  let finish!: (value: WebSessionHistoryPage) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+  const cache: SessionReadingCache = new Map();
+  const reader = setup(session(), {}, cache);
+  act(() => {
+    void reader.result.current.loadOlder();
+  });
+  reader.unmount();
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  await act(async () => {
+    finish(page());
+  });
+  const returned = setup(session(), {}, cache);
+  expect(returned.result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e2",
+    "e3",
+  ]);
+});
+
+it("bounds saved readers and evicts the window and its matching bookmark together", () => {
+  const cache: SessionReadingCache = new Map();
+  for (let index = 0; index < 5; index++) {
+    const selected = session(2, 3, { id: `s${index}` });
+    const scope = sessionReadingScope(selected);
+    rememberSessionReading(cache, scope, {
+      window: { session: selected, anchor: "e3", validatedLeaf: "e3" },
+    });
+    rememberSessionReading(cache, scope, {
+      position: { key: "e2", offset: 0, scrollTop: 0, pinned: false },
+    });
+  }
+  expect(cache.size).toBe(4);
+  expect(cache.has(sessionReadingScope(session(2, 3, { id: "s0" })))).toBe(
+    false,
+  );
+  for (const saved of cache.values()) {
+    expect(saved.window).toBeTruthy();
+    expect(saved.position?.key).toBe("e2");
+  }
+});
+
+it("does not fetch or retain sliding snapshots until the reader asks for history", () => {
+  const read = vi.spyOn(WebClient.prototype, "sessionHistory");
+  const { result, rerender, onAnchorChange } = setup();
+  for (let index = 10; index < 100; index++) {
+    const selected = session(index, index + 1);
+    rerender({ selected });
+    expect(result.current.session).toBe(selected);
+  }
+  expect(result.current.engaged).toBe(false);
+  expect(read).not.toHaveBeenCalled();
+  expect(onAnchorChange).not.toHaveBeenCalled();
+});
+
+it("preloads only one adjacent page without installing or acknowledging unseen entries", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue(page(4, 5, "e7", "e6"));
+  const selected = session(6, 7);
+  const { result, rerender, beforePrepend, onAnchorChange } = setup(selected, {
+    preload: true,
+  });
+  await act(async () => {});
+  expect(read).toHaveBeenCalledOnce();
+  expect(result.current.session).toBe(selected);
+  expect(result.current.engaged).toBe(false);
+  expect(result.current.loading).toBe(false);
+  expect(beforePrepend).not.toHaveBeenCalled();
+  expect(onAnchorChange).not.toHaveBeenCalled();
+  for (let index = 10; index < 100; index++)
+    rerender({ selected: session(index, index + 1) });
+  expect(read).toHaveBeenCalledOnce();
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  expect(result.current.engaged).toBe(false);
+});
+
+it("consumes the buffered page and preloads exactly one new page at the new cursor", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValueOnce(page(4, 5, "e7", "e6"))
+    .mockResolvedValueOnce(page(2, 3, "e7", "e4"))
+    .mockResolvedValueOnce(page(0, 1, "e7", "e2"));
+  const { result, beforePrepend, onAnchorChange } = setup(session(6, 7), {
+    preload: true,
+  });
+  await act(async () => {});
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls.map(([, before]) => before)).toEqual(["e6", "e4"]);
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+  ]);
+  expect(beforePrepend).toHaveBeenCalledOnce();
+  expect(onAnchorChange).toHaveBeenLastCalledWith({
+    sessionId: "s",
+    sessionPath: "/sessions/s.jsonl",
+    entryId: "e7",
+  });
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(result.current.session?.entries[0]?.id).toBe("e2");
+  expect(result.current.hasMore).toBe(true);
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(result.current.hasMore).toBe(false);
+});
+
+it("keeps buffered entries unseen when the reader leaves bottom before asking for the previous page", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue(page());
+  const { result, rerender, beforePrepend } = setup(session(), {
+    preload: true,
+  });
+  await act(async () => {});
+  act(() => {
+    result.current.retainReading();
+  });
+  rerender({ selected: session() });
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e2",
+    "e3",
+  ]);
+  expect(beforePrepend).not.toHaveBeenCalled();
+  expect(read).toHaveBeenCalledOnce();
+});
+
+it("promotes an in-flight prefetch instead of requesting the same cursor again", async () => {
+  let finish!: (value: WebSessionHistoryPage) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+  const { result, beforePrepend } = setup(session(), { preload: true });
+  act(() => {
+    void result.current.loadOlder();
+    void result.current.loadOlder();
+  });
+  expect(read).toHaveBeenCalledOnce();
+  expect(result.current.loading).toBe(true);
+  await act(async () => finish(page()));
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(result.current.loading).toBe(false);
+  expect(beforePrepend).toHaveBeenCalledOnce();
+});
+
+it("never installs a late preload from a copied Session path", async () => {
+  const pending: ((value: WebSessionHistoryPage) => void)[] = [];
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+  const { result, rerender, beforePrepend } = setup(session(), {
+    preload: true,
+  });
+  const replacement = session(20, 21, { path: "/sessions/copy.jsonl" });
+  rerender({ selected: replacement });
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  expect(read).toHaveBeenCalledTimes(2);
+  await act(async () => pending[0]!(page()));
+  expect(result.current.session).toBe(replacement);
+  expect(result.current.engaged).toBe(false);
+  expect(beforePrepend).not.toHaveBeenCalled();
+});
+
+it("does not spin on failed preloads and retries on a reader's explicit request", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValueOnce(page());
+  const { result, rerender, beforePrepend } = setup(session(), {
+    preload: true,
+  });
+  await act(async () => {});
+  rerender({ selected: session() });
+  expect(read).toHaveBeenCalledOnce();
+  expect(result.current.error).toBeNull();
+  expect(result.current.engaged).toBe(false);
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(beforePrepend).toHaveBeenCalledOnce();
+});
+
+it("aborts unseen preloads while the transcript is hidden or disconnected", () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(() => new Promise(() => {}));
+  const callbacks = { preload: true };
+  const { result, rerender } = setup(session(), callbacks);
+  expect(read).toHaveBeenCalledOnce();
+  callbacks.preload = false;
+  rerender({ selected: session() });
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  expect(result.current.engaged).toBe(false);
+  rerender({ selected: session() });
+  expect(read).toHaveBeenCalledOnce();
+  callbacks.preload = true;
+  rerender({ selected: session() });
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls[1]![2].aborted).toBe(false);
+});
+
+it("restarts the one adjacent preload after StrictMode replays effect cleanup", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue(page());
+  const selected = session();
+  const beforePrepend = vi.fn();
+  const { result } = renderHook(
+    () => useSessionHistory(selected, { beforePrepend, preload: true }),
+    { wrapper: StrictMode },
+  );
+  await act(async () => {});
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  expect(read.mock.calls[1]![2].aborted).toBe(false);
+  expect(result.current.session).toBe(selected);
+  expect(result.current.engaged).toBe(false);
+  expect(beforePrepend).not.toHaveBeenCalled();
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(beforePrepend).toHaveBeenCalledOnce();
+});
+
+it("loads native older entries before the current page and reaches the start", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue(page());
+  const { result, beforePrepend, onAnchorChange } = setup();
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledWith(
+    { sessionId: "s", sessionPath: "/sessions/s.jsonl", entryId: "e3" },
+    "e2",
     expect.any(AbortSignal),
   );
-  fireEvent.click(
-    screen.getByRole("button", { name: "Restore conversation Archive one" }),
-  );
-  await waitFor(() => expect(screen.queryByText("Archive one")).toBeNull());
-  expect(restore).toHaveBeenCalledWith("/repo/one.jsonl");
-  expect(select).not.toHaveBeenCalled();
-});
-
-it("reads terminal history as bounded text without selecting a writable Session and clears it on workspace change", async () => {
-  const path = "/repo/terminal.jsonl";
-  const list = vi
-    .spyOn(WebClient.prototype, "terminalSessions")
-    .mockResolvedValue({
-      sessions: [terminal(path)],
-      cursor: 0,
-      total: 1,
-      partial: true,
-    });
-  const detail = vi
-    .spyOn(WebClient.prototype, "terminalSession")
-    .mockResolvedValue({
-      ...terminal(path),
-      preview: {
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: "Original source text" }],
-          },
-          { role: "assistant", content: [{ type: "image", data: "hidden" }] },
-        ],
-        totalMessages: 3,
-        bytesRead: 120,
-        retainedBytes: 80,
-        truncatedBytes: 40,
-      },
-    });
-  const actions = createWebStore().getState().actions;
-  const select = vi.spyOn(actions, "selectSession").mockResolvedValue();
-  const { rerender } = view(
-    createElement(SessionHistory, {
-      kind: "terminal",
-      query: "",
-      workspace: "/repo",
-      actions,
-    }),
-  );
-  expect(await screen.findByText("Terminal record")).toBeTruthy();
-  expect(
-    screen.getByText("History scan is partial; some records may not be shown."),
-  ).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /Terminal record/u }));
-  expect(await screen.findByText("Original source text")).toBeTruthy();
-  expect(screen.getByText("Non-text content not shown")).toBeTruthy();
-  expect(screen.getByText(/Showing 2 of 3 messages/u)).toBeTruthy();
-  expect(detail).toHaveBeenCalledWith(path, expect.any(AbortSignal));
-  expect(select).not.toHaveBeenCalled();
-  await act(async () => {
-    rerender(
-      createElement(
-        I18nextProvider,
-        { i18n },
-        createElement(SessionHistory, {
-          kind: "terminal",
-          query: "",
-          workspace: "/other",
-          actions,
-        }),
-      ),
-    );
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e0",
+    "e1",
+    "e2",
+    "e3",
+  ]);
+  expect(result.current.session?.entries[0]?.message?.role).toBe("user");
+  expect(result.current.hasMore).toBe(false);
+  expect(beforePrepend).toHaveBeenCalledOnce();
+  expect(onAnchorChange).toHaveBeenLastCalledWith({
+    sessionId: "s",
+    sessionPath: "/sessions/s.jsonl",
+    entryId: "e3",
   });
-  await waitFor(() =>
-    expect(
-      screen.queryByRole("dialog", { name: "Terminal session history" }),
-    ).toBeNull(),
-  );
-  expect(list).toHaveBeenLastCalledWith("", 0, expect.any(AbortSignal));
 });
 
-it("does not discover terminal history without a selected workspace", async () => {
-  const list = vi.spyOn(WebClient.prototype, "terminalSessions");
-  const actions = createWebStore().getState().actions;
-  view(
-    createElement(SessionHistory, {
-      kind: "terminal",
-      query: "",
-      workspace: null,
-      actions,
-    }),
+it("never pauses live messages for a verified append to the reading window", () => {
+  const paused: boolean[] = [];
+  const { result, rerender } = renderHook(
+    ({ selected }) => {
+      const history = useSessionHistory(selected, { beforePrepend: vi.fn() });
+      paused.push(history.hasNewer || history.verifying);
+      return history;
+    },
+    { initialProps: { selected: session() } },
   );
-  expect(
-    await screen.findByText(
-      "Select a workspace to inspect its terminal sessions.",
-    ),
-  ).toBeTruthy();
-  expect(list).not.toHaveBeenCalled();
+  act(() => {
+    result.current.retainReading();
+  });
+  paused.length = 0;
+  rerender({
+    selected: session(3, 4, {
+      history: {
+        leafEntryId: "e4",
+        beforeEntryId: "e3",
+        anchorEntryId: "e3",
+        anchorOnBranch: true,
+      },
+    }),
+  });
+  expect(paused.length).toBeGreaterThan(0);
+  expect(paused.every((value) => !value)).toBe(true);
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e2",
+    "e3",
+    "e4",
+  ]);
+});
+
+it("keeps an in-flight older page when a verified append arrives", async () => {
+  let finish!: (page: WebSessionHistoryPage) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+  const { result, rerender } = setup();
+  act(() => {
+    void result.current.loadOlder();
+  });
+  const appended = session(3, 4, {
+    history: {
+      leafEntryId: "e4",
+      beforeEntryId: "e3",
+      anchorEntryId: "e3",
+      anchorOnBranch: true,
+    },
+  });
+  rerender({ selected: appended });
+  expect(read.mock.calls[0]![2].aborted).toBe(false);
+  await act(async () => finish(page()));
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e0",
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+  ]);
+  expect(read).toHaveBeenCalledOnce();
+});
+
+it.each(["session-id", "copied-path"])(
+  "discards a delayed older page after changing %s",
+  async (change) => {
+    let finish!: (page: WebSessionHistoryPage) => void;
+    const read = vi
+      .spyOn(WebClient.prototype, "sessionHistory")
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+    const { result, rerender, beforePrepend } = setup();
+    act(() => {
+      void result.current.loadOlder();
+    });
+    const replacement = session(
+      20,
+      21,
+      change === "session-id"
+        ? { id: "other" }
+        : { path: "/sessions/copy.jsonl" },
+    );
+    rerender({ selected: replacement });
+    expect(read.mock.calls[0]![2].aborted).toBe(true);
+    await act(async () => finish(page()));
+    expect(result.current.session).toBe(replacement);
+    expect(beforePrepend).not.toHaveBeenCalled();
+  },
+);
+
+it("does not splice a pending page into an unverified or forked snapshot", async () => {
+  let finish!: (page: WebSessionHistoryPage) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+  const { result, rerender, beforePrepend } = setup(session(), {
+    onRefresh: () => new Promise<boolean>(() => {}),
+  });
+  act(() => {
+    void result.current.loadOlder();
+  });
+  rerender({ selected: session(20, 21) });
+  await act(async () => finish(page()));
+  expect(result.current.verifying).toBe(true);
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e2",
+    "e3",
+  ]);
+  expect(beforePrepend).not.toHaveBeenCalled();
+  const forked = session(20, 21, {
+    history: {
+      leafEntryId: "e21",
+      beforeEntryId: "e20",
+      anchorEntryId: "e3",
+      anchorOnBranch: false,
+    },
+  });
+  rerender({ selected: forked });
+  expect(result.current.session).toBe(forked);
+  expect(result.current.error).toBe("historyChanged");
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+});
+
+it("keeps a load error visible and permits retry without discarding the current page", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValueOnce(page());
+  const { result } = setup();
+  await act(() => result.current.loadOlder());
+  expect(result.current.error).toBe("historyUnavailable");
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e2",
+    "e3",
+  ]);
+  await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(result.current.error).toBeNull();
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+});
+
+it("keeps only a bounded reading window and releases it on Jump to latest", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValueOnce(page(750, 999, "e1249", "e1000"))
+    .mockResolvedValueOnce(page(500, 749, "e1249", "e750"))
+    .mockResolvedValueOnce(page(250, 499, "e1249", "e500"))
+    .mockResolvedValueOnce(page(0, 249, "e1249", "e250"));
+  const latest = session(1000, 1249);
+  const { result, onAnchorChange } = setup(latest);
+  for (let index = 0; index < 4; index++)
+    await act(() => result.current.loadOlder());
+  expect(read).toHaveBeenCalledTimes(4);
+  expect(result.current.session?.entries).toHaveLength(1000);
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(result.current.hasNewer).toBe(true);
+  act(() => result.current.resetToLatest());
+  expect(result.current.session).toBe(latest);
+  expect(result.current.engaged).toBe(false);
+  expect(onAnchorChange).toHaveBeenLastCalledWith(null);
+});
+
+it("keeps a verified older reading position when many new entries create a gap", async () => {
+  vi.spyOn(WebClient.prototype, "sessionHistory").mockResolvedValue(page());
+  const { result, rerender } = setup();
+  await act(() => result.current.loadOlder());
+  rerender({
+    selected: session(100, 101, {
+      history: {
+        leafEntryId: "e101",
+        beforeEntryId: "e100",
+        anchorEntryId: "e3",
+        anchorOnBranch: true,
+      },
+    }),
+  });
+  expect(result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e0",
+    "e1",
+    "e2",
+    "e3",
+  ]);
+  expect(result.current.hasNewer).toBe(true);
+  expect(result.current.verifying).toBe(false);
+});
+
+it("bounds retained bytes even when each page has far fewer than 250 entries", async () => {
+  const text = "文".repeat(12000);
+  const large = (from: number, through: number) => {
+    const value = session(from, through);
+    value.entries = value.entries.map((entry) => ({
+      ...entry,
+      message: {
+        role: "assistant",
+        content: text,
+        parts: [{ type: "text", text }],
+      },
+    }));
+    value.bytes = jsonByteLength(value.entries);
+    return value;
+  };
+  vi.spyOn(WebClient.prototype, "sessionHistory").mockImplementation(
+    async (anchor, before) => {
+      const end = Number(before.slice(1));
+      const result = page(end - 25, end - 1, anchor.entryId, before);
+      const content = large(end - 25, end - 1);
+      return { ...result, entries: content.entries, bytes: content.bytes };
+    },
+  );
+  const { result } = setup(large(125, 149));
+  for (let index = 0; index < 5; index++)
+    await act(() => result.current.loadOlder());
+  expect(result.current.session?.entries[0]?.id).toBe("e0");
+  expect(result.current.session!.entries.length).toBeLessThan(150);
+  expect(jsonByteLength(result.current.session?.entries)).toBeLessThanOrEqual(
+    8 * 1024 * 1024,
+  );
+  expect(result.current.hasNewer).toBe(true);
 });

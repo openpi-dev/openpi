@@ -1,0 +1,8 @@
+.terminal-history { display: grid; gap: 12px; min-width: 0; }
+.terminal-history h2, .terminal-history p { margin: 0; }
+.terminal-history input { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
+.terminal-history-list { display: grid; gap: 4px; max-height: 35dvh; overflow: auto; }
+.terminal-history-list button { text-align: left; padding: 10px; border-radius: 6px; overflow-wrap: anywhere; }
+.terminal-history-list button:hover, .terminal-history-list button:focus-visible { background: var(--bg-hover); }
+.terminal-history section { max-height: 25dvh; overflow: auto; }
+.terminal-history pre { white-space: pre-wrap; overflow-wrap: anywhere; }

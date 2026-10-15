@@ -117,3 +117,27 @@ test("Down remains consumed when a focused strip has no nested peer", () => {
   assert.equal(state.focused, true);
   assert.deepEqual(inputs, []);
 });
+
+test("native padding getter preserves receiver through wrappers and missing geometry is safe", () => {
+  const wrap = (base: EditorComponent) =>
+    new BelowEditorNavigationEditor(
+      base,
+      keybindings,
+      new BelowEditorStripState(),
+      () => false,
+      () => {},
+      () => {},
+    );
+  const base = {
+    ...baseEditor([]),
+    padding: 3,
+    getPaddingX() {
+      return this.padding;
+    },
+  };
+  const nested = wrap(wrap(base));
+  assert.equal(nested.getPaddingX(), 3);
+  base.padding = 1;
+  assert.equal(nested.getPaddingX(), 1);
+  assert.equal(wrap(baseEditor([])).getPaddingX(), undefined);
+});

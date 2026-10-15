@@ -14,6 +14,7 @@ import {
   type SourceInfo,
   type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
+import { createPiBuiltinExtensionFactories } from "./pi-builtin-extensions.ts";
 import {
   OPENPI_OWNER_SOURCE_PATHS,
   OPENPI_TOOL_SURFACE,
@@ -43,20 +44,27 @@ export const CHILD_SAFE_PACKAGE_TOOL_NAMES = [
 ] as const;
 
 /**
+ * These optional packages are parent-only inside concurrent Pi sessions.
+ * pi-web-access owns shared UI/cache and optional execution/provider authority;
+ * exclude the whole package before import, including renamed tools and commands.
  * pi-intercom resources are unsafe inside concurrent in-process child sessions.
  * It stores session identity and optional supervisor bridge metadata in
  * process.env, which is shared by every Direct/Workflow child in this process.
  * Loading it in children can therefore cross-wire identities; the parent
  * extension remains loaded and fully usable.
  */
-function manifestNamesPiIntercom(manifestPath: string) {
+const PARENT_ONLY_PI_PACKAGES = ["pi-intercom", "pi-web-access"];
+
+function manifestNamesParentOnlyPackage(manifestPath: string) {
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
     return (
       typeof manifest === "object" &&
       manifest !== null &&
       !Array.isArray(manifest) &&
-      (manifest as Record<string, unknown>).name === "pi-intercom"
+      PARENT_ONLY_PI_PACKAGES.includes(
+        String((manifest as Record<string, unknown>).name),
+      )
     );
   } catch (error) {
     throw new Error(
@@ -66,15 +74,15 @@ function manifestNamesPiIntercom(manifestPath: string) {
   }
 }
 
-function installedPathNamesPiIntercom(installedPath: string) {
+function installedPathNamesParentOnlyPackage(installedPath: string) {
   try {
     const stats = statSync(installedPath);
     if (stats.isDirectory()) {
       const manifestPath = path.join(installedPath, "package.json");
       if (existsSync(manifestPath)) {
-        return manifestNamesPiIntercom(manifestPath);
+        return manifestNamesParentOnlyPackage(manifestPath);
       }
-      if (path.basename(installedPath) === "pi-intercom") {
+      if (PARENT_ONLY_PI_PACKAGES.includes(path.basename(installedPath))) {
         throw new Error(
           `Cannot verify child package identity from ${installedPath}`,
         );
@@ -88,16 +96,18 @@ function installedPathNamesPiIntercom(installedPath: string) {
     }
 
     let current = path.dirname(installedPath);
-    let hasIntercomDirectoryName = false;
+    let hasParentOnlyDirectoryName = false;
     while (true) {
-      hasIntercomDirectoryName ||= path.basename(current) === "pi-intercom";
+      hasParentOnlyDirectoryName ||= PARENT_ONLY_PI_PACKAGES.includes(
+        path.basename(current),
+      );
       const manifestPath = path.join(current, "package.json");
       if (existsSync(manifestPath)) {
-        return manifestNamesPiIntercom(manifestPath);
+        return manifestNamesParentOnlyPackage(manifestPath);
       }
       const parent = path.dirname(current);
       if (parent === current) {
-        if (hasIntercomDirectoryName) {
+        if (hasParentOnlyDirectoryName) {
           throw new Error(
             `Cannot verify child package identity from ${installedPath}`,
           );
@@ -120,7 +130,7 @@ function installedPathNamesPiIntercom(installedPath: string) {
   }
 }
 
-function piMatchesPublishedIntercomSource(options: {
+function piMatchesPublishedParentOnlySource(options: {
   source: string;
   cwd: string;
   agentDir: string;
@@ -137,11 +147,15 @@ function piMatchesPublishedIntercomSource(options: {
     packageManager.removeSourceFromSettings("npm:pi-intercom") ||
     packageManager.removeSourceFromSettings(
       "git:https://github.com/nicobailon/pi-intercom",
+    ) ||
+    packageManager.removeSourceFromSettings("npm:pi-web-access") ||
+    packageManager.removeSourceFromSettings(
+      "git:https://github.com/nicobailon/pi-web-access",
     )
   );
 }
 
-function createPiIntercomPackageMatcher(options: {
+function createParentOnlyPackageMatcher(options: {
   cwd: string;
   agentDir: string;
 }) {
@@ -150,7 +164,7 @@ function createPiIntercomPackageMatcher(options: {
   return (source: string, installedPath?: string) => {
     let sourceMatch = sourceMatches.get(source);
     if (sourceMatch === undefined) {
-      sourceMatch = piMatchesPublishedIntercomSource({
+      sourceMatch = piMatchesPublishedParentOnlySource({
         source,
         cwd: options.cwd,
         agentDir: options.agentDir,
@@ -162,7 +176,7 @@ function createPiIntercomPackageMatcher(options: {
     const resolvedPath = path.resolve(installedPath);
     let installedPathMatch = installedPathMatches.get(resolvedPath);
     if (installedPathMatch === undefined) {
-      installedPathMatch = installedPathNamesPiIntercom(resolvedPath);
+      installedPathMatch = installedPathNamesParentOnlyPackage(resolvedPath);
       installedPathMatches.set(resolvedPath, installedPathMatch);
     }
     return installedPathMatch;
@@ -181,7 +195,7 @@ function createBlockedChildPackagePolicy(options: {
     ...options,
     settingsManager: SettingsManager.inMemory(),
   });
-  const matches = createPiIntercomPackageMatcher(options);
+  const matches = createParentOnlyPackageMatcher(options);
   return (sourceInfo: Omit<SourceInfo, "path">) => {
     if (
       !sourceInfo ||
@@ -401,7 +415,7 @@ function blockedPackageSources(
   };
   // Configured packages can be absent in offline mode. Match their canonical
   // identity without demanding loaded-tool provenance from an unloaded package.
-  const matches = createPiIntercomPackageMatcher(options);
+  const matches = createParentOnlyPackageMatcher(options);
   for (const configured of packageManager.listConfiguredPackages()) {
     if (matches(configured.source, configured.installedPath)) {
       blocked[configured.scope].add(configured.source);
@@ -498,8 +512,12 @@ async function createChildSettingsManager(options: {
  * drift test in child-session.test.ts).
  */
 export const CHILD_EXCLUDED_TOOL_NAMES = [
+  // embedded browser — authority belongs to the initiating parent Web tab
+  "openpi_browser",
   // capability discovery mutates the parent model-facing tool surface
   "openpi_load_tools",
+  // runtime inspection includes parent configuration and resource summaries
+  "runtime_snapshot",
   // subagents — children cannot spawn/observe more agents
   "subagent_spawn",
   "subagent_wait",
@@ -538,21 +556,28 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
 ] as const;
 
 const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
-  (Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
-    .filter((owner) => {
-      const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
-      const toolNames = [...entry, ...deferred];
-      return (
-        toolNames.length > 0 &&
-        toolNames.every((name) =>
-          CHILD_EXCLUDED_TOOL_NAMES.includes(name as never),
-        )
-      );
-    })
-    .map((owner) => canonicalExistingPath(OPENPI_OWNER_SOURCE_PATHS[owner]))
-    .filter(
-      (extensionPath): extensionPath is string => extensionPath !== undefined,
+  [
+    canonicalExistingPath(
+      fileURLToPath(new URL("../web-search/index.ts", import.meta.url)),
     ),
+    ...(Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
+      .filter((owner) => {
+        const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
+        const toolNames = [...entry, ...deferred];
+        return (
+          toolNames.length > 0 &&
+          toolNames.every((name) =>
+            CHILD_EXCLUDED_TOOL_NAMES.includes(name as never),
+          )
+        );
+      })
+      .map((owner) => canonicalExistingPath(OPENPI_OWNER_SOURCE_PATHS[owner]))
+      .filter(
+        (extensionPath): extensionPath is string => extensionPath !== undefined,
+      ),
+  ].filter(
+    (extensionPath): extensionPath is string => extensionPath !== undefined,
+  ),
 );
 
 function isVerifiedParentOnlyOpenPiExtension(extension: {
@@ -654,6 +679,11 @@ export async function createChildResources(options: ChildResourceOptions) {
     cwd: options.cwd,
     agentDir,
     settingsManager,
+    // A child is an SDK session, so it inherits no built-in registry unless
+    // this loader passes one (see pi-builtin-extensions.ts). Without it
+    // tool_search and codemode are never registered in the child, which is a
+    // capability loss no child-safe activation list can repair.
+    extensionFactories: createPiBuiltinExtensionFactories(),
     extensionsOverride(base) {
       const withoutGitInfo = excludeOpenPiGitInfoExtension(base);
       return {
@@ -725,28 +755,45 @@ function boundedToolNames(names: readonly string[]) {
  * Parent-only names are deliberately ignored here: the denylist remains
  * authoritative, so naming one can never turn this check into a grant.
  */
+export interface ChildToolPreflightOptions {
+  /**
+   * Treat a requested name the child cannot expose as a narrowed child instead
+   * of a configuration error. Callers that pass the parent's inherited tool
+   * surface need this: a package may register a tool only after the model
+   * enables it, and an SDK child never loads Pi's built-in extensions unless
+   * the caller injects them. An explicit allowlist leaves this off, so a
+   * declared name still fails before the first prompt.
+   */
+  tolerateInheritedMisses?: boolean;
+}
+
 export async function bindChildSessionExtensions(
   session: ChildSessionStartup,
   requestedTools?: readonly string[],
+  options?: ChildToolPreflightOptions,
 ) {
   await session.bindExtensions({ mode: "print" });
   const requested = effectiveChildToolAllowlist(requestedTools);
   let active: Set<string> | undefined;
+  let available: Set<string> | undefined;
   if (
     session.getActiveToolNames &&
     session.getAllTools &&
     session.setActiveToolsByName
   ) {
     const requestedSet = requested ? new Set(requested) : undefined;
-    const available = new Set(session.getAllTools().map(({ name }) => name));
+    available = new Set(session.getAllTools().map(({ name }) => name));
     const activeNames = session.getActiveToolNames();
     active = new Set(activeNames);
-    for (const name of CHILD_SAFE_PACKAGE_TOOL_NAMES) {
-      if (
-        available.has(name) &&
-        !active.has(name) &&
-        (requestedSet === undefined || requestedSet.has(name))
-      ) {
+    // 父级继承来的工具在子会话里往往只是"已注册但未激活"：内置扩展注册的
+    // tool_search / codemode，以及包提供的 web_search、agent_browser* 等，
+    // 都需要一次显式激活才会进入子会话的活动面。requested 是父级活动面去掉
+    // parent-only 工具后的白名单，按它激活不放宽任何边界；requested 缺失时
+    // 退回 CHILD_SAFE_PACKAGE_TOOL_NAMES。
+    const toActivate =
+      requestedSet ?? new Set<string>([...CHILD_SAFE_PACKAGE_TOOL_NAMES]);
+    for (const name of toActivate) {
+      if (available.has(name) && !active.has(name)) {
         activeNames.push(name);
         active.add(name);
       }
@@ -754,6 +801,9 @@ export async function bindChildSessionExtensions(
     if (activeNames.length !== session.getActiveToolNames().length) {
       session.setActiveToolsByName(activeNames);
     }
+    // Pi can refuse activation (for example, hidden exposure). Requested
+    // activation is not evidence that the final bound Session exposes a tool.
+    active = new Set(session.getActiveToolNames());
   }
   if (!requested) return;
 
@@ -769,8 +819,29 @@ export async function bindChildSessionExtensions(
   const missing = [...new Set(requested)].filter((name) => !active.has(name));
   if (missing.length === 0) return;
 
-  throw new Error(
-    `Child tool preflight failed: requested tool${missing.length === 1 ? "" : "s"} ${boundedToolNames(missing)} ${missing.length === 1 ? "is" : "are"} unavailable after child extensions initialized. Check the Agent Type tools list and child extension loading.`,
+  // An explicit allowlist is a claim about what the child must have, so a name
+  // it names still fails before the first prompt.
+  if (!options?.tolerateInheritedMisses) {
+    throw new Error(
+      `Child tool preflight failed: requested tool${missing.length === 1 ? "" : "s"} ${boundedToolNames(missing)} ${missing.length === 1 ? "is" : "are"} unavailable after child extensions initialized. Check the Agent Type tools list and child extension loading.`,
+    );
+  }
+
+  // `requested` is inherited from the parent's live tool surface, so a name the
+  // child cannot expose is not automatically an error. A parent can hold tools
+  // the child legitimately never gets: runtime-registered ones (an MCP server's
+  // tools, a package that activates tools on demand) or names no child
+  // extension registered at all. Failing the whole spawn over one of those is
+  // worse than running without it, so drop them and report once instead. The
+  // counts keep a genuine loading failure visible instead of silent.
+  const registeredCount = available?.size ?? 0;
+  const unregisteredCount = available
+    ? missing.filter((name) => !available.has(name)).length
+    : 0;
+  console.warn(
+    `[openpi] child tool surface narrowed: ${missing.length} of ${requested.length} requested tool(s) unavailable ` +
+      `(${unregisteredCount} never registered, ${missing.length - unregisteredCount} registered but inactive; ` +
+      `${active.size} active of ${registeredCount} registered). Dropped: ${boundedToolNames(missing)}`,
   );
 }
 

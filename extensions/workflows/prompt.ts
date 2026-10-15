@@ -4,6 +4,7 @@ import {
 } from "../shared/result-budget.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { projectText } from "../shared/text-projection.ts";
+import { workflowCompletionLines } from "./agent-completion.ts";
 import {
   countStates,
   formatElapsed,
@@ -11,6 +12,9 @@ import {
   shortenHome,
   type WorkflowDetails,
 } from "./model.ts";
+
+const COMPLETION_DELIVERY_FACTS_LIMIT_ERROR =
+  "Workflow completion delivery facts exceed the transport payload limit";
 
 /** Model-facing schema descriptions for workflow source and launch policy. */
 export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
@@ -156,6 +160,7 @@ export function buildWorkflowResultMessage(
       );
     }
   }
+  lines.push("", ...workflowCompletionLines(details.runId, details.agents));
   if (details.result !== undefined)
     lines.push("", "Result:", resultJson(details.result));
   return sanitizeTerminalText(lines.join("\n"));
@@ -234,9 +239,7 @@ export function buildProjectedWorkflowCompletionBatch(
     manifestSeparatorBytes;
   const bodyBudget = 48 * 1024 - fixedBytes;
   if (bodyBudget < 0) {
-    throw new Error(
-      "Workflow completion delivery facts exceed the transport payload limit",
-    );
+    throw new Error(COMPLETION_DELIVERY_FACTS_LIMIT_ERROR);
   }
   const allocation = allocateResultBudgets(
     full.map((message) => Buffer.byteLength(message, "utf8")),
@@ -275,26 +278,42 @@ export function buildProjectedWorkflowCompletionBatches(
     entries: (typeof entries)[number][];
     content: string;
   }> = [];
-  let current: (typeof entries)[number][] = [];
-  for (const entry of entries) {
-    const candidate = [...current, entry];
-    try {
-      buildProjectedWorkflowCompletionBatch(candidate, usage);
-      current = candidate;
-    } catch (error) {
-      if (current.length === 0) throw error;
-      batches.push({
-        entries: current,
-        content: buildProjectedWorkflowCompletionBatch(current, usage),
-      });
-      current = [entry];
+  let start = 0;
+  while (start < entries.length) {
+    let low = start + 1;
+    let high = entries.length;
+    let selected:
+      | {
+          entries: (typeof entries)[number][];
+          content: string;
+        }
+      | undefined;
+    let firstError: unknown;
+
+    // A candidate only fails when its stable delivery-facts manifest exceeds
+    // the transport budget, so prefix feasibility is monotonic.
+    while (low <= high) {
+      const end = Math.floor((low + high) / 2);
+      const candidate = entries.slice(start, end);
+      try {
+        const content = buildProjectedWorkflowCompletionBatch(candidate, usage);
+        selected = { entries: candidate, content };
+        low = end + 1;
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          error.message !== COMPLETION_DELIVERY_FACTS_LIMIT_ERROR
+        ) {
+          throw error;
+        }
+        firstError ??= error;
+        high = end - 1;
+      }
     }
-  }
-  if (current.length > 0) {
-    batches.push({
-      entries: current,
-      content: buildProjectedWorkflowCompletionBatch(current, usage),
-    });
+
+    if (!selected) throw firstError;
+    batches.push(selected);
+    start += selected.entries.length;
   }
   return batches;
 }
@@ -328,6 +347,7 @@ export function buildWorkflowStatusSummary(
     details.currentPhase ? `Current phase: ${details.currentPhase}` : undefined,
     details.delivery ? `Delivery: ${details.delivery.state}.` : undefined,
     `Artifacts: ${shortenHome(runDir)}`,
+    ...workflowCompletionLines(details.runId, details.agents),
   ]
     .filter(Boolean)
     .join("\n");

@@ -41,12 +41,16 @@ const target: InspectionTarget = {
   cwd: "/ws",
   model: "Example",
 };
-function show(value = target) {
+function show(value = target, onOpenProviders = vi.fn()) {
   return render(
     createElement(
       I18nextProvider,
       { i18n },
-      createElement(InspectionPanel, { target: value, onClose: vi.fn() }),
+      createElement(InspectionPanel, {
+        target: value,
+        onClose: vi.fn(),
+        onOpenProviders,
+      }),
     ),
   );
 }
@@ -58,7 +62,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("shows independent status failures without claiming that configured credentials were tested", async () => {
+it("keeps provider discovery out of runtime status and links to its page", async () => {
+  const onOpenProviders = vi.fn();
   const fetcher = vi.fn(async (url: string) => {
     expect(url).toContain("sessionId=session-a");
     if (url.startsWith("/api/thinking"))
@@ -69,15 +74,10 @@ it("shows independent status failures without claiming that configured credentia
         state: "restricted",
         refreshRequired: false,
       });
-    return reply({
-      providers: [
-        { id: "example", name: "Example provider", configured: true },
-      ],
-      truncation: { truncated: false },
-    });
+    throw new Error(`Unexpected status request: ${url}`);
   });
   vi.stubGlobal("fetch", fetcher);
-  show();
+  show(target, onOpenProviders);
   expect(
     await screen.findByText("Thinking state is unavailable."),
   ).toBeTruthy();
@@ -86,15 +86,18 @@ it("shows independent status failures without claiming that configured credentia
       "Project resources are restricted pending a trust decision.",
     ),
   ).toBeTruthy();
-  expect(screen.getByText("Configured")).toBeTruthy();
   expect(
     screen.getByText(
       "Configured credentials do not guarantee a successful model request.",
     ),
   ).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("openProviderSettings") }),
+  );
+  expect(onOpenProviders).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(6));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(4));
 });
 
 it("aborts closed-panel reads and ignores late old-session results on reopening", async () => {
@@ -127,6 +130,7 @@ it("aborts closed-panel reads and ignores late old-session results on reopening"
     }),
   );
   const first = show({ ...target, terminalId: "bt-1" });
+  await vi.waitFor(() => expect(oldSignal).toBeDefined());
   first.unmount();
   expect(oldSignal?.aborted).toBe(true);
   show({
@@ -179,6 +183,11 @@ it("rejects another Session's same-id terminal and renders output as plain text"
   expect(
     screen.getByText("15 bytes omitted from this output view."),
   ).toBeTruthy();
+  expect(
+    screen
+      .getByRole("region", { name: i18n.t("standardOutput") })
+      .getAttribute("tabindex"),
+  ).toBe("0");
 });
 
 function thinkingFetcher(thinking: unknown) {
@@ -225,4 +234,90 @@ it("warns with role status when the confirmed level is not available", async () 
   expect(screen.getByText("off · low")).toBeTruthy();
   const warning = screen.getByText(i18n.t("thinkingLevelMismatch"));
   expect(warning.getAttribute("role")).toBe("status");
+});
+
+it("separates saved trust from active Session authority and copies only the canonical setup command", async () => {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url.startsWith("/api/thinking")
+        ? reply({
+            sessionId: target.sessionId,
+            level: "medium",
+            available: ["medium"],
+            supported: true,
+          })
+        : url.startsWith("/api/trust")
+          ? reply({
+              source: "pi-project-trust",
+              workspace: "/ws",
+              state: "trusted",
+              decision: "denied",
+              sessionTrusted: true,
+              refreshRequired: true,
+            })
+          : reply({ providers: [], truncation: { truncated: false } }),
+    ),
+  );
+  show();
+  expect(await screen.findByText("Denied")).toBeTruthy();
+  expect(screen.getByText("Trusted in this Session")).toBeTruthy();
+  expect(screen.getByText(i18n.t("trustRefreshNeeded"))).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Copy setup command" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("/openpi-setup"));
+  expect(screen.getByRole("status").textContent).toContain("Copied");
+  Reflect.deleteProperty(navigator, "clipboard");
+});
+
+it("copies only the visible terminal stream and reports clipboard failure", async () => {
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value: vi.fn(() => false),
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      reply({
+        sessionId: target.sessionId,
+        detail: {
+          id: "bt-1",
+          title: "Build",
+          command: "node build",
+          cwd: "/ws",
+          status: "failed",
+          createdAt: 1,
+          stdout: {
+            text: "visible excerpt",
+            truncated: true,
+            omittedBytes: 500,
+          },
+          stderr: { text: "" },
+          truncated: true,
+        },
+      }),
+    ),
+  );
+  show({ ...target, terminalId: "bt-1" });
+  expect(await screen.findByText("visible excerpt")).toBeTruthy();
+  expect(screen.getByText(i18n.t("unknownState"))).toBeTruthy();
+  expect(
+    screen
+      .getByRole("button", { name: "Copy visible Standard error" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Copy visible Standard output" }),
+  );
+  await waitFor(() =>
+    expect(document.execCommand).toHaveBeenCalledWith("copy"),
+  );
+  expect(screen.getByRole("status").textContent).toContain(
+    i18n.t("copyFailed"),
+  );
+  Reflect.deleteProperty(document, "execCommand");
 });

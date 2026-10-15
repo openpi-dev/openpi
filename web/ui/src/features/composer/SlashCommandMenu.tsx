@@ -25,13 +25,20 @@ export function filterWebCommands(
   query: string,
 ) {
   const normalized = query.trim().toLocaleLowerCase();
-  const matches = normalized
+  const nameMatches = normalized
     ? commands.filter((command) =>
-        [command.name, command.description, command.source].some((value) =>
-          value?.toLocaleLowerCase().includes(normalized),
-        ),
+        command.name.toLocaleLowerCase().includes(normalized),
       )
-    : [...commands];
+    : [];
+  const matches = !normalized
+    ? [...commands]
+    : nameMatches.length > 0
+      ? nameMatches
+      : commands.filter((command) =>
+          [command.description, command.source].some((value) =>
+            value?.toLocaleLowerCase().includes(normalized),
+          ),
+        );
 
   return [
     ...matches.filter((command) => command.availability === "available"),
@@ -194,13 +201,25 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
                   <span>{t(`commandSource_${command.source}`)}</span>
                 </span>
                 {command.description && <span>{command.description}</span>}
+                {unsupported && (
+                  <span>
+                    {t(
+                      `commandUnavailable_${command.unavailableReason ?? "not_integrated"}`,
+                    )}
+                  </span>
+                )}
+                {command.support && (
+                  <span>{t(`commandSupport_${command.support}`)}</span>
+                )}
               </span>
               <span className="slash-command-support">
                 {unsupported
                   ? t("commandUnsupported")
-                  : command.argumentHint
-                    ? t("commandAcceptsArguments")
-                    : null}
+                  : command.action
+                    ? t("commandOpensPanel")
+                    : command.argumentHint
+                      ? t("commandAcceptsArguments")
+                      : null}
               </span>
             </button>
           );
