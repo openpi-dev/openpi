@@ -119,7 +119,7 @@ it("expands a file summary without nested controls and opens the resolved file t
   );
 
   const summary = container.querySelector(".tool-evidence-card > summary")!;
-  expect(summary.textContent).toContain("a\u200bb.md");
+  expect(summary.textContent).toContain("ab.md");
   expect(summary.querySelector("button, a, input, [tabindex]")).toBeNull();
   fireEvent.click(summary);
   expect(open).not.toHaveBeenCalled();
