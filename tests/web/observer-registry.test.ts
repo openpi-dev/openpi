@@ -12,6 +12,7 @@ import {
   projectBackgroundTerminalDetail,
   projectSubagentCapability,
   projectSubagentDetail,
+  projectWorkflowAgentDetail,
   projectWorkflowCapability,
   registerWebCapability,
   registerWebCapabilityActions,
@@ -548,6 +549,204 @@ test("projects bounded canonical activity without private payloads", () => {
       exitCode: 0,
     },
   ]);
+});
+
+test("workflow children retain exact run/call identity and uncertain or interrupted outcomes", () => {
+  const projected = projectWorkflowCapability([
+    {
+      runId: "wf_a1",
+      status: "running",
+      startedAt: 1,
+      agents: [
+        { index: 1, label: "same label", state: "done", startedAt: 1 },
+        { index: 2, label: "same label", state: "uncertain", startedAt: 2 },
+        {
+          index: 3,
+          label: "uncertain stop",
+          state: "error",
+          executionOutcome: "uncertain",
+          startedAt: 3,
+        },
+        {
+          index: 4,
+          label: "cancelled",
+          state: "error",
+          executionOutcome: "cancelled",
+          startedAt: 4,
+        },
+        {
+          index: 5,
+          label: "retained uncertainty",
+          state: "done",
+          completion: { observed: { outcome: "uncertain" } },
+          startedAt: 5,
+        },
+      ],
+    },
+    {
+      runId: "wf_b2",
+      status: "completed",
+      startedAt: 1,
+      agents: [{ index: 1, label: "same label", state: "done", startedAt: 1 }],
+    },
+  ]);
+  const first = projected.items.find((item) => item.runId === "wf_a1")!;
+  const children = new Map(
+    first.children!.items.map((item) => [item.id, item]),
+  );
+  assert.equal(children.get("wf_a1:call:1")?.status, "done");
+  for (const index of [2, 3, 5]) {
+    const child = children.get(`wf_a1:call:${index}`)!;
+    assert.equal(child.status, "unknown");
+    assert.equal(child.outcome, undefined);
+  }
+  assert.equal(children.get("wf_a1:call:4")?.outcome, "interrupted");
+  assert.equal(first.agents.done, 1);
+  assert.equal(first.agents.uncertain, 3);
+  assert.equal(
+    projected.items.find((item) => item.runId === "wf_b2")?.children?.items[0]
+      ?.id,
+    "wf_b2:call:1",
+  );
+});
+
+test("workflow owner failure remains failed when child execution succeeded but its result could not persist", () => {
+  const agent = {
+    index: 1,
+    label: "Oversized authoritative result",
+    state: "error",
+    executionOutcome: "success",
+    completion: { observed: { outcome: "success" } },
+    resultPersistence: "failed",
+    startedAt: 1,
+    finishedAt: 2,
+    transcript: [],
+    transcriptUnavailable: true,
+  };
+  const run = projectWorkflowCapability([
+    { runId: "wf_a1", status: "completed", startedAt: 1, agents: [agent] },
+  ]).items[0]!;
+  assert.equal(run.children?.items[0]?.status, "error");
+  assert.equal(run.children?.items[0]?.outcome, "failed");
+  assert.equal(run.agents.error, 1);
+  assert.equal(run.agents.done, 0);
+  const detail = projectWorkflowAgentDetail("wf_a1", agent);
+  assert.equal(detail?.status, "error");
+  assert.equal(detail?.outcome, "failed");
+});
+
+test("workflow child snapshots bound nested data and never truncate navigable identities", () => {
+  const sources = Array.from({ length: 40 }, (_, runIndex) => ({
+    runId: `wf_${runIndex.toString(16)}`,
+    name: "界".repeat(500),
+    status: "running" as const,
+    startedAt: runIndex,
+    agents: Array.from({ length: 2_000 }, (_, index) => ({
+      index: index + 1,
+      label: "界".repeat(500),
+      state: index === 0 ? "running" : "done",
+      startedAt: index,
+      prompt: "private prompt",
+      preview: "private result",
+      transcript: ["private transcript"],
+    })),
+  }));
+  const snapshot = projectWorkflowCapability(sources);
+  assert.equal(snapshot.items.length, 32);
+  for (const run of snapshot.items) {
+    assert.equal(run.children?.items.length, 32);
+    assert.equal(run.children?.omitted, 1_968);
+    assert.equal(run.children?.truncated, true);
+    assert.equal(run.children?.items[0]?.id, `${run.runId}:call:1`);
+    assert.ok(run.children?.items.every((child) => child.runId === run.runId));
+  }
+  const json = JSON.stringify(snapshot);
+  assert.ok(Buffer.byteLength(json) < 4 * 1024 * 1024);
+  assert.equal(json.includes("private"), false);
+
+  const invalid = projectWorkflowCapability([
+    {
+      runId: "wf_c3",
+      status: "completed",
+      startedAt: 1,
+      memoryProjection: { omitted: { agents: 7 } },
+      agents: [
+        { index: -1, state: "done" },
+        { index: 1.5, state: "done" },
+        { index: 2, state: "done" },
+        { index: 2, state: "done" },
+      ],
+    },
+    {
+      runId: `wf_${"a".repeat(160)}`,
+      status: "completed",
+      startedAt: 1,
+      agents: [{ index: 1, state: "done" }],
+    },
+  ]);
+  assert.ok(invalid.items.every((run) => run.children?.items.length === 0));
+  assert.equal(
+    invalid.items.find((run) => run.runId === "wf_c3")?.children?.omitted,
+    11,
+  );
+});
+
+test("workflow detail shares body limits and marks retained or replayed missing evidence", () => {
+  const detail = projectWorkflowAgentDetail("wf_a1", {
+    index: 1,
+    label: "Inspect package",
+    state: "error",
+    executionOutcome: "uncertain",
+    startedAt: 1,
+    finishedAt: 2,
+    cwd: "/workspace",
+    model: "fixture/reasoner",
+    errorText: "Child termination is uncertain",
+    transcriptUnavailable: false,
+    transcript: Array.from({ length: 80 }, (_, index) => ({
+      kind: "assistant" as const,
+      parts: [
+        { type: "text" as const, text: "界".repeat(30_000) },
+        { type: "toolCall" as const, toolId: `tool-${index}`, name: "read" },
+      ],
+    })),
+  });
+  assert.ok(detail);
+  assert.equal(detail.kind, "workflows");
+  assert.equal(detail.id, "wf_a1:call:1");
+  assert.equal(detail.runId, "wf_a1");
+  assert.equal(detail.status, "unknown");
+  assert.equal(detail.outcome, undefined);
+  assert.equal(detail.transcriptUnavailable, false);
+  assert.equal(detail.truncated, true);
+  assert.ok(detail.omittedEntries > 0);
+  assert.ok(Buffer.byteLength(JSON.stringify(detail)) < 128 * 1024);
+
+  const retainedOwner = {
+    index: 1,
+    label: "Replayed child",
+    state: "done",
+    startedAt: 1,
+    replayed: true,
+    transcript: [],
+    transcriptUnavailable: true,
+    preview: "A bounded preview is not a final result",
+  };
+  const retained = projectWorkflowAgentDetail("wf_b2", retainedOwner);
+  assert.ok(retained);
+  assert.equal(retained.transcriptUnavailable, true);
+  assert.equal(retained.replayed, true);
+  assert.equal(retained.finalText, "");
+  assert.equal(JSON.stringify(retained).includes("bounded preview"), false);
+  assert.equal(
+    projectWorkflowAgentDetail("../wf_b2", {
+      index: 1,
+      state: "done",
+      transcript: [],
+      transcriptUnavailable: true,
+    }),
+    undefined,
+  );
 });
 
 test("projects bounded terminal detail with exact identity and recovery evidence", () => {

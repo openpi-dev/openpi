@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import {
@@ -869,6 +870,179 @@ test("first archive mutation preserves previously persisted archive metadata", a
     assert.deepEqual(
       new Set(persisted),
       new Set([existing, resolve(currentPath)]),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archive ordering and exact project filtering precede pagination and bind cursor scope", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-scope-"));
+  const directory = join(root, "sessions");
+  const alpha = join(root, "alpha");
+  const beta = join(root, "alpha-other");
+  try {
+    const paths: string[] = [];
+    for (const [index, cwd, created, modified] of [
+      [0, alpha, "2020-01-01", "2024-01-03"],
+      [1, beta, "2020-01-04", "2024-01-04"],
+      [2, alpha, "2020-01-03", "2024-01-01"],
+      [3, alpha, "2020-01-02", "2024-01-02"],
+    ] as const) {
+      const manager = SessionManager.create(cwd, directory);
+      persistSession(manager, `retained ${index}`, index + 1);
+      const path = manager.getSessionFile()!;
+      const entries = (await readFile(path, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      for (const entry of entries) {
+        entry.timestamp = `${entry.type === "session" ? created : modified}T00:00:00.000Z`;
+        if (entry.type === "message")
+          entry.message.timestamp = Date.parse(entry.timestamp);
+      }
+      await writeFile(
+        path,
+        `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      );
+      paths.push(path);
+    }
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, directory, SessionManager.inMemory(root)),
+    );
+    for (const path of paths) await adapter.archiveSession(path);
+    const updated = await adapter.listArchivedSessions({
+      cwd: alpha,
+      limit: 1,
+    });
+    assert.equal(updated.status, "ok");
+    if (updated.status !== "ok") return;
+    assert.deepEqual(
+      updated.sessions.map((session) => session.path),
+      [paths[0]],
+    );
+    assert.ok(updated.nextCursor);
+    const updatedNext = await adapter.listArchivedSessions({
+      cwd: alpha,
+      sort: "updated",
+      cursor: updated.nextCursor,
+      limit: 1,
+    });
+    assert.equal(updatedNext.status, "ok");
+    if (updatedNext.status !== "ok") return;
+    assert.deepEqual(
+      updatedNext.sessions.map((session) => session.path),
+      [paths[3]],
+    );
+    const created = await adapter.listArchivedSessions({
+      cwd: alpha,
+      sort: "created",
+      limit: 1,
+    });
+    assert.equal(created.status, "ok");
+    if (created.status !== "ok") return;
+    assert.deepEqual(
+      created.sessions.map((session) => session.path),
+      [paths[2]],
+    );
+    assert.equal(created.truncation.matchesOmitted, 2);
+    assert.ok(created.nextCursor);
+    const createdNext = await adapter.listArchivedSessions({
+      cwd: alpha,
+      sort: "created",
+      cursor: created.nextCursor,
+      limit: 1,
+    });
+    assert.equal(createdNext.status, "ok");
+    if (createdNext.status !== "ok") return;
+    assert.deepEqual(
+      createdNext.sessions.map((session) => session.path),
+      [paths[3]],
+    );
+    for (const options of [
+      { cwd: alpha, sort: "updated" as const },
+      { cwd: beta, sort: "created" as const },
+      { query: "changed", cwd: alpha, sort: "created" as const },
+    ])
+      assert.deepEqual(
+        await adapter.listArchivedSessions({
+          ...options,
+          cursor: created.nextCursor,
+        }),
+        { status: "stale_cursor" },
+      );
+
+    const legacyCursor = Buffer.from(
+      JSON.stringify({
+        version: 1,
+        sessionPath: paths[1],
+        queryHash: createHash("sha256").update("").digest("hex"),
+      }),
+    ).toString("base64url");
+    const legacy = await adapter.listArchivedSessions({
+      cursor: legacyCursor,
+      limit: 1,
+    });
+    assert.equal(legacy.status, "ok");
+    if (legacy.status !== "ok") return;
+    assert.deepEqual(
+      legacy.sessions.map((session) => session.path),
+      [paths[0]],
+    );
+    assert.deepEqual(
+      await adapter.listArchivedSessions({ cursor: legacyCursor, cwd: alpha }),
+      { status: "stale_cursor" },
+    );
+    assert.deepEqual(
+      await adapter.listArchivedSessions({
+        cursor: legacyCursor,
+        sort: "created",
+      }),
+      { status: "stale_cursor" },
+    );
+    for (const cwd of [
+      "",
+      "relative",
+      `${root}/\ninvalid`,
+      `/${"x".repeat(4096)}`,
+    ]) {
+      assert.deepEqual(await adapter.listArchivedSessions({ cwd }), {
+        status: "invalid",
+      });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace projection retains an archive-only project beyond the bounded Session rows", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-project-"));
+  const directory = join(root, "sessions");
+  const archivedProject = join(root, "archive-only");
+  try {
+    const manager = SessionManager.create(archivedProject, directory);
+    persistSession(manager, "old archive", 1);
+    const path = manager.getSessionFile()!;
+    const current = SessionManager.inMemory(root);
+    const adapter = new PiWebAdapter(runtimeFor(root, directory, current));
+    await adapter.archiveSession(path);
+    for (let index = 0; index < WEB_MAX_SESSIONS; index++) {
+      const recent = SessionManager.create(root, directory);
+      persistSession(recent, `recent ${index}`, index + 2);
+    }
+    const snapshot = await adapter.getSnapshot();
+    assert.equal(
+      snapshot.sessions.some((session) => session.path === path),
+      false,
+    );
+    assert.ok(
+      snapshot.workspaces.some(
+        (workspace) => workspace.path === archivedProject,
+      ),
+    );
+    assert.equal(
+      await adapter.requireWorkspace(archivedProject),
+      archivedProject,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

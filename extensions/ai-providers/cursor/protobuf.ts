@@ -301,6 +301,11 @@ function compileCodec<T extends ProtoMessage>(
       const tag = reader.uint32();
       const fieldNumber = tag >>> 3;
       const wireType = tag & 7;
+      if (fieldNumber === 0) {
+        throw new Error(
+          `Invalid protobuf field number 0 at byte ${reader.pos}`,
+        );
+      }
       if (!isWireType(wireType)) {
         throw new Error(
           `Unsupported protobuf wire type ${wireType} at byte ${reader.pos}`,
@@ -447,13 +452,12 @@ function compileMapField(desc: MapFieldDesc): CompiledField {
     decode(message, reader, wireType, _fieldNumber) {
       assertWireType(wireType, 2);
       const target = mapField(message, name);
-      const limit = reader.uint32();
-      const end = reader.pos + limit;
+      const entryReader = new Reader(reader.bytes());
       let entryKey = "";
       let entryValue: unknown = valCodec.defaultValue;
 
-      while (reader.pos < end) {
-        const tag = reader.uint32();
+      while (entryReader.pos < entryReader.len) {
+        const tag = entryReader.uint32();
         const entryNumber = tag >>> 3;
         const entryWireType = tag & 7;
         if (!isWireType(entryWireType)) {
@@ -463,12 +467,12 @@ function compileMapField(desc: MapFieldDesc): CompiledField {
         }
         if (entryNumber === 1) {
           assertWireType(entryWireType, key.wireType);
-          entryKey = requireString(key.decode(reader));
+          entryKey = requireString(key.decode(entryReader));
         } else if (entryNumber === 2) {
           assertWireType(entryWireType, valCodec.wireType);
-          entryValue = valCodec.decode(reader);
+          entryValue = valCodec.decode(entryReader);
         } else {
-          reader.skip(entryWireType);
+          entryReader.skip(entryWireType);
         }
       }
 
@@ -946,6 +950,9 @@ class Reader {
     let shift = 0n;
     while (this.pos < this.len) {
       const byte = this.buf[this.pos++];
+      if (shift === 63n && byte > 0x01) {
+        throw new Error("Varint exceeds 64 bits");
+      }
       result |= BigInt(byte & 0x7f) << shift;
       if ((byte & 0x80) === 0) return BigInt.asIntN(64, result);
       shift += 7n;

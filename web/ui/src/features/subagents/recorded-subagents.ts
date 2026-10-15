@@ -20,11 +20,15 @@ export function recordedSubagents(messages: readonly WebLiveMessage[]) {
   for (const message of messages) {
     const spawn =
       message.role === "toolResult" && message.toolName === "subagent_spawn";
+    const send =
+      message.role === "toolResult" && message.toolName === "subagent_send";
+    const finish = message.customType === "subagent-finished";
     const result =
       (message.role === "toolResult" &&
         ["subagent_wait", "subagent_check"].includes(message.toolName ?? "")) ||
-      message.customType === "subagent-result";
-    if ((!spawn && !result) || message.isError) continue;
+      message.customType === "subagent-result" ||
+      finish;
+    if ((!spawn && !send && !result) || message.isError) continue;
     const details = object(message.details);
     for (const entry of Array.isArray(details.results)
       ? details.results
@@ -47,19 +51,29 @@ export function recordedSubagents(messages: readonly WebLiveMessage[]) {
             : (previous?.title ?? item.id),
       };
       if (spawn) record.receipt = message.content;
-      else {
-        record.result =
-          typeof details.displayContent === "string"
-            ? details.displayContent
-            : message.content;
+      else if (send) {
+        // A successful steer/restart supersedes terminal evidence from an older turn.
+        // RunStarted is pumped asynchronously; the acknowledgement may still
+        // contain the previous turn's terminal snapshot.
+        record.state = item.status === "running" ? "running" : undefined;
+        record.result = undefined;
+      } else {
+        // A hidden owner finish proves state, without supplying a final answer.
+        if (!finish)
+          record.result =
+            typeof details.displayContent === "string"
+              ? details.displayContent
+              : message.content;
         record.state =
-          item.outcome === "interrupted"
-            ? "interrupted"
-            : item.status === "done" ||
-                item.status === "error" ||
-                item.status === "running"
-              ? item.status
-              : undefined;
+          item.outcome === "uncertain"
+            ? undefined
+            : item.outcome === "interrupted"
+              ? "interrupted"
+              : item.status === "done" ||
+                  item.status === "error" ||
+                  item.status === "running"
+                ? item.status
+                : undefined;
       }
       records.delete(item.id);
       records.set(item.id, record);

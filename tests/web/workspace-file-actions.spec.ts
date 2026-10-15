@@ -274,10 +274,102 @@ it("cancels a dropped file read when the owning native Session changes before up
   expect(screen.queryByText("cancel-read.txt")).toBeNull();
 });
 
+const toolbarAction = async (menu: string, action: string) => {
+  fireEvent.click(screen.getByRole("button", { name: i18n.t(menu) }));
+  const item = await screen.findByRole("menuitem", { name: i18n.t(action) });
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      within(item.closest('[role="menu"]') as HTMLElement).getAllByRole(
+        "menuitem",
+      )[0],
+    ),
+  );
+  fireEvent.click(item);
+};
+
+it("groups file actions into named menus and returns focus to New when creation is cancelled", async () => {
+  render(node());
+  await screen.findByRole("button", { name: "report.md" });
+  for (const key of ["filesCreateMenu", "filesImportMenu", "filesMoreMenu"]) {
+    const trigger = screen.getByRole("button", { name: i18n.t(key) });
+    expect(trigger.textContent).toContain(i18n.t(key));
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+  }
+  expect(
+    screen.queryByRole("button", { name: i18n.t("filesNewFile") }),
+  ).toBeNull();
+  const trigger = screen.getByRole("button", {
+    name: i18n.t("filesCreateMenu"),
+  });
+  await toolbarAction("filesCreateMenu", "filesNewFile");
+  const name = screen.getByRole("textbox", { name: i18n.t("filesFileName") });
+  expect(document.activeElement).toBe(name);
+  fireEvent.keyDown(name, { key: "Escape" });
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  expect(
+    screen.queryByRole("textbox", { name: i18n.t("filesFileName") }),
+  ).toBeNull();
+  expect(WebClient.prototype.mutateWorkspaceFile).not.toHaveBeenCalled();
+});
+
+it("shows saving and saved text while preserving draft save from preview and hides clean preview save", async () => {
+  entries.push({ name: "save-state.md", path: "save-state.md", kind: "file" });
+  let finish!: (value: { revision: string }) => void;
+  const save = vi.spyOn(WebClient.prototype, "saveArtifact").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  render(node());
+  fireEvent.click(await screen.findByRole("button", { name: "save-state.md" }));
+  await screen.findByRole("button", { name: i18n.t("filesEdit") });
+  expect(
+    screen.queryByRole("button", { name: i18n.t("filesSave") }),
+  ).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("filesEdit") }));
+  expect(
+    screen.getByRole("button", { name: i18n.t("filesSaved") }),
+  ).toHaveProperty("disabled", true);
+  fireEvent.change(
+    screen.getByRole("textbox", { name: i18n.t("filesEditor") }),
+    {
+      target: { value: "# Saved preview" },
+    },
+  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("filesPreview") }));
+  const button = screen.getByRole("button", { name: i18n.t("filesSave") });
+  expect(button.textContent).toContain(i18n.t("filesSave"));
+  fireEvent.click(button);
+  expect(
+    screen.getByRole("button", { name: i18n.t("filesSaving") }),
+  ).toHaveProperty("disabled", true);
+  fireEvent.click(button);
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionId: "same-id",
+      path: "/workspace/save-state.md",
+      handle: "save-state.md",
+    }),
+    "a".repeat(64),
+    "# Saved preview",
+  );
+  await act(async () => finish({ revision: "b".repeat(64) }));
+  await screen.findByText(i18n.t("filesSaved"));
+  expect(screen.getByText(i18n.t("filesSaved"))).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("filesSave") }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("filesSaved") }),
+  ).toBeNull();
+});
+
 it("creates in the selected directory, opens the file and returns keyboard focus to its row", async () => {
   render(node());
   fireEvent.click(await screen.findByRole("button", { name: "src" }));
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("filesNewFile") }));
+  await toolbarAction("filesCreateMenu", "filesNewFile");
   const field = screen.getByRole("textbox", { name: i18n.t("filesFileName") });
   expect(document.activeElement).toBe(field);
   fireEvent.change(field, { target: { value: "新文件.md" } });
@@ -300,9 +392,7 @@ it("creates in the selected directory, opens the file and returns keyboard focus
 it("creates a directory and rejects same-name and path inputs without discarding the name", async () => {
   render(node());
   await screen.findByRole("button", { name: "src" });
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("filesNewDirectory") }),
-  );
+  await toolbarAction("filesCreateMenu", "filesNewDirectory");
   const field = screen.getByRole("textbox", {
     name: i18n.t("filesDirectoryName"),
   }) as HTMLInputElement;
@@ -426,12 +516,24 @@ it("does not apply a delayed write result to another native Session path sharing
   );
   const view = render(node());
   await screen.findByRole("button", { name: "src" });
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("filesNewFile") }));
+  await toolbarAction("filesCreateMenu", "filesNewFile");
   fireEvent.change(
     screen.getByRole("textbox", { name: i18n.t("filesFileName") }),
     { target: { value: "old.txt" } },
   );
   fireEvent.click(screen.getByRole("button", { name: i18n.t("filesCreate") }));
+  const row = screen.getByRole("button", { name: "src" });
+  for (const key of ["filesCreateMenu", "filesImportMenu"]) {
+    const trigger = screen.getByRole("button", { name: i18n.t(key) });
+    expect(trigger).toHaveProperty("disabled", true);
+    row.focus();
+    trigger.focus();
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("menu")).toBeNull();
+  }
+  expect(WebClient.prototype.mutateWorkspaceFile).toHaveBeenCalledTimes(1);
   view.rerender(node("/session/b"));
   await act(async () =>
     finish({
@@ -447,22 +549,23 @@ it("does not apply a delayed write result to another native Session path sharing
     screen.queryByText(i18n.t("filesCreated", { path: "old.txt" })),
   ).toBeNull();
   expect(
-    screen.getByRole("button", { name: i18n.t("filesNewFile") }),
+    screen.getByRole("button", { name: i18n.t("filesCreateMenu") }),
   ).toHaveProperty("disabled", false);
 });
 
 it("keeps write controls disabled for a viewing session while path copying remains available", async () => {
   const view = render(node("/session/a", false));
-  await screen.findByRole("button", { name: "report.md" });
-  expect(
-    screen.getByRole("button", { name: i18n.t("filesNewFile") }),
-  ).toHaveProperty("disabled", true);
-  expect(
-    screen.getByRole("button", { name: i18n.t("filesNewDirectory") }),
-  ).toHaveProperty("disabled", true);
-  expect(
-    screen.getByRole("button", { name: i18n.t("filesImport") }),
-  ).toHaveProperty("disabled", true);
+  const row = await screen.findByRole("button", { name: "report.md" });
+  for (const key of ["filesCreateMenu", "filesImportMenu"]) {
+    const trigger = screen.getByRole("button", { name: i18n.t(key) });
+    expect(trigger).toHaveProperty("disabled", true);
+    row.focus();
+    trigger.focus();
+    expect(document.activeElement).toBe(row);
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("menu")).toBeNull();
+  }
   const preview = view.container.querySelector(".files-preview-empty")!;
   const file = new File(["not writable"], "readonly-drop.txt");
   expect(fireEvent.dragOver(preview, { dataTransfer: droppedFile(file) })).toBe(
@@ -506,7 +609,7 @@ it("does not refresh another workspace when a delayed result shares the Session 
   );
   const view = render(node());
   await screen.findByRole("button", { name: "src" });
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("filesNewFile") }));
+  await toolbarAction("filesCreateMenu", "filesNewFile");
   fireEvent.change(
     screen.getByRole("textbox", { name: i18n.t("filesFileName") }),
     { target: { value: "old-workspace.txt" } },

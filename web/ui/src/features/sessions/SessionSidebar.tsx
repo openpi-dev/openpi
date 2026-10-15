@@ -50,7 +50,6 @@ import {
   WebClient,
 } from "../../protocol/client.ts";
 import type { WebStoreActions } from "../../store/web-store.ts";
-import type { CompletedResultExposure } from "../transcript/Transcript.tsx";
 import { TranscriptSearchDialog } from "./TranscriptSearchDialog.tsx";
 
 interface SessionSidebarProps {
@@ -63,7 +62,7 @@ interface SessionSidebarProps {
   mobileOpen: boolean;
   settingsDisabled: boolean;
   connected?: boolean;
-  completedResultSeen?: CompletedResultExposure | null;
+  sessionViewVisible?: boolean;
   returnFocusRef?: RefObject<HTMLButtonElement | null>;
   onOpenSettings: () => void;
   actions: WebStoreActions;
@@ -153,39 +152,47 @@ export function SessionSidebar(props: SessionSidebarProps) {
     selectedSummary ?? { id: "", path: "" },
   );
   useEffect(() => {
-    const seen = props.completedResultSeen;
     const turn = selectedSummary?.execution?.lastTurn;
     if (
-      !seen ||
+      !props.sessionViewVisible ||
       !selectedSummary ||
-      props.selectedPath !== seen.sessionPath ||
-      selectedSummary.id !== seen.sessionId ||
-      selectedSummary.path !== seen.sessionPath ||
+      props.selectedPath !== selectedSummary.path ||
       turn?.outcome !== "completed" ||
-      turn.commandId !== seen.commandId ||
-      turn.finishedAt !== seen.finishedAt ||
-      turn.resultEntryId !== seen.resultEntryId ||
       seenCompletions.has(completedSelection) ||
       props.connected === false
     )
       return;
-    setSeenCompletions((previous) => {
-      const next = new Set([...previous, completedSelection].slice(-500));
-      try {
-        window.sessionStorage.setItem(
-          seenCompletionsKey,
-          JSON.stringify([...next]),
-        );
-      } catch {
-        /* Reading still works without browser storage. */
-      }
-      return next;
-    });
+    const acknowledge = () => {
+      if (
+        document.visibilityState !== "visible" ||
+        document.querySelector("dialog[open]")
+      )
+        return;
+      setSeenCompletions((previous) => {
+        const next = new Set([...previous, completedSelection].slice(-500));
+        try {
+          window.sessionStorage.setItem(
+            seenCompletionsKey,
+            JSON.stringify([...next]),
+          );
+        } catch {
+          /* Reading still works without browser storage. */
+        }
+        return next;
+      });
+    };
+    acknowledge();
+    document.addEventListener("visibilitychange", acknowledge);
+    document.addEventListener("close", acknowledge, true);
+    return () => {
+      document.removeEventListener("visibilitychange", acknowledge);
+      document.removeEventListener("close", acknowledge, true);
+    };
   }, [
     completedSelection,
     selectedSummary,
     seenCompletions,
-    props.completedResultSeen,
+    props.sessionViewVisible,
     props.selectedPath,
     props.connected,
   ]);

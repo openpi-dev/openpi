@@ -101,11 +101,11 @@ export default function contextPivot(pi: ExtensionAPI) {
     });
   };
 
-  pi.on("session_start", () => {
+  pi.on("session_start", (_event, ctx) => {
     generation += 1;
     pending = undefined;
     compacting = false;
-    setVisibleForContext();
+    setVisibleForContext(ctx);
   });
 
   pi.on("agent_start", (_event, ctx) => {
