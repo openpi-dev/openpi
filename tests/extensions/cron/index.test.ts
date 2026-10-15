@@ -204,6 +204,29 @@ test("cron shutdown clears jobs and stops future delivery", async () => {
   assert.equal(h.messages.length, 0);
 });
 
+test("a new session cannot inherit scheduled prompts from the previous session", async () => {
+  const h = harness();
+  await h.emit("session_start");
+  await h.run("in 30s previous-session reminder");
+  assert.equal(h.polling(), true);
+
+  // Pi uses session_start for /new and /resume while the extension instance
+  // remains loaded. The old session's in-memory scheduler must be discarded.
+  await h.emit("session_start");
+  assert.equal(h.polling(), false);
+  await h.run("list");
+  assert.equal(h.notifications.at(-1), "No scheduled prompts in this session.");
+
+  await h.run("in 30s current-session reminder");
+  h.setNow(30_000);
+  h.poll();
+  assert.deepEqual(
+    (h.messages[0]?.message as { details: { id: number; prompt: string } })
+      .details,
+    { id: 1, prompt: "current-session reminder", recurring: false },
+  );
+});
+
 test("cron does not create a job when the prompt exceeds the limit", async () => {
   const h = harness();
   await h.emit("session_start");

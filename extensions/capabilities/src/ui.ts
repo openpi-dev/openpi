@@ -109,7 +109,7 @@ function highlightNameRanges(
   if (!mentions.length) return line;
   // Native editor SGR and cursor markers may sit inside a name. Preserve them
   // verbatim and color only the visible text pieces, never terminal bytes.
-  const parts = line.split(/(\u001b\[[0-9;]*m|\u001b_pi:c\u0007)/u);
+  const parts = line.split(/(\u001b\[[0-9;]*m|\u001b_pi:(?:c|\/?fc)\u0007)/u);
   if (parts.filter((_, index) => index % 2 === 0).join("") !== plain)
     return line;
   let offset = 0;
@@ -196,8 +196,10 @@ function highlightDraft(
   });
   const markers = rows.flatMap((row, index) => {
     const marker = row.indexOf(CURSOR_MARKER);
+    const fakeCursor = row.indexOf("\u001b_pi:fc\u0007");
     const reverseCursor = row.indexOf("\u001b[7m");
-    const position = marker >= 0 ? marker : reverseCursor;
+    const position =
+      marker >= 0 ? marker : fakeCursor >= 0 ? fakeCursor : reverseCursor;
     return position < 0
       ? []
       : [{ index, prefix: stripTerminalSequences(row.slice(0, position)) }];

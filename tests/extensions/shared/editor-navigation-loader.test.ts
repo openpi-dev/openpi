@@ -124,6 +124,12 @@ test("native extension graphs cycle management strips through the composed edito
       },
     },
   } as unknown as ExtensionContext;
+  let networkRequests = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    networkRequests++;
+    throw new Error("Navigation fixture forbids network requests");
+  };
   let loaded: ReturnType<DefaultResourceLoader["getExtensions"]> | undefined;
   const emit = async (name: "session_start" | "session_shutdown" | "input") => {
     for (const extension of loaded?.extensions ?? []) {
@@ -309,7 +315,9 @@ test("native extension graphs cycle management strips through the composed edito
     down();
     down();
     assert.deepEqual(focused(), ["workflow-navigation"]);
+    assert.equal(networkRequests, 0);
   } finally {
+    globalThis.fetch = originalFetch;
     await emit("session_shutdown");
     for (const widget of widgets.values()) widget.dispose?.();
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
