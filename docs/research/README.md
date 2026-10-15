@@ -128,3 +128,5 @@ The following records predate [`Decision 0001`](../decisions/0001-documentation-
 - [`CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md) — version-scoped Workflow contract interview and evidence boundary.
 
 When research changes a project constraint, preserve the adopted choice in a Decision. Amend or supersede a historical record rather than silently rewriting its original conclusion.
+
+The fixed-main legacy baseline is supplemented only by explicit historical integration admissions in `scripts/knowledge-historical-admissions.json`, with public source commits and scoped PR review provenance. These admissions preserve legacy status; they do not validate content or admit new sibling paths.

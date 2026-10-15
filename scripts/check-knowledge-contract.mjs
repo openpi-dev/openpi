@@ -43,14 +43,22 @@ const RECORD_STATUSES = new Set(["draft", "validated", "superseded"]);
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 // Frozen path identities only. Content changes do not automatically migrate legacy
 // records; explicit scoped review removes a path from this list when migrating it.
-const LEGACY_RECORDS = new Set(
-  JSON.parse(
-    readFileSync(
-      new URL("./knowledge-legacy-records.json", import.meta.url),
-      "utf8",
-    ),
-  ).records,
+const legacyBaseline = JSON.parse(
+  readFileSync(
+    new URL("./knowledge-legacy-records.json", import.meta.url),
+    "utf8",
+  ),
 );
+const historicalAdmissions = JSON.parse(
+  readFileSync(
+    new URL("./knowledge-historical-admissions.json", import.meta.url),
+    "utf8",
+  ),
+);
+const LEGACY_RECORDS = new Set([
+  ...legacyBaseline.records,
+  ...historicalAdmissions.admissions.flatMap((admission) => admission.records),
+]);
 const MARKDOWN_LINK_PATTERN =
   /!?\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
 
@@ -93,21 +101,28 @@ function isTemplateOrIndex(directory, path) {
 
 function markdownProse(source) {
   const withoutComments = source.replace(/<!--[\s\S]*?-->/g, "");
-  const prose = withoutComments
-    .split(/\r?\n/)
-    .reduce(
-      (state, line) => {
-        if (/^\s*(```|~~~)/.test(line)) {
-          state.fenced = !state.fenced;
-          return state;
-        }
-        if (!state.fenced) state.lines.push(line.replace(/`[^`]*`/g, ""));
-        return state;
-      },
-      { fenced: false, lines: [] },
-    )
-    .lines.join("\n");
-  return prose;
+  const lines = [];
+  let fence;
+  for (const line of withoutComments.split(/\r?\n/)) {
+    if (fence) {
+      const closing = /^ {0,3}(`+|~+)[ \t]*$/.exec(line)?.[1];
+      if (
+        closing &&
+        closing[0] === fence.marker &&
+        closing.length >= fence.length
+      )
+        fence = undefined;
+      continue;
+    }
+    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    // Backtick-fence info strings cannot themselves contain backticks.
+    if (opening && !(opening[1][0] === "`" && opening[2].includes("`"))) {
+      fence = { marker: opening[1][0], length: opening[1].length };
+      continue;
+    }
+    lines.push(line.replace(/`[^`]*`/g, ""));
+  }
+  return lines.join("\n");
 }
 
 function markdownLinkTargets(source) {

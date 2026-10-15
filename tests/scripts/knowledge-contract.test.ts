@@ -3,9 +3,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  writeFileSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -418,6 +418,95 @@ test("index links normalize relative spelling and local absolute body paths fail
   assert.ok(
     checkKnowledgeContract(root).problems.includes(
       "docs/research/record.md: broken repository link /tmp/private-evidence.md",
+    ),
+  );
+});
+
+test("only matching sufficiently long fences expose prose after closure", () => {
+  const headings =
+    "## Verified facts\n## Inferences\n## Recommendations\n## Unknowns\n";
+  for (const [opening, inner, closing] of [
+    ["````md", "```", "````"],
+    ["~~~~md", "~~~", "~~~~"],
+    ["````md", "~~~~", "````"],
+    ["~~~~md", "```", "~~~~"],
+    ["````md", "```` trailing text", "````"],
+  ]) {
+    const root = fixture();
+    const fenced = `${opening}\n${inner}\n${headings}[record](record.md)\n${closing}\n`;
+    writeFileSync(join(root, "docs/research/README.md"), fenced);
+    writeFileSync(
+      join(root, "docs/research/record.md"),
+      `${commonMetadata}---\n${fenced}`,
+    );
+    const { problems } = checkKnowledgeContract(root);
+    assert.ok(
+      problems.includes(
+        "docs/research/record.md: not reachable from docs/research/README.md",
+      ),
+      fenced,
+    );
+    for (const section of [
+      "verified facts",
+      "inferences",
+      "recommendations",
+      "unknowns",
+    ]) {
+      assert.ok(
+        problems.includes(
+          `docs/research/record.md: missing section ${section}`,
+        ),
+        fenced,
+      );
+    }
+    // A longer matching closing fence ends the block; subsequent real prose
+    // is eligible for both index reachability and required Research headings.
+    writeFileSync(
+      join(root, "docs/research/README.md"),
+      `${opening}\n${inner}\n${closing}${closing[0]}\n[record](record.md)\n`,
+    );
+    writeFileSync(
+      join(root, "docs/research/record.md"),
+      `${commonMetadata}---\n${opening}\n${inner}\n${closing}${closing[0]}\n${headings}`,
+    );
+    assert.deepEqual(checkKnowledgeContract(root).problems, [], fenced);
+  }
+});
+
+test("explicit historical integration admissions compose with frozen legacy paths, not new siblings", () => {
+  const root = fixture();
+  const baseline = JSON.parse(
+    readFileSync(
+      new URL("../../scripts/knowledge-legacy-records.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const historical = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../scripts/knowledge-historical-admissions.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const admitted = historical.admissions.flatMap(
+    (entry: { records: string[] }) => entry.records,
+  );
+  assert.equal(baseline.records.length, 66);
+  assert.equal(admitted.length, 14);
+  assert.equal(new Set([...baseline.records, ...admitted]).size, 80);
+  for (const record of [...baseline.records, ...admitted]) {
+    const path = join(root, record);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, "# Historical record with an ordinary correction\n");
+  }
+  assert.equal(assertKnowledgeContract(root).records.length, 2);
+  const sibling = "docs/research/PI_BROWSER_TOOLS_NEW.md";
+  writeFileSync(join(root, sibling), "# New sibling\n");
+  assert.ok(
+    checkKnowledgeContract(root).problems.includes(
+      `${sibling}: missing frontmatter`,
     ),
   );
 });
