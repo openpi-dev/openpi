@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import * as http from "node:http";
 import { after, before, test } from "node:test";
+import { Type } from "typebox";
 import type {
   Api,
   AssistantMessageEventStream,
@@ -668,7 +669,10 @@ test("convertTools preserves ref sibling conjunctions and boolean schemas", () =
             denied: { $ref: "#/$defs/Never" },
           },
           $defs: {
-            Value: { type: "object", properties: { required: { type: "string" } } },
+            Value: {
+              type: "object",
+              properties: { required: { type: "string" } },
+            },
             Never: false,
           },
         },
@@ -690,13 +694,148 @@ test("convertTools preserves ref sibling conjunctions and boolean schemas", () =
 
 test("convertTools keeps ordinary no-ref schemas outside ref expansion limits", () => {
   const properties = Object.fromEntries(
-    Array.from({ length: 600 }, (_, index) => [`field${index}`, { type: "string" }]),
+    Array.from({ length: 600 }, (_, index) => [
+      `field${index}`,
+      { type: "string" },
+    ]),
   );
   assert.doesNotThrow(() =>
     convertTools(
-      [{ name: "ordinary", description: "ordinary", parameters: { type: "object", properties } } as never],
+      [
+        {
+          name: "ordinary",
+          description: "ordinary",
+          parameters: { type: "object", properties },
+        } as never,
+      ],
       true,
     ),
+  );
+});
+
+for (const keyword of ["default", "examples", "const", "enum"]) {
+  for (const ref of ["#/$defs/Missing", "https://example.test/literal"]) {
+    test(`buildRequestBody keeps ${keyword} literal data opaque (${ref})`, () => {
+      const literal = { $ref: ref };
+      const value = ["examples", "enum"].includes(keyword)
+        ? [literal]
+        : literal;
+      const tools = [
+        {
+          name: "literal_data",
+          description: "Literal data",
+          parameters: Type.Object({
+            payload: Type.Object({}, { [keyword]: value }),
+          }),
+        },
+      ];
+      assert.doesNotThrow(() =>
+        buildRequestBody(
+          GEMINI_MODEL,
+          { ...SIMPLE_CONTEXT, tools },
+          undefined,
+          "p",
+        ),
+      );
+      assert.deepEqual(
+        convertTools(tools, true)?.[0]?.functionDeclarations[0]?.parameters,
+        {
+          type: "object",
+          properties: {
+            payload: { type: "object", properties: {}, [keyword]: value },
+          },
+          required: ["payload"],
+        },
+      );
+    });
+  }
+}
+
+test("buildRequestBody expands schema refs while preserving literal ref data", () => {
+  for (const keyword of ["default", "examples", "const", "enum"]) {
+    const literal = { $ref: "https://example.test/literal" };
+    const value = ["examples", "enum"].includes(keyword) ? [literal] : literal;
+    const tools = [
+      {
+        name: "mixed_refs",
+        description: "Mixed refs",
+        parameters: Type.Object(
+          {
+            answer: Type.Ref("#/$defs/Answer"),
+            payload: Type.Object({}, { [keyword]: value }),
+          },
+          { $defs: { Answer: Type.String({ enum: ["pass", "fail"] }) } },
+        ),
+      },
+    ];
+    const body = buildRequestBody(
+      GEMINI_MODEL,
+      { ...SIMPLE_CONTEXT, tools },
+      undefined,
+      "p",
+    );
+    assert.match(JSON.stringify(body), /"enum":\["pass","fail"\]/);
+    assert.deepEqual(
+      convertTools(tools, true)?.[0]?.functionDeclarations[0]?.parameters,
+      {
+        type: "object",
+        properties: {
+          answer: { type: "string", enum: ["pass", "fail"] },
+          payload: { type: "object", properties: {}, [keyword]: value },
+        },
+        required: ["answer", "payload"],
+      },
+    );
+  }
+});
+
+test("buildRequestBody budgets opaque data only when a schema ref expands", () => {
+  const payload = Type.Object(
+    {},
+    {
+      default: { $ref: "literal-instance-data", value: "x".repeat(256 * 1024) },
+    },
+  );
+  assert.doesNotThrow(() =>
+    buildRequestBody(
+      GEMINI_MODEL,
+      {
+        ...SIMPLE_CONTEXT,
+        tools: [
+          {
+            name: "ordinary",
+            description: "ordinary",
+            parameters: Type.Object({ payload }),
+          },
+        ],
+      },
+      undefined,
+      "p",
+    ),
+  );
+  assert.throws(
+    () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            {
+              name: "expanded",
+              description: "expanded",
+              parameters: Type.Object(
+                { payload, answer: Type.Ref("#/$defs/Answer") },
+                {
+                  $defs: { Answer: Type.String() },
+                },
+              ),
+            },
+          ],
+        },
+        undefined,
+        "p",
+      ),
+    /expansion byte limit/,
   );
 });
 
@@ -714,6 +853,143 @@ test("convertTools rejects inherited local ref targets", () => {
         true,
       ),
     /unresolved \$ref/,
+  );
+});
+
+test("buildRequestBody treats property names and applicator arrays as schema positions", () => {
+  const tools = [
+    {
+      name: "schema_positions",
+      description: "schema positions",
+      parameters: Type.Object(
+        {
+          default: Type.Ref("#/$defs/Text"),
+          examples: Type.Array(Type.Ref("#/$defs/Text")),
+          $ref: Type.Intersect([Type.Ref("#/$defs/Text"), Type.String()]),
+        },
+        { $defs: { Text: Type.String({ enum: ["retained"] }) } },
+      ),
+    },
+  ];
+  const serialized = JSON.stringify(
+    buildRequestBody(
+      GEMINI_MODEL,
+      { ...SIMPLE_CONTEXT, tools },
+      undefined,
+      "p",
+    ),
+  );
+  assert.match(
+    serialized,
+    /"default":\{"type":"string","enum":\["retained"\]\}/,
+  );
+  assert.match(serialized, /"items":\{"type":"string","enum":\["retained"\]\}/);
+  assert.match(
+    serialized,
+    /"allOf":\[\{"type":"string","enum":\["retained"\]\}/,
+  );
+});
+
+test("buildRequestBody resolves escaped own pointers", () => {
+  const tools = [
+    {
+      name: "escaped_pointer",
+      description: "escaped pointer",
+      parameters: Type.Object(
+        {
+          answer: Type.Ref("#/$defs/a~1b~0c"),
+        },
+        { $defs: { "a/b~c": Type.String({ enum: ["retained"] }) } },
+      ),
+    },
+  ];
+  const serialized = JSON.stringify(
+    buildRequestBody(
+      GEMINI_MODEL,
+      { ...SIMPLE_CONTEXT, tools },
+      undefined,
+      "p",
+    ),
+  );
+  assert.match(
+    serialized,
+    /"answer":\{"type":"string","enum":\["retained"\]\}/,
+  );
+  assert.doesNotMatch(serialized, /"\$defs"/);
+});
+
+test("buildRequestBody enforces the expansion depth boundary", () => {
+  const requestAtDepth = (depth: number) => {
+    let value: Record<string, unknown> = { type: "string" };
+    for (let index = 0; index < depth; index++) value = { items: value };
+    return () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            {
+              name: "depth",
+              description: "depth",
+              parameters: Type.Object(
+                { answer: Type.Ref("#/$defs/Value") },
+                {
+                  $defs: { Value: value },
+                },
+              ),
+            },
+          ],
+        },
+        undefined,
+        "p",
+      );
+  };
+  assert.doesNotThrow(requestAtDepth(20));
+  assert.throws(requestAtDepth(21), /expansion limits/);
+});
+
+test("buildRequestBody budgets opaque nodes when schema expansion is active", () => {
+  const payload = Type.Object({}, { default: Array(10_001).fill(0) });
+  assert.doesNotThrow(() =>
+    buildRequestBody(
+      GEMINI_MODEL,
+      {
+        ...SIMPLE_CONTEXT,
+        tools: [
+          {
+            name: "ordinary",
+            description: "ordinary",
+            parameters: Type.Object({ payload }),
+          },
+        ],
+      },
+      undefined,
+      "p",
+    ),
+  );
+  assert.throws(
+    () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            {
+              name: "nodes",
+              description: "nodes",
+              parameters: Type.Object(
+                { payload, answer: Type.Ref("#/$defs/Answer") },
+                {
+                  $defs: { Answer: Type.String() },
+                },
+              ),
+            },
+          ],
+        },
+        undefined,
+        "p",
+      ),
+    /expansion limits/,
   );
 });
 
