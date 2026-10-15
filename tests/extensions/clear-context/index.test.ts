@@ -29,6 +29,7 @@ test("shortcut is registered as an editor layer and preserves the existing edito
   const listeners = new Map<string, (value: unknown) => void>();
   let registeredLayer: EditorLayer | undefined;
   const pi = {
+    on() {},
     events: {
       emit(channel: string, value: unknown) {
         if (channel === "openpi:editor-layers:register") {
