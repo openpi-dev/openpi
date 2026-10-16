@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, type Stats, watch } from "node:fs";
 import {
@@ -12,8 +11,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { Worker } from "node:worker_threads";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   isWebSearchModelSupport,
@@ -338,13 +337,57 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
 
 export const SETUP_CONFIG_PATH = join(getAgentDir(), "my-pi-setup.json");
 const SETUP_CONFIG_LOCK_PATH = `${SETUP_CONFIG_PATH}.lock`;
+/**
+ * The holder refreshes the lock file's mtime from a worker thread every second.
+ * The lease expires five seconds after the last refresh, so one delayed tick
+ * does not look like a crash. A waiter stops after five seconds when a refresh
+ * was observed during the wait and another landed inside the last two seconds.
+ * A waiter that sees no further refresh keeps the lease already on disk, and
+ * can run one stale period past that patience bound.
+ */
+const SETUP_CONFIG_LOCK_HEARTBEAT_MS = 1_000;
+const SETUP_CONFIG_LOCK_STALE_MS = 5_000;
 const SETUP_CONFIG_LOCK_TIMEOUT_MS = 5_000;
 const SETUP_CONFIG_LOCK_RECHECK_MS = 500;
-const SETUP_CONFIG_LOCK_VERSION = 1;
-const ESTIMATED_PROCESS_STARTED_AT = Math.max(
-  1,
-  Math.round(Date.now() - process.uptime() * 1_000),
-);
+const SETUP_CONFIG_LOCK_ACTIVE_MS = SETUP_CONFIG_LOCK_HEARTBEAT_MS * 2;
+const SETUP_CONFIG_LOCK_VERSION = 2 as const;
+/**
+ * Opens the lock once and refreshes that descriptor. A replacement created at
+ * the same path keeps its own timestamps. The worker has its own thread, so a
+ * synchronous critical section on the holder still renews the lease.
+ */
+const LOCK_HEARTBEAT_WORKER_SOURCE = `
+import { parentPort, workerData } from "node:worker_threads";
+import { closeSync, futimesSync, openSync } from "node:fs";
+
+const port = parentPort;
+if (!port) throw new Error("setup lock heartbeat has no parent port");
+const fd = openSync(workerData.path, "r+");
+let stopped = false;
+const beat = () => {
+  if (stopped) return;
+  try {
+    const now = new Date();
+    futimesSync(fd, now, now);
+  } catch {
+    // A failed refresh retries on the next tick. Repeated failure lets the
+    // lease expire instead of touching some other file at this path.
+  }
+};
+const timer = setInterval(beat, workerData.intervalMs);
+port.on("message", (message) => {
+  if (message !== "stop") return;
+  stopped = true;
+  clearInterval(timer);
+  try {
+    closeSync(fd);
+  } catch {
+    // The descriptor is already closed.
+  }
+  port.postMessage("stopped");
+});
+port.postMessage("ready");
+`;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1145,22 +1188,27 @@ const isErrno = (error: unknown, code: string) =>
 
 interface LockIdentity {
   readonly pid: number;
-  readonly processStartedAt: number;
-  readonly processStartedAtVerified: boolean;
   readonly token: string;
 }
 
-interface LockOwner extends LockIdentity {
-  readonly version: typeof SETUP_CONFIG_LOCK_VERSION;
+interface LockOwnerV1 extends LockIdentity {
+  readonly version: 1;
+  readonly processStartedAt: number;
+  readonly processStartedAtVerified: boolean;
   readonly createdAt: number;
 }
+
+interface LockOwnerV2 extends LockIdentity {
+  readonly version: 2;
+  readonly createdAt: number;
+}
+
+type LockOwner = LockOwnerV1 | LockOwnerV2;
 
 type LockOwnerRead =
   | { kind: "owner"; owner: LockOwner }
   | { kind: "missing" }
   | { kind: "unknown" };
-
-type ProcessLiveness = "live" | "dead" | "unknown";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1168,17 +1216,31 @@ const UUID_PATTERN =
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 
+const isStaleLock = (mtimeMs: number, now = Date.now()) =>
+  now - mtimeMs >= SETUP_CONFIG_LOCK_STALE_MS;
+
 function parseLockOwner(value: unknown): LockOwner | undefined {
   if (!isRecord(value)) return undefined;
-  if (value.version !== SETUP_CONFIG_LOCK_VERSION) return undefined;
   if (!isPositiveInteger(value.pid)) return undefined;
+  if (!isPositiveInteger(value.createdAt)) return undefined;
+  if (typeof value.token !== "string" || !UUID_PATTERN.test(value.token)) {
+    return undefined;
+  }
+  if (value.version === SETUP_CONFIG_LOCK_VERSION) {
+    return {
+      version: SETUP_CONFIG_LOCK_VERSION,
+      pid: value.pid,
+      createdAt: value.createdAt,
+      token: value.token,
+    };
+  }
+  // Version 1 recorded a process start time and never refreshed its lease.
+  // Honor it until that original timestamp goes stale, then recover it.
+  if (value.version !== 1) return undefined;
   if (!isPositiveInteger(value.processStartedAt)) return undefined;
   if (typeof value.processStartedAtVerified !== "boolean") return undefined;
-  if (!isPositiveInteger(value.createdAt)) return undefined;
-  if (typeof value.token !== "string" || !UUID_PATTERN.test(value.token))
-    return undefined;
   return {
-    version: SETUP_CONFIG_LOCK_VERSION,
+    version: 1,
     pid: value.pid,
     processStartedAt: value.processStartedAt,
     processStartedAtVerified: value.processStartedAtVerified,
@@ -1187,212 +1249,136 @@ function parseLockOwner(value: unknown): LockOwner | undefined {
   };
 }
 
-const sameOwner = (left: LockOwner, right: LockOwner) =>
-  left.version === right.version &&
-  left.pid === right.pid &&
-  left.processStartedAt === right.processStartedAt &&
-  left.processStartedAtVerified === right.processStartedAtVerified &&
-  left.createdAt === right.createdAt &&
-  left.token === right.token;
+const sameOwner = (left: LockOwner, right: LockOwner) => {
+  if (
+    left.version !== right.version ||
+    left.pid !== right.pid ||
+    left.createdAt !== right.createdAt ||
+    left.token !== right.token
+  ) {
+    return false;
+  }
+  if (left.version === 1 && right.version === 1) {
+    return (
+      left.processStartedAt === right.processStartedAt &&
+      left.processStartedAtVerified === right.processStartedAtVerified
+    );
+  }
+  return true;
+};
 
 const sameFile = (left: Stats, right: Stats) =>
   left.dev === right.dev && left.ino === right.ino;
 
-// CIM datetime is local time plus a UTC offset in minutes. Truncate the
-// microsecond field so the integer matches FILETIME / ToUnixTimeMilliseconds.
-const CIM_PROCESS_STARTED_AT =
-  /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/;
-
-// Redirected cscript writes UTF-16 LE, often with a BOM. Reading that
-// pipe as UTF-8 leaves NULs or U+FFFD and the CIM parser rejects it, so
-// a live PID stays unknown until the 5s lock expires.
-export function decodeProcessStartedAtOutput(output: Buffer | string) {
-  const buffer = Buffer.isBuffer(output) ? output : Buffer.from(output);
-  const utf16 =
-    (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) ||
-    (buffer.length >= 4 && buffer[1] === 0 && buffer[3] === 0);
-  const text = utf16 ? buffer.toString("utf16le") : buffer.toString("utf8");
-  return text
-    .replace(/^\uFEFF/, "")
-    .replaceAll("\0", "")
-    .trim();
-}
-
-const parseCimProcessStartedAt = (stdout: string) => {
-  const match = CIM_PROCESS_STARTED_AT.exec(stdout.trim());
-  if (!match) return undefined;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6]);
-  const millisecond = Number(match[7]?.slice(0, 3));
-  const offsetMinutes = (match[8] === "+" ? 1 : -1) * Number(match[9]);
-  if (
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31 ||
-    hour > 23 ||
-    minute > 59 ||
-    second > 59 ||
-    !Number.isInteger(offsetMinutes)
-  ) {
-    return undefined;
-  }
-  const localAsUtc = Date.UTC(
-    year,
-    month - 1,
-    day,
-    hour,
-    minute,
-    second,
-    millisecond,
-  );
-  if (!Number.isFinite(localAsUtc)) return undefined;
-  const parsed = new Date(localAsUtc);
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
-  ) {
-    return undefined;
-  }
-  const startedAt = localAsUtc - offsetMinutes * 60_000;
-  return isPositiveInteger(startedAt) ? startedAt : undefined;
-};
-
-const parsePsProcessStartedAt = (stdout: string) => {
-  const startedAt = Date.parse(stdout.trim());
-  return Number.isFinite(startedAt) ? startedAt : undefined;
-};
-
-export function processStartedAtQuery(
-  pid: number,
-  platform = process.platform,
-) {
-  if (platform === "win32") {
-    // Resolve on use. Vitest loads this module without a file URL, so a
-    // top-level fileURLToPath throws during import. WMI via cscript avoids
-    // the PowerShell CLR cold start. The 1s query budget stays; failure is
-    // still unknown ownership, and the 5s lock does not recover.
-    const script = fileURLToPath(
-      new URL("./win32-process-started-at.js", import.meta.url),
-    );
-    return {
-      command: "cscript.exe",
-      args: ["//Nologo", script, String(pid)],
-      env: undefined,
-      parseOutput: parseCimProcessStartedAt,
+function startLockHeartbeat(path: string) {
+  const worker = new Worker(LOCK_HEARTBEAT_WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      path,
+      intervalMs: SETUP_CONFIG_LOCK_HEARTBEAT_MS,
+    },
+  });
+  worker.unref();
+  let readySettled = false;
+  const ready = new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const fail = (error: unknown) => {
+      if (readySettled) return;
+      readySettled = true;
+      if (timer) clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
     };
-  }
-  return {
-    command: "ps",
-    args: ["-o", "lstart=", "-p", String(pid)],
-    env: { LC_ALL: "C" },
-    parseOutput: parsePsProcessStartedAt,
-  };
-}
-
-// One query. A timeout, non-zero exit, or unparseable value is unknown
-// ownership. The 5s lock then expires without a second command.
-const PROCESS_START_QUERY_TIMEOUT_MS = 1_000;
-
-const runProcessStartedAtQuery = (
-  query: {
-    command: string;
-    args: string[];
-    env: Record<string, string> | undefined;
-    parseOutput: (stdout: string) => number | undefined;
-  },
-  timeout: number,
-) =>
-  new Promise<number | undefined>((resolve) => {
-    try {
-      execFile(
-        query.command,
-        query.args,
-        {
-          encoding: "buffer",
-          env: query.env ? { ...process.env, ...query.env } : process.env,
-          timeout,
-          windowsHide: true,
-          // cscript treats //Nologo as a host switch. Verbatim keeps Node
-          // from quoting it into an ordinary argument.
-          windowsVerbatimArguments: process.platform === "win32",
-        },
-        (error, stdout) => {
-          resolve(
-            error || stdout == null
-              ? undefined
-              : query.parseOutput(decodeProcessStartedAtOutput(stdout)),
-          );
-        },
-      );
-    } catch {
-      resolve(undefined);
-    }
+    timer = setTimeout(() => {
+      fail(new Error("Setup config lock heartbeat did not start."));
+    }, SETUP_CONFIG_LOCK_STALE_MS);
+    worker.on("message", (message: unknown) => {
+      if (message !== "ready") return;
+      if (readySettled) return;
+      readySettled = true;
+      clearTimeout(timer);
+      resolve();
+    });
+    worker.once("error", fail);
+    worker.once("exit", (code) => {
+      if (!readySettled && code !== 0) {
+        fail(new Error(`Setup config lock heartbeat exited ${code}.`));
+      }
+    });
   });
 
-const queryProcessStartedAt = (pid: number) =>
-  runProcessStartedAtQuery(
-    processStartedAtQuery(pid),
-    PROCESS_START_QUERY_TIMEOUT_MS,
-  );
-
-const makeLockIdentity = async (): Promise<LockIdentity> => {
-  const processStartedAt = await queryProcessStartedAt(process.pid);
   return {
-    pid: process.pid,
-    processStartedAt: processStartedAt ?? ESTIMATED_PROCESS_STARTED_AT,
-    processStartedAtVerified: processStartedAt !== undefined,
-    token: randomUUID(),
+    ready,
+    async stop() {
+      readySettled = true;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, SETUP_CONFIG_LOCK_HEARTBEAT_MS);
+        const done = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        worker.on("message", (message: unknown) => {
+          if (message === "stopped") done();
+        });
+        worker.once("exit", done);
+        worker.once("error", done);
+        try {
+          worker.postMessage("stop");
+        } catch {
+          done();
+        }
+      });
+      await worker.terminate().catch(() => undefined);
+    },
   };
-};
+}
+
+const makeLockIdentity = (): LockIdentity => ({
+  pid: process.pid,
+  token: randomUUID(),
+});
 
 /**
  * The owner document is fully written before `link()` atomically publishes the
  * lock path. Its companion hard link remains for the whole critical section.
- * A dead-owner recovery atomically renames that companion to its own PID/token,
- * so another recovery can take over if the recovering process is also killed.
+ * Stale-owner recovery atomically renames that companion onto the recoverer's
+ * own pid and token, so another recovery can take over if this one is killed
+ * before it deletes the lock.
  */
-const makeLockOwner = async (): Promise<LockOwner> => ({
+const makeLockOwner = (): LockOwnerV2 => ({
   version: SETUP_CONFIG_LOCK_VERSION,
-  ...(await makeLockIdentity()),
+  ...makeLockIdentity(),
   createdAt: Date.now(),
 });
 
 const claimPathFor = (owner: LockOwner) =>
-  `${SETUP_CONFIG_LOCK_PATH}.owner.${owner.pid}.${owner.processStartedAt}.${owner.token}`;
+  owner.version === 1
+    ? `${SETUP_CONFIG_LOCK_PATH}.owner.${owner.pid}.${owner.processStartedAt}.${owner.token}`
+    : `${SETUP_CONFIG_LOCK_PATH}.owner.${owner.pid}.${owner.token}`;
 
 const recoveryPathFor = (owner: LockOwner, recovery: LockIdentity) =>
-  `${claimPathFor(owner)}.recovering.${recovery.pid}.${recovery.processStartedAt}.${recovery.processStartedAtVerified ? 1 : 0}.${recovery.token}`;
+  `${claimPathFor(owner)}.recovering.${recovery.pid}.${recovery.token}`;
 
 const parseRecoveryIdentity = (owner: LockOwner, name: string) => {
   const prefix = `${basename(claimPathFor(owner))}.recovering.`;
   if (!name.startsWith(prefix)) return undefined;
-  const [rawPid, rawStartedAt, rawVerified, token, ...extra] = name
-    .slice(prefix.length)
-    .split(".");
-  const pid = Number(rawPid);
-  const processStartedAt = Number(rawStartedAt);
+  const parts = name.slice(prefix.length).split(".");
+  // Current recoveries are `pid.token`. A version 1 recovery still in progress
+  // is `pid.processStartedAt.verified.token`.
+  const token = parts.at(-1);
+  const pid = Number(parts[0]);
+  const legacy = parts.length === 4;
   if (
-    extra.length > 0 ||
+    (parts.length !== 2 && !legacy) ||
     !isPositiveInteger(pid) ||
-    !isPositiveInteger(processStartedAt) ||
-    (rawVerified !== "0" && rawVerified !== "1") ||
     !token ||
-    !UUID_PATTERN.test(token)
+    !UUID_PATTERN.test(token) ||
+    (legacy &&
+      (!isPositiveInteger(Number(parts[1])) ||
+        (parts[2] !== "0" && parts[2] !== "1")))
   ) {
     return undefined;
   }
-  return {
-    pid,
-    processStartedAt,
-    processStartedAtVerified: rawVerified === "1",
-    token,
-  } satisfies LockIdentity;
+  return { pid, token } satisfies LockIdentity;
 };
 
 async function readLockOwner(path: string): Promise<LockOwnerRead> {
@@ -1404,18 +1390,13 @@ async function readLockOwner(path: string): Promise<LockOwnerRead> {
   }
 }
 
-async function processLiveness(
-  identity: LockIdentity,
-): Promise<ProcessLiveness> {
+async function lockMtime(path: string) {
   try {
-    process.kill(identity.pid, 0);
+    return (await stat(path)).mtimeMs;
   } catch (error) {
-    return isErrno(error, "ESRCH") ? "dead" : "unknown";
+    if (isErrno(error, "ENOENT")) return undefined;
+    throw error;
   }
-  if (!identity.processStartedAtVerified) return "unknown";
-  const processStartedAt = await queryProcessStartedAt(identity.pid);
-  if (processStartedAt === undefined) return "unknown";
-  return processStartedAt === identity.processStartedAt ? "live" : "dead";
 }
 
 const lockTimeoutError = () =>
@@ -1425,32 +1406,23 @@ const lockTimeoutError = () =>
 
 function waitForSetupConfigLock(deadline: number) {
   const remaining = deadline - Date.now();
-  if (remaining <= 0) return Promise.reject(lockTimeoutError());
+  if (remaining <= 0) return Promise.resolve();
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     let watcher: ReturnType<typeof watch> | undefined;
-    // A dead owner does not change the lock file, so periodically retry the
-    // existing fail-closed recovery path before the shared deadline expires.
-    const recheckTimer = setTimeout(
-      () => finish(),
-      Math.min(remaining, SETUP_CONFIG_LOCK_RECHECK_MS),
-    );
-    const timer = setTimeout(() => {
-      // fs.watch may coalesce or drop events. Recheck the atomic lock path at
-      // the deadline so a released lock cannot become a false timeout.
-      if (!existsSync(SETUP_CONFIG_LOCK_PATH)) finish();
-      else finish(lockTimeoutError());
-    }, remaining);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (error?: unknown) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      clearTimeout(recheckTimer);
+      if (timer) clearTimeout(timer);
       watcher?.close();
       if (error) reject(error);
       else resolve();
     };
+    // A silent owner does not change the lock file. Wake even when fs.watch
+    // drops the event so a lease can be rechecked on the caller's schedule.
+    timer = setTimeout(() => finish(), remaining);
 
     try {
       const lockName = basename(SETUP_CONFIG_LOCK_PATH);
@@ -1485,7 +1457,7 @@ async function findRecoveryClaim(owner: LockOwner) {
 
 async function takeRecoveryClaim(owner: LockOwner, lockStat: Stats) {
   const ownerClaimPath = claimPathFor(owner);
-  const recovery = await makeLockIdentity();
+  const recovery = makeLockIdentity();
   const recoveryPath = recoveryPathFor(owner, recovery);
   const claimOwner = await readLockOwner(ownerClaimPath);
 
@@ -1503,7 +1475,10 @@ async function takeRecoveryClaim(owner: LockOwner, lockStat: Stats) {
 
   const existing = await findRecoveryClaim(owner);
   if (!existing) return undefined;
-  if ((await processLiveness(existing.recovery)) !== "dead") return undefined;
+  const existingMtime = await lockMtime(existing.path);
+  if (existingMtime === undefined || !isStaleLock(existingMtime)) {
+    return undefined;
+  }
   const existingOwner = await readLockOwner(existing.path);
   if (
     existingOwner.kind !== "owner" ||
@@ -1533,12 +1508,7 @@ async function restoreOwnerClaim(owner: LockOwner, recoveryPath: string) {
 async function recoverStaleSetupConfigLock() {
   const lockRead = await readLockOwner(SETUP_CONFIG_LOCK_PATH);
   if (lockRead.kind === "missing") return true;
-  if (
-    lockRead.kind !== "owner" ||
-    (await processLiveness(lockRead.owner)) !== "dead"
-  ) {
-    return false;
-  }
+  if (lockRead.kind !== "owner") return false;
 
   let lockStat: Stats;
   try {
@@ -1546,6 +1516,7 @@ async function recoverStaleSetupConfigLock() {
   } catch (error) {
     return isErrno(error, "ENOENT");
   }
+  if (!isStaleLock(lockStat.mtimeMs)) return false;
 
   const recoveryPath = await takeRecoveryClaim(lockRead.owner, lockStat);
   if (recoveryPath === null) return true;
@@ -1554,13 +1525,14 @@ async function recoverStaleSetupConfigLock() {
   const currentLock = await readLockOwner(SETUP_CONFIG_LOCK_PATH);
   const recoveryOwner = await readLockOwner(recoveryPath);
   try {
+    const currentStat = await stat(SETUP_CONFIG_LOCK_PATH);
     if (
       currentLock.kind !== "owner" ||
       recoveryOwner.kind !== "owner" ||
       !sameOwner(currentLock.owner, lockRead.owner) ||
       !sameOwner(recoveryOwner.owner, lockRead.owner) ||
-      (await processLiveness(currentLock.owner)) !== "dead" ||
-      !sameFile(await stat(SETUP_CONFIG_LOCK_PATH), await stat(recoveryPath))
+      !isStaleLock(currentStat.mtimeMs) ||
+      !sameFile(currentStat, await stat(recoveryPath))
     ) {
       await restoreOwnerClaim(lockRead.owner, recoveryPath);
       return false;
@@ -1599,15 +1571,20 @@ async function releaseSetupConfigLock(owner: LockOwner, claimPath: string) {
 
 async function withSetupConfigLock<A>(action: () => Promise<A>) {
   await mkdir(getAgentDir(), { recursive: true });
-  const owner = await makeLockOwner();
+  const owner = makeLockOwner();
   const claimPath = claimPathFor(owner);
   await writeFile(claimPath, `${JSON.stringify(owner)}\n`, {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
   });
-  const deadline = Date.now() + SETUP_CONFIG_LOCK_TIMEOUT_MS;
+  const started = Date.now();
+  const patienceDeadline = started + SETUP_CONFIG_LOCK_TIMEOUT_MS;
+  const hardDeadline = patienceDeadline + SETUP_CONFIG_LOCK_STALE_MS;
   let acquired = false;
+  let heartbeat: ReturnType<typeof startLockHeartbeat> | undefined;
+  let observedMtime: number | undefined;
+  let lastRenewedAt = 0;
 
   try {
     while (true) {
@@ -1618,18 +1595,48 @@ async function withSetupConfigLock<A>(action: () => Promise<A>) {
       } catch (error) {
         if (!isErrno(error, "EEXIST")) throw error;
         if (await recoverStaleSetupConfigLock()) continue;
-        await waitForSetupConfigLock(deadline);
+
+        const now = Date.now();
+        if (now >= hardDeadline) throw lockTimeoutError();
+        const lockRead = await readLockOwner(SETUP_CONFIG_LOCK_PATH);
+        if (lockRead.kind === "missing") continue;
+        if (lockRead.kind !== "owner") {
+          if (now >= patienceDeadline) throw lockTimeoutError();
+        } else {
+          const mtimeMs = await lockMtime(SETUP_CONFIG_LOCK_PATH);
+          if (mtimeMs === undefined) continue;
+          if (
+            observedMtime !== undefined &&
+            mtimeMs > observedMtime + SETUP_CONFIG_LOCK_HEARTBEAT_MS / 2
+          ) {
+            lastRenewedAt = now;
+          }
+          observedMtime = mtimeMs;
+          if (now >= patienceDeadline) {
+            const holderStillRefreshing =
+              lastRenewedAt > 0 &&
+              now - lastRenewedAt < SETUP_CONFIG_LOCK_ACTIVE_MS;
+            // A quiet owner keeps the lease it already published. A holder
+            // that refreshed during this wait is still working. A stale lock
+            // we could not prove from its companion stops here too.
+            if (holderStillRefreshing || isStaleLock(mtimeMs, now)) {
+              throw lockTimeoutError();
+            }
+          }
+        }
+        await waitForSetupConfigLock(
+          Math.min(hardDeadline, now + SETUP_CONFIG_LOCK_RECHECK_MS),
+        );
       }
     }
 
-    try {
-      return await action();
-    } finally {
-      await releaseSetupConfigLock(owner, claimPath);
-      acquired = false;
-    }
+    heartbeat = startLockHeartbeat(SETUP_CONFIG_LOCK_PATH);
+    await heartbeat.ready;
+    return await action();
   } finally {
-    if (!acquired) await unlink(claimPath).catch(() => undefined);
+    await heartbeat?.stop();
+    if (acquired) await releaseSetupConfigLock(owner, claimPath);
+    else await unlink(claimPath).catch(() => undefined);
   }
 }
 
