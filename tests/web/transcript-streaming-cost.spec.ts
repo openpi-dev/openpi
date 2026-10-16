@@ -157,6 +157,90 @@ describe("persisted transcript signatures", () => {
     ]);
   });
 
+  it("collapses one timestamp-free live copy of a timestamped native prompt", () => {
+    const content = "New user request while reading old history";
+    const history = [
+      messageEntry("before", {
+        role: "assistant",
+        content: "Previous answer",
+        timestamp: 100,
+      }),
+      messageEntry("native-request", {
+        role: "user",
+        content,
+        timestamp: 200,
+        parts: [{ type: "text", text: content }],
+      }),
+    ];
+    const optimistic: LiveEntry = {
+      key: "optimistic-new-command",
+      message: { role: "user", content },
+      optimistic: {
+        sessionId: "s",
+        sessionPath: "/s.jsonl",
+        commandId: "new-command",
+        afterEntryId: "before",
+        admitted: true,
+      },
+    };
+    const shown = (copies: number) =>
+      buildEntries(
+        snapshot(history),
+        [
+          optimistic,
+          ...Array.from({ length: copies }, (_, index) => ({
+            key: `legacy-user-${index}`,
+            message: { role: "user" as const, content },
+          })),
+        ],
+        new Map(),
+      );
+    const once = shown(1);
+    expect(
+      once.entries
+        .filter((entry) => entry.message.role === "user")
+        .map((entry) => entry.entryId ?? entry.key),
+    ).toEqual(["native-request"]);
+    expect(once.projectedPrompts).toEqual([
+      { key: "optimistic-new-command", entryId: "native-request" },
+    ]);
+    const twice = shown(2);
+    expect(
+      twice.entries
+        .filter((entry) => entry.message.role === "user")
+        .map((entry) => entry.entryId ?? entry.key),
+    ).toEqual(["native-request", "legacy-user-1"]);
+  });
+
+  it("shows a message appended to the same history array", () => {
+    const entries = [
+      messageEntry("user", {
+        role: "user",
+        content: "One original request",
+        timestamp: 1,
+      }),
+    ];
+    const state = snapshot(entries);
+    expect(
+      buildEntries(state, [], new Map()).entries.map(
+        (entry) => entry.message.content,
+      ),
+    ).toEqual(["One original request"]);
+    entries.push(
+      messageEntry("recovered", {
+        role: "assistant",
+        content: "Recovered answer",
+        timestamp: 2,
+        stopReason: "stop",
+      }),
+    );
+    expect(
+      buildEntries(state, [], new Map()).entries.map(
+        (entry) => entry.message.content,
+      ),
+    ).toEqual(["One original request", "Recovered answer"]);
+  });
+
   it("moves an optimistic prompt onto the later native message with the same text", () => {
     const optimistic: LiveEntry = {
       key: "optimistic-c1",

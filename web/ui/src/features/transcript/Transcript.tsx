@@ -1308,9 +1308,16 @@ interface PersistedProjection {
   persistedPositions: Map<string, number>;
 }
 
+interface PersistedProjectionCache {
+  projection: PersistedProjection;
+  length: number;
+  head: PersistedEntry | undefined;
+  tail: PersistedEntry | undefined;
+}
+
 const persistedProjectionCache = new WeakMap<
   readonly PersistedEntry[],
-  Map<string | undefined, PersistedProjection>
+  Map<string | undefined, PersistedProjectionCache>
 >();
 
 function persistedTranscriptProjection(
@@ -1319,7 +1326,16 @@ function persistedTranscriptProjection(
 ) {
   let bySession = persistedProjectionCache.get(persisted);
   const cached = bySession?.get(sessionId);
-  if (cached) return cached;
+  // Callers sometimes append to the same entries array between renders. The
+  // unchanged streaming path keeps that array, so a hit stays independent of
+  // history length; a different length or endpoint entry rebuilds.
+  if (
+    cached &&
+    cached.length === persisted.length &&
+    cached.head === persisted[0] &&
+    cached.tail === persisted[persisted.length - 1]
+  )
+    return cached.projection;
   const nativeById = new Map(persisted.map((entry) => [entry.id, entry]));
   const exactNative = new Map<string, PersistedEntry[]>();
   for (const entry of persisted) {
@@ -1410,12 +1426,13 @@ function persistedTranscriptProjection(
   const nativeByIdentity = new Map<string, number[]>();
   const nativeByLegacySignature = new Map<string, number[]>();
   nativeMessages.forEach((candidate, index) => {
-    if (candidate.identity === undefined) {
-      const indexes = nativeByLegacySignature.get(candidate.signature) ?? [];
-      indexes.push(index);
-      nativeByLegacySignature.set(candidate.signature, indexes);
-      return;
-    }
+    // A live message with no timestamp still matches one native payload by
+    // legacy signature, including a native message that does have an identity.
+    const legacyIndexes =
+      nativeByLegacySignature.get(candidate.signature) ?? [];
+    legacyIndexes.push(index);
+    nativeByLegacySignature.set(candidate.signature, legacyIndexes);
+    if (candidate.identity === undefined) return;
     const indexes = nativeByIdentity.get(candidate.identity) ?? [];
     indexes.push(index);
     nativeByIdentity.set(candidate.identity, indexes);
@@ -1468,7 +1485,12 @@ function persistedTranscriptProjection(
     bySession = new Map();
     persistedProjectionCache.set(persisted, bySession);
   }
-  bySession.set(sessionId, projection);
+  bySession.set(sessionId, {
+    projection,
+    length: persisted.length,
+    head: persisted[0],
+    tail: persisted[persisted.length - 1],
+  });
   return projection;
 }
 
