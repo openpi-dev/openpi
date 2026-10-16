@@ -1282,7 +1282,7 @@ export function processStartedAtQuery(
     );
     return {
       command: "cscript.exe",
-      args: ["//Nologo", "//B", script, String(pid)],
+      args: ["//Nologo", script, String(pid)],
       env: undefined,
       parseOutput: parseCimProcessStartedAt,
     };
@@ -1318,6 +1318,9 @@ const runProcessStartedAtQuery = (
           env: query.env ? { ...process.env, ...query.env } : process.env,
           timeout,
           windowsHide: true,
+          // cscript treats //Nologo as a host switch. Verbatim keeps Node
+          // from quoting it into an ordinary argument.
+          windowsVerbatimArguments: process.platform === "win32",
         },
         (error, stdout) => {
           resolve(

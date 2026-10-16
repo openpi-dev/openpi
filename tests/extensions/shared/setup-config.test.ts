@@ -248,9 +248,9 @@ test("FAIL: session child execution admission is opt-in and bounded", () => {
 test("process start-time queries are platform-specific and conservative", () => {
   const windowsQuery = processStartedAtQuery(123, "win32");
   assert.equal(windowsQuery.command, "cscript.exe");
-  assert.deepEqual(windowsQuery.args.slice(0, 2), ["//Nologo", "//B"]);
-  assert.match(windowsQuery.args[2] ?? "", /win32-process-started-at\.js$/);
-  assert.equal(windowsQuery.args[3], "123");
+  assert.deepEqual(windowsQuery.args.slice(0, 1), ["//Nologo"]);
+  assert.match(windowsQuery.args[1] ?? "", /win32-process-started-at\.js$/);
+  assert.equal(windowsQuery.args[2], "123");
   assert.equal(
     windowsQuery.args.some((arg) => arg.toLowerCase().includes("powershell")),
     false,
@@ -710,7 +710,12 @@ test("Windows reads this process start time from WMI alone", {
     execFile(
       query.command,
       query.args,
-      { encoding: "buffer", timeout: 1_000, windowsHide: true },
+      {
+        encoding: "buffer",
+        timeout: 1_000,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      },
       (execError, execStdout, execStderr) => {
         resolve({
           stdout: Buffer.isBuffer(execStdout) ? execStdout : Buffer.alloc(0),
