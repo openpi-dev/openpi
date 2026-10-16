@@ -175,8 +175,8 @@ import {
   type WorkflowStripEntry,
   WorkflowStripState,
   WorkflowStripWidget,
-  workflowStripEntryKey,
   workflowActivityFooter,
+  workflowStripEntryKey,
 } from "./navigation.ts";
 import {
   normalizeWorkflowOperatorKey,
@@ -869,6 +869,29 @@ export default function workflows(
    * next explicit request acknowledges them.
    */
   let lastContext: ExtensionContext | undefined;
+  let deliveryContext:
+    | {
+        ctx: ExtensionContext;
+        scope: ExtensionContext["sessionManager"];
+        owner: ReturnType<typeof completionOwnerFor>;
+      }
+    | undefined;
+  const nativeDeliveryContext = () => {
+    const binding = deliveryContext;
+    if (!binding) return undefined;
+    try {
+      const scope = binding.ctx.sessionManager;
+      const owner = completionOwnerFor(scope);
+      return scope === binding.scope &&
+        owner.sessionId === binding.owner.sessionId &&
+        owner.epoch === binding.owner.epoch
+        ? binding.ctx
+        : undefined;
+    } catch {
+      // A disposed runner cannot lend its context to a late completion.
+      return undefined;
+    }
+  };
   const completionEnvelope = (
     details: WorkflowDetails,
   ): WorkflowCompletionEnvelope => {
@@ -890,9 +913,11 @@ export default function workflows(
     };
   };
   const resultDelivery = createWorkflowResultDelivery({
-    isIdle: () => lastContext?.isIdle() ?? false,
-    owner: () =>
-      lastContext ? completionOwnerFor(lastContext.sessionManager) : undefined,
+    isIdle: () => nativeDeliveryContext()?.isIdle() ?? false,
+    owner: () => {
+      const ctx = nativeDeliveryContext();
+      return ctx ? completionOwnerFor(ctx.sessionManager) : undefined;
+    },
     persist: (details) => {
       if (!details.delivery)
         throw new Error("Workflow delivery identity is missing");
@@ -916,7 +941,7 @@ export default function workflows(
       }));
       const batches = buildProjectedWorkflowCompletionBatches(
         sourceEntries,
-        lastContext?.getContextUsage?.(),
+        nativeDeliveryContext()?.getContextUsage?.(),
       );
       const delivered = new Set<string>();
       let deliveryError: string | undefined;
@@ -1115,6 +1140,11 @@ export default function workflows(
   };
 
   pi.on("session_start", (_event, ctx) => {
+    deliveryContext = {
+      ctx,
+      scope: ctx.sessionManager,
+      owner: completionOwnerFor(ctx.sessionManager),
+    };
     admission = sessionChildExecutionAdmission(ctx.sessionManager, {
       maxActive: loadSetupConfig().childExecutions.maxActive,
     });
@@ -1211,32 +1241,37 @@ export default function workflows(
   });
 
   pi.on("session_shutdown", async () => {
-    if (navigationLayerRegistered) {
-      removeEditorLayer(pi, "workflows");
-      navigationLayerRegistered = false;
-    }
-    await shutdownActiveWorkflowRuns([...activeRuns.values()]);
-    admission?.shutdown();
-    admission = undefined;
-    // Give deferred completions one final delivery attempt. Failed sends stay
-    // durably pending; clearing first would discard an envelope whose initial
-    // persistence may have failed.
-    await resultDelivery.parentSettled();
+    const closing = deliveryContext;
     try {
-      lastContext?.ui.setStatus("workflows", undefined);
-      lastContext?.ui.setWidget(widgetKey, undefined);
-    } catch {
-      // UI may already be disposed.
+      if (navigationLayerRegistered) {
+        removeEditorLayer(pi, "workflows");
+        navigationLayerRegistered = false;
+      }
+      await shutdownActiveWorkflowRuns([...activeRuns.values()]);
+      admission?.shutdown();
+      admission = undefined;
+      // Give deferred completions one final delivery attempt. Failed sends stay
+      // durably pending; clearing first would discard an envelope whose initial
+      // persistence may have failed.
+      await resultDelivery.parentSettled();
+    } finally {
+      if (deliveryContext === closing) deliveryContext = undefined;
+      try {
+        lastContext?.ui.setStatus("workflows", undefined);
+        lastContext?.ui.setWidget(widgetKey, undefined);
+      } catch {
+        // UI may already be disposed.
+      }
+      statusWriter.reset();
+      unregisterWebCapability?.();
+      unregisterWebCapability = undefined;
+      webCapabilityScope = undefined;
+      lastContext = undefined;
+      widgetVisible = false;
+      widgetEntryKey = undefined;
+      requestWidgetRender = undefined;
+      stripState.focused = false;
     }
-    statusWriter.reset();
-    unregisterWebCapability?.();
-    unregisterWebCapability = undefined;
-    webCapabilityScope = undefined;
-    lastContext = undefined;
-    widgetVisible = false;
-    widgetEntryKey = undefined;
-    requestWidgetRender = undefined;
-    stripState.focused = false;
   });
 
   pi.registerCommand("workflows", {
@@ -1323,6 +1358,12 @@ export default function workflows(
     parameters: WorkflowParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const current = nativeDeliveryContext();
+      if (current && current.sessionManager === ctx.sessionManager) {
+        // Refresh only within the epoch established by native session_start.
+        // Completion callbacks and old tool closures cannot revive ownership.
+        deliveryContext!.ctx = ctx;
+      }
       let prepared: ReturnType<typeof prepareWorkflowScript>;
       try {
         prepared = prepareWorkflowScript(params.script);

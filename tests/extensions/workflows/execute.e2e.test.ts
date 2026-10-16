@@ -6,7 +6,6 @@
  */
 
 import assert from "node:assert/strict";
-import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -48,6 +47,7 @@ import {
   type WorkflowDetails,
 } from "../../../extensions/workflows/model.ts";
 import type { WorkflowAgentSessionFactory } from "../../../extensions/workflows/runner.ts";
+import { toolExecutionContext } from "../../support/extension-tool-context.ts";
 
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-wf-e2e-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -782,6 +782,10 @@ test("shutdown preserves a failed completion for reload recovery", async () => {
     "pending",
   );
 
+  // A native reload replaces the disposed SessionManager and its closed pool.
+  Object.defineProperty(ctx, "sessionManager", {
+    value: { ...ctx.sessionManager },
+  });
   const reloadedHandlers = new Map<
     string,
     Array<(event: unknown, ctx: ExtensionContext) => unknown>
@@ -823,6 +827,11 @@ test("shutdown preserves a failed completion for reload recovery", async () => {
   }
   assert.equal(sentMessages.length, 1);
   sentMessages.length = 0;
+  // Later cases use the original fixture instance again. Re-establish its
+  // native Session lifecycle rather than reviving it from a tool callback.
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler({}, { ...ctx, mode: "print" } as ExtensionContext);
+  }
 });
 
 test("cancelled detached delivery preserves aborted status after artifact persistence failure", async () => {
@@ -2247,5 +2256,361 @@ test("Workflow agent inherits real parent package provenance and excludes interc
     if (parent) await shutdownAndDisposeChildSession(parent);
     if (previousSettings) writeFileSync(settingsPath, previousSettings);
     else rmSync(settingsPath, { force: true });
+  }
+});
+
+async function printDeliveryFixture(
+  manager = SessionManager.inMemory(repoDir),
+) {
+  const localTools = new Map<string, CapturedTool>();
+  const localHandlers = new Map<
+    string,
+    Array<(event: unknown, ctx: ExtensionContext) => unknown>
+  >();
+  const messages: SentMessage[] = [];
+  let idle = true;
+  let closed = false;
+  let closedReads = 0;
+  let failures = 0;
+  const localCtx = {
+    ...ctx,
+    mode: "print",
+    hasUI: false,
+    get sessionManager() {
+      if (closed) closedReads++;
+      assert.equal(closed, false, "disposed delivery context was read");
+      return manager;
+    },
+    isIdle: () => idle,
+    ui: new Proxy(ctx.ui, {
+      get() {
+        assert.fail("print delivery accessed TUI UI");
+      },
+    }),
+  } as ExtensionContext;
+  workflows({
+    ...pi,
+    registerTool(tool: CapturedTool) {
+      localTools.set(tool.name, tool);
+    },
+    on(event: string, handler: unknown) {
+      localHandlers.set(event, [
+        ...(localHandlers.get(event) ?? []),
+        handler as (event: unknown, ctx: ExtensionContext) => unknown,
+      ]);
+      return () => {
+        localHandlers.set(
+          event,
+          (localHandlers.get(event) ?? []).filter((item) => item !== handler),
+        );
+      };
+    },
+    sendMessage(message: SentMessage["message"], options: unknown) {
+      if (failures > 0) {
+        failures--;
+        throw new Error("print fixture send failure");
+      }
+      messages.push({ message, options });
+    },
+  } as unknown as ExtensionAPI);
+  const emit = async (event: string, context = localCtx) => {
+    for (const handler of localHandlers.get(event) ?? [])
+      await handler({}, context);
+  };
+  await emit("session_start");
+  return {
+    ctx: localCtx,
+    tools: localTools,
+    emit,
+    messages,
+    setIdle(value: boolean) {
+      idle = value;
+    },
+    failSends(count: number) {
+      failures = count;
+    },
+    closeContext() {
+      closed = true;
+    },
+    closedReads: () => closedReads,
+  };
+}
+
+for (const busy of [false, true]) {
+  test(`native print interrupted inline completion delivers once after parent busy=${busy}`, async () => {
+    const fixture = await printDeliveryFixture();
+    fixture.setIdle(!busy);
+    let release = () => {};
+    let started = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    __setWorkflowTestAgentSessionFactory(async () => ({
+      session: fakeAgentSession("native print completion", gate, () => {
+        started = true;
+      }),
+    }));
+    try {
+      const controller = new AbortController();
+      const execution = Promise.resolve(
+        fixture.tools.get("workflow")!.execute(
+          "native-print",
+          {
+            script:
+              'return await agent("native print", { agent_type: "bounded-reviewer" });',
+            wait: true,
+          },
+          controller.signal,
+          undefined,
+          fixture.ctx,
+        ),
+      );
+      await waitFor(() => started, "native print child started");
+      controller.abort();
+      let runId: string | undefined;
+      await assert.rejects(execution, (error: unknown) => {
+        runId = String(error).match(/run (wf_[0-9a-f]+)/u)?.[1];
+        return /continues in the background/u.test(String(error));
+      });
+      assert.ok(runId);
+      release();
+      await waitFor(
+        () => readWorkflowJson(runId).status === "completed",
+        "native print worker completed",
+      );
+      if (busy) {
+        await waitFor(
+          () =>
+            (readWorkflowJson(runId).delivery as { state: string }).state ===
+            "pending",
+          "busy delivery retained",
+        );
+        assert.equal(fixture.messages.length, 0);
+        fixture.setIdle(true);
+        await fixture.emit("agent_settled");
+      }
+      await waitFor(
+        () => fixture.messages.length === 1,
+        "native print follow-up",
+        1500,
+      );
+      assert.deepEqual(fixture.messages[0]!.options, {
+        deliverAs: "followUp",
+        triggerTurn: true,
+      });
+      assert.equal(
+        (readWorkflowJson(runId).delivery as { state: string }).state,
+        "delivered",
+      );
+      await fixture.emit("agent_settled");
+      await fixture.emit("agent_settled");
+      assert.equal(fixture.messages.length, 1);
+    } finally {
+      release();
+      __setWorkflowTestAgentSessionFactory(undefined);
+      await fixture.emit("session_shutdown");
+    }
+  });
+}
+
+for (const replacement of [
+  "different-session",
+  "same-id-new-manager",
+  "changed-id-same-manager",
+] as const) {
+  test(`print late completion cannot acquire ${replacement} ownership`, async () => {
+    const manager = SessionManager.inMemory(repoDir);
+    const originalId = manager.getSessionId();
+    const fixture = await printDeliveryFixture(manager);
+    let release = () => {};
+    let started = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    __setWorkflowTestAgentSessionFactory(async () => ({
+      session: fakeAgentSession("old print owner", gate, () => {
+        started = true;
+      }),
+    }));
+    try {
+      const abort = new AbortController();
+      const execution = Promise.resolve(
+        fixture.tools.get("workflow")!.execute(
+          "old-owner",
+          {
+            script:
+              'return await agent("old owner", { agent_type: "bounded-reviewer" });',
+            wait: true,
+          },
+          abort.signal,
+          undefined,
+          fixture.ctx,
+        ),
+      );
+      await waitFor(() => started, "old owner child");
+      abort.abort();
+      let runId: string | undefined;
+      await assert.rejects(execution, (error: unknown) => {
+        runId = String(error).match(/run (wf_[0-9a-f]+)/u)?.[1];
+        return Boolean(runId);
+      });
+      const next =
+        replacement === "changed-id-same-manager"
+          ? manager
+          : SessionManager.inMemory(repoDir);
+      if (replacement === "same-id-new-manager")
+        next.getSessionId = () => originalId;
+      if (replacement === "changed-id-same-manager")
+        next.getSessionId = () => "replacement-session";
+      // No session_start for same-id/new-manager: a stale lazy context cannot
+      // authorize it. Other cases install the new native lifecycle owner.
+      if (replacement !== "same-id-new-manager") {
+        await fixture.emit("session_start", {
+          ...fixture.ctx,
+          sessionManager: next,
+        });
+      } else {
+        Object.defineProperty(fixture.ctx, "sessionManager", {
+          get: () => next,
+        });
+      }
+      if (replacement === "different-session") {
+        await fixture.tools
+          .get("workflow")!
+          .execute(
+            "late-old-tool",
+            { script: "return true;", wait: true },
+            undefined,
+            undefined,
+            fixture.ctx,
+          );
+      }
+      release();
+      await waitFor(
+        () => readWorkflowJson(runId).status === "completed",
+        "old completion terminal",
+      );
+      await fixture.emit("agent_settled");
+      assert.equal(fixture.messages.length, 0);
+      assert.equal(
+        (readWorkflowJson(runId).delivery as { state: string }).state,
+        "pending",
+      );
+    } finally {
+      release();
+      __setWorkflowTestAgentSessionFactory(undefined);
+      await fixture.emit("session_shutdown");
+    }
+  });
+}
+
+test("print reload restores a failed canonical delivery without reviving a disposed context", async () => {
+  const manager = SessionManager.inMemory(repoDir);
+  const fixture = await printDeliveryFixture(manager);
+  fixture.failSends(2);
+  let release = () => {};
+  let started = false;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  __setWorkflowTestAgentSessionFactory(async () => ({
+    session: fakeAgentSession("print reload", gate, () => {
+      started = true;
+    }),
+  }));
+  let runId: string | undefined;
+  try {
+    const abort = new AbortController();
+    const execution = Promise.resolve(
+      fixture.tools.get("workflow")!.execute(
+        "print-reload",
+        {
+          script:
+            'return await agent("reload", { agent_type: "bounded-reviewer" });',
+          wait: true,
+        },
+        abort.signal,
+        undefined,
+        fixture.ctx,
+      ),
+    );
+    await waitFor(() => started, "reload child");
+    abort.abort();
+    await assert.rejects(execution, (error: unknown) => {
+      runId = String(error).match(/run (wf_[0-9a-f]+)/u)?.[1];
+      return Boolean(runId);
+    });
+    release();
+    await waitFor(
+      () =>
+        (readWorkflowJson(runId).delivery as { attempts: number }).attempts ===
+        1,
+      "failed print send",
+    );
+    await fixture.emit("session_shutdown");
+    fixture.closeContext();
+    assert.equal(fixture.messages.length, 0);
+    assert.equal(
+      (readWorkflowJson(runId).delivery as { state: string }).state,
+      "pending",
+    );
+    const restoredManager = SessionManager.inMemory(repoDir);
+    restoredManager.getSessionId = () => manager.getSessionId();
+    const restored = await printDeliveryFixture(restoredManager);
+    try {
+      await waitFor(
+        () => restored.messages.length === 1,
+        "restored print completion",
+      );
+      assert.equal(
+        (readWorkflowJson(runId).delivery as { state: string }).state,
+        "delivered",
+      );
+      await fixture.emit("agent_settled");
+      await restored.emit("agent_settled");
+      assert.equal(fixture.closedReads(), 0);
+      assert.equal(restored.messages.length, 1);
+    } finally {
+      await restored.emit("session_shutdown");
+    }
+  } finally {
+    release();
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
+});
+
+test("native print keeps normal inline consumption and rejects direct detached launch", async () => {
+  const fixture = await printDeliveryFixture();
+  try {
+    const tool = fixture.tools.get("workflow")!;
+    const result = (await tool.execute(
+      "print-inline-only",
+      { script: "return { inline: true };" },
+      undefined,
+      undefined,
+      fixture.ctx,
+    )) as AgentToolResult<WorkflowDetails>;
+    assert.equal(result.details.background, false);
+    assert.equal(result.details.delivery?.state, "consumed-inline");
+    const before = readdirSync(join(agentDir, "workflows")).sort();
+    for (const input of [{ wait: false }, { background: true }]) {
+      await assert.rejects(
+        Promise.resolve(
+          tool.execute(
+            "print-detached-rejected",
+            { script: "return true;", ...input },
+            undefined,
+            undefined,
+            fixture.ctx,
+          ),
+        ),
+        /cannot deliver.*wait: true/iu,
+      );
+    }
+    assert.deepEqual(readdirSync(join(agentDir, "workflows")).sort(), before);
+    await fixture.emit("agent_settled");
+    assert.equal(fixture.messages.length, 0);
+  } finally {
+    await fixture.emit("session_shutdown");
   }
 });

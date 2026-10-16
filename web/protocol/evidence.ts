@@ -44,6 +44,8 @@ export function evidenceText(value: string, tail = false) {
 export type EvidenceState = "running" | "returned" | "failed" | "cancelled" | "timed_out" | "unknown";
 export interface LiveToolEvidence {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
+  /** Pi's native nested-call identity; never inferred from an id prefix. */
+  parentToolCallId?: string;
   result?: WebLiveMessage;
   state: EvidenceState;
 }
@@ -71,6 +73,7 @@ export function isEvidenceTool(name: string) {
 }
 
 function terminalOutcome(name: string, result?: WebLiveMessage) {
+  if (result?.forkSnapshotToolResult) return { state: "unknown" as const };
   if (name === "bash" && result?.terminalReceipt) return result.terminalReceipt;
   const details = evidenceRecord(result?.details);
   if (name.startsWith("bg_")) {
@@ -134,14 +137,14 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
   const args = toolArguments(call);
   const details = evidenceRecord(result?.details);
   const terminal = terminalOutcome(call.name, result);
-  const state = terminal?.state ?? (liveState === "running" ? "running" : result?.isError === true ? "failed" : result?.isError === false ? "returned" : "unknown");
+  const state = terminal?.state ?? (liveState === "running" || liveState === "cancelled" || liveState === "timed_out" ? liveState : result?.isError === true ? "failed" : result?.isError === false ? "returned" : "unknown");
   const isTerminal = ["bash", "bg_start", "bg_status"].includes(call.name);
   const output = evidenceText(result?.content ?? "", isTerminal);
   const readFooter = call.name === "read" ? /\n\n(\[(?:\d+ more lines in file\. Use offset=\d+ to continue\.|Showing lines [^\n]+)\])$/u.exec(output.text) : null;
   const truncated = output.truncated || Boolean(result?.truncation) || evidenceRecord(details.truncation).truncated === true || call.evidenceTruncated === true;
-  const tests = isTerminal ? testSummary(output.text) : undefined;
+  const tests = isTerminal && !result?.forkSnapshotToolResult ? testSummary(output.text) : undefined;
   const kind = call.name === "read" ? "file" : ["write", "edit"].includes(call.name) ? "change" : tests ? "test" : "terminal";
-  const diff = ["write", "edit"].includes(call.name) && result?.isError === false && typeof details.diff === "string" ? evidenceText(details.diff) : undefined;
+  const diff = ["write", "edit"].includes(call.name) && state === "returned" && result?.isError === false && typeof details.diff === "string" ? evidenceText(details.diff) : undefined;
   const offset = typeof args.offset === "number" && Number.isSafeInteger(args.offset) && args.offset > 0 ? args.offset : 1;
   return {
     kind, state, processState: terminal?.state ?? (call.name === "bash" && result?.isError === false ? "returned" : call.name === "bash" && liveState === "running" ? "running" : "unknown"), output: readFooter ? output.text.slice(0, readFooter.index) : output.text, truncated: truncated || diff?.truncated === true,
@@ -151,7 +154,7 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
     resolvedPath: typeof args.resolvedPath === "string" ? evidenceText(args.resolvedPath).text : undefined,
     command: typeof args.command === "string" ? evidenceText(args.command).text : undefined,
     offset, diff: diff?.text, tests,
-    change: result?.isError === false && ["created", "overwritten", "unchanged"].includes(String(details.change)) ? String(details.change) : undefined,
+    change: state === "returned" && result?.isError === false && ["created", "overwritten", "unchanged"].includes(String(details.change)) ? String(details.change) : undefined,
     evidenceUnavailable: typeof details.evidenceUnavailable === "string" ? evidenceText(details.evidenceUnavailable).text : undefined,
     exitCode: terminal && "exitCode" in terminal ? terminal.exitCode : undefined,
     signal: terminal && "signal" in terminal ? terminal.signal : undefined,

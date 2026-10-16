@@ -43,6 +43,13 @@ test("embedded computer-use targets exact same-process and cross-process documen
       .locator(".workbar-panel")
       .getByRole("button", { name: /^浏览器/ })
       .click();
+    // Native readiness is acknowledged only after this tab's DNR rules install.
+    // Use the existing bounded native-control handoff budget before DENY navigation.
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-openpi-browser-extension",
+      "ready",
+      { timeout: 15_000 },
+    );
     const active = page.locator(".browser-page:not([hidden])");
     // This test covers the native provider. Host/controller and stale-state authority have separate broker tests.
     const control = (

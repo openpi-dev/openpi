@@ -64,8 +64,8 @@ export function Providers({ children }: PropsWithChildren) {
       colors["--focus"] = appearance.accent;
     }
     const families = {
-      system:
-        "ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      codex: "var(--openpi-default-font)",
+      system: "var(--openpi-default-font)",
       sans: "Arial, Helvetica, sans-serif",
       serif: "Georgia, 'Times New Roman', serif",
       mono: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",

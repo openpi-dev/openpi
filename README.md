@@ -451,11 +451,11 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 ### 自然语言配置与页面设置
 
-`/openpi-setup` 是自然语言配置入口。Web 的主题、配色、字体、聊天宽度、字号、默认展开思考块、可见推理强度和置顶排序控件直接保存，不调用模型、不产生聊天消息，模型运行或 Plan 模式下也可调整。这些展示偏好仍使用同一份 `my-pi-setup.json` 和共享配置锁、校验、未知字段保留及原子写入；以保存接口成功回执更新界面。其他 OpenPI 自有配置继续通过 setup 回合修改。
+`/openpi-setup` 是自然语言配置入口。Web 的主题、配色、字体、聊天宽度、字号、默认展开思考块、可见推理强度、侧栏分组、排序和最近列表显示控件直接保存，不调用模型、不产生聊天消息，模型运行或 Plan 模式下也可调整。这些展示偏好仍使用同一份 `my-pi-setup.json` 和共享配置锁、校验、未知字段保留及原子写入；以保存接口成功回执更新界面。其他 OpenPI 自有配置继续通过 setup 回合修改。
 
 Web「配置」页的响应详细程度和推理摘要通过 `/openpi-setup` 保存为 `response_verbosity`（`default` / `low` / `medium` / `high`）与 `response_reasoning_summary`（`default` / `auto` / `concise` / `detailed` / `none`）。两者默认 `default`，保留 Pi 的原生请求。它们仅作用于当前模型的 OpenAI Responses / Codex Responses API；摘要还要求原生推理能力和已有 reasoning 参数。`none` 仅移除摘要请求，不关闭推理或删除 reasoning effort。其他 API 保持原请求。可见推理强度使用 `web_hidden_thinking_levels` 保存隐藏列表，默认 `[]`；合法值为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，与 Pi 原生支持列表求交后展示，并保留当前选中值，不改变模型能力或当前 Session 的推理强度。
 
-Web 外观将模式与配色分开：`ui.webTheme` 的新模式选择为 `system` / `light` / `dark`；`ui.webAppearance` 是完整对象，默认 `{ "palette": "default", "accent": "", "background": "", "foreground": "", "font": "system" }`。`palette` 可选 `default` / `mist` / `rose` / `pine`，`font` 可选 `system` / `sans` / `serif` / `mono`；三种颜色只允许空串（使用主题默认色）或 `#RRGGBB`。保存外观时整对象替换并拒绝未知字段，不接受嵌套局部修改。旧 `ui.webTheme` 的 `mist` / `rose` / `pine` 继续优先作为旧配色预设；替换旧预设时同时保存新模式和外观对象。`/openpi-setup` 通过 `ui_web_appearance` 修改同一份外观配置，无参数状态显示当前配色、默认色或自定义色及字体。
+Web 外观将模式与配色分开：`ui.webTheme` 的新模式选择为 `system` / `light` / `dark`；`ui.webAppearance` 是完整对象，默认 `{ "palette": "default", "accent": "", "background": "", "foreground": "", "font": "codex" }`。`palette` 可选 `default` / `mist` / `rose` / `pine`，`font` 可选 `codex`（Codex 默认）/ `sans` / `serif` / `mono`，旧 `system` 读取及主题导入时映射为 `codex`；三种颜色只允许空串（使用主题默认色）或 `#RRGGBB`。保存外观时整对象替换并拒绝未知字段，不接受嵌套局部修改。旧 `ui.webTheme` 的 `mist` / `rose` / `pine` 继续优先作为旧配色预设；替换旧预设时同时保存新模式和外观对象。`/openpi-setup` 通过 `ui_web_appearance` 修改同一份外观配置，无参数状态显示当前配色、默认色或自定义色及字体。Codex 默认使用 `-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`，在 macOS 上为 SF Pro + 苹方，在 Windows 上优先 Segoe UI；实际字形由所在平台提供，不打包专有字体。首次加载、侧栏、设置和正文使用同一字体定义，代码保留等宽字体。
 
 个人配置 `my-pi-setup.json` 使用 `configVersion: 1`。无参数 `/openpi-setup` 展示配置来源、版本、字段诊断与是否允许写入。缺文件时仅使用默认值；旧格式仅在明确保存时迁移；JSON 损坏、读取失败、不支持的版本及非法已知字段会阻止覆盖，并保留原文件。未知字段会警告并保留；会丢失未知字段的修改被拒绝。有 UI 的 Session 启动或扩展重载时，加载错误会主动提示正在使用安全默认值且写入已阻止；旧格式或未知字段会给出简短警告，引导到 `/openpi-setup` 查看详情，不触发模型调用或自动改写文件。缺文件和合法的当前版本配置不告警。当前 Session 应用失败时尝试恢复旧文件和配置；若文件已被外部修改或恢复失败，则报告恢复不完整。诊断不展示字段原值或 post-edit 命令。修复文件或明确移除文件后才能恢复配置写入，入口仍为 `/openpi-setup`。
 
@@ -468,19 +468,21 @@ Web 外观将模式与配色分开：`ui.webTheme` 的新模式选择为 `system
 
 Plan 模式下需先退出规划，再通过 `/openpi-setup` 修改配置。Web 设置页会禁用相关修改入口，并在会话空闲时提供退出按钮；退出仅切换状态，不调用模型或开始实施。Setup 在接收命令和投递排队请求时都检查当前 Session 的 Plan 状态。设置页依据实际工具回执反馈保存、设置未变化、失败或取消；回合结束或模型声称成功都不能替代保存回执。
 
-Web 侧栏支持独立置顶会话分区。行内图钉可置顶或取消，置顶区菜单切换最近更新和手动排序；手动模式支持拖动以及会话菜单上移/下移。`ui.webPinnedSort` 默认为 `manual`，可选 `updated`，由 `/openpi-setup` 或置顶区菜单保存。置顶顺序保存在当前 Web 会话目录的工作区元数据中；归档暂时隐藏置顶，恢复后保留顺序。
+Web 侧栏的置顶分区同时容纳项目和会话。项目与会话菜单可置顶或取消，会话也保留行内图钉；手动模式支持跨类型拖动和菜单上移/下移，最多置顶 100 项。置顶区菜单保存 `ui.webPinnedSort`：默认为 `manual`，可选 `updated`（最近更新），也可通过 `/openpi-setup` 修改。统一置顶顺序保存在当前 Web 会话目录的工作区元数据中；归档暂时隐藏会话置顶，恢复后保留顺序。
 
-会话行右侧只保留三种提示：执行中的转圈、已完成未读的小圆点、需要处理的提示。等待输入和失败共用需要处理标记，悬停或打开会话可查看具体原因；停止和未知结果恢复普通行。断线时收起执行动画，由页面连接状态统一提示，绝不当作完成。打开并确认加载会话后，在可见的对话或执行轨迹页面立即将该轮完成圆点记为已读；折叠过程或浏览较早的消息不影响已读。后台页面、未确认的切换、断线和被遮住的会话保留提示，已读记录只影响当前浏览器标签页的对应会话与回合。后台完成回执在当前 Host 生命周期内保留，不将已释放运行实例误报为空闲。
+侧栏分组 `ui.webSidebarGrouping` 默认为 `project`（按项目），可选 `list`（统一最近列表）；会话排序 `ui.webChatsSort` 默认为 `updated`（最近更新），可选 `manual`，在项目和最近列表共享同一顺序。`ui.webProjectsInRecents` 默认为 `true`，最近列表也显示未置顶项目中的会话；关闭后只显示未分组会话。导入的空项目、人工已读/未读和精确会话顺序保存在同一 Web 工作区元数据中；这些操作不调用模型。
+
+会话行显示执行中的转圈、未读圆点或需要处理的提示，通知中心汇总对应会话。等待输入和失败共用需要处理标记，悬停或打开会话可查看具体原因；停止和未知结果不会生成完成通知，也不会清除此前尚未阅读的完成结果。断线时收起执行动画，由页面连接状态统一提示。打开并确认加载会话后，在可见的对话或执行轨迹页面保存已读；折叠过程或浏览较早的消息不影响已读。后台页面、未确认的切换、断线和被遮住的会话保留提示。已读记录绑定 Session 路径、ID、原生完成回执和状态版本，在同一 Host 的浏览器标签页间同步并跨重启保留；标为已读或未读都校验刚看到的版本，新结果和另一窗口的人工标记不会被迟到请求覆盖。最早未读位置按 Pi 原生分支条目顺序重建，不依赖系统时钟先后，不将已释放运行实例或未知状态误报为空闲。
 
 Web 思考行使用简洁的灯泡图标，仍按原有偏好折叠。执行轨迹按原生用户消息分组，连续的会话变更默认收起；搜索可查找已加载的消息、推理、工具参数和结果。选择工具后可分别查看概览、输入和结果，记录信息按需展开；窄面板自动上下排列。此视图只展示已保存的有界记录，不推断执行耗时、缺失结果或完整模型请求。详见[执行轨迹边界与展示](docs/research/WEB_TRAJECTORY_2026-09-07.md)。
 
 Web 模型配置先填写提供商连接，再选择“获取可用模型”。列表支持搜索、勾选当前结果和批量添加，已有配置不会重复添加；搜索保留其他结果的勾选。查询仅请求提供商模型目录，不调用模型。可使用同一已保存端点的 Pi 凭据，或输入仅用于本次查询的临时密钥；临时密钥不会保存。新增模型沿用表单里的能力默认值，可在高级参数中逐项调整。提供商不支持目录接口时仍可手动添加。
 
-Web 侧栏宽度默认 280px（220–420px），工具面板宽度默认 520px（360–720px）。拖动或键盘调整后保存到同一份配置，刷新后恢复；小窗口按当前视口临时限制显示宽度，不覆盖已保存值。也可用 `/openpi-setup` 修改 `ui.webSidebarWidth` 和 `ui.webAuxiliaryWidth`。
+Web 侧栏宽度默认 340px（配置兼容范围 220–520px），工具面板宽度默认 520px（360–720px）。拖动或键盘调整后保存到同一份配置，刷新后恢复；小窗口按当前视口临时限制显示宽度，不覆盖已保存值。也可用 `/openpi-setup` 修改 `ui.webSidebarWidth` 和 `ui.webAuxiliaryWidth`。
 
 Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示控件，直接保存已有 `ui.subagentResultDisplay`、`ui.bashToolDisplay`、`ui.fileMutationDisplay`，用于相应工具详情的默认展开。有可靠耗时记录的回合，执行时展开整个过程，完成后“用时”默认收起中间说明、思考和工具，最终回答继续显示在下方；可点击“用时”查看完整过程，不折叠用户问题或最终回答。连续的思考、工具和活动按原生顺序组成同一组，遇到说明文字或其他消息就分开；单行活动直接显示，不再套一层分组。活动组运行时展开，结束后收起为图标、操作摘要与计数；思考保留在实际发生的位置，使用独立的一行文字预览，展开后使用 Markdown 排版。工具活动使用统一的线框图标与语义摘要，read/write/edit 保留彩色标记；文件名可打开原位预览，命令可展开 Shell 输出并复制。Pi 终端页脚开关和样式保存已有 `ui.customFooter` / `ui.footerStyle`，仅影响 Pi 终端页脚。能力发现、工作流上限、下一步建议及编辑后命令的控件通过 `/openpi-setup` 修改，以实际写入回执为准。
 
-<!-- config-contract: codeMode.enabled webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webHiddenThinkingLevels ui.webPinnedSort ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: codeMode.enabled webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webHiddenThinkingLevels ui.webPinnedSort ui.webSidebarGrouping ui.webChatsSort ui.webProjectsInRecents ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 浏览器模型控制默认关闭。Web「设置 → 浏览器」提供安装引导和连接检查；总开关、逐个浏览器授权及默认浏览器选择会提交 `/openpi-setup` 请求，由当前模型在设置流程中通过配置工具保存。也可直接用 `/openpi-setup` 设置 `browser_control`、`browser_embedded`、`browser_default`、`browser_external`。默认值依次为 `false`、`true`、`embedded`、`[]`：总开关关闭时所有模型浏览器操作都被拒绝，普通 iframe 浏览不受影响。请求受理不代表配置已保存；控件以实际持久化状态为准。
 
@@ -534,6 +536,9 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | 响应详细程度 / 推理摘要     | `default` / `default`；保留 Pi 原生请求         |
 | Web 隐藏推理强度           | `[]`；显示全部原生支持的级别，不改当前选择     |
 | Web 置顶排序                | `manual` 手动排序；可选 `updated` 最近更新      |
+| Web 侧栏分组                | `project` 按项目；可选 `list` 统一最近列表       |
+| Web 会话排序                | `updated` 最近更新；可选 `manual` 手动排序      |
+| 最近列表显示项目会话         | 默认开启；关闭时最近列表仅显示未分组会话        |
 | 大型 Header                  | 关闭                                           |
 | Dashboard Footer             | 开启；单行 `plain`                           |
 | Subagent / Bash / Write/Edit | `compact` / `compact` / `compact`             |
@@ -626,9 +631,11 @@ pi install npm:pi-intercom
 
 ### 独立 Web 工作台
 
-Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的 Pi `AgentSessionRuntime`、独立 `~/.pi/agent/web-sessions` 持久化目录和生命周期；浏览器发送消息、新建 Session 或切换工作区，不会写入或切换任何已经运行的终端 Pi Session，Web Session 也不会出现在终端的默认 Session 列表中。在侧栏选择 Session 会把它激活为 Web 进程的当前 Pi Session；Prompt 只会投递到请求时仍匹配的活动 Web Session。其他页面切换活动会话时，本页保留正在看的会话及其后台进度；需要继续对话或使用交互工具时，点击“切换到此会话”。读取与刷新不会自动抢占活动会话。
+Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的 Pi `AgentSessionRuntime`、独立 `~/.pi/agent/web-sessions` 持久化目录和生命周期；浏览器发送消息、新建 Session 或切换工作区，不会写入或切换任何已经运行的终端 Pi Session，Web Session 也不会出现在终端的默认 Session 列表中。在侧栏选择 Session 会把它激活为 Web 进程的当前 Pi Session；Prompt 只会投递到请求时仍匹配的活动 Web Session。其他页面切换活动会话时，本页保留正在看的会话及其后台进度，并可继续编辑草稿；发送消息时会先激活正在查看的同一会话，确认身份后再投递，失败时保留草稿。使用交互工具仍可点击“切换到此会话”。读取与刷新不会自动抢占活动会话。
 
 同一 Pi agent 目录一次只允许一个 Web Host 持有该 Session/元数据目录。第二个 `openpi web` 会明确拒绝启动；正常关停会先排空共享目录变更再释放租约，进程崩溃后仅在确认原 owner 的 PID 与进程启动身份不再匹配时恢复。一个 Host 可在侧栏管理多个工作区，因此不需要为每个仓库启动一个进程。
+
+会话行的 `… → 分叉` 支持运行中的整段会话快照：源任务继续执行，新分支继承已保存的当前历史并等待新的输入。Git 项目还可选择“在新工作树中创建聊天分支”，基于源 HEAD 创建独立 detached 工作树，带入未提交内容，保留原项目分组；原目录和暂存区不会因分叉而被改写。取消只作用于分叉创建，发现目录已有其他改动时保留并报告位置。工作树不会自动安装依赖或执行 setup；当前不支持 sparse/unmerged/submodule 快照。删除会话默认保留工作树；独立的显式释放操作只回收私有原始凭据匹配且没有任何会话或运行时持有的未改动目录，共享、修改或无法核实的现场继续保留。保留资源可按原项目分页重新发现。历史、文件范围、失败保留和验证边界见[侧栏分叉设计记录](docs/design/WEB_CODEX_SIDEBAR.md#2026-10-13-running-snapshots-and-worktree-forks)。
 
 Host 仅监听 loopback。本机任意浏览器直接输入终端显示的 `http://127.0.0.1:端口` 即可使用，无需配对或复制 token。正式页面在本地导航时自动取得当前 Host 的高熵凭据，API 仍校验 Bearer token；跨站、其他本地端口和嵌入页面不能取得入口凭据。凭据只属于本次进程，不是远程身份或长期登录机制；Host 重启后刷新页面即可取得新凭据。旧的 fragment 登录链接仍兼容，读取后清除地址栏 fragment。Vite 开发页面保持开发启动器提供的 fragment 入口。
 

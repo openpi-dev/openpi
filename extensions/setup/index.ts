@@ -199,7 +199,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Visible Web thinking levels: web_hidden_thinking_levels replaces the presentation-only hidden list. Empty (default) shows every native supported level; legal levels are off/minimal/low/medium/high/xhigh/max. A hidden current level stays visible. This does not change Pi model support, active thinking effort, defaults, or child authority.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
-    `- UI: OpenPI Web mode is system (default), light, or dark. The complete ui_web_appearance object defaults to {palette:"default",accent:"",background:"",foreground:"",font:"system"}; palette supports default/mist/rose/pine, font supports system/sans/serif/mono, and each color must be empty for the theme default or #RRGGBB. Preserve unrequested fields when replacing this object. Legacy ui_web_theme values mist, rose, and pine remain valid and take precedence over the new palette; replacing a legacy preset requires selecting system/light/dark together with the appearance object. Chat content width defaults to ${DEFAULT_WEB_CHAT_WIDTH}px (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}px), chat font size defaults to ${DEFAULT_WEB_CHAT_FONT_SIZE}px (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}px), and thinking blocks are collapsed by default. These values are projected from canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web appearance changes apply on its next canonical snapshot.`,
+    `- UI: OpenPI Web mode is system (default), light, or dark. The complete ui_web_appearance object defaults to {palette:"default",accent:"",background:"",foreground:"",font:"codex"}; palette supports default/mist/rose/pine, font supports codex/sans/serif/mono (system is a legacy alias for codex), and each color must be empty for the theme default or #RRGGBB. Preserve unrequested fields when replacing this object. Legacy ui_web_theme values mist, rose, and pine remain valid and take precedence over the new palette; replacing a legacy preset requires selecting system/light/dark together with the appearance object. Chat content width defaults to ${DEFAULT_WEB_CHAT_WIDTH}px (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}px), chat font size defaults to ${DEFAULT_WEB_CHAT_FONT_SIZE}px (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}px), and thinking blocks are collapsed by default. These values are projected from canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web appearance changes apply on its next canonical snapshot.`,
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact; all three default to compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Recommend compact for users who scan activity first and inspect evidence on demand.",
@@ -656,7 +656,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
           {
             additionalProperties: false,
             description:
-              "Complete OpenPI Web appearance object. Palette: default, mist, rose, pine. Font: system, sans, serif, mono. Each color is empty for the theme default or #RRGGBB. Defaults to default palette, empty colors, system font. Replaces the whole object; preserve fields the user did not ask to change. Legacy mist/rose/pine ui_web_theme takes precedence; select system/light/dark when replacing a legacy preset. Omit to preserve the current object.",
+              "Complete OpenPI Web appearance object. Palette: default, mist, rose, pine. Font: codex, sans, serif, mono; system is a legacy alias for codex. Each color is empty for the theme default or #RRGGBB. Defaults to default palette, empty colors, Codex default font (codex). Replaces the whole object; preserve fields the user did not ask to change. Legacy mist/rose/pine ui_web_theme takes precedence; select system/light/dark when replacing a legacy preset. Omit to preserve the current object.",
           },
         ),
       ),
@@ -744,6 +744,24 @@ export default function openPiSetup(pi: ExtensionAPI) {
         StringEnum(["manual", "updated"] as const, {
           description:
             "OpenPI Web pinned conversation order: manual (default) or recently updated. Omit to preserve the current value.",
+        }),
+      ),
+      ui_web_sidebar_grouping: Type.Optional(
+        StringEnum(["project", "list"] as const, {
+          description:
+            "OpenPI Web sidebar grouping: project (default) or one recent conversation list. Omit to preserve the current value.",
+        }),
+      ),
+      ui_web_chats_sort: Type.Optional(
+        StringEnum(["manual", "updated"] as const, {
+          description:
+            "OpenPI Web conversation order within projects and the recent list: recently updated (default) or manual. Omit to preserve the current value.",
+        }),
+      ),
+      ui_web_projects_in_recents: Type.Optional(
+        Type.Boolean({
+          description:
+            "Whether OpenPI Web recents includes conversations from unpinned projects (default true). Omit to preserve the current value.",
         }),
       ),
       ui_custom_footer: Type.Optional(
@@ -1021,6 +1039,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
               current.ui.webHiddenThinkingLevels,
             webPinnedSort:
               params.ui_web_pinned_sort ?? current.ui.webPinnedSort,
+            webSidebarGrouping:
+              params.ui_web_sidebar_grouping ?? current.ui.webSidebarGrouping,
+            webChatsSort: params.ui_web_chats_sort ?? current.ui.webChatsSort,
+            webProjectsInRecents:
+              params.ui_web_projects_in_recents ??
+              current.ui.webProjectsInRecents,
             showHeader: params.ui_show_header ?? current.ui.showHeader,
             customFooter: params.ui_custom_footer ?? current.ui.customFooter,
             ...footer,
