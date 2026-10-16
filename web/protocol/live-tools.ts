@@ -3,8 +3,11 @@ import type { WebLiveMessage, WebMessagePart } from "./types.ts";
 
 /** Input is the bounded Host protocol; partial results are complete snapshots. */
 export function reduceLiveTools(current: LiveToolEvidence[], type: string, detail: Record<string, unknown>) {
-  if (["session_start", "session_switched", "session_created"].includes(type)) return [];
-  if (["agent_settled", "turn_settled"].includes(type)) return current.map((item) => item.state === "running" ? { ...item, state: "unknown" as const } : item);
+  if (["session_start", "session_switched", "session_created"].includes(type)) return current.length === 0 ? current : [];
+  if (["agent_settled", "turn_settled"].includes(type)) {
+    if (!current.some((item) => item.state === "running")) return current;
+    return current.map((item) => item.state === "running" ? { ...item, state: "unknown" as const } : item);
+  }
   if (!type.startsWith("tool_execution_")) return current;
   const id = detail.toolCallId;
   if (typeof id !== "string" || id.length > 500) return current;
