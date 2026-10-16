@@ -357,10 +357,14 @@ export function ProviderModelsSection({
   );
 
   return (
-    <div className="models-page">
+    <div className="settings-content-page models-page">
       <div className="models-section">
-        <h2>{t("modelSettings")}</h2>
-        <p className="models-intro">{t("modelsIntro")}</p>
+        <header className="settings-page-heading">
+          <div>
+            <h1>{t("modelSettings")}</h1>
+            <p>{t("modelsIntro")}</p>
+          </div>
+        </header>
         {saved && (
           <p className="models-saved" role="status">
             {t("providerSaved", { provider: saved })}

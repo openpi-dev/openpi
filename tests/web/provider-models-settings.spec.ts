@@ -207,6 +207,138 @@ it("starts with compact provider rows and only expands the requested card", asyn
   expect((control("Model 1 name") as HTMLInputElement).value).toBe("Model A");
 });
 
+it("edits native supported thinking levels as a draft, including max, and can reset them", async () => {
+  mount();
+  await edit();
+  advanced();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("providerModelDetails", { model: "Model A" }),
+    }),
+  );
+  const label = i18n.t("providerCapacityLabel", {
+    field: i18n.t("providerThinkingLevels"),
+    number: 1,
+  });
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  const max = await screen.findByRole("menuitemcheckbox", { name: "max" });
+  expect(max.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(max);
+  expect(
+    WebClient.prototype.changeProviderConfiguration,
+  ).not.toHaveBeenCalled();
+  fireEvent.keyDown(max, { key: "Escape" });
+  save();
+  await waitFor(() =>
+    expect(
+      WebClient.prototype.changeProviderConfiguration,
+    ).toHaveBeenCalledOnce(),
+  );
+  const change = vi.mocked(WebClient.prototype.changeProviderConfiguration).mock
+    .calls[0]![2];
+  expect(change.action).toBe("save");
+  if (change.action === "save") {
+    expect(change.configuration.models[0]?.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: null,
+      max: "max",
+    });
+    expect(change.configuration.models[1]?.thinkingLevelMap).toBeUndefined();
+  }
+  await waitFor(() => expect(screen.queryByLabelText("API key")).toBeNull());
+  await edit();
+  advanced();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("providerModelDetails", { model: "Model A" }),
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: "max" }));
+  fireEvent.keyDown(screen.getByRole("menuitemcheckbox", { name: "max" }), {
+    key: "Escape",
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("providerThinkingReset") }),
+  );
+  expect(screen.getByRole("button", { name: label }).textContent).toContain(
+    i18n.t("providerThinkingAutomatic"),
+  );
+  save();
+  await waitFor(() =>
+    expect(
+      WebClient.prototype.changeProviderConfiguration,
+    ).toHaveBeenCalledTimes(2),
+  );
+  const reset = vi.mocked(WebClient.prototype.changeProviderConfiguration).mock
+    .calls[1]![2];
+  if (reset.action === "save")
+    expect(reset.configuration.models[0]?.thinkingLevelMap).toBeNull();
+});
+
+it("inherits native thinking defaults and preserves provider mappings when customizing", async () => {
+  vi.mocked(WebClient.prototype.modelConfigurations).mockResolvedValue({
+    ...structuredClone(configuration),
+    thinkingDefaults: {
+      "alpha/a": {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: null,
+        max: "xhigh",
+      },
+    },
+  });
+  mount();
+  await edit();
+  advanced();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("providerModelDetails", { model: "Model A" }),
+    }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("providerCapacityLabel", {
+        field: i18n.t("providerThinkingLevels"),
+        number: 1,
+      }),
+    }),
+  );
+  expect(
+    (await screen.findByRole("menuitemcheckbox", { name: "max" })).getAttribute(
+      "aria-checked",
+    ),
+  ).toBe("true");
+  const medium = screen.getByRole("menuitemcheckbox", { name: "medium" });
+  fireEvent.click(medium);
+  fireEvent.keyDown(medium, { key: "Escape" });
+  save();
+  await waitFor(() =>
+    expect(
+      WebClient.prototype.changeProviderConfiguration,
+    ).toHaveBeenCalledOnce(),
+  );
+  const change = vi.mocked(WebClient.prototype.changeProviderConfiguration).mock
+    .calls[0]![2];
+  if (change.action === "save")
+    expect(change.configuration.models[0]?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: "xhigh",
+    });
+});
+
 it("makes native account providers discoverable without adding a custom endpoint", async () => {
   vi.mocked(WebClient.prototype.providerAuth).mockResolvedValue({
     ...auth,

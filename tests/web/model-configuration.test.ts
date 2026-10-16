@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   readModelConfigurations,
@@ -356,6 +357,113 @@ test("a built-in provider can override its connection while retaining its native
   }
 });
 
+test("native thinking capabilities round-trip, preserve provider mappings and explicitly reset", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-thinking-config-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const thinkingLevelMap = {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: null,
+    high: "high",
+    xhigh: null,
+    max: "xhigh",
+  };
+  const before = await readModelConfigurations(directory);
+  await saveModelConfiguration(directory, before.revision, {
+    ...model,
+    thinkingLevelMap,
+  });
+  const saved = await readModelConfigurations(directory);
+  assert.deepEqual(saved.models[0]?.thinkingLevelMap, thinkingLevelMap);
+  const options = {
+    modelsPath: join(directory, "models.json"),
+    authPath: join(directory, "auth.json"),
+    allowModelNetwork: false,
+  };
+  const native = await ModelRuntime.create(options);
+  assert.equal(native.getError(), undefined);
+  assert.deepEqual(
+    getSupportedThinkingLevels(native.getModel(model.provider, model.id)!),
+    ["low", "high", "max"],
+  );
+  // An older caller that omits the field preserves the native mapping.
+  await saveModelConfiguration(directory, saved.revision, {
+    ...model,
+    name: "Renamed",
+  });
+  const retained = await readModelConfigurations(directory);
+  assert.deepEqual(retained.models[0]?.thinkingLevelMap, thinkingLevelMap);
+  await changeProviderConfiguration(directory, retained.revision, {
+    action: "save",
+    configuration: {
+      provider: model.provider,
+      name: "Fixture",
+      baseUrl: model.baseUrl,
+      api: model.api,
+      models: [{ ...model, thinkingLevelMap: null }],
+    },
+  });
+  const reset = await readModelConfigurations(directory);
+  assert.equal(Object.hasOwn(reset.models[0]!, "thinkingLevelMap"), false);
+  const defaults = await ModelRuntime.create(options);
+  assert.deepEqual(
+    getSupportedThinkingLevels(defaults.getModel(model.provider, model.id)!),
+    ["off", "minimal", "low", "medium", "high"],
+  );
+});
+
+test("invalid thinking maps fail before writing native configuration", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-thinking-invalid-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const before = await readModelConfigurations(directory);
+  for (const thinkingLevelMap of [
+    [],
+    "high",
+    { ultra: "ultra" },
+    { high: 10 },
+    { high: "" },
+    { high: "bad\nvalue" },
+    { off: null, minimal: null, low: null, medium: null, high: null },
+  ]) {
+    const invalid = {
+      ...model,
+      thinkingLevelMap,
+    } as unknown as WebModelConfiguration;
+    assert.equal(validModelConfiguration(invalid), false);
+    await assert.rejects(
+      saveModelConfiguration(directory, before.revision, invalid),
+      /Invalid model configurations/u,
+    );
+  }
+  assert.deepEqual(await readModelConfigurations(directory), before);
+});
+
+test("automatic thinking choices project native catalog mappings independently of overrides", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-thinking-defaults-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const builtin = getBuiltinModels("openai").find(
+    (entry) => entry.reasoning && entry.thinkingLevelMap?.max,
+  );
+  assert.ok(builtin);
+  await saveModelConfiguration(
+    directory,
+    (await readModelConfigurations(directory)).revision,
+    {
+      ...model,
+      provider: "openai",
+      id: builtin.id,
+      thinkingLevelMap: { max: null },
+    },
+  );
+  const projected = await readModelConfigurations(directory);
+  assert.deepEqual(
+    projected.thinkingDefaults[`openai/${builtin.id}`],
+    builtin.thinkingLevelMap,
+  );
+  assert.deepEqual(projected.models[0]?.thinkingLevelMap, { max: null });
+});
+
 test("batch model additions commit together and reject invalid or stale batches without partial writes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "openpi-model-batch-"));
   try {
@@ -565,10 +673,24 @@ test("Web saves a custom provider key through Pi login, reloads it, and rejects 
         ...model,
         baseUrl: "http://127.0.0.1:10/v1",
         name: "Updated current model",
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: "low",
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
       },
     );
     assert.equal(session.model.baseUrl, "http://127.0.0.1:10/v1");
     assert.equal(session.model.name, "Updated current model");
+    assert.deepEqual(getSupportedThinkingLevels(session.model), [
+      "low",
+      "high",
+      "max",
+    ]);
     await assert.rejects(
       runtime.changeProviderConfiguration(
         sessionId,

@@ -1,4 +1,5 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import type {
   PlanControlResult,
@@ -56,6 +57,8 @@ export interface WebModelConfiguration {
   baseUrl: string;
   api: "openai-responses" | "openai-completions" | "anthropic-messages";
   reasoning: boolean;
+  /** Native Pi model capability map; null explicitly removes the override. */
+  thinkingLevelMap?: ThinkingLevelMap | null;
   contextWindow?: number;
   maxTokens?: number;
   input?: ("text" | "image")[];
@@ -65,6 +68,8 @@ export interface WebModelConfigurations {
   revision: string;
   models: WebModelConfiguration[];
   providers?: WebProviderConfigurationSummary[];
+  /** Read-only native catalog defaults, independent of saved per-model overrides. */
+  thinkingDefaults?: Record<string, ThinkingLevelMap>;
 }
 
 /** Pi-owned global default; trusted project settings may override it. */
