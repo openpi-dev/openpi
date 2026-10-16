@@ -1252,24 +1252,92 @@ function messageIdentity(message: WebLiveMessage) {
   return undefined;
 }
 
-function buildEntries(
-  snapshot: WebSnapshot,
-  liveMessages: LiveEntry[],
-  nativeRowKeys: Map<string, string>,
-) {
-  const persisted = snapshot.selectedSession?.entries ?? [];
-  const nativeById = new Map(persisted.map((entry) => [entry.id, entry]));
-  for (const id of nativeRowKeys.keys())
-    if (!nativeById.has(id)) nativeRowKeys.delete(id);
-  // Native IDs own historic rows. A live disclosure can keep its existing DOM
-  // only when both sides contain exactly one complete, equal projected payload.
-  const exactNative = new Map<string, PersistedEntry[]>();
-  const exactLive = new Map<string, LiveEntry[]>();
-  const disclosureSignature = (message: WebLiveMessage) =>
-    ["assistant", "toolResult"].includes(message.role ?? "") &&
+function disclosureSignature(message: WebLiveMessage) {
+  return ["assistant", "toolResult"].includes(message.role ?? "") &&
     !message.truncation?.truncated
-      ? JSON.stringify(message)
-      : null;
+    ? JSON.stringify(message)
+    : null;
+}
+
+function contentSignature(message: WebLiveMessage) {
+  return JSON.stringify([
+    message.role,
+    message.content,
+    (message.parts ?? [])
+      .filter((part) => message.role !== "user" || part.type !== "text")
+      .map((part) =>
+        part.type === "image"
+          ? [
+              part.type,
+              part.mimeType,
+              // Pi persists user image data and MIME type without its filename.
+              message.role === "user" ? undefined : part.name,
+            ]
+          : part.type,
+      ),
+    message.stopReason,
+    message.errorMessage,
+    message.toolCallId,
+  ]);
+}
+
+function legacySignature(message: WebLiveMessage) {
+  return message.role === "user"
+    ? contentSignature(message)
+    : JSON.stringify({ ...message, timestamp: undefined });
+}
+
+interface PersistedProjection {
+  nativeById: Map<string, PersistedEntry>;
+  exactNative: Map<string, PersistedEntry[]>;
+  baseEntries: DisplayEntry[];
+  indexById: Map<string, number>;
+  lookupIndexes: Map<string, number[]>;
+  customIndexes: Map<string, number[]>;
+  nativeByIdentity: Map<string, number[]>;
+  nativeByLegacySignature: Map<string, number[]>;
+  nativeMessages: { identity: string | undefined; signature: string }[];
+  promptCandidates: {
+    key: string;
+    position: number | undefined;
+    parentId: string | null | undefined;
+    signature: string;
+  }[];
+  promptsBySignature: Map<string, PersistedProjection["promptCandidates"]>;
+  commandInputs: Map<string, string>;
+  persistedPositions: Map<string, number>;
+}
+
+interface PersistedProjectionCache {
+  projection: PersistedProjection;
+  length: number;
+  head: PersistedEntry | undefined;
+  tail: PersistedEntry | undefined;
+}
+
+const persistedProjectionCache = new WeakMap<
+  readonly PersistedEntry[],
+  Map<string | undefined, PersistedProjectionCache>
+>();
+
+function persistedTranscriptProjection(
+  persisted: readonly PersistedEntry[],
+  sessionId: string | undefined,
+) {
+  let bySession = persistedProjectionCache.get(persisted);
+  const cached = bySession?.get(sessionId);
+  // Callers sometimes append to the same entries array between renders. The
+  // unchanged streaming path keeps that array, so a hit stays independent of
+  // history length; a different length or endpoint entry rebuilds.
+  if (
+    cached &&
+    cached.length === persisted.length &&
+    cached.head === persisted[0] &&
+    cached.tail === persisted[persisted.length - 1]
+  )
+    return cached.projection;
+  const nativeById = new Map(persisted.map((entry) => [entry.id, entry]));
+  const exactNative = new Map<string, PersistedEntry[]>();
   for (const entry of persisted) {
     const signature = entry.message && disclosureSignature(entry.message);
     if (!signature) continue;
@@ -1277,6 +1345,192 @@ function buildEntries(
     group.push(entry);
     exactNative.set(signature, group);
   }
+  const baseEntries = persisted.flatMap(
+    (entry: PersistedEntry): DisplayEntry[] => {
+      if (entry.forkSnapshotBoundary)
+        return [
+          {
+            key: entry.id,
+            entryId: entry.id,
+            timestamp: entry.timestamp,
+            forkSnapshotBoundary: true,
+            message: { role: "custom", content: "" },
+          },
+        ];
+      if (entry.type === "compaction")
+        return [
+          {
+            key: entry.id,
+            entryId: entry.id,
+            timestamp: entry.timestamp,
+            compaction: true,
+            message: { role: "custom", content: "" },
+          },
+        ];
+      if (
+        "turnTiming" in entry &&
+        entry.turnTiming &&
+        entry.turnTiming.sessionId === sessionId
+      )
+        return [
+          {
+            key: entry.id,
+            timestamp: entry.timestamp,
+            timing: entry.turnTiming,
+            message: { role: "custom", content: "" },
+          },
+        ];
+      if (entry.type !== "message" || !entry.message) return [];
+      const message = setupDisplayMessage(entry.message);
+      const parent = setupPromptParent(entry, (id) => nativeById.get(id));
+      // The exact command ancestry identifies this episode. Do not collapse
+      // separate setup requests merely because their text is the same.
+      if (isSetupPromptEcho(entry.message, parent)) return [];
+      return [
+        {
+          // Provider timestamps can repeat across distinct native messages. Live
+          // reconciliation and timing remain separate from persisted row identity.
+          key: entry.id,
+          entryId: entry.id,
+          timestamp: entry.timestamp,
+          message,
+        },
+      ];
+    },
+  );
+  const indexById = new Map<string, number>();
+  const lookupIndexes = new Map<string, number[]>();
+  baseEntries.forEach((entry, index) => {
+    if (entry.entryId) indexById.set(entry.entryId, index);
+    if (entry.timing || entry.compaction || entry.forkSnapshotBoundary) return;
+    const lookup = messageIdentity(entry.message) ?? entry.entryId ?? entry.key;
+    const indexes = lookupIndexes.get(lookup) ?? [];
+    indexes.push(index);
+    lookupIndexes.set(lookup, indexes);
+  });
+  const customIndexes = new Map<string, number[]>();
+  let customIndex = 0;
+  for (const entry of persisted) {
+    if (entry.message?.role !== "custom" || entry.message.truncation?.truncated)
+      continue;
+    const signature = legacySignature(entry.message);
+    const indexes = customIndexes.get(signature) ?? [];
+    indexes.push(customIndex);
+    customIndexes.set(signature, indexes);
+    customIndex++;
+  }
+  const nativeMessages = baseEntries.map((entry) => ({
+    identity: messageIdentity(entry.message),
+    signature: legacySignature(entry.message),
+  }));
+  const nativeByIdentity = new Map<string, number[]>();
+  const nativeByLegacySignature = new Map<string, number[]>();
+  nativeMessages.forEach((candidate, index) => {
+    // A live message with no timestamp still matches one native payload by
+    // legacy signature, including a native message that does have an identity.
+    const legacyIndexes =
+      nativeByLegacySignature.get(candidate.signature) ?? [];
+    legacyIndexes.push(index);
+    nativeByLegacySignature.set(candidate.signature, legacyIndexes);
+    if (candidate.identity === undefined) return;
+    const indexes = nativeByIdentity.get(candidate.identity) ?? [];
+    indexes.push(index);
+    nativeByIdentity.set(candidate.identity, indexes);
+  });
+  const persistedPositions = new Map(
+    persisted.map((entry, index) => [entry.id, index]),
+  );
+  const promptCandidates = baseEntries
+    .filter((entry) => entry.message.role === "user")
+    .map((entry) => ({
+      key: entry.entryId ?? entry.key,
+      position: persistedPositions.get(entry.entryId ?? entry.key),
+      parentId: nativeById.get(entry.entryId ?? entry.key)?.parentId,
+      signature: contentSignature(entry.message),
+    }));
+  const promptsBySignature = new Map<
+    string,
+    PersistedProjection["promptCandidates"]
+  >();
+  for (const candidate of promptCandidates) {
+    const group = promptsBySignature.get(candidate.signature) ?? [];
+    group.push(candidate);
+    promptsBySignature.set(candidate.signature, group);
+  }
+  const commandInputs = new Map(
+    baseEntries.flatMap((entry) =>
+      entry.message.role === "user" &&
+      entry.message.customType === "openpi-web-command-input" &&
+      entry.message.commandId
+        ? [[entry.message.commandId, entry.entryId ?? entry.key] as const]
+        : [],
+    ),
+  );
+  const projection: PersistedProjection = {
+    nativeById,
+    exactNative,
+    baseEntries,
+    indexById,
+    lookupIndexes,
+    customIndexes,
+    nativeByIdentity,
+    nativeByLegacySignature,
+    nativeMessages,
+    promptCandidates,
+    promptsBySignature,
+    commandInputs,
+    persistedPositions,
+  };
+  if (!bySession) {
+    bySession = new Map();
+    persistedProjectionCache.set(persisted, bySession);
+  }
+  bySession.set(sessionId, {
+    projection,
+    length: persisted.length,
+    head: persisted[0],
+    tail: persisted[persisted.length - 1],
+  });
+  return projection;
+}
+
+function firstUnmatched(indexes: number[] | undefined, matched: Set<number>) {
+  if (!indexes) return -1;
+  for (const index of indexes) if (!matched.has(index)) return index;
+  return -1;
+}
+
+function displayedThinkingDuration(
+  entry: DisplayEntry,
+  durations: Record<string, number>,
+) {
+  const keys = [
+    entry.timingKey,
+    entry.key,
+    entry.entryId,
+    messageIdentity(entry.message),
+  ];
+  for (const key of keys) {
+    if (!key) continue;
+    const duration = durations[key];
+    if (duration !== undefined) return duration;
+  }
+  return undefined;
+}
+
+function buildEntries(
+  snapshot: WebSnapshot,
+  liveMessages: LiveEntry[],
+  nativeRowKeys: Map<string, string>,
+) {
+  const selected = snapshot.selectedSession;
+  const persisted = selected?.entries ?? [];
+  const projection = persistedTranscriptProjection(persisted, selected?.id);
+  for (const id of nativeRowKeys.keys())
+    if (!projection.nativeById.has(id)) nativeRowKeys.delete(id);
+  // Native IDs own historic rows. A live disclosure can keep its existing DOM
+  // only when both sides contain exactly one complete, equal projected payload.
+  const exactLive = new Map<string, LiveEntry[]>();
   for (const live of liveMessages) {
     if (live.optimistic) continue;
     const signature = disclosureSignature(live.message);
@@ -1286,137 +1540,27 @@ function buildEntries(
     exactLive.set(signature, group);
   }
   const aliasedKeys = new Set(nativeRowKeys.values());
-  for (const [signature, native] of exactNative) {
+  for (const [signature, native] of projection.exactNative) {
     const live = exactLive.get(signature);
     if (native.length !== 1 || live?.length !== 1) continue;
     const id = native[0]!.id;
     const key = live[0]!.key;
-    if (nativeRowKeys.has(id) || aliasedKeys.has(key) || nativeById.has(key))
+    if (
+      nativeRowKeys.has(id) ||
+      aliasedKeys.has(key) ||
+      projection.nativeById.has(key)
+    )
       continue;
     nativeRowKeys.set(id, key);
     aliasedKeys.add(key);
   }
-  const liveKeys = new Map(
-    liveMessages.map((live) => [
-      messageIdentity(live.message) ?? live.key,
-      live.key,
-    ]),
-  );
-  const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] => {
-    if (entry.forkSnapshotBoundary)
-      return [
-        {
-          key: entry.id,
-          entryId: entry.id,
-          timestamp: entry.timestamp,
-          forkSnapshotBoundary: true,
-          message: { role: "custom", content: "" },
-        },
-      ];
-    if (entry.type === "compaction")
-      return [
-        {
-          key: entry.id,
-          entryId: entry.id,
-          timestamp: entry.timestamp,
-          compaction: true,
-          message: {
-            role: "custom",
-            content: "",
-          },
-        },
-      ];
-    if (
-      "turnTiming" in entry &&
-      entry.turnTiming &&
-      entry.turnTiming.sessionId === snapshot.selectedSession?.id
-    )
-      return [
-        {
-          key: entry.id,
-          timestamp: entry.timestamp,
-          timing: entry.turnTiming,
-          message: { role: "custom", content: "" },
-        },
-      ];
-    if (entry.type !== "message" || !entry.message) return [];
-    const message = setupDisplayMessage(entry.message);
-    const parent = setupPromptParent(entry, (id) => nativeById.get(id));
-    // The exact command ancestry identifies this episode. Do not collapse
-    // separate setup requests merely because their text is the same.
-    if (isSetupPromptEcho(entry.message, parent)) return [];
-    return [
-      {
-        // Provider timestamps can repeat across distinct native messages. Live
-        // reconciliation and timing remain separate from persisted row identity.
-        key: nativeRowKeys.get(entry.id) ?? entry.id,
-        entryId: entry.id,
-        timingKey: liveKeys.get(messageIdentity(entry.message) ?? entry.id),
-        timestamp: entry.timestamp,
-        message,
-      },
-    ];
-  });
-  const signature = (message: WebLiveMessage) =>
-    JSON.stringify([
-      message.role,
-      message.content,
-      (message.parts ?? [])
-        .filter((part) => message.role !== "user" || part.type !== "text")
-        .map((part) =>
-          part.type === "image"
-            ? [
-                part.type,
-                part.mimeType,
-                // Pi persists user image data and MIME type without its filename.
-                message.role === "user" ? undefined : part.name,
-              ]
-            : part.type,
-        ),
-      message.stopReason,
-      message.errorMessage,
-      message.toolCallId,
-    ]);
-  const legacySignature = (message: WebLiveMessage) =>
-    message.role === "user"
-      ? signature(message)
-      : JSON.stringify({ ...message, timestamp: undefined });
-  // Pi persists custom messages without their live timestamp. Reconcile the
-  // complete native payload before turning setup instructions into user text,
-  // including setup echoes whose native parent already renders the command.
-  const customMessages = persisted.flatMap((entry) =>
-    entry.message?.role === "custom" && !entry.message.truncation?.truncated
-      ? [legacySignature(entry.message)]
-      : [],
-  );
-  const matchedCustomMessages = new Set<number>();
-  // Preserve the mainline native-identity reconciliation of thinking/tool-only
-  // messages. Legacy matching consumes one full message, rather than a Set.
-  const nativeMessages = entries.map((entry) => ({
-    identity: messageIdentity(entry.message),
-    signature: legacySignature(entry.message),
-  }));
-  const matchedMessages = new Set<number>();
-  const persistedPositions = new Map(
-    persisted.map((entry, index) => [entry.id, index]),
-  );
-  const promptCandidates = entries
-    .filter((entry) => entry.message.role === "user")
-    .map((entry) => ({
-      key: entry.entryId ?? entry.key,
-      position: persistedPositions.get(entry.entryId ?? entry.key),
-      parentId: nativeById.get(entry.entryId ?? entry.key)?.parentId,
-      signature: signature(entry.message),
-    }));
-  const commandInputs = new Map(
-    entries.flatMap((entry) =>
-      entry.message.role === "user" &&
-      entry.message.customType === "openpi-web-command-input" &&
-      entry.message.commandId
-        ? [[entry.message.commandId, entry.entryId ?? entry.key] as const]
-        : [],
-    ),
-  );
+  const timingAt = new Map<number, string>();
+  for (const live of liveMessages) {
+    const lookup = messageIdentity(live.message) ?? live.key;
+    const indexes = projection.lookupIndexes.get(lookup);
+    if (!indexes) continue;
+    for (const index of indexes) timingAt.set(index, live.key);
+  }
   const acknowledgedPrompts = new Set(
     liveMessages.flatMap((entry) =>
       entry.optimistic?.projectedEntryId
@@ -1427,8 +1571,8 @@ function buildEntries(
   const projectedPrompts: { key: string; entryId: string }[] = [];
   const pendingPrompts: DisplayEntry[] = [];
   const execution =
-    snapshot.selectedExecution?.sessionId === snapshot.selectedSession?.id &&
-    snapshot.selectedExecution?.sessionPath === snapshot.selectedSession?.path
+    snapshot.selectedExecution?.sessionId === selected?.id &&
+    snapshot.selectedExecution?.sessionPath === selected?.path
       ? snapshot.selectedExecution
       : undefined;
   const queued = execution?.pendingFollowUps ?? 0;
@@ -1438,18 +1582,21 @@ function buildEntries(
       (entry) =>
         entry.optimistic?.admitted &&
         !entry.optimistic.projectedEntryId &&
-        !commandInputs.has(entry.optimistic.commandId),
+        !projection.commandInputs.has(entry.optimistic.commandId),
     ).length - queued,
   );
   let mergedRegularPrompts = 0;
   const suppressedLiveUsers = new Set<string>();
+  const matchedCustomMessages = new Set<number>();
+  const matchedMessages = new Set<number>();
+  const appended: DisplayEntry[] = [];
   for (const live of liveMessages) {
     if (live.optimistic?.projectedEntryId) continue;
     if (live.message.role === "custom" && !live.message.truncation?.truncated) {
-      const match = customMessages.findIndex(
-        (signature, index) =>
-          !matchedCustomMessages.has(index) &&
-          signature === legacySignature(live.message),
+      const signature = legacySignature(live.message);
+      const match = firstUnmatched(
+        projection.customIndexes.get(signature),
+        matchedCustomMessages,
       );
       if (match >= 0) {
         matchedCustomMessages.add(match);
@@ -1461,7 +1608,9 @@ function buildEntries(
       (live.key.startsWith("optimistic-")
         ? live.key.slice("optimistic-".length)
         : undefined);
-    const commandEntry = commandId ? commandInputs.get(commandId) : undefined;
+    const commandEntry = commandId
+      ? projection.commandInputs.get(commandId)
+      : undefined;
     if (commandEntry) {
       if (live.optimistic)
         projectedPrompts.push({ key: live.key, entryId: commandEntry });
@@ -1473,19 +1622,20 @@ function buildEntries(
       const after =
         live.optimistic.afterEntryId === null
           ? -1
-          : persistedPositions.get(live.optimistic.afterEntryId);
+          : projection.persistedPositions.get(live.optimistic.afterEntryId);
       const acknowledgement =
         !live.optimistic.admitted || mergedRegularPrompts >= mergeLimit
           ? undefined
-          : promptCandidates.find(
-              (entry) =>
-                entry.position !== undefined &&
-                (after !== undefined
-                  ? entry.position > after
-                  : entry.parentId === live.optimistic?.afterEntryId) &&
-                !acknowledgedPrompts.has(entry.key) &&
-                entry.signature === signature(message),
-            );
+          : projection.promptsBySignature
+              .get(contentSignature(message))
+              ?.find(
+                (entry) =>
+                  entry.position !== undefined &&
+                  (after !== undefined
+                    ? entry.position > after
+                    : entry.parentId === live.optimistic?.afterEntryId) &&
+                  !acknowledgedPrompts.has(entry.key),
+              );
       if (acknowledgement) {
         acknowledgedPrompts.add(acknowledgement.key);
         projectedPrompts.push({ key: live.key, entryId: acknowledgement.key });
@@ -1501,11 +1651,10 @@ function buildEntries(
                 !pending.optimistic.projectedEntryId &&
                 !suppressedLiveUsers.has(pending.key) &&
                 !projectedPrompts.some((pair) => pair.key === pending.key) &&
-                pending.optimistic.sessionId === snapshot.selectedSession?.id &&
-                pending.optimistic.sessionPath ===
-                  snapshot.selectedSession?.path &&
-                signature(setupDisplayMessage(pending.message)) ===
-                  signature(message),
+                pending.optimistic.sessionId === selected?.id &&
+                pending.optimistic.sessionPath === selected?.path &&
+                contentSignature(setupDisplayMessage(pending.message)) ===
+                  contentSignature(message),
             )
           : undefined;
       if (admission) {
@@ -1513,16 +1662,18 @@ function buildEntries(
         continue;
       }
       const identity = messageIdentity(message);
-      const legacy =
-        identity === undefined ? legacySignature(message) : undefined;
-      const match = nativeMessages.findIndex(
-        (candidate, index) =>
-          !matchedMessages.has(index) &&
-          (identity === undefined
-            ? candidate.signature === legacy
-            : candidate.identity === identity &&
-              candidate.signature === legacySignature(message)),
-      );
+      const legacy = legacySignature(message);
+      const match =
+        identity === undefined
+          ? firstUnmatched(
+              projection.nativeByLegacySignature.get(legacy),
+              matchedMessages,
+            )
+          : ((projection.nativeByIdentity.get(identity) ?? []).find(
+              (index) =>
+                !matchedMessages.has(index) &&
+                projection.nativeMessages[index]?.signature === legacy,
+            ) ?? -1);
       if (match >= 0) {
         matchedMessages.add(match);
         continue;
@@ -1536,7 +1687,7 @@ function buildEntries(
       optimistic: live.optimistic,
     };
     if (message.role === "user" && live.optimistic) pendingPrompts.push(next);
-    else entries.push(next);
+    else appended.push(next);
   }
   const queueCounts = new Map<string, number>();
   for (const message of execution?.queuedMessages ?? [])
@@ -1563,14 +1714,33 @@ function buildEntries(
     ),
   );
   for (const pair of projectedPrompts) promptKeys.set(pair.entryId, pair.key);
+  let persistedRows = projection.baseEntries;
+  const rewrite = (index: number, entry: DisplayEntry) => {
+    if (persistedRows === projection.baseEntries)
+      persistedRows = projection.baseEntries.slice();
+    persistedRows[index] = entry;
+  };
+  for (const [index, timingKey] of timingAt) {
+    const current = persistedRows[index];
+    if (!current || current.timingKey === timingKey) continue;
+    rewrite(index, { ...current, timingKey });
+  }
+  for (const [id, key] of nativeRowKeys) {
+    const index = projection.indexById.get(id);
+    if (index === undefined) continue;
+    const current = persistedRows[index];
+    if (!current || current.key === key) continue;
+    rewrite(index, { ...current, key });
+  }
+  for (const [entryId, key] of promptKeys) {
+    const index = projection.indexById.get(entryId);
+    if (index === undefined) continue;
+    const current = persistedRows[index];
+    if (!current || current.key === key) continue;
+    rewrite(index, { ...current, key });
+  }
   return {
-    entries: [
-      ...entries.map((entry) => {
-        const key = entry.entryId && promptKeys.get(entry.entryId);
-        return key ? { ...entry, key } : entry;
-      }),
-      ...visiblePending,
-    ],
+    entries: persistedRows.concat(appended, visiblePending),
     projectedPrompts,
   };
 }
@@ -2140,37 +2310,40 @@ function ConversationTurn({
   );
 }
 
-function renderTurns(
+function groupConversationTurns(
   rows: RenderRow[],
   running: boolean,
   activeCommandId?: string,
-  changesByPrompt?: Map<string, WebTurnChanges>,
-  session?: WebSessionProjection,
   timedTurn?: ActiveTurn,
-  onReviewTurn?: OpenTurnReview,
-  observed = true,
 ) {
+  const promptIndexes = new Map<string, number>();
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index]!;
+    if (
+      row.kind === "prompt" &&
+      row.promptEntryId &&
+      !promptIndexes.has(row.promptEntryId)
+    )
+      promptIndexes.set(row.promptEntryId, index);
+  }
   const owners = new Map<RenderRow, number>();
   const attachRun = (promptEntryId: string | undefined, end: number) => {
     if (!promptEntryId) return;
-    const start = rows.findIndex(
-      (row) => row.kind === "prompt" && row.promptEntryId === promptEntryId,
-    );
-    if (start < 0 || start >= end) return;
-    if (
-      rows
-        .slice(start + 1, end)
-        .some((row) => row.timing || row.forkSnapshotBoundary)
-    )
-      return;
+    const start = promptIndexes.get(promptEntryId);
+    if (start === undefined || start >= end) return;
+    for (let index = start + 1; index < end; index++) {
+      const row = rows[index]!;
+      if (row.timing || row.forkSnapshotBoundary) return;
+    }
     for (let index = start; index <= end; index++) {
       const row = rows[index]!;
       if (!row.pendingPrompt) owners.set(row, rows[start]!.turn);
     }
   };
-  rows.forEach((row, index) => {
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index]!;
     if (row.timing) attachRun(row.timing.promptEntryId, index);
-  });
+  }
   if (running && timedTurn) attachRun(timedTurn.promptEntryId, rows.length - 1);
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
@@ -2200,7 +2373,28 @@ function renderTurns(
   ) {
     nativeTurnIndex--;
   }
-  const activeTurn = confirmedTurn?.id ?? turns[nativeTurnIndex]?.id;
+  return {
+    turns,
+    activeTurn: confirmedTurn?.id ?? turns[nativeTurnIndex]?.id,
+  };
+}
+
+function renderTurns(
+  rows: RenderRow[],
+  running: boolean,
+  activeCommandId?: string,
+  changesByPrompt?: Map<string, WebTurnChanges>,
+  session?: WebSessionProjection,
+  timedTurn?: ActiveTurn,
+  onReviewTurn?: OpenTurnReview,
+  observed = true,
+) {
+  const { turns, activeTurn } = groupConversationTurns(
+    rows,
+    running,
+    activeCommandId,
+    timedTurn,
+  );
   return turns.map((turn) => (
     <ConversationTurn
       id={turn.id}
@@ -2228,6 +2422,8 @@ function renderTurns(
     />
   ));
 }
+
+export { buildEntries, groupConversationTurns };
 
 function captureReadingPosition(
   element: HTMLElement,
@@ -3134,9 +3330,10 @@ export function Transcript(props: TranscriptProps) {
                           ? props.snapshot.thinking?.level
                           : undefined
                       }
-                      duration={
-                        props.thinkingDurations[entry.timingKey ?? entry.key]
-                      }
+                      duration={displayedThinkingDuration(
+                        entry,
+                        props.thinkingDurations,
+                      )}
                       defaultOpen={
                         props.snapshot.preferences.expandThinking === true
                       }
