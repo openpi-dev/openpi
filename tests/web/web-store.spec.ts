@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  WEB_MAX_ENTRIES,
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebCommandDiscoveryResult,
   type WebEvent,
@@ -24,7 +25,10 @@ import {
   EventResyncRequired,
   type EventStreamOptions,
 } from "../../web/ui/src/protocol/event-stream.ts";
-import { createWebStore } from "../../web/ui/src/store/web-store.ts";
+import {
+  createWebStore,
+  THINKING_TIMING_RETENTION_LIMIT,
+} from "../../web/ui/src/store/web-store.ts";
 
 const snapshotTruncation = {
   bytes: 0,
@@ -5959,5 +5963,248 @@ describe("thinking level selection", () => {
       { sessionId: "session-1", level: "low" },
     ]);
     store.getState().actions.stop();
+  });
+});
+
+describe("streaming update cost", () => {
+  function thinkingMessage(text: string, timestamp?: number) {
+    return {
+      role: "assistant",
+      content: text,
+      ...(timestamp === undefined ? {} : { timestamp }),
+      parts: [{ type: "thinking" as const, text }],
+    };
+  }
+
+  it("does not replace an unchanged live tool snapshot when a message streams", async () => {
+    const client = new FakeClient();
+    const stream = eventStreamHarness();
+    const initial = snapshot();
+    initial.runtime.liveTools = [];
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.setState({
+      snapshot: initial,
+      cursor: 4,
+      selectedPath: initial.selectedSession!.path,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      const before = store.getState().snapshot;
+      stream.emit(
+        runtimeEvent(5, "message_update", {
+          sessionId: "session-1",
+          messageKey: "live-1",
+          message: { role: "assistant", content: "delta" },
+        }),
+      );
+      expect(store.getState().cursor).toBe(5);
+      expect(store.getState().snapshot).toBe(before);
+      expect(store.getState().liveMessages.map((entry) => entry.key)).toEqual([
+        "live-1",
+      ]);
+      stream.emit(
+        runtimeEvent(6, "turn_settled", {
+          sessionId: "session-1",
+          commandId: "command-1",
+          epoch: 1,
+          outcome: "completed",
+        }),
+      );
+      expect(store.getState().cursor).toBe(6);
+      expect(store.getState().snapshot).toBe(before);
+      stream.emit(
+        runtimeEvent(7, "tool_execution_start", {
+          sessionId: "session-1",
+          toolCallId: "call-1",
+          call: {
+            type: "toolCall",
+            id: "call-1",
+            name: "read",
+            arguments: "{}",
+          },
+        }),
+      );
+      const withTool = store.getState().snapshot;
+      expect(withTool).not.toBe(before);
+      expect(withTool?.runtime.liveTools?.map((item) => item.call.id)).toEqual([
+        "call-1",
+      ]);
+      stream.emit(
+        runtimeEvent(8, "message_update", {
+          sessionId: "session-1",
+          messageKey: "live-1",
+          message: { role: "assistant", content: "delta again" },
+        }),
+      );
+      expect(store.getState().cursor).toBe(8);
+      expect(store.getState().snapshot).toBe(withTool);
+      expect(store.getState().liveMessages[0]?.message.content).toBe(
+        "delta again",
+      );
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("keeps thinking timings for visible history and drops them after the live window moves on", async () => {
+    const client = new FakeClient();
+    const stream = eventStreamHarness();
+    const initial = snapshot();
+    const persisted = {
+      id: "visible-thinking",
+      type: "message" as const,
+      timestamp: "2026-10-16T00:00:00Z",
+      message: thinkingMessage("Inspect the source", 1_700_000_000_000),
+    };
+    initial.selectedSession!.entries = [persisted];
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.setState({
+      snapshot: initial,
+      cursor: 4,
+      selectedPath: initial.selectedSession!.path,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-10-16T00:00:00Z"));
+      stream.emit(
+        runtimeEvent(5, "message_update", {
+          sessionId: "session-1",
+          messageKey: "live-visible",
+          message: persisted.message,
+        }),
+      );
+      vi.setSystemTime(new Date("2026-10-16T00:00:05Z"));
+      stream.emit(
+        runtimeEvent(6, "message_end", {
+          sessionId: "session-1",
+          messageKey: "live-visible",
+          message: persisted.message,
+        }),
+      );
+      for (let index = 0; index < 20; index++) {
+        stream.emit(
+          runtimeEvent(7 + index, "message_update", {
+            sessionId: "session-1",
+            messageKey: `live-next-${index}`,
+            message: thinkingMessage(`later ${index}`),
+          }),
+        );
+      }
+      const durations = store.getState().thinkingDurations;
+      expect(durations["message-assistant-1700000000000"]).toBe(5_000);
+      expect(durations["visible-thinking"]).toBeUndefined();
+      expect(durations["live-visible"]).toBeUndefined();
+      expect(store.getState().liveMessages).toHaveLength(8);
+      expect(
+        store
+          .getState()
+          .liveMessages.some((entry) => entry.key === "live-visible"),
+      ).toBe(false);
+      expect(
+        Object.keys(store.getState().thinkingStarts).length,
+      ).toBeLessThanOrEqual(8);
+
+      const kept = snapshot();
+      kept.cursor = 30;
+      kept.selectedSession!.entries = [persisted];
+      client.snapshots.push(Promise.resolve(kept));
+      expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+      expect(
+        store.getState().thinkingDurations["message-assistant-1700000000000"],
+      ).toBe(5_000);
+      const removed = snapshot();
+      removed.cursor = 31;
+      removed.selectedSession!.entries = [
+        {
+          id: "other-thinking",
+          type: "message",
+          timestamp: "2026-10-16T00:01:00Z",
+          message: thinkingMessage("A different note", 1_700_000_000_001),
+        },
+      ];
+      client.snapshots.push(Promise.resolve(removed));
+      expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+      expect(
+        store.getState().thinkingDurations["message-assistant-1700000000000"],
+      ).toBeUndefined();
+      expect(
+        store.getState().thinkingDurations["message-assistant-1700000000001"],
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      store.getState().actions.stop();
+    }
+  });
+
+  it("bounds thinking timings to the reading window after live messages are trimmed", async () => {
+    const client = new FakeClient();
+    const stream = eventStreamHarness();
+    const initial = snapshot();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.setState({
+      snapshot: initial,
+      cursor: 4,
+      selectedPath: initial.selectedSession!.path,
+      thinkingStarts: Object.fromEntries(
+        Array.from({ length: 10_000 }, (_, index) => [`stale-${index}`, index]),
+      ),
+      thinkingDurations: Object.fromEntries(
+        Array.from({ length: 10_000 }, (_, index) => [`stale-${index}`, index]),
+      ),
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-10-16T00:00:00Z"));
+      const limit = THINKING_TIMING_RETENTION_LIMIT;
+      expect(limit).toBe(WEB_MAX_ENTRIES * 4);
+      for (let index = 0; index < limit + 1; index++) {
+        const timestamp = 5_000 + index;
+        stream.emit(
+          runtimeEvent(5 + index * 2, "message_update", {
+            sessionId: "session-1",
+            messageKey: `live-${index}`,
+            message: thinkingMessage("reason", timestamp),
+          }),
+        );
+        vi.setSystemTime(Date.now() + 1_000);
+        stream.emit(
+          runtimeEvent(6 + index * 2, "message_end", {
+            sessionId: "session-1",
+            messageKey: `live-${index}`,
+            message: thinkingMessage("reason", timestamp),
+          }),
+        );
+      }
+      const durations = store.getState().thinkingDurations;
+      const keys = Object.keys(durations);
+      expect(keys.length).toBeLessThanOrEqual(limit + 8);
+      expect(durations["message-assistant-5000"]).toBeUndefined();
+      expect(durations[`message-assistant-${5_000 + limit}`]).toBe(1_000);
+      expect(
+        Object.keys(store.getState().thinkingStarts).some((key) =>
+          key.startsWith("stale-"),
+        ),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      store.getState().actions.stop();
+    }
   });
 });
