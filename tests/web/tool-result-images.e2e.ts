@@ -94,14 +94,15 @@ test("an image-only read result stays visible after refresh without embedding im
     if ((await sequence.getAttribute("open")) === null)
       await sequence.locator(":scope > summary").click();
     const card = page.locator('[data-tool="read"]');
-    await expect(card.locator("summary")).toContainText("1 张图片 · image/png");
-    await expect(card.locator("summary")).toContainText("无法预览");
+    const summary = card.locator(":scope > summary");
+    await expect(summary).toContainText("1 张图片 · image/png");
+    await expect(summary).toContainText("无法预览");
     await expect(card).toContainText("Chart caption");
     await expect(card).not.toContainText("无输出");
     await expect(card).not.toContainText(secret);
     await expect(card).toHaveAttribute("data-state", "returned");
     await page.reload();
-    await expect(card.locator("summary")).toContainText("1 张图片 · image/png");
+    await expect(summary).toContainText("1 张图片 · image/png");
     await expect(card).not.toContainText(secret);
   } finally {
     await context.close();

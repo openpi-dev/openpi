@@ -3754,7 +3754,7 @@ export function Transcript(props: TranscriptProps) {
               icon={icon}
               name={toolName}
               summary={compactSummary(message.content)}
-              output={message.content}
+              output={mediaSummary ? message.content : undefined}
               mediaSummary={mediaSummary}
               media={
                 mediaSummary ? <ToolResultMedia message={message} /> : undefined
