@@ -26,6 +26,17 @@ if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
 
 const authenticatedPath = "/";
 
+// route.fetch() keeps the upstream body on the per-test request context.
+// Closing that context ("Test ended") drops the body, so a snapshot refresh
+// still between fetch() and json() rejects a finished test with
+// "Response has been disposed". Drain handlers before fixture teardown.
+// A handler that fails for any other reason still fails the test. Tests that
+// already closed the fixture page have finished their own handlers.
+test.afterEach(async ({ page }) => {
+  if (page.isClosed()) return;
+  await page.unrouteAll({ behavior: "wait" });
+});
+
 for (const firstControl of ["settings", "thinking"] as const) {
   test(`first-use ${firstControl} works before sending a message and preserves the draft`, async ({
     page,
