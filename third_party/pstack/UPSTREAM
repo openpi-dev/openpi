@@ -1,0 +1,5 @@
+repository: https://github.com/cursor/plugins
+path: pstack
+commit: 2f8377461fd533f5af782e1fd643783b1067b847
+version: 0.15.25
+license: MIT

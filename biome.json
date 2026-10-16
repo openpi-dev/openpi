@@ -16,6 +16,7 @@
       "web/browser-extension/**/*.js",
       "web/ui/*.json",
       "**/*.json",
+      "!.cursor/**",
       "!extensions/**/docs/**",
       "!docs/**",
       "!node_modules/**"
