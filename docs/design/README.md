@@ -1,5 +1,7 @@
 # Design archive
 
+- [`WEB_TRAJECTORY_DEEPSEEK_2026-10-14.md`](WEB_TRAJECTORY_DEEPSEEK_2026-10-14.md) — DeepSeek 风格轨迹列表、三轨总览、详情与 Pi 原生证据适配，跟踪 #785。
+
 - [`WEB_CODEX_SIDEBAR.md`](WEB_CODEX_SIDEBAR.md) — Codex App Server and shipped-UI evidence, mixed pins, Activity/search, Web menus and Pi-owned reading revisions for #597 / #711.
 - [`WEB_CODEX_SETTINGS.md`](WEB_CODEX_SETTINGS.md) — draft Codex settings surface, appearance and archived-chat state comparison with bounded REA/App Server evidence for #597 / #711.
 

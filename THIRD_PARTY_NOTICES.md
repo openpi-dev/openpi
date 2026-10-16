@@ -10,6 +10,14 @@ it does not install or activate the package's desktop helper.
 
 ## Project origins and acknowledgments
 
+The Web execution trajectory adapts the compact ledger, three-lane overview,
+range selection, and record inspector of DeepSeek Harness at revision
+`d743267388641bc76f17c45ce8b4c231aed1d32c`, from
+[`@deepseek-ai/dsh-client-ui-trajectory`](https://github.com/deepseek-ai/deepseek-harness/tree/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/client/ui-trajectory).
+OpenPI keeps Pi's Session records and bounded Web projections; it does not embed
+Cordis or the DeepSeek agent runtime. The MIT notice is reproduced in
+[`web/ui/src/features/trajectory/LICENSE.dsh`](web/ui/src/features/trajectory/LICENSE.dsh).
+
 The Web model settings page adapts the provider cards, inline editors and model
 selection interactions of `@deepseek-ai/dsh-client-ui-settings-models` version
 `0.1.7-rc.2`, from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).

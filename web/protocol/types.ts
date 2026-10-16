@@ -408,6 +408,10 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  /** Provider-reported accounting for this response, never Session totals. */
+  usage?: Partial<Pick<WebSessionUsage, "input" | "output" | "cacheRead" | "cacheWrite">>;
+  provider?: string;
+  model?: string;
   /** Pi's bounded native child ledger. Child result bodies are not persisted by Pi. */
   nestedCalls?: { calls: WebNestedToolCall[]; complete: boolean };
   webSearch?: (NativeSearchActivity & { beforePartIndex?: number })[];
@@ -991,6 +995,16 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
       ? (message as Record<string, unknown>)
       : {};
   const content = projectContent(value, resolvePath);
+  const rawUsage = value.role === "assistant" && value.usage && typeof value.usage === "object"
+    ? value.usage as Record<string, unknown> : undefined;
+  const usage = rawUsage ? Object.fromEntries(
+    ["input", "output", "cacheRead", "cacheWrite"].flatMap((key) => {
+      const count = rawUsage[key];
+      return typeof count === "number" && Number.isFinite(count) && count >= 0 ? [[key, count]] : [];
+    }),
+  ) : undefined;
+  const placeholderUsage = (value.stopReason === "error" || value.stopReason === "aborted") &&
+    usage && !Object.values(usage).some((count) => count > 0);
   const webSearch = projectNativeSearch(value, content.parts.length);
   const details = detailsProjection(value.details);
   if (details.truncated && value.role === "custom" && value.customType === "subagent-result") {
@@ -1032,6 +1046,9 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
+    ...(usage && !placeholderUsage && Object.keys(usage).length ? { usage } : {}),
+    ...(value.role === "assistant" && typeof value.provider === "string" ? { provider: value.provider.slice(0, WEB_MAX_METADATA_TEXT) } : {}),
+    ...(value.role === "assistant" && typeof value.model === "string" ? { model: value.model.slice(0, WEB_MAX_METADATA_TEXT) } : {}),
     ...(nestedCalls ? { nestedCalls } : {}),
     ...(webSearch ? { webSearch } : {}),
     ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
