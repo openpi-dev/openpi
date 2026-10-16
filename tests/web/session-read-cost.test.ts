@@ -295,6 +295,102 @@ test("non-current history keeps Pi's branch without a synchronous open or a seco
   }
 });
 
+test("a long non-current history matches Pi's branch and yields before the request finishes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-long-history-yield-"));
+  const directory = join(root, "sessions");
+  await mkdir(directory, { recursive: true });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const messageCount = 10_000;
+  const path = join(directory, "long-history.jsonl");
+  const timestamp = "2026-10-15T00:00:00.000Z";
+  const lines = [
+    JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "long-history",
+      timestamp,
+      cwd: root,
+    }),
+  ];
+  for (let index = 0; index < messageCount; index++) {
+    lines.push(
+      JSON.stringify({
+        type: "message",
+        id: `e-${index}`,
+        parentId: index === 0 ? null : `e-${index - 1}`,
+        timestamp,
+        message: {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: [{ type: "text", text: "m" }],
+          timestamp: 1_792_022_400_000,
+        },
+      }),
+    );
+  }
+  await writeFile(path, `${lines.join("\n")}\n`);
+  const oracle = SessionManager.open(path, directory);
+  const oracleBranch = oracle.getBranch();
+  const adapter = new PiWebAdapter(
+    runtimeFor(root, directory, SessionManager.inMemory(root)),
+  );
+  const summary = (await adapter.listSessions()).find(
+    (session) => session.path === path,
+  );
+  assert.ok(summary);
+  assert.equal(summary.messageCount, messageCount);
+  const originalRead = fsPromises.readFile;
+  const originalSetTimeout = globalThis.setTimeout;
+  let bodyReads = 0;
+  let watchParseTurns = false;
+  let parseTurns = 0;
+  // Counts timer turns scheduled while the body is being parsed. A later
+  // await, such as the identity stat, must not count: setImmediate would also
+  // starve a caller timer between chunks.
+  globalThis.setTimeout = function (
+    this: unknown,
+    ...args: Parameters<typeof setTimeout>
+  ) {
+    if (watchParseTurns && args[1] === 0) parseTurns++;
+    return originalSetTimeout.apply(globalThis, args);
+  } as typeof setTimeout;
+  t.mock.method(
+    fsPromises,
+    "readFile",
+    async (...args: Parameters<typeof originalRead>) => {
+      const result = await originalRead(...args);
+      if (args[0] === path) {
+        bodyReads++;
+        watchParseTurns = true;
+      }
+      return result;
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    globalThis.setTimeout = originalSetTimeout;
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+
+  const session = await adapter.getSession(path, [summary]);
+  watchParseTurns = false;
+  assert.ok(parseTurns > 0);
+  assert.equal(bodyReads, 1);
+  assert.ok(session);
+  assert.equal(session.history?.leafEntryId, oracle.getLeafId());
+  assert.equal(
+    session.truncation.entriesOmitted + session.entries.length,
+    oracleBranch.length,
+  );
+  const earliest = await adapter.getSessionMessageWindow(
+    summary.id,
+    path,
+    "e-0",
+  );
+  assert.equal(earliest.status, "ok");
+  assert.equal(bodyReads, 1);
+});
+
 test("concurrent catalog reads share one scan", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "openpi-catalog-share-"));
   const directory = join(root, "sessions");

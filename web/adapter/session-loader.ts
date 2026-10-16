@@ -1,9 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { Worker } from "node:worker_threads";
-import { SessionManager, type FileEntry } from "@earendil-works/pi-coding-agent";
+import { parseSessionEntries, SessionManager, type FileEntry } from "@earendil-works/pi-coding-agent";
 
 const MAX_OPEN_SESSIONS = 4;
+/** Enough lines that a yield can run, without a timer per message. */
+const PARSE_TURN_LINES = 4_000;
 
 type FileIdentity = {
   dev: bigint;
@@ -13,20 +14,10 @@ type FileIdentity = {
   ctimeNs: bigint;
 };
 
-type WorkerResponse = {
-  id: number;
-  entries?: FileEntry[];
-  error?: string;
-};
-
 type CachedSession = {
   identity: FileIdentity;
   manager: SessionManager;
 };
-
-let worker: Worker | undefined;
-let nextId = 0;
-const pending = new Map<number, { resolve: (entries: FileEntry[]) => void; reject: (error: Error) => void }>();
 
 function identityOf(stats: FileIdentity): FileIdentity {
   return {
@@ -43,59 +34,39 @@ function sameIdentity(left: FileIdentity, right: FileIdentity) {
     left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }
 
-function releaseWorker(current: Worker) {
-  if (pending.size === 0) current.unref();
+function yieldTurn() {
+  // setTimeout, not setImmediate: a chain of check-phase callbacks starves caller timers.
+  return new Promise((resolveTurn) => setTimeout(resolveTurn, 0));
 }
 
-function fileWorker() {
-  if (worker) return worker;
-  worker = new Worker(new URL("./session-file-worker.ts", import.meta.url), {
-    execArgv: ["--experimental-strip-types"],
-  });
-  // An idle parser must not keep the process, or a finished request never ends.
-  worker.unref();
-  const current = worker;
-  current.on("message", (message: WorkerResponse) => {
-    const request = pending.get(message.id);
-    if (!request) return;
-    pending.delete(message.id);
-    releaseWorker(current);
-    if (message.error !== undefined) request.reject(new Error(message.error));
-    else request.resolve(message.entries ?? []);
-  });
-  current.on("error", (error) => {
-    const requests = [...pending.values()];
-    pending.clear();
-    if (worker === current) worker = undefined;
-    current.unref();
-    const failure = error instanceof Error ? error : new Error(String(error));
-    for (const request of requests) request.reject(failure);
-  });
-  return current;
-}
-
-function parseEntries(bytes: Buffer) {
-  const id = nextId++;
-  const current = fileWorker();
-  current.ref();
-  return new Promise<FileEntry[]>((resolvePromise, reject) => {
-    const fail = (error: Error) => {
-      if (pending.get(id)) pending.delete(id);
-      releaseWorker(current);
-      reject(error);
-    };
-    pending.set(id, {
-      resolve: (entries) => {
-        resolvePromise(entries);
-      },
-      reject: fail,
-    });
-    try {
-      current.postMessage({ id, bytes });
-    } catch (error) {
-      fail(error instanceof Error ? error : new Error(String(error)));
+async function parseInTurns(content: string) {
+  const entries: FileEntry[] = [];
+  let start = 0;
+  let cursor = 0;
+  let linesInChunk = 0;
+  let chunks = 0;
+  const flush = async (end: number) => {
+    const slice = chunks === 0 && end >= content.length ? content : content.slice(start, end);
+    // A single short file stays one Pi parse. A longer file yields before every chunk.
+    if (chunks > 0 || end < content.length) await yieldTurn();
+    if (slice.length > 0) entries.push(...parseSessionEntries(slice) as FileEntry[]);
+    chunks++;
+    start = end;
+    linesInChunk = 0;
+  };
+  while (cursor < content.length) {
+    const newline = content.indexOf("\n", cursor);
+    if (newline === -1) {
+      cursor = content.length;
+      linesInChunk++;
+      break;
     }
-  });
+    cursor = newline + 1;
+    linesInChunk++;
+    if (linesInChunk === PARSE_TURN_LINES) await flush(cursor);
+  }
+  if (start < cursor) await flush(cursor);
+  return entries;
 }
 
 function readableSession(path: string, sessionDir: string, entries: FileEntry[]) {
@@ -110,8 +81,9 @@ function readableSession(path: string, sessionDir: string, entries: FileEntry[])
 }
 
 /**
- * Opens a non-current Session off the request thread and reuses it while the
- * file identity is unchanged. Pi remains the parser and the branch authority.
+ * Opens a non-current Session without a synchronous full-file read. Long files
+ * yield before each Pi parse turn, including the first. The result is reused
+ * while the file identity is unchanged. Pi remains the parser and the branch authority.
  */
 export class SessionLoader {
   private readonly cache = new Map<string, CachedSession>();
@@ -161,7 +133,6 @@ export class SessionLoader {
   }
 
   private async readEntries(path: string) {
-    // The bytes are read asynchronously here; Pi parses them off this thread.
-    return parseEntries(await readFile(path));
+    return parseInTurns(await readFile(path, "utf8"));
   }
 }
