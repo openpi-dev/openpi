@@ -1957,11 +1957,19 @@ const resources = {
       configureModels: "Configure models",
       openModelSettings: "Model settings",
       selectThinking: "Select thinking level",
+      thinkingAvailableLevels: "Available: {{levels}}",
       resetThinking: "Restore the opening level ({{level}})",
       modelThinkingNotEnabled:
         "Thinking is not enabled for this model. Enable reasoning support in model settings if your provider supports it.",
       providerReasoningHint:
-        "Enable only if the provider supports reasoning. Available levels come from Pi; adjust the level in the composer.",
+        "Enable only if the provider supports reasoning. Adjust the active level in the composer.",
+      providerThinkingLevels: "Supported thinking levels",
+      providerThinkingLevelsHint:
+        "Choose the levels this model supports. Saving updates the conversation picker.",
+      providerThinkingAutomatic: "Automatic (Pi defaults)",
+      providerThinkingSelected_one: "{{count}} level selected",
+      providerThinkingSelected_other: "{{count}} levels selected",
+      providerThinkingReset: "Use Pi defaults",
       providerImageHint:
         "When Image is unchecked, the model will not receive image attachments.",
       selectWorkspace: "Select workspace",
@@ -3875,11 +3883,17 @@ const resources = {
       configureModels: "配置模型",
       openModelSettings: "模型设置",
       selectThinking: "选择思考等级",
+      thinkingAvailableLevels: "可选等级：{{levels}}",
       resetThinking: "恢复打开时的等级（{{level}}）",
       modelThinkingNotEnabled:
         "此模型未启用思考。如提供商支持，可在模型设置中开启「支持推理」。",
-      providerReasoningHint:
-        "按提供商能力开启；可用档位由 Pi 提供，在聊天输入框调节强度。",
+      providerReasoningHint: "按提供商能力开启，在聊天输入框调节当前思考等级。",
+      providerThinkingLevels: "支持的思考等级",
+      providerThinkingLevelsHint:
+        "选择此模型支持的等级，保存后同步到会话选择器。",
+      providerThinkingAutomatic: "自动（Pi 默认）",
+      providerThinkingSelected: "已选 {{count}} 项",
+      providerThinkingReset: "使用 Pi 默认等级",
       providerImageHint: "未勾选图片时，模型不会收到图片附件。",
       selectWorkspace: "选择工作区",
       send: "发送",

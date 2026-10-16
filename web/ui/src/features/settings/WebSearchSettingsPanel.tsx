@@ -1,5 +1,5 @@
 import { Button } from "@astryxdesign/core/Button";
-import { RefreshCw, Search } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { WebSettingsCatalog } from "../../../../protocol/types.ts";
 
@@ -25,7 +25,7 @@ export function WebSearchSettingsPanel({
     Boolean(error) ||
     Boolean(catalog?.resources.diagnostics.settingsErrors);
   return (
-    <section className="settings-general-panel settings-web-search-panel">
+    <section className="settings-content-page settings-web-search-panel">
       <header className="settings-page-heading">
         <div>
           <h1>{t("webSearchSettings")}</h1>
@@ -46,52 +46,44 @@ export function WebSearchSettingsPanel({
         </p>
       )}
       {!catalog && !error && <p role="status">{t("settingsCatalogLoading")}</p>}
-      <section className="settings-section-block">
-        <div className="settings-detail-heading">
-          <div>
-            <h2>
-              <Search aria-hidden="true" />
-              {t("webSearchCurrentModel")}
-            </h2>
+      <section className="settings-control-group">
+        <div className="settings-control-row">
+          <div className="settings-control-copy">
+            <h2>{t("webSearchCurrentModel")}</h2>
             <p>{t("webSearchNativeDetail")}</p>
           </div>
-          <span className="settings-status-badge">
-            {t(enabled ? "enabled" : "disabled")}
+          <Button
+            label={t(enabled ? "webSearchDisable" : "webSearchEnable")}
+            variant="secondary"
+            size="sm"
+            isDisabled={blocked}
+            isLoading={pending}
+            onClick={() =>
+              void onConfigure(
+                t(
+                  enabled
+                    ? "webSearchDisableRequest"
+                    : "webSearchNativeRequest",
+                ),
+              )
+            }
+          />
+        </div>
+        <div className="settings-control-row">
+          <div className="settings-control-copy">
+            <strong>{t("model")}</strong>
+          </div>
+          <span className="settings-control-value">
+            {catalog?.webSearch?.model
+              ? `${catalog.webSearch.provider} / ${catalog.webSearch.model}`
+              : t("unavailable")}
           </span>
         </div>
-        <dl className="settings-detail-metadata">
-          <div>
-            <dt>{t("source")}</dt>
-            <dd>{t("webSearchCurrentModel")}</dd>
-          </div>
-          <div>
-            <dt>{t("model")}</dt>
-            <dd>
-              {catalog?.webSearch?.model
-                ? `${catalog.webSearch.provider} / ${catalog.webSearch.model}`
-                : t("unavailable")}
-            </dd>
-          </div>
-        </dl>
-        <p className="settings-resource-caption">{t("webSearchDefaultOff")}</p>
-        <p role="status" className="settings-resource-caption">
-          {t(available ? "webSearchSupported" : "webSearchUnsupported")}
-        </p>
       </section>
-      <section className="settings-section-block settings-web-search-actions">
-        <Button
-          label={t(enabled ? "webSearchDisable" : "webSearchEnable")}
-          variant="secondary"
-          size="sm"
-          isDisabled={blocked}
-          isLoading={pending}
-          onClick={() =>
-            void onConfigure(
-              t(enabled ? "webSearchDisableRequest" : "webSearchNativeRequest"),
-            )
-          }
-        />
-      </section>
+      <p className="settings-resource-caption">{t("webSearchDefaultOff")}</p>
+      <p role="status" className="settings-resource-caption">
+        {t(available ? "webSearchSupported" : "webSearchUnsupported")}
+      </p>
     </section>
   );
 }
