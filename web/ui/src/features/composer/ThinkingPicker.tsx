@@ -15,7 +15,9 @@ export function ThinkingPicker({
   actions,
   onChooseModel,
   onClose,
+  active = true,
 }: {
+  active?: boolean;
   snapshot: WebSnapshot | null;
   model?: WebModelSummary | null;
   pending: string | null;
@@ -45,11 +47,11 @@ export function ThinkingPicker({
     setPreview(null);
   };
   useEffect(() => {
-    slider.current?.focus();
+    if (active) slider.current?.focus();
     return () => {
       previewRef.current = null;
     };
-  }, []);
+  }, [active]);
   const commit = () => {
     const index = previewRef.current;
     clearPreview();
@@ -62,7 +64,8 @@ export function ThinkingPicker({
   return (
     <div className="thinking-controls">
       <div className="thinking-strength" aria-live="polite">
-        {label(displayed)}
+        <small>{t("thinkingLevel")}</small>
+        <span>{label(displayed)}</span>
       </div>
       <div
         className="thinking-slider"
@@ -118,6 +121,10 @@ export function ThinkingPicker({
             }
           }}
         />
+      </div>
+      <div className="thinking-slider-labels" aria-hidden="true">
+        <span>{label(levels[0] ?? shown)}</span>
+        <span>{label(levels.at(-1) ?? shown)}</span>
       </div>
       <button
         type="button"

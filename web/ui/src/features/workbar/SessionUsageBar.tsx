@@ -100,6 +100,14 @@ export function SessionUsageBar({
                   <dd>{format(usage.output)}</dd>
                 </div>
                 <div>
+                  <dt>{t("usageCacheReadLabel")}</dt>
+                  <dd>{format(usage.cacheRead)}</dd>
+                </div>
+                <div>
+                  <dt>{t("usageCacheWriteLabel")}</dt>
+                  <dd>{format(usage.cacheWrite)}</dd>
+                </div>
+                <div>
                   <dt>{t("usageTotalLabel")}</dt>
                   <dd>{format(usage.total)}</dd>
                 </div>

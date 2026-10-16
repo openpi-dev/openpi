@@ -439,8 +439,8 @@ for (const touch of [false, true]) {
       await expect(summary).toHaveAccessibleName(/2.*工具调用/);
       if (!touch) {
         await page.mouse.move(0, 0);
-        await expect(counts).toHaveCSS("opacity", "0");
-        await expect(arrow).toHaveCSS("opacity", "0");
+        await expect(counts).toHaveCSS("opacity", "1");
+        await expect(arrow).toHaveCSS("opacity", "1");
         await page.evaluate(() => document.fonts.ready);
         const shell = page.locator(".app-shell");
         // Observe the saved width before waiting, so a not-yet-started startup
@@ -457,7 +457,7 @@ for (const touch of [false, true]) {
         await expect(arrow).toHaveCSS("opacity", "1");
         expect(await summary.boundingBox()).toEqual(before);
         await page.mouse.move(0, 0);
-        await expect(counts).toHaveCSS("opacity", "0");
+        await expect(counts).toHaveCSS("opacity", "1");
         await page.keyboard.press("Tab");
         await summary.focus();
         await expect(counts).toHaveCSS("opacity", "1");

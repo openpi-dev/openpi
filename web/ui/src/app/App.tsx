@@ -1019,6 +1019,7 @@ export function App() {
               <div className="conversation-view-row">
                 <fieldset
                   className="conversation-view-switch"
+                  data-view={view}
                   aria-label={t("conversationView")}
                 >
                   <button

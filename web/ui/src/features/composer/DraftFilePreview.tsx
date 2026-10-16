@@ -19,15 +19,18 @@ export function DraftFilePreview({
     ownerKey: string;
     id: string;
     trigger: HTMLButtonElement;
+    open: boolean;
   } | null>(null);
   const returnFocus = useRef<typeof selection>(null);
   const file =
     selection?.ownerKey === ownerKey
       ? files.find((item) => item.id === selection.id)
       : undefined;
+  const previewOpen = Boolean(file && selection?.open);
   const close = () => {
+    if (!previewOpen) return;
     returnFocus.current = selection;
-    setSelection(null);
+    setSelection((current) => current && { ...current, open: false });
   };
   useEffect(() => {
     if (selection && !file) {
@@ -35,7 +38,7 @@ export function DraftFilePreview({
       setSelection(null);
       return;
     }
-    if (selection || !returnFocus.current) return;
+    if (previewOpen || !returnFocus.current) return;
     const target = returnFocus.current;
     returnFocus.current = null;
     const focused = document.activeElement;
@@ -46,7 +49,7 @@ export function DraftFilePreview({
       (focused === document.body || dialog.current?.contains(focused))
     )
       target.trigger.focus();
-  }, [selection, file, ownerKey, files]);
+  }, [selection, file, previewOpen, ownerKey, files]);
   const status = (item: StagedPromptFile) =>
     t(
       item.extractionError
@@ -61,7 +64,7 @@ export function DraftFilePreview({
     <>
       {files.length > 0 && (
         <section
-          className="composer-attachments"
+          className="composer-attachment-group"
           aria-label={t("fileAttachments")}
         >
           {files.map((attachment) => (
@@ -83,15 +86,19 @@ export function DraftFilePreview({
                     ownerKey,
                     id: attachment.id,
                     trigger: event.currentTarget,
+                    open: true,
                   });
                 }}
               >
                 <FileText aria-hidden="true" />
+                <span title={attachment.name}>
+                  {attachment.name}
+                  <small>
+                    {(attachment.size / 1024).toFixed(1)} KB ·{" "}
+                    {status(attachment)}
+                  </small>
+                </span>
               </button>
-              <span title={attachment.name}>
-                {attachment.name}
-                <small>{status(attachment)}</small>
-              </span>
               <button
                 type="button"
                 className="composer-attachment-remove"
@@ -106,38 +113,53 @@ export function DraftFilePreview({
       )}
       <Dialog
         ref={dialog}
-        isOpen={Boolean(file)}
+        isOpen={previewOpen}
         onOpenChange={(open: boolean) => !open && close()}
         purpose="info"
         width={720}
         maxHeight="calc(100dvh - 32px)"
+        padding={0}
         aria-label={`${t("previewFileAttachment")} ${file?.name ?? ""}`.trim()}
       >
         {file && (
-          <div className="draft-file-preview">
-            <strong>{file.name}</strong>
-            <p>
-              {status(file)} · {(file.size / 1024).toFixed(1)} KB
-            </p>
-            {file.extractionError && (
-              <p>
-                {t(
-                  file.extractionError === "encoding"
-                    ? "fileAttachmentEncodingUnavailable"
-                    : "fileAttachmentDocumentUnavailable",
-                )}
-              </p>
-            )}
-            {file.text !== undefined ? (
-              <pre>
-                {file.text.slice(0, 20_000)}
-                {file.text.length > 20_000
-                  ? `\n${t("fileAttachmentPreviewTruncated")}`
-                  : ""}
-              </pre>
-            ) : (
-              <p>{t("fileAttachmentNoText")}</p>
-            )}
+          <div className="draft-file-preview" inert={!previewOpen}>
+            <header>
+              <div className="draft-preview-heading">
+                <strong title={file.name}>{file.name}</strong>
+                <p>
+                  {status(file)} · {(file.size / 1024).toFixed(1)} KB
+                </p>
+              </div>
+              <button
+                type="button"
+                data-autofocus
+                aria-label={t("closePreview")}
+                onClick={close}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <div className="draft-file-preview-content">
+              {file.extractionError && (
+                <p>
+                  {t(
+                    file.extractionError === "encoding"
+                      ? "fileAttachmentEncodingUnavailable"
+                      : "fileAttachmentDocumentUnavailable",
+                  )}
+                </p>
+              )}
+              {file.text !== undefined ? (
+                <pre>
+                  {file.text.slice(0, 20_000)}
+                  {file.text.length > 20_000
+                    ? `\n${t("fileAttachmentPreviewTruncated")}`
+                    : ""}
+                </pre>
+              ) : (
+                <p>{t("fileAttachmentNoText")}</p>
+              )}
+            </div>
           </div>
         )}
       </Dialog>

@@ -43,6 +43,11 @@ export function ModelPicker(props: ModelPickerProps) {
   const [query, setQuery] = useState("");
   const [view, setView] = useState<"models" | "thinking" | null>(null);
   const [open, setOpen] = useState(false);
+  const shownSearch = useRef(props.modelSearch);
+  useEffect(() => {
+    if (open) shownSearch.current = props.modelSearch;
+  }, [open, props.modelSearch]);
+  const modelSearch = open ? props.modelSearch : shownSearch.current;
   const preparationStarted = useRef(false);
   const outsideFocus = useRef<HTMLElement | null>(null);
   const selector = useRef<ComplexSelectorHandle>(null);
@@ -62,15 +67,15 @@ export function ModelPicker(props: ModelPickerProps) {
   const canSearch = (props.snapshot?.truncation.modelsOmitted ?? 0) > 0;
   const hasCatalog = snapshotModels.length > 0 || canSearch;
   const normalizedQuery = query.trim();
-  const searchMatchesQuery = props.modelSearch.query === normalizedQuery;
+  const searchMatchesQuery = modelSearch.query === normalizedQuery;
   const searchPending =
     canSearch &&
     Boolean(normalizedQuery) &&
-    (!searchMatchesQuery || props.modelSearch.status === "loading");
+    (!searchMatchesQuery || modelSearch.status === "loading");
   const matchingModels = normalizedQuery
     ? canSearch
       ? searchMatchesQuery
-        ? props.modelSearch.models
+        ? modelSearch.models
         : []
       : snapshotModels.filter((model) =>
           [model.provider, model.id, model.name, model.label].some((value) =>
@@ -93,6 +98,7 @@ export function ModelPicker(props: ModelPickerProps) {
 
   useEffect(() => {
     if (
+      !open ||
       !canSearch ||
       !normalizedQuery ||
       (searchQuery === normalizedQuery && searchStatus !== "idle")
@@ -102,12 +108,14 @@ export function ModelPicker(props: ModelPickerProps) {
       void searchModels(normalizedQuery);
     }, MODEL_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [canSearch, normalizedQuery, searchModels, searchQuery, searchStatus]);
-
-  const resetSearch = () => {
-    setQuery("");
-    props.actions.clearModelSearch();
-  };
+  }, [
+    open,
+    canSearch,
+    normalizedQuery,
+    searchModels,
+    searchQuery,
+    searchStatus,
+  ]);
 
   const select = (model: WebModelSummary, close: () => void) => {
     void props.actions.selectModel(`${model.provider}/${model.id}`);
@@ -176,6 +184,9 @@ export function ModelPicker(props: ModelPickerProps) {
   ]);
   const previousOwner = useRef(owner);
   useEffect(() => {
+    if (previousOwner.current !== owner) {
+      setView(null);
+    }
     if (
       thinkingView &&
       previousOwner.current !== owner &&
@@ -201,7 +212,7 @@ export function ModelPicker(props: ModelPickerProps) {
 
   return (
     <ComplexSelector
-      className="model-selector model-picker"
+      className={`model-selector model-picker${open ? " is-open" : ""}`}
       label={
         supportsThinking
           ? `${triggerLabel}, ${t("thinkingLevel")}: ${level}`
@@ -231,14 +242,14 @@ export function ModelPicker(props: ModelPickerProps) {
       handleRef={selector}
       onOpenChange={(open: boolean) => {
         setOpen(open);
+        if (open) setQuery("");
         if (!open) {
+          props.actions.clearModelSearch();
           // ComplexSelector restores its trigger first; preserve an explicit
           // outside click so the user can immediately continue composing.
           if (outsideFocus.current?.isConnected)
             outsideFocus.current.focus({ preventScroll: true });
           outsideFocus.current = null;
-          resetSearch();
-          setView(null);
         }
       }}
     >
@@ -247,13 +258,14 @@ export function ModelPicker(props: ModelPickerProps) {
         _onChange: (value: string) => void,
         close: () => void,
       ) =>
-        open && props.thinkingNeedsSession && (selected || thinkingView) ? (
+        props.thinkingNeedsSession && (selected || thinkingView) ? (
           <p className="thinking-preparing" role="status">
             {t("switchingSession")}
           </p>
-        ) : open && thinkingView ? (
+        ) : thinkingView ? (
           <ThinkingPicker
-            key={owner}
+            key={JSON.stringify([owner, open])}
+            active={open}
             snapshot={props.snapshot}
             model={selected}
             pending={props.thinkingPendingLevel ?? null}
@@ -295,6 +307,9 @@ export function ModelPicker(props: ModelPickerProps) {
                 <span className="sr-only">{t("searchModels")}</span>
                 <input
                   ref={input}
+                  name="model-search"
+                  autoComplete="off"
+                  spellCheck={false}
                   aria-controls={optionsId}
                   value={query}
                   placeholder={t("searchModelsPlaceholder")}
@@ -327,12 +342,12 @@ export function ModelPicker(props: ModelPickerProps) {
             {canSearch &&
               normalizedQuery &&
               searchMatchesQuery &&
-              props.modelSearch.status === "error" && (
+              modelSearch.status === "error" && (
                 <p
                   className="model-search-status model-search-error"
                   role="alert"
                 >
-                  {props.modelSearch.error ?? t("modelSearchFailed")}
+                  {modelSearch.error ?? t("modelSearchFailed")}
                   <button
                     type="button"
                     className="model-search-retry"
@@ -347,7 +362,7 @@ export function ModelPicker(props: ModelPickerProps) {
             {hasCatalog &&
               normalizedQuery &&
               (!canSearch ||
-                (searchMatchesQuery && props.modelSearch.status === "ready")) &&
+                (searchMatchesQuery && modelSearch.status === "ready")) &&
               models.length === 0 && (
                 <p className="model-search-status" role="status">
                   {t("noMatchingModels")}
@@ -356,11 +371,11 @@ export function ModelPicker(props: ModelPickerProps) {
             {canSearch &&
               normalizedQuery &&
               searchMatchesQuery &&
-              props.modelSearch.status === "ready" &&
-              props.modelSearch.matchesOmitted > 0 && (
+              modelSearch.status === "ready" &&
+              modelSearch.matchesOmitted > 0 && (
                 <p className="model-search-status" role="status">
                   {t("modelSearchTruncated", {
-                    omitted: props.modelSearch.matchesOmitted,
+                    omitted: modelSearch.matchesOmitted,
                   })}
                 </p>
               )}

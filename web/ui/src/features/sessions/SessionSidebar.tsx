@@ -1226,6 +1226,15 @@ export function SessionSidebar(props: SessionSidebarProps) {
         }
         aria-label={sessionTitle(session, t("untitledSession"))}
         data-session-key={JSON.stringify([session.path, session.id])}
+        data-dragging={
+          (draggingSidebar &&
+            ((draggedPin.current?.kind === "session" &&
+              draggedPin.current.path === session.path &&
+              draggedPin.current.id === session.id) ||
+              (draggedChat.current?.path === session.path &&
+                draggedChat.current.id === session.id))) ||
+          undefined
+        }
         key={session.path}
         draggable={
           !pinSaving &&

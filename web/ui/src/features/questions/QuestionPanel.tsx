@@ -249,7 +249,7 @@ export function QuestionCard({
       aria-busy={busy}
     >
       <header className="question-card-header">
-        <span className="question-eyebrow">
+        <span className="question-status">
           <MessageCircleQuestion aria-hidden="true" />
           {t(request.handoff ? "handoffWaiting" : "questionWaiting")}
         </span>
@@ -272,7 +272,7 @@ export function QuestionCard({
           <X />
         </button>
       </header>
-      <div className="question-card-body">
+      <div className="question-card-body" key={`${index}:${review}`}>
         <h2 id={`${id}-title`} ref={heading} tabIndex={-1}>
           {review ? t("questionReviewTitle") : question.question}
         </h2>
@@ -336,7 +336,7 @@ export function QuestionCard({
                     onChange={() => update({ choice: i })}
                   />
                   <span className="question-choice-number" aria-hidden="true">
-                    {i + 1}
+                    {draft.choice === i ? <Check aria-hidden="true" /> : i + 1}
                   </span>
                   <span className="question-choice-copy">
                     <strong>{choiceLabel(option.label, i)}</strong>

@@ -256,6 +256,10 @@ describe("Web slash command discovery", () => {
       screen.getByRole("listbox", { name: i18n.t("commands") }),
     ).toBeTruthy();
     expect(discoverCommands).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(input.value).toBe("/rev");
+    expect(sendPrompt).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(input.value).toBe("/review ");

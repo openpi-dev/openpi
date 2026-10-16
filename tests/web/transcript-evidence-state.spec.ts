@@ -1938,8 +1938,11 @@ it.each([
         .querySelector(".tool-evidence-card")
         ?.getAttribute("data-state"),
     ).toBe(state);
-    expect(container.querySelector(".evidence-shell pre")?.textContent).toBe(
-      `$ build\n\n${content}`,
+    expect(
+      container.querySelector(".evidence-shell-command")?.textContent,
+    ).toBe("$ build");
+    expect(container.querySelector(".evidence-shell-output")?.textContent).toBe(
+      content,
     );
     expect(container.querySelector(".process-step.running")).toBeNull();
   },

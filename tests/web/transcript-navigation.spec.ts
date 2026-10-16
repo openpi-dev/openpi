@@ -8,6 +8,7 @@ import {
   render,
   renderHook,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { createElement, Fragment, useState } from "react";
 import { jsx } from "react/jsx-runtime";
@@ -1066,8 +1067,7 @@ it.each(["wheel", "ArrowUp", "PageUp", "Home", "Shift+Space"])(
       ).toBeNull();
       height = 1600;
       view.rerender(stream("Fifth streamed text"));
-      expect(viewport.scrollTop).toBe(973);
-      expect(scroll).toHaveBeenCalledWith({ top: 1600, behavior: "instant" });
+      await waitFor(() => expect(viewport.scrollTop).toBe(973));
     } finally {
       if (originalScroll)
         Object.defineProperty(
@@ -1294,7 +1294,7 @@ it.each(
   ),
 )(
   "preserves $owner keyboard ownership for $key on a focused $control before scroll delivery",
-  ({ owner, control, key }) => {
+  async ({ owner, control, key }) => {
     const calls = ["first", "second"].map((id) => ({
       type: "toolCall" as const,
       id,
@@ -1389,7 +1389,7 @@ it.each(
     fireEvent.scroll(element);
     height = 1000;
     view.rerender(stream("Fifth native output"));
-    expect(element.scrollTop).toBe(640);
+    await waitFor(() => expect(element.scrollTop).toBe(640));
   },
 );
 

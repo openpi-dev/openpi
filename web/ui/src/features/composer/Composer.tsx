@@ -2,6 +2,7 @@ import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Check,
+  Clock3,
   CornerDownRight,
   FileText,
   Folder,
@@ -239,6 +240,18 @@ export function Composer(props: ComposerProps) {
     expectedTurnCommandId: string;
   } | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const attachmentShelf = useRef<HTMLDivElement>(null);
+  const attachmentLayout = useRef<{
+    owner: string;
+    height: number;
+    positions: Map<Element, { left: number; top: number }>;
+    animations: Animation[];
+  } | null>(null);
+  const textareaSize = useRef<{
+    owner: string;
+    height: number;
+    animation?: Animation;
+  } | null>(null);
   const planImplementationApproval = useRef<PlanImplementationApproval | null>(
     null,
   );
@@ -294,14 +307,119 @@ export function Composer(props: ComposerProps) {
     void prompt;
     const element = textarea.current;
     if (!element) return;
+    const previous = textareaSize.current;
+    const from = element.getBoundingClientRect().height;
+    // A running WAAPI height still affects scrollHeight. Release it before
+    // measuring the new content, especially a clear during draft hydration.
+    previous?.animation?.cancel();
     element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
+    const height = Math.min(element.scrollHeight, 220);
+    element.style.height = `${height}px`;
     element.style.overflowY = element.scrollHeight > 220 ? "auto" : "hidden";
+    textareaSize.current = { owner: renderedOwnerKey, height };
+    if (
+      previous?.owner === renderedOwnerKey &&
+      from > 0 &&
+      Math.abs(from - height) > 1 &&
+      element.animate &&
+      !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      textareaSize.current.animation = element.animate(
+        [{ height: `${from}px` }, { height: `${height}px` }],
+        { duration: 180, easing: "cubic-bezier(.16, 1, .3, 1)" },
+      );
+    }
+  }, [prompt, renderedOwnerKey]);
+  useLayoutEffect(() => {
+    void prompt;
+    void renderedOwnerKey;
+    const element = textarea.current;
+    if (!element) return;
     if (restoreCaret.current) {
       restoreCaret.current = false;
       element.setSelectionRange(cursor, cursor);
     }
-  }, [prompt, cursor]);
+  }, [prompt, cursor, renderedOwnerKey]);
+  useEffect(() => () => textareaSize.current?.animation?.cancel(), []);
+  useLayoutEffect(() => {
+    void images;
+    void files;
+    const shelf = attachmentShelf.current;
+    if (!shelf) return;
+    const previous = attachmentLayout.current;
+    const fromHeight = shelf.getBoundingClientRect().height;
+    // Sample in-flight offsets before cancelling, so another removal continues
+    // from the currently visible position instead of replaying the first move.
+    const offsets = new Map(
+      Array.from(previous?.positions.keys() ?? []).map((card) => {
+        const values = getComputedStyle(card)
+          .translate.split(" ")
+          .map(Number.parseFloat);
+        return [card, { x: values[0] || 0, y: values[1] || 0 }] as const;
+      }),
+    );
+    previous?.animations.forEach((animation) => {
+      animation.cancel();
+    });
+    const shelfRect = shelf.getBoundingClientRect();
+    const height = shelfRect.height;
+    const positions = new Map(
+      Array.from(shelf.querySelectorAll(".composer-attachment")).map((card) => {
+        const rect = card.getBoundingClientRect();
+        return [
+          card,
+          { left: rect.left - shelfRect.left, top: rect.top - shelfRect.top },
+        ] as const;
+      }),
+    );
+    const animations: Animation[] = [];
+    attachmentLayout.current = {
+      owner: renderedOwnerKey,
+      height,
+      positions,
+      animations,
+    };
+    if (
+      !shelf.animate ||
+      previous?.owner !== renderedOwnerKey ||
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    const options = { duration: 220, easing: "cubic-bezier(.16, 1, .3, 1)" };
+    if (previous.height !== height)
+      animations.push(
+        shelf.animate(
+          [
+            {
+              height: `${fromHeight === height ? previous.height : fromHeight}px`,
+            },
+            { height: `${height}px` },
+          ],
+          options,
+        ),
+      );
+    for (const [card, rect] of positions) {
+      const old = previous.positions.get(card);
+      if (!old) continue;
+      const offset = offsets.get(card);
+      const x = old.left + (offset?.x ?? 0) - rect.left;
+      const y = old.top + (offset?.y ?? 0) - rect.top;
+      if (Math.abs(x) + Math.abs(y) > 1)
+        animations.push(
+          card.animate(
+            [{ translate: `${x}px ${y}px` }, { translate: "0 0" }],
+            options,
+          ),
+        );
+    }
+  }, [images, files, renderedOwnerKey]);
+  useEffect(
+    () => () =>
+      attachmentLayout.current?.animations.forEach((animation) => {
+        animation.cancel();
+      }),
+    [],
+  );
   useEffect(() => {
     if (fileReferenceOpen || !restoreFileReferenceFocus.current) return;
     restoreFileReferenceFocus.current = false;
@@ -1592,10 +1710,15 @@ export function Composer(props: ComposerProps) {
       {showingQueue && (
         <section
           className="composer-queue"
+          data-state={execution?.promptQueueBlocked ? "blocked" : "waiting"}
           aria-label={t("pendingFollowUpsHint", { count: observedQueue })}
         >
           <div className="composer-queue-status" role="status">
-            <span>
+            <Clock3 aria-hidden="true" />
+            <strong>
+              {t("pendingFollowUpsHint", { count: observedQueue })}
+            </strong>
+            <span className="composer-queue-help">
               {t(
                 execution?.promptQueueBlocked
                   ? "compactionQueueBlocked"
@@ -1744,13 +1867,13 @@ export function Composer(props: ComposerProps) {
           void stageFiles(event.dataTransfer.files);
         }}
       >
-        {actionMenu && (
-          <ComposerActionMenu
-            key={actionMenu}
-            items={actionItems}
-            onClose={closeActionMenu}
-          />
-        )}
+        <ComposerActionMenu
+          key={`actions:${renderedOwnerKey}`}
+          open={Boolean(actionMenu)}
+          viewKey={actionMenu ?? undefined}
+          items={actionItems}
+          onClose={closeActionMenu}
+        />
         {!props.selectedWorkspace && (
           <div className="composer-dormant-cta" aria-hidden="true">
             <Folder />
@@ -1777,34 +1900,36 @@ export function Composer(props: ComposerProps) {
               void stageFiles(event.currentTarget.files);
           }}
         />
-        <DraftImagePreview
-          ownerKey={renderedOwnerKey}
-          images={images}
-          onRemove={(id) => {
-            if (
-              updateDraft({
-                images: currentDraft.current.images.filter(
-                  (item) => item.id !== id,
-                ),
-              })
-            )
-              setAttachmentError(null);
-          }}
-        />
-        <DraftFilePreview
-          ownerKey={renderedOwnerKey}
-          files={files}
-          onRemove={(id) => {
-            if (
-              updateDraft({
-                files: (currentDraft.current.files ?? []).filter(
-                  (item) => item.id !== id,
-                ),
-              })
-            )
-              setAttachmentError(null);
-          }}
-        />
+        <div className="composer-attachments" ref={attachmentShelf}>
+          <DraftImagePreview
+            ownerKey={renderedOwnerKey}
+            images={images}
+            onRemove={(id) => {
+              if (
+                updateDraft({
+                  images: currentDraft.current.images.filter(
+                    (item) => item.id !== id,
+                  ),
+                })
+              )
+                setAttachmentError(null);
+            }}
+          />
+          <DraftFilePreview
+            ownerKey={renderedOwnerKey}
+            files={files}
+            onRemove={(id) => {
+              if (
+                updateDraft({
+                  files: (currentDraft.current.files ?? []).filter(
+                    (item) => item.id !== id,
+                  ),
+                })
+              )
+                setAttachmentError(null);
+            }}
+          />
+        </div>
         {attachmentError && (
           <p className="composer-attachment-error" role="alert">
             {attachmentError}
@@ -1915,7 +2040,11 @@ export function Composer(props: ComposerProps) {
             void stageFiles(files);
           }}
           onKeyDown={(event) => {
-            if (event.nativeEvent.isComposing) return;
+            if (
+              event.nativeEvent.isComposing ||
+              event.nativeEvent.keyCode === 229
+            )
+              return;
             if (commandMenuOpen) {
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
@@ -1960,17 +2089,17 @@ export function Composer(props: ComposerProps) {
             }
           }}
         />
-        {commandMenuOpen && (
-          <SlashCommandMenu
-            activeIndex={activeCommand}
-            commandDiscovery={commandDiscovery}
-            commands={filteredCommands}
-            draft={Boolean(props.workspaceDraft)}
-            preferBelow={props.landing}
-            onComplete={completeCommand}
-            onSelect={setActiveCommand}
-          />
-        )}
+        <SlashCommandMenu
+          key={`commands:${renderedOwnerKey}`}
+          open={commandMenuOpen}
+          activeIndex={activeCommand}
+          commandDiscovery={commandDiscovery}
+          commands={filteredCommands}
+          draft={Boolean(props.workspaceDraft)}
+          preferBelow={props.landing}
+          onComplete={completeCommand}
+          onSelect={setActiveCommand}
+        />
         <div className="composer-toolbar">
           <div className="composer-toolbar-context">
             {contextEntryAvailable && (
@@ -1995,8 +2124,8 @@ export function Composer(props: ComposerProps) {
                 className="composer-workspace-label"
                 title={`${workspaceLabel} / ${targetLabel}`}
               >
-                <Folder />
-                {workspaceLabel}
+                <Folder aria-hidden="true" />
+                <span>{workspaceLabel}</span>
               </span>
             )}
             {active &&
@@ -2079,7 +2208,7 @@ export function Composer(props: ComposerProps) {
             {canStop && (
               <Tooltip content={t("stopTurn")} placement="above">
                 <button
-                  className="send-button"
+                  className="send-button stop-button"
                   type="button"
                   aria-label={t("stopTurn")}
                   disabled={
@@ -2087,7 +2216,7 @@ export function Composer(props: ComposerProps) {
                   }
                   onClick={() => void props.actions.cancelActiveTurn()}
                 >
-                  <Square />
+                  <Square aria-hidden="true" />
                 </button>
               </Tooltip>
             )}

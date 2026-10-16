@@ -6,6 +6,7 @@ import {
   ChevronRight,
   CircleAlert,
   Clipboard,
+  Clock3,
   GitBranch,
   Globe,
   Lightbulb,
@@ -1072,6 +1073,7 @@ function MessageActions({
       <button
         type="button"
         aria-label={copied ? t("copiedMessage") : t("copyMessage")}
+        data-copied={copied || undefined}
         title={
           copyRequiresFull
             ? t("messageCopyRequiresFull")
@@ -1923,6 +1925,7 @@ function TurnRun({
   const { t } = useTranslation();
   const id = useId();
   const [open, setOpen] = useState(timing?.outcome !== "completed");
+  const userOpened = useRef(false);
   const previousOutcome = useRef(timing?.outcome);
   useEffect(() => {
     if (
@@ -1971,10 +1974,17 @@ function TurnRun({
               className="turn-duration-toggle"
               aria-expanded={open}
               aria-controls={bodies.map((_, index) => bodyId(index)).join(" ")}
-              onClick={() => setOpen((value) => !value)}
+              onClick={(event) => {
+                userOpened.current = event.nativeEvent.isTrusted;
+                setOpen((value) => !value);
+              }}
             >
+              <Clock3 className="turn-duration-icon" aria-hidden="true" />
               {elapsed}
-              <ChevronRight aria-hidden="true" />
+              <ChevronRight
+                className="turn-duration-chevron"
+                aria-hidden="true"
+              />
             </button>
           ) : (
             elapsed
@@ -1994,6 +2004,8 @@ function TurnRun({
                 key={block.rows[0]!.key}
                 id={bodyId(bodies.indexOf(block))}
                 hidden={!open}
+                inert={!open}
+                data-user-toggle={userOpened.current || undefined}
               >
                 {groupRows(block.rows, active && block === bodies.at(-1))}
               </div>
@@ -2099,6 +2111,13 @@ function ConversationTurn({
     } else if (row.timing) appendRun(row.timing);
     else runRows.push(row);
   }
+  const awaitingContent =
+    active &&
+    observed &&
+    (runRows.length > 0 ||
+      Boolean(currentTimedTurn) ||
+      !rows.some((row) => row.timing)) &&
+    !runRows.some((row) => row.kind !== "prompt" && row.content !== null);
   if (runRows.length || currentTimedTurn) appendRun(undefined, true);
   const hasTiming = Boolean(timedTurn || rows.some((row) => row.timing));
   return (
@@ -2129,6 +2148,16 @@ function ConversationTurn({
           </header>
         )}
       {content}
+      {awaitingContent && (
+        <div className="conversation-waiting" aria-hidden="true">
+          <span className="conversation-waiting-dots">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span>{t("modelRunning")}</span>
+        </div>
+      )}
       {changes && session && (
         <TurnChangesCard
           key={`${session.id}:${session.path}:${changes.promptEntryId}`}
@@ -2377,6 +2406,64 @@ export function Transcript(props: TranscriptProps) {
   const conversationContent = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastScrollTop = useRef(0);
+  const followFrame = useRef<number | null>(null);
+  const cancelFollowing = useCallback(() => {
+    if (followFrame.current !== null) cancelAnimationFrame(followFrame.current);
+    followFrame.current = null;
+  }, []);
+  const followLatest = useCallback(
+    (smooth: boolean) => {
+      const element = viewport.current;
+      if (!element) return;
+      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+      const immediate = () => {
+        cancelFollowing();
+        if (typeof element.scrollTo === "function")
+          element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
+        else element.scrollTop = element.scrollHeight;
+        lastScrollTop.current = element.scrollTop;
+      };
+      if (
+        !smooth ||
+        reduced?.matches ||
+        document.visibilityState === "hidden" ||
+        !element.clientHeight
+      ) {
+        immediate();
+        return;
+      }
+      if (followFrame.current !== null) return;
+      const gap =
+        element.scrollHeight - element.clientHeight - element.scrollTop;
+      if (gap <= 1 || gap > element.clientHeight) {
+        immediate();
+        return;
+      }
+      let previous = performance.now();
+      const advance = (now: number) => {
+        followFrame.current = null;
+        if (!pinned.current || viewport.current !== element) return;
+        if (reduced?.matches || document.visibilityState === "hidden") {
+          immediate();
+          return;
+        }
+        const target = Math.max(0, element.scrollHeight - element.clientHeight);
+        const gap = target - element.scrollTop;
+        if (gap <= 1) {
+          element.scrollTop = target;
+          lastScrollTop.current = element.scrollTop;
+          return;
+        }
+        const elapsed = Math.min(64, Math.max(1, now - previous));
+        previous = now;
+        element.scrollTop += Math.max(1, gap * (1 - Math.exp(-elapsed / 48)));
+        lastScrollTop.current = element.scrollTop;
+        followFrame.current = requestAnimationFrame(advance);
+      };
+      followFrame.current = requestAnimationFrame(advance);
+    },
+    [cancelFollowing],
+  );
   const touchY = useRef<number | undefined>(undefined);
   const savePositionTimer = useRef(0);
   const restorePending = useRef(props.readingRestorePending);
@@ -2447,6 +2534,10 @@ export function Transcript(props: TranscriptProps) {
       ? highlightedNavigation.entryId
       : undefined;
   const hydrationScope = JSON.stringify([selectedId, selectedPath]);
+  useLayoutEffect(() => {
+    void hydrationScope;
+    return cancelFollowing;
+  }, [hydrationScope, cancelFollowing]);
   const promptScope = JSON.stringify([
     props.snapshot.selectedSession?.id,
     props.snapshot.selectedSession?.path,
@@ -2561,18 +2652,13 @@ export function Transcript(props: TranscriptProps) {
       // Composer growth and window resizing must preserve bottom following.
       // Reading older messages still owns the scroll position.
       if (!pinned.current) return;
-      if (typeof element.scrollTo === "function") {
-        element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
-      } else {
-        element.scrollTop = element.scrollHeight;
-      }
-      lastScrollTop.current = element.scrollTop;
+      followLatest(running);
     });
     observer.observe(element);
     if (conversationContent.current)
       observer.observe(conversationContent.current);
     return () => observer.disconnect();
-  }, []);
+  }, [followLatest, running]);
 
   const { rows, turns } = useMemo(() => {
     const records = recordedSubagents(entries.map((entry) => entry.message));
@@ -2954,6 +3040,16 @@ export function Transcript(props: TranscriptProps) {
         const appendText = (text: string, key: string, actions: boolean) => {
           if (recoverable && !actions) return;
           if (!recoverable && !text.trim()) return;
+          const streaming =
+            actions &&
+            !historyPaused &&
+            !retry &&
+            props.activityObserved !== false &&
+            running &&
+            selectedExecution?.compaction?.state !== "running" &&
+            !message.stopReason &&
+            index === entries.length - 1 &&
+            lastVisiblePart === lastTextIndex;
           detailRows.push({
             key,
             turn,
@@ -2966,6 +3062,7 @@ export function Transcript(props: TranscriptProps) {
             content: (
               <article
                 className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
+                data-streaming={streaming || undefined}
                 data-history-message={entry.entryId ?? entry.key}
                 data-history-highlighted={
                   (highlightedEntry && entry.entryId === highlightedEntry) ||
@@ -2999,7 +3096,9 @@ export function Transcript(props: TranscriptProps) {
                       }
                     />
                   ) : (
-                    <Markdown>{text}</Markdown>
+                    <Markdown key={hydrationScope} streaming={streaming}>
+                      {text}
+                    </Markdown>
                   )}
                 </div>
                 {actions && lastAssistantByTurn.has(index) && (
@@ -3659,6 +3758,7 @@ export function Transcript(props: TranscriptProps) {
     selectedPath,
     selectedCwd,
     hydratedMessages,
+    hydrationScope,
     highlightedEntry,
     t,
   ]);
@@ -3821,12 +3921,7 @@ export function Transcript(props: TranscriptProps) {
     if (changed || requested || pinned.current) {
       pinned.current = true;
       setReadingHistory(false);
-      if (typeof element.scrollTo === "function") {
-        element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
-      } else {
-        element.scrollTop = element.scrollHeight;
-      }
-      lastScrollTop.current = element.scrollTop;
+      followLatest(running && !changed && !requested);
     }
     lastPath.current = identity;
   }, [
@@ -3839,6 +3934,8 @@ export function Transcript(props: TranscriptProps) {
     readingCache,
     navigation,
     navigationKey,
+    followLatest,
+    running,
   ]);
 
   useLayoutEffect(() => {
@@ -3984,6 +4081,7 @@ export function Transcript(props: TranscriptProps) {
       void history.loadOlder();
   };
   const pauseFollowing = () => {
+    cancelFollowing();
     pinned.current = false;
     setReadingHistory(true);
     history.retainReading();
@@ -4195,11 +4293,18 @@ export function Transcript(props: TranscriptProps) {
           onClick={() => {
             const element = viewport.current;
             if (!element) return;
+            cancelFollowing();
             pinned.current = true;
             setReadingHistory(false);
             setHighlightedNavigation(null);
             history.resetToLatest();
-            element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+            element.scrollTo({
+              top: element.scrollHeight,
+              behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+                .matches
+                ? "instant"
+                : "smooth",
+            });
             // Returning from a reading window can replace its rows in this commit.
             queueMicrotask(() => {
               if (viewport.current !== element) return;

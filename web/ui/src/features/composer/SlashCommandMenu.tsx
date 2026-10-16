@@ -5,6 +5,7 @@ import type { WebCommandSummary } from "../../../../protocol/types.ts";
 import type { CommandDiscoveryState } from "../../store/web-store.ts";
 
 interface SlashCommandMenuProps {
+  open?: boolean;
   activeIndex: number;
   commandDiscovery: CommandDiscoveryState;
   commands: WebCommandSummary[];
@@ -52,14 +53,21 @@ function SourceIcon({ source }: Pick<WebCommandSummary, "source">) {
   return <Sparkles />;
 }
 
-export function SlashCommandMenu(props: SlashCommandMenuProps) {
+export function SlashCommandMenu(current: SlashCommandMenuProps) {
   const { t } = useTranslation();
   const menu = useRef<HTMLDivElement>(null);
+  const open = current.open !== false;
+  const previous = useRef(current);
+  useLayoutEffect(() => {
+    if (open) previous.current = current;
+  }, [open, current]);
+  const props = open ? current : previous.current;
+  const visibility = { hidden: !open, inert: !open };
 
   useLayoutEffect(() => {
     const element = menu.current;
     const composer = element?.parentElement;
-    if (!element || !composer || !props.preferBelow) return;
+    if (!open || !element || !composer || !props.preferBelow) return;
 
     const placeMenu = () => {
       const viewport = window.visualViewport;
@@ -109,20 +117,21 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
       window.visualViewport?.removeEventListener("resize", placeMenu);
       window.visualViewport?.removeEventListener("scroll", placeMenu);
     };
-  }, [props.preferBelow]);
+  }, [open, props.preferBelow]);
 
   const activeCommand = props.commands[props.activeIndex];
   useEffect(() => {
-    if (!activeCommand) return;
+    if (!open || !activeCommand) return;
     const option = menu.current?.querySelector<HTMLElement>(
       `[data-command-index="${props.activeIndex}"]`,
     );
     option?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [activeCommand, props.activeIndex]);
+  }, [open, activeCommand, props.activeIndex]);
 
   if (props.draft) {
     return (
       <div
+        {...visibility}
         ref={menu}
         className="slash-command-menu slash-command-state"
         role="status"
@@ -137,6 +146,7 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
   ) {
     return (
       <div
+        {...visibility}
         ref={menu}
         className="slash-command-menu slash-command-state"
         role="status"
@@ -148,6 +158,7 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
   if (props.commandDiscovery.status === "error") {
     return (
       <div
+        {...visibility}
         ref={menu}
         className="slash-command-menu slash-command-state"
         role="alert"
@@ -163,6 +174,7 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
   ) {
     return (
       <div
+        {...visibility}
         ref={menu}
         className="slash-command-menu slash-command-state"
         role="status"
@@ -173,7 +185,7 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
   }
 
   return (
-    <div ref={menu} className="slash-command-menu">
+    <div {...visibility} ref={menu} className="slash-command-menu">
       <div id={slashCommandListId} role="listbox" aria-label={t("commands")}>
         {props.commands.map((command, index) => {
           const unsupported = command.availability === "unsupported";

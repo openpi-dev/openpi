@@ -1,5 +1,5 @@
 import type { Element, Root, RootContent } from "hast";
-import { Check, Clipboard } from "lucide-react";
+import { Check, Clipboard, WrapText } from "lucide-react";
 import type { ComponentPropsWithoutRef } from "react";
 import {
   isValidElement,
@@ -7,6 +7,7 @@ import {
   memo,
   Suspense,
   useContext,
+  useDeferredValue,
   useEffect,
   useRef,
   useState,
@@ -118,6 +119,7 @@ function CodeBlock({
   ...props
 }: ComponentPropsWithoutRef<"pre"> & { node?: Element }) {
   const { t } = useTranslation();
+  const [wrapped, setWrapped] = useState(false);
   const [copyStatus, setCopyStatus] = useState<
     "idle" | "copying" | "copied" | "failed"
   >("idle");
@@ -132,16 +134,32 @@ function CodeBlock({
     [],
   );
   const copied = copyStatus === "copied";
+  const language = isValidElement<{ className?: string }>(children)
+    ? /(?:^|\s)language-([\w+-]+)/u.exec(children.props.className ?? "")?.[1]
+    : undefined;
   return (
-    <div className="markdown-code-block">
+    <div className="markdown-code-block" data-wrap={wrapped || undefined}>
       <div className="markdown-code-toolbar">
+        <span className="markdown-code-language">
+          {language ?? t("codeBlock")}
+        </span>
         {copyStatus === "failed" && (
           <span role="status">{t("copyCodeFailed")}</span>
         )}
         <button
           type="button"
+          aria-label={t("wrapCode")}
+          title={t("wrapCode")}
+          aria-pressed={wrapped}
+          onClick={() => setWrapped((value) => !value)}
+        >
+          <WrapText aria-hidden="true" />
+        </button>
+        <button
+          type="button"
           aria-label={copied ? t("copiedCode") : t("copyCode")}
           title={copied ? t("copiedCode") : t("copyCode")}
+          data-copied={copied || undefined}
           disabled={copyStatus === "copying"}
           onClick={() => {
             const generation = ++copyGeneration.current;
@@ -202,7 +220,7 @@ function FileCodeBlock(
   return <CodeBlock {...props} />;
 }
 
-export const Markdown = memo(function Markdown({
+const MarkdownContent = memo(function MarkdownContent({
   children,
   filePreview = false,
 }: {
@@ -316,5 +334,22 @@ export const Markdown = memo(function Markdown({
         {children}
       </ReactMarkdown>
     </div>
+  );
+});
+
+export const Markdown = memo(function Markdown({
+  children,
+  filePreview = false,
+  streaming = false,
+}: {
+  children: string;
+  filePreview?: boolean;
+  streaming?: boolean;
+}) {
+  const deferred = useDeferredValue(children);
+  return (
+    <MarkdownContent filePreview={filePreview}>
+      {streaming ? deferred : children}
+    </MarkdownContent>
   );
 });
