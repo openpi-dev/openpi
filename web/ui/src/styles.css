@@ -423,6 +423,10 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .thinking-evidence .markdown :is(h1, h2, h3, h4, h5, h6) { margin-block:12px 6px; font-size:1em; color:inherit; }
 .thinking-evidence .markdown > :last-child { margin-bottom:0; }
 .tool-line-empty { @apply flex min-h-8 items-center gap-2; padding: 3px 8px; color: var(--muted); }
+.tool-result-media-summary { min-width: 0; color: var(--muted); }
+.tool-result-media { margin: 8px 10px 10px; }
+.tool-result-images { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.tool-result-images li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
 .process-sequence { width:min(var(--conversation-content-width), calc(100% - 48px)); margin:8px auto; color:var(--muted); }
 .process-sequence > summary { position:relative; display:flex; min-height:21px; align-items:center; gap:6px; overflow:hidden; padding:0; border-radius:6px; cursor:pointer; list-style:none; font-size:var(--conversation-font-size); line-height:1.5; transition:background-color 140ms ease, color 140ms ease; }
 .process-sequence > summary > * { position:relative; z-index:1; }
