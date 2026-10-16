@@ -33,6 +33,7 @@ const {
   parseSetupConfig,
   POST_EDIT_COMMAND_MAX_CHARS,
   decodeProcessStartedAtOutput,
+  processStartedAtFallbackQuery,
   processStartedAtQuery,
   saveSetupConfig,
   SETUP_CONFIG_PATH,
@@ -248,9 +249,17 @@ test("FAIL: session child execution admission is opt-in and bounded", () => {
 test("process start-time queries are platform-specific and conservative", () => {
   const windowsQuery = processStartedAtQuery(123, "win32");
   assert.equal(windowsQuery.command, "cscript.exe");
-  assert.deepEqual(windowsQuery.args.slice(0, 3), ["//Nologo", "//U", "//B"]);
-  assert.match(windowsQuery.args[3] ?? "", /win32-process-started-at\.js$/);
-  assert.equal(windowsQuery.args[4], "123");
+  assert.deepEqual(windowsQuery.args.slice(0, 2), ["//Nologo", "//B"]);
+  assert.match(windowsQuery.args[2] ?? "", /win32-process-started-at\.js$/);
+  assert.equal(windowsQuery.args[3], "123");
+  const fallback = processStartedAtFallbackQuery(123, "win32");
+  assert.ok(fallback);
+  assert.equal(fallback.command, "powershell.exe");
+  assert.equal(processStartedAtFallbackQuery(123, "linux"), undefined);
+  assert.equal(processStartedAtFallbackQuery(0, "win32"), undefined);
+  assert.equal(fallback.parseOutput("1700000000123"), 1_700_000_000_123);
+  assert.equal(fallback.parseOutput("0"), undefined);
+  assert.equal(fallback.parseOutput("not a timestamp"), undefined);
   const cim = "20231114221320.000000+000";
   const utf16Pipe = Buffer.from(`\uFEFF${cim}\r\n`, "utf16le");
   assert.equal(

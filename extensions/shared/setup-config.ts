@@ -1268,6 +1268,11 @@ const parsePsProcessStartedAt = (stdout: string) => {
   return Number.isFinite(startedAt) ? startedAt : undefined;
 };
 
+const parsePowerShellProcessStartedAt = (stdout: string) => {
+  const startedAt = Number(stdout.trim());
+  return isPositiveInteger(startedAt) ? startedAt : undefined;
+};
+
 export function processStartedAtQuery(
   pid: number,
   platform = process.platform,
@@ -1275,15 +1280,14 @@ export function processStartedAtQuery(
   if (platform === "win32") {
     // Resolve on use. Vitest loads this module without a file URL, so a
     // top-level fileURLToPath throws during import. WMI via cscript avoids
-    // the PowerShell CLR cold start. //U makes the pipe UTF-16. The 1s
-    // query budget stays; failure is still unknown ownership, and the 5s
-    // lock does not recover.
+    // the PowerShell CLR cold start. The 1s query budget stays; failure is
+    // still unknown ownership, and the 5s lock does not recover.
     const script = fileURLToPath(
       new URL("./win32-process-started-at.js", import.meta.url),
     );
     return {
       command: "cscript.exe",
-      args: ["//Nologo", "//U", "//B", script, String(pid)],
+      args: ["//Nologo", "//B", script, String(pid)],
       env: undefined,
       parseOutput: parseCimProcessStartedAt,
     };
@@ -1296,9 +1300,44 @@ export function processStartedAtQuery(
   };
 }
 
-const queryProcessStartedAt = (pid: number) =>
+// Used only when the cscript query returns no time. One cold PowerShell
+// start can exceed 1s and still has to finish inside the 5s lock. A timeout
+// or a non-integer is unknown ownership and does not recover the lock.
+const PROCESS_START_QUERY_TIMEOUT_MS = 1_000;
+const PROCESS_START_FALLBACK_TIMEOUT_MS = 3_500;
+
+export function processStartedAtFallbackQuery(
+  pid: number,
+  platform = process.platform,
+) {
+  if (platform !== "win32" || !isPositiveInteger(pid)) return undefined;
+  return {
+    command: "powershell.exe",
+    args: [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      [
+        "$ErrorActionPreference='Stop'",
+        `$p=Get-Process -Id ${pid}`,
+        "[Console]::Out.Write(([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds())",
+      ].join("; "),
+    ],
+    env: undefined,
+    parseOutput: parsePowerShellProcessStartedAt,
+  };
+}
+
+const runProcessStartedAtQuery = (
+  query: {
+    command: string;
+    args: string[];
+    env: Record<string, string> | undefined;
+    parseOutput: (stdout: string) => number | undefined;
+  },
+  timeout: number,
+) =>
   new Promise<number | undefined>((resolve) => {
-    const query = processStartedAtQuery(pid);
     try {
       execFile(
         query.command,
@@ -1306,7 +1345,8 @@ const queryProcessStartedAt = (pid: number) =>
         {
           encoding: "buffer",
           env: query.env ? { ...process.env, ...query.env } : process.env,
-          timeout: 1_000,
+          timeout,
+          windowsHide: true,
         },
         (error, stdout) => {
           resolve(
@@ -1320,6 +1360,17 @@ const queryProcessStartedAt = (pid: number) =>
       resolve(undefined);
     }
   });
+
+const queryProcessStartedAt = async (pid: number) => {
+  const startedAt = await runProcessStartedAtQuery(
+    processStartedAtQuery(pid),
+    PROCESS_START_QUERY_TIMEOUT_MS,
+  );
+  if (startedAt !== undefined) return startedAt;
+  const fallback = processStartedAtFallbackQuery(pid);
+  if (!fallback) return undefined;
+  return runProcessStartedAtQuery(fallback, PROCESS_START_FALLBACK_TIMEOUT_MS);
+};
 
 const makeLockIdentity = async (): Promise<LockIdentity> => {
   const processStartedAt = await queryProcessStartedAt(process.pid);
