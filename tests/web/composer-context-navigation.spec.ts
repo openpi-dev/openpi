@@ -160,7 +160,7 @@ async function openFileReference(
   return reference;
 }
 
-it("opens source picking without replacing the draft and rejects another session path", async () => {
+it("opens source picking without replacing the draft and rejects another session path", () => {
   const { input, update, sendPrompt } = setup();
   fireEvent.change(input, { target: { value: "keep this draft" } });
   update({
@@ -180,8 +180,11 @@ it("opens source picking without replacing the draft and rejects another session
       revision: 2,
     },
   });
+  // The matching request opens the menu in the same flushed render. Polling
+  // here spends the suite timeout when timers stall, without protecting a
+  // later readiness condition.
   expect(
-    await screen.findByRole("menuitem", { name: /Reference workspace file/u }),
+    screen.getByRole("menuitem", { name: /Reference workspace file/u }),
   ).toBeTruthy();
   expect(input.value).toBe("keep this draft");
   expect(sendPrompt).not.toHaveBeenCalled();

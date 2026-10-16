@@ -454,7 +454,10 @@ export function Composer(props: ComposerProps) {
       (props.workspaceDraft ||
         (!selected && !props.snapshot?.currentSessionId)),
   );
-  const canCompose = active || draftSession;
+  const viewedSession = Boolean(
+    !props.workspaceDraft && selected && selectedPath === selected.path,
+  );
+  const canCompose = viewedSession || draftSession;
   const compacting =
     active &&
     props.snapshot?.selectedExecution?.sessionId === selected?.id &&
@@ -462,7 +465,11 @@ export function Composer(props: ComposerProps) {
     props.snapshot?.selectedExecution?.compaction?.state === "running";
   const running =
     !props.workspaceDraft &&
-    (props.snapshot?.runtime.status === "running" || props.liveRunning);
+    (active
+      ? props.snapshot?.runtime.status === "running" || props.liveRunning
+      : props.snapshot?.selectedExecution?.sessionId === selected?.id &&
+        props.snapshot?.selectedExecution?.sessionPath === selected?.path &&
+        props.snapshot?.selectedExecution?.status === "running");
   const canStop =
     active &&
     running &&
@@ -854,11 +861,22 @@ export function Composer(props: ComposerProps) {
       let expectedTarget: Awaited<
         ReturnType<WebStoreActions["prepareSession"]>
       > = null;
+      if (viewedSession && !active) {
+        expectedTarget = await props.actions.prepareSession();
+        if (
+          !expectedTarget ||
+          submission.owner.kind !== "session" ||
+          expectedTarget.sessionId !== submission.owner.sessionId ||
+          expectedTarget.sessionPath !== submission.owner.sessionPath ||
+          draftOwner.current.key !== submission.owner.key
+        )
+          return;
+      }
       if (captured.files?.length) {
         sendingFiles = true;
         setAttachmentBusy(true);
         setAttachmentError(null);
-        expectedTarget = await props.actions.prepareSession();
+        expectedTarget ??= await props.actions.prepareSession();
         if (!expectedTarget?.sessionPath) return;
         const uploaded = await client.uploadPromptFiles(
           expectedTarget.sessionId,
@@ -1139,17 +1157,19 @@ export function Composer(props: ComposerProps) {
       : selected
         ? sessionTitle(sessionSummary ?? {}, selected.id)
         : t("newSession");
-  const placeholder = !props.selectedWorkspace
-    ? t("promptStart")
-    : active &&
-        props.snapshot?.runtime.planHasPrompt &&
-        ["planning", "ready"].includes(props.snapshot.runtime.plan ?? "")
-      ? t("promptPlanMessage")
-      : props.landing
-        ? t("promptTask")
-        : active
-          ? t("promptMessage")
-          : t("promptReadonly");
+  const placeholder = props.sessionSwitching
+    ? t("switchingSession")
+    : !props.selectedWorkspace
+      ? t("promptStart")
+      : active &&
+          props.snapshot?.runtime.planHasPrompt &&
+          ["planning", "ready"].includes(props.snapshot.runtime.plan ?? "")
+        ? t("promptPlanMessage")
+        : props.landing
+          ? t("promptTask")
+          : viewedSession
+            ? t("promptMessage")
+            : t("promptReadonly");
   const thinking = props.snapshot?.thinking;
   const confirmed = thinking?.level ?? null;
   const pending = props.thinkingPendingLevel ?? null;
@@ -1176,14 +1196,16 @@ export function Composer(props: ComposerProps) {
     execution.sessionPath === selected.path
       ? execution.pendingFollowUps
       : undefined;
-  const pendingCount = observedQueue ?? props.pendingFollowUpsReceipt;
+  const pendingCount =
+    observedQueue ?? (active ? props.pendingFollowUpsReceipt : null);
   const observedSteering =
     selected &&
     execution?.sessionId === selected.id &&
     execution.sessionPath === selected.path
       ? execution.pendingSteering
       : undefined;
-  const steeringCount = observedSteering ?? props.pendingSteeringReceipt;
+  const steeringCount =
+    observedSteering ?? (active ? props.pendingSteeringReceipt : null);
   const steeringMessages =
     observedSteering !== undefined ? (execution?.steeringMessages ?? []) : [];
   const showingSteering =
@@ -1220,7 +1242,7 @@ export function Composer(props: ComposerProps) {
                 : !showingSteering && (steeringCount ?? 0) > 0
                   ? t("pendingSteeringHint", { count: steeringCount })
                   : !showingQueue &&
-                      (props.pendingFollowUpsReceipt !== null ||
+                      ((active && props.pendingFollowUpsReceipt !== null) ||
                         (pendingCount ?? 0) > 0)
                     ? (pendingCount ?? 0) > 0
                       ? t("pendingFollowUpsHint", {
@@ -1240,7 +1262,7 @@ export function Composer(props: ComposerProps) {
       props.thinkingPendingLevel !== null ||
       props.turnCancellationPending ||
       props.turnTerminalStatus === "cancelled" ||
-      (!showingQueue && props.pendingFollowUpsReceipt !== null) ||
+      (!showingQueue && active && props.pendingFollowUpsReceipt !== null) ||
       (!showingQueue && (pendingCount ?? 0) > 0) ||
       (!showingSteering && (steeringCount ?? 0) > 0) ||
       (running && Boolean(prompt.trim() || images.length || files.length)));
@@ -1388,7 +1410,10 @@ export function Composer(props: ComposerProps) {
             alias: "model",
             description: t("composerModelDescription"),
             icon: <Cpu />,
-            disabled: running || props.modelSelectionPending,
+            disabled:
+              (!active && !draftSession) ||
+              running ||
+              props.modelSelectionPending,
             onClick: choose(() => setModelOpenRequest((value) => value + 1)),
           },
         ];
@@ -1946,10 +1971,7 @@ export function Composer(props: ComposerProps) {
             onSelect={setActiveCommand}
           />
         )}
-        <div
-          className="composer-toolbar"
-          hidden={Boolean(selected && !active && !props.workspaceDraft)}
-        >
+        <div className="composer-toolbar">
           <div className="composer-toolbar-context">
             {contextEntryAvailable && (
               <button
@@ -2028,6 +2050,7 @@ export function Composer(props: ComposerProps) {
             )}
             <div
               className="model-picker-wrap"
+              hidden={Boolean(selected && !active && !props.workspaceDraft)}
               title={
                 thinkingDisabledReason ? t(thinkingDisabledReason) : undefined
               }

@@ -74,6 +74,7 @@ function AppearanceMenu({
       items={options.map((option) => ({
         id: option.id || "default",
         label: option.label,
+        isDisabled: disabled,
         ...(option.color
           ? {
               icon: (
@@ -176,13 +177,13 @@ export function AppearanceSettingsPanel({
     setChatWidth(setup.ui.webChatWidth);
     setFontSize(setup.ui.webChatFontSize);
   }, [setup]);
-  const disabled = pending || !setup || !!error;
+  const unreadable =
+    catalog?.setupWritable === false ||
+    !!catalog?.resources.diagnostics.settingsErrors;
+  const disabled = pending || !setup || !!error || unreadable;
   const parsedImport = parseAppearanceTheme(importValue);
   const saveAppearance = (patch: Partial<WebAppearancePreference>) =>
-    onUpdatePreferences({
-      theme: mode,
-      appearance: { ...appearance, palette, ...patch },
-    });
+    onUpdatePreferences({ appearance: patch });
   const closeImport = () => {
     if (pending) return;
     setImportOpen(false);
@@ -196,13 +197,22 @@ export function AppearanceSettingsPanel({
   return (
     <section className="settings-content-page settings-appearance-panel">
       <h1>{t("appearance")}</h1>
-      {(!setup || error) && (
-        <div className="settings-load-state" role={error ? "alert" : "status"}>
+      {(!setup || error || unreadable) && (
+        <div
+          className="settings-load-state"
+          role={error || unreadable ? "alert" : "status"}
+        >
           <RefreshCw aria-hidden="true" />
           <span>
-            {t(error ? "settingsCatalogFailed" : "settingsCatalogLoading")}
+            {t(
+              unreadable
+                ? "configurationReadFailure"
+                : error
+                  ? "settingsCatalogFailed"
+                  : "settingsCatalogLoading",
+            )}
           </span>
-          {error && (
+          {(error || unreadable) && (
             <button type="button" onClick={onRefresh}>
               {t("retryAdmissionCheck")}
             </button>
@@ -245,12 +255,7 @@ export function AppearanceSettingsPanel({
                     )}
                     checked={mode === id}
                     disabled={disabled}
-                    onChange={() =>
-                      void onUpdatePreferences({
-                        theme: id,
-                        appearance: { ...appearance, palette },
-                      })
-                    }
+                    onChange={() => void onUpdatePreferences({ theme: id })}
                   />
                   <span
                     aria-hidden="true"
@@ -390,7 +395,7 @@ export function AppearanceSettingsPanel({
             <span>{t("appearanceFont")}</span>
             <AppearanceMenu
               label={t("appearanceFont")}
-              value={appearance.font}
+              value={appearance.font === "system" ? "codex" : appearance.font}
               options={fonts.map((id) => ({
                 id,
                 label: t(`appearanceFont_${id}`),

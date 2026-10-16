@@ -216,8 +216,17 @@ export class BelowEditorNavigationEditor implements EditorComponent, Focusable {
   }
 
   private nestedNavigation() {
-    return this.base instanceof BelowEditorNavigationEditor
-      ? this.base
+    // Native extension loading gives each layer its own module graph, so
+    // constructor identity cannot recognize another layer's navigation wrapper.
+    type Navigation = Pick<
+      BelowEditorNavigationEditor,
+      "hasFocusedStrip" | "blurAllStrips" | "focusAvailableStrip"
+    >;
+    const candidate = this.base as EditorComponent & Partial<Navigation>;
+    return typeof candidate.hasFocusedStrip === "function" &&
+      typeof candidate.blurAllStrips === "function" &&
+      typeof candidate.focusAvailableStrip === "function"
+      ? (candidate as Navigation)
       : undefined;
   }
 
