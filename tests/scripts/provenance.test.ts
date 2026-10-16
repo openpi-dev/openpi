@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -120,13 +121,16 @@ test("provenance accepts this checkout when pi list reports only its real path",
 test("provenance rejects a single foreign OpenPI package", () => {
   const root = mkdtempSync(join(tmpdir(), "openpi-provenance-"));
   try {
-    const foreign = packageDir(root, OPENPI_PACKAGE_NAME, "foreign");
-    const result = runProvenance([foreign]);
+    const created = packageDir(root, OPENPI_PACKAGE_NAME, "foreign");
+    const foreign = realpathSync.native(created);
+    const result = runProvenance([created]);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /Provenance match: no/);
     assert.match(
       result.stdout,
-      new RegExp(foreign.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      new RegExp(
+        `OpenPI source reported by pi list: ${foreign.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+      ),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
