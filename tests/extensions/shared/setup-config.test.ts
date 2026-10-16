@@ -8,9 +8,11 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   rmdirSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,7 +34,6 @@ const {
   formatSetupDiagnostics,
   parseSetupConfig,
   POST_EDIT_COMMAND_MAX_CHARS,
-  processStartedAtQuery,
   saveSetupConfig,
   SETUP_CONFIG_PATH,
   updateSetupConfig,
@@ -244,28 +245,15 @@ test("FAIL: session child execution admission is opt-in and bounded", () => {
   );
 });
 
-test("process start-time queries are platform-specific and conservative", () => {
-  const windowsQuery = processStartedAtQuery(123, "win32");
-  assert.equal(windowsQuery.command, "powershell.exe");
-  assert.deepEqual(windowsQuery.args.slice(0, 3), [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-  ]);
-  assert.match(windowsQuery.args.at(-1) ?? "", /Get-Process -Id 123/);
-  assert.equal(windowsQuery.parseOutput("1700000000000"), 1_700_000_000_000);
-  assert.equal(windowsQuery.parseOutput("not a timestamp"), undefined);
+const delay = (ms: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
-  const posixQuery = processStartedAtQuery(123, "linux");
-  assert.equal(posixQuery.command, "ps");
-  assert.deepEqual(posixQuery.args, ["-o", "lstart=", "-p", "123"]);
-  assert.deepEqual(posixQuery.env, { LC_ALL: "C" });
-  assert.equal(
-    posixQuery.parseOutput("Mon Jan  1 00:00:00 2024\n"),
-    Date.parse("Mon Jan  1 00:00:00 2024"),
-  );
-  assert.equal(posixQuery.parseOutput("not a timestamp"), undefined);
-});
+const expireLock = (path: string) => {
+  const expired = new Date(Date.now() - 6_000);
+  utimesSync(path, expired, expired);
+};
 
 test("every one-line footer preset keeps model context left and cwd right", () => {
   for (const preset of Object.values(FOOTER_PRESET_DEFINITIONS)) {
@@ -487,7 +475,9 @@ await updateSetupConfig((current) => {
   });
 });
 
-test("a killed setup writer releases ownership for the next process", async () => {
+test("a killed setup writer is recovered from its last heartbeat", {
+  timeout: 15_000,
+}, async () => {
   await saveSetupConfig(DEFAULT_SETUP_CONFIG);
   const source = `
 const { writeFileSync } = await import("node:fs");
@@ -530,6 +520,12 @@ await updateSetupConfig((current) => {
       );
     });
     assert.equal(existsSync(setupConfigLockPath), true);
+    const frozen = statSync(setupConfigLockPath).mtimeMs;
+    const killedAt = Date.now();
+    assert.ok(
+      killedAt - frozen < 3_000,
+      `heartbeat was already stale when the holder was killed (${killedAt - frozen}ms)`,
+    );
 
     const exited = once(holder, "exit");
     holder.kill("SIGKILL");
@@ -539,9 +535,18 @@ await updateSetupConfig((current) => {
       ...current,
       ui: { ...current.ui, showHeader: true },
     }));
+    const recoveredAt = Date.now();
     assert.equal(config.ui.showHeader, true);
     assert.equal(loadSetupConfig().ui.showHeader, true);
     assert.equal(existsSync(setupConfigLockPath), false);
+    assert.ok(
+      recoveredAt >= frozen + 5_000 - 100,
+      `recovered ${recoveredAt - frozen}ms after the last heartbeat`,
+    );
+    assert.ok(
+      recoveredAt - killedAt < 8_000,
+      `recovery took ${recoveredAt - killedAt}ms`,
+    );
   } finally {
     if (holder.exitCode === null && holder.signalCode === null) {
       const exited = once(holder, "exit");
@@ -633,18 +638,27 @@ process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - starte
     await holder.waitFor("holding\n");
     waiter = start(waiterSource);
     await waiter.waitFor("watching\n");
+    const frozen = statSync(setupConfigLockPath).mtimeMs;
+    const killedAt = Date.now();
+    assert.ok(killedAt - frozen < 3_000);
     holder.child.kill("SIGKILL");
     await holder.exited;
 
     await waiter.exited;
+    const recoveredAt = Date.now();
     const { stdout, stderr } = waiter.output();
     assert.equal(stderr, "");
     const result = JSON.parse(stdout.split("\n").at(-2) ?? "");
     assert.equal(result.result, "success");
     assert.ok(
-      result.ms < 5_000,
-      "waiter used the full deadline: " + result.ms + "ms",
+      recoveredAt >= frozen + 5_000 - 100,
+      `waiter recovered ${recoveredAt - frozen}ms after the last heartbeat`,
     );
+    assert.ok(
+      result.ms < 12_000,
+      "waiter exceeded the lease cap: " + result.ms,
+    );
+    assert.equal(existsSync(setupConfigLockPath), false);
   } finally {
     for (const process of [holder, waiter]) {
       if (!process) continue;
@@ -658,7 +672,93 @@ process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - starte
   }
 });
 
-test("a reused PID does not impersonate the dead lock owner", async () => {
+test("a stale setup lock is recovered even when its recorded pid is alive", async () => {
+  removeLockArtifacts();
+  await saveSetupConfig(DEFAULT_SETUP_CONFIG);
+  const owner = {
+    version: 2,
+    pid: process.pid,
+    createdAt: Date.now(),
+    token: "33333333-3333-4333-8333-333333333333",
+  };
+  const metadata = `${JSON.stringify(owner)}\n`;
+  const claimPath = `${setupConfigLockPath}.owner.${owner.pid}.${owner.token}`;
+  writeFileSync(claimPath, metadata);
+  linkSync(claimPath, setupConfigLockPath);
+  expireLock(setupConfigLockPath);
+
+  try {
+    const started = Date.now();
+    const { config } = await updateSetupConfig((current) => ({
+      ...current,
+      ui: { ...current.ui, showHeader: true },
+    }));
+    assert.equal(config.ui.showHeader, true);
+    assert.equal(loadSetupConfig().ui.showHeader, true);
+    assert.ok(
+      Date.now() - started < 2_000,
+      "stale recovery waited out a live pid",
+    );
+    assert.equal(existsSync(setupConfigLockPath), false);
+  } finally {
+    removeLockArtifacts();
+  }
+});
+
+test("a fresh setup lock is kept until its timestamp is past the deadline", async () => {
+  removeLockArtifacts();
+  await saveSetupConfig(DEFAULT_SETUP_CONFIG);
+  const dead = spawn(process.execPath, ["--eval", ""]);
+  const deadPid = dead.pid;
+  await once(dead, "exit");
+  assert.equal(typeof deadPid, "number");
+  const owner = {
+    version: 2,
+    pid: deadPid,
+    createdAt: Date.now(),
+    token: "55555555-5555-4555-8555-555555555555",
+  };
+  const metadata = `${JSON.stringify(owner)}\n`;
+  const claimPath = `${setupConfigLockPath}.owner.${owner.pid}.${owner.token}`;
+  writeFileSync(claimPath, metadata);
+  linkSync(claimPath, setupConfigLockPath);
+
+  let settled = false;
+  const pending = updateSetupConfig((current) => ({
+    ...current,
+    ui: { ...current.ui, showHeader: true },
+  })).then((result) => {
+    settled = true;
+    return result;
+  });
+  pending.catch(() => undefined);
+
+  try {
+    await delay(1_000);
+    assert.equal(settled, false);
+    assert.equal(readFileSync(setupConfigLockPath, "utf8"), metadata);
+    expireLock(setupConfigLockPath);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("stale lock was not recovered")),
+          3_000,
+        );
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    assert.equal(settled, true);
+    assert.equal(result.config.ui.showHeader, true);
+    assert.equal(existsSync(setupConfigLockPath), false);
+  } finally {
+    removeLockArtifacts();
+    await pending.catch(() => undefined);
+  }
+});
+
+test("a legacy setup lock is protected while fresh and recovered once stale", async () => {
   removeLockArtifacts();
   await saveSetupConfig(DEFAULT_SETUP_CONFIG);
   const owner = {
@@ -667,123 +767,198 @@ test("a reused PID does not impersonate the dead lock owner", async () => {
     processStartedAt: 1,
     processStartedAtVerified: true,
     createdAt: Date.now(),
-    token: "33333333-3333-4333-8333-333333333333",
+    token: "66666666-6666-4666-8666-666666666666",
   };
+  const metadata = `${JSON.stringify(owner)}\n`;
   const claimPath = `${setupConfigLockPath}.owner.${owner.pid}.${owner.processStartedAt}.${owner.token}`;
-  writeFileSync(claimPath, `${JSON.stringify(owner)}\n`);
+  writeFileSync(claimPath, metadata);
   linkSync(claimPath, setupConfigLockPath);
 
+  let settled = false;
+  const pending = updateSetupConfig((current) => ({
+    ...current,
+    ui: { ...current.ui, showHeader: true },
+  })).then((result) => {
+    settled = true;
+    return result;
+  });
+  pending.catch(() => undefined);
+
   try {
+    await delay(1_000);
+    assert.equal(settled, false);
+    assert.equal(readFileSync(setupConfigLockPath, "utf8"), metadata);
+    expireLock(setupConfigLockPath);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("stale legacy lock was not recovered")),
+          3_000,
+        );
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    assert.equal(settled, true);
+    assert.equal(result.config.ui.showHeader, true);
+  } finally {
+    removeLockArtifacts();
+    await pending.catch(() => undefined);
+  }
+});
+
+test("a stale legacy recovery claim is taken over even if its pid is alive", async () => {
+  removeLockArtifacts();
+  await saveSetupConfig(DEFAULT_SETUP_CONFIG);
+  const owner = {
+    version: 1,
+    pid: process.pid,
+    processStartedAt: 1,
+    processStartedAtVerified: true,
+    createdAt: Date.now(),
+    token: "77777777-7777-4777-8777-777777777777",
+  };
+  const metadata = `${JSON.stringify(owner)}\n`;
+  const claimPath = `${setupConfigLockPath}.owner.${owner.pid}.${owner.processStartedAt}.${owner.token}`;
+  const recoveryPath = `${claimPath}.recovering.${process.pid}.1.1.88888888-8888-4888-8888-888888888888`;
+  writeFileSync(claimPath, metadata);
+  linkSync(claimPath, setupConfigLockPath);
+  renameSync(claimPath, recoveryPath);
+  expireLock(setupConfigLockPath);
+
+  try {
+    const started = Date.now();
     const { config } = await updateSetupConfig((current) => ({
       ...current,
       ui: { ...current.ui, showHeader: true },
     }));
     assert.equal(config.ui.showHeader, true);
+    assert.ok(Date.now() - started < 2_000);
+    assert.equal(existsSync(setupConfigLockPath), false);
+    assert.equal(existsSync(recoveryPath), false);
   } finally {
     removeLockArtifacts();
   }
 });
 
-test("process start-time query failures do not authorize lock recovery", async () => {
+test("a live holder keeps the setup lock across a blocked main thread", {
+  timeout: 20_000,
+}, async () => {
+  removeLockArtifacts();
+  await saveSetupConfig(DEFAULT_SETUP_CONFIG);
   const source = `
-const childProcess = await import("node:child_process");
-const { syncBuiltinESMExports } = await import("node:module");
-childProcess.default.execFile = (...args) => {
-  const callback = args.at(-1);
-  if (typeof callback !== "function") {
-    throw new Error("expected execFile callback");
-  }
-  queueMicrotask(() => callback(new Error("mock process start query failure"), ""));
-};
-syncBuiltinESMExports();
-
-const { existsSync, linkSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
-const {
-  DEFAULT_SETUP_CONFIG,
-  SETUP_CONFIG_PATH,
-  saveSetupConfig,
-  updateSetupConfig,
-} = await import(process.env.SETUP_CONFIG_MODULE_URL);
-
-await saveSetupConfig(DEFAULT_SETUP_CONFIG);
-const lockPath = SETUP_CONFIG_PATH + ".lock";
-const owner = {
-  version: 1,
-  pid: process.pid,
-  processStartedAt: 1,
-  processStartedAtVerified: true,
-  createdAt: Date.now(),
-  token: "44444444-4444-4444-8444-444444444444",
-};
-const metadata = JSON.stringify(owner) + "\\n";
-const claimPath = lockPath + ".owner." + owner.pid + "." + owner.processStartedAt + "." + owner.token;
-writeFileSync(claimPath, metadata);
-linkSync(claimPath, lockPath);
-
-let mutated = false;
-try {
-  await updateSetupConfig((current) => {
-    mutated = true;
-    return { ...current, ui: { ...current.ui, showHeader: true } };
-  });
-  throw new Error("lock was recovered after an unknown process start-time query");
-} catch (error) {
-  if (!(error instanceof Error) || !error.message.includes("Timed out waiting")) throw error;
-}
-if (mutated) throw new Error("mutator ran under unknown lock ownership");
-if (!existsSync(lockPath) || readFileSync(lockPath, "utf8") !== metadata) {
-  throw new Error("unknown lock ownership was modified");
-}
-rmSync(process.env.PI_CODING_AGENT_DIR, { recursive: true, force: true });
-process.stdout.write("preserved\\n");
+const { writeFileSync } = await import("node:fs");
+const { updateSetupConfig } = await import(process.env.SETUP_CONFIG_MODULE_URL);
+await updateSetupConfig((current) => {
+  writeFileSync(1, "holding\\n");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15000);
+  return { ...current, ui: { ...current.ui, showHeader: true } };
+});
+writeFileSync(1, "released\\n");
 `;
-
-  await runSetupConfigChildScenario({
-    source,
-    tempPrefix: "my-pi-setup-query-failure-lock-",
-    failureLabel: "query failure owner check",
+  const holder = spawn(
+    process.execPath,
+    ["--experimental-strip-types", "--input-type=module", "--eval", source],
+    {
+      env: {
+        ...process.env,
+        PI_CODING_AGENT_DIR: agentDir,
+        SETUP_CONFIG_MODULE_URL: setupConfigModuleUrl,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  holder.stdout.setEncoding("utf8");
+  holder.stderr.setEncoding("utf8");
+  let stderr = "";
+  holder.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
   });
+  const exited = once(holder, "exit");
+  void exited.catch(() => {});
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let stdout = "";
+      holder.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        if (stdout.includes("holding\n")) resolve();
+      });
+      holder.once("error", reject);
+      holder.once("exit", (code) =>
+        reject(new Error(`lock holder exited ${code}: ${stderr}`)),
+      );
+    });
+    const before = statSync(setupConfigLockPath).mtimeMs;
+    const held = readFileSync(setupConfigLockPath, "utf8");
+    await delay(2_200);
+    const after = statSync(setupConfigLockPath).mtimeMs;
+    assert.ok(
+      after >= before + 500,
+      `lock timestamp did not refresh during a blocked hold (${after - before}ms)`,
+    );
+
+    const waiterStarted = Date.now();
+    await assert.rejects(
+      updateSetupConfig((current) => ({
+        ...current,
+        ui: { ...current.ui, customFooter: false },
+      })),
+      /Timed out waiting/,
+    );
+    const waiterMs = Date.now() - waiterStarted;
+    assert.ok(waiterMs < 9_000, `live lock wait took ${waiterMs}ms`);
+    assert.equal(readFileSync(setupConfigLockPath, "utf8"), held);
+    assert.equal(loadSetupConfig().ui.customFooter, true);
+    assert.equal(holder.exitCode, null);
+  } finally {
+    if (holder.exitCode === null && holder.signalCode === null) {
+      holder.kill("SIGKILL");
+      await exited;
+    }
+    removeLockArtifacts();
+  }
 });
 
-test("live and uncertain lock owners are never stolen", async () => {
+test("unreadable, mismatched, and newer setup locks are never stolen", async () => {
   const source = `
-const { spawn } = await import("node:child_process");
-const { once } = await import("node:events");
-const { existsSync, linkSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+const { existsSync, linkSync, readFileSync, rmSync, utimesSync, writeFileSync } = await import("node:fs");
 const { join } = await import("node:path");
 const scenario = process.env.SETUP_LOCK_SCENARIO;
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 const lockPath = join(agentDir, "my-pi-setup.json.lock");
-if (scenario === "live") {
+const expire = () => {
+  const expired = new Date(Date.now() - 10_000);
+  utimesSync(lockPath, expired, expired);
+};
+if (scenario === "future") {
   const owner = {
-    version: 1,
+    version: 99,
     pid: process.pid,
-    processStartedAt: Math.max(1, Math.round(Date.now() - process.uptime() * 1000)),
-    processStartedAtVerified: false,
     createdAt: Date.now(),
-    token: "11111111-1111-4111-8111-111111111111",
+    token: "99999999-9999-4999-8999-999999999999",
   };
-  const claimPath = lockPath + ".owner." + owner.pid + "." + owner.processStartedAt + "." + owner.token;
-  writeFileSync(claimPath, JSON.stringify(owner) + "\\n");
+  const metadata = JSON.stringify(owner) + "\\n";
+  const claimPath = lockPath + ".owner." + owner.pid + "." + owner.token;
+  writeFileSync(claimPath, metadata);
   linkSync(claimPath, lockPath);
+  expire();
 } else if (scenario === "mismatched") {
-  const dead = spawn(process.execPath, ["--eval", ""]);
-  const deadPid = dead.pid;
-  await once(dead, "exit");
   const owner = {
-    version: 1,
-    pid: deadPid,
-    processStartedAt: 1,
-    processStartedAtVerified: false,
+    version: 2,
+    pid: process.pid,
     createdAt: Date.now(),
     token: "22222222-2222-4222-8222-222222222222",
   };
-  const claimPath = lockPath + ".owner." + owner.pid + "." + owner.processStartedAt + "." + owner.token;
   const metadata = JSON.stringify(owner) + "\\n";
+  const claimPath = lockPath + ".owner." + owner.pid + "." + owner.token;
   writeFileSync(lockPath, metadata);
   writeFileSync(claimPath, metadata);
+  expire();
 } else {
   writeFileSync(lockPath, "not trustworthy\\n");
+  expire();
 }
 const before = readFileSync(lockPath, "utf8");
 const { updateSetupConfig } = await import(process.env.SETUP_CONFIG_MODULE_URL);
@@ -805,7 +980,7 @@ rmSync(agentDir, { recursive: true, force: true });
 process.stdout.write("preserved\\n");
 `;
 
-  const runs = ["live", "unknown", "mismatched"].map((scenario) => {
+  const runs = ["unknown", "mismatched", "future"].map((scenario) => {
     return runSetupConfigChildScenario({
       source,
       tempPrefix: `my-pi-setup-${scenario}-lock-`,
@@ -1324,4 +1499,89 @@ test("IO errors remain visible and unknown model fields cannot disappear on role
   await updateSetupConfig((config) => config);
   if (process.platform !== "win32")
     assert.equal(statSync(SETUP_CONFIG_PATH).mode & 0o777, 0o600);
+});
+
+for (const invalid of [[0xff], [0xc0, 0xaf], [0xe2, 0x82]]) {
+  test(`malformed UTF-8 ${Buffer.from(invalid).toString("hex")} blocks setup writes without losing original bytes`, async () => {
+    const original = Buffer.concat([
+      Buffer.from('{"configVersion":1,"future":{"note":"'),
+      Buffer.from(invalid),
+      Buffer.from('"}}\n'),
+    ]);
+    writeFileSync(SETUP_CONFIG_PATH, original);
+    const inspected = inspectSetupConfig();
+    let mutations = 0;
+    let applies = 0;
+    const error = await updateSetupConfig(
+      (config) => {
+        mutations += 1;
+        return { ...config, ui: { ...config.ui, showHeader: true } };
+      },
+      async () => {
+        applies += 1;
+      },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    assert.deepEqual(
+      {
+        writable: inspected.writable,
+        rejected: error instanceof Error,
+        mutations,
+        applies,
+        unchanged: readFileSync(SETUP_CONFIG_PATH).equals(original),
+      },
+      {
+        writable: false,
+        rejected: true,
+        mutations: 0,
+        applies: 0,
+        unchanged: true,
+      },
+    );
+  });
+}
+
+for (const note of ["ASCII", "中文", "😀", "�"]) {
+  test(`valid UTF-8 ${note} survives unrelated setup updates and rollback`, async () => {
+    const future = { nested: { note }, list: [note] };
+    const original = Buffer.from(
+      ` ${JSON.stringify({ configVersion: 1, future })}\n`,
+    );
+    writeFileSync(SETUP_CONFIG_PATH, original);
+    assert.equal(inspectSetupConfig().writable, true);
+    await updateSetupConfig((config) => ({
+      ...config,
+      ui: { ...config.ui, showHeader: true },
+    }));
+    const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+    assert.deepEqual(saved.future, future);
+    assert.equal(saved.ui.showHeader, true);
+    writeFileSync(SETUP_CONFIG_PATH, original);
+    const applied: boolean[] = [];
+    await assert.rejects(
+      updateSetupConfig(
+        (config) => ({ ...config, ui: { ...config.ui, showHeader: true } }),
+        async (config) => {
+          applied.push(config.ui.showHeader);
+          if (config.ui.showHeader) throw new Error("synthetic apply failure");
+        },
+      ),
+      /previous file and configuration restored/,
+    );
+    assert.deepEqual(applied, [true, false]);
+    assert.deepEqual(readFileSync(SETUP_CONFIG_PATH), original);
+  });
+}
+
+test("UTF-8 BOM retains the existing malformed JSON rejection", async () => {
+  const original = Buffer.from('\ufeff{"configVersion":1}');
+  writeFileSync(SETUP_CONFIG_PATH, original);
+  assert.equal(inspectSetupConfig().writable, false);
+  await assert.rejects(
+    updateSetupConfig((config) => config),
+    /Refusing to overwrite/,
+  );
+  assert.deepEqual(readFileSync(SETUP_CONFIG_PATH), original);
 });

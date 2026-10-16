@@ -1527,39 +1527,110 @@ test("streamAntigravity bounds the first event wait and releases both bodies", a
   assert.match(error.error.errorMessage ?? "", /first SSE event/);
 });
 
+const SSE_CLOCK_ORIGIN = 1_700_000_000_000;
+const SSE_TIMEOUT_MS = 1_000;
+const SSE_METADATA = new TextEncoder().encode(
+  'data: {"response":{"usageMetadata":{"promptTokenCount":1}}}\n\n',
+);
+
+// timeoutMs is both deadlines. The body prefetches one extra chunk before the
+// first read is parsed, so the third pull is the read after that event. Move
+// the clock there. Advancing earlier still reports the first SSE event.
+async function withSseClock<T>(
+  run: (clock: { advance: (ms: number) => void }) => Promise<T>,
+) {
+  const realNow = Date.now;
+  const previousVersion = process.env.OPENPI_ANTIGRAVITY_VERSION;
+  let now = SSE_CLOCK_ORIGIN;
+  Date.now = () => now;
+  process.env.OPENPI_ANTIGRAVITY_VERSION = "1.2.3";
+  try {
+    return await run({
+      advance(ms) {
+        now += ms;
+      },
+    });
+  } finally {
+    Date.now = realNow;
+    if (previousVersion === undefined) {
+      delete process.env.OPENPI_ANTIGRAVITY_VERSION;
+    } else process.env.OPENPI_ANTIGRAVITY_VERSION = previousVersion;
+  }
+}
+
 test("streamAntigravity bounds the full SSE lifetime after the first event", async () => {
   const urls: string[] = [];
   let cancellations = 0;
-  globalThis.fetch = (async (input: unknown) => {
-    urls.push(String(input));
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(
-            new TextEncoder().encode(
-              'data: {"response":{"usageMetadata":{"promptTokenCount":1}}}\n\n',
-            ),
-          );
-        },
-        cancel() {
-          cancellations++;
-        },
-      }),
-      { status: 200 },
-    );
-  }) as typeof fetch;
+  await withSseClock(async (clock) => {
+    globalThis.fetch = (async (input: unknown) => {
+      urls.push(String(input));
+      let pulls = 0;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pulls += 1;
+            if (pulls < 3) {
+              controller.enqueue(SSE_METADATA);
+              return;
+            }
+            clock.advance(SSE_TIMEOUT_MS);
+            controller.enqueue(new TextEncoder().encode(": stall\n"));
+          },
+          cancel() {
+            cancellations++;
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
 
-  const events = await collectEvents(
-    streamAntigravity(GEMINI_MODEL, SIMPLE_CONTEXT, {
-      apiKey: API_KEY,
-      timeoutMs: 5,
-    }),
-  );
-  assert.equal(urls.length, 2);
-  assert.equal(cancellations, 2);
-  const error = events.find((event) => event.type === "error");
-  assert.ok(error && error.type === "error");
-  assert.match(error.error.errorMessage ?? "", /next SSE event/);
+    const events = await collectEvents(
+      streamAntigravity(GEMINI_MODEL, SIMPLE_CONTEXT, {
+        apiKey: API_KEY,
+        timeoutMs: SSE_TIMEOUT_MS,
+      }),
+    );
+    assert.equal(urls.length, 2);
+    assert.equal(cancellations, 2);
+    const error = events.find((event) => event.type === "error");
+    assert.ok(error && error.type === "error");
+    assert.match(error.error.errorMessage ?? "", /next SSE event/);
+  });
+});
+
+test("streamAntigravity reports the first SSE event when the deadline passes before a payload", async () => {
+  const urls: string[] = [];
+  let cancellations = 0;
+  await withSseClock(async (clock) => {
+    globalThis.fetch = (async (input: unknown) => {
+      urls.push(String(input));
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            clock.advance(SSE_TIMEOUT_MS);
+            controller.enqueue(SSE_METADATA);
+          },
+          cancel() {
+            cancellations++;
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const events = await collectEvents(
+      streamAntigravity(GEMINI_MODEL, SIMPLE_CONTEXT, {
+        apiKey: API_KEY,
+        timeoutMs: SSE_TIMEOUT_MS,
+      }),
+    );
+    assert.equal(urls.length, 2);
+    assert.equal(cancellations, 2);
+    const error = events.find((event) => event.type === "error");
+    assert.ok(error && error.type === "error");
+    assert.match(error.error.errorMessage ?? "", /first SSE event/);
+    assert.doesNotMatch(error.error.errorMessage ?? "", /next SSE event/);
+  });
 });
 
 test("streamAntigravity bounds the response-header wait and fails over", async () => {
