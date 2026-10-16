@@ -127,7 +127,9 @@ async function nativeRuntime(
   };
 }
 
-test("manual provider retry keeps the original input, images and completed tool results in the native Session", async (t) => {
+test("manual provider retry keeps the original input, images and completed tool results in the native Session", {
+  skip: skipBeforePi12,
+}, async (t) => {
   let calls = 0;
   const { runtime, session, events, cwd } = await nativeRuntime(
     t,
@@ -264,7 +266,77 @@ test("manual provider retry keeps the original input, images and completed tool 
   );
 });
 
-test("manual provider retry keeps the original run owner after steering", async (t) => {
+test("manual provider retry rejects mixed input and revalidates a changed native branch before dispatch", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  let calls = 0;
+  const { runtime, session } = await nativeRuntime(t, () => undefined, [
+    () => {
+      calls++;
+      return fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: "503 fixture",
+      });
+    },
+  ]);
+  await runtime.sendPrompt("Original request", { commandId: "original" });
+  await session.waitForIdle();
+  const failure = session.sessionManager
+    .getBranch()
+    .slice()
+    .reverse()
+    .find((entry) => entry.type === "message")!;
+  const target = {
+    commandId: "retry",
+    retryEntryId: failure.id,
+    expectedSessionId: session.sessionId,
+    expectedSessionPath: `current:${session.sessionId}`,
+  };
+  for (const options of [
+    {
+      ...target,
+      images: [{ mimeType: "image/png" as const, data: "fixture" }],
+    },
+    { ...target, streamingBehavior: "steer" as const },
+    { ...target, planRevision: "plan" },
+  ])
+    await assert.rejects(runtime.sendPrompt("", options));
+  await assert.rejects(runtime.sendPrompt("Different request", target), {
+    code: "PROMPT_REJECTED",
+  });
+  await assert.rejects(
+    runtime.sendPrompt("", { ...target, expectedSessionId: "another" }),
+    { code: "SESSION_CONFLICT" },
+  );
+  assert.equal(calls, 1);
+
+  // Admission accepts this idle failure, then the native branch changes while
+  // the dispatch queue is blocked. The second check must prevent continuation.
+  const gate = Promise.withResolvers<void>();
+  Reflect.set(runtime, "promptAdmission", gate.promise);
+  const retry = runtime.sendPrompt("", target);
+  const rejected = assert.rejects(retry, { code: "PROMPT_REJECTED" });
+  session.sessionManager.appendMessage({
+    role: "user",
+    content: "A newer native input",
+    timestamp: Date.now(),
+  });
+  gate.resolve();
+  await rejected;
+  assert.equal(calls, 1);
+  assert.equal(
+    session.messages.filter(
+      (message) =>
+        message.role === "custom" &&
+        message.customType === "openpi-web-provider-retry",
+    ).length,
+    0,
+  );
+});
+
+test("manual provider retry keeps the original run owner after steering", {
+  skip: skipBeforePi12,
+}, async (t) => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const { runtime, session, events } = await nativeRuntime(t, () => undefined, [
@@ -338,7 +410,9 @@ test("manual provider retry keeps the original run owner after steering", async 
   }
 });
 
-test("manual provider retry remains cancellable through the native run lifecycle", async (t) => {
+test("manual provider retry remains cancellable through the native run lifecycle", {
+  skip: skipBeforePi12,
+}, async (t) => {
   const entered = Promise.withResolvers<void>();
   const { runtime, session, events } = await nativeRuntime(t, () => undefined, [
     fauxAssistantMessage([], {

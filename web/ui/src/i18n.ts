@@ -1744,6 +1744,35 @@ const resources = {
       sidebarArchive: "Archive",
       sidebarRestore: "Restore",
       sidebarDelete: "Permanently delete",
+      managedWorktreeRecoveryFull:
+        "Check earlier unfinished removal requests before starting another.",
+      managedWorktreesChanged:
+        "The worktree list changed. Refresh it before reviewing a target.",
+      managedWorktreesRefresh: "Refresh worktrees",
+      managedWorktreesBack: "Back to worktrees",
+      managedWorktreesRetry: "Retry request",
+      managedWorktrees: "Retained worktrees",
+      managedWorktreesDescription:
+        "Worktrees created by OpenPI are kept when a conversation is deleted. Review an exact path before requesting removal. Active, shared, changed or unverified worktrees stay in place.",
+      managedWorktreeConfirm:
+        "Remove this managed worktree? The server rechecks ownership, active conversations and local changes before removal.",
+      managedWorktreeRemoved: "Worktree removed.",
+      managedWorktreePreserved: "Worktree kept:",
+      managedWorktreeUncertainTerminal:
+        "Removal outcome is uncertain. Automatic removal cannot be repeated. Inspect the retained path before taking further action.",
+      managedWorktreeUncertain:
+        "Removal outcome is unknown. Retry to check the original request.",
+      managedWorktreeRemoving: "Checking and removing…",
+      managedWorktreeRemove: "Remove worktree",
+      managedWorktreeReview: "Review removal",
+      managedWorktreesEmpty: "No managed worktrees were found on this page.",
+      managedWorktreesUnavailable:
+        "{{count}} ownership records could not be verified.",
+      managedWorktreesLoadFailed:
+        "Could not load retained worktrees. Retry without changing the target.",
+      managedWorktreesMore: "Load more worktrees",
+      managedWorktreeRetainedAfterDelete:
+        "Conversation deleted. Worktree kept at {{path}}. Review retained worktrees in the project menu.",
       sidebarDeleteTitle: "Delete conversation?",
       sidebarDeleteDescription:
         "Permanently delete “{{name}}”? This cannot be undone.",
@@ -3581,6 +3610,32 @@ const resources = {
       sidebarArchive: "归档",
       sidebarRestore: "恢复",
       sidebarDelete: "永久删除",
+      managedWorktreeRecoveryFull:
+        "请先核对先前未确认的移除请求，再开始新的请求。",
+      managedWorktreesChanged: "工作树列表已变化，请刷新后重新核对目标。",
+      managedWorktreesRefresh: "刷新工作树列表",
+      managedWorktreesBack: "返回工作树列表",
+      managedWorktreesRetry: "重试请求",
+      managedWorktrees: "保留的工作树",
+      managedWorktreesDescription:
+        "删除会话会保留 OpenPI 创建的工作树。请核对准确路径后再请求移除。使用中、共享、有改动或无法确认归属的工作树会保留。",
+      managedWorktreeConfirm:
+        "移除此工作树？服务端会重新核对归属、使用中的会话及本地改动后再操作。",
+      managedWorktreeRemoved: "工作树已移除。",
+      managedWorktreePreserved: "工作树已保留：",
+      managedWorktreeUncertainTerminal:
+        "移除结果无法确认，不能自动重复移除。请先检查保留路径，再决定后续操作。",
+      managedWorktreeUncertain: "尚不能确认移除结果。重试会核对原请求。",
+      managedWorktreeRemoving: "正在核对并移除…",
+      managedWorktreeRemove: "移除工作树",
+      managedWorktreeReview: "核对移除",
+      managedWorktreesEmpty: "这一页没有找到托管工作树。",
+      managedWorktreesUnavailable: "有 {{count}} 条归属记录无法确认。",
+      managedWorktreesLoadFailed:
+        "无法加载保留的工作树。请重试，目标不会改变。",
+      managedWorktreesMore: "加载更多工作树",
+      managedWorktreeRetainedAfterDelete:
+        "会话已删除，工作树保留在 {{path}}。可从项目菜单核对保留的工作树。",
       sidebarDeleteTitle: "删除会话？",
       sidebarDeleteDescription: "确定永久删除“{{name}}”？此操作无法撤销。",
       sidebarDeleteConfirm: "删除",

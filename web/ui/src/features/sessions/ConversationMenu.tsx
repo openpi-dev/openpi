@@ -180,6 +180,21 @@ export function ConversationMenu({
     };
   }, []);
 
+  const menuIdentity = useRef({ id: session.id, path: session.path });
+  useEffect(() => {
+    if (
+      menuIdentity.current.id === session.id &&
+      menuIdentity.current.path === session.path
+    )
+      return;
+    menuIdentity.current = { id: session.id, path: session.path };
+    // A reused pathname with a new native identity is a different menu target.
+    // Keep an existing delete confirmation frozen so its mismatch stays visible.
+    setOpen(false);
+    setTargets(null);
+    setForkOptions(null);
+  }, [session.id, session.path]);
+
   useEffect(() => {
     if (!open || !session.cwd || !connected) return;
     const request = ++targetRequest.current;

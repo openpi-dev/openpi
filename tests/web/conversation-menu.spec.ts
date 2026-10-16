@@ -519,3 +519,23 @@ it("leaves browser modifier shortcuts unhandled and exposes menu actions without
   await openMenu();
   expect(document.querySelector(".sidebar-menu-shortcut")).toBeNull();
 });
+
+it("closes a menu when a pathname is reused by a different native Session", async () => {
+  const view = mount();
+  const trigger = await openMenu();
+  view.update({
+    session: {
+      ...view.session,
+      id: "replacement-id",
+      name: "Replacement conversation",
+    },
+  });
+  await waitFor(() =>
+    expect(trigger.getAttribute("aria-expanded")).toBe("false"),
+  );
+  expect(
+    screen.queryByRole("menuitem", { name: i18n.t("sidebarRename") }),
+  ).toBeNull();
+  expect(view.actions.deleteSession).not.toHaveBeenCalled();
+  expect(view.actions.forkConversation).not.toHaveBeenCalled();
+});

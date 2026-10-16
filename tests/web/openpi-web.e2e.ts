@@ -669,8 +669,13 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
   await sidebarHandle.press("Enter");
   await expect(sidebar).toHaveCSS("width", "340px");
-  await expect(sidebarHandle).toHaveAttribute("aria-valuemin", "240");
+  await expect(sidebarHandle).toHaveAttribute("aria-valuemin", "220");
   await expect(sidebarHandle).toHaveAttribute("aria-valuemax", "520");
+  await sidebarHandle.press("Home");
+  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "220");
+  await expect(sidebar).toHaveCSS("width", "220px");
+  await sidebarHandle.press("Enter");
+  await expect(sidebar).toHaveCSS("width", "340px");
   const initialSidebar = await sidebar.boundingBox();
   const initialConversation = await conversation.boundingBox();
   expect(initialSidebar).not.toBeNull();

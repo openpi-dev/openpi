@@ -769,3 +769,39 @@ it("keeps the latest operator width when later snapshots contain an older saved 
   expect(shell.style.getPropertyValue("--sidebar-width")).toBe("340px");
   expect(save).toHaveBeenCalledTimes(2);
 });
+
+it.each([220, 230])(
+  "renders the canonical saved sidebar width %i and supports keyboard minimum 220",
+  async (width) => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600,
+    });
+    const current = snapshot();
+    current.preferences = {
+      theme: "system",
+      sidebarWidth: width,
+      auxiliaryWidth: 520,
+    };
+    webStore.setState({ snapshot: current });
+    const save = vi
+      .spyOn(original.actions, "savePreferences")
+      .mockResolvedValue(undefined);
+    const view = render(createElement(Providers, null, createElement(App)));
+    const shell = view.container.querySelector<HTMLElement>(".app-shell")!;
+    const handle = screen.getByRole("separator", {
+      name: i18n.t("resizeSidebar"),
+    });
+    expect(shell.style.getPropertyValue("--sidebar-width")).toBe(`${width}px`);
+    expect(handle.getAttribute("aria-valuemin")).toBe("220");
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(shell.style.getPropertyValue("--sidebar-width")).toBe("220px");
+    if (width !== 220)
+      await waitFor(() =>
+        expect(save).toHaveBeenCalledWith({
+          sidebarWidth: 220,
+          auxiliaryWidth: 520,
+        }),
+      );
+  },
+);

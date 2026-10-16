@@ -74,9 +74,22 @@ for (const theme of ["light", "dark"] as const) {
     await expect(notice.locator("svg.lucide-circle-alert")).toBeVisible();
     await expect(notice).toHaveCSS("border-top-style", "solid");
     await page.evaluate(() => document.fonts.ready);
-    const compactBounds = (await compaction.boundingBox())!;
-    const retryBounds = (await reconnect.boundingBox())!;
-    const errorBounds = (await notice.boundingBox())!;
+    // The conversation column can move during the sidebar width transition.
+    // Read all three rectangles in one frame so alignment compares one layout.
+    const [compactBounds, retryBounds, errorBounds] =
+      await conversation.evaluate((element) =>
+        [
+          element.querySelector(".context-compaction-text"),
+          element.querySelector(
+            ".provider-attempts > summary > [role='status']",
+          ),
+          element.querySelector(".execution-error"),
+        ].map((target) => {
+          if (!target) throw new Error("Missing visible conversation notice");
+          const { x, y, height } = target.getBoundingClientRect();
+          return { x, y, height };
+        }),
+      );
     expect(Math.abs(compactBounds.x - retryBounds.x)).toBeLessThanOrEqual(1);
     expect(compactBounds.y + compactBounds.height).toBeLessThan(retryBounds.y);
     expect(retryBounds.y + retryBounds.height).toBeLessThan(errorBounds.y);
@@ -337,6 +350,7 @@ for (const touch of [false, true]) {
         snapshot.preferences = {
           ...snapshot.preferences,
           expandThinking: false,
+          sidebarWidth: 340,
           theme: touch ? "light" : "dark",
         };
         snapshot.runtime = {
@@ -428,6 +442,15 @@ for (const touch of [false, true]) {
         await expect(counts).toHaveCSS("opacity", "0");
         await expect(arrow).toHaveCSS("opacity", "0");
         await page.evaluate(() => document.fonts.ready);
+        const shell = page.locator(".app-shell");
+        // Observe the saved width before waiting, so a not-yet-started startup
+        // transition cannot be mistaken for stable hover geometry.
+        await expect(shell).toHaveCSS("--sidebar-width", "340px");
+        await shell.evaluate(async (element) => {
+          await Promise.all(
+            element.getAnimations().map((animation) => animation.finished),
+          );
+        });
         const before = await summary.boundingBox();
         await summary.hover();
         await expect(counts).toHaveCSS("opacity", "1");

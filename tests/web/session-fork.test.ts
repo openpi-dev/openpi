@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import fs, { readdirSync, writeFileSync } from "node:fs";
 import {
   link,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   realpath,
@@ -12,8 +14,10 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import {
@@ -27,11 +31,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readMessageRerun } from "../../web/protocol/message-rerun.ts";
 import {
-  WEB_SESSION_FORK,
   readSessionFork,
+  WEB_SESSION_FORK,
 } from "../../web/protocol/session-fork.ts";
 import { formatSourceReference } from "../../web/protocol/session-sources.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
+import { readSessionWorktreeReceipt } from "../../web/runtime/session-worktree.ts";
 import {
   WebRuntimeRequestError,
   type WebSessionForkResult,
@@ -1865,3 +1870,585 @@ test("an event subscriber failure cannot turn a confirmed unlink into an uncerta
     replayed: true,
   });
 });
+
+test("explicit release retains shared and replacement cwd owners, then recovers private authority after restart", {
+  timeout: 30_000,
+}, async (t) => {
+  const { root, runtime, request } = await fixture(t);
+  const git = await gitFixture(root);
+  const fork = await runtime.forkSession({
+    ...conversation(request),
+    environment: "worktree",
+  });
+  assert.equal(fork.state, "forked");
+  const target = {
+    sessionId: fork.sessionId!,
+    sessionPath: fork.sessionPath!,
+    worktreePath: fork.worktree!.path,
+  };
+  const release = { ...target, commandId: "release-exact" };
+  assert.equal(
+    (await runtime.releaseSessionWorktree(release)).state,
+    "preserved",
+  );
+  const descendant = await runtime.forkSession(
+    conversation(target, "shared-descendant"),
+  );
+  assert.equal(descendant.cwd, fork.cwd);
+  const deleted = await runtime.deleteSession({
+    commandId: "delete-owner",
+    sessionId: target.sessionId,
+    sessionPath: target.sessionPath,
+  });
+  assert.ok("worktreeReleaseTarget" in deleted);
+  assert.deepEqual(deleted.worktreeReleaseTarget, target);
+  assert.equal(
+    (
+      await runtime.releaseSessionWorktree({
+        ...release,
+        commandId: "release-shared",
+      })
+    ).state,
+    "preserved",
+  );
+  await runtime.deleteSession({
+    commandId: "delete-descendant",
+    sessionId: descendant.sessionId!,
+    sessionPath: descendant.sessionPath!,
+  });
+  assert.equal(runtime.cwd, fork.cwd);
+  const replacement = await runtime.releaseSessionWorktree({
+    ...release,
+    commandId: "release-replacement",
+  });
+  assert.equal(replacement.state, "preserved");
+  assert.match(replacement.reason!, /runtime/u);
+  await runtime.newSession(root, { commandId: "leave-worktree" });
+  await runtime.dispose();
+  const restarted = await PiWebRuntime.create(root);
+  t.after(() => restarted.dispose());
+  assert.deepEqual((await restarted.listRetainedWorktrees(root)).worktrees, [
+    target,
+  ]);
+  await assert.rejects(
+    restarted.releaseSessionWorktree({
+      ...release,
+      sessionPath: join(root, "outside.jsonl"),
+    }),
+    /exact/u,
+  );
+  const first = restarted.releaseSessionWorktree({
+    ...release,
+    commandId: "release-after-restart",
+  });
+  const duplicate = restarted.releaseSessionWorktree({
+    ...release,
+    commandId: "release-after-restart",
+  });
+  assert.equal((await first).state, "removed");
+  assert.equal((await duplicate).replayed, true);
+  assert.equal(
+    (
+      await restarted.releaseSessionWorktree({
+        ...release,
+        commandId: "release-after-restart",
+      })
+    ).state,
+    "removed",
+  );
+  assert.equal(
+    (await restarted.listRetainedWorktrees(root)).worktrees.length,
+    0,
+  );
+  assert.equal(
+    (await git("worktree", "list", "--porcelain")).stdout.includes(
+      target.worktreePath,
+    ),
+    false,
+  );
+  await restarted.dispose();
+});
+
+test("explicit release preserves modified checkout and rejects forged native binding without erasing authority", {
+  timeout: 20_000,
+}, async (t) => {
+  const { root, runtime, request } = await fixture(t);
+  await gitFixture(root);
+  const fork = await runtime.forkSession({
+    ...conversation(request),
+    environment: "worktree",
+  });
+  const target = {
+    sessionId: fork.sessionId!,
+    sessionPath: fork.sessionPath!,
+    worktreePath: fork.worktree!.path,
+  };
+  await runtime.deleteSession({
+    commandId: "delete-dirty",
+    sessionId: target.sessionId,
+    sessionPath: target.sessionPath,
+  });
+  await runtime.newSession(root, { commandId: "leave-dirty" });
+  const file = join(target.worktreePath, "private.env");
+  await writeFile(file, "operator evidence\n");
+  const wrong = await runtime.releaseSessionWorktree({
+    ...target,
+    sessionId: "forged-child",
+    commandId: "wrong-binding",
+  });
+  assert.equal(wrong.state, "preserved");
+  assert.match(wrong.reason!, /another native child/u);
+  const dirty = await runtime.releaseSessionWorktree({
+    ...target,
+    commandId: "dirty-release",
+  });
+  assert.equal(dirty.state, "preserved");
+  assert.equal(await readFile(file, "utf8"), "operator evidence\n");
+  assert.deepEqual((await runtime.listRetainedWorktrees(root)).worktrees, [
+    target,
+  ]);
+  await rm(file);
+  const incomplete = join(runtime.sessionDirectory, "unknown.jsonl");
+  await writeFile(incomplete, "unreadable native reference");
+  assert.equal(
+    (
+      await runtime.releaseSessionWorktree({
+        ...target,
+        commandId: "unknown-reference",
+      })
+    ).state,
+    "preserved",
+  );
+  await rm(incomplete);
+  const disposal = deferred();
+  const pending = runtime as unknown as {
+    runtimeDisposals: Set<Promise<void>>;
+  };
+  pending.runtimeDisposals.add(disposal.promise);
+  const shuttingDown = await runtime.releaseSessionWorktree({
+    ...target,
+    commandId: "pending-disposal",
+  });
+  assert.equal(shuttingDown.state, "preserved");
+  assert.match(shuttingDown.reason!, /shutdown is still pending/u);
+  pending.runtimeDisposals.delete(disposal.promise);
+  disposal.resolve();
+  for (const [commandId, holder] of [
+    ["host-present", () => true],
+    [
+      "host-unknown",
+      () => {
+        throw new Error("unknown holder state");
+      },
+    ],
+  ] as const) {
+    const held = await runtime.releaseSessionWorktree(
+      { ...target, commandId },
+      holder,
+    );
+    assert.equal(held.state, "preserved");
+    assert.ok(await readFile(join(target.worktreePath, "tracked.txt"), "utf8"));
+  }
+  let holderInspections = 0;
+  const acquired = await runtime.releaseSessionWorktree(
+    { ...target, commandId: "host-acquired" },
+    () => ++holderInspections > 1,
+  );
+  assert.equal(acquired.state, "preserved");
+  assert.equal(holderInspections, 2);
+  const removed = await runtime.releaseSessionWorktree({
+    ...target,
+    commandId: "explicit-retry",
+  });
+  assert.equal(removed.state, "removed");
+  await assert.rejects(
+    runtime.releaseSessionWorktree({
+      ...target,
+      commandId: "explicit-retry",
+      sessionId: "different",
+    }),
+    /another resource/u,
+  );
+});
+
+test("private native binding persistence failure is uncertain and preserves both child and checkout", {
+  timeout: 20_000,
+}, async (t) => {
+  const { root, runtime, request, hooks } = await fixture(t);
+  await gitFixture(root);
+  hooks.onFork = () => {
+    for (const entry of readdirSync(join(root, ".git", "worktrees")))
+      writeFileSync(
+        join(root, ".git", "worktrees", entry, "openpi-session-worktree.json"),
+        "changed ownership marker",
+      );
+  };
+  const result = await runtime.forkSession({
+    ...conversation(request),
+    environment: "worktree",
+  });
+  assert.equal(result.state, "uncertain");
+  assert.ok(result.sessionPath);
+  assert.ok(result.preservedWorktreePath);
+  assert.ok(await readFile(result.sessionPath, "utf8"));
+  assert.equal(
+    await readFile(join(result.preservedWorktreePath, "tracked.txt"), "utf8"),
+    "dirty source contents\n",
+  );
+  const listing = await runtime.listRetainedWorktrees(root);
+  assert.equal(listing.worktrees.length, 0);
+  assert.equal(listing.unavailable, 1);
+});
+
+test("private resource uncertainty survives changed commands and native Host restart", {
+  timeout: 30_000,
+}, async (t) => {
+  const { root, runtime, request } = await fixture(t);
+  await gitFixture(root);
+  const fork = await runtime.forkSession({
+    ...conversation(request),
+    environment: "worktree",
+  });
+  const target = {
+    sessionId: fork.sessionId!,
+    sessionPath: fork.sessionPath!,
+    worktreePath: fork.worktree!.path,
+  };
+  await runtime.deleteSession({
+    ...target,
+    commandId: "delete-terminal-owner",
+  });
+  await runtime.newSession(root, { commandId: "leave-terminal-resource" });
+  const receipt = await readSessionWorktreeReceipt(
+    target.worktreePath,
+    runtime.sessionDirectory,
+  );
+  // A Host can stop after claiming this exact original private resource and
+  // before atomically replacing its marker. A new Host must honor that claim.
+  await writeFile(
+    join(receipt.gitDir, "openpi-session-worktree.json.release-lock"),
+    JSON.stringify(receipt),
+    { flag: "wx", mode: 0o600 },
+  );
+  for (const commandId of ["uncertain-original", "uncertain-new-command"]) {
+    const result = await runtime.releaseSessionWorktree({
+      ...target,
+      commandId,
+    });
+    assert.equal(result.state, "uncertain");
+    assert.match(result.reason!, /prior release attempt/u);
+  }
+  assert.equal(
+    (
+      await runtime.releaseSessionWorktree({
+        ...target,
+        commandId: "uncertain-original",
+      })
+    ).replayed,
+    true,
+  );
+  let holderInspected = false;
+  assert.equal(
+    (
+      await runtime.releaseSessionWorktree(
+        { ...target, commandId: "uncertain-with-holder" },
+        () => {
+          holderInspected = true;
+          return true;
+        },
+      )
+    ).state,
+    "uncertain",
+  );
+  assert.equal(
+    holderInspected,
+    false,
+    "terminal resource state precedes new holder observations",
+  );
+  await runtime.dispose();
+  const restarted = await PiWebRuntime.create(root);
+  try {
+    assert.deepEqual((await restarted.listRetainedWorktrees(root)).worktrees, [
+      target,
+    ]);
+    for (const commandId of ["uncertain-original", "restart-new-command"])
+      assert.equal(
+        (await restarted.releaseSessionWorktree({ ...target, commandId }))
+          .state,
+        "uncertain",
+      );
+    assert.ok(await readFile(join(target.worktreePath, "tracked.txt"), "utf8"));
+  } finally {
+    await restarted.dispose();
+  }
+});
+
+test("release authority unknowns never downgrade a resource terminal across claim, marker and holder combinations", {
+  timeout: 60_000,
+}, async (t) => {
+  const { root, runtime, request } = await fixture(t);
+  await gitFixture(root);
+  const fork = await runtime.forkSession({
+    ...conversation(request),
+    environment: "worktree",
+  });
+  const target = {
+    sessionId: fork.sessionId!,
+    sessionPath: fork.sessionPath!,
+    worktreePath: fork.worktree!.path,
+  };
+  await runtime.deleteSession({
+    ...target,
+    commandId: "delete-projection-owner",
+  });
+  await runtime.newSession(root, { commandId: "leave-projection-resource" });
+  const receipt = await readSessionWorktreeReceipt(
+    target.worktreePath,
+    runtime.sessionDirectory,
+  );
+  const markerPath = join(receipt.gitDir, "openpi-session-worktree.json");
+  const claimPath = `${markerPath}.release-lock`;
+  const originalMarker = await readFile(markerPath, "utf8");
+  const originalOpen = fs.promises.open;
+  const originalLstat = fs.promises.lstat;
+  let command = 0;
+  try {
+    // Start with the independently reproduced missing-marker + existing-claim
+    // case. Every subsequent row changes only one authority projection fact.
+    for (const claim of ["present", "absent", "unknown"] as const) {
+      await rm(claimPath, { force: true });
+      if (claim === "present")
+        await writeFile(claimPath, originalMarker, { flag: "wx", mode: 0o600 });
+      for (const marker of [
+        "missing",
+        "malformed",
+        "unreadable",
+        "unbound",
+        "invalid",
+        "terminal",
+        "clean",
+      ] as const) {
+        await rm(markerPath, { force: true });
+        if (marker !== "missing")
+          await writeFile(
+            markerPath,
+            marker === "malformed"
+              ? "not a private receipt"
+              : marker === "unbound"
+                ? JSON.stringify({ ...receipt, ownerSession: undefined })
+                : marker === "invalid"
+                  ? JSON.stringify({ ...receipt, releaseState: "invalid" })
+                  : marker === "terminal"
+                    ? JSON.stringify({ ...receipt, releaseState: "uncertain" })
+                    : originalMarker,
+          );
+        fs.promises.open = async (...args) => {
+          if (marker === "unreadable" && String(args[0]) === markerPath)
+            throw Object.assign(new Error("injected unreadable marker"), {
+              code: "EACCES",
+            });
+          return originalOpen(...args);
+        };
+        fs.promises.lstat = ((...args: Parameters<typeof originalLstat>) => {
+          if (claim === "unknown" && String(args[0]) === claimPath)
+            return Promise.reject(
+              Object.assign(new Error("injected unknown claim"), {
+                code: "EACCES",
+              }),
+            );
+          return originalLstat(...args);
+        }) as typeof originalLstat;
+        syncBuiltinESMExports();
+        for (const holder of ["none", "present", "unknown"] as const) {
+          if (claim === "absent" && marker === "clean" && holder === "none")
+            continue; // Successful removal has its separate real-Git fixture.
+          let inspected = false;
+          const result = await runtime.releaseSessionWorktree(
+            { ...target, commandId: `projection-${++command}` },
+            () => {
+              inspected = true;
+              if (holder === "unknown")
+                throw new Error("injected unknown holder");
+              return holder === "present";
+            },
+          );
+          const terminal = claim !== "absent" || marker !== "clean";
+          assert.equal(
+            result.state,
+            terminal ? "uncertain" : "preserved",
+            `${claim}/${marker}/${holder}`,
+          );
+          assert.equal(
+            inspected,
+            !terminal,
+            `${claim}/${marker}/${holder} authority precedes holder`,
+          );
+          assert.ok(
+            await readFile(join(target.worktreePath, "tracked.txt"), "utf8"),
+          );
+        }
+        if (marker !== "clean" && marker !== "terminal") {
+          const listing = await runtime.listRetainedWorktrees(root);
+          assert.deepEqual(
+            listing.worktrees,
+            [],
+            "a claim never recreates discovery identity from a bad marker",
+          );
+          assert.equal(listing.unavailable, 1);
+        }
+        if (marker === "clean" || marker === "terminal") {
+          const wrong = await runtime.releaseSessionWorktree({
+            ...target,
+            sessionId: "different-native-child",
+            commandId: `projection-${++command}`,
+          });
+          assert.equal(
+            wrong.state,
+            "preserved",
+            "a fully verified different native child grants no authority",
+          );
+        }
+      }
+    }
+  } finally {
+    fs.promises.open = originalOpen;
+    fs.promises.lstat = originalLstat;
+    syncBuiltinESMExports();
+    await writeFile(markerPath, originalMarker);
+    await writeFile(claimPath, originalMarker, { mode: 0o600 });
+  }
+  const gitFile = join(target.worktreePath, ".git");
+  const originalGitFile = await readFile(gitFile, "utf8");
+  // Git marks this existing file hidden on Windows; opening with w yields EPERM.
+  const replaceGitFile = async (contents: string) => {
+    const handle = await open(gitFile, "r+");
+    try {
+      await handle.truncate(0);
+      await handle.writeFile(contents);
+    } finally {
+      await handle.close();
+    }
+    assert.equal(await readFile(gitFile, "utf8"), contents);
+  };
+  try {
+    await replaceGitFile("gitdir: missing-private-admin\n");
+    assert.equal(
+      (
+        await runtime.releaseSessionWorktree({
+          ...target,
+          commandId: "canonical-admin-unknown",
+        })
+      ).state,
+      "uncertain",
+    );
+  } finally {
+    await replaceGitFile(originalGitFile);
+  }
+});
+
+for (const clock of [
+  { name: "forward-wall", wall: 120_000, elapsed: 0, expires: false },
+  { name: "backward-wall", wall: -120_000, elapsed: 0, expires: false },
+  {
+    name: "backward-wall-with-budget-left",
+    wall: -120_000,
+    elapsed: 85_000,
+    expires: false,
+  },
+  {
+    name: "backward-wall-with-expired-budget",
+    wall: -120_000,
+    elapsed: 120_000,
+    expires: true,
+  },
+]) {
+  test(`native release header scan uses monotonic budget: ${clock.name}`, {
+    timeout: 30_000,
+  }, async (t) => {
+    const { root, runtime, request } = await fixture(t);
+    await gitFixture(root);
+    const fork = await runtime.forkSession({
+      ...conversation(request),
+      environment: "worktree",
+    });
+    const target = {
+      sessionId: fork.sessionId!,
+      sessionPath: fork.sessionPath!,
+      worktreePath: fork.worktree!.path,
+    };
+    await runtime.deleteSession({ ...target, commandId: "delete-clock-owner" });
+    await runtime.newSession(root, { commandId: "leave-clock-resource" });
+    runtime.sessionManager.appendMessage({
+      role: "user",
+      content: "second persisted native header",
+      timestamp: 3,
+    });
+    const catalogDirectory = await realpath(runtime.sessionDirectory);
+    assert.ok(
+      (await readdir(catalogDirectory)).filter((file) =>
+        file.endsWith(".jsonl"),
+      ).length >= 2,
+    );
+    const originalDateNow = Date.now;
+    const originalPerformanceNow = performance.now.bind(performance);
+    const descriptor = Object.getOwnPropertyDescriptor(performance, "now");
+    const originalLstat = fs.lstatSync;
+    let shifted = false;
+    fs.lstatSync = ((...args: Parameters<typeof originalLstat>) => {
+      const result = originalLstat(...args);
+      if (
+        !shifted &&
+        String(args[0]).endsWith(".jsonl") &&
+        [runtime.sessionDirectory, catalogDirectory].includes(
+          dirname(String(args[0])),
+        )
+      ) {
+        shifted = true;
+        Date.now = () => originalDateNow() + clock.wall;
+        Object.defineProperty(performance, "now", {
+          configurable: true,
+          value: () => originalPerformanceNow() + clock.elapsed,
+        });
+      }
+      return result;
+    }) as typeof originalLstat;
+    syncBuiltinESMExports();
+    try {
+      const result = await runtime.releaseSessionWorktree({
+        ...target,
+        commandId: "clock-release",
+      });
+      assert.equal(
+        shifted,
+        true,
+        "clock changes after the first real native header inspection begins",
+      );
+      assert.equal(result.state, clock.expires ? "preserved" : "removed");
+      if (clock.expires)
+        assert.match(
+          result.reason!,
+          /reference inspection reached its time limit/u,
+        );
+    } finally {
+      fs.lstatSync = originalLstat;
+      Date.now = originalDateNow;
+      if (descriptor) Object.defineProperty(performance, "now", descriptor);
+      else Reflect.deleteProperty(performance, "now");
+      syncBuiltinESMExports();
+    }
+    if (clock.expires) {
+      assert.ok(
+        await readFile(join(target.worktreePath, "tracked.txt"), "utf8"),
+      );
+      assert.equal(
+        (
+          await runtime.releaseSessionWorktree({
+            ...target,
+            commandId: "explicit-after-deadline",
+          })
+        ).state,
+        "removed",
+      );
+    }
+  });
+}

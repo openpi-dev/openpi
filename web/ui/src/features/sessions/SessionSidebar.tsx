@@ -53,6 +53,13 @@ import {
 import type { WebStoreActions } from "../../store/web-store.ts";
 import { ConversationMenu, captureSidebarFocus } from "./ConversationMenu.tsx";
 import { TranscriptSearchDialog } from "./TranscriptSearchDialog.tsx";
+import { ManagedWorktreesDialog } from "./ManagedWorktreesDialog.tsx";
+import {
+  dropIsAfter,
+  movedItemAnchor,
+  droppedItemAnchor,
+  sessionProject,
+} from "./sidebar-order.ts";
 
 interface SessionSidebarProps {
   snapshot: WebSnapshot | null;
@@ -76,12 +83,6 @@ type SidebarSession = Omit<
   WebSessionSummary,
   "source" | "origin" | "controller" | "readOnly"
 >;
-
-function sessionProject(
-  session: Pick<WebSessionSummary, "cwd" | "workspacePath">,
-) {
-  return session.workspacePath ?? session.cwd;
-}
 
 function completionKey(
   session: Pick<WebSessionSummary, "path" | "id" | "execution">,
@@ -150,6 +151,10 @@ function ActionMenu({
 
 export function SessionSidebar(props: SessionSidebarProps) {
   const { t } = useTranslation();
+  const worktreeFocus = useRef<(() => void) | null>(null);
+  const [worktreeWorkspace, setWorktreeWorkspace] = useState<string | null>(
+    null,
+  );
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [transcriptSearchOpen, setTranscriptSearchOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
@@ -260,7 +265,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [pinSaving, setPinSaving] = useState(false);
   const pinInFlight = useRef(false);
   const draggedPin = useRef<WebSidebarPinTarget | null>(null);
-  const suppressDragClickUntil = useRef(0);
+  // One trailing click after a drag. Cleared by that click or by a later
+  // pointerdown. A wall-clock window drops the click when the post-drop render
+  // is slower than the window.
+  const suppressDragClick = useRef(false);
   const [draggingSidebar, setDraggingSidebar] = useState(false);
   const draggedChat = useRef<{
     path: string;
@@ -922,7 +930,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
   const endDrag = useCallback(() => {
     if (draggedPin.current || draggedChat.current)
-      suppressDragClickUntil.current = Date.now() + 250;
+      suppressDragClick.current = true;
     draggedPin.current = null;
     draggedChat.current = null;
     setDraggingSidebar(false);
@@ -952,7 +960,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const movePin = (index: number, down: boolean) => {
     const target = sidebarPins[index];
     if (!target) return;
-    const before = sidebarPins[index + (down ? 2 : -1)];
+    const before = movedItemAnchor(sidebarPins, index, down);
     void saveSidebarPin(
       pinTarget(target),
       true,
@@ -1187,7 +1195,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
               label: t("movePinUp"),
               icon: <ArrowUp />,
               isDisabled: pinSaving || chatIndex <= 0,
-              onClick: () => void moveChat(orderScope.sessions[chatIndex - 1]),
+              onClick: () =>
+                void moveChat(
+                  movedItemAnchor(orderScope.sessions, chatIndex, false),
+                ),
             },
             {
               id: "move-down",
@@ -1196,7 +1207,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
               isDisabled:
                 pinSaving || chatIndex === orderScope.sessions.length - 1,
               onClick: () =>
-                void moveChat(orderScope.sessions[chatIndex + 2] ?? null),
+                void moveChat(
+                  movedItemAnchor(orderScope.sessions, chatIndex, true),
+                ),
             },
           ]
         : [];
@@ -1233,7 +1246,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             return;
           }
           setDraggingSidebar(true);
-          suppressDragClickUntil.current = Number.POSITIVE_INFINITY;
+          suppressDragClick.current = true;
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData("text/plain", session.id);
         }}
@@ -1249,12 +1262,12 @@ export function SessionSidebar(props: SessionSidebarProps) {
           setDropPath(session.path);
           setWorkspaceDrop(null);
           const bounds = event.currentTarget.getBoundingClientRect();
-          setDropAfter(event.clientY > bounds.top + bounds.height / 2);
+          setDropAfter(dropIsAfter(event.clientY, bounds));
         }}
         onDragEnd={endDrag}
         onDrop={(event) => {
           const bounds = event.currentTarget.getBoundingClientRect();
-          const after = event.clientY > bounds.top + bounds.height / 2;
+          const after = dropIsAfter(event.clientY, bounds);
           if (inPinned && pinnedSort === "manual" && draggedPin.current) {
             event.preventDefault();
             event.stopPropagation();
@@ -1272,7 +1285,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
             event.preventDefault();
             event.stopPropagation();
             const dragged = draggedChat.current;
-            const before = after ? orderScope.sessions[chatIndex + 1] : session;
+            const before = droppedItemAnchor(
+              orderScope.sessions,
+              chatIndex,
+              after,
+            );
             void saveSidebarChange(() =>
               props.actions.setSessionOrder(
                 dragged.path,
@@ -1425,7 +1442,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
       saveSidebarChange(() =>
         props.actions.setWorkspaceOrder(
           group.path,
-          ordinaryProjects[projectIndex + (down ? 2 : -1)]?.path ?? null,
+          movedItemAnchor(ordinaryProjects, projectIndex, down)?.path ?? null,
         ),
       );
     const target: WebSidebarPinTarget = { kind: "workspace", path: group.path };
@@ -1478,6 +1495,29 @@ export function SessionSidebar(props: SessionSidebarProps) {
               },
             ]
           : []),
+      ...(!group.ungrouped
+        ? [
+            {
+              id: "managed-worktrees",
+              label: t("managedWorktrees"),
+              icon: <Folder />,
+              isDisabled: props.connected === false,
+              onClick: () => {
+                const row = Array.from(
+                  sidebar.current?.querySelectorAll<HTMLElement>(
+                    ".workspace-group",
+                  ) ?? [],
+                ).find((item) => item.dataset.workspaceKey === group.path);
+                worktreeFocus.current = captureSidebarFocus(
+                  row?.querySelector<HTMLElement>(
+                    ".workspace-row-actions .menu-action-button",
+                  ) ?? null,
+                );
+                queueMicrotask(() => setWorktreeWorkspace(group.path));
+              },
+            },
+          ]
+        : []),
       {
         id: "rename",
         label: t("renameWorkspace"),
@@ -1509,6 +1549,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             : "")
         }
         key={group.path}
+        data-workspace-key={group.path}
         aria-label={group.name}
         onDragOver={(event) => {
           if (
@@ -1525,7 +1566,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
           setWorkspaceDrop(group.path);
           setDropPath(null);
           const bounds = event.currentTarget.getBoundingClientRect();
-          setDropAfter(event.clientY > bounds.top + bounds.height / 2);
+          setDropAfter(dropIsAfter(event.clientY, bounds));
         }}
         onDragEnd={endDrag}
         onDragLeave={(event) => {
@@ -1547,7 +1588,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
           event.preventDefault();
           event.stopPropagation();
           const bounds = event.currentTarget.getBoundingClientRect();
-          const after = event.clientY > bounds.top + bounds.height / 2;
+          const after = dropIsAfter(event.clientY, bounds);
           const dragged = draggedPin.current;
           if (dragged.kind !== "workspace" || dragged.path !== group.path) {
             if (inPinned) {
@@ -1592,7 +1633,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
               if (mounted.current && draggedPin.current === target)
                 setDraggingSidebar(true);
             });
-            suppressDragClickUntil.current = Number.POSITIVE_INFINITY;
+            suppressDragClick.current = true;
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", group.path);
           }}
@@ -1718,12 +1759,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
       onPointerDownCapture={() => {
         // A new gesture is intentional; only suppress the drag's trailing click.
         if (!draggedPin.current && !draggedChat.current)
-          suppressDragClickUntil.current = 0;
+          suppressDragClick.current = false;
       }}
       onClickCapture={(event) => {
-        if (event.detail !== 0 && Date.now() < suppressDragClickUntil.current) {
+        if (event.detail !== 0 && suppressDragClick.current) {
           event.preventDefault();
           event.stopPropagation();
+          suppressDragClick.current = false;
         }
       }}
       onKeyDown={(event) => {
@@ -2452,6 +2494,19 @@ export function SessionSidebar(props: SessionSidebarProps) {
         </form>
       </Dialog>
 
+      {worktreeWorkspace && (
+        <ManagedWorktreesDialog
+          key={worktreeWorkspace}
+          workspace={worktreeWorkspace}
+          client={client}
+          actions={props.actions}
+          connected={props.connected !== false}
+          onClose={() => {
+            setWorktreeWorkspace(null);
+            worktreeFocus.current?.();
+          }}
+        />
+      )}
       <Dialog
         isOpen={Boolean(deleteTarget)}
         onOpenChange={(open: boolean) =>

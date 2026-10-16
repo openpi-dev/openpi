@@ -302,6 +302,80 @@ it("renders real nested live results without duplicating the carrier and settles
   expect(container.querySelector('[data-tool="codemode"]')).toBeNull();
 });
 
+it("keeps active native child SSE bodies when the execution snapshot only lists pending top-level calls", () => {
+  const tool = { ...call, id: "live-native-code", name: "codemode" };
+  const child = { ...call, id: "live-native-code/1", name: "read" };
+  const childResult = projectMessage({
+    role: "toolResult",
+    toolName: "read",
+    toolCallId: child.id,
+    isError: false,
+    content: [
+      { type: "text", text: "Exact live child body" },
+      { type: "image", data: "fixture", mimeType: "image/png" },
+    ],
+  });
+  const liveTools: LiveToolEvidence[] = [
+    { call: tool, state: "running" },
+    {
+      call: child,
+      parentToolCallId: tool.id,
+      state: "returned",
+      result: childResult,
+    },
+  ];
+  const state: WebSnapshot = snapshot({ tool, liveTools, running: true });
+  // getSessionExecution reconstructs pending native top-level calls, while
+  // Host runtime.liveTools carries the observed nested events and bodies.
+  state.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/session.jsonl",
+    status: "running",
+    liveTools: [{ call: tool, state: "running" }],
+    liveToolsOmitted: 0,
+  };
+  const ui = render(view(state));
+  expect(ui.container.textContent).toContain("Exact live child body");
+  expect(ui.container.textContent).not.toContain(
+    i18n.t("toolNestedOutputMissing"),
+  );
+
+  const result = projectMessage({
+    role: "toolResult",
+    toolName: "codemode",
+    toolCallId: tool.id,
+    isError: false,
+    content: "wrapper",
+    nestedCalls: {
+      complete: true,
+      calls: [{ id: child.id, name: "read", arguments: {}, status: "ok" }],
+    },
+  });
+  const settled: WebSnapshot = snapshot({ tool, results: [result], liveTools });
+  settled.selectedExecution = {
+    ...state.selectedExecution,
+    status: "idle",
+    liveTools: [],
+  };
+  ui.rerender(view(settled));
+  expect(ui.container.textContent).toContain("Exact live child body");
+  expect(ui.container.textContent).not.toContain(
+    i18n.t("toolNestedOutputMissing"),
+  );
+
+  // Another current controller (even a copied Session sharing the id) cannot
+  // supply its live body to this historical projection.
+  ui.rerender(view({ ...settled, currentSessionPath: "/other-copy.jsonl" }));
+  expect(ui.container.textContent).not.toContain("Exact live child body");
+  expect(ui.container.textContent).toContain(i18n.t("toolNestedOutputMissing"));
+  // A fresh Host/reload with no observed body remains truthfully missing.
+  ui.rerender(
+    view({ ...settled, runtime: { ...settled.runtime, liveTools: [] } }),
+  );
+  expect(ui.container.textContent).not.toContain("Exact live child body");
+  expect(ui.container.textContent).toContain(i18n.t("toolNestedOutputMissing"));
+});
+
 it("retains Code Mode wrapper failures and distinguishes cancelled child evidence after refresh", () => {
   const tool = { ...call, id: "code", name: "codemode" };
   const result = projectMessage({

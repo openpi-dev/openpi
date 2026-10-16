@@ -5,6 +5,11 @@ import type {
 } from "../../web/protocol/types.ts";
 import { createAttachmentHost } from "./file-formats-e2e-support.ts";
 
+// Complete pending fixture responses before Playwright disposes their context.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "wait" });
+});
+
 async function installSidebarFixture(
   page: Page,
   theme: "light" | "dark" = "light",

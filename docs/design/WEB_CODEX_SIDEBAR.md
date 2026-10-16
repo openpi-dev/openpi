@@ -480,3 +480,62 @@ Simplification: removed the proposed startup baseline scan and its persisted
 flag; removing the publication gate instead reproduces the legacy blue-dot
 regression. The implementation uses existing Pi timing and presentation
 receipts, with no new settings, model-facing tool or independent activity store.
+
+## 2026-10-15: explicit release of retained fork worktrees
+
+- Status: implementation candidate for PR #821 / Issue #798; independent final
+  review and the sidebar UI acceptance remain separate gates.
+- Source boundary: PR #821 `079ace4d`, integrated with main `f98d6a47`.
+- This amendment extends the earlier retention policy; it does not change the
+  historical snapshot or cancellation receipts above.
+
+Session deletion still retains its worktree. A separate explicit release request
+uses the original private Git ownership receipt, bound to the newly persisted
+native child before activation. If binding persistence fails, the fork reports
+`uncertain` and preserves the child and checkout. Public fork provenance and a
+browser-supplied path alone never grant cleanup authority.
+
+The Host provides workspace-scoped discovery from those private receipts at
+`GET /api/workspaces/worktrees?path=…&cursor=…`. Pages scan at most 128 managed
+entries; a continuation cursor also advances through unavailable entries. The
+projection contains only native child id/path and worktree path, with explicit
+partial/unavailable counts. It survives deletion of the child Session and Host
+restart without a second Session registry or a global garbage collector.
+
+`POST /api/sessions/worktree-release` takes the exact command id, original native
+child id/path and worktree path. It is separate from Session deletion. Release
+refuses an existing original Session, any saved Session sharing the checkout,
+active/retained/candidate/in-flight native cwd holders, incomplete reference
+inspection and unverified shutdown. In particular, deleting an active Session
+can create an idle native replacement in the same cwd; that replacement still
+prevents release until the operator genuinely leaves the checkout. Host PTY
+creation and release share the existing mutation queue; pending creation and
+closed terminals remain holders until native exit is observed. A missing holder
+inspection seam is unknown and preserves the checkout, and closing processes
+continue consuming the existing terminal capacity until exit.
+
+Only an unchanged checkout with matching private marker, directory/Git identity,
+HEAD, index and full contents can be removed. Confirmed modifications and shared
+references produce a `preserved` refusal with their path and reason. Unavailable
+canonical Git identity or missing, unreadable, corrupt or unbound original
+private receipts produce typed `uncertain` refusal, even if the checkout still
+exists. Claim inspection precedes marker parsing; a claim never recreates a
+missing native child binding or grants deletion authority. Fully verified
+terminal state precedes new holder observations. A failed removal after Git was invoked is
+`uncertain`, rather than a claim that the checkout remains intact. Command
+receipts replay the exact same-process result and reject identity reuse; after
+restart, a missing checkout is uncertain rather than evidence of successful
+release. A destructive attempt first exclusively claims this resource in its
+private Git directory and writes a terminal `uncertain` barrier into the original
+receipt. A different command or Host restart cannot repeat removal after that
+barrier, including when only the claim survived an interrupted marker update.
+Failure to persist or inspect the barrier prevents Git removal. The resource has
+no automatic unlock or retry-after-uncertain path. An exclusive claim rejected
+before creation is `preserved` only if inspection confirms no claim, no marker
+change and no destructive Git invocation. A definitive pre-removal
+`preserved` outcome still permits a new explicit command after its cause is fixed.
+Discovery does not promise eligibility, and every release rechecks it.
+
+The #822 sidebar owns the explicit confirmation, retained-worktree list and
+response-loss interaction. The #821 runtime/Host candidate itself adds no model
+tool, setup preference, automatic cleanup or dependency installation.

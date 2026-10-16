@@ -47,3 +47,30 @@ it("sends mixed pin identities and the observed reading revision without retryin
     expectedRevision: "next-revision",
   });
 });
+
+it("passes opaque worktree cursors and exact release identities without a fallback mutation", async () => {
+  const client = new WebClient();
+  const request = vi
+    .spyOn(client, "request")
+    .mockResolvedValue({ worktrees: [], truncated: false, unavailable: 0 });
+  await client.workspaceWorktrees("/project & files", "opaque+next/=?");
+  const query = new URL(request.mock.calls[0]![0], "http://localhost")
+    .searchParams;
+  expect(query.get("path")).toBe("/project & files");
+  expect(query.get("cursor")).toBe("opaque+next/=?");
+  const release = {
+    commandId: "original-request",
+    sessionId: "deleted-native-child",
+    sessionPath: "/sessions/child.jsonl",
+    worktreePath: "/managed/child",
+  };
+  request.mockRejectedValueOnce(new Error("response lost"));
+  await expect(client.releaseSessionWorktree(release)).rejects.toThrow(
+    "response lost",
+  );
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1]).toEqual([
+    "/api/sessions/worktree-release",
+    { method: "POST", body: JSON.stringify(release) },
+  ]);
+});
