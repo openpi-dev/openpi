@@ -919,6 +919,77 @@ it("keeps a smooth loaded-turn jump unpinned through its first frames without un
   }
 });
 
+it.each([0, 35])(
+  "keeps bottom following when a resize-induced scroll advances by %ipx before ResizeObserver",
+  async (advance) => {
+    let resize: (() => void) | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private readonly callback: () => void) {}
+        observe(element: Element) {
+          if (element.classList.contains("conversation"))
+            resize = this.callback;
+        }
+        disconnect() {}
+      },
+    );
+    const originalScroll = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollTo",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value(this: HTMLElement, options: ScrollToOptions) {
+        this.scrollTop = Math.min(
+          options.top ?? 0,
+          this.scrollHeight - this.clientHeight,
+        );
+      },
+    });
+    let viewportHeight = 627;
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(
+      1530,
+    );
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
+      () => viewportHeight,
+    );
+    try {
+      const view = render(node(snapshot(session(0, 1)), null, new Map()));
+      const viewport =
+        view.container.querySelector<HTMLElement>(".conversation")!;
+      expect(viewport.scrollTop).toBe(903);
+      expect(resize).toBeDefined();
+      // Growing the composer shrinks the viewport. Chromium can emit scroll
+      // before ResizeObserver even though the reader never scrolled upward.
+      viewportHeight = 459;
+      viewport.scrollTop += advance;
+      fireEvent.scroll(viewport);
+      await act(async () => resize!());
+      expect(
+        viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+      ).toBe(0);
+      expect(
+        screen.queryByRole("button", { name: i18n.t("jumpToLatest") }),
+      ).toBeNull();
+      viewport.scrollTop = 120;
+      fireEvent.scroll(viewport);
+      viewportHeight = 400;
+      await act(async () => resize!());
+      expect(viewport.scrollTop).toBe(120);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalScroll)
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollTo",
+          originalScroll,
+        );
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+    }
+  },
+);
+
 it.each(["wheel", "ArrowUp", "PageUp", "Home", "Shift+Space"])(
   "pauses streamed bottom following on %s before scroll delivery and resumes on a downward return",
   async (input) => {

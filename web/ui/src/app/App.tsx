@@ -1,4 +1,11 @@
-import { Menu, PanelLeftOpen, PanelRight, RefreshCw, X } from "lucide-react";
+import {
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRight,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import {
   type CSSProperties,
   useCallback,
@@ -10,6 +17,10 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
+import type {
+  WebHistoryAnchor,
+  WebSessionProjection,
+} from "../../../protocol/types.ts";
 import { OpenPiLogo } from "../components/OpenPiLogo.tsx";
 import { PaneResizeHandle } from "../components/PaneResizeHandle.tsx";
 import {
@@ -27,6 +38,7 @@ import {
 } from "../features/questions/QuestionPanel.tsx";
 import type { DiffLineReference } from "../features/review/DiffCodePreview.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
+import { ArchiveNotifications } from "../features/sessions/ArchiveNotifications.tsx";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import {
   ProviderSettingsPage,
@@ -47,17 +59,12 @@ import {
   type ReadingPosition,
   sessionReadingScope,
 } from "../features/transcript/session-reading-state.ts";
-import type {
-  WebHistoryAnchor,
-  WebSessionProjection,
-} from "../../../protocol/types.ts";
-import { WebClient } from "../protocol/client.ts";
 import { Transcript } from "../features/transcript/Transcript.tsx";
+import { useBrowserConnector } from "../features/workbar/browser-connector.ts";
+import { useBrowserControl } from "../features/workbar/browser-control.ts";
 import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
 import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
-import { useBrowserConnector } from "../features/workbar/browser-connector.ts";
-import { useBrowserControl } from "../features/workbar/browser-control.ts";
 import {
   loadWorkbarPositions,
   saveWorkbarPositions,
@@ -65,11 +72,12 @@ import {
 } from "../features/workbar/workbar-position-storage.ts";
 import { sessionTitle, workspaceName } from "../lib/format.ts";
 import { isControlledSession } from "../lib/session-control.ts";
+import { WebClient } from "../protocol/client.ts";
 import { webStore } from "../store/web-store.ts";
 
-const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_DEFAULT_WIDTH = 340;
 const SIDEBAR_MIN_WIDTH = 220;
-const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_MAX_WIDTH = 520;
 const SIDEBAR_COLLAPSE_THRESHOLD = 190;
 const AUXILIARY_DEFAULT_WIDTH = 520;
 const AUXILIARY_MIN_WIDTH = 360;
@@ -827,7 +835,13 @@ export function App() {
           state.snapshot.selectedExecution.compaction
         )));
   const resend = useCallback(
-    (content: string) => actions.sendPrompt(content),
+    (content: string, retryEntryId?: string) =>
+      retryEntryId
+        ? actions.sendPrompt("", [], undefined, {
+            streamingBehavior: "followUp",
+            retryEntryId,
+          })
+        : actions.sendPrompt(content),
     [actions],
   );
 
@@ -861,6 +875,7 @@ export function App() {
         >
           <SessionSidebar
             sessionViewVisible={
+              view === "chat" &&
               !centerCollapsed &&
               !providerSettingsVisible &&
               !state.sessionSwitching &&
@@ -900,15 +915,23 @@ export function App() {
           >
             <header className="task-header">
               <button
-                className="task-header-menu"
+                className="task-header-menu sidebar-shell-toggle"
                 ref={sidebarTrigger}
                 type="button"
-                aria-label={t("openSidebar")}
+                aria-label={t(
+                  narrow
+                    ? "openSidebar"
+                    : state.sidebarCollapsed
+                      ? "expandSidebar"
+                      : "collapseSidebar",
+                )}
                 aria-controls="session-sidebar"
-                aria-expanded={mobileSidebarOpen}
-                onClick={() => actions.toggleSidebar(true)}
+                aria-expanded={
+                  narrow ? mobileSidebarOpen : !state.sidebarCollapsed
+                }
+                onClick={() => actions.toggleSidebar(narrow)}
               >
-                <Menu />
+                {narrow ? <Menu /> : <PanelLeftClose />}
               </button>
               <div className="task-identity">
                 {workspacePath && (
@@ -1074,6 +1097,7 @@ export function App() {
                 snapshot={state.snapshot}
                 liveMessages={state.liveMessages}
                 liveRunning={state.liveRunning}
+                liveActiveTurn={state.activeTurn}
                 livePhase={state.livePhase}
                 activityObserved={state.connection === "connected"}
                 liveRetry={state.liveRetry}
@@ -1210,7 +1234,9 @@ export function App() {
                 snapshot={state.snapshot}
                 selectedPath={state.selectedPath}
                 selectedWorkspace={selected?.cwd ?? state.selectedWorkspace}
-                sessionSwitching={state.sessionSwitching}
+                sessionSwitching={
+                  state.sessionSwitching || state.sessionForkPending
+                }
                 promptAdmissionPending={state.promptAdmissionPending}
                 promptAdmissionRecovery={state.promptAdmissionRecovery}
                 promptAdmissionResolution={state.promptAdmissionResolution}
@@ -1220,6 +1246,36 @@ export function App() {
                 actions={actions}
               />
             )}
+            {state.sessionForkPending && (
+              <div className="session-fork-progress" role="status">
+                <span
+                  className="session-fork-progress-spinner"
+                  aria-hidden="true"
+                />
+                {t(
+                  state.sessionForkCancellation === "too-late"
+                    ? "sidebarForkFinishing"
+                    : state.sessionForkCancellation
+                      ? "sidebarForkCancelling"
+                      : state.sessionForkEnvironment === "worktree"
+                        ? "sidebarForkWorktreePending"
+                        : "forkSessionPending",
+                )}
+                {state.sessionForkEnvironment && (
+                  <button
+                    type="button"
+                    disabled={state.sessionForkCancellation !== null}
+                    onClick={() => void actions.cancelSessionFork()}
+                  >
+                    {t("cancel")}
+                  </button>
+                )}
+              </div>
+            )}
+            <ArchiveNotifications
+              notices={state.archiveNotices}
+              actions={actions}
+            />
             {state.notice && (
               <div
                 className={
@@ -1396,6 +1452,7 @@ export function App() {
             t("unknownState")
           }
           theme={state.snapshot?.preferences.theme ?? "system"}
+          preferences={state.snapshot?.preferences}
           workspaces={state.snapshot?.workspaces ?? []}
           onRestoreSession={(path) => actions.unarchiveSession(path)}
           plan={state.snapshot?.runtime.plan}

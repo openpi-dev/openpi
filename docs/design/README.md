@@ -1,5 +1,6 @@
 # Design archive
 
+- [`WEB_CODEX_SIDEBAR.md`](WEB_CODEX_SIDEBAR.md) — Codex App Server and shipped-UI evidence, mixed pins, Activity/search, Web menus and Pi-owned reading revisions for #597 / #711.
 - [`WEB_CODEX_SETTINGS.md`](WEB_CODEX_SETTINGS.md) — draft Codex settings surface, appearance and archived-chat state comparison with bounded REA/App Server evidence for #597 / #711.
 
 - [`WEB_BROWSER_SETUP_2026-10-09.md`](WEB_BROWSER_SETUP_2026-10-09.md) — validated browser authorization, default/explicit selection and scrollable setup, with separate real-provider, browser and UI evidence for #169 / #597 / #711 / #720.

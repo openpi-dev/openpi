@@ -351,6 +351,7 @@ test("separate terminal tabs own independent PTYs, output and close lifecycle", 
     assert.equal(manager.get("a", first.id), undefined);
     assert.equal(manager.get("a", second.id)?.exited, false);
     assert.equal(ptys[1]!.kills.length, 0);
+    ptys[0]!.emitExit(0);
     const replacement = await manager.create({
       ...options,
       createKey: "terminal:third",
@@ -434,6 +435,85 @@ test("cancels pending creates when the retained Session changes or the manager d
     });
     assert.equal(replacement.sessionId, "session-b");
     assert.equal(ptys.length, 1, scenario);
+    manager.dispose();
+  }
+});
+
+test("worktree holders survive close until native exit and bound closing capacity", async () => {
+  const ptys: FakePty[] = [];
+  const manager = new InteractiveTerminalManager({
+    maxTerminals: 1,
+    spawn: () => {
+      const pty = new FakePty();
+      ptys.push(pty);
+      return pty;
+    },
+  });
+  try {
+    const terminal = await manager.create({
+      sessionId: "child",
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+    assert.equal(manager.hasWorktreeReferences(process.cwd()), true);
+    assert.equal(manager.hasWorktreeReferences(`${process.cwd()}s`), false);
+    manager.close("child", terminal.id);
+    assert.equal(manager.get("child", terminal.id), undefined);
+    assert.equal(manager.hasWorktreeReferences(process.cwd()), true);
+    await assert.rejects(
+      manager.create({
+        sessionId: "other",
+        cwd: "/",
+        cols: 80,
+        rows: 24,
+      }),
+      /capacity is full/u,
+    );
+    ptys[0]!.emitExit(0);
+    assert.equal(manager.hasWorktreeReferences(process.cwd()), false);
+    await manager.create({
+      sessionId: "other",
+      cwd: "/",
+      cols: 80,
+      rows: 24,
+    });
+  } finally {
+    manager.dispose();
+    for (const pty of ptys) pty.emitExit(0);
+  }
+});
+
+test("pending terminal creation holds its cwd until cancellation or spawn failure settles", async () => {
+  for (const failure of [false, true]) {
+    const manager = new InteractiveTerminalManager();
+    let finish!: (spawn: typeof import("node-pty").spawn) => void;
+    const internals = manager as unknown as {
+      loadSpawn: () => Promise<typeof import("node-pty").spawn>;
+    };
+    internals.loadSpawn = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const pending = manager.create({
+      sessionId: "child",
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+    });
+    const rejected = assert.rejects(
+      pending,
+      failure ? /spawn failed/u : /creation was cancelled/u,
+    );
+    assert.equal(manager.hasWorktreeReferences(process.cwd()), true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (!failure) manager.retain("other", "/");
+    assert.equal(manager.hasWorktreeReferences(process.cwd()), true);
+    finish(() => {
+      throw new Error("spawn failed");
+    });
+    await rejected;
+    assert.equal(manager.hasWorktreeReferences(process.cwd()), false);
     manager.dispose();
   }
 });

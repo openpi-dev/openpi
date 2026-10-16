@@ -1,7 +1,8 @@
-import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync, unlinkSync } from "node:fs";
 import { readConfiguredPackages } from "./configured-packages.ts";
-import { mkdir, realpath, stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { mkdir, readdir, realpath, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createTurnChangeRecorder } from "./turn-changes.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -12,6 +13,8 @@ import {
   type AgentSessionRuntime,
   type CreateAgentSessionRuntimeFactory,
   type PromptOptions,
+  type SessionStartEvent,
+  CURRENT_SESSION_VERSION,
   CredentialSynchronizationError,
   ProjectTrustStore,
   SessionManager,
@@ -39,6 +42,13 @@ import {
   type WebSessionCreationResult,
   type WebSessionForkRequest,
   type WebSessionForkResult,
+  type WebSessionForkOptions,
+  type WebSessionForkCancelRequest,
+  type WebSessionForkCancelResult,
+  type WebSessionDeleteRequest,
+  type WebSessionDeleteResult,
+  type WebWorktreeReleaseRequest,
+  type WebWorktreeReleaseResult,
   type WebSessionExecution,
   type WebThinkingProjection,
   type WebThinkingSelectionOptions,
@@ -49,9 +59,10 @@ import {
 import { projectMessage, projectAssistantError, jsonByteLength, boundedText, WEB_MAX_TEXT, WEB_PROMPT_MAX_TEXT_LENGTH, WEB_PROMPT_IMAGE_MAX_BASE64_CHARS, WEB_PROMPT_IMAGE_MAX_BYTES, WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES, WEB_PROMPT_IMAGE_MAX_COUNT, type WebPromptImage } from "../protocol/types.ts";
 import { sourceReferenceTokens } from "../protocol/session-sources.ts";
 import { WEB_MESSAGE_RERUN } from "../protocol/message-rerun.ts";
+import { WEB_SESSION_FORK, readSessionFork, type WebSessionForkMetadata, type WebSessionForkSnapshot, type WebSessionForkToolBoundary } from "../protocol/session-fork.ts";
 import { LIVE_TOOL_LIMIT, type LiveToolEvidence } from "../protocol/evidence.ts";
 import { elapsed, traceWeb } from "../trace.ts";
-import { WEB_TURN_TIMING_ENTRY, readTurnTiming, type WebTurnTiming } from "../protocol/turn-timing.ts";
+import { WEB_TURN_TIMING_ENTRY, readSessionTurnEvidence, readTurnTiming, type WebTurnTiming } from "../protocol/turn-timing.ts";
 import {
   applyHttpProxySettings,
   configureHttpDispatcher,
@@ -84,6 +95,7 @@ import {
 import { applySetupConfiguration } from "../../extensions/shared/setup-apply.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { resolveWebSearchSupport } from "../../extensions/web-search/support.ts";
+import { createSessionWorktree, inspectSessionWorktree, cleanupSessionWorktree, bindSessionWorktree, listSessionWorktrees, readSessionWorktreeReceipt, sessionWorktreeReleaseTarget, SessionWorktreeError } from "./session-worktree.ts";
 
 const setupEvents = new WeakMap<object, ReturnType<typeof createEventBus>>();
 
@@ -105,6 +117,12 @@ const WEB_PROVIDER_AUTH_SOURCES = new Set<WebProviderAuthSource>([
 ]);
 
 type PromptDisposition = Parameters<NonNullable<PromptOptions["preflightResult"]>>[0];
+
+type ConversationForkControl = {
+  controller: AbortController;
+  creationStarted: boolean;
+  settled: boolean;
+};
 
 type PromptTrace = {
   commandId: string;
@@ -204,6 +222,35 @@ async function canonicalDirectory(path: string) {
   return canonical;
 }
 
+// Inspect only a bounded native header. Never follow a Session symlink or allow
+// a copied filename to turn another Pi storage directory into Web ownership.
+function inspectSavedWebSession(path: string, id: string, directory: string, purpose: "delete" | "fork") {
+  const unavailable = () => new WebRuntimeRequestError(`Only an exact saved Web Session file can be ${purpose === "delete" ? "deleted" : "forked"}`, purpose === "delete" ? "SESSION_DELETE_UNAVAILABLE" : "SESSION_FORK_UNAVAILABLE", 409);
+  if (path !== resolve(path) || dirname(path) !== resolve(directory) || !basename(path).endsWith(`_${id}.jsonl`)) throw unavailable();
+  let fd: number | undefined;
+  try {
+    const root = lstatSync(directory);
+    const before = lstatSync(path);
+    if (!root.isDirectory() || root.isSymbolicLink() || !before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || realpathSync(path) !== join(realpathSync(directory), basename(path))) throw unavailable();
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.nlink !== 1) throw unavailable();
+    const buffer = Buffer.alloc(16 * 1024);
+    const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+    const end = buffer.subarray(0, bytes).indexOf(10);
+    if (end < 0) throw unavailable();
+    const header: unknown = JSON.parse(buffer.subarray(0, end).toString("utf8"));
+    if (!header || typeof header !== "object" || !("type" in header) || header.type !== "session" || !("id" in header) || header.id !== id || !("cwd" in header) || typeof header.cwd !== "string" || !("timestamp" in header) || typeof header.timestamp !== "string" || basename(path) !== `${header.timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`) throw unavailable();
+    if (purpose === "fork" && (!("version" in header) || header.version !== CURRENT_SESSION_VERSION)) throw unavailable();
+    return { dev: opened.dev, ino: opened.ino, cwd: header.cwd };
+  } catch (error) {
+    if (error instanceof WebRuntimeRequestError) throw error;
+    throw unavailable();
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 export class PiWebRuntime implements WebRuntimeController {
   private runtime: AgentSessionRuntime;
   private unsubscribeSession?: () => void;
@@ -275,11 +322,16 @@ export class PiWebRuntime implements WebRuntimeController {
   private disposed = false;
   private disposePromise?: Promise<void>;
   private hasSelectedWorkspace: boolean;
-  private historyForkPending = false;
+  private sessionMutationPending = false;
   private historyForkPromptBytes = 0;
   private readonly historyForkReceipts = new Map<string, {
     request: WebSessionForkRequest;
     result: Promise<WebSessionForkResult>;
+    cancellation?: ConversationForkControl;
+  }>();
+  private readonly sessionDeleteReceipts = new Map<string, {
+    request: WebSessionDeleteRequest;
+    result: Promise<WebSessionDeleteResult>;
   }>();
 
   private constructor(
@@ -411,16 +463,10 @@ export class PiWebRuntime implements WebRuntimeController {
     const retry = observedRetry && matchesSessionIdentity(session.sessionManager, {
       expectedSessionId: observedRetry.sessionId, expectedSessionPath: observedRetry.sessionPath,
     }) ? observedRetry.retry : session.isRetrying ? {} : undefined;
-    const branch = session.sessionManager.getBranch();
-    const terminalEntry = branch.slice().reverse().find((entry) => entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY);
-    const timing = terminalEntry?.type === "custom" ? readTurnTiming(terminalEntry.data) : undefined;
-    // Legacy timing has no result id. Its nearest preceding native message is
-    // proof only when it is a terminal assistant on this exact current branch.
-    const preceding = terminalEntry ? branch.slice(0, branch.indexOf(terminalEntry)).reverse().find((entry) => entry.type === "message" || entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY) : undefined;
-    const resultEntryId = timing?.outcome === "completed" && preceding?.type === "message" && preceding.message.role === "assistant" && ["stop", "length"].includes(preceding.message.stopReason) && (!timing.resultEntryId || timing.resultEntryId === preceding.id) ? preceding.id : undefined;
+    const { lastTurn } = readSessionTurnEvidence(session.sessionManager.getBranch(), sessionId);
     return {
       sessionId, sessionPath,
-      ...(timing?.sessionId === sessionId ? { lastTurn: { commandId: timing.commandId, finishedAt: timing.finishedAt, outcome: timing.outcome, ...(resultEntryId ? { resultEntryId } : {}) } } : {}),
+      ...(lastTurn ? { lastTurn } : {}),
       status: session.isIdle ? "idle" : "running",
       pendingFollowUps: queued.length,
       queuedMessages: queued.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
@@ -653,7 +699,7 @@ export class PiWebRuntime implements WebRuntimeController {
       const held = this.compactionQueues?.get(this.runtime);
       if (held) held.blocked = true;
       const abortOperation = this.runtime.session.abort();
-      this.turnAbortOperations.set(key, abortOperation);
+      if (!this.terminalTurnKeys.has(key)) this.turnAbortOperations.set(key, abortOperation);
       void abortOperation.catch(() => {
         if (this.turnAbortOperations.get(key) === abortOperation) {
           this.turnAbortOperations.delete(key);
@@ -1391,7 +1437,9 @@ export class PiWebRuntime implements WebRuntimeController {
   async sendPrompt(content: string, options?: WebPromptOptions) {
     this.assertActive();
     this.assertWorkspaceSelected();
-    this.assertNoHistoryFork();
+    this.assertNoSessionMutation();
+    if (options?.retryEntryId !== undefined && content.trim())
+      throw new WebRuntimeRequestError("Provider retry cannot also submit a new user message", "PROMPT_REJECTED", 422);
     const owner = this.runtime;
     if (!matchesSessionIdentity(owner.session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
@@ -1401,6 +1449,7 @@ export class PiWebRuntime implements WebRuntimeController {
       );
     }
     this.assertSteeringTarget(owner.session, options);
+    this.providerRetryPrompt(owner.session, options);
     const sessionId = owner.session.sessionManager.getSessionId();
     const exact = { ...options, expectedSessionId: sessionId, expectedSessionPath: owner.session.sessionManager.getSessionFile() ?? `current:${sessionId}` };
     if (options?.streamingBehavior !== "steer" && (owner.session.isCompacting || this.manualCompactionOwner === owner || this.compactionQueues?.has(owner)))
@@ -1426,6 +1475,29 @@ export class PiWebRuntime implements WebRuntimeController {
         "TURN_CONFLICT",
         409,
       );
+  }
+
+  private providerRetryPrompt(session: AgentSession, options?: WebPromptOptions) {
+    if (options?.retryEntryId === undefined) return;
+    const branch = [...session.sessionManager.getBranch()].reverse();
+    const failure = branch.find((entry) => entry.type === "message");
+    // The failed run may include steering. Its persisted owner remains the
+    // original input, even when a later user message is last in the context.
+    const timingEntry = failure && branch.slice(0, branch.indexOf(failure)).find((entry) => entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY);
+    const timing = timingEntry?.type === "custom" ? readTurnTiming(timingEntry.data) : undefined;
+    const prompt = timing?.promptEntryId
+      ? branch.find((entry) => entry.id === timing.promptEntryId)
+      : branch.find((entry) => entry.type === "message" && entry.message.role === "user");
+    if (
+      !options.commandId || !options.expectedSessionId || !options.expectedSessionPath ||
+      typeof options.retryEntryId !== "string" || !options.retryEntryId || options.retryEntryId.length > 128 ||
+      options.streamingBehavior === "steer" || options.planRevision !== undefined || options.images?.length ||
+      !session.isIdle || session.pendingMessageCount || session.getFollowUpMessages().length || session.getSteeringMessages().length ||
+      failure?.id !== options.retryEntryId || failure?.type !== "message" || failure.message.role !== "assistant" || failure.message.stopReason !== "error" ||
+      timingEntry && (!timing || timing.sessionId !== session.sessionId || timing.outcome !== "failed" || timing.resultEntryId !== undefined && timing.resultEntryId !== failure.id) ||
+      prompt?.type !== "message" || prompt.message.role !== "user"
+    ) throw new WebRuntimeRequestError("The failed response is no longer the latest idle response in this Session", "PROMPT_REJECTED", 422);
+    return prompt.message;
   }
 
   private async dispatchPrompt(agentRuntime: AgentSessionRuntime, content: string, options?: WebPromptOptions, fromCompactionQueue = false) {
@@ -1480,7 +1552,7 @@ export class PiWebRuntime implements WebRuntimeController {
         }
         this.assertActive();
         this.assertWorkspaceSelected();
-        this.assertNoHistoryFork();
+        this.assertNoSessionMutation();
         if (
           (agentRuntime !== this.runtime && !(fromCompactionQueue && this.retainedRuntimes.has(agentRuntime))) ||
           session !== agentRuntime.session ||
@@ -1496,6 +1568,8 @@ export class PiWebRuntime implements WebRuntimeController {
           );
         }
         this.assertSteeringTarget(session, options);
+        const retryPrompt = this.providerRetryPrompt(session, options);
+        if (promptTrace && retryPrompt) promptTrace.promptMessage = retryPrompt;
         assertWebCommandSupported(agentRuntime.services, content);
         if (agentRuntime !== this.runtime && submittedExtensionCommand(agentRuntime.services, content)) {
           throw new WebRuntimeRequestError("Return to this Session to retry its queued command.", "SESSION_CONFLICT", 409);
@@ -1529,7 +1603,11 @@ export class PiWebRuntime implements WebRuntimeController {
           });
         }
         unsubscribePromptLifecycle = session.subscribe((event) => {
-          if (event.type === "agent_start") agentLifecycleStarted = true;
+          if (event.type === "agent_start") {
+            agentLifecycleStarted = true;
+            if (options?.retryEntryId && admissionDisposition === undefined)
+              preflightResult("started");
+          }
         });
         this.promptOrigins ??= new AsyncLocalStorage<PromptTrace | undefined>();
         const extensionCommand = submittedExtensionCommand(agentRuntime.services, content);
@@ -1625,7 +1703,17 @@ export class PiWebRuntime implements WebRuntimeController {
               } : {}),
             });
           };
-        if (options?.streamingBehavior === "steer") {
+        if (options?.retryEntryId) {
+          // Pi owns custom-message preparation, provider retry, compaction and
+          // settlement. Record the user's explicit retry action without
+          // inserting their text/images again or replaying completed tools.
+          await this.promptOrigins.run(promptTrace, () => session.sendCustomMessage({
+            customType: "openpi-web-provider-retry",
+            content: "The user requested retrying the interrupted response. Continue from the existing conversation.",
+            display: false,
+            details: { failedEntryId: options.retryEntryId },
+          }, { triggerTurn: true }));
+        } else if (options?.streamingBehavior === "steer") {
           // Native steer never starts a fresh prompt. Pi 0.99 also runs input
           // hooks here, so preserve its handled/queued admission disposition.
           const disposition = await this.promptOrigins.run(promptTrace, () => session.steer(content, promptImages, { source: "rpc" }));
@@ -1749,39 +1837,264 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private sessionCreationReceipts?: Map<string, { workspacePath: string; result: WebSessionCreationResult }>;
 
-  forkSession(request: WebSessionForkRequest) {
-    if (!request.commandId || request.commandId.length > 128 || /[\u0000-\u001f\u007f]/u.test(request.commandId))
+  async sessionForkOptions(request: { sessionPath: string; sessionId: string }): Promise<WebSessionForkOptions> {
+    this.assertActive();
+    try {
+      inspectSavedWebSession(request.sessionPath, request.sessionId, this.webSessionDirectory, "fork");
+      const manager = SessionManager.open(request.sessionPath, this.webSessionDirectory);
+      if (!matchesSessionIdentity(manager, { expectedSessionId: request.sessionId, expectedSessionPath: request.sessionPath }) || !manager.getLeafId())
+        throw new Error("A saved conversation branch is required");
+      const cwd = await canonicalDirectory(manager.getCwd());
+      const worktree = await inspectSessionWorktree(cwd);
+      return { local: true, worktree: worktree.available, ...(!worktree.available ? { reason: worktree.reason } : {}) };
+    } catch (error) {
+      return { local: false, worktree: false, reason: errorText(error) };
+    }
+  }
+
+  async cancelSessionFork(request: WebSessionForkCancelRequest): Promise<WebSessionForkCancelResult> {
+    const receipt = this.historyForkReceipts.get(request.commandId);
+    if (!receipt?.cancellation) return { state: "not-found" };
+    if (receipt.request.sessionId !== request.sessionId || receipt.request.sessionPath !== request.sessionPath)
+      throw new WebRuntimeRequestError("Fork cancellation belongs to another Session", "SESSION_CONFLICT", 409);
+    if (receipt.cancellation.creationStarted) return { state: "too-late" };
+    if (receipt.cancellation.settled) return { state: "not-found" };
+    receipt.cancellation.controller.abort();
+    return { state: "requested" };
+  }
+
+  private forkSourceHasWork(owner: AgentSessionRuntime, heldReference = false) {
+    const session = owner.session;
+    return !session.isIdle || session.isStreaming || session.isCompacting || session.pendingMessageCount > 0 ||
+      session.getFollowUpMessages().length > 0 || session.getSteeringMessages().length > 0 ||
+      (this.inFlightRuntimes.get(owner) ?? 0) > (heldReference ? 1 : 0) ||
+      this.compactionQueues?.has(owner) === true || this.manualCompactionOwner === owner;
+  }
+
+  private async forkConversation(exact: Extract<WebSessionForkRequest, { scope: "conversation" }>, control: ConversationForkControl): Promise<WebSessionForkResult> {
+    const inspected = inspectSavedWebSession(exact.sessionPath, exact.sessionId, this.webSessionDirectory, "fork");
+    const sourceManager = SessionManager.open(exact.sessionPath, this.webSessionDirectory);
+    if (!matchesSessionIdentity(sourceManager, { expectedSessionId: exact.sessionId, expectedSessionPath: exact.sessionPath }) || !sourceManager.getLeafId())
+      throw new WebRuntimeRequestError("Session identity changed before forking", "SESSION_CONFLICT", 409);
+    const sourceProjectPath = resolve(sourceManager.getCwd());
+    const sourceCwd = await canonicalDirectory(sourceProjectPath);
+    const environment = exact.environment ?? "local";
+    const inherited = readSessionFork(sourceManager.getBranch(), exact.sessionId, sourceManager.getCwd());
+    const resultContext: Pick<WebSessionForkMetadata, "source" | "cwd" | "workspacePath" | "environment" | "worktree" | "snapshot"> = {
+      source: { sessionId: exact.sessionId, sessionPath: exact.sessionPath, entryId: sourceManager.getLeafId()! },
+      cwd: sourceCwd,
+      workspacePath: inherited?.workspacePath ?? sourceProjectPath,
+      environment,
+      ...(inherited?.worktree ? { worktree: inherited.worktree } : {}),
+    };
+    const owner = [this.runtime, ...this.retainedRuntimes].find((candidate) => matchesSessionIdentity(candidate.session.sessionManager, { expectedSessionId: exact.sessionId, expectedSessionPath: exact.sessionPath }));
+    const sourceStillRunning = () => Boolean(owner && this.forkSourceHasWork(owner, true));
+    if (owner) this.retainRuntimeReference(owner);
+    let createdWorktree: Awaited<ReturnType<typeof createSessionWorktree>> | undefined;
+    let child: { sessionId: string; sessionPath?: string } | undefined;
+    const cancelled = async (): Promise<WebSessionForkResult> => {
+      const cleanup = createdWorktree ? await cleanupSessionWorktree(createdWorktree.cleanupReceipt) : undefined;
+      return {
+        state: cleanup && !cleanup.removed ? "uncertain" : "cancelled",
+        commandId: exact.commandId,
+        ...resultContext,
+        sourceStillRunning: sourceStillRunning(),
+        ...(cleanup && !cleanup.removed ? { preservedWorktreePath: cleanup.path, reason: cleanup.reason } : {}),
+      };
+    };
+    try {
+      this.assertActive();
+      if (control.controller.signal.aborted) return await cancelled();
+      if (environment === "worktree") {
+        createdWorktree = await createSessionWorktree(sourceCwd, exact.commandId, control.controller.signal);
+        resultContext.cwd = createdWorktree.cwd;
+        resultContext.worktree = createdWorktree.worktree;
+      }
+      if (control.controller.signal.aborted) return await cancelled();
+      this.assertActive();
+      const current = inspectSavedWebSession(exact.sessionPath, exact.sessionId, this.webSessionDirectory, "fork");
+      if (current.dev !== inspected.dev || current.ino !== inspected.ino)
+        throw new WebRuntimeRequestError("Session file changed before snapshot capture", "SESSION_CONFLICT", 409);
+      // Freeze once the target environment is ready, before the native veto
+      // hook. This independent manager never changes the source's live branch.
+      const manager = SessionManager.open(exact.sessionPath, this.webSessionDirectory, resultContext.cwd);
+      const leafId = owner ? owner.session.sessionManager.getLeafId() : manager.getLeafId();
+      if (!leafId || !manager.getEntry(leafId) || !matchesSessionIdentity(manager, { expectedSessionId: exact.sessionId, expectedSessionPath: exact.sessionPath }))
+        throw new WebRuntimeRequestError("A saved conversation branch is required", "SESSION_FORK_UNAVAILABLE", 409);
+      // Native branch navigation is in-memory until the next append. Respect
+      // the owner's selected persisted leaf, not an abandoned file-tail branch.
+      manager.branch(leafId);
+      const source = { sessionId: exact.sessionId, sessionPath: exact.sessionPath, entryId: leafId };
+      resultContext.source = source;
+      resultContext.workspacePath = readSessionFork(manager.getBranch(), exact.sessionId, sourceManager.getCwd())?.workspacePath ?? sourceProjectPath;
+      const context = manager.buildSessionContext();
+      const pending = new Map<string, { id: string; name: string }>();
+      for (const message of context.messages) {
+        if (message.role === "assistant" || message.role === "user") pending.clear();
+        if (message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted") {
+          for (const part of message.content) if (part.type === "toolCall") pending.set(part.id, { id: part.id, name: part.name });
+        } else if (message.role === "toolResult") pending.delete(message.toolCallId);
+      }
+      const lastMessage = context.messages.at(-1);
+      const snapshot: WebSessionForkSnapshot = {
+        kind: "persisted-prefix",
+        capturedAt: Date.now(),
+        interrupted: sourceStillRunning() || pending.size > 0 || lastMessage?.role === "user" || lastMessage?.role === "assistant" && lastMessage.stopReason === "aborted",
+      };
+      resultContext.snapshot = snapshot;
+      if (owner?.session.extensionRunner.hasHandlers("session_before_fork")) {
+        // Pi's hook has no abort signal. Keep its owner until the hook settles,
+        // then honor cancellation without creating a child or aborting a turn.
+        const veto = await owner.session.extensionRunner.emit({ type: "session_before_fork", entryId: leafId, position: "at" });
+        if (veto?.cancel || control.controller.signal.aborted) return await cancelled();
+      }
+      const title = await this.conversationForkTitle(manager);
+      if (control.controller.signal.aborted) return await cancelled();
+      this.assertActive();
+      const checked = inspectSavedWebSession(exact.sessionPath, exact.sessionId, this.webSessionDirectory, "fork");
+      if (checked.dev !== inspected.dev || checked.ino !== inspected.ino)
+        throw new WebRuntimeRequestError("Session file changed after snapshot capture", "SESSION_CONFLICT", 409);
+      control.creationStarted = true;
+      const sessionPath = manager.createBranchedSession(leafId);
+      const sessionId = manager.getSessionId();
+      if (sessionId !== exact.sessionId) child = { sessionId, sessionPath: sessionPath ?? undefined };
+      if (!sessionPath || !existsSync(sessionPath) || sessionId === exact.sessionId || manager.getHeader()?.parentSession !== exact.sessionPath)
+        throw new Error("Native fork identity was not confirmed");
+      // These are explicit missing-result records in the child only. No tool is
+      // run, and no eventual source output or external side effect is invented.
+      for (const tool of pending.values()) manager.appendMessage({
+        role: "toolResult", toolCallId: tool.id, toolName: tool.name, isError: true,
+        content: [{ type: "text", text: "Snapshot boundary: this tool had no persisted result when the conversation was forked. It was not executed or cancelled in this child. Its outcome and any external side effects in the source conversation are unknown." }],
+        details: { openpiForkSnapshot: { version: 1, source, snapshot: { ...snapshot, interrupted: true }, toolCallId: tool.id } satisfies WebSessionForkToolBoundary },
+        timestamp: snapshot.capturedAt,
+      });
+      if (snapshot.interrupted) manager.appendCustomMessageEntry("openpi-web-fork-snapshot", "This conversation starts from a frozen persisted prefix. The source conversation was not stopped by the fork and may continue independently. Unpersisted assistant text and pending messages were not copied. Missing tool results are explicitly marked as unknown in this child; they are not actual tool results or proof that external work failed.", false, { source, snapshot });
+      manager.appendSessionInfo(title);
+      manager.appendCustomEntry(WEB_SESSION_FORK, { version: 1, sessionId, ...resultContext } satisfies WebSessionForkMetadata);
+      if (createdWorktree) await bindSessionWorktree(createdWorktree.cleanupReceipt, { sessionId, sessionPath });
+      const replacement = await PiWebRuntime.createRuntime(resultContext.cwd, manager, this.dispatcherLease, { type: "session_start", reason: "fork", previousSessionFile: exact.sessionPath });
+      if (replacement.runtime.modelFallbackMessage) {
+        await this.disposeAgentRuntime(replacement.runtime);
+        throw new Error(`The source model could not be restored: ${replacement.runtime.modelFallbackMessage}`);
+      }
+      await this.activateCandidate(replacement.runtime);
+      this.hasSelectedWorkspace = true;
+      this.emit("session_switched", { sessionId, sessionPath, commandId: exact.commandId });
+      return { state: "forked", commandId: exact.commandId, sessionId, sessionPath, ...resultContext, sourceStillRunning: sourceStillRunning() } satisfies WebSessionForkResult;
+    } catch (error) {
+      if (control.creationStarted) {
+        // Keep the child's native file and any worktree after creation began.
+        // The source still owns its input authority and ongoing execution.
+        return { state: "uncertain", commandId: exact.commandId, ...child, ...resultContext, sourceStillRunning: sourceStillRunning(), reason: errorText(error), ...(createdWorktree ? { preservedWorktreePath: createdWorktree.worktree.path } : {}) };
+      }
+      const cleanup = createdWorktree ? await cleanupSessionWorktree(createdWorktree.cleanupReceipt) : undefined;
+      const preservedWorktreePath = cleanup && !cleanup.removed ? cleanup.path : error instanceof SessionWorktreeError ? error.preservedPath : undefined;
+      if (preservedWorktreePath) return { state: "uncertain", commandId: exact.commandId, ...resultContext, sourceStillRunning: sourceStillRunning(), reason: cleanup?.reason ?? errorText(error), preservedWorktreePath };
+      if (control.controller.signal.aborted || error instanceof SessionWorktreeError && error.code === "cancelled")
+        return { state: "cancelled", commandId: exact.commandId, ...resultContext, sourceStillRunning: sourceStillRunning() };
+      if (error instanceof SessionWorktreeError) throw new WebRuntimeRequestError(error.message, "SESSION_FORK_UNAVAILABLE", 409);
+      throw error;
+    } finally {
+      if (owner) this.releaseRuntimeReference(owner);
+    }
+  }
+
+  private async conversationForkTitle(source: SessionManager) {
+    const sessions = await SessionManager.listAll(this.webSessionDirectory);
+    const byPath = new Map(sessions.map((session) => [session.path, session]));
+    const nativeTitle = (manager: SessionManager) => {
+      const first = manager.buildSessionContext().messages.find((message) => message.role === "user");
+      const text = first?.role === "user" ? typeof first.content === "string" ? first.content : first.content.filter((part) => part.type === "text").map((part) => part.text).join(" ") : "";
+      return (manager.getSessionName() ?? text).replace(/\s+/gu, " ").trim() || "Conversation";
+    };
+    const numbered = (base: string, number: number) => {
+      const suffix = ` (${number})`;
+      if (base.length + suffix.length <= 60) return `${base}${suffix}`;
+      const prefix = base.slice(0, 59 - suffix.length).replace(/[\uD800-\uDBFF]$/u, "").trimEnd();
+      return `${prefix}…${suffix}`;
+    };
+    const family = (manager: SessionManager, visited = new Set<string>()): { base: string; rootId: string } => {
+      const title = nativeTitle(manager);
+      const own = { base: title, rootId: manager.getSessionId() };
+      const number = Number(/ \((\d+)\)$/u.exec(title)?.[1]);
+      if (!Number.isSafeInteger(number) || number < 2 || visited.size >= 32 || visited.has(manager.getSessionId())) return own;
+      visited.add(manager.getSessionId());
+      const metadata = readSessionFork(manager.getBranch(), manager.getSessionId(), manager.getHeader()?.cwd ?? manager.getCwd());
+      const parent = metadata && byPath.get(metadata.source.sessionPath);
+      // A user title such as "Release (2026)" is not a numbered fork family.
+      if (!metadata || manager.getHeader()?.parentSession !== metadata.source.sessionPath || parent?.id !== metadata.source.sessionId) return own;
+      try {
+        inspectSavedWebSession(parent.path, parent.id, this.webSessionDirectory, "fork");
+        const ancestor = SessionManager.open(parent.path, this.webSessionDirectory);
+        if (!ancestor.getEntry(metadata.source.entryId)) return own;
+        const ancestorFamily = family(ancestor, visited);
+        return numbered(ancestorFamily.base, number) === title ? ancestorFamily : own;
+      } catch {
+        return own;
+      }
+    };
+    const sourceFamily = family(source);
+    const base = sourceFamily.base;
+    let maximum = 1;
+    const occupied = new Set(sessions.map((session) => session.name ?? session.firstMessage));
+    for (const session of sessions) {
+      const number = Number(/ \((\d+)\)$/u.exec(session.name ?? "")?.[1]);
+      if (!Number.isSafeInteger(number) || number < 2 || number >= Number.MAX_SAFE_INTEGER || session.name !== numbered(base, number)) continue;
+      try {
+        inspectSavedWebSession(session.path, session.id, this.webSessionDirectory, "fork");
+        const candidate = session.id === source.getSessionId() ? source : SessionManager.open(session.path, this.webSessionDirectory);
+        if (family(candidate).rootId === sourceFamily.rootId) maximum = Math.max(maximum, number);
+      } catch {
+        // An unrelated invalid file cannot grant lineage or prevent a fork.
+      }
+    }
+    let title = numbered(base, ++maximum);
+    while (occupied.has(title)) title = numbered(base, ++maximum);
+    return title;
+  }
+
+  forkSession(request: WebSessionForkRequest): Promise<WebSessionForkResult> {
+    if ([request.commandId, request.sessionId, request.sessionPath].some((value) => typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/u.test(value)) || request.commandId.length > 128 || request.sessionId.length > 128 || request.sessionPath.length > 4096)
       return Promise.reject(new WebRuntimeRequestError("A bounded fork command is required", "SESSION_FORK_UNAVAILABLE", 400));
     if (request.rerun && (request.rerun.mode !== "edit" && request.rerun.mode !== "regenerate" || request.rerun.mode === "edit" && (typeof request.rerun.content !== "string" || !request.rerun.content.trim() || request.rerun.content.length > WEB_PROMPT_MAX_TEXT_LENGTH)))
       return Promise.reject(new WebRuntimeRequestError("A bounded edited prompt is required", "SESSION_FORK_UNAVAILABLE", 400));
+    if (request.scope === "conversation" && (request.entryId !== undefined || request.rerun !== undefined))
+      return Promise.reject(new WebRuntimeRequestError("Conversation fork cannot include a message or rerun", "SESSION_FORK_UNAVAILABLE", 400));
+    if (request.environment !== undefined && (request.scope !== "conversation" || request.environment !== "local" && request.environment !== "worktree"))
+      return Promise.reject(new WebRuntimeRequestError("A supported conversation fork environment is required", "SESSION_FORK_UNAVAILABLE", 400));
     const receipts = this.historyForkReceipts;
     const previous = receipts.get(request.commandId);
     if (previous) {
       const original = previous.request;
-      if (original.sessionId !== request.sessionId || original.sessionPath !== request.sessionPath || original.entryId !== request.entryId || JSON.stringify(original.rerun) !== JSON.stringify(request.rerun))
+      if (original.sessionId !== request.sessionId || original.sessionPath !== request.sessionPath || original.entryId !== request.entryId || (original.scope ?? "message") !== (request.scope ?? "message") || (original.environment ?? "local") !== (request.environment ?? "local") || JSON.stringify(original.rerun) !== JSON.stringify(request.rerun))
         return Promise.reject(new WebRuntimeRequestError("Fork command belongs to another message", "SESSION_CONFLICT", 409));
       return previous.result.then((result) => ({ ...result, replayed: true }));
     }
     if (receipts.size >= 1024)
       return Promise.reject(new WebRuntimeRequestError("Fork receipt capacity reached", "SESSION_FORK_CAPACITY", 409));
-    if (this.historyForkPending)
-      return Promise.reject(new WebRuntimeRequestError("Another Session fork is in progress", "SESSION_CONFLICT", 409));
-    const exact = { ...request, ...(request.rerun ? { rerun: { ...request.rerun } } : {}) };
-    const source = { sessionId: exact.sessionId, sessionPath: exact.sessionPath, entryId: exact.entryId };
+    if (this.sessionMutationPending)
+      return Promise.reject(new WebRuntimeRequestError("Another Session mutation is in progress", "SESSION_CONFLICT", 409));
+    const exact: WebSessionForkRequest = request.scope === "conversation" ? { ...request } : { ...request, ...(request.rerun ? { rerun: { ...request.rerun } } : {}) };
+    const cancellation = exact.scope === "conversation" ? { controller: new AbortController(), creationStarted: false, settled: false } : undefined;
     const result = this.serializeControllerMutation(async () => {
       this.assertActive();
+      if (exact.scope === "conversation") return this.forkConversation(exact, cancellation!);
       this.assertWorkspaceSelected();
       const owner = this.runtime;
       const session = owner.session;
       const manager = session.sessionManager;
       if (!matchesSessionIdentity(manager, { expectedSessionId: exact.sessionId, expectedSessionPath: exact.sessionPath }))
         throw new WebRuntimeRequestError("Only the active Web Session can fork", "SESSION_CONFLICT", 409);
-      const entry = manager.getBranch().find((entry) => entry.id === exact.entryId);
+      const branch = manager.getBranch();
+      const entryId = exact.entryId;
+      const entry = branch.find((entry) => entry.id === entryId);
       if (!entry || entry.type !== "message" || !manager.isPersisted() || !existsSync(exact.sessionPath) || dirname(resolve(exact.sessionPath)) !== resolve(this.webSessionDirectory))
         throw new WebRuntimeRequestError("A saved message on the current Web branch is required", "SESSION_FORK_UNAVAILABLE", 409);
+      const source = { sessionId: exact.sessionId, sessionPath: exact.sessionPath, entryId: entry.id };
+      const retainedEntryId = entry.id;
       let prompt: WebSessionForkResult["prompt"];
       if (exact.rerun) {
-        if (entry.message.role !== "user")
+        if (entry.type !== "message" || entry.message.role !== "user")
           throw new WebRuntimeRequestError("Rerun must target the original user message", "SESSION_FORK_UNAVAILABLE", 409);
         const parts = typeof entry.message.content === "string" ? [{ type: "text" as const, text: entry.message.content }] : entry.message.content;
         const originalText = parts.filter((part) => part.type === "text").map((part) => part.text).join("\n");
@@ -1817,19 +2130,22 @@ export class PiWebRuntime implements WebRuntimeController {
       }
       if (!session.isIdle || session.isStreaming || session.isCompacting || session.pendingMessageCount || session.getFollowUpMessages().length || session.getSteeringMessages().length || this.inFlightRuntimes.has(owner) || this.activePromptTrace || this.pendingPromptTraces.length || this.compactionQueues?.has(owner) || this.manualCompactionOwner === owner)
         throw new WebRuntimeRequestError("Wait for current work and queued messages before forking", "SESSION_FORK_UNAVAILABLE", 409);
+      const inheritedFork = readSessionFork(branch, exact.sessionId, manager.getCwd());
       try {
-        const fork = await owner.fork(exact.entryId, { position: prompt ? "before" : "at" });
+        const fork = await owner.fork(entry.id, { position: prompt ? "before" : "at" });
         this.assertActiveRuntime(owner);
         if (fork.cancelled) return { state: "cancelled", commandId: exact.commandId, source } satisfies WebSessionForkResult;
         const child = owner.session.sessionManager;
         const sessionId = child.getSessionId();
         const sessionPath = child.getSessionFile();
-        if (!sessionPath || sessionId === exact.sessionId || sessionPath === exact.sessionPath || child.getHeader()?.parentSession !== exact.sessionPath || child.getBranch().some((entry) => entry.id === exact.entryId) === Boolean(prompt))
+        if (!sessionPath || sessionId === exact.sessionId || sessionPath === exact.sessionPath || child.getHeader()?.parentSession !== exact.sessionPath || child.getBranch().some((entry) => entry.id === retainedEntryId) === Boolean(prompt))
           throw new Error("Native fork identity was not confirmed");
         if (exact.rerun) child.appendCustomEntry(WEB_MESSAGE_RERUN, { source, mode: exact.rerun.mode });
+        const forkContext = inheritedFork ? { environment: "local" as const, cwd: child.getCwd(), workspacePath: inheritedFork.workspacePath, ...(inheritedFork.worktree ? { worktree: inheritedFork.worktree } : {}) } : undefined;
+        if (forkContext) child.appendCustomEntry(WEB_SESSION_FORK, { version: 1, sessionId, source, ...forkContext } satisfies WebSessionForkMetadata);
         if (prompt) this.historyForkPromptBytes += jsonByteLength(prompt);
         this.emit("session_switched", { sessionId, sessionPath, commandId: exact.commandId });
-        return { state: "forked", commandId: exact.commandId, source, sessionId, sessionPath, ...(prompt ? { prompt } : {}) } satisfies WebSessionForkResult;
+        return { state: "forked", commandId: exact.commandId, source, sessionId, sessionPath, ...forkContext, ...(prompt ? { prompt } : {}) } satisfies WebSessionForkResult;
       } catch {
         // Native fork can persist its new file before replacement fails. Keep
         // this command terminal and never repeat that irreversible creation.
@@ -1838,9 +2154,185 @@ export class PiWebRuntime implements WebRuntimeController {
         return { state: "uncertain", commandId: exact.commandId, source } satisfies WebSessionForkResult;
       }
     }, true);
-    this.historyForkPending = true;
-    const settled = result.finally(() => { this.historyForkPending = false; });
+    this.sessionMutationPending = true;
+    const settled = result.finally(() => {
+      this.sessionMutationPending = false;
+      if (cancellation) cancellation.settled = true;
+    });
+    receipts.set(exact.commandId, { request: exact, result: settled, ...(cancellation ? { cancellation } : {}) });
+    return settled;
+  }
+
+  async listRetainedWorktrees(workspacePath: string, cursor?: string) {
+    this.assertActive();
+    try { return await listSessionWorktrees(workspacePath, this.webSessionDirectory, cursor); }
+    catch (error) {
+      if (error instanceof SessionWorktreeError && error.code === "cursor")
+        throw new WebRuntimeRequestError(error.message, "WORKTREE_LIST_CHANGED", 409);
+      throw error;
+    }
+  }
+
+  private worktreeReleaseReceipts?: Map<string, { request: WebWorktreeReleaseRequest; result: Promise<WebWorktreeReleaseResult> }>;
+
+  releaseSessionWorktree(request: WebWorktreeReleaseRequest, hasExternalHolders?: () => boolean) {
+    const exact = { ...request };
+    if ([exact.commandId, exact.sessionId, exact.sessionPath, exact.worktreePath].some((value) => typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/u.test(value)) ||
+        exact.commandId.length > 128 || exact.sessionId.length > 128 || exact.sessionPath.length > 4096 || exact.worktreePath.length > 4096 ||
+        !isAbsolute(exact.worktreePath) || dirname(exact.sessionPath) !== resolve(this.webSessionDirectory))
+      return Promise.reject(new WebRuntimeRequestError("An exact managed worktree and native child identity are required", "INVALID_WORKTREE_RELEASE", 400));
+    const receipts = this.worktreeReleaseReceipts ??= new Map<string, { request: WebWorktreeReleaseRequest; result: Promise<WebWorktreeReleaseResult> }>();
+    const previous = receipts.get(exact.commandId);
+    if (previous) {
+      if (previous.request.sessionId !== exact.sessionId || previous.request.sessionPath !== exact.sessionPath || previous.request.worktreePath !== exact.worktreePath)
+        return Promise.reject(new WebRuntimeRequestError("Worktree release command belongs to another resource", "SESSION_CONFLICT", 409));
+      return previous.result.then((result) => ({ ...result, replayed: true }));
+    }
+    if (receipts.size >= 1024 || this.sessionMutationPending)
+      return Promise.reject(new WebRuntimeRequestError("Worktree release is unavailable while another mutation is pending or receipt capacity is full", "WORKTREE_RELEASE_UNAVAILABLE", 409));
+    const result = this.serializeControllerMutation(async (): Promise<WebWorktreeReleaseResult> => {
+      const preserve = (reason: string): WebWorktreeReleaseResult => ({ ...exact, state: "preserved", reason });
+      try {
+        this.assertActive();
+        const receipt = await readSessionWorktreeReceipt(exact.worktreePath, this.webSessionDirectory);
+        if (receipt.ownerSession.sessionId !== exact.sessionId || receipt.ownerSession.sessionPath !== exact.sessionPath)
+          return preserve("The private worktree receipt belongs to another native child.");
+        if (receipt.releaseState === "uncertain") return { ...exact, state: "uncertain", reason: "A prior release attempt is uncertain. Automatic removal cannot be repeated." };
+        if (hasExternalHolders?.()) return preserve("A Host terminal or pending process still owns this worktree, or its shutdown cannot be verified.");
+        if (existsSync(exact.sessionPath)) return preserve("The original native child Session still exists. Delete the Session before releasing its worktree.");
+        const inside = (cwd: string) => {
+          const suffix = relative(exact.worktreePath, cwd);
+          return suffix === "" || !isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`);
+        };
+        if (this.runtimeDisposals.size > 0) return preserve("Native runtime shutdown is still pending.");
+        this.assertActive();
+        if (this.runtimeDisposalFailure !== undefined) return preserve("Native runtime shutdown could not be verified.");
+        const owners = new Set([this.runtime, ...this.retainedRuntimes, ...this.candidateRuntimes, ...this.inFlightRuntimes.keys()]);
+        for (const owner of owners) {
+          // Includes an idle native replacement whose new Session still uses this cwd.
+          if (inside(await realpath(owner.session.sessionManager.getCwd())))
+            return preserve("A native runtime still owns this worktree. Leave it before releasing the checkout.");
+        }
+        const files = (await readdir(this.webSessionDirectory, { withFileTypes: true })).filter((entry) => entry.name.endsWith(".jsonl"));
+        if (files.length > 5000 || files.some((entry) => !entry.isFile()))
+          return preserve("The native Session reference catalog is incomplete or exceeds its inspection limit.");
+        // Only native headers own cwd. Do not load unbounded private transcripts
+        // or treat the sidebar's bounded/paginated projection as the full catalog.
+        const deadline = performance.now() + 90_000;
+        for (const file of files) {
+          if (performance.now() >= deadline) return preserve("Native Session reference inspection reached its time limit.");
+          const id = file.name.slice(file.name.lastIndexOf("_") + 1, -6);
+          const header = inspectSavedWebSession(join(this.webSessionDirectory, file.name), id, this.webSessionDirectory, "fork");
+          if (inside(await realpath(header.cwd)))
+            return preserve("A saved native Session still references this worktree. Delete or move its references first.");
+        }
+        this.assertActive();
+        if (hasExternalHolders?.()) return preserve("A Host process acquired the worktree during reference inspection.");
+        const cleanup = await cleanupSessionWorktree(receipt);
+        return { ...exact, state: cleanup.removed ? "removed" : "uncertain" in cleanup ? "uncertain" : "preserved", ...(cleanup.reason ? { reason: cleanup.reason } : {}) };
+      } catch (error) {
+        return { ...exact, state: error instanceof SessionWorktreeError && error.code === "uncertain" || !existsSync(exact.worktreePath) ? "uncertain" : "preserved", reason: errorText(error) };
+      }
+    }, true);
+    this.sessionMutationPending = true;
+    const settled = result.finally(() => { this.sessionMutationPending = false; });
     receipts.set(exact.commandId, { request: exact, result: settled });
+    return settled;
+  }
+
+  deleteSession(request: WebSessionDeleteRequest) {
+    if ([request.commandId, request.sessionId, request.sessionPath].some((value) => typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/u.test(value)) || request.commandId.length > 128 || request.sessionId.length > 128 || request.sessionPath.length > 4096)
+      return Promise.reject(new WebRuntimeRequestError("A bounded deletion command and exact Session identity are required", "SESSION_DELETE_UNAVAILABLE", 400));
+    const previous = this.sessionDeleteReceipts.get(request.commandId);
+    if (previous) {
+      if (previous.request.sessionId !== request.sessionId || previous.request.sessionPath !== request.sessionPath)
+        return Promise.reject(new WebRuntimeRequestError("Deletion command belongs to another Session", "SESSION_CONFLICT", 409));
+      return previous.result.then((result) => ({ ...result, replayed: true }));
+    }
+    if (this.sessionDeleteReceipts.size >= 1024)
+      return Promise.reject(new WebRuntimeRequestError("Deletion receipt capacity reached", "SESSION_DELETE_CAPACITY", 409));
+    if (this.sessionMutationPending)
+      return Promise.reject(new WebRuntimeRequestError("Another Session mutation is in progress", "SESSION_CONFLICT", 409));
+    const exact = { ...request };
+    const result = this.serializeControllerMutation(async () => {
+      const before = inspectSavedWebSession(exact.sessionPath, exact.sessionId, this.webSessionDirectory, "delete");
+      let worktreeReleaseTarget: WebSessionDeleteResult["worktreeReleaseTarget"];
+      try {
+        const manager = SessionManager.open(exact.sessionPath, this.webSessionDirectory);
+        const fork = readSessionFork(manager.getBranch(), exact.sessionId, manager.getCwd());
+        if (fork?.worktree) worktreeReleaseTarget = sessionWorktreeReleaseTarget(await readSessionWorktreeReceipt(fork.worktree.path, this.webSessionDirectory));
+      } catch { /* Retention remains safe when private release authority is unavailable. */ }
+      // A recently released runtime may still be running its native shutdown
+      // hooks. They must finish before its backing file can disappear.
+      await Promise.all([...this.runtimeDisposals]);
+      this.assertActive();
+      if (this.runtimeDisposalFailure !== undefined)
+        throw new WebRuntimeRequestError("A native Session did not finish shutting down; deletion is unavailable", "SESSION_DELETE_UNAVAILABLE", 409);
+      const owners = [this.runtime, ...this.retainedRuntimes].filter((owner) => matchesSessionIdentity(owner.session.sessionManager, { expectedSessionPath: exact.sessionPath }));
+      if (owners.some((owner) => owner.session.sessionManager.getSessionId() !== exact.sessionId) || [...this.candidateRuntimes].some((owner) => matchesSessionIdentity(owner.session.sessionManager, { expectedSessionPath: exact.sessionPath })))
+        throw new WebRuntimeRequestError("Session ownership changed before deletion", "SESSION_CONFLICT", 409);
+      for (const owner of owners) {
+        const session = owner.session;
+        const traces = owner === this.runtime ? { active: this.activePromptTrace, pending: this.pendingPromptTraces } : this.suspendedPromptTraces?.get(session);
+        if (!session.isIdle || session.isStreaming || session.isCompacting || session.pendingMessageCount || session.getFollowUpMessages().length || session.getSteeringMessages().length || this.inFlightRuntimes.has(owner) || traces?.active || traces?.pending.length || this.compactionQueues?.has(owner) || this.manualCompactionOwner === owner || this.endingSessions?.has(session))
+          throw new WebRuntimeRequestError("Wait for this Session's current work and queued messages before deleting it", "SESSION_DELETE_BUSY", 409);
+      }
+      let replacementStarted = false;
+      let activeSessionChanged = false;
+      let deleted = false;
+      try {
+        for (const owner of owners) {
+          if (owner === this.runtime) {
+            replacementStarted = true;
+            // Pi owns before-switch cancellation, shutdown, invalidation and
+            // replacement. Do not leave a live manager pointing at a deleted file.
+            const switched = await owner.newSession();
+            this.assertActiveRuntime(owner);
+            if (switched.cancelled) return { ...exact, state: "cancelled" } satisfies WebSessionDeleteResult;
+            activeSessionChanged = true;
+            this.hasSelectedWorkspace = false;
+            if (matchesSessionIdentity(owner.session.sessionManager, { expectedSessionId: exact.sessionId }) || owner.session.sessionManager.getSessionFile() === exact.sessionPath)
+              throw new Error("Native Session replacement was not confirmed");
+          } else {
+            await this.disposeAgentRuntime(owner);
+            this.retainedSubscriptions.get(owner)?.();
+            this.retainedSubscriptions.delete(owner);
+            this.retainedRuntimes.delete(owner);
+          }
+        }
+        this.assertActive();
+        const final = inspectSavedWebSession(exact.sessionPath, exact.sessionId, this.webSessionDirectory, "delete");
+        if (final.dev !== before.dev || final.ino !== before.ino)
+          throw new WebRuntimeRequestError("Session file changed while preparing deletion", "SESSION_CONFLICT", 409);
+        // Keep the final identity check and unlink in one synchronous section;
+        // the Web host lease excludes another Web writer for this directory.
+        unlinkSync(exact.sessionPath);
+        deleted = true;
+        this.completedSessionTurns?.delete(JSON.stringify([exact.sessionPath, exact.sessionId]));
+        this.emit("session_deleted", { ...exact, activeSessionChanged });
+        return { ...exact, state: "deleted", ...(activeSessionChanged ? { activeSessionChanged } : {}), ...(worktreeReleaseTarget ? { worktreeReleaseTarget } : {}) } satisfies WebSessionDeleteResult;
+      } catch (error) {
+        if (deleted) return { ...exact, state: "deleted", ...(activeSessionChanged ? { activeSessionChanged } : {}), ...(worktreeReleaseTarget ? { worktreeReleaseTarget } : {}) } satisfies WebSessionDeleteResult;
+        if (!replacementStarted) throw error;
+        // A native replacement can fail after disposing the original Session.
+        // Never rerun this command or restore write authority from a stale view.
+        this.hasSelectedWorkspace = false;
+        return { ...exact, state: "uncertain", activeSessionChanged: true } satisfies WebSessionDeleteResult;
+      }
+    }, true);
+    this.sessionMutationPending = true;
+    let retainReceipt = false;
+    const settled = result.then((outcome) => {
+      retainReceipt = outcome.state === "deleted" || outcome.state === "uncertain";
+      return outcome;
+    }).finally(() => {
+      this.sessionMutationPending = false;
+      // A rejected preflight or explicit native cancellation performed no
+      // unlink. Keep Retry usable; confirmed/uncertain effects remain terminal.
+      if (!retainReceipt && this.sessionDeleteReceipts.get(exact.commandId)?.result === settled)
+        this.sessionDeleteReceipts.delete(exact.commandId);
+    });
+    this.sessionDeleteReceipts.set(exact.commandId, { request: exact, result: settled });
     return settled;
   }
 
@@ -1934,6 +2426,10 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private async disposeInternal() {
     this.disposed = true;
+    for (const receipt of this.historyForkReceipts.values()) {
+      if (receipt.cancellation && !receipt.cancellation.creationStarted && !receipt.cancellation.settled)
+        receipt.cancellation.controller.abort();
+    }
     await this.providerLogin?.dispose();
     this.compactionQueues?.clear();
     this.unsubscribeSession?.();
@@ -2019,6 +2515,7 @@ export class PiWebRuntime implements WebRuntimeController {
     cwd: string,
     sessionManager: SessionManager,
     dispatcherLease?: HttpDispatcherLease,
+    sessionStartEvent?: SessionStartEvent,
   ) {
     const agentDir = getAgentDir();
     let sharedDispatcherLease = dispatcherLease;
@@ -2106,6 +2603,7 @@ export class PiWebRuntime implements WebRuntimeController {
         cwd,
         agentDir,
         sessionManager,
+        sessionStartEvent,
       });
       if (!sharedDispatcherLease) {
         throw new Error("HTTP dispatcher lease was not created");
@@ -2183,14 +2681,8 @@ export class PiWebRuntime implements WebRuntimeController {
     if (session !== this.runtime.session) return;
     this.observeRetry(session, event);
     this.observeCompaction(session, event);
-    // A command can return before its native triggerTurn continuation starts.
-    // Recover only that async invocation's unused origin, never the last HTTP
-    // request or an unrelated run. This also retains its controlling Web tab.
-    if (event.type === "agent_start" && !this.activePromptTrace) {
-      const origin = this.promptOrigins?.getStore();
-      if (origin && !origin.started && matchesSessionIdentity(session.sessionManager, { expectedSessionId: origin.sessionId, expectedSessionPath: origin.sessionPath })) {
-        this.activePromptTrace = origin;
-      }
+    if (event.type === "agent_start") {
+      this.activePromptTrace = this.observeRunStart(session, this.activePromptTrace);
     }
     if (this.activePromptTrace) observePromptOutcome(this.activePromptTrace, event);
     if (event.type === "agent_start" && this.activePromptTrace) {
@@ -2312,6 +2804,8 @@ export class PiWebRuntime implements WebRuntimeController {
           sessionId: session.sessionManager.getSessionId(),
           toolName: event.toolName,
           toolCallId: event.toolCallId,
+          ...("parentToolCallId" in event && typeof event.parentToolCallId === "string"
+            ? { parentToolCallId: event.parentToolCallId } : {}),
           ...(event.type === "tool_execution_end"
             ? { isError: event.isError, result: projectMessage({ ...event.result, role: "toolResult", toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError }) }
             : { call: projectMessage({ content: [{ type: "toolCall", id: event.toolCallId, name: event.toolName, arguments: event.args }] }).parts?.[0],
@@ -2325,8 +2819,33 @@ export class PiWebRuntime implements WebRuntimeController {
     for (const listener of this.listeners) listener({ type, detail });
   }
 
+  private observeRunStart(session: AgentSession, trace?: PromptTrace, publish = true) {
+    const manager = session.sessionManager;
+    const belongs = (candidate?: PromptTrace) => candidate && matchesSessionIdentity(manager, {
+      expectedSessionId: candidate.sessionId, expectedSessionPath: candidate.sessionPath,
+    });
+    // A delayed command may still own an unused exact Web origin. A genuinely
+    // native run gets only a control handle, never an HTTP/controller admission.
+    const origin = this.promptOrigins?.getStore();
+    const current = belongs(trace) ? trace!
+      : origin && !origin.started && belongs(origin) ? origin
+        : {
+            commandId: `native-${randomUUID()}`,
+            sessionId: manager.getSessionId(),
+            sessionPath: manager.getSessionFile() ?? `current:${manager.getSessionId()}`,
+            startedAt: performance.now(),
+            started: false,
+            queued: false,
+            userMessageObserved: false,
+          };
+    this.startPromptTrace(current, manager, publish);
+    return current;
+  }
+
   private activeTurnFromTrace(trace?: PromptTrace, sessionManager = this.sessionManager): WebActiveTurn | undefined {
-    if (!trace?.started || trace.epoch === undefined) return undefined;
+    if (!trace?.started || trace.epoch === undefined || !matchesSessionIdentity(sessionManager, {
+      expectedSessionId: trace.sessionId, expectedSessionPath: trace.sessionPath,
+    })) return undefined;
     const prompt = trace.promptMessage && sessionManager.getBranch().find((entry) => entry.type === "message" && entry.message === trace.promptMessage && entry.message.role === "user");
     return {
       sessionId: trace.sessionId,
@@ -2376,6 +2895,7 @@ export class PiWebRuntime implements WebRuntimeController {
         finishedAt: Date.now(),
         elapsedMs: activeTurn.elapsedMs,
         outcome: settlement.outcome,
+        ...(["completed", "failed"].includes(settlement.outcome) ? { unreadEligible: true as const } : {}),
         ...(activeTurn.promptEntryId ? { promptEntryId: activeTurn.promptEntryId } : {}),
       };
       const result = settlement.outcome === "completed" && trace.resultMessage ? sessionManager.getBranch().find((entry) => entry.type === "message" && entry.message === trace.resultMessage) : undefined;
@@ -2388,6 +2908,9 @@ export class PiWebRuntime implements WebRuntimeController {
       try {
         sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, timing);
       } catch {
+        // Pi appends to memory before persisting. Keep the execution fact, but
+        // explicitly deny attention even when legacy read receipts are present.
+        timing.unreadEligible = false;
         // Optional display evidence must never change Pi's terminal outcome.
         traceWeb("turn_timing_persistence_failed", { commandId: activeTurn.commandId });
       }
@@ -2449,10 +2972,10 @@ export class PiWebRuntime implements WebRuntimeController {
     return operation;
   }
 
-  private serializeControllerMutation<T>(operation: () => Promise<T>, historyFork = false) {
+  private serializeControllerMutation<T>(operation: () => Promise<T>, sessionMutation = false) {
     if (this.providerLogin?.active) return Promise.reject(this.providerLoginConflict());
-    if (!historyFork && this.historyForkPending)
-      return Promise.reject(new WebRuntimeRequestError("Session fork is in progress. Keep your draft.", "SESSION_CONFLICT", 409));
+    if (!sessionMutation && this.sessionMutationPending)
+      return Promise.reject(new WebRuntimeRequestError("Session mutation is in progress. Keep your draft.", "SESSION_CONFLICT", 409));
     const result = (this.controllerMutation ?? Promise.resolve()).then(() => {
       this.assertActive();
       this.assertNoProviderLogin();
@@ -2498,9 +3021,15 @@ export class PiWebRuntime implements WebRuntimeController {
     const unsubscribe = session.subscribe((event) => {
       this.observeRetry(session, event);
       this.observeCompaction(session, event);
-      const traces = this.suspendedPromptTraces?.get(session);
+      const owners = this.suspendedPromptTraces ??= new WeakMap();
+      let traces = owners.get(session);
+      if (event.type === "agent_start") {
+        traces ??= { pending: [] };
+        traces.active = this.observeRunStart(session, traces.active ?? traces.pending.shift(), false);
+        owners.set(session, traces);
+      }
       if (traces) {
-        if (event.type === "agent_start" || (event.type === "message_start" && event.message.role === "user")) {
+        if (event.type === "message_start" && event.message.role === "user") {
           traces.active ??= traces.pending.shift();
           if (traces.active) this.startPromptTrace(traces.active, session.sessionManager, false);
         }
@@ -2513,7 +3042,9 @@ export class PiWebRuntime implements WebRuntimeController {
       if (event.type === "agent_settled") {
         clearTimeout(progressTimer);
         progress();
-        this.releaseRetainedRuntime(runtime);
+        // Pi starts settled-hook triggerTurn actions after public settlement.
+        // Recheck ownership after those actions can enter their preparing run.
+        queueMicrotask(() => this.releaseRetainedRuntime(runtime));
       } else if (["agent_start", "message_start", "message_end", "tool_execution_start", "tool_execution_end", "queue_update"].includes(event.type) && !progressTimer) {
         progressTimer = setTimeout(progress, 100);
         progressTimer.unref();
@@ -2538,7 +3069,7 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private releaseRetainedRuntime(runtime: AgentSessionRuntime) {
     if (!this.retainedRuntimes.has(runtime)) return;
-    if (runtime.session.isStreaming || this.inFlightRuntimes.has(runtime)) return;
+    if (!runtime.session.isIdle || runtime.session.isStreaming || this.inFlightRuntimes.has(runtime)) return;
     this.retainedSubscriptions.get(runtime)?.();
     this.retainedSubscriptions.delete(runtime);
     this.retainedRuntimes.delete(runtime);
@@ -2605,9 +3136,9 @@ export class PiWebRuntime implements WebRuntimeController {
     if (this.providerLogin?.active) throw this.providerLoginConflict();
   }
 
-  private assertNoHistoryFork() {
-    if (this.historyForkPending)
-      throw new WebRuntimeRequestError("Session fork is in progress. Keep your draft.", "SESSION_CONFLICT", 409);
+  private assertNoSessionMutation() {
+    if (this.sessionMutationPending)
+      throw new WebRuntimeRequestError("Session mutation is in progress. Keep your draft.", "SESSION_CONFLICT", 409);
   }
 
   private assertWorkspaceSelected() {

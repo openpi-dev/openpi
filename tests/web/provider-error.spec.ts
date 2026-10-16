@@ -170,7 +170,7 @@ it("retries the user prompt from its provider failure", async () => {
     1,
   );
   fireEvent.click(retry);
-  expect(onResend).toHaveBeenCalledWith("Try this task");
+  expect(onResend).toHaveBeenCalledWith("Try this task", "error");
   expect(retry.disabled).toBe(true);
   finish(true);
   await waitFor(() => expect(retry.disabled).toBe(false));
@@ -192,6 +192,92 @@ it("does not drop a new failed response with the same partial text as a saved an
   expect(screen.getByRole("alert").textContent).toContain(
     "provider capacity reached",
   );
+});
+
+it("keeps a manual retry under one prompt and removes the previous failure's retry action after recovery", () => {
+  const state = snapshot(error("503 original failure"));
+  state.selectedSession!.entries.unshift({
+    id: "user",
+    type: "message",
+    timestamp: "2026-10-13T00:00:00Z",
+    message: projectMessage({ role: "user", content: "One original request" }),
+  });
+  const timing = {
+    version: 1 as const,
+    sessionId: "session",
+    commandId: "failed",
+    epoch: 1,
+    startedAt: 1000,
+    finishedAt: 2000,
+    elapsedMs: 1000,
+    outcome: "failed" as const,
+    promptEntryId: "user",
+  };
+  state.selectedSession!.entries.push({
+    id: "failed-timing",
+    type: "custom",
+    timestamp: "2026-10-13T00:00:01Z",
+    turnTiming: timing,
+  });
+  const activeTurn = {
+    sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
+    commandId: "retry",
+    epoch: 2,
+    promptEntryId: "user",
+    startedAt: 3000,
+    elapsedMs: 2000,
+  };
+  const view = render(
+    transcriptNode(state, { liveRunning: true, liveActiveTurn: activeTurn }),
+  );
+  expect(screen.getAllByText("One original request")).toHaveLength(1);
+  expect(screen.getByRole("timer").textContent).toContain("2s");
+  state.selectedSession!.entries.push(
+    {
+      id: "retry-marker",
+      type: "message",
+      timestamp: "2026-10-13T00:00:03Z",
+      message: projectMessage({
+        role: "custom",
+        customType: "openpi-web-provider-retry",
+        content: "The user requested retrying the interrupted response.",
+        display: false,
+      }),
+    },
+    {
+      id: "recovered",
+      type: "message",
+      timestamp: "2026-10-13T00:00:05Z",
+      message: projectMessage({
+        role: "assistant",
+        content: "Recovered answer",
+        stopReason: "stop",
+      }),
+    },
+    {
+      id: "retry-timing",
+      type: "custom",
+      timestamp: "2026-10-13T00:00:05Z",
+      turnTiming: {
+        ...timing,
+        ...activeTurn,
+        version: 1,
+        finishedAt: 5000,
+        elapsedMs: 2000,
+        outcome: "completed",
+        resultEntryId: "recovered",
+      },
+    },
+  );
+  view.rerender(transcriptNode({ ...state }, { liveActiveTurn: null }));
+  expect(screen.getAllByText("One original request")).toHaveLength(1);
+  expect(screen.getByText("Recovered answer").closest("[hidden]")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
+  expect(
+    screen.queryByText("The user requested retrying the interrupted response."),
+  ).toBeNull();
+  expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(2);
 });
 
 it("keeps a partial answer and a distinct cancelled terminal state", () => {

@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readMessageRerun } from "../protocol/message-rerun.ts";
+import { readSessionFork } from "../protocol/session-fork.ts";
 import {
   lstat,
   open,
@@ -48,6 +49,7 @@ import {
   type WebSessionPromptHistoryPage,
   type WebSessionPromptPreview,
   type WebSessionSummary,
+  type WebSidebarPinTarget,
   type WebSnapshotTruncation,
   type WebWorkspaceSummary,
 } from "../protocol/types.ts";
@@ -56,6 +58,8 @@ import type {
   WebThinkingProjection,
 } from "../runtime/types.ts";
 import { matchesSessionIdentity } from "../runtime/session-identity.ts";
+import { WebRuntimeRequestError } from "../runtime/types.ts";
+import { WEB_TURN_TIMING_ENTRY, readSessionTurnEvidence, readTurnTiming } from "../protocol/turn-timing.ts";
 import { searchWebTranscripts } from "../search/transcript-search.ts";
 import { collectSessionSources } from "./session-sources.ts";
 import { isSessionPrompt, setupDisplayMessage } from "../protocol/prompt-navigation.ts";
@@ -75,8 +79,38 @@ export class WebReadOnlySessionError extends Error {
   }
 }
 
+type SessionIdentity = { path: string; id: string };
+type ReadTurn = { commandId: string; finishedAt: number };
+type SessionReadState = SessionIdentity & { read: boolean; revision?: string; lastReadTurn?: ReadTurn };
+const MAX_SIDEBAR_METADATA_ENTRIES = 5_000;
+export const WEB_SESSION_MARKDOWN_MAX_BYTES = 10 * 1024 * 1024;
+
+function isSessionIdentity(value: unknown): value is SessionIdentity {
+  return Boolean(value && typeof value === "object" && "path" in value && "id" in value && typeof value.path === "string" && value.path.length > 0 && value.path.length <= 4096 && typeof value.id === "string" && value.id.length > 0 && value.id.length <= 500);
+}
+
+function isReadTurn(value: unknown): value is ReadTurn {
+  return Boolean(value && typeof value === "object" && "commandId" in value && "finishedAt" in value && typeof value.commandId === "string" && value.commandId.length > 0 && value.commandId.length <= 500 && Number.isSafeInteger(value.finishedAt) && Number(value.finishedAt) >= 0);
+}
+
+function sameReadTurn(left: ReadTurn | undefined, right: ReadTurn | undefined) {
+  return left?.commandId === right?.commandId && left?.finishedAt === right?.finishedAt;
+}
+
+function sessionReadRevision(session: SessionIdentity, reading: SessionReadState | undefined, lastResult: ReadTurn | undefined) {
+  // Equality token for native results and operator edits; reads never write.
+  return createHash("sha256").update(JSON.stringify([session.path, session.id, reading?.revision, reading?.read, reading?.lastReadTurn, lastResult?.commandId, lastResult?.finishedAt])).digest("hex");
+}
+
+function sameSidebarPin(left: WebSidebarPinTarget, right: WebSidebarPinTarget) {
+  return left.kind === right.kind && left.path === right.path && (left.kind !== "session" || right.kind === "session" && left.id === right.id);
+}
+
 type WorkspaceStateSnapshot = {
-  sessionPins: { path: string; id: string }[];
+  sidebarPins: WebSidebarPinTarget[];
+  workspaceOrder: string[];
+  sessionOrder: SessionIdentity[];
+  sessionReadStates: SessionReadState[];
   importedWorkspaces: Set<string>;
   hiddenWorkspaces: Set<string>;
   workspaceNames: Map<string, string>;
@@ -347,11 +381,17 @@ async function listTerminalSessionInfo(workspace: string, signal?: AbortSignal) 
 
 export type ArchivedSessionQuery = WebArchivedSessionQuery;
 
-interface ArchivedSessionCursor {
-  readonly version: 1;
-  readonly sessionPath: string;
-  readonly queryHash: string;
-}
+type ArchivedSessionCursor =
+  | {
+      readonly version: 1;
+      readonly sessionPath: string;
+      readonly queryHash: string;
+    }
+  | {
+      readonly version: 2;
+      readonly sessionPathHash: string;
+      readonly queryHash: string;
+    };
 
 function encodeArchivedSessionCursor(cursor: ArchivedSessionCursor) {
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
@@ -374,14 +414,27 @@ function decodeArchivedSessionCursor(value: string) {
     if (
       !parsed ||
       typeof parsed !== "object" ||
-      Array.isArray(parsed) ||
-      (parsed as { version?: unknown }).version !== 1 ||
-      typeof (parsed as { sessionPath?: unknown }).sessionPath !== "string" ||
-      (parsed as { sessionPath: string }).sessionPath.length === 0 ||
-      (parsed as { sessionPath: string }).sessionPath.length > 320 ||
-      typeof (parsed as { queryHash?: unknown }).queryHash !== "string" ||
-      !/^[0-9a-f]{64}$/u.test((parsed as { queryHash: string }).queryHash)
+      Array.isArray(parsed)
     ) {
+      return undefined;
+    }
+    const cursor = parsed as Record<string, unknown>;
+    if (
+      typeof cursor.queryHash !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(cursor.queryHash)
+    ) return undefined;
+    if (cursor.version === 1) {
+      if (
+        typeof cursor.sessionPath !== "string" ||
+        cursor.sessionPath.length === 0 ||
+        cursor.sessionPath.length > 320
+      ) return undefined;
+    } else if (cursor.version === 2) {
+      if (
+        typeof cursor.sessionPathHash !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(cursor.sessionPathHash)
+      ) return undefined;
+    } else {
       return undefined;
     }
     return parsed as ArchivedSessionCursor;
@@ -391,7 +444,10 @@ function decodeArchivedSessionCursor(value: string) {
 }
 
 export class PiWebAdapter {
-  private sessionPins: { path: string; id: string }[] = [];
+  private sidebarPins: WebSidebarPinTarget[] = [];
+  private workspaceOrder: string[] = [];
+  private sessionOrder: SessionIdentity[] = [];
+  private sessionReadStates: SessionReadState[] = [];
   private readonly runtime: WebRuntimeController;
   private readonly importedWorkspaces = new Set<string>();
   private readonly hiddenWorkspaces = new Set<string>();
@@ -418,7 +474,7 @@ export class PiWebAdapter {
     );
     this.archiveFile = join(runtime.sessionDirectory, "archived-sessions.json");
     if (runtime.workspaceSelected === true) {
-      this.importedWorkspaces.add(resolve(runtime.cwd));
+      this.importedWorkspaces.add(this.currentProjectPath());
     }
   }
 
@@ -426,6 +482,7 @@ export class PiWebAdapter {
     if (this.workspaceStateLoaded) return;
     if (!this.workspaceStateLoading) {
       this.workspaceStateLoading = (async () => {
+        const draft = this.captureWorkspaceState();
         try {
           const parsed: unknown = JSON.parse(
             await readFile(this.workspaceStateFile, "utf8"),
@@ -434,12 +491,32 @@ export class PiWebAdapter {
             throw new Error("Workspace metadata must be an object");
           }
           const state = parsed as Record<string, unknown>;
-          if (state.sessionPins !== undefined) {
+          if (state.sidebarPins !== undefined) {
+            if (!Array.isArray(state.sidebarPins) || state.sidebarPins.length > 100 || !state.sidebarPins.every((pin) => pin && typeof pin === "object" && (pin.kind === "session" ? isSessionIdentity(pin) : pin.kind === "workspace" && typeof pin.path === "string" && pin.path.length > 0 && pin.path.length <= 4096))) throw new Error("Sidebar pins have an invalid shape");
+            draft.sidebarPins = state.sidebarPins.map((pin: WebSidebarPinTarget) => pin.kind === "session" ? { kind: pin.kind, path: pin.path, id: pin.id } : { kind: pin.kind, path: resolve(pin.path) });
+          } else if (state.sessionPins !== undefined) {
             if (!Array.isArray(state.sessionPins) || state.sessionPins.length > 100 ||
               !state.sessionPins.every((pin) => pin && typeof pin.path === "string" && typeof pin.id === "string")) {
               throw new Error("Session pins have an invalid shape");
             }
-            this.sessionPins = state.sessionPins.map((pin) => ({ path: pin.path, id: pin.id }));
+            draft.sidebarPins = state.sessionPins.map((pin) => ({ kind: "session", path: pin.path, id: pin.id }));
+          }
+          if (state.importedWorkspaces !== undefined) {
+            const paths = state.importedWorkspaces;
+            if (!Array.isArray(paths) || paths.length > MAX_SIDEBAR_METADATA_ENTRIES || !paths.every((path) => typeof path === "string" && path.length > 0 && path.length <= 4096)) throw new Error("Workspace paths have an invalid shape");
+            for (const path of paths) draft.importedWorkspaces.add(resolve(path));
+          }
+          if (state.sessionOrder !== undefined) {
+            if (!Array.isArray(state.sessionOrder) || state.sessionOrder.length > MAX_SIDEBAR_METADATA_ENTRIES || !state.sessionOrder.every(isSessionIdentity)) throw new Error("Session order has an invalid shape");
+            draft.sessionOrder = state.sessionOrder.map(({ path, id }) => ({ path, id }));
+          }
+          if (state.workspaceOrder !== undefined) {
+            if (!Array.isArray(state.workspaceOrder) || state.workspaceOrder.length > MAX_SIDEBAR_METADATA_ENTRIES || !state.workspaceOrder.every((path) => typeof path === "string" && isAbsolute(path) && path.length <= 4096 && !/[\u0000-\u001f\u007f]/u.test(path)) || new Set(state.workspaceOrder.map((path) => resolve(path))).size !== state.workspaceOrder.length) throw new Error("Workspace order has an invalid shape");
+            draft.workspaceOrder = state.workspaceOrder.map((path) => resolve(path));
+          }
+          if (state.sessionReadStates !== undefined) {
+            if (!Array.isArray(state.sessionReadStates) || state.sessionReadStates.length > MAX_SIDEBAR_METADATA_ENTRIES || !state.sessionReadStates.every((item) => isSessionIdentity(item) && "read" in item && typeof item.read === "boolean" && (!("revision" in item) || typeof item.revision === "string" && item.revision.length > 0 && item.revision.length <= 200) && (!("lastReadTurn" in item) || isReadTurn(item.lastReadTurn)))) throw new Error("Session reading state has an invalid shape");
+            draft.sessionReadStates = state.sessionReadStates.map((item: SessionReadState) => ({ path: item.path, id: item.id, read: item.read, ...(item.revision ? { revision: item.revision } : {}), ...(item.lastReadTurn ? { lastReadTurn: { ...item.lastReadTurn } } : {}) }));
           }
           if (
             !Array.isArray(state.hiddenWorkspaces) ||
@@ -456,24 +533,31 @@ export class PiWebAdapter {
             throw new Error("Workspace metadata has an invalid shape");
           }
           for (const path of state.hiddenWorkspaces) {
-            this.hiddenWorkspaces.add(resolve(path));
+            draft.hiddenWorkspaces.add(resolve(path));
           }
           for (const path of state.ungroupedSessions) {
-            this.ungroupedSessions.add(resolve(path));
+            draft.ungroupedSessions.add(resolve(path));
           }
           for (const [path, name] of Object.entries(state.workspaceNames)) {
-            this.workspaceNames.set(resolve(path), name as string);
+            draft.workspaceNames.set(resolve(path), name as string);
           }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-        this.restoreInitialWorkspace =
+        draft.restoreInitialWorkspace =
           this.runtime.workspaceSelected === true &&
-          this.hiddenWorkspaces.has(resolve(this.runtime.cwd));
+          draft.hiddenWorkspaces.has(resolve(this.runtime.cwd));
+        this.restoreWorkspaceState(draft);
         this.workspaceStateLoaded = true;
       })();
     }
-    await this.workspaceStateLoading;
+    const loading = this.workspaceStateLoading;
+    try {
+      await loading;
+    } catch (error) {
+      if (this.workspaceStateLoading === loading) this.workspaceStateLoading = undefined;
+      throw error;
+    }
   }
 
   private enqueueWorkspaceMutation<T>(
@@ -489,7 +573,11 @@ export class PiWebAdapter {
           hiddenWorkspaces: [...draft.hiddenWorkspaces],
           ungroupedSessions: [...draft.ungroupedSessions],
           workspaceNames: Object.fromEntries(draft.workspaceNames),
-          sessionPins: draft.sessionPins,
+          sidebarPins: draft.sidebarPins,
+          workspaceOrder: draft.workspaceOrder,
+          sessionOrder: draft.sessionOrder,
+          sessionReadStates: draft.sessionReadStates,
+          importedWorkspaces: [...draft.importedWorkspaces],
         })}\n`,
       );
       this.restoreWorkspaceState(draft);
@@ -523,7 +611,14 @@ export class PiWebAdapter {
         this.archivesLoaded = true;
       })();
     }
-    await this.archivesLoading;
+    const loading = this.archivesLoading;
+    try {
+      await loading;
+    } catch (error) {
+      // A failed read must remain fail-closed without poisoning later retries.
+      if (this.archivesLoading === loading) this.archivesLoading = undefined;
+      throw error;
+    }
   }
 
   private enqueueArchiveMutation<T>(
@@ -566,7 +661,7 @@ export class PiWebAdapter {
       await this.enqueueWorkspaceMutation((draft) => {
         draft.restoreInitialWorkspace = false;
         draft.hiddenWorkspaces.delete(resolve(this.runtime.cwd));
-        draft.importedWorkspaces.add(resolve(this.runtime.cwd));
+        draft.importedWorkspaces.add(this.currentProjectPath());
       });
     })();
     return this.initialization;
@@ -580,6 +675,7 @@ export class PiWebAdapter {
       throw new Error("Workspace path is not a directory");
     return this.enqueueWorkspaceMutation((draft) => {
       draft.importedWorkspaces.add(canonical);
+      if (draft.importedWorkspaces.size > MAX_SIDEBAR_METADATA_ENTRIES) throw new Error("Imported projects exceed their metadata limit");
       draft.hiddenWorkspaces.delete(canonical);
       return canonical;
     });
@@ -600,7 +696,7 @@ export class PiWebAdapter {
     const workspace = resolve(this.runtime.cwd);
     if (
       this.runtime.workspaceSelected !== true ||
-      this.hiddenWorkspaces.has(workspace)
+      this.hiddenWorkspaces.has(this.currentProjectPath())
     ) {
       throw new Error("Workspace is not available");
     }
@@ -613,7 +709,7 @@ export class PiWebAdapter {
     const session = sessions.find((item) => item.path === path);
     if (!session) throw new Error("Session is not available");
     if (!session.ungrouped) {
-      const workspace = resolve(session.cwd);
+      const workspace = resolve(session.workspacePath ?? session.cwd);
       if (this.hiddenWorkspaces.has(workspace)) {
         throw new Error("Workspace is not available");
       }
@@ -660,6 +756,48 @@ export class PiWebAdapter {
     return normalized;
   }
 
+  async sessionMarkdown(path: string, id: string) {
+    const session = await this.requireSession(path);
+    if (session.id !== id) throw new WebRuntimeRequestError("The exact Session is unavailable", "SESSION_CONFLICT", 409);
+    const manager = this.runtime.getSessionManagerForRead?.(id, path) ??
+      (this.isCurrentSession(session) ? this.runtime.sessionManager : SessionManager.open(path));
+    if (!matchesSessionIdentity(manager, { expectedSessionId: id, expectedSessionPath: path }))
+      throw new WebRuntimeRequestError("The Session changed before export", "SESSION_CONFLICT", 409);
+    const sections = [`# ${(session.name || session.firstMessage || "Conversation").replace(/[\r\n]+/g, " ")}\n`];
+    let bytes = jsonByteLength({ markdown: sections[0] });
+    // Export native ancestry, never the paginated/truncated Web projection.
+    // Thinking, tool output and image bytes are not conversation Markdown.
+    for (const entry of manager.getBranch()) {
+      if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant")) continue;
+      const content = entry.message.content;
+      const body = typeof content === "string" ? content : content.flatMap((part) =>
+        part.type === "text" ? [part.text] : part.type === "image" ? ["[Image]"] : [],
+      ).join("\n\n");
+      if (!body) continue;
+      const section = `\n## ${entry.message.role === "user" ? "User" : "Assistant"}\n\n${body}\n`;
+      bytes += jsonByteLength(section) - 2;
+      if (bytes > WEB_SESSION_MARKDOWN_MAX_BYTES)
+        throw new WebRuntimeRequestError("Conversation Markdown exceeds the 10 MiB export limit", "SESSION_MARKDOWN_TOO_LARGE", 413);
+      sections.push(section);
+    }
+    const markdown = sections.join("");
+    if (jsonByteLength({ markdown }) > WEB_SESSION_MARKDOWN_MAX_BYTES)
+      throw new WebRuntimeRequestError("Conversation Markdown exceeds the 10 MiB export limit", "SESSION_MARKDOWN_TOO_LARGE", 413);
+    return { markdown };
+  }
+
+  async forgetDeletedSession(path: string, id: string) {
+    await this.ensureWorkspaceStateLoaded();
+    await this.ensureArchivesLoaded();
+    await this.enqueueWorkspaceMutation(async (draft) => {
+      draft.sidebarPins = draft.sidebarPins.filter((pin) => pin.kind !== "session" || pin.path !== path || pin.id !== id);
+      draft.sessionOrder = draft.sessionOrder.filter((session) => session.path !== path || session.id !== id);
+      draft.sessionReadStates = draft.sessionReadStates.filter((session) => session.path !== path || session.id !== id);
+      draft.ungroupedSessions.delete(path);
+    });
+    await this.enqueueArchiveMutation(async (draft) => { draft.delete(resolve(path)); });
+  }
+
   async archiveSession(path: string) {
     await this.ensureArchivesLoaded();
     await this.enqueueArchiveMutation(async (draft) => {
@@ -668,7 +806,8 @@ export class PiWebAdapter {
     });
   }
 
-  async listArchivedSessions(options: ArchivedSessionQuery = {}) {
+  async listArchivedSessions(options: ArchivedSessionQuery = {}, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     await this.ensureWorkspaceStateLoaded();
     await this.ensureArchivesLoaded();
     const limit = options.limit ?? 25;
@@ -691,19 +830,36 @@ export class PiWebAdapter {
       return { status: "invalid" as const };
     }
 
-    const allSessions = await SessionManager.listAll(
-      this.runtime.sessionDirectory,
-    );
-    if (sort === "created") allSessions.sort((left, right) => right.created.getTime() - left.created.getTime() || right.path.localeCompare(left.path));
-    const scanned = allSessions.slice(0, WEB_MAX_ARCHIVED_SESSION_SCAN);
     const cwd = options.cwd === undefined ? undefined : resolve(options.cwd);
     const normalizedQuery = query.normalize("NFKC").toLocaleLowerCase();
     if (normalizedQuery.length > WEB_MAX_ARCHIVED_SESSION_QUERY) {
       return { status: "invalid" as const };
     }
-    const matches = scanned.filter((session) => {
+    const queryHash = archivedQueryHash(normalizedQuery, sort, cwd);
+    const cursor = options.cursor === undefined
+      ? undefined
+      : decodeArchivedSessionCursor(options.cursor);
+    if (options.cursor !== undefined && !cursor) {
+      return { status: "invalid" as const };
+    }
+    if (cursor && cursor.queryHash !== queryHash) {
+      return { status: "stale_cursor" as const };
+    }
+    const allSessions = await SessionManager.listAll(
+      this.runtime.sessionDirectory,
+      undefined,
+      signal,
+    );
+    signal?.throwIfAborted();
+    // Order the complete Pi catalog before locating the continuation window.
+    if (sort === "created") {
+      allSessions.sort((left, right) =>
+        right.created.getTime() - left.created.getTime() ||
+        right.path.localeCompare(left.path));
+    }
+    const matchesArchive = (session: (typeof allSessions)[number]) => {
       if (!this.archivedSessions.has(resolve(session.path))) return false;
-      if (cwd !== undefined && resolve(session.cwd) !== cwd) return false;
+      if (cwd !== undefined && resolve(this.sessionFork(session)?.workspacePath ?? session.cwd) !== cwd) return false;
       if (!normalizedQuery) return true;
       const source = [
         session.id,
@@ -715,22 +871,26 @@ export class PiWebAdapter {
         .normalize("NFKC")
         .toLocaleLowerCase();
       return source.includes(normalizedQuery);
-    });
-    const queryHash = archivedQueryHash(normalizedQuery, sort, cwd);
+    };
     let start = 0;
-    if (options.cursor !== undefined) {
-      const cursor = decodeArchivedSessionCursor(options.cursor);
-      if (!cursor) return { status: "invalid" as const };
-      if (cursor.queryHash !== queryHash) {
-        return { status: "stale_cursor" as const };
-      }
-      const cursorIndex = matches.findIndex(
-        (session) => session.path === cursor.sessionPath,
+    if (cursor) {
+      const cursorIndex = allSessions.findIndex(
+        (session) => cursor.version === 1
+          ? session.path === cursor.sessionPath
+          : createHash("sha256").update(session.path).digest("hex") === cursor.sessionPathHash,
       );
       if (cursorIndex < 0) return { status: "stale_cursor" as const };
+      if (cursor.version === 1 && !matchesArchive(allSessions[cursorIndex]!)) {
+        return { status: "stale_cursor" as const };
+      }
       start = cursorIndex + 1;
     }
-    const selected = matches.slice(start, start + limit);
+    const scanned = allSessions.slice(
+      start,
+      start + WEB_MAX_ARCHIVED_SESSION_SCAN,
+    );
+    const matches = scanned.filter(matchesArchive);
+    const selected = matches.slice(0, limit);
     const sessions = selected.map((session) => ({
       id: session.id,
       path: session.path,
@@ -749,25 +909,34 @@ export class PiWebAdapter {
       ...(this.ungroupedSessions.has(resolve(session.path))
         ? { ungrouped: true }
         : {}),
+      ...this.sidebarState(session),
     }));
-    const pageEnd = start + sessions.length;
-    const hasMoreMatches = pageEnd < matches.length;
-    const recordsUnscanned = Math.max(0, allSessions.length - scanned.length);
+    const hasMoreMatches = sessions.length < matches.length;
+    const recordsUnscanned = Math.max(
+      0,
+      allSessions.length - start - scanned.length,
+    );
+    // Advance past nonmatching rows too, including an entirely empty window.
+    const anchor = hasMoreMatches
+      ? selected.at(-1)
+      : recordsUnscanned > 0 ? scanned.at(-1) : undefined;
     return {
       status: "ok" as const,
       sessions,
-      ...(hasMoreMatches && sessions.length > 0
+      ...(anchor
         ? {
             nextCursor: encodeArchivedSessionCursor({
-              version: 1,
-              sessionPath: sessions.at(-1)!.path,
+              version: 2,
+              sessionPathHash: createHash("sha256")
+                .update(anchor.path)
+                .digest("hex"),
               queryHash,
             }),
           }
         : {}),
       truncation: {
         truncated: hasMoreMatches || recordsUnscanned > 0,
-        matchesOmitted: Math.max(0, matches.length - pageEnd),
+        matchesOmitted: Math.max(0, matches.length - sessions.length),
         recordsUnscanned,
         maxPageSize: WEB_MAX_ARCHIVED_SESSION_PAGE,
         maxScanned: WEB_MAX_ARCHIVED_SESSION_SCAN,
@@ -793,7 +962,7 @@ export class PiWebAdapter {
       }
       const sessions = await SessionManager.listAll(this.runtime.sessionDirectory);
       for (const session of sessions) {
-        if (resolve(session.cwd) === canonical) {
+        if (resolve(this.sessionFork(session)?.workspacePath ?? session.cwd) === canonical) {
           draft.ungroupedSessions.add(resolve(session.path));
         }
       }
@@ -804,6 +973,8 @@ export class PiWebAdapter {
         draft.ungroupedSessions.add(resolve(currentPath));
       }
       draft.importedWorkspaces.delete(canonical);
+      draft.workspaceOrder = draft.workspaceOrder.filter((path) => path !== canonical);
+      draft.sidebarPins = draft.sidebarPins.filter((pin) => pin.kind !== "workspace" || pin.path !== canonical);
       draft.workspaceNames.delete(canonical);
       draft.hiddenWorkspaces.add(canonical);
       draft.restoreInitialWorkspace = false;
@@ -811,39 +982,156 @@ export class PiWebAdapter {
   }
 
   async setSessionPin(path: string, id: string, pinned: boolean, before?: { path: string; id: string } | null) {
+    return this.setSidebarPin({ kind: "session", path, id }, pinned, before ? { kind: "session", ...before } : before);
+  }
+
+  async setSidebarPin(target: WebSidebarPinTarget, pinned: boolean, before?: WebSidebarPinTarget | null) {
     await this.ensureWorkspaceStateLoaded();
     return this.enqueueWorkspaceMutation(async (draft) => {
-      const session = await this.requireSession(path);
-      if (session.id !== id) throw new Error("Session identity changed; refresh before pinning");
-      const previousIndex = draft.sessionPins.findIndex((pin) => pin.path === path && pin.id === id);
+      const anchor = before?.kind === "workspace" ? { ...before, path: resolve(before.path) } : before;
+      if (target.kind === "workspace") target = { ...target, path: await this.requireWorkspace(target.path) };
+      else if ((await this.requireSession(target.path)).id !== target.id) throw new WebRuntimeRequestError("Session identity changed; refresh before pinning", "SESSION_CONFLICT", 409);
+      const previousIndex = draft.sidebarPins.findIndex((pin) => sameSidebarPin(pin, target));
       if (!pinned) {
-        if (previousIndex >= 0) draft.sessionPins.splice(previousIndex, 1);
+        if (previousIndex >= 0) draft.sidebarPins.splice(previousIndex, 1);
         return;
       }
-      if (before?.path === path && before.id === id) return;
-      if (before && !draft.sessionPins.some((pin) => pin.path === before.path && pin.id === before.id)) {
-        throw new Error("Pin order changed; refresh before reordering");
-      }
+      if (anchor && sameSidebarPin(anchor, target)) return;
+      if (anchor && !draft.sidebarPins.some((pin) => sameSidebarPin(pin, anchor))) throw new WebRuntimeRequestError("Pin order changed; refresh before reordering", "SIDEBAR_PIN_CHANGED", 409);
       if (previousIndex >= 0 && before === undefined) return;
-      if (previousIndex >= 0) draft.sessionPins.splice(previousIndex, 1);
-      if (draft.sessionPins.length >= 100) throw new Error("At most 100 conversations can be pinned");
-      const index = before ? draft.sessionPins.findIndex((pin) => pin.path === before.path && pin.id === before.id) : draft.sessionPins.length;
-      draft.sessionPins.splice(index, 0, { path, id });
+      if (previousIndex >= 0) draft.sidebarPins.splice(previousIndex, 1);
+      if (draft.sidebarPins.length >= 100) throw new Error("At most 100 projects and conversations can be pinned");
+      draft.sidebarPins.splice(anchor ? draft.sidebarPins.findIndex((pin) => sameSidebarPin(pin, anchor)) : draft.sidebarPins.length, 0, { ...target });
     });
   }
 
-  async listSessionProjection(pinnedPath?: string) {
+  async setWorkspaceOrder(path: string, before?: string | null) {
+    await this.ensureWorkspaceStateLoaded();
+    return this.enqueueWorkspaceMutation(async (draft) => {
+      const canonical = resolve(path);
+      const anchor = before ? resolve(before) : null;
+      const paths = await this.workspacePaths(undefined, draft);
+      const ordinary = [...paths].filter((path) => !draft.hiddenWorkspaces.has(path) && !draft.sidebarPins.some((pin) => pin.kind === "workspace" && pin.path === path));
+      if (!paths.has(canonical) || draft.hiddenWorkspaces.has(canonical) || anchor && !ordinary.includes(anchor)) throw new WebRuntimeRequestError("Project order changed; refresh before reordering", "WORKSPACE_ORDER_CHANGED", 409);
+      if (anchor === canonical) return;
+      const known = new Set(draft.workspaceOrder);
+      for (const path of this.orderedWorkspacePaths(paths, draft)) {
+        if (!draft.hiddenWorkspaces.has(path) && !known.has(path)) draft.workspaceOrder.push(path);
+      }
+      if (draft.workspaceOrder.length > MAX_SIDEBAR_METADATA_ENTRIES) throw new Error("Project order exceeds its metadata limit");
+      draft.sidebarPins = draft.sidebarPins.filter((pin) => pin.kind !== "workspace" || pin.path !== canonical);
+      draft.workspaceOrder = draft.workspaceOrder.filter((path) => path !== canonical);
+      draft.workspaceOrder.splice(anchor ? draft.workspaceOrder.indexOf(anchor) : draft.workspaceOrder.length, 0, canonical);
+    });
+  }
+
+  async setSessionOrder(path: string, id: string, before?: SessionIdentity | null) {
+    await this.ensureWorkspaceStateLoaded();
+    return this.enqueueWorkspaceMutation(async (draft) => {
+      const session = await this.requireSession(path);
+      if (session.id !== id) throw new WebRuntimeRequestError("Session identity changed; refresh before reordering", "SESSION_CONFLICT", 409);
+      if (before) {
+        const anchor = await this.requireSession(before.path);
+        if (anchor.id !== before.id) throw new WebRuntimeRequestError("Session order anchor changed; refresh before reordering", "SESSION_CONFLICT", 409);
+        if (before.path === path && before.id === id) return;
+      }
+      // A first manual move freezes the existing visible order. Unknown older
+      // identities retain their positions instead of being erased by pagination.
+      for (const item of [...await this.listSessions(), session, ...(before ? [before] : [])]) {
+        if (!draft.sessionOrder.some((entry) => entry.path === item.path && entry.id === item.id)) draft.sessionOrder.push({ path: item.path, id: item.id });
+      }
+      if (draft.sessionOrder.length > MAX_SIDEBAR_METADATA_ENTRIES) throw new Error("Conversation order exceeds its metadata limit");
+      draft.sessionOrder = draft.sessionOrder.filter((entry) => entry.path !== path || entry.id !== id);
+      const index = before ? draft.sessionOrder.findIndex((entry) => entry.path === before.path && entry.id === before.id) : draft.sessionOrder.length;
+      draft.sessionOrder.splice(index, 0, { path, id });
+    });
+  }
+
+  async setSessionRead(path: string, id: string, read: boolean, expectedRevision: string) {
+    await this.ensureWorkspaceStateLoaded();
+    return this.enqueueWorkspaceMutation(async (draft) => {
+      const session = await this.requireSession(path);
+      if (session.id !== id) throw new WebRuntimeRequestError("Session identity changed; refresh before marking it read", "SESSION_CONFLICT", 409);
+      const reading = draft.sessionReadStates.find((item) => item.path === path && item.id === id);
+      const lastTurn = this.sessionTurnEvidence(session, reading?.lastReadTurn).results.at(-1);
+      if (expectedRevision !== sessionReadRevision(session, reading, lastTurn)) throw new WebRuntimeRequestError("Session reading state changed; refresh before marking it again", "SESSION_READ_STATE_CHANGED", 409);
+      const record: SessionReadState = { path, id, read, revision: randomUUID(), ...(read && lastTurn ? { lastReadTurn: { commandId: lastTurn.commandId, finishedAt: lastTurn.finishedAt } } : {}) };
+      draft.sessionReadStates = draft.sessionReadStates.filter((item) => item.path !== path || item.id !== id);
+      if (draft.sessionReadStates.length >= MAX_SIDEBAR_METADATA_ENTRIES) throw new Error("Conversation reading state exceeds its metadata limit");
+      draft.sessionReadStates.push(record);
+    });
+  }
+
+  private sessionTurnEvidence(session: SessionIdentity, acknowledged?: ReadTurn) {
+    const runtime = this.runtime.getSessionExecution?.(session.id, session.path);
+    const exact = runtime?.sessionId === session.id && runtime.sessionPath === session.path ? runtime : undefined;
+    let native: ReturnType<typeof readSessionTurnEvidence> = { lastTurn: undefined, results: [] };
+    let acknowledgedResults: ReadTurn[] = acknowledged ? [acknowledged] : [];
+    if (!session.path.startsWith("current:")) {
+      try {
+        const manager = this.runtime.getSessionManagerForRead?.(session.id, session.path) ?? (this.isCurrentSession(session) ? this.runtime.sessionManager : SessionManager.open(session.path, this.runtime.sessionDirectory));
+        if (matchesSessionIdentity(manager, { expectedSessionId: session.id, expectedSessionPath: session.path })) {
+          // An existing exact read position can still distinguish older unread
+          // results. Without it, history discovery is not a live publication.
+          native = readSessionTurnEvidence(manager.getBranch(), session.id, Boolean(acknowledged));
+          if (acknowledged) {
+            const readEntry = manager.getEntries().find((entry) => {
+              const timing = entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY ? readTurnTiming(entry.data) : undefined;
+              return timing?.sessionId === session.id && sameReadTurn(timing, acknowledged);
+            });
+            if (readEntry) acknowledgedResults = readSessionTurnEvidence(manager.getBranch(readEntry.id), session.id, true).results;
+          }
+        }
+      } catch {
+        // Missing or changed native evidence never becomes a success receipt.
+      }
+    }
+    const lastTurn = exact?.lastTurn ?? native.lastTurn;
+    // Execution can recover historical or unpersisted terminal facts. Only
+    // durable live-publication records may seed automatic unread activity.
+    return { exact, lastTurn, results: native.results, acknowledgedResults };
+  }
+
+  private sidebarState(session: SessionIdentity) {
+    const fork = this.sessionFork(session);
+    const order = this.sessionOrder.findIndex((item) => item.path === session.path && item.id === session.id);
+    const reading = this.sessionReadStates.find((item) => item.path === session.path && item.id === session.id);
+    const { exact, lastTurn, results, acknowledgedResults } = this.sessionTurnEvidence(session, reading?.lastReadTurn);
+    // Pi keeps the acknowledged branch, so a rewind does not resurrect its read
+    // ancestors. Native order, not wall-clock time, determines the unread position.
+    const acknowledgedKeys = new Set(acknowledgedResults.map((turn) => JSON.stringify([turn.commandId, turn.finishedAt])));
+    const firstResult = results.find((turn) => !acknowledgedKeys.has(JSON.stringify([turn.commandId, turn.finishedAt])));
+    const firstUnread = reading?.read === false ? { type: "sessionStart" as const } : firstResult ? { type: "turn" as const, ...firstResult } : undefined;
+    const readRevision = sessionReadRevision(session, reading, results.at(-1));
+    return {
+      ...(fork ? { workspacePath: fork.workspacePath, ...(fork.worktree ? { worktree: fork.worktree } : {}) } : {}),
+      ...(order >= 0 ? { order } : {}),
+      unread: Boolean(firstUnread),
+      readRevision,
+      ...(firstUnread ? { firstUnread } : {}),
+      ...(lastTurn || exact && exact.status !== "unknown" ? {
+        execution: {
+          status: exact?.status ?? "unknown" as const,
+          ...(exact ? { pendingFollowUps: exact.pendingFollowUps } : {}),
+          ...(exact?.pendingSteering !== undefined && exact.pendingSteering > 0 ? { pendingSteering: exact.pendingSteering } : {}),
+          ...(lastTurn ? { lastTurn } : {}),
+          ...(exact?.compaction?.state === "running" ? { compacting: true } : {}),
+        },
+      } : {}),
+    };
+  }
+
+  async listSessionProjection(pinnedPath?: string, chatsSort: "manual" | "updated" = "updated") {
     await this.ensureWorkspaceStateLoaded();
     await this.ensureArchivesLoaded();
     const allSessions = await SessionManager.listAll(
       this.runtime.sessionDirectory,
     );
-    // Pi already returns this list newest-first. The scan remains Pi-owned;
-    // only the Web projection below is retained and bounded.
-    const sorted = allSessions;
+    // Filter and order Pi's catalog before bounding the visible page. Archived
+    // history has its own cursor; only an exact current/selected archive stays.
     const currentId = this.runtime.sessionManager.getSessionId();
     const pinned = new Set(
-      sorted
+      allSessions
         .filter(
           (session) =>
             this.isCurrentSession(session) ||
@@ -851,8 +1139,14 @@ export class PiWebAdapter {
         )
         .map((session) => session.path),
     );
-    for (const pin of this.sessionPins) {
-      if (sorted.some((session) => session.path === pin.path && session.id === pin.id) && !this.archivedSessions.has(resolve(pin.path))) pinned.add(pin.path);
+    for (const pin of this.sidebarPins) {
+      if (pin.kind === "session" && allSessions.some((session) => session.path === pin.path && session.id === pin.id) && !this.archivedSessions.has(resolve(pin.path))) pinned.add(pin.path);
+    }
+    const sorted = allSessions.filter((session) => !this.archivedSessions.has(resolve(session.path)) || pinned.has(session.path));
+    if (chatsSort === "manual") {
+      const positions = new Map(this.sessionOrder.map((entry, index) => [JSON.stringify([entry.path, entry.id]), index]));
+      const position = (session: SessionIdentity) => positions.get(JSON.stringify([session.path, session.id])) ?? Number.MAX_SAFE_INTEGER;
+      sorted.sort((left, right) => position(left) - position(right) || right.modified.getTime() - left.modified.getTime() || left.path.localeCompare(right.path));
     }
     const retainedPaths = new Set(pinned);
     for (const session of sorted) {
@@ -941,31 +1235,18 @@ export class PiWebAdapter {
       }
     }
     return {
-      workspacePaths: new Set(allSessions.map((session) => resolve(session.cwd))),
+      workspacePaths: await this.workspacePaths(allSessions, undefined, true),
       sessions: projected.map((record) => {
-        const pinOrder = this.sessionPins.findIndex((pin) => pin.path === record.path && pin.id === record.id);
-        const session = { ...record, ...(pinOrder >= 0 ? { pinOrder } : {}) };
-        const execution = this.runtime.getSessionExecution?.(session.id, session.path);
-        if (
-          !execution ||
-          execution.sessionId !== session.id ||
-          execution.sessionPath !== session.path ||
-          (execution.status === "unknown" && !execution.lastTurn)
-        ) return session;
+        const pinOrder = this.sidebarPins.findIndex((pin) => pin.kind === "session" && pin.path === record.path && pin.id === record.id);
         return {
-          ...session,
-          execution: {
-            status: execution.status,
-            pendingFollowUps: execution.pendingFollowUps,
-            ...(execution.pendingSteering !== undefined && execution.pendingSteering > 0 ? { pendingSteering: execution.pendingSteering } : {}),
-            ...(execution.lastTurn ? { lastTurn: execution.lastTurn } : {}),
-            ...(execution.compaction?.state === "running" ? { compacting: true } : {}),
-          },
+          ...record,
+          ...(pinOrder >= 0 ? { pinOrder } : {}),
+          ...this.sidebarState(record),
         };
       }),
       omitted: Math.max(
         0,
-        allSessions.length +
+        sorted.length +
           (allSessions.some((session) => this.isCurrentSession(session)) ||
           this.runtime.workspaceSelected !== true
             ? 0
@@ -1109,13 +1390,12 @@ export class PiWebAdapter {
     };
   }
 
-  async getSnapshot(selectedPath?: string, historyAnchor?: { sessionId: string; entryId: string }) {
+  async getSnapshot(selectedPath?: string, historyAnchor?: { sessionId: string; entryId: string }, chatsSort: "manual" | "updated" = "updated") {
     await this.ensureWorkspaceStateLoaded();
-    const sessionProjection = await this.listSessionProjection(selectedPath);
+    const sessionProjection = await this.listSessionProjection(selectedPath, chatsSort);
     const sessions: WebSessionSummary[] = sessionProjection.sessions;
-    const currentCwd = resolve(this.runtime.cwd);
-    const workspacePaths = await this.workspacePaths(sessions);
-    for (const path of sessionProjection.workspacePaths) workspacePaths.add(path);
+    const currentCwd = this.currentProjectPath();
+    const workspacePaths = this.orderedWorkspacePaths(sessionProjection.workspacePaths);
     const retainedWorkspacePaths: string[] = [];
     let visibleWorkspaceCount = 0;
     for (const workspacePath of workspacePaths) {
@@ -1128,17 +1408,11 @@ export class PiWebAdapter {
     const workspaces: WebWorkspaceSummary[] = retainedWorkspacePaths
       .map((path) => ({
         path,
+        ...(this.sidebarPins.some((pin) => pin.kind === "workspace" && pin.path === path) ? { pinOrder: this.sidebarPins.findIndex((pin) => pin.kind === "workspace" && pin.path === path) } : {}),
         name: (this.workspaceNames.get(path) ?? basename(path)) || path,
         current:
           this.runtime.workspaceSelected === true && path === currentCwd,
-      }))
-      .sort((left, right) =>
-        left.current === right.current
-          ? left.name.localeCompare(right.name)
-          : left.current
-            ? -1
-            : 1,
-      );
+      }));
     const path =
       selectedPath ??
       sessions.find(
@@ -1311,7 +1585,10 @@ export class PiWebAdapter {
 
   private captureWorkspaceState(): WorkspaceStateSnapshot {
     return {
-      sessionPins: this.sessionPins.map((pin) => ({ ...pin })),
+      sidebarPins: this.sidebarPins.map((pin) => ({ ...pin })),
+      workspaceOrder: [...this.workspaceOrder],
+      sessionOrder: this.sessionOrder.map((item) => ({ ...item })),
+      sessionReadStates: this.sessionReadStates.map((item) => ({ ...item, ...(item.lastReadTurn ? { lastReadTurn: { ...item.lastReadTurn } } : {}) })),
       importedWorkspaces: new Set(this.importedWorkspaces),
       hiddenWorkspaces: new Set(this.hiddenWorkspaces),
       workspaceNames: new Map(this.workspaceNames),
@@ -1321,7 +1598,10 @@ export class PiWebAdapter {
   }
 
   private restoreWorkspaceState(state: WorkspaceStateSnapshot) {
-    this.sessionPins = state.sessionPins;
+    this.sidebarPins = state.sidebarPins;
+    this.workspaceOrder = state.workspaceOrder;
+    this.sessionOrder = state.sessionOrder;
+    this.sessionReadStates = state.sessionReadStates;
     this.importedWorkspaces.clear();
     for (const path of state.importedWorkspaces) this.importedWorkspaces.add(path);
     this.hiddenWorkspaces.clear();
@@ -1337,20 +1617,50 @@ export class PiWebAdapter {
     this.restoreInitialWorkspace = state.restoreInitialWorkspace;
   }
 
+  private orderedWorkspacePaths(paths: Iterable<string>, state?: WorkspaceStateSnapshot) {
+    const positions = new Map((state?.workspaceOrder ?? this.workspaceOrder).map((path, index) => [path, index]));
+    const names = state?.workspaceNames ?? this.workspaceNames;
+    const name = (path: string) => (names.get(path) ?? basename(path)) || path;
+    // Selection never changes order. Saved positions take precedence; new or
+    // legacy projects have a deterministic name/path fallback until moved.
+    return [...paths].sort((left, right) =>
+      (positions.get(left) ?? Number.MAX_SAFE_INTEGER) - (positions.get(right) ?? Number.MAX_SAFE_INTEGER) || name(left).localeCompare(name(right)) || left.localeCompare(right),
+    );
+  }
+
   private async workspacePaths(
-    knownSessions?: WebSessionSummary[],
+    knownSessions?: readonly (SessionIdentity & { cwd: string })[],
     workspaceState?: WorkspaceStateSnapshot,
+    groupForks = false,
   ) {
-    const sessionWorkspaces = knownSessions
-      ? knownSessions.map((session) => session.cwd)
-      : (await this.listSessionProjection()).workspacePaths;
+    const sessions = knownSessions ?? (await SessionManager.listAll(this.runtime.sessionDirectory));
+    // The sidebar groups worktree forks under their source project. Files and
+    // runtime admission still resolve the real, separately registered cwd.
+    const project = (session: SessionIdentity & { cwd: string }) => resolve(groupForks ? this.sessionFork(session)?.workspacePath ?? session.cwd : session.cwd);
     return new Set([
       ...(this.runtime.workspaceSelected === true
-        ? [resolve(this.runtime.cwd)]
+        ? [project({ id: this.runtime.sessionManager.getSessionId(), path: this.runtime.sessionManager.getSessionFile() ?? "", cwd: this.runtime.cwd })]
         : []),
+      ...(workspaceState?.sidebarPins ?? this.sidebarPins).flatMap((pin) => pin.kind === "workspace" ? [pin.path] : []),
       ...(workspaceState?.importedWorkspaces ?? this.importedWorkspaces),
-      ...sessionWorkspaces,
+      ...sessions.map(project),
     ]);
+  }
+
+  private sessionFork(session: SessionIdentity) {
+    if (!session.path || session.path.startsWith("current:")) return undefined;
+    try {
+      const manager = this.runtime.getSessionManagerForRead?.(session.id, session.path) ??
+        (this.isCurrentSession(session) ? this.runtime.sessionManager : SessionManager.open(session.path, this.runtime.sessionDirectory));
+      if (!matchesSessionIdentity(manager, { expectedSessionId: session.id, expectedSessionPath: session.path })) return undefined;
+      return readSessionFork(manager.getBranch(), session.id, manager.getCwd());
+    } catch {
+      return undefined;
+    }
+  }
+
+  private currentProjectPath() {
+    return resolve(this.sessionFork({ id: this.runtime.sessionManager.getSessionId(), path: this.runtime.sessionManager.getSessionFile() ?? "" })?.workspacePath ?? this.runtime.cwd);
   }
 
   isCurrentSession(session: Pick<WebSessionSummary, "id" | "path">) {

@@ -9,6 +9,7 @@ import {
   type FauxResponseStep,
   fauxAssistantMessage,
   fauxProvider,
+  fauxToolCall,
 } from "@earendil-works/pi-ai";
 import {
   AgentSessionRuntime,
@@ -55,7 +56,14 @@ async function nativeRuntime(
   await mkdir(agentDir);
   const provider = fauxProvider({
     provider: `native-admission-${root.split(/[/\\]/u).at(-1)}`,
-    models: [{ id: "fixture", name: "Fixture", reasoning: false }],
+    models: [
+      {
+        id: "fixture",
+        name: "Fixture",
+        reasoning: false,
+        input: ["text", "image"],
+      },
+    ],
   });
   provider.setResponses(responses);
   const modelRuntime = await ModelRuntime.create({
@@ -118,6 +126,342 @@ async function nativeRuntime(
     provider: provider.provider,
   };
 }
+
+test("manual provider retry keeps the original input, images and completed tool results in the native Session", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  let calls = 0;
+  const { runtime, session, events, cwd } = await nativeRuntime(
+    t,
+    () => undefined,
+    [
+      () => {
+        calls++;
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "read",
+            { path: "completed.txt" },
+            { id: "completed-read" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      () => {
+        calls++;
+        return fauxAssistantMessage([], {
+          stopReason: "error",
+          errorMessage: "503 fixture failure",
+        });
+      },
+      (context) => {
+        calls++;
+        const original = context.messages.filter(
+          (message) =>
+            message.role === "user" &&
+            contentText(message.content).includes("Read once"),
+        );
+        assert.equal(original.length, 1);
+        assert.ok(
+          Array.isArray(original[0]!.content) &&
+            original[0]!.content.some((part) => part.type === "image"),
+        );
+        assert.ok(
+          context.messages.some(
+            (message) =>
+              message.role === "toolResult" &&
+              message.toolCallId === "completed-read" &&
+              contentText(message.content).includes("completed evidence"),
+          ),
+        );
+        assert.ok(
+          context.messages.some(
+            (message) =>
+              message.role === "user" &&
+              contentText(message.content).includes(
+                "The user requested retrying",
+              ),
+          ),
+        );
+        return fauxAssistantMessage("Recovered response");
+      },
+    ],
+  );
+  await writeFile(join(cwd, "completed.txt"), "completed evidence");
+  const image = {
+    mimeType: "image/png" as const,
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  };
+  await runtime.sendPrompt("Read once and describe this image", {
+    commandId: "original",
+    images: [image],
+  });
+  await session.waitForIdle();
+  const original = session.sessionManager
+    .getBranch()
+    .find(
+      (entry) => entry.type === "message" && entry.message.role === "user",
+    )!;
+  const failure = session.sessionManager
+    .getBranch()
+    .slice()
+    .reverse()
+    .find(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    )!;
+  const target = {
+    expectedSessionId: session.sessionId,
+    expectedSessionPath: `current:${session.sessionId}`,
+    retryEntryId: failure.id,
+  };
+  await assert.rejects(
+    runtime.sendPrompt("", {
+      ...target,
+      commandId: "wrong",
+      retryEntryId: original.id,
+    }),
+    { code: "PROMPT_REJECTED" },
+  );
+  await runtime.sendPrompt("", { ...target, commandId: "retry" });
+  await session.waitForIdle();
+  assert.equal(calls, 3);
+  const answer = [...session.messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  assert.equal(
+    answer?.stopReason,
+    "stop",
+    answer?.errorMessage ?? "Expected successful recovery",
+  );
+  assert.equal(
+    session.messages.filter((message) => message.role === "user").length,
+    1,
+  );
+  assert.equal(
+    events.filter((event) => event.type === "tool_execution_start").length,
+    1,
+  );
+  const retryStart = events.find(
+    (event) =>
+      event.type === "turn_started" && event.detail?.commandId === "retry",
+  );
+  assert.equal(retryStart?.detail?.promptEntryId, original.id);
+  assert.ok(typeof retryStart?.detail?.startedAt === "number");
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn_settled")
+      .map((event) => event.detail?.outcome),
+    ["failed", "completed"],
+  );
+  assert.ok(
+    session.messages.some(
+      (message) =>
+        message.role === "custom" &&
+        message.customType === "openpi-web-provider-retry" &&
+        message.display === false,
+    ),
+  );
+  await assert.rejects(
+    runtime.sendPrompt("", { ...target, commandId: "stale" }),
+    { code: "PROMPT_REJECTED" },
+  );
+});
+
+test("manual provider retry rejects mixed input and revalidates a changed native branch before dispatch", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  let calls = 0;
+  const { runtime, session } = await nativeRuntime(t, () => undefined, [
+    () => {
+      calls++;
+      return fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: "503 fixture",
+      });
+    },
+  ]);
+  await runtime.sendPrompt("Original request", { commandId: "original" });
+  await session.waitForIdle();
+  const failure = session.sessionManager
+    .getBranch()
+    .slice()
+    .reverse()
+    .find((entry) => entry.type === "message")!;
+  const target = {
+    commandId: "retry",
+    retryEntryId: failure.id,
+    expectedSessionId: session.sessionId,
+    expectedSessionPath: `current:${session.sessionId}`,
+  };
+  for (const options of [
+    {
+      ...target,
+      images: [{ mimeType: "image/png" as const, data: "fixture" }],
+    },
+    { ...target, streamingBehavior: "steer" as const },
+    { ...target, planRevision: "plan" },
+  ])
+    await assert.rejects(runtime.sendPrompt("", options));
+  await assert.rejects(runtime.sendPrompt("Different request", target), {
+    code: "PROMPT_REJECTED",
+  });
+  await assert.rejects(
+    runtime.sendPrompt("", { ...target, expectedSessionId: "another" }),
+    { code: "SESSION_CONFLICT" },
+  );
+  assert.equal(calls, 1);
+
+  // Admission accepts this idle failure, then the native branch changes while
+  // the dispatch queue is blocked. The second check must prevent continuation.
+  const gate = Promise.withResolvers<void>();
+  Reflect.set(runtime, "promptAdmission", gate.promise);
+  const retry = runtime.sendPrompt("", target);
+  const rejected = assert.rejects(retry, { code: "PROMPT_REJECTED" });
+  session.sessionManager.appendMessage({
+    role: "user",
+    content: "A newer native input",
+    timestamp: Date.now(),
+  });
+  gate.resolve();
+  await rejected;
+  assert.equal(calls, 1);
+  assert.equal(
+    session.messages.filter(
+      (message) =>
+        message.role === "custom" &&
+        message.customType === "openpi-web-provider-retry",
+    ).length,
+    0,
+  );
+});
+
+test("manual provider retry keeps the original run owner after steering", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const { runtime, session, events } = await nativeRuntime(t, () => undefined, [
+    async () => {
+      entered.resolve();
+      await release.promise;
+      return fauxAssistantMessage("Initial response");
+    },
+    fauxAssistantMessage([], {
+      stopReason: "error",
+      errorMessage: "503 after steering",
+    }),
+    fauxAssistantMessage("Recovered steered response"),
+  ]);
+  try {
+    await runtime.sendPrompt("Original request", { commandId: "original" });
+    await entered.promise;
+    await runtime.sendPrompt("Additional constraint", {
+      commandId: "steering",
+      streamingBehavior: "steer",
+      expectedTurnCommandId: "original",
+    });
+    release.resolve();
+    await session.waitForIdle();
+    const branch = session.sessionManager.getBranch();
+    const original = branch.find(
+      (entry) => entry.type === "message" && entry.message.role === "user",
+    )!;
+    const steering = [...branch]
+      .reverse()
+      .find(
+        (entry) => entry.type === "message" && entry.message.role === "user",
+      )!;
+    const failure = [...branch]
+      .reverse()
+      .find((entry) => entry.type === "message")!;
+    assert.notEqual(original.id, steering.id);
+    assert.equal(
+      events.find(
+        (event) =>
+          event.type === "turn_settled" &&
+          event.detail?.commandId === "original",
+      )?.detail?.promptEntryId,
+      original.id,
+    );
+    await runtime.sendPrompt("", {
+      commandId: "retry",
+      retryEntryId: failure.id,
+      expectedSessionId: session.sessionId,
+      expectedSessionPath: `current:${session.sessionId}`,
+    });
+    await session.waitForIdle();
+    assert.equal(
+      events.find(
+        (event) =>
+          event.type === "turn_started" && event.detail?.commandId === "retry",
+      )?.detail?.promptEntryId,
+      original.id,
+    );
+    assert.equal(
+      [...events].reverse().find((event) => event.type === "turn_settled")
+        ?.detail?.outcome,
+      "completed",
+    );
+    assert.equal(
+      session.messages.filter((message) => message.role === "user").length,
+      2,
+    );
+  } finally {
+    release.resolve();
+  }
+});
+
+test("manual provider retry remains cancellable through the native run lifecycle", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  const entered = Promise.withResolvers<void>();
+  const { runtime, session, events } = await nativeRuntime(t, () => undefined, [
+    fauxAssistantMessage([], {
+      stopReason: "error",
+      errorMessage: "503 fixture",
+    }),
+    async (_context, options) => {
+      entered.resolve();
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) resolve();
+        else
+          options?.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+      });
+      return fauxAssistantMessage([], { stopReason: "aborted" });
+    },
+  ]);
+  await runtime.sendPrompt("Original request", { commandId: "original" });
+  await session.waitForIdle();
+  const failure = session.sessionManager
+    .getBranch()
+    .slice()
+    .reverse()
+    .find((entry) => entry.type === "message")!;
+  await runtime.sendPrompt("", {
+    commandId: "retry",
+    retryEntryId: failure.id,
+    expectedSessionId: session.sessionId,
+    expectedSessionPath: `current:${session.sessionId}`,
+  });
+  await entered.promise;
+  const turn = runtime.getActiveTurn()!;
+  await runtime.cancelTurn({
+    sessionId: turn.sessionId,
+    commandId: turn.commandId,
+    epoch: turn.epoch,
+  });
+  await session.waitForIdle();
+  assert.equal(
+    session.messages.filter((message) => message.role === "user").length,
+    1,
+  );
+  assert.equal(
+    [...events].reverse().find((event) => event.type === "turn_settled")?.detail
+      ?.outcome,
+    "cancelled",
+  );
+});
 
 test("Pi 1.2 custom-message runs pass capability hooks without a user prompt", {
   skip: skipBeforePi12,
