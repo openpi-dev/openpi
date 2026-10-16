@@ -23,6 +23,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createCapabilitiesExtension } from "../../extensions/capabilities/index.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
+import { projectMessage } from "../../web/protocol/types.ts";
 import type { WebRuntimeEvent } from "../../web/runtime/types.ts";
 
 // These cases exercise Pi 1.2 event shapes; the minimum-host CI job runs 0.99.
@@ -1022,5 +1023,106 @@ test("Web steering preserves native handled and queued input dispositions", {
     );
   } finally {
     release.resolve();
+  }
+});
+
+test("native execute duration survives return, throw and saved history while unexecuted calls remain unknown", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  const { runtime, session, events, cwd, agentDir } = await nativeRuntime(
+    t,
+    (pi) => {
+      pi.on("tool_call", (event) => {
+        if (event.toolCallId === "duration-unexecuted")
+          return { block: true, reason: "Fixture blocks before execute" };
+      });
+    },
+    [
+      fauxAssistantMessage(
+        [
+          fauxToolCall(
+            "read",
+            { path: "timed.txt" },
+            { id: "duration-return" },
+          ),
+          fauxToolCall(
+            "read",
+            { path: "missing.txt" },
+            { id: "duration-throw" },
+          ),
+          fauxToolCall(
+            "read",
+            { path: "timed.txt" },
+            { id: "duration-unexecuted" },
+          ),
+        ],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Done"),
+    ],
+  );
+  await writeFile(join(cwd, "timed.txt"), "native exact result");
+  const nativeEnds: { toolCallId: string; durationMs?: number }[] = [];
+  session.subscribe((event) => {
+    if (event.type === "tool_execution_end")
+      nativeEnds.push({
+        toolCallId: event.toolCallId,
+        ...("durationMs" in event && typeof event.durationMs === "number"
+          ? { durationMs: event.durationMs }
+          : {}),
+      });
+  });
+  await runtime.sendPrompt("Execute native duration cases", {
+    commandId: "native-duration",
+  });
+  await session.waitForIdle();
+  for (const id of [
+    "duration-return",
+    "duration-throw",
+    "duration-unexecuted",
+  ]) {
+    const native = nativeEnds.find((event) => event.toolCallId === id)!;
+    const saved = session.messages.find(
+      (message) => message.role === "toolResult" && message.toolCallId === id,
+    )!;
+    const projected = events.find(
+      (event) =>
+        event.type === "tool_execution_end" && event.detail?.toolCallId === id,
+    )?.detail?.result;
+    assert.ok(native);
+    assert.equal(
+      (projected as { durationMs?: number }).durationMs,
+      native.durationMs,
+    );
+    assert.equal(projectMessage(saved).durationMs, native.durationMs);
+    if (id === "duration-unexecuted")
+      assert.equal(native.durationMs, undefined);
+    else
+      assert.ok(
+        typeof native.durationMs === "number" && native.durationMs >= 0,
+      );
+  }
+  const persisted = SessionManager.create(
+    cwd,
+    join(agentDir, "timed-sessions"),
+  );
+  for (const message of session.messages) {
+    if (
+      message.role === "user" ||
+      message.role === "assistant" ||
+      message.role === "toolResult"
+    )
+      persisted.appendMessage(message);
+  }
+  const reopened = SessionManager.open(persisted.getSessionFile()!);
+  for (const entry of reopened.getBranch()) {
+    if (entry.type !== "message" || entry.message.role !== "toolResult")
+      continue;
+    const message = entry.message;
+    assert.equal(
+      projectMessage(message).durationMs,
+      nativeEnds.find((event) => event.toolCallId === message.toolCallId)
+        ?.durationMs,
+    );
   }
 });

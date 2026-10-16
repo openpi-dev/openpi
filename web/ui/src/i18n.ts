@@ -1989,6 +1989,10 @@ const resources = {
       toolDiffStatsHelp: "Added and removed lines in the displayed diff",
       toolRequestedFile: "File:",
       toolWorkspace: "Workspace",
+      toolExecutionDuration: "Pi execution duration",
+      toolExecutionDurationValue: "{{duration}} ms",
+      toolExecutionDurationHelp:
+        "Measured by Pi around tool execution; excludes preparation and result hooks. This is not background job or provider latency.",
       toolRawEvidence: "Arguments and original result",
       toolCodemodeDetails: "Script and original result",
       toolNestedOutputMissing:
@@ -3832,6 +3836,10 @@ const resources = {
       toolDiffStatsHelp: "当前显示差异中的新增和删除行数",
       toolRequestedFile: "文件：",
       toolWorkspace: "工作区",
+      toolExecutionDuration: "Pi 执行耗时",
+      toolExecutionDurationValue: "{{duration}} ms",
+      toolExecutionDurationHelp:
+        "由 Pi 测量工具执行，不含准备和结果钩子；不是后台任务用时或模型服务延迟。",
       toolRawEvidence: "参数与原始结果",
       toolCodemodeDetails: "脚本与原始结果",
       toolNestedOutputMissing:

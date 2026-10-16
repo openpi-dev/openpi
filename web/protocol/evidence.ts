@@ -21,6 +21,11 @@ export function projectEvidenceArguments(input: unknown) {
   return result;
 }
 
+/** Pi's execute measurement, never a lifecycle span or an inferred duration. */
+export function nativeExecuteDurationMs(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? value : undefined;
+}
+
 /** Display only: never feed this projection back to a tool or Session. */
 export function evidenceText(value: string, tail = false) {
   // Bound work before stripping terminal controls, including OSC hyperlinks.
@@ -134,6 +139,8 @@ function failureExcerpts(text: string, pattern: RegExp) {
 }
 
 export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolCall" }>, result?: WebLiveMessage, liveState?: EvidenceState) {
+  const durationMs = result?.role === "toolResult" && result.toolCallId === call.id && result.toolName === call.name && !result.forkSnapshotToolResult && liveState !== "running"
+    ? nativeExecuteDurationMs(result.durationMs) : undefined;
   const args = toolArguments(call);
   const details = evidenceRecord(result?.details);
   const terminal = terminalOutcome(call.name, result);
@@ -147,7 +154,7 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
   const diff = ["write", "edit"].includes(call.name) && state === "returned" && result?.isError === false && typeof details.diff === "string" ? evidenceText(details.diff) : undefined;
   const offset = typeof args.offset === "number" && Number.isSafeInteger(args.offset) && args.offset > 0 ? args.offset : 1;
   return {
-    kind, state, processState: terminal?.state ?? (call.name === "bash" && result?.isError === false ? "returned" : call.name === "bash" && liveState === "running" ? "running" : "unknown"), output: readFooter ? output.text.slice(0, readFooter.index) : output.text, truncated: truncated || diff?.truncated === true,
+    kind, state, durationMs, processState: terminal?.state ?? (call.name === "bash" && result?.isError === false ? "returned" : call.name === "bash" && liveState === "running" ? "running" : "unknown"), output: readFooter ? output.text.slice(0, readFooter.index) : output.text, truncated: truncated || diff?.truncated === true,
     readRecovery: readFooter?.[1],
     numberLines: call.name === "read" && result?.isError === false && evidenceRecord(details.truncation).firstLineExceedsLimit !== true && Boolean(output.text),
     path: typeof args.path === "string" ? evidenceText(args.path).text : undefined,
@@ -160,6 +167,6 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
     signal: terminal && "signal" in terminal ? terminal.signal : undefined,
     recovery: typeof details.fullOutputPath === "string" ? evidenceText(details.fullOutputPath).text : undefined,
     rawArguments: evidenceText(call.arguments).text,
-    rawResult: evidenceText(JSON.stringify({ content: result?.content, details: result?.details, isError: result?.isError })).text,
+    rawResult: evidenceText(JSON.stringify({ content: result?.content, details: result?.details, isError: result?.isError, ...(durationMs !== undefined ? { durationMs } : {}) })).text,
   };
 }

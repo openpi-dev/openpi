@@ -3444,3 +3444,64 @@ test("a merged thinking selection rejects callers whose expected session changed
   // Only the still-active Session's intent is written.
   assert.deepEqual(fixture.state.calls, ["minimal"]);
 });
+
+test("live end duration comes from native event, while partial and old-owner events cannot supply it", () => {
+  const session = { sessionManager: SessionManager.inMemory(process.cwd()) };
+  const events: WebRuntimeEvent[] = [];
+  const harness = {
+    runtime: { session },
+    observeRetry: () => undefined,
+    observeCompaction: () => undefined,
+    emit: (type: string, detail: Record<string, unknown>) =>
+      events.push({ type, detail }),
+  };
+  const project = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(this: object, session: object, event: object): void;
+    }
+  ).projectEvent;
+  const base = { toolCallId: "duration", toolName: "read" };
+  project.call(harness, session, {
+    ...base,
+    type: "tool_execution_update",
+    partialResult: { content: "partial", durationMs: 999 },
+  });
+  assert.equal(
+    (events.at(-1)?.detail?.result as { durationMs?: number }).durationMs,
+    undefined,
+  );
+  project.call(harness, session, {
+    ...base,
+    type: "tool_execution_end",
+    result: { content: "done", durationMs: 999 },
+    durationMs: 0,
+    isError: false,
+  });
+  assert.equal(
+    (events.at(-1)?.detail?.result as { durationMs?: number }).durationMs,
+    0,
+  );
+  project.call(harness, session, {
+    ...base,
+    type: "tool_execution_end",
+    result: { content: "unexecuted", durationMs: 999 },
+    isError: true,
+  });
+  assert.equal(
+    (events.at(-1)?.detail?.result as { durationMs?: number }).durationMs,
+    undefined,
+  );
+  const before = events.length;
+  project.call(
+    harness,
+    { ...session },
+    {
+      ...base,
+      type: "tool_execution_end",
+      result: { content: "stale" },
+      durationMs: 42,
+      isError: false,
+    },
+  );
+  assert.equal(events.length, before);
+});
