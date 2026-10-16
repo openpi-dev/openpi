@@ -253,6 +253,9 @@ it("offers an empty pin drop area during a project drag and suppresses the trail
   expect(within(pinned).getByText(i18n.t("sidebarDropPin"))).toBeTruthy();
   dragPointer(pinned, "dragover");
   dragPointer(pinned, "drop");
+  // Longer than the old 250ms suppression window. A trailing click still must
+  // not toggle the workspace after a slow post-drop render.
+  await new Promise((resolve) => setTimeout(resolve, 300));
   await waitFor(() =>
     expect(pin).toHaveBeenCalledWith(
       { kind: "workspace", path: "/project-1" },

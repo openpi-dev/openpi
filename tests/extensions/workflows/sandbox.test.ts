@@ -55,6 +55,19 @@ async function runWithTimeout(
   }
 }
 
+test("a slow sandbox start is outside the synchronous execution deadline", async () => {
+  const started = Date.now();
+  assert.equal(await run("return 1;", { startDelayMs: 1_500 }), 1);
+  assert.ok(Date.now() - started >= 1_500);
+});
+
+test("a delayed start still stops a non-yielding script at the sync deadline", async () => {
+  await assert.rejects(
+    runWithTimeout("while (true) {}", { startDelayMs: 1_500 }, 8_000),
+    /Script execution timed out/,
+  );
+});
+
 test("sandbox exposes only workflow capabilities and validates results", async () => {
   const phases: string[] = [];
   let active = 0;
