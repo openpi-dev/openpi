@@ -6,17 +6,24 @@ var raw =
 if (!/^[1-9][0-9]*$/.test(raw)) {
   WScript.Quit(1);
 }
+var startedAt = "";
 try {
   var locator = new ActiveXObject("WbemScripting.SWbemLocator");
   var service = locator.ConnectServer(".", "root\\cimv2");
+  // Default Identify makes a local query fail closed. Impersonate is the
+  // level Win32_Process expects. 48 is forward-only and return-immediately.
+  service.Security_.ImpersonationLevel = 3;
   var processes = service.ExecQuery(
     "SELECT CreationDate FROM Win32_Process WHERE ProcessId=" + raw,
+    "WQL",
+    48,
   );
   var enumerator = new Enumerator(processes);
-  if (enumerator.atEnd()) WScript.Quit(1);
-  var startedAt = enumerator.item().CreationDate;
-  if (!startedAt) WScript.Quit(1);
-  WScript.StdOut.Write(String(startedAt));
+  if (!enumerator.atEnd()) startedAt = String(enumerator.item().CreationDate);
 } catch (error) {
-  WScript.Quit(1);
+  startedAt = "";
 }
+// Quit outside try. JScript turns WScript.Quit into a catchable exception,
+// so a failure exit inside try/catch can fall off the end with status 0.
+if (!startedAt) WScript.Quit(1);
+WScript.Echo(startedAt);

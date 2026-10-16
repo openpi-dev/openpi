@@ -1203,6 +1203,21 @@ const sameFile = (left: Stats, right: Stats) =>
 const CIM_PROCESS_STARTED_AT =
   /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/;
 
+// cscript //U writes a redirected pipe as UTF-16 LE, often with a BOM.
+// Reading that pipe as UTF-8 leaves NULs or U+FFFD and the CIM parser
+// rejects it, so a live PID stays "unknown" until the 5s lock expires.
+export function decodeProcessStartedAtOutput(output: Buffer | string) {
+  const buffer = Buffer.isBuffer(output) ? output : Buffer.from(output);
+  const utf16 =
+    (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) ||
+    (buffer.length >= 4 && buffer[1] === 0 && buffer[3] === 0);
+  const text = utf16 ? buffer.toString("utf16le") : buffer.toString("utf8");
+  return text
+    .replace(/^\uFEFF/, "")
+    .replaceAll("\0", "")
+    .trim();
+}
+
 const parseCimProcessStartedAt = (stdout: string) => {
   const match = CIM_PROCESS_STARTED_AT.exec(stdout.trim());
   if (!match) return undefined;
@@ -1260,14 +1275,15 @@ export function processStartedAtQuery(
   if (platform === "win32") {
     // Resolve on use. Vitest loads this module without a file URL, so a
     // top-level fileURLToPath throws during import. WMI via cscript avoids
-    // the PowerShell CLR cold start. The 1s query budget stays; failure is
-    // still unknown ownership, and the 5s lock does not recover.
+    // the PowerShell CLR cold start. //U makes the pipe UTF-16. The 1s
+    // query budget stays; failure is still unknown ownership, and the 5s
+    // lock does not recover.
     const script = fileURLToPath(
       new URL("./win32-process-started-at.js", import.meta.url),
     );
     return {
       command: "cscript.exe",
-      args: ["//Nologo", "//B", script, String(pid)],
+      args: ["//Nologo", "//U", "//B", script, String(pid)],
       env: undefined,
       parseOutput: parseCimProcessStartedAt,
     };
@@ -1288,12 +1304,16 @@ const queryProcessStartedAt = (pid: number) =>
         query.command,
         query.args,
         {
-          encoding: "utf8",
+          encoding: "buffer",
           env: query.env ? { ...process.env, ...query.env } : process.env,
           timeout: 1_000,
         },
         (error, stdout) => {
-          resolve(error ? undefined : query.parseOutput(stdout));
+          resolve(
+            error || stdout == null
+              ? undefined
+              : query.parseOutput(decodeProcessStartedAtOutput(stdout)),
+          );
         },
       );
     } catch {
