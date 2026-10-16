@@ -169,3 +169,7 @@ body:has(.sidebar-conversation-menu) .astryx-dropdown-menu [role="separator"] { 
   .session-sidebar .session-state, .sidebar-activity-tail svg { animation: none; }
   .workspace-heading-label .lucide-chevron-down { transition: none; }
 }
+
+.managed-worktrees-list { display: grid; gap: 16px; max-height: 40dvh; overflow-y: auto; }
+.managed-worktrees-list > div { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
+.managed-worktrees-list button { justify-self: start; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--page); color: var(--text); cursor: pointer; }

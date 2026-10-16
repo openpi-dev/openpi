@@ -116,6 +116,9 @@ export type WebRuntimeRequestErrorCode =
   | "SESSION_DELETE_BUSY"
   | "WORKSPACE_ORDER_CHANGED"
   | "WORKSPACE_NOT_FOUND"
+  | "INVALID_WORKTREE_RELEASE"
+  | "WORKTREE_RELEASE_UNAVAILABLE"
+  | "WORKTREE_LIST_CHANGED"
   | "SESSION_MARKDOWN_TOO_LARGE"
   | "SESSION_OPEN_UNAVAILABLE"
   | "TURN_CONFLICT"
@@ -297,6 +300,31 @@ export interface WebSessionDeleteResult extends WebSessionDeleteRequest {
   replayed?: boolean;
   /** The native active Session was replaced; the Web UI must clear its selection. */
   activeSessionChanged?: boolean;
+  /** Retention is the default. Releasing this resource is a separate explicit action. */
+  worktreeReleaseTarget?: WebWorktreeReleaseTarget;
+}
+
+export interface WebWorktreeReleaseTarget {
+  sessionId: string;
+  sessionPath: string;
+  worktreePath: string;
+}
+
+export interface WebWorktreeReleaseRequest extends WebWorktreeReleaseTarget {
+  commandId: string;
+}
+
+export interface WebWorktreeReleaseResult extends WebWorktreeReleaseRequest {
+  state: "removed" | "preserved" | "uncertain";
+  reason?: string;
+  replayed?: boolean;
+}
+
+export interface WebRetainedWorktrees {
+  worktrees: WebWorktreeReleaseTarget[];
+  truncated: boolean;
+  unavailable: number;
+  nextCursor?: string;
 }
 
 export interface WebRuntimeController {
@@ -327,6 +355,8 @@ export interface WebRuntimeController {
   sessionForkOptions?(request: { sessionPath: string; sessionId: string }): Promise<WebSessionForkOptions>;
   cancelSessionFork?(request: WebSessionForkCancelRequest): Promise<WebSessionForkCancelResult>;
   deleteSession?(request: WebSessionDeleteRequest): Promise<WebSessionDeleteResult>;
+  listRetainedWorktrees?(workspacePath: string, cursor?: string): Promise<WebRetainedWorktrees>;
+  releaseSessionWorktree?(request: WebWorktreeReleaseRequest, hasExternalHolders?: () => boolean): Promise<WebWorktreeReleaseResult>;
   listModels(): WebModelSummary[];
   searchModels(query: string, limit?: number, provider?: string): WebModelSearchResult;
   listCommands?(): WebCommandDiscoveryResult;

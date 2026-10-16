@@ -76,7 +76,7 @@ import { WebClient } from "../protocol/client.ts";
 import { webStore } from "../store/web-store.ts";
 
 const SIDEBAR_DEFAULT_WIDTH = 340;
-const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 520;
 const SIDEBAR_COLLAPSE_THRESHOLD = 190;
 const AUXILIARY_DEFAULT_WIDTH = 520;

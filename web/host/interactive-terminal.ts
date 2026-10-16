@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { IPty } from "node-pty";
 import type {
   WebInteractiveTerminal,
@@ -30,6 +31,7 @@ interface TerminalRecord {
 
 interface PendingTerminalCreate {
   readonly generation: number;
+  readonly cwd: string;
   readonly completion: Promise<WebInteractiveTerminal & { reused: boolean }>;
 }
 
@@ -59,6 +61,8 @@ export interface InteractiveTerminalService {
   ): InteractiveTerminalSubscription | undefined;
   close(sessionId: string, id: string, force?: boolean): boolean;
   retain(sessionId: string, cwd: string): void;
+  /** Includes pending creates and killed processes until native exit is observed. */
+  hasWorktreeReferences?(worktreePath: string): boolean;
   dispose(): void;
 }
 
@@ -88,6 +92,7 @@ export class InteractiveTerminalManager
   private readonly maxTerminals: number;
   private readonly injectedSpawn?: PtySpawn;
   private readonly pendingCreates = new Map<string, PendingTerminalCreate>();
+  private readonly closingRecords = new Set<TerminalRecord>();
   private readonly reservations = new Set<symbol>();
   private retainedScope?: string;
   private lifecycleGeneration = 0;
@@ -140,7 +145,7 @@ export class InteractiveTerminalManager
         createKey,
       }),
     );
-    const create = { generation, completion };
+    const create = { generation, completion, cwd: canonicalCwd };
     this.pendingCreates.set(key, create);
     const clearPending = () => {
       if (this.pendingCreates.get(key) === create)
@@ -160,7 +165,7 @@ export class InteractiveTerminalManager
   }) {
     this.assertCurrentGeneration(generation);
     this.makeSpace();
-    if (this.records.size + this.reservations.size >= this.maxTerminals) {
+    if (this.records.size + this.closingRecords.size + this.reservations.size >= this.maxTerminals) {
       throw new Error("Interactive terminal capacity is full");
     }
     const reservation = Symbol(sessionId);
@@ -204,6 +209,7 @@ export class InteractiveTerminalManager
       });
       pty.onExit(({ exitCode }) => {
         record.exited = true;
+        this.closingRecords.delete(record);
         record.exitCode = exitCode;
         this.clearCleanup(record);
         this.emit(record, { type: "exit", exitCode });
@@ -279,6 +285,19 @@ export class InteractiveTerminalManager
     if (!record) return false;
     this.remove(record, force);
     return true;
+  }
+
+  hasWorktreeReferences(worktreePath: string) {
+    let root = resolve(worktreePath);
+    try { root = realpathSync(root); } catch { /* Missing target is handled by release authority validation. */ }
+    const inside = (cwd: string) => {
+      let canonical: string;
+      try { canonical = realpathSync(cwd); } catch { return true; }
+      const suffix = relative(root, canonical);
+      return suffix === "" || !isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`);
+    };
+    return [...this.records.values(), ...this.closingRecords].some((record) => !record.exited && inside(record.cwd)) ||
+      [...this.pendingCreates.values()].some((pending) => inside(pending.cwd));
   }
 
   retain(sessionId: string, cwd: string) {
@@ -375,6 +394,7 @@ export class InteractiveTerminalManager
     this.clearCleanup(record);
     this.records.delete(record.id);
     if (!record.exited) {
+      this.closingRecords.add(record);
       // Windows node-pty terminates through ConPTY and rejects POSIX signals.
       const windows = process.platform === "win32";
       record.pty.kill(force && !windows ? "SIGKILL" : undefined);

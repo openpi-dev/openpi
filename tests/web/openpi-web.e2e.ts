@@ -26,6 +26,17 @@ if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
 
 const authenticatedPath = "/";
 
+// route.fetch() keeps the upstream body on the per-test request context.
+// Closing that context ("Test ended") drops the body, so a snapshot refresh
+// still between fetch() and json() rejects a finished test with
+// "Response has been disposed". Drain handlers before fixture teardown.
+// A handler that fails for any other reason still fails the test. Tests that
+// already closed the fixture page have finished their own handlers.
+test.afterEach(async ({ page }) => {
+  if (page.isClosed()) return;
+  await page.unrouteAll({ behavior: "wait" });
+});
+
 for (const firstControl of ["settings", "thinking"] as const) {
   test(`first-use ${firstControl} works before sending a message and preserves the draft`, async ({
     page,
@@ -669,8 +680,13 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
   await sidebarHandle.press("Enter");
   await expect(sidebar).toHaveCSS("width", "340px");
-  await expect(sidebarHandle).toHaveAttribute("aria-valuemin", "240");
+  await expect(sidebarHandle).toHaveAttribute("aria-valuemin", "220");
   await expect(sidebarHandle).toHaveAttribute("aria-valuemax", "520");
+  await sidebarHandle.press("Home");
+  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "220");
+  await expect(sidebar).toHaveCSS("width", "220px");
+  await sidebarHandle.press("Enter");
+  await expect(sidebar).toHaveCSS("width", "340px");
   const initialSidebar = await sidebar.boundingBox();
   const initialConversation = await conversation.boundingBox();
   expect(initialSidebar).not.toBeNull();
@@ -2629,9 +2645,10 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
 }, testInfo) => {
   const sessionId = "inspection-browser-session";
   const reads: string[] = [];
+  let baselineSnapshot: Promise<string> | undefined;
   await page.route("**/api/snapshot**", async (route) => {
-    const response = await route.fetch();
-    const snapshot = await response.json();
+    baselineSnapshot ??= route.fetch().then((response) => response.text());
+    const snapshot = JSON.parse(await baselineSnapshot);
     snapshot.currentSessionId = sessionId;
     snapshot.workspaces = [
       { path: "/inspection", name: "Inspection", current: true },
@@ -2692,7 +2709,7 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
       },
     ];
     alignControlledSessionFixture(snapshot);
-    await route.fulfill({ response, json: snapshot });
+    await route.fulfill({ json: snapshot });
   });
   await page.route("**/events?**", (route) =>
     route.fulfill({

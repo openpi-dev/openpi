@@ -15,7 +15,11 @@ import {
   type WebSnapshot,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
-import type { WebSessionForkRequest } from "../../../runtime/types.ts";
+import type {
+  WebWorktreeReleaseTarget,
+  WebWorktreeReleaseResult,
+  WebSessionForkRequest,
+} from "../../../runtime/types.ts";
 import { i18n } from "../i18n.ts";
 import { sessionTitle } from "../lib/format.ts";
 import { isControlledSession } from "../lib/session-control.ts";
@@ -283,6 +287,9 @@ export interface WebStoreActions {
     environment?: "local" | "worktree",
   ) => Promise<boolean>;
   cancelSessionFork: () => Promise<void>;
+  releaseSessionWorktree: (
+    target: WebWorktreeReleaseTarget,
+  ) => Promise<WebWorktreeReleaseResult>;
   deleteSession: (
     path: string,
     id: string,
@@ -402,6 +409,16 @@ function waitForReconnect(delay: number, signal: AbortSignal) {
   });
 }
 
+/** Admit native absolute shapes without resolving paths in the browser. */
+function absoluteSessionLinkPath(value: string) {
+  return (
+    /^\/(?![\\/])/u.test(value) ||
+    /^[a-z]:[\\/]/iu.test(value) ||
+    /^\\\\(?![?.]\\)[^\\/]+\\[^\\/]+\\/u.test(value) ||
+    /^\/\/[^\\/]+\/[^\\/]+\//u.test(value)
+  );
+}
+
 export function createWebStore(
   client = new WebClient(),
   dependencies: WebStoreDependencies = {},
@@ -412,7 +429,8 @@ export function createWebStore(
   const linkId = linkParams.get("sessionId");
   const hasSessionLink = linkPath !== null || linkId !== null;
   let sessionLink =
-    linkPath?.startsWith("/") &&
+    linkPath &&
+    absoluteSessionLinkPath(linkPath) &&
     linkPath.length <= 4096 &&
     linkId &&
     linkId.length <= 128 &&
@@ -425,6 +443,16 @@ export function createWebStore(
   let navigationSequence = 0;
   let forkRequest: WebSessionForkRequest | null = null;
   let deletingSession = false;
+  // Keep uncertain request identities across dialog closure/navigation. This is
+  // correlation only; native marker checks and receipts own every effect.
+  const worktreeReleases = new Map<
+    string,
+    {
+      commandId: string;
+      state: "preserved" | "uncertain";
+      pending?: Promise<WebWorktreeReleaseResult>;
+    }
+  >();
   let snapshotGeneration = 0;
   let liveTurnSequence = 0;
   let snapshotFailureNotice: string | null = null;
@@ -1754,8 +1782,20 @@ export function createWebStore(
           pendingSessionSelection?.path === path &&
           pendingSessionSelection.epoch === sessionEpoch
         ) {
+          const pending = pendingSessionSelection;
           set({ mobileSidebarOpen: false });
-          return pendingSessionSelection.promise;
+          const selected = await pending.promise;
+          const settled = get();
+          return (
+            selected &&
+            pending.epoch === sessionEpoch &&
+            settled.selectedPath === path &&
+            settled.snapshot?.selectedSession?.path === path &&
+            (!expectedSessionId ||
+              settled.snapshot.selectedSession.id === expectedSessionId) &&
+            !settled.workspaceDraft &&
+            isControlledSession(settled.snapshot)
+          );
         }
         if (
           !current.workspaceDraft &&
@@ -1829,7 +1869,8 @@ export function createWebStore(
               get().snapshot?.selectedSession?.path === path &&
               (!expectedSessionId ||
                 get().snapshot?.selectedSession?.id === expectedSessionId) &&
-              !get().workspaceDraft
+              !get().workspaceDraft &&
+              isControlledSession(get().snapshot)
             );
           } catch (error) {
             if (epoch !== sessionEpoch) return false;
@@ -2093,6 +2134,15 @@ export function createWebStore(
             sessionSwitching: true,
           });
           let confirmed = await actions.refreshSnapshot({ epoch: nextEpoch });
+          if (
+            !confirmed &&
+            nextEpoch === sessionEpoch &&
+            get().selectedPath === result.sessionPath
+          ) {
+            // A concurrent refresh may supersede this confirmation. Recheck
+            // canonical state once without repeating the fork or prompt.
+            confirmed = await actions.refreshSnapshot({ epoch: nextEpoch });
+          }
           if (nextEpoch !== sessionEpoch) return false;
           let current = get().snapshot;
           // A delivered fork whose response was lost can be replayed after the
@@ -2115,6 +2165,7 @@ export function createWebStore(
           }
           if (
             !confirmed ||
+            get().selectedPath !== result.sessionPath ||
             current?.selectedSession?.id !== result.sessionId ||
             current.selectedSession.path !== result.sessionPath ||
             !isControlledSession(current)
@@ -2215,7 +2266,7 @@ export function createWebStore(
           });
           if (
             sessionEpoch === ownedEpoch &&
-            get().selectedPath !== anchor.sessionPath &&
+            ownedEpoch !== epoch &&
             get().sessionSwitching
           )
             set({ sessionSwitching: false });
@@ -2238,6 +2289,55 @@ export function createWebStore(
           showError(error);
           throw error;
         }
+      },
+      async releaseSessionWorktree(target) {
+        const key = JSON.stringify([
+          target.sessionId,
+          target.sessionPath,
+          target.worktreePath,
+        ]);
+        const previous = worktreeReleases.get(key);
+        if (previous?.pending) return previous.pending;
+        if (!previous && worktreeReleases.size >= 128) {
+          // A preserved receipt is terminal and caused no removal. Its next
+          // explicit retry gets a new command anyway; uncertain IDs stay put.
+          const settled = [...worktreeReleases].find(
+            ([, item]) => item.state === "preserved" && !item.pending,
+          );
+          if (settled) worktreeReleases.delete(settled[0]);
+          else throw new Error(i18n.t("managedWorktreeRecoveryFull"));
+        }
+        const request = {
+          commandId:
+            previous?.state === "uncertain"
+              ? previous.commandId
+              : crypto.randomUUID(),
+          state: "uncertain" as "preserved" | "uncertain",
+          pending: undefined as Promise<WebWorktreeReleaseResult> | undefined,
+        };
+        worktreeReleases.set(key, request);
+        request.pending = (async () => {
+          try {
+            const result = await client.releaseSessionWorktree({
+              ...target,
+              commandId: request.commandId,
+            });
+            if (
+              result.commandId !== request.commandId ||
+              result.sessionId !== target.sessionId ||
+              result.sessionPath !== target.sessionPath ||
+              result.worktreePath !== target.worktreePath ||
+              !["removed", "preserved", "uncertain"].includes(result.state)
+            )
+              throw new Error(i18n.t("managedWorktreeUncertain"));
+            if (result.state === "removed") worktreeReleases.delete(key);
+            else request.state = result.state;
+            return result;
+          } finally {
+            request.pending = undefined;
+          }
+        })();
+        return request.pending;
       },
       async deleteSession(path, id, commandId) {
         if (
@@ -2291,9 +2391,16 @@ export function createWebStore(
           }
           await actions.refreshSnapshot();
           set({
-            notice: result.metadataCleanupPending
-              ? i18n.t("sessionDeleteMetadataPending")
-              : { kind: "success", message: i18n.t("sessionDeleted") },
+            notice: result.worktreeReleaseTarget
+              ? {
+                  kind: "success",
+                  message: i18n.t("managedWorktreeRetainedAfterDelete", {
+                    path: result.worktreeReleaseTarget.worktreePath,
+                  }),
+                }
+              : result.metadataCleanupPending
+                ? i18n.t("sessionDeleteMetadataPending")
+                : { kind: "success", message: i18n.t("sessionDeleted") },
           });
           return true;
         } catch (error) {
@@ -2398,7 +2505,17 @@ export function createWebStore(
             ),
           }));
           if (epoch !== sessionEpoch) return true;
-          const refreshed = await actions.refreshSnapshot({ epoch });
+          const generation = snapshotGeneration;
+          let refreshed = await actions.refreshSnapshot({ epoch });
+          // A concurrent refresh can supersede ours, which then reports false
+          // although the restore was accepted. Confirm once more with a fresh
+          // snapshot instead of reporting an unconfirmed restore.
+          if (
+            !refreshed &&
+            epoch === sessionEpoch &&
+            snapshotGeneration > generation + 1
+          )
+            refreshed = await actions.refreshSnapshot({ epoch });
           return epoch !== sessionEpoch || refreshed;
         } catch (error) {
           if (epoch === sessionEpoch) showError(error);

@@ -181,7 +181,7 @@ for (const scenario of [
     const preview = harness.render();
     assert.match(preview, /compact/);
     assert.match(preview, /hide thinking/);
-    assert.match(preview, /Filter: type to filter/);
+    assert.match(preview, /⌕ \[ type to filter \]/);
     assert.match(preview, /Beta/);
 
     harness.input(scenario.finishKey);
@@ -200,7 +200,7 @@ test("a narrow picker treats t and h as search text after Tab", async () => {
   harness.input("t");
   harness.input("h");
   const filtered = harness.render();
-  assert.match(filtered, /Filter: th/);
+  assert.match(filtered, /⌕ \[ th \]/);
   assert.match(filtered, /No matching sessions/);
 });
 

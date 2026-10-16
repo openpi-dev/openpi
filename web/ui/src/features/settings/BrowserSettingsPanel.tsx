@@ -52,9 +52,11 @@ function BrowserMark({ browser }: { browser: BrowserId }) {
 }
 
 export function BrowserSettingsPanel({
-  onSaved,
+  onConfigure,
+  setupPending = false,
 }: {
-  onSaved: () => Promise<boolean>;
+  onConfigure: (request: string) => Promise<boolean>;
+  setupPending?: boolean;
 }) {
   const { t } = useTranslation();
   const guideWindow = useBrowserGuideWindow();
@@ -63,6 +65,7 @@ export function BrowserSettingsPanel({
   const [status, setStatus] = useState<BrowserSettingsStatus>();
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
+  const configurationPending = pending || setupPending;
   const [checking, setChecking] = useState(false);
   const [guide, setGuide] = useState<BrowserId>();
   const [installer, setInstaller] = useState<ExternalBrowser>("chrome");
@@ -120,15 +123,26 @@ export function BrowserSettingsPanel({
     setNotice(undefined);
     ++serial.current;
     try {
-      const next = await new WebClient().request<BrowserSettingsStatus>(
-        "/api/settings/browser",
-        { method: "POST", body: JSON.stringify(patch) },
+      const choices = [
+        patch.control === undefined
+          ? undefined
+          : `browser_control=${patch.control}`,
+        patch.embedded === undefined
+          ? undefined
+          : `browser_embedded=${patch.embedded}`,
+        patch.defaultBrowser === undefined
+          ? undefined
+          : `browser_default=${JSON.stringify(patch.defaultBrowser)}`,
+        patch.externalBrowsers === undefined
+          ? undefined
+          : `browser_external=${JSON.stringify(patch.externalBrowsers)}`,
+      ].filter((choice) => choice !== undefined);
+      const accepted = await onConfigure(
+        `Configure browser access: ${choices.join(", ")}. Preserve all other settings.`,
       );
       if (!mounted.current) return;
-      ++serial.current;
-      setStatus(next);
-      setNotice(t("browserSaved"));
-      void onSaved();
+      if (!accepted) throw new Error(t("setupRequestFailed"));
+      setNotice(t("setupRequestAccepted"));
     } catch (reason) {
       await refresh();
       if (mounted.current)
@@ -272,7 +286,7 @@ export function BrowserSettingsPanel({
           isLabelHidden
           size="sm"
           value={allowed(browser)}
-          isDisabled={pending}
+          isDisabled={configurationPending}
           onChange={(value: boolean) => void save(allowPatch(browser, value))}
         />
       </div>
@@ -337,7 +351,7 @@ export function BrowserSettingsPanel({
             isLabelHidden
             size="sm"
             value={config.control}
-            isDisabled={pending}
+            isDisabled={configurationPending}
             onChange={(control: boolean) => void save({ control })}
           />
         </div>
@@ -349,7 +363,7 @@ export function BrowserSettingsPanel({
           <select
             id="browser-default"
             value={config.defaultBrowser}
-            disabled={pending}
+            disabled={configurationPending}
             onChange={(event) =>
               void save({ defaultBrowser: event.target.value as BrowserId })
             }
@@ -477,7 +491,7 @@ export function BrowserSettingsPanel({
                     <button
                       type="button"
                       className="browser-settings-primary"
-                      disabled={pending}
+                      disabled={configurationPending}
                       onClick={() =>
                         void save({ control: true, ...allowPatch(guide, true) })
                       }
@@ -489,7 +503,7 @@ export function BrowserSettingsPanel({
                     <button
                       type="button"
                       className="browser-settings-button"
-                      disabled={pending}
+                      disabled={configurationPending}
                       onClick={() => void save({ defaultBrowser: guide })}
                     >
                       {t("browserMakeDefault")}

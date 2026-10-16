@@ -41,7 +41,14 @@ const initial = (): BrowserSettingsStatus => ({
 });
 function backend(state = initial()) {
   const writes: { path: string; body: Record<string, unknown> }[] = [];
-  const server = { writes, state, failActions: false };
+  const requests: string[] = [];
+  const server = {
+    writes,
+    requests,
+    state,
+    failActions: false,
+    failSetup: false,
+  };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init?: RequestInit) => {
@@ -60,13 +67,18 @@ function backend(state = initial()) {
     }),
   );
   render(
-    createElement(BrowserSettingsPanel, { onSaved: vi.fn(async () => true) }),
+    createElement(BrowserSettingsPanel, {
+      onConfigure: vi.fn(async (request: string) => {
+        requests.push(request);
+        return !server.failSetup;
+      }),
+    }),
   );
   return server;
 }
 
 it("separates installation evidence from authorization and guides setup without a model request", async () => {
-  const { writes, state } = backend();
+  const { writes, requests, state } = backend();
   await screen.findByRole("heading", { name: "Browser" });
   expect(screen.queryByText("Connected")).toBeNull();
   expect(
@@ -138,10 +150,14 @@ it("separates installation evidence from authorization and guides setup without 
     }),
   );
   await waitFor(() =>
-    expect(writes.at(-1)).toEqual({
-      path: "/api/settings/browser",
-      body: { control: true, externalBrowsers: ["chrome"] },
-    }),
+    expect(requests).toEqual([
+      'Configure browser access: browser_control=true, browser_external=["chrome"]. Preserve all other settings.',
+    ]),
+  );
+  expect(state.config.control).toBe(false);
+  expect(state.config.externalBrowsers).toEqual([]);
+  expect(writes.some((write) => write.path === "/api/settings/browser")).toBe(
+    false,
   );
   expect(writes.some((write) => write.path.includes("prompt"))).toBe(false);
 });
@@ -208,12 +224,27 @@ it("skips installation without claiming a stale or other-profile embedded connec
   expect(writes).toEqual([]);
 });
 
-it("keeps default selection and grants separate, and uses typed settings writes", async () => {
-  const { writes } = backend();
+it("requests grants and default selection through setup without optimistic authorization", async () => {
+  const { writes, requests, state } = backend();
   await screen.findByRole("heading", { name: "Browser" });
   fireEvent.click(screen.getByRole("switch", { name: "Allow Chrome" }));
   await waitFor(() =>
-    expect(writes[0]?.body).toEqual({ externalBrowsers: ["chrome"] }),
+    expect(requests[0]).toBe(
+      'Configure browser access: browser_external=["chrome"]. Preserve all other settings.',
+    ),
+  );
+  expect(state.config.externalBrowsers).toEqual([]);
+  expect(
+    (screen.getByRole("switch", { name: "Allow Chrome" }) as HTMLInputElement)
+      .checked,
+  ).toBe(false);
+  state.config = { ...state.config, externalBrowsers: ["chrome"] };
+  fireEvent.focus(window);
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("switch", { name: "Allow Chrome" }) as HTMLInputElement)
+        .checked,
+    ).toBe(true),
   );
   await waitFor(() =>
     expect(
@@ -228,8 +259,12 @@ it("keeps default selection and grants separate, and uses typed settings writes"
     target: { value: "chrome" },
   });
   await waitFor(() =>
-    expect(writes[1]?.body).toEqual({ defaultBrowser: "chrome" }),
+    expect(requests[1]).toBe(
+      'Configure browser access: browser_default="chrome". Preserve all other settings.',
+    ),
   );
+  expect(state.config.defaultBrowser).toBe("embedded");
+  expect(writes).toEqual([]);
   expect(
     (
       screen.getByRole("switch", {

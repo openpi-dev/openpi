@@ -89,6 +89,15 @@ test("separate guide shares live connection state, native family steps and opene
     extensionVersion: "0.4.0",
   };
   const writes: unknown[] = [];
+  const requests: string[] = [];
+  await page.route("**/api/prompt", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body.content);
+    await route.fulfill({
+      status: 202,
+      json: { id: body.commandId, accepted: true },
+    });
+  });
   await page.route("**/api/settings/browser", async (route) => {
     if (route.request().method() === "POST") {
       const patch = route.request().postDataJSON();
@@ -161,8 +170,13 @@ test("separate guide shares live connection state, native family steps and opene
   await guide
     .getByRole("button", { name: "允许 OpenPI 使用", exact: true })
     .click();
-  await expect.poll(() => writes.length).toBe(1);
-  expect(writes[0]).toEqual({ control: true, externalBrowsers: ["safari"] });
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toBe(
+    '/openpi-setup Configure browser access: browser_control=true, browser_external=["safari"]. Preserve all other settings.',
+  );
+  expect(writes).toEqual([]);
+  expect(status.config.control).toBe(false);
+  expect(status.config.externalBrowsers).toEqual([]);
   await popup.close();
   await expect(
     dialog.getByRole("region", { name: "连接 Safari", exact: true }),
@@ -255,7 +269,7 @@ test("browser setup preserves the settings shell, works during a turn and explai
   ).toBeVisible();
   await expect(
     panel.getByRole("switch", { name: "浏览器控制", exact: true }),
-  ).toBeEnabled();
+  ).toBeDisabled();
   await dialog.screenshot({
     path: info.outputPath("browser-settings-light.png"),
   });
@@ -376,27 +390,22 @@ test("browser setup preserves the settings shell, works during a turn and explai
     path: info.outputPath("browser-settings-ready.png"),
   });
   await guide.getByRole("button", { name: "收起浏览器设置引导" }).click();
-  await panel
-    .getByRole("switch", { name: "允许使用 Chrome", exact: true })
-    .click();
   await expect(
     panel.getByRole("switch", { name: "允许使用 Chrome", exact: true }),
-  ).toBeEnabled();
-  await panel
-    .getByRole("combobox", { name: "默认浏览器" })
-    .selectOption("chrome");
+  ).toBeDisabled();
   await expect(
     panel.getByRole("combobox", { name: "默认浏览器" }),
-  ).toBeEnabled();
-  await panel.getByRole("switch", { name: "浏览器控制", exact: true }).click();
+  ).toBeDisabled();
   await expect(
     panel.getByRole("switch", { name: "浏览器控制", exact: true }),
-  ).toBeChecked();
-  expect(writes).toEqual([
-    { externalBrowsers: ["chrome"] },
-    { defaultBrowser: "chrome" },
-    { control: true },
-  ]);
+  ).toBeDisabled();
+  expect(writes).toEqual([]);
+  status.config = {
+    ...status.config,
+    control: true,
+    externalBrowsers: ["chrome"],
+    defaultBrowser: "chrome",
+  };
   status.profiles = [
     {
       id: "test-connection",
@@ -429,9 +438,8 @@ test("browser setup preserves the settings shell, works during a turn and explai
     (element) => element.scrollWidth > element.clientWidth,
   );
   expect(overflows).toBe(false);
-  await panel.getByRole("switch", { name: "浏览器控制", exact: true }).click();
   await expect(
     panel.getByRole("switch", { name: "浏览器控制", exact: true }),
-  ).not.toBeChecked();
-  expect(writes.at(-1)).toEqual({ control: false });
+  ).toBeDisabled();
+  expect(writes).toEqual([]);
 });

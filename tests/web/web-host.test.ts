@@ -26,7 +26,10 @@ import {
   WEB_SESSION_MARKDOWN_MAX_BYTES,
 } from "../../web/adapter/pi-adapter.ts";
 import type { GitReviewService } from "../../web/host/git-review.ts";
-import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
+import {
+  InteractiveTerminalManager,
+  type InteractiveTerminalService,
+} from "../../web/host/interactive-terminal.ts";
 import type { WebHostOptions } from "../../web/host/web-host.ts";
 import {
   WEB_PROMPT_IMAGE_MAX_BYTES,
@@ -49,8 +52,12 @@ const hostAgentDirectory = await mkdtemp(join(tmpdir(), "openpi-host-agent-"));
 const previousHostAgentDirectory = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = hostAgentDirectory;
 const { WebHost } = await import("../../web/host/web-host.ts");
-const { loadSetupConfig, formatSetupConfig, DEFAULT_WEB_APPEARANCE } =
-  await import("../../extensions/shared/setup-config.ts");
+const {
+  loadSetupConfig,
+  formatSetupConfig,
+  updateSetupConfig,
+  DEFAULT_WEB_APPEARANCE,
+} = await import("../../extensions/shared/setup-config.ts");
 after(async () => {
   if (previousHostAgentDirectory === undefined)
     delete process.env.PI_CODING_AGENT_DIR;
@@ -58,7 +65,7 @@ after(async () => {
   await rm(hostAgentDirectory, { recursive: true, force: true });
 });
 
-test("browser settings hot-apply without a model turn and native credentials cannot authorize Web APIs", async () => {
+test("browser preferences require setup and native credentials cannot authorize Web APIs", async () => {
   const path = join(hostAgentDirectory, "my-pi-setup.json");
   const before = await readFile(path, "utf8").catch(() => undefined);
   const cwd = await mkdtemp(join(tmpdir(), "openpi-browser-host-"));
@@ -119,11 +126,23 @@ test("browser settings hot-apply without a model turn and native credentials can
       defaultBrowser: "chrome",
       externalBrowsers: ["chrome"],
     });
-    assert.equal(saved.status, 200);
-    assert.equal((await saved.json()).config.defaultBrowser, "chrome");
-    assert.equal(loadSetupConfig().browser.control, true);
-    assert.equal(applied, 1);
+    assert.equal(saved.status, 403);
+    assert.match((await saved.json()).error, /\/openpi-setup/);
+    assert.equal(loadSetupConfig().browser.control, false);
+    assert.equal(loadSetupConfig().browser.defaultBrowser, "embedded");
+    assert.deepEqual(loadSetupConfig().browser.externalBrowsers, []);
+    assert.equal(applied, 0);
     assert.equal(prompted, 0);
+    // Simulate the canonical setup writer for the transport authorization checks.
+    await updateSetupConfig((current) => ({
+      ...current,
+      browser: {
+        ...current.browser,
+        control: true,
+        defaultBrowser: "chrome",
+        externalBrowsers: ["chrome"],
+      },
+    }));
     const identity = {
       browser: "chrome",
       profileId: controller,
@@ -197,10 +216,16 @@ test("browser settings hot-apply without a model turn and native credentials can
       403,
     );
     const revoked = await post("/api/settings/browser", { control: false });
-    assert.equal(revoked.status, 200);
+    assert.equal(revoked.status, 403);
+    assert.equal(loadSetupConfig().browser.control, true);
+    await updateSetupConfig((current) => ({
+      ...current,
+      browser: { ...current.browser, control: false },
+    }));
+    host.publish("settings_changed", {});
     const polling = await post(route, { pages: [] }, scoped);
     assert.equal((await polling.json()).enabled, false);
-    assert.equal(applied, 2);
+    assert.equal(applied, 0);
     assert.equal(prompted, 0);
   } finally {
     await host.stop();
@@ -6729,40 +6754,47 @@ test("provider key writes require authentication and sanitize provider failures"
   }
 });
 
-test("stop bounds an authenticated incomplete HTTP request", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-http-"));
-  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
-  const socket = createConnection({
-    host: launched.hostname,
-    port: Number(launched.port),
-  });
-  socket.on("error", () => undefined);
-  try {
-    await once(socket, "connect");
-    socket.write(
-      `POST /api/workspaces HTTP/1.1\r\nHost: ${launched.host}\r\nAuthorization: ${headers.Authorization}\r\nContent-Type: application/json\r\nContent-Length: 4096\r\n\r\n{"path":"`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+for (const wallShift of [0, 120_000, -120_000]) {
+  test(`stop bounds an authenticated incomplete HTTP request with wall shift ${wallShift}`, async (t) => {
+    const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-http-"));
+    const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+    const socket = createConnection({
+      host: launched.hostname,
+      port: Number(launched.port),
+    });
+    socket.on("error", () => undefined);
+    try {
+      await once(socket, "connect");
+      socket.write(
+        `POST /api/workspaces HTTP/1.1\r\nHost: ${launched.host}\r\nAuthorization: ${headers.Authorization}\r\nContent-Type: application/json\r\nContent-Length: 4096\r\n\r\n{"path":"`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const startedAt = Date.now();
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      host.stop(),
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("host stop did not finish")),
-          2_000,
-        );
-      }),
-    ]);
-    clearTimeout(timeout);
-    assert.ok(Date.now() - startedAt < 1_500);
-  } finally {
-    socket.destroy();
-    await host.stop();
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
+      const nativeDateNow = Date.now;
+      const startedAt = performance.now();
+      const stopping = host.stop();
+      t.mock.method(Date, "now", () => nativeDateNow() + wallShift);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        stopping,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("host stop did not finish")),
+            2_000,
+          );
+        }),
+      ]);
+      clearTimeout(timeout);
+      const elapsed = performance.now() - startedAt;
+      assert.ok(elapsed >= 0 && elapsed < 1_500, `stop elapsed ${elapsed}ms`);
+    } finally {
+      t.mock.restoreAll();
+      socket.destroy();
+      await host.stop();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+}
 
 test("stop disposes the runtime before waiting for an in-flight prompt request", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-prompt-"));
@@ -6801,6 +6833,133 @@ test("stop disposes the runtime before waiting for an in-flight prompt request",
     assert.equal((await response).status, 202);
   } finally {
     releasePrompt();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("managed worktree endpoints bind discovery to a known workspace and forward only exact release identity", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-worktree-host-"));
+  const runtime = testRuntime(cwd);
+  const calls: unknown[] = [];
+  const target = {
+    sessionId: "deleted-native-child",
+    sessionPath: join(runtime.sessionDirectory, "deleted.jsonl"),
+    worktreePath: join(cwd, ".git", "pi-worktrees", "retained"),
+  };
+  runtime.listRetainedWorktrees = async (path, cursor) => {
+    calls.push({ path, cursor });
+    return {
+      worktrees: [target],
+      truncated: true,
+      unavailable: 1,
+      nextCursor: "opaque-next",
+    };
+  };
+  let externalHolder: boolean | undefined;
+  runtime.releaseSessionWorktree = async (request, hasExternalHolders) => {
+    externalHolder = hasExternalHolders?.();
+    calls.push(request);
+    return {
+      ...request,
+      state: "preserved",
+      reason: "A saved Session still references this checkout.",
+    };
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const route = `${launched.origin}/api/workspaces/worktrees?path=${encodeURIComponent(cwd)}`;
+  const release = { ...target, commandId: "explicit-release" };
+  const post = (body: unknown, authenticated = true) =>
+    fetch(`${launched.origin}/api/sessions/worktree-release`, {
+      method: "POST",
+      headers: {
+        ...(authenticated ? headers : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await fetch(route)).status, 401);
+    const listing = await fetch(`${route}&cursor=opaque`, { headers });
+    assert.equal(listing.status, 200);
+    assert.deepEqual(await listing.json(), {
+      worktrees: [target],
+      truncated: true,
+      unavailable: 1,
+      nextCursor: "opaque-next",
+    });
+    assert.deepEqual(calls.shift(), { path: cwd, cursor: "opaque" });
+    assert.notEqual(
+      (
+        await fetch(
+          `${launched.origin}/api/workspaces/worktrees?path=${encodeURIComponent(join(cwd, "unknown"))}`,
+          { headers },
+        )
+      ).status,
+      200,
+    );
+    assert.equal(calls.length, 0);
+    assert.equal((await post(release, false)).status, 401);
+    for (const body of [
+      { ...release, token: "browser-authority" },
+      { ...release, worktreePath: "relative" },
+      { ...release, sessionId: "bad\nidentity" },
+    ])
+      assert.equal((await post(body)).status, 400);
+    assert.equal(calls.length, 0);
+    const response = await post(release);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      ...release,
+      state: "preserved",
+      reason: "A saved Session still references this checkout.",
+    });
+    assert.deepEqual(calls, [release]);
+    assert.equal(externalHolder, false);
+    delete runtime.releaseSessionWorktree;
+    assert.equal((await post(release)).status, 501);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("release treats an injected terminal service without holder evidence as unknown", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-holder-host-"));
+  const runtime = testRuntime(cwd);
+  const terminals: InteractiveTerminalService =
+    new InteractiveTerminalManager();
+  terminals.hasWorktreeReferences = undefined;
+  runtime.releaseSessionWorktree = async (request, holders) => ({
+    ...request,
+    state: holders?.() ? "preserved" : "removed",
+  });
+  const { host, launched, headers } = await startTestHost(runtime, {
+    interactiveTerminals: terminals,
+  });
+  try {
+    for (const evidence of [undefined, () => true, () => false]) {
+      terminals.hasWorktreeReferences = evidence;
+      const response = await fetch(
+        `${launched.origin}/api/sessions/worktree-release`,
+        {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            commandId: "release",
+            sessionId: "deleted",
+            sessionPath: join(runtime.sessionDirectory, "deleted.jsonl"),
+            worktreePath: cwd,
+          }),
+        },
+      );
+      assert.equal(response.status, 200);
+      assert.equal(
+        (await response.json()).state,
+        evidence?.() === false ? "removed" : "preserved",
+      );
+    }
+  } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }

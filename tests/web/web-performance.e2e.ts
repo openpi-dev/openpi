@@ -5,10 +5,13 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
+import {
+  assertPerformanceSessionIdentity,
+  performanceFixturePath as fixturePath,
+  performanceSessionId as sessionId,
+} from "./web-performance-session.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const fixturePath = "/m12-fixture/session.jsonl";
-const sessionId = "m12-synthetic-session";
 const stamp = "2026-09-18T00:00:00Z";
 
 type Entry = NonNullable<WebSnapshot["selectedSession"]>["entries"][number];
@@ -53,9 +56,10 @@ function entriesFor(scenario: Scenario): Entry[] {
 function projectedSnapshot(base: WebSnapshot, scenario: Scenario): WebSnapshot {
   const entries = entriesFor(scenario);
   const omitted = scenario === "truncated" ? 488 : 0;
-  return {
+  const snapshot: WebSnapshot = {
     ...base,
     currentSessionId: sessionId,
+    currentSessionPath: fixturePath,
     workspaces: [
       { path: "/m12-fixture", name: "M12 synthetic", current: true },
     ],
@@ -92,6 +96,8 @@ function projectedSnapshot(base: WebSnapshot, scenario: Scenario): WebSnapshot {
     runtime: { status: "idle", capabilities: {} },
     truncation: { ...base.truncation, truncated: omitted > 0 },
   };
+  assertPerformanceSessionIdentity(snapshot);
+  return snapshot;
 }
 
 function percentile(samples: number[], quantile: number) {
@@ -113,7 +119,13 @@ async function installFixture(page: Page, scenario: Scenario) {
         base = (await response.json()) as WebSnapshot;
       }
       await route.fulfill({ json: projectedSnapshot(base, scenario) });
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("synthetic session identity mismatch")
+      ) {
+        throw error;
+      }
       await route.abort().catch(() => undefined);
     }
   });

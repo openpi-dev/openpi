@@ -127,14 +127,19 @@ it("keeps browser authorization readable and reveals manual code only on request
     document.querySelector(".models-login-fallback")?.hasAttribute("open"),
   ).toBe(false);
   fireEvent.click(screen.getByText(i18n.t("accountLoginFallback")));
-  const input = screen.getByLabelText(i18n.t("accountLoginPaste"));
+  const input = screen.getByLabelText<HTMLInputElement>(
+    i18n.t("accountLoginPaste"),
+  );
   expect(input.getAttribute("type")).toBe("password");
+  await waitFor(() => expect(input.disabled).toBe(false));
   fireEvent.change(input, { target: { value: "private-code" } });
   fireEvent.keyDown(input, { key: "Enter", isComposing: true });
   expect(WebClient.prototype.respondProviderLogin).toHaveBeenCalledTimes(1);
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("accountLoginContinue") }),
-  );
+  const submit = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("accountLoginContinue"),
+  });
+  await waitFor(() => expect(submit.disabled).toBe(false));
+  fireEvent.click(submit);
   await waitFor(() =>
     expect(WebClient.prototype.respondProviderLogin).toHaveBeenCalledWith(
       "session-a",

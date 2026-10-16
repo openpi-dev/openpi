@@ -7,6 +7,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { formatCompactTokens } from "../shared/context-utilization.ts";
 import type {
   FooterItem,
   FooterLayoutItem,
@@ -111,12 +112,6 @@ function sanitizeTerminalLabel(text: string) {
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 }
 
-export function formatTokens(tokens: number) {
-  if (tokens < 1_000) return `${tokens}`;
-  if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}k`;
-  return `${(tokens / 1_000_000).toFixed(1)}m`;
-}
-
 export function formatDirectory(
   cwd: string,
   home = homedir(),
@@ -177,7 +172,9 @@ export function buildSegmentCatalog(
   ) => string = defaultPullRequest,
 ): Record<FooterItem, { text: string; tone: SegmentTone }> {
   const contextWindow =
-    modelInfo.contextWindow > 0 ? formatTokens(modelInfo.contextWindow) : "";
+    modelInfo.contextWindow > 0
+      ? formatCompactTokens(modelInfo.contextWindow)
+      : "";
   const contextText =
     modelInfo.contextPercent === null
       ? contextWindow
@@ -311,7 +308,12 @@ function renderPowerlineLine(
   const leftText = renderPowerlineSide(left);
   const rightText = renderPowerlineSide(right);
   if (!rightText) return truncateToWidth(leftText, width);
-  if (!leftText) return truncateToWidth(rightText, width);
+  if (!leftText) {
+    const fittedRight = truncateToWidth(rightText, width);
+    return (
+      " ".repeat(Math.max(0, width - visibleWidth(fittedRight))) + fittedRight
+    );
+  }
 
   const gap = width - visibleWidth(leftText) - visibleWidth(rightText);
   if (gap >= 1) {
@@ -329,7 +331,12 @@ function renderPlainLine(
   const leftText = joinPlain(left, theme);
   const rightText = joinPlain(right, theme);
   if (!rightText) return truncateToWidth(leftText, width);
-  if (!leftText) return truncateToWidth(rightText, width);
+  if (!leftText) {
+    const fittedRight = truncateToWidth(rightText, width);
+    return (
+      " ".repeat(Math.max(0, width - visibleWidth(fittedRight))) + fittedRight
+    );
+  }
 
   const naturalGap = width - visibleWidth(leftText) - visibleWidth(rightText);
   if (naturalGap >= 1) {

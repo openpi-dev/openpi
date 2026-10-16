@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { posix, win32 } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   DEFAULT_FOOTER_LINES,
+  FOOTER_STYLES,
   normalizeFooterLines,
   parseSetupConfig,
 } from "../../../extensions/shared/setup-config.ts";
@@ -44,6 +46,53 @@ const gitInfo: GitInfoState = {
   changedFiles: 7,
   pullRequest: { number: 42, url: "https://example.com/pr/42", isDraft: false },
 };
+
+for (const style of FOOTER_STYLES) {
+  test(`${style} keeps a right-only flex group at the terminal edge`, () => {
+    for (const branch of ["main", "分支", "e\u0301", "🔧"]) {
+      const render = (
+        layout: unknown,
+        width = 40,
+        cachePercent: number | null = null,
+      ) =>
+        renderFooter({
+          cwd: "/tmp/project",
+          modelInfo: { ...modelInfo, cachePercent },
+          gitInfo: { ...gitInfo, branch, pullRequest: null },
+          style,
+          lines: normalizeFooterLines(layout),
+          width,
+          theme: { fg: (_name, text) => `\x1b[36m${text}\x1b[0m` },
+        });
+      assert.deepEqual(normalizeFooterLines([["flex", "git"]]), [
+        ["flex", "git"],
+      ]);
+      const leftOnly = render([["git"]])[0]!;
+      const rightOnly = render([["flex", "git"]])[0]!;
+      assert.equal(visibleWidth(rightOnly), 40);
+      assert.ok(rightOnly.endsWith(leftOnly));
+      assert.equal(
+        stripVTControlCharacters(rightOnly),
+        " ".repeat(40 - visibleWidth(leftOnly)) +
+          stripVTControlCharacters(leftOnly),
+      );
+      assert.deepEqual(render([["cache", "flex", "git"]]), [rightOnly]);
+      const twoSided = render([["cache", "flex", "git"]], 40, 82)[0]!;
+      assert.equal(visibleWidth(twoSided), 40);
+      assert.match(stripVTControlCharacters(twoSided), /^ ?cache 82%/);
+      assert.ok(stripVTControlCharacters(twoSided).includes(`⎇ ${branch}`));
+      assert.deepEqual(render([["git", "flex"]]), [leftOnly]);
+      assert.ok(visibleWidth(leftOnly) < 40);
+      assert.deepEqual(render([["cache", "flex", "pr"]]), []);
+
+      for (const width of [0, 1, 2, 3, 5, 9]) {
+        const narrow = render([["flex", "git"]], width);
+        assert.ok(narrow.length <= 1);
+        assert.equal(visibleWidth(narrow[0] ?? ""), width);
+      }
+    }
+  });
+}
 
 test("formatDirectory shortens Windows Home paths", () => {
   assert.equal(
@@ -93,13 +142,13 @@ test("default one-line layout leads with model context and ends with cwd", () =>
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /project/);
   assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);
-  assert.match(lines[0]!, /25%\/1\.0m/);
+  assert.match(lines[0]!, /25%\/1\.0M/);
   // Cost is an opt-in metric and stays out of the default layout.
   assert.doesNotMatch(lines[0]!, /\$/);
   assert.match(lines[0]!, /main/);
   assert.match(lines[0]!, /PR #42/);
   const modelIndex = lines[0]!.indexOf("seal/gpt-5.6-sol");
-  const contextIndex = lines[0]!.indexOf("25%/1.0m");
+  const contextIndex = lines[0]!.indexOf("25%/1.0M");
   const branchIndex = lines[0]!.indexOf("main");
   const prIndex = lines[0]!.indexOf("PR #42");
   const cwdIndex = lines[0]!.indexOf("project");
@@ -107,8 +156,29 @@ test("default one-line layout leads with model context and ends with cwd", () =>
   assert.ok(contextIndex < branchIndex);
   assert.ok(branchIndex < prIndex);
   assert.ok(prIndex < cwdIndex);
-  const gap = branchIndex - contextIndex - "25%/1.0m".length;
+  const gap = branchIndex - contextIndex - "25%/1.0M".length;
   assert.ok(gap > 1);
+});
+
+test("footer context window matches the shared compact token formatter", () => {
+  const render = (contextWindow: number) =>
+    renderFooter({
+      cwd: "/Users/me/project",
+      modelInfo: { ...modelInfo, contextWindow, contextPercent: 25 },
+      gitInfo,
+      style: "plain",
+      lines: DEFAULT_FOOTER_LINES,
+      width: 140,
+      theme,
+      formatPullRequest: (n) => `PR #${n}`,
+    })[0]!;
+
+  // The footer shows the same capacity the shared child-agent projection
+  // shows, so the two must agree at every magnitude. It previously kept a
+  // private formatter that rounded across the whole 1k-999k range and used a
+  // lowercase "m".
+  assert.match(render(8_192), /25%\/8\.2k/);
+  assert.match(render(1_048_576), /25%\/1\.0M/);
 });
 
 test("legacy footerItems migration preserves the rendered footer", () => {
@@ -363,7 +433,7 @@ test("renderFooter renders only the configured segments", () => {
 
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);
-  assert.match(lines[0]!, /25%\/1\.0m/);
+  assert.match(lines[0]!, /25%\/1\.0M/);
   assert.match(lines[0]!, /cache 82%/);
   assert.doesNotMatch(lines[0]!, /project|main|PR #42/);
 });

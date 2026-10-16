@@ -639,7 +639,10 @@ export function ProviderSettingsPage({
               hidden={section !== "browser"}
             >
               {section === "browser" && (
-                <BrowserSettingsPanel onSaved={onPreferencesChanged} />
+                <BrowserSettingsPanel
+                  onConfigure={configureOpenPi}
+                  setupPending={setupDisabled}
+                />
               )}
             </div>
             <div

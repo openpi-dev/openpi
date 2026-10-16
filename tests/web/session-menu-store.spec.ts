@@ -440,3 +440,117 @@ it("recovers an expired link to a blank draft instead of presenting another conv
   expect(store.getState().workspaceDraft).toBe(true);
   expect(store.getState().notice).toContain("linked");
 });
+
+it.each([true, false])(
+  "settles each pending same-path caller against its own native identity and controlled state: %s",
+  async (controlled) => {
+    const client = new WebClient();
+    const replacement = snapshot("replacement");
+    if (!controlled) replacement.currentSessionId = "different-controller";
+    vi.spyOn(client, "snapshot").mockResolvedValue(replacement);
+    let finish!: (value: { cancelled: boolean }) => void;
+    const select = vi.spyOn(client, "selectSession").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: snapshot("else", "/sessions/else.jsonl"),
+      selectedPath: "/sessions/else.jsonl",
+      workspaceDraft: false,
+    });
+    const correct = store.getState().actions.selectSession(path, "replacement");
+    await vi.waitFor(() => expect(select).toHaveBeenCalledTimes(1));
+    const same = store.getState().actions.selectSession(path, "replacement");
+    const stale = store
+      .getState()
+      .actions.selectSession(path, "stale-native-id");
+    finish({ cancelled: false });
+    expect(await Promise.all([correct, same, stale])).toEqual([
+      controlled,
+      controlled,
+      false,
+    ]);
+    expect(select).toHaveBeenCalledExactlyOnceWith(path, "replacement");
+  },
+);
+
+it.each([
+  "/sessions/合法 #?.jsonl",
+  "C:/Sessions/合法 #?.jsonl",
+  String.raw`C:\Sessions\合法 #?.jsonl`,
+  String.raw`\\server\share\Sessions\合法 #?.jsonl`,
+  "//server/share/Sessions/合法 #?.jsonl",
+])(
+  "admits an exact platform-independent absolute session link without rewriting %s",
+  async (sessionPath) => {
+    window.history.replaceState(
+      null,
+      "",
+      `/?${new URLSearchParams({ sessionPath, sessionId: id })}`,
+    );
+    const client = new WebClient();
+    const read = vi
+      .spyOn(client, "snapshot")
+      .mockResolvedValue(snapshot(id, sessionPath));
+    const select = vi.spyOn(client, "selectSession");
+    const store = createWebStore(client);
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(read).toHaveBeenCalledWith(sessionPath, undefined, id);
+    expect(store.getState().selectedPath).toBe(sessionPath);
+    expect(store.getState().workspaceDraft).toBe(false);
+    expect(select).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  "sessions/relative.jsonl",
+  "C:relative.jsonl",
+  String.raw`\root-relative.jsonl`,
+  String.raw`\\server`,
+  "//server",
+  "https://example.invalid/session.jsonl",
+  "/sessions/bad\n.jsonl",
+])(
+  "rejects a relative, ambiguous or control-bearing session link %s",
+  (sessionPath) => {
+    window.history.replaceState(
+      null,
+      "",
+      `/?${new URLSearchParams({ sessionPath, sessionId: id })}`,
+    );
+    const store = createWebStore();
+    expect(store.getState().selectedPath).toBeNull();
+    expect(store.getState().workspaceDraft).toBe(true);
+    expect(store.getState().notice).toContain("linked");
+  },
+);
+
+it.each([
+  `sessionPath=${encodeURIComponent(path)}&sessionPath=${encodeURIComponent(path)}&sessionId=${id}`,
+  `sessionPath=${encodeURIComponent(path)}&sessionId=${id}&sessionId=${id}`,
+  new URLSearchParams({
+    sessionPath: "/" + "a".repeat(4096),
+    sessionId: id,
+  }).toString(),
+  new URLSearchParams({
+    sessionPath: path,
+    sessionId: "a".repeat(129),
+  }).toString(),
+  new URLSearchParams({
+    sessionPath: path,
+    sessionId: "bad\nidentity",
+  }).toString(),
+  new URLSearchParams({
+    sessionPath: String.raw`\\?\C:\Sessions\child.jsonl`,
+    sessionId: id,
+  }).toString(),
+])("keeps bounds, control and duplicate admission fail closed: %s", (query) => {
+  window.history.replaceState(null, "", `/?${query}`);
+  const store = createWebStore();
+  expect(store.getState().selectedPath).toBeNull();
+  expect(store.getState().workspaceDraft).toBe(true);
+  expect(store.getState().notice).toContain("linked");
+});

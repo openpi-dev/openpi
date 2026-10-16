@@ -639,7 +639,8 @@ const makePiSession = (
           break;
         case "agent_settled":
           activePrompt.lifecycleSettled = true;
-          activePrompt.lifecycleAborted ||= event.aborted === true;
+          activePrompt.lifecycleAborted ||=
+            "aborted" in event && event.aborted === true;
           maybeSettle(activePrompt);
           break;
       }

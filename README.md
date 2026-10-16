@@ -484,7 +484,7 @@ Web 常规设置提供 Subagent、Bash 和 Write/Edit 的完整／紧凑显示�
 
 <!-- config-contract: codeMode.enabled webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webHiddenThinkingLevels ui.webPinnedSort ui.webSidebarGrouping ui.webChatsSort ui.webProjectsInRecents ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
-浏览器模型控制默认关闭。打开 Web「设置 → 浏览器」，可点击完成安装引导、连接检查、总开关、逐个浏览器授权和默认浏览器选择；也可用 `/openpi-setup` 自然语言设置 `browser_control`、`browser_embedded`、`browser_default`、`browser_external`。默认值依次为 `false`、`true`、`embedded`、`[]`：总开关关闭时所有模型浏览器操作都被拒绝，普通 iframe 浏览不受影响。设置中的授权变更通过同一配置写入器和 Pi 原生扩展事件生效，无需一次模型调用。
+浏览器模型控制默认关闭。Web「设置 → 浏览器」提供安装引导和连接检查；总开关、逐个浏览器授权及默认浏览器选择会提交 `/openpi-setup` 请求，由当前模型在设置流程中通过配置工具保存。也可直接用 `/openpi-setup` 设置 `browser_control`、`browser_embedded`、`browser_default`、`browser_external`。默认值依次为 `false`、`true`、`embedded`、`[]`：总开关关闭时所有模型浏览器操作都被拒绝，普通 iframe 浏览不受影响。请求受理不代表配置已保存；控件以实际持久化状态为准。
 
 普通浏览器可选择 `chrome`、`edge`、`brave`、`chromium`、`safari`、`firefox`。安装引导可打开独立窗口，在支持 Document Picture-in-Picture 的浏览器中浮动显示，其他浏览器使用普通弹窗。步骤中的圈选是操作示意；浏览器管理页仍由浏览器自身管理。Safari 26+（macOS）和 Firefox 128+ 使用随包提供的兼容扩展控制普通标签，内置控制仍需要 Chromium 系浏览器。开发安装为临时扩展，重启后需要重新加载；正式一键安装需要另行发布签名扩展。
 
@@ -635,7 +635,7 @@ Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的
 
 同一 Pi agent 目录一次只允许一个 Web Host 持有该 Session/元数据目录。第二个 `openpi web` 会明确拒绝启动；正常关停会先排空共享目录变更再释放租约，进程崩溃后仅在确认原 owner 的 PID 与进程启动身份不再匹配时恢复。一个 Host 可在侧栏管理多个工作区，因此不需要为每个仓库启动一个进程。
 
-会话行的 `… → 分叉` 支持运行中的整段会话快照：源任务继续执行，新分支继承已保存的当前历史并等待新的输入。Git 项目还可选择“在新工作树中创建聊天分支”，基于源 HEAD 创建独立 detached 工作树，带入未提交内容，保留原项目分组；原目录和暂存区不会因分叉而被改写。取消只作用于分叉创建，发现目录已有其他改动时保留并报告位置。工作树不会自动安装依赖或执行 setup；当前不支持 sparse/unmerged/submodule 快照。历史、文件范围、失败保留和验证边界见[侧栏分叉设计记录](docs/design/WEB_CODEX_SIDEBAR.md#2026-10-13-running-snapshots-and-worktree-forks)。
+会话行的 `… → 分叉` 支持运行中的整段会话快照：源任务继续执行，新分支继承已保存的当前历史并等待新的输入。Git 项目还可选择“在新工作树中创建聊天分支”，基于源 HEAD 创建独立 detached 工作树，带入未提交内容，保留原项目分组；原目录和暂存区不会因分叉而被改写。取消只作用于分叉创建，发现目录已有其他改动时保留并报告位置。工作树不会自动安装依赖或执行 setup；当前不支持 sparse/unmerged/submodule 快照。删除会话默认保留工作树；独立的显式释放操作只回收私有原始凭据匹配且没有任何会话或运行时持有的未改动目录，共享、修改或无法核实的现场继续保留。保留资源可按原项目分页重新发现。历史、文件范围、失败保留和验证边界见[侧栏分叉设计记录](docs/design/WEB_CODEX_SIDEBAR.md#2026-10-13-running-snapshots-and-worktree-forks)。
 
 Host 仅监听 loopback。本机任意浏览器直接输入终端显示的 `http://127.0.0.1:端口` 即可使用，无需配对或复制 token。正式页面在本地导航时自动取得当前 Host 的高熵凭据，API 仍校验 Bearer token；跨站、其他本地端口和嵌入页面不能取得入口凭据。凭据只属于本次进程，不是远程身份或长期登录机制；Host 重启后刷新页面即可取得新凭据。旧的 fragment 登录链接仍兼容，读取后清除地址栏 fragment。Vite 开发页面保持开发启动器提供的 fragment 入口。
 

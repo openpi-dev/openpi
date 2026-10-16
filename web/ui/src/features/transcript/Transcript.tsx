@@ -2589,10 +2589,24 @@ export function Transcript(props: TranscriptProps) {
     let retryRowKey: string | undefined;
     const results = new Map<string, DisplayEntry>();
     const pairedToolIds = new Set<string>();
+    // The native execution snapshot reconstructs pending top-level calls.
+    // Only the exact active controller owns Host-observed nested result bodies;
+    // prefer those events and supplement calls whose start was not observed.
+    const observedTools = active
+      ? (props.snapshot.runtime.liveTools ?? [])
+      : [];
+    const pendingTools = selectedExecution?.liveTools ?? [];
     const liveTools = historyPaused
       ? []
-      : (selectedExecution?.liveTools ??
-        (active ? (props.snapshot.runtime.liveTools ?? []) : []));
+      : [
+          ...observedTools,
+          ...pendingTools.filter(
+            (item) =>
+              !observedTools.some(
+                (observed) => observed.call.id === item.call.id,
+              ),
+          ),
+        ];
     entries.forEach((entry) => {
       const { message } = entry;
       if (message.role === "toolResult" && message.toolCallId)

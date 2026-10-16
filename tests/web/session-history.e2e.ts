@@ -593,6 +593,11 @@ test("automatic native pages retain chronological turns with repeated provider t
   page.on("request", (request) => {
     if (new URL(request.url()).pathname === "/api/session/history") reads++;
   });
+  let completedReads = 0;
+  page.on("requestfinished", (request) => {
+    if (new URL(request.url()).pathname === "/api/session/history")
+      completedReads++;
+  });
   try {
     await page.goto(fixture.host.origin);
     const conversation = page.locator(".conversation");
@@ -617,6 +622,13 @@ test("automatic native pages retain chronological turns with repeated provider t
     ]) {
       await conversation.hover();
       await page.mouse.wheel(0, -100_000);
+      if (from === 1) {
+        // The final one-entry root page is prefetched after the preceding 40.
+        // Consume it explicitly instead of relying on one wheel gesture timing.
+        await expect.poll(() => completedReads).toBe(requestCount);
+        await conversation.hover();
+        await page.mouse.wheel(0, -100_000);
+      }
       await expect(questions).toHaveCount(count + (from === 1 ? 1 : 0));
       await expect(answers).toHaveCount(count);
       await expect.poll(rowText).toEqual(expected(from));

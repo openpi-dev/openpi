@@ -61,8 +61,7 @@ function planProviderConnection(page: Page, baseUrl: string) {
       const snapshot = await page.request.get("/api/snapshot", { headers });
       expect(snapshot.status()).toBe(200);
       const { currentSessionId, runtime } = await snapshot.json();
-      // Failed streaming assertions still own a native turn. Stop it before
-      // restoring the model or closing the provider so later tests stay isolated.
+      // Retire the exact native turn before restoring its model configuration.
       if (runtime.activeTurn) {
         const { sessionId, commandId, epoch } = runtime.activeTurn;
         const cancelled = await page.request.post("/api/turns/cancel", {
@@ -75,7 +74,8 @@ function planProviderConnection(page: Page, baseUrl: string) {
         .poll(async () => {
           const response = await page.request.get("/api/snapshot", { headers });
           expect(response.status()).toBe(200);
-          return (await response.json()).runtime.status;
+          const { runtime } = await response.json();
+          return runtime.activeTurn ? "running" : runtime.status;
         })
         .toBe("idle");
       const current = await configuration(currentSessionId);

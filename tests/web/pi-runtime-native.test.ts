@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   contentText,
+  type FauxResponseStep,
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
-  type FauxResponseStep,
 } from "@earendil-works/pi-ai";
 import {
   AgentSessionRuntime,
@@ -20,9 +21,28 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { createCapabilitiesExtension } from "../../extensions/capabilities/index.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import type { WebRuntimeEvent } from "../../web/runtime/types.ts";
-import { createCapabilitiesExtension } from "../../extensions/capabilities/index.ts";
+
+// These cases exercise Pi 1.2 event shapes; the minimum-host CI job runs 0.99.
+const piMajorMinor = (
+  JSON.parse(
+    readFileSync(
+      new URL(
+        "../../node_modules/@earendil-works/pi-coding-agent/package.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ).version as string
+)
+  .split(".")
+  .map(Number);
+const skipBeforePi12 =
+  piMajorMinor[0]! < 1 || (piMajorMinor[0] === 1 && piMajorMinor[1]! < 2)
+    ? "requires Pi >= 1.2"
+    : false;
 
 async function nativeRuntime(
   t: TestContext,
@@ -107,7 +127,9 @@ async function nativeRuntime(
   };
 }
 
-test("manual provider retry keeps the original input, images and completed tool results in the native Session", async (t) => {
+test("manual provider retry keeps the original input, images and completed tool results in the native Session", {
+  skip: skipBeforePi12,
+}, async (t) => {
   let calls = 0;
   const { runtime, session, events, cwd } = await nativeRuntime(
     t,
@@ -244,7 +266,77 @@ test("manual provider retry keeps the original input, images and completed tool 
   );
 });
 
-test("manual provider retry keeps the original run owner after steering", async (t) => {
+test("manual provider retry rejects mixed input and revalidates a changed native branch before dispatch", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  let calls = 0;
+  const { runtime, session } = await nativeRuntime(t, () => undefined, [
+    () => {
+      calls++;
+      return fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: "503 fixture",
+      });
+    },
+  ]);
+  await runtime.sendPrompt("Original request", { commandId: "original" });
+  await session.waitForIdle();
+  const failure = session.sessionManager
+    .getBranch()
+    .slice()
+    .reverse()
+    .find((entry) => entry.type === "message")!;
+  const target = {
+    commandId: "retry",
+    retryEntryId: failure.id,
+    expectedSessionId: session.sessionId,
+    expectedSessionPath: `current:${session.sessionId}`,
+  };
+  for (const options of [
+    {
+      ...target,
+      images: [{ mimeType: "image/png" as const, data: "fixture" }],
+    },
+    { ...target, streamingBehavior: "steer" as const },
+    { ...target, planRevision: "plan" },
+  ])
+    await assert.rejects(runtime.sendPrompt("", options));
+  await assert.rejects(runtime.sendPrompt("Different request", target), {
+    code: "PROMPT_REJECTED",
+  });
+  await assert.rejects(
+    runtime.sendPrompt("", { ...target, expectedSessionId: "another" }),
+    { code: "SESSION_CONFLICT" },
+  );
+  assert.equal(calls, 1);
+
+  // Admission accepts this idle failure, then the native branch changes while
+  // the dispatch queue is blocked. The second check must prevent continuation.
+  const gate = Promise.withResolvers<void>();
+  Reflect.set(runtime, "promptAdmission", gate.promise);
+  const retry = runtime.sendPrompt("", target);
+  const rejected = assert.rejects(retry, { code: "PROMPT_REJECTED" });
+  session.sessionManager.appendMessage({
+    role: "user",
+    content: "A newer native input",
+    timestamp: Date.now(),
+  });
+  gate.resolve();
+  await rejected;
+  assert.equal(calls, 1);
+  assert.equal(
+    session.messages.filter(
+      (message) =>
+        message.role === "custom" &&
+        message.customType === "openpi-web-provider-retry",
+    ).length,
+    0,
+  );
+});
+
+test("manual provider retry keeps the original run owner after steering", {
+  skip: skipBeforePi12,
+}, async (t) => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const { runtime, session, events } = await nativeRuntime(t, () => undefined, [
@@ -318,7 +410,9 @@ test("manual provider retry keeps the original run owner after steering", async 
   }
 });
 
-test("manual provider retry remains cancellable through the native run lifecycle", async (t) => {
+test("manual provider retry remains cancellable through the native run lifecycle", {
+  skip: skipBeforePi12,
+}, async (t) => {
   const entered = Promise.withResolvers<void>();
   const { runtime, session, events } = await nativeRuntime(t, () => undefined, [
     fauxAssistantMessage([], {
@@ -369,7 +463,9 @@ test("manual provider retry remains cancellable through the native run lifecycle
   );
 });
 
-test("Pi 1.2 custom-message runs pass capability hooks without a user prompt", async (t) => {
+test("Pi 1.2 custom-message runs pass capability hooks without a user prompt", {
+  skip: skipBeforePi12,
+}, async (t) => {
   const entered = Promise.withResolvers<void>();
   const settled = Promise.withResolvers<void>();
   let trigger = () => {};
@@ -378,7 +474,10 @@ test("Pi 1.2 custom-message runs pass capability hooks without a user prompt", a
     (pi) => {
       createCapabilitiesExtension()(pi);
       pi.on("before_agent_start", (event, ctx) => {
-        assert.equal(event.messageType, "custom");
+        assert.equal(
+          (event as { messageType?: unknown }).messageType,
+          "custom",
+        );
         assert.equal("prompt" in event, false);
         assert.equal(ctx.isIdle(), false);
         entered.resolve();
@@ -410,7 +509,9 @@ test("Pi 1.2 custom-message runs pass capability hooks without a user prompt", a
   );
 });
 
-test("Web preserves Pi 1.2 cancellation during before_agent_start", async (t) => {
+test("Web preserves Pi 1.2 cancellation during before_agent_start", {
+  skip: skipBeforePi12,
+}, async (t) => {
   let providerCalls = 0;
   const { runtime, session, events } = await nativeRuntime(
     t,

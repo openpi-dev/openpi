@@ -54,6 +54,9 @@ import type {
   WebModelConfigurations,
   WebModelDefaults,
   WebProviderAuthProjection,
+  WebWorktreeReleaseRequest,
+  WebWorktreeReleaseResult,
+  WebRetainedWorktrees,
   WebSessionDeleteRequest,
   WebSessionDeleteResult,
   WebSessionForkRequest,
@@ -690,6 +693,24 @@ export class WebClient {
       method: "POST",
       body: JSON.stringify(request),
     });
+  }
+
+  workspaceWorktrees(path: string, cursor?: string) {
+    const query = new URLSearchParams({ path });
+    if (cursor !== undefined) query.set("cursor", cursor);
+    return this.request<WebRetainedWorktrees>(
+      `/api/workspaces/worktrees?${query}`,
+    );
+  }
+
+  releaseSessionWorktree(request: WebWorktreeReleaseRequest) {
+    return this.request<WebWorktreeReleaseResult>(
+      "/api/sessions/worktree-release",
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
   }
 
   sessionMarkdown(path: string, id: string) {
