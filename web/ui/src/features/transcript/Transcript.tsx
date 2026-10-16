@@ -77,6 +77,7 @@ import {
   sessionReadingScope,
 } from "./session-reading-state.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
+import { ToolResultMedia, toolResultMediaSummary } from "./ToolResultMedia.tsx";
 import { type OpenTurnReview, TurnChangesCard } from "./TurnChangesCard.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
 import { TurnNavigation, type TurnNavigationItem } from "./TurnNavigation.tsx";
@@ -505,6 +506,8 @@ function EvidenceDetails({
   rawDetails,
   snapshotMissingResult = false,
   defaultOpen = false,
+  media,
+  mediaSummary,
 }: {
   body: string;
   icon?: ReactNode;
@@ -517,6 +520,8 @@ function EvidenceDetails({
   rawDetails?: unknown;
   snapshotMissingResult?: boolean;
   defaultOpen?: boolean;
+  media?: ReactNode;
+  mediaSummary?: string;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(defaultOpen);
@@ -554,6 +559,9 @@ function EvidenceDetails({
           </span>
           {summary && <span className="tool-summary">{summary}</span>}
         </span>
+        {mediaSummary && (
+          <span className="tool-result-media-summary">{mediaSummary}</span>
+        )}
         {snapshotMissingResult && (
           <span className="evidence-status">
             {t("toolSnapshotMissingResult")}
@@ -564,9 +572,12 @@ function EvidenceDetails({
       </summary>
       {note && <p className="evidence-note">{note}</p>}
       {output === undefined ? (
-        <pre className="details-body tool-evidence">
-          {evidenceText(body).text}
-        </pre>
+        <>
+          <pre className="details-body tool-evidence">
+            {evidenceText(body).text}
+          </pre>
+          {media}
+        </>
       ) : (
         <>
           <figure aria-label={t("toolCallArguments")} style={{ margin: 0 }}>
@@ -574,11 +585,14 @@ function EvidenceDetails({
               {evidenceText(body).text}
             </pre>
           </figure>
-          <figure aria-label={t("toolCallOutput")} style={{ margin: 0 }}>
-            <pre className="details-body tool-evidence">
-              {evidenceText(output).text || t("noOutput")}
-            </pre>
-          </figure>
+          {(evidenceText(output).text || !media) && (
+            <figure aria-label={t("toolCallOutput")} style={{ margin: 0 }}>
+              <pre className="details-body tool-evidence">
+                {evidenceText(output).text || t("noOutput")}
+              </pre>
+            </figure>
+          )}
+          {media}
         </>
       )}
       {rawDetails !== undefined && (
@@ -3518,6 +3532,18 @@ export function Transcript(props: TranscriptProps) {
                                 ? result?.content
                                 : undefined
                           }
+                          mediaSummary={
+                            child || (part.id && pairedToolIds.has(part.id))
+                              ? toolResultMediaSummary(result, t)
+                              : undefined
+                          }
+                          media={
+                            (child ||
+                              (part.id && pairedToolIds.has(part.id))) &&
+                            toolResultMediaSummary(result, t) ? (
+                              <ToolResultMedia message={result} />
+                            ) : undefined
+                          }
                           status={status}
                           evidenceState={
                             props.activityObserved === false &&
@@ -3701,18 +3727,20 @@ export function Transcript(props: TranscriptProps) {
                 : false;
         const { Icon } = toolActivity(toolName);
         const icon = <Icon key={`${entry.key}-icon`} />;
+        const mediaSummary = toolResultMediaSummary(message, t);
         const content =
           family && !message.forkSnapshotToolResult ? (
             <ActivityCard
               key={`${entry.key}-card`}
               family={family}
-              title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content)}`}
-              body={message.content}
+              title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content) || mediaSummary || ""}`}
+              body={[message.content, mediaSummary].filter(Boolean).join("\n")}
               status={status}
               defaultOpen={defaultOpen}
             />
           ) : isEmptyToolOutput(message.content) &&
-            !message.forkSnapshotToolResult ? (
+            !message.forkSnapshotToolResult &&
+            !mediaSummary ? (
             <div className="tool-line-empty" key={`${entry.key}-empty`}>
               <span className="tool-icon">{icon}</span>
               <span className="tool-name">{toolName}</span>
@@ -3726,6 +3754,11 @@ export function Transcript(props: TranscriptProps) {
               icon={icon}
               name={toolName}
               summary={compactSummary(message.content)}
+              output={message.content}
+              mediaSummary={mediaSummary}
+              media={
+                mediaSummary ? <ToolResultMedia message={message} /> : undefined
+              }
               status={status}
               snapshotMissingResult={message.forkSnapshotToolResult}
               defaultOpen={defaultOpen}

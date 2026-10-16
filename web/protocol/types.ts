@@ -430,6 +430,8 @@ export interface WebLiveMessage {
   display?: boolean;
   details?: unknown;
   truncation?: WebMessageTruncation;
+  /** Retained blocks this projection cannot show. Their payloads are not copied. */
+  unsupportedParts?: number;
 }
 
 export interface WebNestedToolCall {
@@ -454,6 +456,8 @@ export type WebMessagePart =
       name?: string;
       previewUrl?: string;
       sourcePartIndex?: number;
+      /** Native bytes exceeded the display budget and were not copied onto the wire. */
+      bytesOmitted?: true;
     }
   | { type: "thinking"; text: string; sourcePartIndex?: number; textTruncated?: true }
   | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
@@ -766,6 +770,7 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       content: text.value,
       parts: [] as WebMessagePart[],
       partsOmitted: 0,
+      unsupportedParts: 0,
       textTruncated: text.truncated,
       visibleTextTruncated: text.truncated,
     };
@@ -785,19 +790,24 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       content: text.value,
       parts: [] as WebMessagePart[],
       partsOmitted: 0,
+      unsupportedParts: 0,
       textTruncated: text.truncated,
       visibleTextTruncated: text.truncated,
     };
   }
 
   const parts: WebMessagePart[] = [];
+  let unsupportedParts = 0;
   let visibleText = "";
   let textTruncated = false;
   let visibleTextTruncated = false;
   const retainedParts = Math.min(content.length, WEB_MAX_MESSAGE_PARTS);
   for (let index = 0; index < retainedParts; index++) {
     const part = content[index];
-    if (typeof part !== "object" || part === null) continue;
+    if (typeof part !== "object" || part === null) {
+      unsupportedParts += 1;
+      continue;
+    }
     const typed = part as Record<string, unknown>;
     let projected: WebMessagePart | undefined;
     if (typed.type === "text" && typeof typed.text === "string") {
@@ -821,12 +831,18 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       typed.type === "image" &&
       typeof typed.mimeType === "string"
     ) {
-      projected = {
-        type: "image",
-        mimeType: typed.mimeType,
-        sourcePartIndex: index,
-        ...(typeof typed.name === "string" ? { name: typed.name.slice(0, 255) } : {}),
-      };
+      const mimeType = typed.mimeType.replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 255);
+      if (mimeType) {
+        const bytesOmitted = typeof typed.data === "string" &&
+          typed.data.length > WEB_PROMPT_IMAGE_MAX_BASE64_CHARS;
+        projected = {
+          type: "image",
+          mimeType,
+          sourcePartIndex: index,
+          ...(typeof typed.name === "string" ? { name: typed.name.slice(0, 255) } : {}),
+          ...(bytesOmitted ? { bytesOmitted: true as const } : {}),
+        };
+      }
     } else if (
       typed.type === "thinking" &&
       typeof typed.thinking === "string"
@@ -878,7 +894,10 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
         id?.truncated === true ||
         name.truncated;
     }
-    if (!projected) continue;
+    if (!projected) {
+      unsupportedParts += 1;
+      continue;
+    }
     parts.push(projected);
   }
   const contentText = boundedTextProjection(visibleText, WEB_MAX_TEXT);
@@ -899,6 +918,7 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
     content: contentText.value,
     parts,
     partsOmitted: Math.max(0, content.length - retainedParts),
+    unsupportedParts,
     textTruncated: textTruncated || contentText.truncated,
     visibleTextTruncated,
   };
@@ -1009,6 +1029,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     toolName: toolName?.value,
     content: content.content,
     ...(content.parts.length > 0 ? { parts: content.parts } : {}),
+    ...(content.unsupportedParts > 0 ? { unsupportedParts: content.unsupportedParts } : {}),
     ...(toolCallId ? { toolCallId: toolCallId.value } : {}),
     ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
     ...(forkSnapshotToolResult ? { forkSnapshotToolResult: true } : {}),

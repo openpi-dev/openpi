@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { WEB_COMMAND_HANDLED } from "../../extensions/shared/web-command-feedback.ts";
+import { WEB_TURN_CHANGES_ENTRY } from "../../web/protocol/turn-changes.ts";
 import {
   projectEntries,
   projectEntry,
   projectMessage,
   WEB_MAX_MESSAGE_PARTS,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
+  WEB_PROMPT_IMAGE_MAX_BASE64_CHARS,
 } from "../../web/protocol/types.ts";
-import { WEB_TURN_CHANGES_ENTRY } from "../../web/protocol/turn-changes.ts";
-import { WEB_COMMAND_HANDLED } from "../../extensions/shared/web-command-feedback.ts";
 
 test("image projection retains bounded native names for prompt reconciliation and omits image bytes", () => {
   const projected = projectMessage({
@@ -40,6 +41,58 @@ test("image projection retains bounded native names for prompt reconciliation an
     oversized.parts?.[0]?.type === "image" && oversized.parts[0].name?.length,
     255,
   );
+});
+
+test("image-only tool results keep type and name metadata without image bytes", () => {
+  const projected = projectMessage({
+    role: "toolResult",
+    toolName: "read",
+    toolCallId: "read-image",
+    isError: false,
+    content: [
+      {
+        type: "image",
+        data: "synthetic-image-data",
+        mimeType: "image/png",
+        name: "shot.png",
+      },
+      { type: "audio", data: "secret-audio-bytes" },
+    ],
+  });
+  assert.equal(projected.content, "");
+  assert.equal(projected.isError, false);
+  assert.deepEqual(projected.parts, [
+    {
+      type: "image",
+      mimeType: "image/png",
+      name: "shot.png",
+      sourcePartIndex: 0,
+    },
+  ]);
+  assert.equal(projected.unsupportedParts, 1);
+  assert.equal(
+    JSON.stringify(projected).includes("synthetic-image-data"),
+    false,
+  );
+  assert.equal(JSON.stringify(projected).includes("secret-audio-bytes"), false);
+  const oversized = projectMessage({
+    role: "toolResult",
+    toolName: "read",
+    toolCallId: "read-image",
+    isError: false,
+    content: [
+      {
+        type: "image",
+        mimeType: "image/png",
+        data: "A".repeat(WEB_PROMPT_IMAGE_MAX_BASE64_CHARS + 1),
+      },
+    ],
+  });
+  assert.equal(
+    oversized.parts?.[0]?.type === "image" && oversized.parts[0].bytesOmitted,
+    true,
+  );
+  assert.equal(JSON.stringify(oversized).includes("AAAA"), false);
 });
 
 test("image source indices refer to original native parts even when unsupported parts are skipped", () => {

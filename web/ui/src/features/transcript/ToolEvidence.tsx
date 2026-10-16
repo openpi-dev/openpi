@@ -14,6 +14,7 @@ import type {
 import { copyText } from "../../lib/clipboard.ts";
 import { ArtifactContext } from "../artifacts/context.ts";
 import { parseDiffRows } from "../review/DiffCodePreview.tsx";
+import { ToolResultMedia, toolResultMediaSummary } from "./ToolResultMedia.tsx";
 import {
   toolActivity,
   toolActivityLabel,
@@ -105,6 +106,7 @@ export function ToolEvidence({
   const lines = view.output
     .split("\n")
     .map((text, index) => ({ text, number: view.offset + index }));
+  const mediaSummary = toolResultMediaSummary(result, t);
   const diffRows = view.diff ? toolDiffRows(view.diff) : [];
   // These are counts in the displayed result, never guesses from edit arguments.
   const additions = diffRows.filter((line) => line.kind === "added").length;
@@ -147,6 +149,9 @@ export function ToolEvidence({
           ) : null}
         </span>
         {stats}
+        {mediaSummary && (
+          <span className="tool-result-media-summary">{mediaSummary}</span>
+        )}
         <ChevronRight className="evidence-chevron" aria-hidden="true" />
         <span className="evidence-status">{statusLabel}</span>
       </summary>
@@ -198,7 +203,10 @@ export function ToolEvidence({
                 {copyFeedback === "copiedCode" ? <Check /> : <Clipboard />}
               </button>
             </figcaption>
-            <pre>{shellText || t("noOutput")}</pre>
+            {(shellText || !mediaSummary) && (
+              <pre>{shellText || t("noOutput")}</pre>
+            )}
+            {mediaSummary && <ToolResultMedia message={result} />}
             <div className="evidence-process-meta">
               {statusLabel}
               {view.exitCode !== undefined
@@ -315,10 +323,13 @@ export function ToolEvidence({
             ))}
           </EvidenceBlock>
         ) : (
-          <EvidenceBlock className="evidence-log" aria-label="Tool output">
-            {view.output || t("noOutput")}
-          </EvidenceBlock>
+          (view.output || !mediaSummary) && (
+            <EvidenceBlock className="evidence-log" aria-label="Tool output">
+              {view.output || t("noOutput")}
+            </EvidenceBlock>
+          )
         )}
+        {!shell && mediaSummary && <ToolResultMedia message={result} />}
         {view.kind === "file" && view.truncated && <p>{t("toolReadMore")}</p>}
         {view.recovery && (
           <p>

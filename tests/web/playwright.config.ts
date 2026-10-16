@@ -1,5 +1,5 @@
-import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, defineConfig } from "@playwright/test";
@@ -45,6 +45,7 @@ export default defineConfig({
     "tests/web/document-reading-state.e2e.ts",
     "tests/web/transcript-search.e2e.ts",
     "tests/web/history-images.e2e.ts",
+    "tests/web/tool-result-images.e2e.ts",
     "tests/web/settings-parity.e2e.ts",
     "tests/web/configuration-settings.e2e.ts",
     "tests/web/settings-appearance.e2e.ts",
