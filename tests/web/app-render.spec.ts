@@ -30,8 +30,8 @@ import {
   type SessionReadingCache,
   sessionReadingScope,
 } from "../../web/ui/src/features/transcript/session-reading-state.ts";
-import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
+import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
@@ -771,7 +771,7 @@ describe("OpenPI React transcript", () => {
     );
 
     expect(screen.getByRole<HTMLInputElement>("searchbox").value).toBe("foo ");
-    expect(screen.getByText("foo bar")).toBeTruthy();
+    expect(screen.getAllByText("foo bar")).toHaveLength(2);
   });
 
   it("keeps the 16-cell logo animation replayable", () => {
@@ -921,7 +921,7 @@ describe("OpenPI React transcript", () => {
     expect(container.querySelectorAll(".tool-evidence-card")).toHaveLength(4);
     expect(
       container.querySelectorAll(".tool-evidence-card .tool-name"),
-    ).toHaveLength(4);
+    ).toHaveLength(0);
     expect(container.querySelectorAll(".activity-card.subagent")).toHaveLength(
       1,
     );
@@ -2435,7 +2435,7 @@ it.each(["openpi-setup", "my-pi-setup"])(
         screen.getByRole("button", { name: i18n.t("retryPrompt") }),
       );
     });
-    expect(resend).toHaveBeenCalledWith(content);
+    expect(resend).toHaveBeenCalledWith(content, "answer");
   },
 );
 
@@ -2820,7 +2820,7 @@ it("refreshes background Session Git review while a different Session runs", asy
   }
 });
 
-it("keeps the reader mounted across an external controller change and revokes input until refreshed", async () => {
+it("keeps the reader and editable draft across an external controller change without direct prompt admission", async () => {
   const original = webStore.getState();
   const snapshot = activeSnapshot();
   snapshot.runtime.status = "idle";
@@ -2948,7 +2948,7 @@ it("keeps the reader mounted across an external controller change and revokes in
     expect(
       view.container.querySelector<HTMLTextAreaElement>(".composer textarea")
         ?.disabled,
-    ).toBe(true);
+    ).toBe(false);
     expect(
       await store.getState().actions.sendPrompt("Must not reach old A"),
     ).toBe(false);
@@ -4091,9 +4091,7 @@ it("loads archived history even when its workspace summary was omitted", async (
     expect.any(AbortSignal),
   );
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(
-    await screen.findByRole("menuitem", { name: "Restore conversation" }),
-  );
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Restore" }));
   expect(
     await screen.findByText(
       "Could not confirm restoration. Refresh and try again.",

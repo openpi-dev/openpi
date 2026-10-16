@@ -49,29 +49,43 @@ export async function discoverProviderModels(request: ProviderModelDiscovery, he
   if (!validProviderDiscovery(request)) throw new Error("Invalid provider connection");
   const base = request.baseUrl.replace(/\/+$/u, "");
   const url = new URL(`${base}${request.api === "anthropic-messages" && !base.endsWith("/v1") ? "/v1" : ""}/models`);
-  const response = await fetch(url, { headers, signal, redirect: "error" });
-  if (!response.ok) throw new Error(`Model catalog returned HTTP ${response.status}`);
-  if (!response.body) throw new Error("Empty model catalog");
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      bytes += value.length;
-      if (bytes > 1024 * 1024) throw new Error("Model catalog is too large");
-      chunks.push(value);
-    }
-  } finally { await reader.cancel().catch(() => undefined); }
-  const data: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  if (!data || typeof data !== "object" || !("data" in data) || !Array.isArray(data.data)) throw new Error("Unsupported model catalog");
   const models = new Map<string, DiscoveredProviderModel>();
-  for (const item of data.data) {
-    if (!item || typeof item !== "object" || typeof item.id !== "string" || !item.id || item.id.length > 256 || /[\u0000-\u001f]/u.test(item.id)) continue;
-    const name = typeof item.name === "string" ? item.name : typeof item.display_name === "string" ? item.display_name : item.id;
-    models.set(item.id, { ...modelCapabilities(item), id: item.id, name: name.slice(0, 256).replace(/[\u0000-\u001f]/gu, "") || item.id });
-    if (models.size >= 500) break;
+  const cursors = new Set<string>();
+  let bytes = 0;
+  let truncated = false;
+  while (true) {
+    const response = await fetch(url, { headers, signal, redirect: "error" });
+    if (!response.ok) throw new Error(`Model catalog returned HTTP ${response.status}`);
+    if (!response.body) throw new Error("Empty model catalog");
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        bytes += value.length;
+        if (bytes > 1024 * 1024) throw new Error("Model catalog is too large");
+        chunks.push(value);
+      }
+    } finally { await reader.cancel().catch(() => undefined); }
+    const data: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!record(data) || !Array.isArray(data.data)) throw new Error("Unsupported model catalog");
+    const hasMore = request.api === "anthropic-messages" && data.has_more === true;
+    truncated ||= data.data.length > 500;
+    for (const [index, item] of data.data.entries()) {
+      if (!item || typeof item !== "object" || typeof item.id !== "string" || !item.id || item.id.length > 256 || /[\u0000-\u001f]/u.test(item.id)) continue;
+      const name = typeof item.name === "string" ? item.name : typeof item.display_name === "string" ? item.display_name : item.id;
+      models.set(item.id, { ...modelCapabilities(item), id: item.id, name: name.slice(0, 256).replace(/[\u0000-\u001f]/gu, "") || item.id });
+      if (models.size >= 500) {
+        truncated ||= index < data.data.length - 1 || hasMore;
+        break;
+      }
+    }
+    if (!hasMore || models.size >= 500) break;
+    const cursor = data.last_id;
+    if (typeof cursor !== "string" || !cursor || cursor.length > 256 || /[\u0000-\u001f]/u.test(cursor) || cursors.has(cursor) || data.data.length === 0) throw new Error("Unsupported model catalog pagination");
+    cursors.add(cursor);
+    url.searchParams.set("after_id", cursor);
   }
-  return { models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)), truncated: data.data.length > 500 };
+  return { models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)), truncated };
 }

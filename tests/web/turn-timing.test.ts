@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,6 +7,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   readTurnTiming,
+  readSessionTurnEvidence,
   WEB_TURN_TIMING_ENTRY,
 } from "../../web/protocol/turn-timing.ts";
 import { projectEntry } from "../../web/protocol/types.ts";
@@ -115,6 +116,14 @@ test("Pi execution timing excludes queue time, survives clock rollback and persi
   const timing = readTurnTiming(record.data);
   assert.equal(timing?.elapsedMs, 157000);
   assert.equal(timing?.outcome, "completed");
+  assert.equal(timing?.unreadEligible, true);
+  assert.equal(
+    readSessionTurnEvidence(
+      sessionManager.getBranch(),
+      sessionManager.getSessionId(),
+    ).results.length,
+    1,
+  );
   assert.equal(timing?.finishedAt, 100000);
   const projection = projectEntry(record);
   assert.deepEqual(
@@ -128,6 +137,48 @@ test("Pi execution timing excludes queue time, survives clock rollback and persi
   );
 });
 
+test("a timing entry retained in Pi memory after persistence fails cannot publish unread activity", async (t) => {
+  const root = await mkdtemp(
+    join(tmpdir(), "openpi-timing-persistence-failure-"),
+  );
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const manager = SessionManager.create(root, join(root, "sessions"));
+  manager.appendMessage({ role: "user", content: "fixture", timestamp: 1 });
+  const { runtime, emit, events } = harness(manager);
+  emit({ type: "agent_start" });
+  runtime.activePromptTrace!.outcome = "failed";
+  const sessionFile = manager.getSessionFile()!;
+  const savedFile = `${sessionFile}.saved`;
+  await rename(sessionFile, savedFile);
+  await mkdir(sessionFile);
+
+  // Real Pi appends its entry to memory before appendFileSync fails on this directory.
+  emit({ type: "agent_settled" });
+  const record = manager.getEntries().find((entry) => entry.type === "custom");
+  assert.equal(record && readTurnTiming(record.data)?.unreadEligible, false);
+  for (const includeLegacyResults of [false, true]) {
+    const evidence = readSessionTurnEvidence(
+      manager.getBranch(),
+      manager.getSessionId(),
+      includeLegacyResults,
+    );
+    assert.deepEqual(evidence.results, []);
+    assert.equal(evidence.lastTurn?.outcome, "failed");
+  }
+  assert.equal(
+    SessionManager.open(savedFile)
+      .getEntries()
+      .some((entry) => entry.type === "custom"),
+    false,
+  );
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn_settled")
+      .map((event) => event.detail?.outcome),
+    ["failed"],
+  );
+});
+
 for (const outcome of ["failed", "cancelled", "uncertain"] as const) {
   test(`timing preserves ${outcome} without changing the terminal outcome`, () => {
     const { runtime, sessionManager, emit, events } = harness();
@@ -138,6 +189,10 @@ for (const outcome of ["failed", "cancelled", "uncertain"] as const) {
       .getEntries()
       .find((entry) => entry.type === "custom");
     assert.equal(record && readTurnTiming(record.data)?.outcome, outcome);
+    assert.equal(
+      record && readTurnTiming(record.data)?.unreadEligible,
+      outcome === "failed" ? true : undefined,
+    );
     assert.equal(
       events.find((event) => event.type === "turn_settled")?.detail?.outcome,
       outcome,
@@ -204,11 +259,18 @@ test("an optional timing write failure cannot suppress Pi's terminal event", (t)
     throw new Error("fixture disk failure");
   });
   emit({ type: "agent_start" });
-  runtime.activePromptTrace!.outcome = "cancelled";
+  runtime.activePromptTrace!.outcome = "completed";
   assert.doesNotThrow(() => emit({ type: "agent_settled" }));
   assert.equal(
     events.find((event) => event.type === "turn_settled")?.detail?.outcome,
-    "cancelled",
+    "completed",
+  );
+  assert.equal(
+    readSessionTurnEvidence(
+      sessionManager.getBranch(),
+      sessionManager.getSessionId(),
+    ).results.length,
+    0,
   );
   assert.equal(runtime.getActiveTurn(), undefined);
 });

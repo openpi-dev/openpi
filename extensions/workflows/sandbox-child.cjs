@@ -433,3 +433,18 @@ function run(source, argsJson, maxConcurrency, initSeq) {
     fail(error);
   }
 }
+
+function announceListening() {
+  // No token yet. The parent arms the sync watchdog only after this message,
+  // so process startup is not charged against the script deadline.
+  sendIpc?.({ kind: "listening" });
+}
+
+const startDelay = Number(process.env.OPENPI_SANDBOX_START_DELAY_MS);
+if (Number.isFinite(startDelay) && startDelay > 0) {
+  // Keep the timer referenced. IPC also holds the process, but an unref'd
+  // delay must not be the reason a child exits before it can listen.
+  setTimeout(announceListening, startDelay);
+} else {
+  announceListening();
+}
