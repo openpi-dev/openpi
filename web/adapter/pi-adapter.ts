@@ -60,7 +60,13 @@ import type {
 import { matchesSessionIdentity } from "../runtime/session-identity.ts";
 import { WebRuntimeRequestError } from "../runtime/types.ts";
 import { WEB_TURN_TIMING_ENTRY, readSessionTurnEvidence, readTurnTiming } from "../protocol/turn-timing.ts";
-import { searchWebTranscripts } from "../search/transcript-search.ts";
+import {
+  WEB_TRANSCRIPT_SEARCH_MAX_DURATION_MS,
+  WEB_TRANSCRIPT_SEARCH_MAX_TOTAL_BYTES,
+  searchWebTranscripts,
+} from "../search/transcript-search.ts";
+import { SessionCatalog } from "./session-catalog.ts";
+import { SessionLoader } from "./session-loader.ts";
 import { collectSessionSources } from "./session-sources.ts";
 import { isSessionPrompt, setupDisplayMessage } from "../protocol/prompt-navigation.ts";
 import {
@@ -465,6 +471,8 @@ export class PiWebAdapter {
   private initialization?: Promise<void>;
   private restoreInitialWorkspace = false;
   private writeSequence = 0;
+  private readonly sessionCatalog = new SessionCatalog();
+  private readonly sessionLoader = new SessionLoader();
 
   constructor(runtime: WebRuntimeController) {
     this.runtime = runtime;
@@ -760,7 +768,7 @@ export class PiWebAdapter {
     const session = await this.requireSession(path);
     if (session.id !== id) throw new WebRuntimeRequestError("The exact Session is unavailable", "SESSION_CONFLICT", 409);
     const manager = this.runtime.getSessionManagerForRead?.(id, path) ??
-      (this.isCurrentSession(session) ? this.runtime.sessionManager : SessionManager.open(path));
+      (this.isCurrentSession(session) ? this.runtime.sessionManager : await this.readSession(path));
     if (!matchesSessionIdentity(manager, { expectedSessionId: id, expectedSessionPath: path }))
       throw new WebRuntimeRequestError("The Session changed before export", "SESSION_CONFLICT", 409);
     const sections = [`# ${(session.name || session.firstMessage || "Conversation").replace(/[\r\n]+/g, " ")}\n`];
@@ -845,11 +853,7 @@ export class PiWebAdapter {
     if (cursor && cursor.queryHash !== queryHash) {
       return { status: "stale_cursor" as const };
     }
-    const allSessions = await SessionManager.listAll(
-      this.runtime.sessionDirectory,
-      undefined,
-      signal,
-    );
+    const allSessions = (await this.sessionCatalog.list(this.runtime.sessionDirectory, { signal })).sessions;
     signal?.throwIfAborted();
     // Order the complete Pi catalog before locating the continuation window.
     if (sort === "created") {
@@ -960,7 +964,7 @@ export class PiWebAdapter {
       if (!workspaces.has(canonical)) {
         throw new Error("Workspace is not available");
       }
-      const sessions = await SessionManager.listAll(this.runtime.sessionDirectory);
+      const sessions = (await this.sessionCatalog.list(this.runtime.sessionDirectory)).sessions;
       for (const session of sessions) {
         if (resolve(this.sessionFork(session)?.workspacePath ?? session.cwd) === canonical) {
           draft.ungroupedSessions.add(resolve(session.path));
@@ -1069,17 +1073,26 @@ export class PiWebAdapter {
     let acknowledgedResults: ReadTurn[] = acknowledged ? [acknowledged] : [];
     if (!session.path.startsWith("current:")) {
       try {
-        const manager = this.runtime.getSessionManagerForRead?.(session.id, session.path) ?? (this.isCurrentSession(session) ? this.runtime.sessionManager : SessionManager.open(session.path, this.runtime.sessionDirectory));
-        if (matchesSessionIdentity(manager, { expectedSessionId: session.id, expectedSessionPath: session.path })) {
+        const manager = this.runtime.getSessionManagerForRead?.(session.id, session.path) ?? (this.isCurrentSession(session) ? this.runtime.sessionManager : undefined);
+        const branch = manager
+          ? (matchesSessionIdentity(manager, { expectedSessionId: session.id, expectedSessionPath: session.path }) ? manager.getBranch() : undefined)
+          : this.sessionCatalog.branch(session.path, session.id);
+        const entries = manager ? (branch ? manager.getEntries() : undefined) : this.sessionCatalog.entries(session.path, session.id);
+        if (branch && entries) {
           // An existing exact read position can still distinguish older unread
           // results. Without it, history discovery is not a live publication.
-          native = readSessionTurnEvidence(manager.getBranch(), session.id, Boolean(acknowledged));
+          native = readSessionTurnEvidence(branch, session.id, Boolean(acknowledged));
           if (acknowledged) {
-            const readEntry = manager.getEntries().find((entry) => {
+            const readEntry = entries.find((entry) => {
               const timing = entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY ? readTurnTiming(entry.data) : undefined;
               return timing?.sessionId === session.id && sameReadTurn(timing, acknowledged);
             });
-            if (readEntry) acknowledgedResults = readSessionTurnEvidence(manager.getBranch(readEntry.id), session.id, true).results;
+            if (readEntry) {
+              const acknowledgedBranch = manager
+                ? manager.getBranch(readEntry.id)
+                : this.sessionCatalog.branch(session.path, session.id, readEntry.id);
+              if (acknowledgedBranch) acknowledgedResults = readSessionTurnEvidence(acknowledgedBranch, session.id, true).results;
+            }
           }
         }
       } catch {
@@ -1124,9 +1137,7 @@ export class PiWebAdapter {
   async listSessionProjection(pinnedPath?: string, chatsSort: "manual" | "updated" = "updated") {
     await this.ensureWorkspaceStateLoaded();
     await this.ensureArchivesLoaded();
-    const allSessions = await SessionManager.listAll(
-      this.runtime.sessionDirectory,
-    );
+    const allSessions = (await this.sessionCatalog.list(this.runtime.sessionDirectory)).sessions;
     // Filter and order Pi's catalog before bounding the visible page. Archived
     // history has its own cursor; only an exact current/selected archive stays.
     const currentId = this.runtime.sessionManager.getSessionId();
@@ -1266,7 +1277,13 @@ export class PiWebAdapter {
     options.signal?.throwIfAborted();
     // Use Pi's catalog and the same workspace visibility as requireSession.
     // The caller supplies a query, never paths or a broader file capability.
-    const catalog = await SessionManager.listAll(this.runtime.sessionDirectory);
+    const startedAt = Date.now();
+    const catalogPage = await this.sessionCatalog.list(this.runtime.sessionDirectory, {
+      signal: options.signal,
+      maxBodyBytes: WEB_TRANSCRIPT_SEARCH_MAX_TOTAL_BYTES,
+      deadlineAt: startedAt + WEB_TRANSCRIPT_SEARCH_MAX_DURATION_MS,
+    });
+    const catalog = catalogPage.sessions;
     options.signal?.throwIfAborted();
     const sessions = catalog.filter((session) =>
       (options.includeArchived || !this.archivedSessions.has(resolve(session.path))) &&
@@ -1279,13 +1296,30 @@ export class PiWebAdapter {
       source: "web" as const,
       ...(session.name ? { name: session.name } : {}),
     }));
-    return searchWebTranscripts({
+    const elapsed = Date.now() - startedAt;
+    const remainingBytes = WEB_TRANSCRIPT_SEARCH_MAX_TOTAL_BYTES - catalogPage.bodyBytes;
+    const remainingMs = WEB_TRANSCRIPT_SEARCH_MAX_DURATION_MS - elapsed;
+    // A zero limit is rejected by the search contract. An exhausted pre-scan
+    // budget is a partial result, not a second pass over the same files.
+    const budgetRemains = remainingBytes >= 1 && remainingMs >= 1;
+    const searchable = budgetRemains ? sessions : [];
+    const result = await searchWebTranscripts({
       query,
-      sessions,
+      sessions: searchable,
       allowedSessionRoots: [this.runtime.sessionDirectory],
-      allowedWorkspaces: [...new Set(sessions.map((session) => session.cwd))],
+      allowedWorkspaces: [...new Set(searchable.map((session) => session.cwd))],
       signal: options.signal,
+      ...(budgetRemains ? { limits: { maxDurationMs: remainingMs, maxTotalBytes: remainingBytes } } : {}),
     });
+    const exhausted = remainingBytes < 1 ? "byte-limit" as const : remainingMs < 1 ? "time-limit" as const : undefined;
+    for (const reason of [catalogPage.partial ? catalogPage.partialReason : undefined, exhausted]) {
+      if (reason && !result.partialReasons.includes(reason)) {
+        result.partial = true;
+        result.partialReasons.push(reason);
+      }
+    }
+    result.scannedBytes += catalogPage.bodyBytes;
+    return result;
   }
 
   async listReadOnlyTerminalSessions(
@@ -1633,7 +1667,7 @@ export class PiWebAdapter {
     workspaceState?: WorkspaceStateSnapshot,
     groupForks = false,
   ) {
-    const sessions = knownSessions ?? (await SessionManager.listAll(this.runtime.sessionDirectory));
+    const sessions = knownSessions ?? (await this.sessionCatalog.list(this.runtime.sessionDirectory)).sessions;
     // The sidebar groups worktree forks under their source project. Files and
     // runtime admission still resolve the real, separately registered cwd.
     const project = (session: SessionIdentity & { cwd: string }) => resolve(groupForks ? this.sessionFork(session)?.workspacePath ?? session.cwd : session.cwd);
@@ -1651,9 +1685,15 @@ export class PiWebAdapter {
     if (!session.path || session.path.startsWith("current:")) return undefined;
     try {
       const manager = this.runtime.getSessionManagerForRead?.(session.id, session.path) ??
-        (this.isCurrentSession(session) ? this.runtime.sessionManager : SessionManager.open(session.path, this.runtime.sessionDirectory));
-      if (!matchesSessionIdentity(manager, { expectedSessionId: session.id, expectedSessionPath: session.path })) return undefined;
-      return readSessionFork(manager.getBranch(), session.id, manager.getCwd());
+        (this.isCurrentSession(session) ? this.runtime.sessionManager : undefined);
+      const branch = manager && matchesSessionIdentity(manager, { expectedSessionId: session.id, expectedSessionPath: session.path })
+        ? manager.getBranch()
+        : this.sessionCatalog.branch(session.path, session.id);
+      const cwd = manager && matchesSessionIdentity(manager, { expectedSessionId: session.id, expectedSessionPath: session.path })
+        ? manager.getCwd()
+        : this.sessionCatalog.cwd(session.path, session.id);
+      if (!branch || cwd === undefined) return undefined;
+      return readSessionFork(branch, session.id, cwd);
     } catch {
       return undefined;
     }
@@ -1661,6 +1701,10 @@ export class PiWebAdapter {
 
   private currentProjectPath() {
     return resolve(this.sessionFork({ id: this.runtime.sessionManager.getSessionId(), path: this.runtime.sessionManager.getSessionFile() ?? "" })?.workspacePath ?? this.runtime.cwd);
+  }
+
+  private readSession(path: string) {
+    return this.sessionLoader.open(path, this.runtime.sessionDirectory);
   }
 
   isCurrentSession(session: Pick<WebSessionSummary, "id" | "path">) {
@@ -1684,7 +1728,7 @@ export class PiWebAdapter {
       this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
       (this.isCurrentSession(summary)
         ? this.runtime.sessionManager
-        : SessionManager.open(path));
+        : await this.readSession(path));
     const branch = manager.getBranch();
     const projected = alignHistoryPage(
       projectEntries(branch, (path) => resolve(summary.cwd, path)),
@@ -1711,7 +1755,7 @@ export class PiWebAdapter {
     const summary = (await this.listSessions(path)).find((session) => session.path === path);
     if (!summary) return { status: "not_found" as const };
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
-      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : await this.readSession(path));
     if (manager.getSessionId() !== sessionId || summary.id !== sessionId)
       return { status: "changed" as const };
     const branch = manager.getBranch();
@@ -1754,7 +1798,7 @@ export class PiWebAdapter {
     const summary = (await this.listSessions(path)).find((session) => session.path === path);
     if (!summary) return { status: "not_found" as const };
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
-      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : await this.readSession(path));
     if (summary.id !== sessionId || manager.getSessionId() !== sessionId) return { status: "changed" as const };
     const branch = manager.getBranch();
     const branchById = new Map(branch.map((entry) => [entry.id, entry]));
@@ -1781,7 +1825,7 @@ export class PiWebAdapter {
     const summary = (await this.listSessions(path)).find((session) => session.path === path);
     if (!summary) return { status: "not_found" as const };
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
-      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : await this.readSession(path));
     if (summary.id !== sessionId || manager.getSessionId() !== sessionId) return { status: "changed" as const };
     const branch = manager.getBranch();
     const branchById = new Map(branch.map((entry) => [entry.id, entry]));
@@ -1812,7 +1856,7 @@ export class PiWebAdapter {
     const summary = await this.requireSession(path).catch(() => undefined);
     if (!summary) return { status: "not_found" as const };
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
-      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : await this.readSession(path));
     if (summary.id !== sessionId || manager.getSessionId() !== sessionId) return { status: "changed" as const };
     const branch = manager.getBranch();
     const branchById = new Map(branch.map((entry) => [entry.id, entry]));
@@ -1856,7 +1900,7 @@ export class PiWebAdapter {
     const summary = (await this.listSessions(path)).find((session) => session.path === path);
     if (!summary) return { ok: false, reason: "not_found" };
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
-      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : await this.readSession(path));
     if (summary.id !== sessionId || manager.getSessionId() !== sessionId)
       return { ok: false, reason: "identity_changed" };
     const branch = manager.getBranch();
@@ -1887,7 +1931,7 @@ export class PiWebAdapter {
     const summary = (await this.listSessions(path)).find((session) => session.path === path);
     if (!summary || summary.id !== sessionId) return undefined;
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
-      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : await this.readSession(path));
     return manager.getSessionId() === sessionId ? manager : undefined;
   }
 
@@ -1918,7 +1962,7 @@ export class PiWebAdapter {
     const summary = (await this.listSessions(path)).find((session) => session.path === path);
     if (!summary) return { status: "not_found" as const };
     const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
-      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : await this.readSession(path));
     if (summary.id !== sessionId || manager.getSessionId() !== sessionId)
       return { status: "changed" as const };
     const entry = manager.getBranch().find((item) => item.id === entryId);
