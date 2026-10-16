@@ -1203,9 +1203,9 @@ const sameFile = (left: Stats, right: Stats) =>
 const CIM_PROCESS_STARTED_AT =
   /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/;
 
-// cscript //U writes a redirected pipe as UTF-16 LE, often with a BOM.
-// Reading that pipe as UTF-8 leaves NULs or U+FFFD and the CIM parser
-// rejects it, so a live PID stays "unknown" until the 5s lock expires.
+// Redirected cscript writes UTF-16 LE, often with a BOM. Reading that
+// pipe as UTF-8 leaves NULs or U+FFFD and the CIM parser rejects it, so
+// a live PID stays unknown until the 5s lock expires.
 export function decodeProcessStartedAtOutput(output: Buffer | string) {
   const buffer = Buffer.isBuffer(output) ? output : Buffer.from(output);
   const utf16 =
@@ -1268,11 +1268,6 @@ const parsePsProcessStartedAt = (stdout: string) => {
   return Number.isFinite(startedAt) ? startedAt : undefined;
 };
 
-const parsePowerShellProcessStartedAt = (stdout: string) => {
-  const startedAt = Number(stdout.trim());
-  return isPositiveInteger(startedAt) ? startedAt : undefined;
-};
-
 export function processStartedAtQuery(
   pid: number,
   platform = process.platform,
@@ -1300,33 +1295,9 @@ export function processStartedAtQuery(
   };
 }
 
-// Used only when the cscript query returns no time. One cold PowerShell
-// start can exceed 1s and still has to finish inside the 5s lock. A timeout
-// or a non-integer is unknown ownership and does not recover the lock.
+// One query. A timeout, non-zero exit, or unparseable value is unknown
+// ownership. The 5s lock then expires without a second command.
 const PROCESS_START_QUERY_TIMEOUT_MS = 1_000;
-const PROCESS_START_FALLBACK_TIMEOUT_MS = 3_500;
-
-export function processStartedAtFallbackQuery(
-  pid: number,
-  platform = process.platform,
-) {
-  if (platform !== "win32" || !isPositiveInteger(pid)) return undefined;
-  return {
-    command: "powershell.exe",
-    args: [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      [
-        "$ErrorActionPreference='Stop'",
-        `$p=Get-Process -Id ${pid}`,
-        "[Console]::Out.Write(([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds())",
-      ].join("; "),
-    ],
-    env: undefined,
-    parseOutput: parsePowerShellProcessStartedAt,
-  };
-}
 
 const runProcessStartedAtQuery = (
   query: {
@@ -1361,16 +1332,11 @@ const runProcessStartedAtQuery = (
     }
   });
 
-const queryProcessStartedAt = async (pid: number) => {
-  const startedAt = await runProcessStartedAtQuery(
+const queryProcessStartedAt = (pid: number) =>
+  runProcessStartedAtQuery(
     processStartedAtQuery(pid),
     PROCESS_START_QUERY_TIMEOUT_MS,
   );
-  if (startedAt !== undefined) return startedAt;
-  const fallback = processStartedAtFallbackQuery(pid);
-  if (!fallback) return undefined;
-  return runProcessStartedAtQuery(fallback, PROCESS_START_FALLBACK_TIMEOUT_MS);
-};
 
 const makeLockIdentity = async (): Promise<LockIdentity> => {
   const processStartedAt = await queryProcessStartedAt(process.pid);

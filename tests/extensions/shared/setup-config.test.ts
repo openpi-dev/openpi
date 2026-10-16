@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   existsSync,
@@ -33,7 +33,6 @@ const {
   parseSetupConfig,
   POST_EDIT_COMMAND_MAX_CHARS,
   decodeProcessStartedAtOutput,
-  processStartedAtFallbackQuery,
   processStartedAtQuery,
   saveSetupConfig,
   SETUP_CONFIG_PATH,
@@ -252,14 +251,10 @@ test("process start-time queries are platform-specific and conservative", () => 
   assert.deepEqual(windowsQuery.args.slice(0, 2), ["//Nologo", "//B"]);
   assert.match(windowsQuery.args[2] ?? "", /win32-process-started-at\.js$/);
   assert.equal(windowsQuery.args[3], "123");
-  const fallback = processStartedAtFallbackQuery(123, "win32");
-  assert.ok(fallback);
-  assert.equal(fallback.command, "powershell.exe");
-  assert.equal(processStartedAtFallbackQuery(123, "linux"), undefined);
-  assert.equal(processStartedAtFallbackQuery(0, "win32"), undefined);
-  assert.equal(fallback.parseOutput("1700000000123"), 1_700_000_000_123);
-  assert.equal(fallback.parseOutput("0"), undefined);
-  assert.equal(fallback.parseOutput("not a timestamp"), undefined);
+  assert.equal(
+    windowsQuery.args.some((arg) => arg.toLowerCase().includes("powershell")),
+    false,
+  );
   const cim = "20231114221320.000000+000";
   const utf16Pipe = Buffer.from(`\uFEFF${cim}\r\n`, "utf16le");
   assert.equal(
@@ -702,6 +697,37 @@ process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - starte
   }
 });
 
+test("Windows reads this process start time from WMI alone", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const query = processStartedAtQuery(process.pid);
+  assert.equal(query.command, "cscript.exe");
+  const { stdout, stderr, error } = await new Promise<{
+    stdout: Buffer;
+    stderr: Buffer;
+    error: Error | null;
+  }>((resolve) => {
+    execFile(
+      query.command,
+      query.args,
+      { encoding: "buffer", timeout: 1_000, windowsHide: true },
+      (execError, execStdout, execStderr) => {
+        resolve({
+          stdout: Buffer.isBuffer(execStdout) ? execStdout : Buffer.alloc(0),
+          stderr: Buffer.isBuffer(execStderr) ? execStderr : Buffer.alloc(0),
+          error: execError,
+        });
+      },
+    );
+  });
+  const text = decodeProcessStartedAtOutput(stdout);
+  const startedAt = error ? undefined : query.parseOutput(text);
+  assert.ok(
+    startedAt !== undefined && startedAt > 1,
+    `WMI start time missing: ${error?.message ?? "unparseable"}; decoded=${JSON.stringify(text)}; stderr=${JSON.stringify(decodeProcessStartedAtOutput(stderr))}`,
+  );
+});
+
 test("a reused PID does not impersonate the dead lock owner", async () => {
   removeLockArtifacts();
   await saveSetupConfig(DEFAULT_SETUP_CONFIG);
@@ -732,7 +758,9 @@ test("process start-time query failures do not authorize lock recovery", async (
   const source = `
 const childProcess = await import("node:child_process");
 const { syncBuiltinESMExports } = await import("node:module");
+const commands = [];
 childProcess.default.execFile = (...args) => {
+  commands.push(String(args[0]));
   const callback = args.at(-1);
   if (typeof callback !== "function") {
     throw new Error("expected execFile callback");
@@ -777,6 +805,15 @@ try {
 if (mutated) throw new Error("mutator ran under unknown lock ownership");
 if (!existsSync(lockPath) || readFileSync(lockPath, "utf8") !== metadata) {
   throw new Error("unknown lock ownership was modified");
+}
+if (commands.some((command) => command.toLowerCase().includes("powershell"))) {
+  throw new Error("failed start-time read fell through to PowerShell: " + commands.join(","));
+}
+if (process.platform === "win32" && !commands.includes("cscript.exe")) {
+  throw new Error("Windows lock recovery did not query WMI: " + commands.join(","));
+}
+if (process.platform === "win32" && commands.some((command) => command !== "cscript.exe")) {
+  throw new Error("Windows lock recovery used another start-time command: " + commands.join(","));
 }
 rmSync(process.env.PI_CODING_AGENT_DIR, { recursive: true, force: true });
 process.stdout.write("preserved\\n");

@@ -14,7 +14,13 @@ try {
     "SELECT CreationDate FROM Win32_Process WHERE ProcessId=" + raw,
   );
   var enumerator = new Enumerator(processes);
-  if (!enumerator.atEnd()) startedAt = String(enumerator.item().CreationDate);
+  if (!enumerator.atEnd()) {
+    // Properties_.Item returns the CIM datetime string. The default
+    // property can surface a locale date that the parser must reject.
+    startedAt = String(
+      enumerator.item().Properties_.Item("CreationDate").Value,
+    );
+  }
 } catch (error) {
   startedAt = "";
 }
