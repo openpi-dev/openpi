@@ -37,10 +37,13 @@ test("a host path with the synthetic id is rejected before the UI waits", () => 
 });
 
 test("a missing current path is rejected", () => {
-  const withoutPath = { ...consistent };
-  delete withoutPath.currentSessionPath;
   assert.throws(
-    () => assertPerformanceSessionIdentity(withoutPath),
+    () =>
+      assertPerformanceSessionIdentity({
+        currentSessionId: consistent.currentSessionId,
+        sessions: consistent.sessions,
+        selectedSession: consistent.selectedSession,
+      }),
     /synthetic session identity mismatch/,
   );
 });
