@@ -1,7 +1,6 @@
 #settings-panel-browser { overflow-y: auto; }
-.browser-settings { max-width: 760px; margin: 0 auto; padding: 12px 12px 24px; }
 .browser-settings-heading { margin: 0 0 28px; }
-.browser-settings-heading h2 { margin: 0 0 8px; font-size: 25px; font-weight: 650; letter-spacing: -.6px; }
+.browser-settings-heading h1 { margin-bottom: 8px; }
 .browser-settings-heading p, .browser-settings-guide p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
 .browser-settings-card { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--page); }
 .browser-settings-control, .browser-settings-default { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 22px; }
@@ -11,7 +10,7 @@
 .browser-settings select { max-width: 200px; min-height: 34px; padding: 5px 28px 5px 10px; border: 1px solid var(--border); border-radius: 8px; background-color: var(--page); color: var(--text); font-size: 13px; cursor: pointer; }
 .browser-settings select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .browser-settings-section-heading { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 28px 2px 12px; }
-.browser-settings-section-heading h3 { font-size: 13px; font-weight: 550; margin: 0; }
+.browser-settings-section-heading h2 { font-size: 13px; font-weight: 550; margin: 0; }
 .browser-settings-section-heading > span { color: var(--muted); font-size: 11px; }
 .browser-settings-row { display: flex; align-items: center; gap: 16px; padding: 18px 22px; min-height: 84px; }
 .browser-settings-row + .browser-settings-row { border-top: 1px solid var(--border); }

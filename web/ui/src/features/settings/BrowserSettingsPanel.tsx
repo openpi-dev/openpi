@@ -335,9 +335,9 @@ export function BrowserSettingsPanel({
       ? createPortal(content, guideWindow.container)
       : content;
   return (
-    <div className="browser-settings">
+    <div className="settings-content-page browser-settings">
       <header className="browser-settings-heading">
-        <h2>{t("browserSettings")}</h2>
+        <h1>{t("browserSettings")}</h1>
         <p>{t("browserSettingsIntro")}</p>
       </header>
       <div className="browser-settings-card browser-settings-main-card">
@@ -383,7 +383,7 @@ export function BrowserSettingsPanel({
         </p>
       )}
       <div className="browser-settings-section-heading">
-        <h3>{t("browserAllowedTitle")}</h3>
+        <h2>{t("browserAllowedTitle")}</h2>
         <span>{!config.control && t("browserOffHint")}</span>
       </div>
       <div className="browser-settings-card">

@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
+import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
+import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
+import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
 import { type WebModelConfiguration, type WebProviderConfigurationChange, type WebProviderConfigurationSummary, WebRuntimeRequestError } from "./types.ts";
 
 const apis = new Set(["openai-responses", "openai-completions", "anthropic-messages"]);
@@ -17,7 +19,14 @@ const validUrl = (value: unknown): value is string => {
 };
 
 export function validModelConfiguration(value: unknown): value is WebModelConfiguration {
-  if (!record(value) || Object.keys(value).some((key) => !["provider", "id", "name", "baseUrl", "api", "reasoning", "contextWindow", "maxTokens", "input"].includes(key))) return false;
+  if (!record(value) || Object.keys(value).some((key) => !["provider", "id", "name", "baseUrl", "api", "reasoning", "thinkingLevelMap", "contextWindow", "maxTokens", "input"].includes(key))) return false;
+  const thinking = value.thinkingLevelMap;
+  if (thinking !== undefined && thinking !== null) {
+    if (!record(thinking) || Object.entries(thinking).some(([level, mapped]) =>
+      !MODEL_THINKING_LEVELS.some((native) => native === level) || (mapped !== null && !text(mapped, 128)))) return false;
+    if (value.reasoning === true && !MODEL_THINKING_LEVELS.some((level) =>
+      thinking[level] !== null && (level !== "xhigh" && level !== "max" || thinking[level] !== undefined))) return false;
+  }
   if (value.input !== undefined && (!Array.isArray(value.input) || !value.input.length || value.input.length > 2 || new Set(value.input).size !== value.input.length || !value.input.every((item) => item === "text" || item === "image"))) return false;
   if (!validProvider(value.provider) ||
     !text(value.id, 256) || !text(value.name, 256) || !text(value.baseUrl, 2048) ||
@@ -56,10 +65,13 @@ async function readConfiguration(agentDir: string) {
 export async function readModelConfigurations(agentDir: string) {
   const { providers, revision } = await readConfiguration(agentDir);
   const models: WebModelConfiguration[] = [];
+  const thinkingDefaults: Record<string, ThinkingLevelMap> = {};
   const summaries: WebProviderConfigurationSummary[] = [];
   for (const [provider, config] of Object.entries(providers)) {
     if (!validProvider(provider) || !record(config)) continue;
     const entries = Array.isArray(config.models) ? config.models : [];
+    const nativeProvider = getBuiltinProviders().find((id) => id === provider);
+    const nativeModels = nativeProvider ? getBuiltinModels(nativeProvider) : [];
     const start = models.length;
     for (const model of entries) {
       if (models.length >= 250) break;
@@ -68,11 +80,15 @@ export async function readModelConfigurations(agentDir: string) {
         provider, id: model.id, name: model.name ?? model.id,
         baseUrl: model.baseUrl ?? config.baseUrl, api: model.api ?? config.api,
         reasoning: model.reasoning ?? false,
+        ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
         ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
         ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
         ...(model.input !== undefined ? { input: model.input } : {}),
       };
-      if (validModelConfiguration(candidate)) models.push(candidate);
+      if (validModelConfiguration(candidate)) {
+        models.push(candidate);
+        thinkingDefaults[`${provider}/${candidate.id}`] = nativeModels.find((entry) => entry.id === candidate.id)?.thinkingLevelMap ?? {};
+      }
       if (models.length >= 250) break;
     }
     summaries.push({ provider, name: text(config.name, 160) ? config.name : provider,
@@ -82,7 +98,7 @@ export async function readModelConfigurations(agentDir: string) {
     });
     if (summaries.length >= 250) break;
   }
-  return { revision, models, providers: summaries };
+  return { revision, models, providers: summaries, thinkingDefaults };
 }
 
 export async function saveModelConfiguration(agentDir: string, revision: string, model: WebModelConfiguration) {
@@ -101,7 +117,9 @@ export async function saveModelConfigurations(agentDir: string, revision: string
   const models = Array.isArray(config.models) ? [...config.models] : [];
   const index = models.findIndex((entry) => record(entry) && entry.id === model.id);
   const { provider: _provider, ...fields } = model;
-  const entry = { ...(index >= 0 && record(models[index]) ? models[index] : {}), ...fields };
+  const entry = { ...(index >= 0 && record(models[index]) ? models[index] : {}), ...fields,
+    ...(fields.thinkingLevelMap === null ? { thinkingLevelMap: undefined } : {}),
+  };
   if (index >= 0) models[index] = entry;
   else models.push(entry);
   current.providers[model.provider] = {
@@ -133,6 +151,7 @@ export async function changeProviderConfiguration(agentDir: string, revision: st
     const previousModels = Array.isArray(config.models) ? config.models : [];
     current.providers[id] = { ...config, ...fields, ...(previous || getBuiltinProviders().some((provider) => provider === id) ? {} : { authHeader: true }), models: models.map(({ provider: _id, ...model }) => ({
       ...previousModels.find((entry) => record(entry) && entry.id === model.id), ...model,
+      ...(model.thinkingLevelMap === null ? { thinkingLevelMap: undefined } : {}),
       // Empty capacity controls remove the override instead of retaining the previous value.
       contextWindow: model.contextWindow, maxTokens: model.maxTokens,
     })) };
