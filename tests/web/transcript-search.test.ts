@@ -530,7 +530,90 @@ test("reports file, byte, per-file, and result limits deterministically", async 
   }
 });
 
-test("stops on the wall-time budget and responds to AbortSignal", async () => {
+for (const scenario of [
+  {
+    name: "ordinary elapsed expiry",
+    elapsed: 1_000,
+    wallJump: 0,
+    expired: true,
+  },
+  {
+    name: "backward wall-clock jump",
+    elapsed: 1_000,
+    wallJump: -60_000,
+    expired: true,
+  },
+  {
+    name: "forward wall-clock jump",
+    elapsed: 10,
+    wallJump: 60_000,
+    expired: false,
+  },
+  { name: "ordinary timely read", elapsed: 10, wallJump: 0, expired: false },
+]) {
+  test(`default search budget follows elapsed time: ${scenario.name}`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "openpi-transcript-clock-"));
+    const path = join(root, "session.jsonl");
+    try {
+      const body = `${line(header("session-1", root))}${line(message("user-1", null, "user", "needle", 1))}`;
+      await writeFile(path, body);
+      let elapsed = 0;
+      let wallJump = 0;
+      let reads = 0;
+      t.mock.method(Date, "now", () => 1_700_000_000_000 + elapsed + wallJump);
+      t.mock.method(performance, "now", () => elapsed);
+      const originalOpen = fs.open;
+      t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+        const handle = await originalOpen(...args);
+        const originalRead = handle.read.bind(handle);
+        t.mock.method(
+          handle,
+          "read",
+          async (
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number,
+          ) => {
+            const result = await originalRead(buffer, offset, length, position);
+            reads++;
+            elapsed = scenario.elapsed;
+            wallJump = scenario.wallJump;
+            return result;
+          },
+        );
+        return handle;
+      });
+      syncBuiltinESMExports();
+
+      // Use the production default clock and budget, with real authorized files.
+      const result = await searchWebTranscripts({
+        query: "needle",
+        sessions: [session("session-1", path, root)],
+        allowedSessionRoots: [root],
+        allowedWorkspaces: [root],
+      });
+      assert.equal(reads, 1);
+      assert.equal(result.scannedBytes, Buffer.byteLength(body));
+      assert.equal(result.limits.maxDurationMs, 1_000);
+      assert.deepEqual(
+        result.partialReasons,
+        scenario.expired ? ["time-limit"] : [],
+      );
+      assert.equal(result.scannedFiles, scenario.expired ? 0 : 1);
+      assert.deepEqual(
+        result.matches.map((match) => match.messageId),
+        scenario.expired ? [] : ["user-1"],
+      );
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("stops on the elapsed-time budget and responds to AbortSignal", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-transcript-cancel-"));
   const path = join(root, "session.jsonl");
   try {
