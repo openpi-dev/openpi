@@ -102,6 +102,8 @@ export interface WorkflowJournalAccumulator {
   readonly bytes: number;
   readonly dropped: number;
   readonly length: number;
+  /** Changes whenever `toJson()` could; lets checkpoints skip an unchanged file. */
+  readonly revision: number;
   append(entry: JournalEntry): void;
   toJournal(): WorkflowJournal;
   toJson(): string;
@@ -120,6 +122,7 @@ export function createJournalAccumulator(
   let head = 0;
   let entryBytes = 0;
   let dropped = 0;
+  let revision = 0;
 
   const activeLength = () => queue.length - head;
   const activeBytes = () => journalBytes(activeLength(), entryBytes);
@@ -148,7 +151,11 @@ export function createJournalAccumulator(
     get length() {
       return activeLength();
     },
+    get revision() {
+      return revision;
+    },
     append(entry) {
+      revision++;
       const encoded = encodeJournalEntry(entry);
       queue.push(encoded);
       entryBytes += encoded.bytes;
