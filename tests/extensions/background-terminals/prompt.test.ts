@@ -5,6 +5,7 @@ import type {
   TerminalSnapshot,
 } from "../../../extensions/background-terminals/src/domain.ts";
 import { RETAINED_PER_STREAM } from "../../../extensions/background-terminals/src/manager.ts";
+import { OutputBuffer } from "../../../extensions/background-terminals/src/output.ts";
 import {
   BG_START_PARAMETER_DESCRIPTIONS,
   BG_START_TOOL_DESCRIPTION,
@@ -13,7 +14,6 @@ import {
   buildTerminalBatchResultMessage,
   buildTerminalResultMessage,
 } from "../../../extensions/background-terminals/src/prompt.ts";
-import { OutputBuffer } from "../../../extensions/background-terminals/src/output.ts";
 import { sanitizeTerminalText } from "../../../extensions/shared/terminal-text.ts";
 
 test("start descriptions identify the platform-specific shell contract", () => {
@@ -38,6 +38,9 @@ function view(overrides: Partial<OutputView> = {}): OutputView {
     modelSafeText: overrides.modelSafeText ?? sanitizeTerminalText(text),
     totalBytes: 0,
     truncatedBytes: 0,
+    truncatedChars: 0,
+    retainedChars: text.length,
+    slice: (from: number, to?: number) => text.slice(from, to),
     ...overrides,
   };
 }
