@@ -1198,10 +1198,6 @@ const sameOwner = (left: LockOwner, right: LockOwner) =>
 const sameFile = (left: Stats, right: Stats) =>
   left.dev === right.dev && left.ino === right.ino;
 
-const WIN32_PROCESS_STARTED_AT_SCRIPT = fileURLToPath(
-  new URL("./win32-process-started-at.js", import.meta.url),
-);
-
 // CIM datetime is local time plus a UTC offset in minutes. Truncate the
 // microsecond field so the integer matches FILETIME / ToUnixTimeMilliseconds.
 const CIM_PROCESS_STARTED_AT =
@@ -1262,11 +1258,16 @@ export function processStartedAtQuery(
   platform = process.platform,
 ) {
   if (platform === "win32") {
-    // WMI via cscript avoids the PowerShell CLR cold start. The query still
-    // has a 1s budget; failure stays unknown and the 5s lock does not recover.
+    // Resolve on use. Vitest loads this module without a file URL, so a
+    // top-level fileURLToPath throws during import. WMI via cscript avoids
+    // the PowerShell CLR cold start. The 1s query budget stays; failure is
+    // still unknown ownership, and the 5s lock does not recover.
+    const script = fileURLToPath(
+      new URL("./win32-process-started-at.js", import.meta.url),
+    );
     return {
       command: "cscript.exe",
-      args: ["//Nologo", "//B", WIN32_PROCESS_STARTED_AT_SCRIPT, String(pid)],
+      args: ["//Nologo", "//B", script, String(pid)],
       env: undefined,
       parseOutput: parseCimProcessStartedAt,
     };
