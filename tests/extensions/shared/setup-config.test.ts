@@ -246,15 +246,36 @@ test("FAIL: session child execution admission is opt-in and bounded", () => {
 
 test("process start-time queries are platform-specific and conservative", () => {
   const windowsQuery = processStartedAtQuery(123, "win32");
-  assert.equal(windowsQuery.command, "powershell.exe");
-  assert.deepEqual(windowsQuery.args.slice(0, 3), [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-  ]);
-  assert.match(windowsQuery.args.at(-1) ?? "", /Get-Process -Id 123/);
-  assert.equal(windowsQuery.parseOutput("1700000000000"), 1_700_000_000_000);
+  assert.equal(windowsQuery.command, "cscript.exe");
+  assert.deepEqual(windowsQuery.args.slice(0, 2), ["//Nologo", "//B"]);
+  assert.match(windowsQuery.args[2] ?? "", /win32-process-started-at\.js$/);
+  assert.equal(windowsQuery.args[3], "123");
+  assert.equal(
+    windowsQuery.parseOutput("20231114221320.000000+000"),
+    1_700_000_000_000,
+  );
+  assert.equal(
+    windowsQuery.parseOutput("20231115061320.000000+480"),
+    1_700_000_000_000,
+  );
+  assert.equal(
+    windowsQuery.parseOutput("20231114171320.000000-300"),
+    1_700_000_000_000,
+  );
+  assert.equal(
+    windowsQuery.parseOutput("20231114221320.123999+000\n"),
+    1_700_000_000_123,
+  );
+  assert.equal(windowsQuery.parseOutput("1700000000000"), undefined);
   assert.equal(windowsQuery.parseOutput("not a timestamp"), undefined);
+  assert.equal(
+    windowsQuery.parseOutput("20231314221320.000000+000"),
+    undefined,
+  );
+  assert.equal(
+    windowsQuery.parseOutput("19700101000000.000000+000"),
+    undefined,
+  );
 
   const posixQuery = processStartedAtQuery(123, "linux");
   assert.equal(posixQuery.command, "ps");

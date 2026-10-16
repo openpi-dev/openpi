@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
@@ -1197,8 +1198,57 @@ const sameOwner = (left: LockOwner, right: LockOwner) =>
 const sameFile = (left: Stats, right: Stats) =>
   left.dev === right.dev && left.ino === right.ino;
 
-const parsePowerShellProcessStartedAt = (stdout: string) => {
-  const startedAt = Number(stdout.trim());
+const WIN32_PROCESS_STARTED_AT_SCRIPT = fileURLToPath(
+  new URL("./win32-process-started-at.js", import.meta.url),
+);
+
+// CIM datetime is local time plus a UTC offset in minutes. Truncate the
+// microsecond field so the integer matches FILETIME / ToUnixTimeMilliseconds.
+const CIM_PROCESS_STARTED_AT =
+  /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/;
+
+const parseCimProcessStartedAt = (stdout: string) => {
+  const match = CIM_PROCESS_STARTED_AT.exec(stdout.trim());
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millisecond = Number(match[7]?.slice(0, 3));
+  const offsetMinutes = (match[8] === "+" ? 1 : -1) * Number(match[9]);
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    !Number.isInteger(offsetMinutes)
+  ) {
+    return undefined;
+  }
+  const localAsUtc = Date.UTC(
+    year,
+    month - 1,
+    day,
+    hour,
+    minute,
+    second,
+    millisecond,
+  );
+  if (!Number.isFinite(localAsUtc)) return undefined;
+  const parsed = new Date(localAsUtc);
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+  const startedAt = localAsUtc - offsetMinutes * 60_000;
   return isPositiveInteger(startedAt) ? startedAt : undefined;
 };
 
@@ -1212,16 +1262,13 @@ export function processStartedAtQuery(
   platform = process.platform,
 ) {
   if (platform === "win32") {
-    const script = [
-      "$ErrorActionPreference='Stop'",
-      `$p=Get-Process -Id ${pid}`,
-      "[Console]::Out.Write(([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds())",
-    ].join("; ");
+    // WMI via cscript avoids the PowerShell CLR cold start. The query still
+    // has a 1s budget; failure stays unknown and the 5s lock does not recover.
     return {
-      command: "powershell.exe",
-      args: ["-NoProfile", "-NonInteractive", "-Command", script],
+      command: "cscript.exe",
+      args: ["//Nologo", "//B", WIN32_PROCESS_STARTED_AT_SCRIPT, String(pid)],
       env: undefined,
-      parseOutput: parsePowerShellProcessStartedAt,
+      parseOutput: parseCimProcessStartedAt,
     };
   }
   return {
