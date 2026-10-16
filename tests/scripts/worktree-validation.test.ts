@@ -124,7 +124,11 @@ test("validation works inside and outside Git metadata without exposing private 
     for (const folder of ["tests/web", "web/ui/src"]) {
       mkdirSync(join(repository, folder), { recursive: true });
     }
-    for (const config of ["biome.json", "vitest.config.mjs"]) {
+    for (const config of [
+      "biome.json",
+      "vitest.config.mjs",
+      "tests/browser-environment.ts",
+    ]) {
       copyFileSync(join(source, config), join(repository, config));
     }
     writeFileSync(

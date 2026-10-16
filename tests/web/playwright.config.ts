@@ -1,5 +1,6 @@
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, defineConfig } from "@playwright/test";
 
@@ -13,6 +14,21 @@ const token =
 const origin = `http://127.0.0.1:${port}`;
 const browserExecutable = process.env.OPENPI_WEB_BROWSER_EXECUTABLE;
 const outputDirectory = resolve(tmpdir(), "openpi-web-playwright-results");
+
+// Several browser fixtures instantiate WebHost inside the worker. Isolate
+// their package preferences too; the spawned server has its own agent dir.
+const workerAgentDirectory = mkdtempSync(
+  join(tmpdir(), "openpi-web-e2e-worker-agent-"),
+);
+process.env.PI_CODING_AGENT_DIR = workerAgentDirectory;
+writeFileSync(
+  join(workerAgentDirectory, "settings.json"),
+  `${JSON.stringify({ packages: [repositoryRoot] })}\n`,
+  { mode: 0o600 },
+);
+process.once("exit", () =>
+  rmSync(workerAgentDirectory, { recursive: true, force: true }),
+);
 
 process.env.OPENPI_WEB_E2E_TOKEN = token;
 
@@ -36,6 +52,9 @@ export default defineConfig({
     "tests/web/model-connections.e2e.ts",
     "tests/web/conversation-reading.e2e.ts",
     "tests/web/workbench-polish.e2e.ts",
+    "tests/web/sidebar-parity.e2e.ts",
+    "tests/web/sidebar-menu-flow.e2e.ts",
+    "tests/web/sidebar-fork-depth.e2e.ts",
     "tests/web/message-rerun.e2e.ts",
     "tests/web/session-history.e2e.ts",
     "tests/web/turn-changes-history.e2e.ts",

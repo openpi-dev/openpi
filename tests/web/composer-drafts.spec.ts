@@ -491,14 +491,16 @@ it.each(["other", "missing"])(
     };
     view.update({ snapshot: observer });
     expect(view.input.value).toBe("");
-    expect(view.input.disabled || view.input.readOnly).toBe(true);
+    expect(view.input.disabled || view.input.readOnly).toBe(
+      registration === "missing",
+    );
     view.update({ selectedWorkspace: "/workspace" });
     view.select("A");
     expect(view.input.value).toBe("A draft");
   },
 );
 
-it("retains a draft across control loss and return without enabling submission", async () => {
+it("retains an editable draft across control loss and a rejected reactivation", async () => {
   const view = setup();
   fireEvent.change(view.input, { target: { value: "alpha" } });
   await paste();
@@ -508,7 +510,7 @@ it("retains a draft across control loss and return without enabling submission",
   observer.sessions[0]!.controller = "none";
   observer.sessions.push(snapshot("B", "/workspace/b.jsonl").sessions[0]!);
   view.update({ snapshot: observer });
-  expect(view.input.disabled).toBe(true);
+  expect(view.input.disabled).toBe(false);
   expect(view.input.value).toBe("alpha");
   expect(screen.getByText("draft.png")).toBeTruthy();
   fireEvent.keyDown(view.input, { key: "Enter" });

@@ -7,9 +7,8 @@ import type {
 async function installSidebarActionsFixture(page: Page) {
   let selected = "first";
   const selections: string[] = [];
-  await page.route("**/events?**", (route) =>
-    route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }),
-  );
+  // Keep the owned Host's real event stream open: a fulfilled finite stream
+  // disconnects and legitimately disables menu actions during recovery.
   await page.route("**/api/sessions/select", async (route) => {
     const path = route.request().postDataJSON().path;
     expect(path).toMatch(/^\/preview\/sidebar-(first|second)\.jsonl$/u);
@@ -33,12 +32,14 @@ async function installSidebarActionsFixture(page: Page) {
     const snapshot = (await response.json()) as WebSnapshot;
     const real = snapshot.sessions[0]!;
     snapshot.preferences.theme = "light";
+    snapshot.preferences.projectsInRecents = false;
     snapshot.sessions = ["first", "second"].map((id) => ({
       ...real,
       id,
       path: `/preview/sidebar-${id}.jsonl`,
       name: id === "first" ? "侧栏交互 A" : "侧栏交互 B",
       execution: { status: "idle" },
+      readRevision: `fixture-${id}-initial`,
       pinOrder: undefined,
     }));
     const session = snapshot.sessions.find(({ id }) => id === selected)!;
@@ -123,7 +124,7 @@ test("session actions stay quiet until hover or keyboard focus, and remain avail
     path: testInfo.outputPath("sidebar-actions-open-menu.png"),
     animations: "disabled",
   });
-  await page.getByRole("menuitem", { name: "重命名会话", exact: true }).click();
+  await page.getByRole("menuitem", { name: "重命名", exact: true }).click();
   await expect(
     page.getByRole("dialog", { name: "重命名会话", exact: true }),
   ).toBeVisible();
@@ -138,7 +139,7 @@ test.describe("touch sidebar actions", () => {
     viewport: { width: 390, height: 844 },
   });
 
-  test("ordinary rows hide actions while touch selection keeps the selected conversation menu reachable", async ({
+  test("touch rows expose pinning through the options menu without requiring selection or hover", async ({
     page,
   }, testInfo) => {
     const selections = await installSidebarActionsFixture(page);
@@ -148,11 +149,19 @@ test.describe("touch sidebar actions", () => {
     ).toBe(true);
     await page.getByRole("button", { name: "打开侧边栏", exact: true }).tap();
     const row = page.getByRole("listitem", { name: "侧栏交互 B", exact: true });
-    const pin = row.getByRole("button", { name: "置顶会话", exact: true });
+    const pin = row.locator(".session-pin-button");
     const trigger = row.getByRole("button", { name: "会话选项", exact: true });
     const actions = row.locator(":scope > .astryx-menu-trigger");
-    await expect(pin).toHaveCSS("opacity", "0");
-    await expect(actions).toHaveCSS("opacity", "0");
+    await expect(pin).toBeHidden();
+    await expect(actions).toHaveCSS("opacity", "1");
+    await trigger.tap();
+    await expect(
+      page.getByRole("menuitem", { name: "置顶", exact: true }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".app-shell")).toHaveClass(/sidebar-open/u);
+    await expect(trigger).toBeFocused();
+    expect(selections).toEqual([]);
     await row.locator(".session").tap();
     await expect(page.locator(".app-shell")).not.toHaveClass(/sidebar-open/u);
     await page.getByRole("button", { name: "打开侧边栏", exact: true }).tap();
@@ -161,18 +170,15 @@ test.describe("touch sidebar actions", () => {
       "page",
     );
     await expect(actions).toHaveCSS("opacity", "1");
-    await expect(pin).toHaveCSS("opacity", "1");
+    await expect(pin).toBeHidden();
     const ordinaryRow = page.getByRole("listitem", {
       name: "侧栏交互 A",
       exact: true,
     });
-    await expect(ordinaryRow.locator(".session-pin-button")).toHaveCSS(
-      "opacity",
-      "0",
-    );
+    await expect(ordinaryRow.locator(".session-pin-button")).toBeHidden();
     await expect(
       ordinaryRow.locator(":scope > .astryx-menu-trigger"),
-    ).toHaveCSS("opacity", "0");
+    ).toHaveCSS("opacity", "1");
     expect((await trigger.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await trigger.tap();
     const menu = page.getByRole("menu", { name: "会话选项", exact: true });
@@ -182,7 +188,7 @@ test.describe("touch sidebar actions", () => {
       path: testInfo.outputPath("sidebar-actions-touch-menu.png"),
       animations: "disabled",
     });
-    await page.getByRole("menuitem", { name: "重命名会话", exact: true }).tap();
+    await page.getByRole("menuitem", { name: "重命名", exact: true }).tap();
     await expect(
       page.getByRole("dialog", { name: "重命名会话", exact: true }),
     ).toBeVisible();
@@ -200,9 +206,11 @@ test("conversation pin persists through browser reload and unpin returns it to i
   await row.hover();
   const title = await row.locator(".session-title").textContent();
   await row.getByRole("button", { name: "会话选项" }).click();
-  await expect(page.getByRole("menuitem", { name: "置顶会话" })).toHaveCount(0);
   await expect(
-    page.getByRole("menuitem", { name: "重命名会话" }),
+    page.getByRole("menuitem", { name: "置顶", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "重命名", exact: true }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await row.getByRole("button", { name: "置顶会话", exact: true }).click();
@@ -212,7 +220,7 @@ test("conversation pin persists through browser reload and unpin returns it to i
   await expect(pins.locator(".session-title")).toHaveText(title!);
   await pins.locator(".session-row").hover();
   await pins.getByRole("button", { name: "会话选项" }).click();
-  await expect(page.getByRole("menuitem", { name: "取消置顶" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "取消置顶" })).toBeVisible();
   await page.keyboard.press("Escape");
   await pins.getByRole("button", { name: "取消置顶", exact: true }).click();
   await expect(pins).toHaveCount(0);
@@ -221,7 +229,7 @@ test("conversation pin persists through browser reload and unpin returns it to i
   ).toHaveText(title!);
 });
 
-test("pinned section supports drag, keyboard ordering and light dark touch layouts", async ({
+test("pinned section supports drag, keyboard ordering and light dark narrow mouse layouts", async ({
   page,
 }, testInfo) => {
   let theme: "light" | "dark" = "light";
@@ -233,14 +241,15 @@ test("pinned section supports drag, keyboard ordering and light dark touch layou
       body: ": heartbeat\n\n",
     }),
   );
-  await page.route("**/api/sessions/pin", async (route) => {
+  await page.route("**/api/sidebar/pin", async (route) => {
     const body = route.request().postDataJSON();
-    order = order.filter((id) => id !== body.id);
+    expect(body.target.kind).toBe("session");
+    order = order.filter((id) => id !== body.target.id);
     if (body.pinned)
       order.splice(
         body.before ? order.indexOf(body.before.id) : order.length,
         0,
-        body.id,
+        body.target.id,
       );
     await route.fulfill({ json: { saved: true } });
   });
@@ -256,6 +265,7 @@ test("pinned section supports drag, keyboard ordering and light dark touch layou
       ...value.preferences,
       theme,
       pinnedSort: sort as "manual" | "updated",
+      projectsInRecents: false,
     };
     value.sessions = [
       ...["design", "navigation", "research"].map((id, index) => ({
@@ -292,6 +302,7 @@ test("pinned section supports drag, keyboard ordering and light dark touch layou
   );
   await page.locator(".task-header").click();
   await page.screenshot({ path: testInfo.outputPath("pinned-light.png") });
+  await pins.locator(".sidebar-section-heading").hover();
   await pins.getByRole("button", { name: "置顶选项" }).click();
   await page.screenshot({ path: testInfo.outputPath("pinned-sort-menu.png") });
   await page.getByRole("menuitem", { name: "最近更新", exact: true }).click();
@@ -309,13 +320,22 @@ test("pinned section supports drag, keyboard ordering and light dark touch layou
   await page.screenshot({ path: testInfo.outputPath("pinned-dark.png") });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "打开侧边栏" }).click();
-  const pinButton = pins
-    .getByRole("button", { name: "取消置顶", exact: true })
+  expect(await page.evaluate(() => matchMedia("(pointer: fine)").matches)).toBe(
+    true,
+  );
+  const optionsButton = pins
+    .getByRole("button", { name: "会话选项", exact: true })
     .first();
-  await expect(pinButton).toBeVisible();
-  expect((await pinButton.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await expect(optionsButton).toBeVisible();
+  expect((await optionsButton.boundingBox())!.height).toBe(24);
+  await rows.first().hover();
+  await optionsButton.click();
+  await expect(
+    page.getByRole("menuitem", { name: "取消置顶", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
   await page.screenshot({
-    path: testInfo.outputPath("pinned-mobile.png"),
+    path: testInfo.outputPath("pinned-narrow-mouse.png"),
     animations: "disabled",
   });
 });
@@ -328,6 +348,7 @@ test("session rail separates live, waiting and terminal states without covering 
     const value = (await response.json()) as WebSnapshot;
     const real = value.sessions[0]!;
     value.preferences.theme = "light";
+    value.preferences.projectsInRecents = false;
     value.sessions = [
       {
         ...real,
@@ -354,6 +375,7 @@ test("session rail separates live, waiting and terminal states without covering 
             "已停止的会话",
             "执行结果待确认",
           ][index],
+          unread: outcome === "completed" || outcome === "failed",
           execution: {
             status: "idle" as const,
             lastTurn: { commandId: outcome, outcome, finishedAt: 1 },
@@ -365,6 +387,10 @@ test("session rail separates live, waiting and terminal states without covering 
     await route.fulfill({ response, json: value });
   });
   await page.goto("/");
+  await page
+    .locator(".workspace-group")
+    .getByRole("button", { name: "展开显示", exact: true })
+    .click();
   await expect(page.locator(".session-state-running")).toBeVisible();
   await expect(page.locator(".session-state-attention")).toHaveCount(2);
   await expect(page.locator(".session-state-completed")).toBeVisible();
@@ -383,7 +409,7 @@ test("session rail separates live, waiting and terminal states without covering 
   });
 });
 
-test("workspace rail keeps names readable and archive navigation reachable across desktop and touch layouts", async ({
+test("workspace rail keeps names readable and archive navigation reachable across wide and narrow mouse layouts", async ({
   page,
 }, testInfo) => {
   let theme: "light" | "dark" = "light";
@@ -396,7 +422,11 @@ test("workspace rail keeps names readable and archive navigation reachable acros
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const value = (await response.json()) as WebSnapshot;
-    value.preferences = { ...value.preferences, theme };
+    value.preferences = {
+      ...value.preferences,
+      theme,
+      projectsInRecents: false,
+    };
     const current = value.selectedSession;
     if (!current) throw new Error("Missing real Session fixture");
     value.workspaces = [
@@ -415,6 +445,29 @@ test("workspace rail keeps names readable and archive navigation reachable acros
   const sidebar = page.locator(".session-sidebar");
   const workspace = sidebar.locator(".workspace-label").first();
   await expect(sidebar.getByText("工作区导航与交互细节")).toBeVisible();
+  await expect(sidebar.locator(".sidebar-brand-title")).toHaveText("OpenPI");
+  await expect(sidebar.locator(".sidebar-brand-title")).toHaveCSS(
+    "font-size",
+    "18px",
+  );
+  await expect(
+    sidebar.locator(".sidebar-brand [aria-haspopup='menu']"),
+  ).toHaveCount(0);
+  await expect(sidebar.locator(".session.active")).toHaveCSS("height", "30px");
+  await expect(sidebar.locator(".session.active")).toHaveCSS(
+    "border-radius",
+    "10px",
+  );
+  await expect(sidebar.locator(".session.active .session-title")).toHaveCSS(
+    "font-size",
+    "14px",
+  );
+  await expect(
+    page.locator(".task-header .sidebar-shell-toggle"),
+  ).toBeVisible();
+  await expect(
+    sidebar.getByRole("button", { name: "收起侧边栏" }),
+  ).toBeHidden();
   await expect(sidebar.locator(".workspace-identity small")).toHaveCount(0);
   await expect(workspace).toHaveAttribute("title", /openpi/);
   await expect(sidebar.locator(".session.active")).toHaveCSS(
@@ -428,12 +481,14 @@ test("workspace rail keeps names readable and archive navigation reachable acros
   await sidebar.getByRole("button", { name: "当前", exact: true }).click();
   await expect(workspace).toBeVisible();
   await workspace.focus();
-  await expect(workspace.locator(".workspace-chevron")).toHaveCSS(
+  await expect(workspace.locator(".workspace-folder")).toHaveCSS(
     "opacity",
     "1",
   );
+  await expect(workspace.locator(".lucide-folder-open")).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(workspace).toHaveAttribute("aria-expanded", "false");
+  await expect(workspace.locator(".lucide-folder")).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(workspace).toHaveAttribute("aria-expanded", "true");
   await page.locator(".task-header").click();
@@ -449,12 +504,15 @@ test("workspace rail keeps names readable and archive navigation reachable acros
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "打开侧边栏" }).click();
   await expect(sidebar).toBeVisible();
+  expect(await page.evaluate(() => matchMedia("(pointer: fine)").matches)).toBe(
+    true,
+  );
   for (const control of [
     archive,
     workspace,
     sidebar.locator(".session").first(),
   ]) {
-    expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    expect((await control.boundingBox())!.height).toBe(30);
   }
   expect(
     await sidebar.evaluate(
@@ -462,7 +520,7 @@ test("workspace rail keeps names readable and archive navigation reachable acros
     ),
   ).toBe(true);
   await page.screenshot({
-    path: testInfo.outputPath("workspace-rail-mobile.png"),
+    path: testInfo.outputPath("workspace-rail-narrow-mouse.png"),
   });
 });
 
@@ -476,6 +534,7 @@ test("long session titles stay compact and elapsed time survives refresh with co
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const value = (await response.json()) as WebSnapshot;
+    value.preferences.projectsInRecents = false;
     const session = value.selectedSession;
     if (!session) throw new Error("Missing real Session fixture");
     value.sessions = value.sessions.map((item) =>

@@ -11,9 +11,8 @@ async function installSettingsFixture(page: Page) {
   let archived = true;
   let failRestore = true;
   const queries: URLSearchParams[] = [];
-  await page.route("**/events?**", (route) =>
-    route.fulfill({ contentType: "text/event-stream", body: ": idle\n\n" }),
-  );
+  // Keep the owned Host's event stream open. A finite SSE response repeatedly
+  // reconnects and can supersede the snapshot confirming an archive restore.
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch({
       url: new URL("/api/snapshot", route.request().url()).href,
@@ -98,7 +97,6 @@ async function installSettingsFixture(page: Page) {
     }
     for (const [key, field] of Object.entries({
       theme: "webTheme",
-      appearance: "webAppearance",
       chatWidth: "webChatWidth",
       chatFontSize: "webChatFontSize",
       expandThinking: "webExpandThinking",
@@ -106,6 +104,10 @@ async function installSettingsFixture(page: Page) {
       if (patch[key] !== undefined)
         Object.assign(config.ui, { [field]: patch[key] });
     }
+    if (patch.appearance !== undefined)
+      Object.assign(config.ui, {
+        webAppearance: { ...config.ui.webAppearance, ...patch.appearance },
+      });
     await route.fulfill({
       json: { saved: true, setup: projectWebSetupConfig(config) },
     });
@@ -184,6 +186,16 @@ test("settings shell, hover/focus, mode previews, menus and disclosure follow th
   ).toBeVisible();
   await expect(dialog.getByRole("radio")).toHaveCount(3);
   await expect(dialog.getByRole("slider")).toHaveCount(0);
+  const font = dialog.getByRole("button", { name: "字体", exact: true });
+  await expect(font).toHaveText("Codex 默认");
+  await font.click();
+  await expect(
+    page.getByRole("menuitem", { name: "Codex 默认", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "系统", exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await page.emulateMedia({ colorScheme: "dark" });
   await expect(
     dialog.getByRole("textbox", { name: "背景", exact: true }),
@@ -309,6 +321,33 @@ test("appearance import applies canonical tokens and font, survives reload, and 
   });
 });
 
+test("legacy theme import selects the Codex default and keeps it after reload", async ({
+  page,
+}) => {
+  const fixture = await installSettingsFixture(page);
+  await page.goto("/?settings=appearance");
+  const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+  await dialog.getByRole("button", { name: "导入主题", exact: true }).click();
+  const importer = page.getByRole("dialog", { name: "导入主题", exact: true });
+  await importer.getByRole("textbox").fill(
+    JSON.stringify({
+      version: 1,
+      theme: "light",
+      appearance: { ...DEFAULT_SETUP_CONFIG.ui.webAppearance, font: "system" },
+    }),
+  );
+  await importer.getByRole("button", { name: "导入", exact: true }).click();
+  await expect(importer).toBeHidden();
+  expect(fixture.posts[0]).toMatchObject({ appearance: { font: "codex" } });
+  await page.reload();
+  await expect(
+    dialog.getByRole("button", { name: "字体", exact: true }),
+  ).toHaveText("Codex 默认");
+  expect(
+    await dialog.evaluate((node) => getComputedStyle(node).fontFamily),
+  ).toMatch(/^-apple-system,/u);
+});
+
 test("narrow mouse and touch layouts remain distinct and fit the viewport", async ({
   page,
   browser,
@@ -415,6 +454,8 @@ test("archived chats query project/sort before paging and restore without activa
   });
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await expect(
-    page.locator(".session-sidebar").getByText("Active chat", { exact: true }),
+    page
+      .getByRole("region", { name: "OpenPI", exact: true })
+      .getByText("Active chat", { exact: true }),
   ).toBeVisible();
 });

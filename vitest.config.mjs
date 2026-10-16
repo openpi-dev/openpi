@@ -7,6 +7,7 @@ import { defineConfig } from "vitest/config";
 // allow-list, but evaluate checkout files relative to that checkout boundary.
 // The Web dev server deliberately retains Vite's unmodified deny policy.
 export default defineConfig({
+  test: { setupFiles: ["./tests/browser-environment.ts"] },
   plugins: [
     {
       name: "openpi-worktree-test-files",

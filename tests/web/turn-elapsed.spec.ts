@@ -172,6 +172,85 @@ it("recovers the elapsed value on refresh and resets only for a different turn i
   expect(vi.getTimerCount()).toBe(1);
 });
 
+it("shows native live timing before a snapshot and clears it on settlement", () => {
+  const value = snapshot();
+  const turn = value.runtime.activeTurn!;
+  value.runtime = { status: "idle", capabilities: {} };
+  value.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/session.jsonl",
+    status: "idle",
+    pendingFollowUps: 0,
+    queuedMessages: [],
+    liveTools: [],
+    liveToolsOmitted: 0,
+  };
+  const view = render(node(value, { liveRunning: true, liveActiveTurn: turn }));
+  expect(screen.getByRole("timer").textContent).toContain("1m40s");
+  view.rerender(node(value, { liveActiveTurn: null }));
+  expect(screen.queryByRole("timer")).toBeNull();
+  view.rerender(
+    node(value, {
+      liveRunning: true,
+      liveActiveTurn: { ...turn, sessionPath: "/different-session.jsonl" },
+    }),
+  );
+  expect(screen.queryByRole("timer")).toBeNull();
+});
+
+it("keeps the exact running turn clock while reading its verified earlier messages", () => {
+  const value = snapshot();
+  value.runtime.activeTurn!.promptEntryId = "input";
+  value.selectedSession!.history = {
+    leafEntryId: "latest",
+    beforeEntryId: null,
+  };
+  const reading = {
+    ...value.selectedSession!,
+    entries: [
+      {
+        id: "input",
+        type: "message" as const,
+        timestamp: "2026-10-13T00:00:00Z",
+        message: { role: "user", content: "Original request" },
+      },
+    ],
+    history: {
+      leafEntryId: "latest",
+      beforeEntryId: null,
+      anchorEntryId: "input",
+      anchorOnBranch: true,
+    },
+  };
+  const cache = new Map([
+    [
+      JSON.stringify([reading.id, reading.path]),
+      {
+        window: { session: reading, anchor: "input", validatedLeaf: "latest" },
+      },
+    ],
+  ]);
+  const view = render(node(value, { readingCache: cache }));
+  expect(screen.getByText("Original request")).toBeTruthy();
+  expect(screen.getByRole("timer").textContent).toContain("1m40s");
+  view.rerender(
+    node(
+      {
+        ...value,
+        runtime: {
+          ...value.runtime,
+          activeTurn: {
+            ...value.runtime.activeTurn!,
+            promptEntryId: "different-input",
+          },
+        },
+      },
+      { readingCache: cache },
+    ),
+  );
+  expect(screen.queryByRole("timer")).toBeNull();
+});
+
 it.each(["completed", "failed", "cancelled", "uncertain"] as const)(
   "shows fixed persisted elapsed time and the appropriate process default for a %s run",
   (outcome) => {

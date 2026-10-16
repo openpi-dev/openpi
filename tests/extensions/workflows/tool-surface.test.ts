@@ -36,6 +36,7 @@ test("session start keeps the complete workflow capability group stable", () => 
     cwd: process.cwd(),
     hasUI: false,
     mode: "print",
+    isIdle: () => true,
     isProjectTrusted: () => false,
     sessionManager: {
       getSessionId: () => "tool-surface-session",

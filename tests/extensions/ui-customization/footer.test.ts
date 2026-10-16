@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { posix, win32 } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   DEFAULT_FOOTER_LINES,
+  FOOTER_STYLES,
   normalizeFooterLines,
   parseSetupConfig,
 } from "../../../extensions/shared/setup-config.ts";
@@ -44,6 +46,53 @@ const gitInfo: GitInfoState = {
   changedFiles: 7,
   pullRequest: { number: 42, url: "https://example.com/pr/42", isDraft: false },
 };
+
+for (const style of FOOTER_STYLES) {
+  test(`${style} keeps a right-only flex group at the terminal edge`, () => {
+    for (const branch of ["main", "分支", "e\u0301", "🔧"]) {
+      const render = (
+        layout: unknown,
+        width = 40,
+        cachePercent: number | null = null,
+      ) =>
+        renderFooter({
+          cwd: "/tmp/project",
+          modelInfo: { ...modelInfo, cachePercent },
+          gitInfo: { ...gitInfo, branch, pullRequest: null },
+          style,
+          lines: normalizeFooterLines(layout),
+          width,
+          theme: { fg: (_name, text) => `\x1b[36m${text}\x1b[0m` },
+        });
+      assert.deepEqual(normalizeFooterLines([["flex", "git"]]), [
+        ["flex", "git"],
+      ]);
+      const leftOnly = render([["git"]])[0]!;
+      const rightOnly = render([["flex", "git"]])[0]!;
+      assert.equal(visibleWidth(rightOnly), 40);
+      assert.ok(rightOnly.endsWith(leftOnly));
+      assert.equal(
+        stripVTControlCharacters(rightOnly),
+        " ".repeat(40 - visibleWidth(leftOnly)) +
+          stripVTControlCharacters(leftOnly),
+      );
+      assert.deepEqual(render([["cache", "flex", "git"]]), [rightOnly]);
+      const twoSided = render([["cache", "flex", "git"]], 40, 82)[0]!;
+      assert.equal(visibleWidth(twoSided), 40);
+      assert.match(stripVTControlCharacters(twoSided), /^ ?cache 82%/);
+      assert.ok(stripVTControlCharacters(twoSided).includes(`⎇ ${branch}`));
+      assert.deepEqual(render([["git", "flex"]]), [leftOnly]);
+      assert.ok(visibleWidth(leftOnly) < 40);
+      assert.deepEqual(render([["cache", "flex", "pr"]]), []);
+
+      for (const width of [0, 1, 2, 3, 5, 9]) {
+        const narrow = render([["flex", "git"]], width);
+        assert.ok(narrow.length <= 1);
+        assert.equal(visibleWidth(narrow[0] ?? ""), width);
+      }
+    }
+  });
+}
 
 test("formatDirectory shortens Windows Home paths", () => {
   assert.equal(

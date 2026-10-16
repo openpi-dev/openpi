@@ -114,6 +114,38 @@ it("uses the independent archive query, scopes sort/project on the server, and i
   expect(screen.getByText("Second chat")).toBeTruthy();
 });
 
+it("groups archived worktree forks under their source project and filters by that identity", async () => {
+  const list = vi
+    .spyOn(WebClient.prototype, "listArchivedSessions")
+    .mockResolvedValue(
+      result([
+        first,
+        {
+          ...second,
+          cwd: "/worktrees/fork-working-directory",
+          workspacePath: first.cwd,
+        },
+      ]),
+    );
+  show();
+  await screen.findByText("Second chat");
+  expect(
+    screen.getByRole("button", {
+      name: i18n.t("archiveProjectGroup", { project: "One", count: 2 }),
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("option", { name: "fork-working-directory" }),
+  ).toBeNull();
+  fireEvent.change(
+    screen.getByRole("combobox", { name: i18n.t("archiveProjectFilter") }),
+    {
+      target: { value: first.cwd },
+    },
+  );
+  await waitFor(() => expect(list.mock.lastCall?.[0]?.cwd).toBe(first.cwd));
+});
+
 it("keeps rows on a page failure and restarts a stale cursor query from the beginning", async () => {
   const list = vi
     .spyOn(WebClient.prototype, "listArchivedSessions")
@@ -133,6 +165,34 @@ it("keeps rows on a page failure and restarts a stale cursor query from the begi
   await screen.findByText("Second chat");
   expect(list.mock.lastCall?.[0]?.cursor).toBeUndefined();
   expect(screen.queryByText("First chat")).toBeNull();
+});
+
+it("offers continuation after an empty scan window and reveals older archives", async () => {
+  const list = vi
+    .spyOn(WebClient.prototype, "listArchivedSessions")
+    .mockResolvedValueOnce({
+      ...result([], "older-scan-window"),
+      truncation: {
+        ...result().truncation,
+        truncated: true,
+        recordsUnscanned: 1,
+      },
+    })
+    .mockResolvedValueOnce(result([first]));
+  show();
+  const more = await screen.findByRole("button", {
+    name: i18n.t("moreArchives"),
+  });
+  expect(screen.getByText(i18n.t("noScannedArchives"))).toBeTruthy();
+  expect(
+    screen.getByText(i18n.t("archiveScanBounded", { count: 1 })),
+  ).toBeTruthy();
+  fireEvent.click(more);
+  await screen.findByText("First chat");
+  expect(list.mock.lastCall?.[0]?.cursor).toBe("older-scan-window");
+  expect(
+    screen.queryByRole("button", { name: i18n.t("moreArchives") }),
+  ).toBeNull();
 });
 
 it("collapses groups without mutation, deduplicates restore, and retains a failed row until a confirmed restore", async () => {

@@ -62,6 +62,7 @@ If those answers are unclear, investigate before adding surface area.
 
 - Preserve unrelated and uncommitted user work. Make the smallest scoped change that satisfies the request.
 - Follow existing patterns and tests before inventing a new abstraction.
+- Apply the `test-value` skill when adding, changing, removing, or diagnosing tests.
 - Run `bun run check` and `bun run test` after making a change. If a relevant validation command does not exist, call that out and propose one.
 - When opening or updating a pull request, follow `.github/PULL_REQUEST_TEMPLATE.md` and complete its Problem, Value, Approach, Validation, and Impact sections.
 - Avoid explicit return types unless they are necessary. Prefer inference over repeatedly declaring types.
