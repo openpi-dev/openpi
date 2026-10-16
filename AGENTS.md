@@ -60,6 +60,10 @@ If those answers are unclear, investigate before adding surface area.
 
 ## Repository work
 
+### Root-cause fixes only
+
+pstack is enabled for this repository. The project rule is root-cause fixes only: never land through CI flakes, no reruns, no retries, and no wider timeouts. This overrides pstack's overnight example that says to land a stack even if CI flakes.
+
 - Preserve unrelated and uncommitted user work. Make the smallest scoped change that satisfies the request.
 - Follow existing patterns and tests before inventing a new abstraction.
 - Apply the `test-value` skill when adding, changing, removing, or diagnosing tests.
