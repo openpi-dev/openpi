@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
+import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
 import {
   ChildExecutionAdmission,
   ChildExecutionAdmissionAbortedError,
@@ -199,4 +204,71 @@ test("FAIL: a grant racing cancellation leaves no leaked lease", async () => {
   const lease = await pending;
   lease.release();
   assert.equal(admission.snapshot().held, 0);
+});
+
+test("FAIL: Pi-loaded extensions share one admission per Session and a fresh one after reload", async () => {
+  // Pi evaluates each extension with `moduleCache: false`, so Workflows and
+  // Subagents import separate copies of the admission module. Load two
+  // fixtures through Pi's real loader instead of one ESM test process.
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-admission-"));
+  const sink = Symbol.for("@tt-a1i/openpi/test/admission-loader-sink");
+  const moduleUrl = pathToFileURL(
+    path.resolve("extensions/shared/child-execution-admission.ts"),
+  ).href;
+  const fixture = (origin: string) =>
+    [
+      `import { sessionChildExecutionAdmission } from ${JSON.stringify(moduleUrl)};`,
+      "export default function () {",
+      `  globalThis[Symbol.for(${JSON.stringify(sink.description)})].${origin} = (owner) =>`,
+      "    sessionChildExecutionAdmission(owner, { maxActive: 1 });",
+      "}",
+    ].join("\n");
+  const factories: Record<
+    "workflow" | "direct",
+    (owner: object) => ChildExecutionAdmission
+  > = Object.create(null);
+  Reflect.set(globalThis, sink, factories);
+  try {
+    await writeFile(path.join(directory, "workflows.ts"), fixture("workflow"));
+    await writeFile(path.join(directory, "subagents.ts"), fixture("direct"));
+    const loaded = await discoverAndLoadExtensions(
+      [
+        path.join(directory, "workflows.ts"),
+        path.join(directory, "subagents.ts"),
+      ],
+      directory,
+      path.join(directory, "agent"),
+    );
+    assert.deepEqual(loaded.errors, []);
+
+    const session = {};
+    const workflow = factories.workflow(session);
+    const direct = factories.direct(session);
+    assert.equal(workflow, direct);
+
+    const directLease = await direct.acquire("direct");
+    const queued = workflow.acquire("workflow");
+    assert.deepEqual(workflow.snapshot().heldByOrigin, {
+      workflow: 0,
+      direct: 1,
+      btw: 0,
+    });
+    assert.equal(workflow.snapshot().queued, 1);
+    directLease.release();
+    (await queued).release();
+
+    const otherSession = factories.direct({});
+    assert.notEqual(otherSession, workflow);
+
+    // Pi's reload shuts the old extension runtime down and then starts the
+    // new one with the same SessionManager.
+    workflow.shutdown();
+    const reloaded = factories.direct(session);
+    assert.notEqual(reloaded, workflow);
+    assert.equal(factories.workflow(session), reloaded);
+    (await reloaded.acquire("direct")).release();
+  } finally {
+    Reflect.deleteProperty(globalThis, sink);
+    await rm(directory, { recursive: true, force: true });
+  }
 });

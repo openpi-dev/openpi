@@ -5,7 +5,7 @@
  * settled Direct children may remain available for a later `send`, but they do
  * not retain a permit. The parent `SessionManager` is the owner identity, so a
  * second top-level Pi Session gets an independent pool even though extensions
- * share this module instance in one process.
+ * share one Session map in this process.
  */
 
 export const MAX_CHILD_EXECUTION_QUEUE = 256;
@@ -87,6 +87,10 @@ export class ChildExecutionAdmission {
   constructor(options: ChildExecutionAdmissionOptions = {}) {
     this.limit = options.maxActive;
     this.maxQueued = options.maxQueued ?? MAX_CHILD_EXECUTION_QUEUE;
+  }
+
+  get isShutdown() {
+    return this.closed;
   }
 
   snapshot(): ChildExecutionAdmissionSnapshot {
@@ -232,7 +236,30 @@ export class ChildExecutionAdmission {
   }
 }
 
-const sessionAdmissions = new WeakMap<object, ChildExecutionAdmission>();
+// Pi loads every extension with `moduleCache: false`, so Workflows and
+// Subagents each evaluate their own copy of this module. Symbol.for keeps those
+// same-process copies on one versioned Session map; a module-level WeakMap
+// would silently give each extension its own pool.
+const SESSION_ADMISSIONS_KEY = Symbol.for(
+  "@tt-a1i/openpi/child-execution-admission/v1",
+);
+const existingAdmissions: unknown = Reflect.get(
+  globalThis,
+  SESSION_ADMISSIONS_KEY,
+);
+if (
+  existingAdmissions !== undefined &&
+  !(existingAdmissions instanceof WeakMap)
+) {
+  throw new Error("Incompatible OpenPI child execution admission registry");
+}
+const sessionAdmissions: WeakMap<object, ChildExecutionAdmission> =
+  existingAdmissions ?? new WeakMap();
+if (existingAdmissions === undefined) {
+  Object.defineProperty(globalThis, SESSION_ADMISSIONS_KEY, {
+    value: sessionAdmissions,
+  });
+}
 
 /** Return the one admission owner for this top-level Pi Session. */
 export function sessionChildExecutionAdmission(
@@ -240,7 +267,10 @@ export function sessionChildExecutionAdmission(
   options: ChildExecutionAdmissionOptions,
 ) {
   let admission = sessionAdmissions.get(sessionOwner);
-  if (!admission) {
+  // Pi's reload emits session_shutdown and then session_start for the same
+  // SessionManager. A shut-down pool rejects every acquire, so the reloaded
+  // extensions start a fresh one, as separate module copies did before.
+  if (!admission || admission.isShutdown) {
     admission = new ChildExecutionAdmission(options);
     sessionAdmissions.set(sessionOwner, admission);
   }
