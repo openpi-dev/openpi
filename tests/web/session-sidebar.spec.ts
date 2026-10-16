@@ -18,6 +18,7 @@ import {
   beforeEach,
   expect,
   it,
+  onTestFinished,
   vi,
 } from "vitest";
 import type {
@@ -237,6 +238,12 @@ it("reorders projects when dropped over their child conversations using the full
 });
 
 it("offers an empty pin drop area during a project drag and suppresses the trailing pointer click", async () => {
+  // The trailing-click window is 250 ms of wall time after the drop. Freeze
+  // Date so a slow runner awaiting the pin action cannot outlive it (#829).
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const { actions } = mount(catalog(2, 1));
   const pin = vi.spyOn(actions, "setSidebarPin").mockResolvedValue();
   const toggle = vi

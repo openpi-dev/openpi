@@ -2627,6 +2627,10 @@ test("recovers an unknown prompt admission only after an explicit user decision"
       exact: true,
     }),
   ).toHaveCount(0);
+  // The accepted prompt triggers snapshot refreshes whose route handler is
+  // still reading the proxied response; let it finish before the context
+  // closes instead of failing with "Response has been disposed" (#829).
+  await page.unrouteAll({ behavior: "wait" });
 });
 
 test("inspects session-scoped runtime and terminal details on desktop and mobile", async ({

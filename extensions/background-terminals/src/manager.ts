@@ -12,7 +12,7 @@
  * and issue fire-and-forget kills without touching the Effect runtime.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -29,9 +29,9 @@ import {
   ConcurrencyLimitError,
   formatExit,
   SpawnError,
-  UnknownTerminalError,
   type TerminalSnapshot,
   type TerminalStatus,
+  UnknownTerminalError,
 } from "./domain.ts";
 import { OutputBuffer } from "./output.ts";
 
@@ -789,7 +789,12 @@ function* makeManager(maxSpillBytesPerSession: number) {
     if (entry.exitCleanupStarted) return;
     entry.exitCleanupStarted = true;
     runCleanup(
-      Effect.sleep(SETTLE_GRACE_MS).pipe(
+      // End the grace as soon as the natural close path settles, so an
+      // ordinary exit does not keep a detached sleeper (and shutdown) waiting.
+      Effect.race(
+        Effect.sleep(SETTLE_GRACE_MS),
+        Deferred.await(entry.settled),
+      ).pipe(
         Effect.andThen(
           Effect.suspend(() =>
             entry.snapshot.status === "running" && !entry.stdioClosed
