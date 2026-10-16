@@ -190,6 +190,56 @@
   line-height: 1.4;
 }
 
+.composer-failure {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(100%, 840px);
+  margin: 0 auto 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  background: var(--page);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.composer-failure p {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.composer-failure strong { font-weight: 650; }
+
+.composer-failure span {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.composer-failure button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.composer-failure button:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.composer-failure button svg { width: 16px; height: 16px; }
+
 .file-reference-heading {
   display: flex;
   align-items: flex-start;

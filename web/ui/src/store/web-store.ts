@@ -1,6 +1,7 @@
 import { createStore } from "zustand/vanilla";
 import { reduceLiveTools } from "../../../protocol/live-tools.ts";
 import {
+  projectAssistantError,
   WEB_MAX_ENTRIES,
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebCommandSummary,
@@ -66,6 +67,12 @@ const refreshEventTypes = new Set([
   "command_submitted",
   "plan_mode_changed",
 ]);
+
+function visibleFailureReason(value: unknown) {
+  if (typeof value !== "string") return null;
+  const projected = projectAssistantError(value).value;
+  return projected ? projected : null;
+}
 
 function readStringSet(key: string) {
   try {
@@ -281,6 +288,8 @@ export interface WebStoreState {
   activeTurn: WebSnapshot["runtime"]["activeTurn"] | null;
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
+  /** Provider failure kept on screen after the run is idle, until the user sends or dismisses it. */
+  turnFailure: { reason: string | null } | null;
   pendingFollowUpsReceipt: number | null;
   pendingSteeringReceipt: number | null;
   draftModel: WebModelSummary | null;
@@ -445,6 +454,7 @@ export interface WebStoreActions {
   toggleSidebar: (narrow: boolean) => void;
   closeMobileSidebar: () => void;
   clearNotice: () => void;
+  dismissTurnFailure: () => void;
 }
 
 export interface ModelSearchState {
@@ -562,6 +572,7 @@ export function createWebStore(
   const terminalPromptIds = new Set<string>();
   const completedActivationIds = new Set<string>();
   let pendingTimingKeys: string[] = [];
+  let pendingTurnFailureReason: string | null = null;
 
   const rememberBounded = (set: Set<string>, value: unknown) => {
     if (typeof value !== "string") return;
@@ -575,11 +586,13 @@ export function createWebStore(
   const resetLivePatch = () => {
     planSelectionGeneration++;
     pendingTimingKeys = [];
+    pendingTurnFailureReason = null;
     return {
       planSelectionPending: false,
       activeTurn: null,
       turnCancellationPending: false,
       turnTerminalStatus: null,
+      turnFailure: null,
       pendingFollowUpsReceipt: null,
       pendingSteeringReceipt: null,
       liveMessages: [] as LiveEntry[],
@@ -1160,6 +1173,7 @@ export function createWebStore(
         });
       } else if (event.type === "turn_started") {
         liveTurnSequence = event.sequence;
+        pendingTurnFailureReason = null;
         set({
           activeTurn: {
             sessionId: String(detail.sessionId),
@@ -1182,6 +1196,7 @@ export function createWebStore(
           livePhase: "running",
           liveRetry: null,
           turnTerminalStatus: null,
+          turnFailure: null,
         });
       } else if (event.type === "agent_start") {
         liveTurnSequence = event.sequence;
@@ -1202,14 +1217,20 @@ export function createWebStore(
           turn?.epoch === detail.epoch
         ) {
           liveTurnSequence = event.sequence;
+          const outcome =
+            typeof detail.outcome === "string" ? detail.outcome : null;
           set({
             activeTurn: null,
             liveRunning: false,
             livePhase: "idle",
             liveRetry: null,
-            turnTerminalStatus:
-              typeof detail.outcome === "string" ? detail.outcome : null,
+            turnTerminalStatus: outcome,
+            turnFailure:
+              outcome === "failed"
+                ? { reason: pendingTurnFailureReason }
+                : null,
           });
+          pendingTurnFailureReason = null;
         }
       } else if (event.type === "agent_settled") {
         if (!current.activeTurn) liveTurnSequence = event.sequence;
@@ -1230,6 +1251,19 @@ export function createWebStore(
           set({ liveRunning: false, livePhase: "idle", liveRetry: null });
       } else if (detail.message && typeof detail.message === "object") {
         const message = detail.message as WebLiveMessage;
+        if (message.role === "assistant") {
+          if (message.stopReason === "error") {
+            pendingTurnFailureReason = visibleFailureReason(
+              message.errorMessage,
+            );
+          } else if (
+            message.stopReason === "stop" ||
+            message.stopReason === "length" ||
+            message.stopReason === "aborted"
+          ) {
+            pendingTurnFailureReason = null;
+          }
+        }
         let liveMessages = current.liveMessages;
         const key =
           typeof detail.messageKey === "string"
@@ -1328,7 +1362,11 @@ export function createWebStore(
       }
       if (event.type === "auto_retry_end") {
         // A recovered request can continue into tools or another model step.
-        // Only Pi's settled event ends the run.
+        // Only Pi's settled event ends the run and publishes the final failure.
+        if (detail.success === false) {
+          const reason = visibleFailureReason(detail.finalError);
+          if (reason) pendingTurnFailureReason = reason;
+        }
         set({ liveRetry: null });
       }
       if (event.type === "thinking_level_changed") {
@@ -3117,6 +3155,7 @@ export function createWebStore(
           ...(delivery ? { delivery } : {}),
         };
         promptAdmissionToken = admission;
+        pendingTurnFailureReason = null;
         set({
           liveMessages:
             retrying || delivery?.retryEntryId
@@ -3153,6 +3192,7 @@ export function createWebStore(
           pendingFollowUpsReceipt: null,
           pendingSteeringReceipt: null,
           turnTerminalStatus: null,
+          turnFailure: null,
           promptAdmissionPending: true,
           scrollToBottom: get().scrollToBottom + 1,
         });
@@ -3650,6 +3690,10 @@ export function createWebStore(
       clearNotice() {
         set({ notice: null });
       },
+      dismissTurnFailure() {
+        pendingTurnFailureReason = null;
+        set({ turnFailure: null });
+      },
     };
 
     return {
@@ -3657,6 +3701,7 @@ export function createWebStore(
       activeTurn: null,
       turnCancellationPending: false,
       turnTerminalStatus: null,
+      turnFailure: null,
       pendingFollowUpsReceipt: null,
       pendingSteeringReceipt: null,
       snapshot: null,
