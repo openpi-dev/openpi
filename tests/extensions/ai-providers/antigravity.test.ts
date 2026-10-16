@@ -1533,9 +1533,9 @@ const SSE_METADATA = new TextEncoder().encode(
   'data: {"response":{"usageMetadata":{"promptTokenCount":1}}}\n\n',
 );
 
-// timeoutMs is both deadlines. Hold the clock until the metadata event is
-// parsed, then move it onto the lifetime deadline. Advancing inside the first
-// read is too early: the post-read check still has sawEvent false.
+// timeoutMs is both deadlines. The body prefetches one extra chunk before the
+// first read is parsed, so the third pull is the read after that event. Move
+// the clock there. Advancing earlier still reports the first SSE event.
 async function withSseClock<T>(
   run: (clock: { advance: (ms: number) => void }) => Promise<T>,
 ) {
@@ -1569,7 +1569,7 @@ test("streamAntigravity bounds the full SSE lifetime after the first event", asy
         new ReadableStream<Uint8Array>({
           pull(controller) {
             pulls += 1;
-            if (pulls === 1) {
+            if (pulls < 3) {
               controller.enqueue(SSE_METADATA);
               return;
             }
