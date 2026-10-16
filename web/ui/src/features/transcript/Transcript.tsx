@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   Fragment,
+  memo,
   type ReactNode,
   useCallback,
   useEffect,
@@ -100,6 +101,7 @@ type PersistedEntry = NonNullable<
 interface DisplayEntry {
   compaction?: true;
   forkSnapshotBoundary?: true;
+  persisted?: true;
   key: string;
   entryId?: string;
   timingKey?: string;
@@ -173,7 +175,48 @@ interface RenderRow {
   commandHandledInputId?: string;
   commandHandledCommandId?: string;
   forkSnapshotBoundary?: true;
+  persisted?: true;
   timing?: WebTurnTiming;
+}
+
+interface CachedHistoryRows {
+  slots: readonly unknown[];
+  rows: RenderRow[];
+  token: object;
+  turn: number;
+  latestUserPrompt: string | undefined;
+  latestUserIndex: number;
+  retryRowKey: string | undefined;
+  turnItems: TurnNavigationItem[];
+  attemptContents: [string, RenderRow[]][];
+}
+
+let transcriptRowRenderObserver: ((rowKey: string) => void) | undefined;
+
+export function observeTranscriptRowRenders(
+  observer: ((rowKey: string) => void) | undefined,
+) {
+  const previous = transcriptRowRenderObserver;
+  transcriptRowRenderObserver = observer;
+  return () => {
+    transcriptRowRenderObserver = previous;
+  };
+}
+
+function sameSlot(left: unknown, right: unknown) {
+  if (Object.is(left, right)) return true;
+  if (!Array.isArray(left) || !Array.isArray(right)) return false;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++)
+    if (!sameSlot(left[index], right[index])) return false;
+  return true;
+}
+
+function sameSlots(left: readonly unknown[], right: readonly unknown[]) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++)
+    if (!sameSlot(left[index], right[index])) return false;
+  return true;
 }
 
 type ActiveTurn = NonNullable<WebSnapshot["runtime"]["activeTurn"]>;
@@ -1345,8 +1388,8 @@ function persistedTranscriptProjection(
     group.push(entry);
     exactNative.set(signature, group);
   }
-  const baseEntries = persisted.flatMap(
-    (entry: PersistedEntry): DisplayEntry[] => {
+  const baseEntries = persisted
+    .flatMap((entry: PersistedEntry): DisplayEntry[] => {
       if (entry.forkSnapshotBoundary)
         return [
           {
@@ -1396,8 +1439,8 @@ function persistedTranscriptProjection(
           message,
         },
       ];
-    },
-  );
+    })
+    .map((entry) => ({ ...entry, persisted: true as const }));
   const indexById = new Map<string, number>();
   const lookupIndexes = new Map<string, number[]>();
   baseEntries.forEach((entry, index) => {
@@ -2051,6 +2094,31 @@ function ProcessSequence({
       </section>
     </details>
   );
+}
+
+const MemoRowFrame = memo(function MemoRowFrame({
+  rowKey,
+  token,
+  children,
+}: {
+  rowKey: string;
+  token: object;
+  children: ReactNode;
+}) {
+  transcriptRowRenderObserver?.(rowKey);
+  return children;
+});
+
+function frameRow(row: RenderRow, token: object): RenderRow {
+  if (row.content == null) return row;
+  return {
+    ...row,
+    content: (
+      <MemoRowFrame rowKey={row.key} token={token}>
+        {row.content}
+      </MemoRowFrame>
+    ),
+  };
 }
 
 function groupRows(rows: RenderRow[], active: boolean) {
@@ -2727,6 +2795,18 @@ export function Transcript(props: TranscriptProps) {
     scope: hydrationScope,
     keys: new Map<string, string>(),
   });
+  const entryRowCache = useRef({
+    scope: hydrationScope,
+    rows: new Map<string, CachedHistoryRows>(),
+  });
+  const reviewTurnRef = useRef(props.onReviewTurn);
+  reviewTurnRef.current = props.onReviewTurn;
+  const onReviewTurn = useCallback(
+    (promptEntryId: string, filePath?: string) => {
+      reviewTurnRef.current?.(promptEntryId, filePath);
+    },
+    [],
+  );
   if (nativeRowKeys.current.scope !== hydrationScope)
     nativeRowKeys.current = { scope: hydrationScope, keys: new Map() };
   const { entries, projectedPrompts } = useMemo(
@@ -2770,6 +2850,60 @@ export function Transcript(props: TranscriptProps) {
     return () => observer.disconnect();
   }, []);
 
+  const rowContext = useMemo(
+    () => ({
+      active,
+      running,
+      selectedExecution,
+      retry,
+      activityObserved: props.activityObserved,
+      historyPaused,
+      onResend: props.onResend,
+      onEdit: props.onEdit,
+      onRegenerate: props.onRegenerate,
+      onFork: props.onFork,
+      forkAvailable: props.forkAvailable,
+      forkPending: props.forkPending,
+      onInspectSubagent: props.onInspectSubagent,
+      subagents: props.snapshot.runtime.capabilities.subagents,
+      workflows: props.snapshot.runtime.capabilities.workflows?.items,
+      expandThinking: props.snapshot.preferences.expandThinking,
+      subagentResultDisplay: props.snapshot.preferences.subagentResultDisplay,
+      bashToolDisplay: props.snapshot.preferences.bashToolDisplay,
+      fileMutationDisplay: props.snapshot.preferences.fileMutationDisplay,
+      thinkingLevel: props.snapshot.thinking?.level,
+      selectedId,
+      selectedPath,
+      selectedCwd,
+      t,
+    }),
+    [
+      active,
+      running,
+      selectedExecution,
+      retry,
+      props.activityObserved,
+      historyPaused,
+      props.onResend,
+      props.onEdit,
+      props.onRegenerate,
+      props.onFork,
+      props.forkAvailable,
+      props.forkPending,
+      props.onInspectSubagent,
+      props.snapshot.runtime.capabilities.subagents,
+      props.snapshot.runtime.capabilities.workflows?.items,
+      props.snapshot.preferences.expandThinking,
+      props.snapshot.preferences.subagentResultDisplay,
+      props.snapshot.preferences.bashToolDisplay,
+      props.snapshot.preferences.fileMutationDisplay,
+      props.snapshot.thinking?.level,
+      selectedId,
+      selectedPath,
+      selectedCwd,
+      t,
+    ],
+  );
   const { rows, turns } = useMemo(() => {
     const records = recordedSubagents(entries.map((entry) => entry.message));
     const failures = providerFailures(entries, running && !historyPaused);
@@ -2847,8 +2981,17 @@ export function Transcript(props: TranscriptProps) {
         assistantCandidate = index;
     });
     if (assistantCandidate >= 0) lastAssistantByTurn.add(assistantCandidate);
+    const recordsSignature = [...records.values()]
+      .map(
+        (item) =>
+          `${item.id}\0${item.title}\0${item.state ?? ""}\0${item.result ?? ""}\0${item.receipt ?? ""}`,
+      )
+      .join("\n");
 
-    const rendered = entries.flatMap((entry, index): RenderRow[] => {
+    const produceEntryRows = (
+      entry: DisplayEntry,
+      index: number,
+    ): RenderRow[] => {
       const message = entry.message;
       if (entry.forkSnapshotBoundary)
         return [
@@ -3762,7 +3905,124 @@ export function Transcript(props: TranscriptProps) {
         ];
       }
       return [];
+    };
+    if (entryRowCache.current.scope !== hydrationScope)
+      entryRowCache.current = {
+        scope: hydrationScope,
+        rows: new Map(),
+      };
+    const historyCache = entryRowCache.current.rows;
+    const seenEntryKeys = new Set<string>();
+    const rendered = entries.flatMap((entry, index): RenderRow[] => {
+      const hydrationKey = entry.entryId
+        ? JSON.stringify([selectedId, selectedPath, entry.entryId])
+        : "";
+      const failure = failures.groups.get(index);
+      const toolDeps: unknown[] = [];
+      let highlighted = Boolean(
+        highlightedEntry && entry.entryId === highlightedEntry,
+      );
+      if (entry.message.role === "assistant") {
+        for (const part of entry.message.parts ?? []) {
+          if (part.type !== "toolCall" || !part.id) continue;
+          const resultEntry = results.get(part.id);
+          if (highlightedEntry && resultEntry?.entryId === highlightedEntry)
+            highlighted = true;
+          const related = new Set([part.id]);
+          const liveDeps: unknown[] = [];
+          for (const item of liveTools) {
+            if (
+              item.call.id !== part.id &&
+              !(item.parentToolCallId && related.has(item.parentToolCallId))
+            )
+              continue;
+            if (item.call.id) related.add(item.call.id);
+            liveDeps.push(
+              item.call.id,
+              item.state,
+              item.result,
+              item.parentToolCallId,
+            );
+          }
+          toolDeps.push(
+            part.id,
+            resultEntry?.message,
+            part.name.startsWith("subagent") || part.name.startsWith("workflow")
+              ? recordsSignature
+              : undefined,
+            liveDeps,
+          );
+        }
+      } else if (
+        entry.message.role === "toolResult" &&
+        entry.message.toolCallId
+      ) {
+        toolDeps.push(pairedToolIds.has(entry.message.toolCallId));
+      }
+      const slots = [
+        rowContext,
+        entry.message,
+        entry.key,
+        entry.entryId,
+        entry.timestamp,
+        entry.timing,
+        entry.compaction,
+        entry.forkSnapshotBoundary,
+        entry.optimistic,
+        entry.persisted,
+        index,
+        highlighted,
+        hydrationKey ? hydratedMessages[hydrationKey] : undefined,
+        displayedThinkingDuration(entry, props.thinkingDurations),
+        lastAssistantByTurn.has(index),
+        failures.finalErrors.has(index),
+        failure?.state,
+        failure
+          ? failure.attempts.map((attempt) => attempt.key).join("\0")
+          : undefined,
+        turn,
+        latestUserPrompt,
+        latestUserIndex,
+        toolDeps,
+      ];
+      const hit = historyCache.get(entry.key);
+      if (hit && sameSlots(hit.slots, slots)) {
+        turn = hit.turn;
+        latestUserPrompt = hit.latestUserPrompt;
+        latestUserIndex = hit.latestUserIndex;
+        if (hit.retryRowKey) retryRowKey = hit.retryRowKey;
+        for (const item of hit.turnItems) turnItems.push(item);
+        for (const [key, value] of hit.attemptContents)
+          attemptContents.set(key, value);
+        seenEntryKeys.add(entry.key);
+        return hit.rows;
+      }
+      const turnItemsBefore = turnItems.length;
+      const attemptKeysBefore = new Set(attemptContents.keys());
+      const produced = produceEntryRows(entry, index).map((row) =>
+        entry.persisted ? { ...row, persisted: true as const } : row,
+      );
+      const token = {};
+      const framed = produced.map((row) => frameRow(row, token));
+      const attemptAdded: [string, RenderRow[]][] = [];
+      for (const [key, value] of attemptContents)
+        if (!attemptKeysBefore.has(key)) attemptAdded.push([key, value]);
+      historyCache.set(entry.key, {
+        slots,
+        rows: framed,
+        token,
+        turn,
+        latestUserPrompt,
+        latestUserIndex,
+        retryRowKey,
+        turnItems: turnItems.slice(turnItemsBefore),
+        attemptContents: attemptAdded,
+      });
+      seenEntryKeys.add(entry.key);
+      return framed;
     });
+    for (const key of historyCache.keys())
+      if (!seenEntryKeys.has(key)) historyCache.delete(key);
     let nativeEnd = rendered.length;
     while (nativeEnd > 0 && rendered[nativeEnd - 1]!.pendingPrompt) nativeEnd--;
     const pendingPreviews = rendered.length - nativeEnd;
@@ -3857,6 +4117,8 @@ export function Transcript(props: TranscriptProps) {
     selectedCwd,
     hydratedMessages,
     highlightedEntry,
+    hydrationScope,
+    rowContext,
     t,
   ]);
 
@@ -4355,7 +4617,7 @@ export function Transcript(props: TranscriptProps) {
             changesByPrompt,
             selected,
             props.activityObserved !== false ? visibleTimedTurn : undefined,
-            props.onReviewTurn,
+            onReviewTurn,
             props.activityObserved !== false,
           )}
           {running &&
