@@ -111,7 +111,7 @@ import {
   subagentStripEntryKey,
 } from "./navigation.ts";
 import {
-  formatAgentTypeDiagnostics,
+  formatAgentTypeNotices,
   loadAgentTypes,
   roleModelForAgentType,
   selectSubagentModel,
@@ -888,9 +888,10 @@ export default function (
     // A malformed agent type is silently missing from the roster otherwise, so
     // report it once. Never fatal: the rest still loaded. Non-UI modes receive
     // stderr rather than a model-context message.
-    const notice = formatAgentTypeDiagnostics(agentTypeDiagnostics);
-    if (notice && ctx.hasUI) ctx.ui.notify(notice, "warning");
-    else if (notice) process.stderr.write(`${notice}\n`);
+    for (const notice of formatAgentTypeNotices(agentTypeDiagnostics)) {
+      if (ctx.hasUI) ctx.ui.notify(notice.message, notice.level);
+      else process.stderr.write(`${notice.message}\n`);
+    }
   });
 
   // A new explicit request starts a fresh unread window: previously finished
