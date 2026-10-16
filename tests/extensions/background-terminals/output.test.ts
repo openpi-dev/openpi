@@ -22,6 +22,10 @@ test("head chunks are evicted past the cap and accounted as truncated", () => {
   assert.equal(view.text, "bbbbcccc");
   assert.equal(view.totalBytes, 12);
   assert.equal(view.truncatedBytes, 4);
+  assert.equal(view.truncatedChars, 4);
+  assert.equal(view.retainedChars, 8);
+  assert.equal(view.slice(0, 4), "bbbb");
+  assert.equal(view.slice(4), "cccc");
 });
 
 test("a single chunk larger than the cap is trimmed to its tail — retention stays bounded", () => {
@@ -55,6 +59,9 @@ test("an oversized chunk cut lands on a UTF-8 code point boundary", () => {
   assert.equal(view.text, "éé"); // 4 bytes retained (5 would split)
   assert.equal(view.totalBytes, 10);
   assert.equal(view.truncatedBytes, 6);
+  assert.equal(view.truncatedChars, 3);
+  assert.equal(view.retainedChars, 2);
+  assert.equal(view.slice(1), "é");
   assert.ok(!view.text.includes("�"));
 });
 
@@ -95,6 +102,33 @@ test("spill callback receives every chunk in order, even after eviction", () => 
   buf.push("cccc");
   assert.deepEqual(spilled, ["aaaa", "bbbb", "cccc"]);
   assert.equal(buf.view().text, "cccc");
+});
+
+test("many small chunks keep the newest whole chunks after compaction", () => {
+  const cap = 128;
+  const buf = new OutputBuffer(cap);
+  const chunks: string[] = [];
+  for (let index = 0; index < 2000; index++) {
+    const chunk = `${index % 10}`.repeat(8);
+    chunks.push(chunk);
+    buf.push(chunk);
+  }
+  const retainedCount = cap / 8;
+  const expected = chunks.slice(chunks.length - retainedCount).join("");
+  const dropped = chunks.slice(0, chunks.length - retainedCount).join("");
+  const view = buf.view();
+  assert.equal(view.text, expected);
+  assert.equal(view.modelSafeText, expected);
+  assert.equal(view.retainedChars, expected.length);
+  assert.equal(view.truncatedChars, dropped.length);
+  assert.equal(view.truncatedBytes, dropped.length);
+  assert.equal(view.totalBytes, expected.length + dropped.length);
+  assert.equal(view.slice(0, 8), expected.slice(0, 8));
+  assert.equal(view.slice(3, 20), expected.slice(3, 20));
+  assert.equal(
+    view.slice(expected.length - 5),
+    expected.slice(expected.length - 5),
+  );
 });
 
 test("view text is cached between pushes and version increments per push", () => {
