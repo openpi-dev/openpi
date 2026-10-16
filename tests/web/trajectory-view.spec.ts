@@ -127,8 +127,20 @@ it("retains the selected record while saved history grows and resets on Session 
   ).toContain("Prompt 10");
   rendered.rerender(view(100));
   expect(
+    rendered.container.querySelectorAll(".trajectory-record"),
+  ).toHaveLength(50);
+  expect(
     rendered.container.querySelector(".trajectory-inspector")?.textContent,
   ).toContain("Prompt 10");
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("trajectoryLatestRecords") }),
+  );
+  expect(
+    rendered.container.querySelector(".trajectory-inspector")?.textContent,
+  ).toContain("Prompt 99");
+  expect(
+    rendered.container.querySelectorAll(".trajectory-record"),
+  ).toHaveLength(50);
   rendered.rerender(view(5, "different-session"));
   expect(
     rendered.container.querySelector(".trajectory-inspector")?.textContent,
