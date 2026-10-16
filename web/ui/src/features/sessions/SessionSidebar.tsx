@@ -265,7 +265,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [pinSaving, setPinSaving] = useState(false);
   const pinInFlight = useRef(false);
   const draggedPin = useRef<WebSidebarPinTarget | null>(null);
-  const suppressDragClickUntil = useRef(0);
+  // One trailing click after a drag. Cleared by that click or by a later
+  // pointerdown. A wall-clock window drops the click when the post-drop render
+  // is slower than the window.
+  const suppressDragClick = useRef(false);
   const [draggingSidebar, setDraggingSidebar] = useState(false);
   const draggedChat = useRef<{
     path: string;
@@ -927,7 +930,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
   const endDrag = useCallback(() => {
     if (draggedPin.current || draggedChat.current)
-      suppressDragClickUntil.current = Date.now() + 250;
+      suppressDragClick.current = true;
     draggedPin.current = null;
     draggedChat.current = null;
     setDraggingSidebar(false);
@@ -1243,7 +1246,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             return;
           }
           setDraggingSidebar(true);
-          suppressDragClickUntil.current = Number.POSITIVE_INFINITY;
+          suppressDragClick.current = true;
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData("text/plain", session.id);
         }}
@@ -1630,7 +1633,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
               if (mounted.current && draggedPin.current === target)
                 setDraggingSidebar(true);
             });
-            suppressDragClickUntil.current = Number.POSITIVE_INFINITY;
+            suppressDragClick.current = true;
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", group.path);
           }}
@@ -1756,12 +1759,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
       onPointerDownCapture={() => {
         // A new gesture is intentional; only suppress the drag's trailing click.
         if (!draggedPin.current && !draggedChat.current)
-          suppressDragClickUntil.current = 0;
+          suppressDragClick.current = false;
       }}
       onClickCapture={(event) => {
-        if (event.detail !== 0 && Date.now() < suppressDragClickUntil.current) {
+        if (event.detail !== 0 && suppressDragClick.current) {
           event.preventDefault();
           event.stopPropagation();
+          suppressDragClick.current = false;
         }
       }}
       onKeyDown={(event) => {
