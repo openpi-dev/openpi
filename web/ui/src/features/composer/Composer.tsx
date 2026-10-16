@@ -117,6 +117,7 @@ interface ComposerProps {
   activeTurn: WebStoreState["activeTurn"];
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
+  turnFailure?: WebStoreState["turnFailure"];
   pendingFollowUpsReceipt: number | null;
   pendingSteeringReceipt?: number | null;
   commandDiscovery?: WebStoreState["commandDiscovery"];
@@ -1712,6 +1713,21 @@ export function Composer(props: ComposerProps) {
               })}
             </small>
           )}
+        </section>
+      )}
+      {props.turnFailure && (
+        <section className="composer-failure" role="alert">
+          <p>
+            <strong>{t("modelRequestFailed")}</strong>
+            <span>{props.turnFailure.reason || t("modelFailureUnknown")}</span>
+          </p>
+          <button
+            type="button"
+            aria-label={t("close")}
+            onClick={() => props.actions.dismissTurnFailure()}
+          >
+            <X aria-hidden="true" />
+          </button>
         </section>
       )}
       <form

@@ -1228,6 +1228,7 @@ export function App() {
                 activityObserved={state.connection === "connected"}
                 turnCancellationPending={state.turnCancellationPending}
                 turnTerminalStatus={state.turnTerminalStatus}
+                turnFailure={state.turnFailure}
                 pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
                 pendingSteeringReceipt={state.pendingSteeringReceipt}
                 commandDiscovery={state.commandDiscovery}
