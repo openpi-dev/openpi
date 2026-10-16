@@ -9,12 +9,19 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
 import { readSessionFork } from "../../web/protocol/session-fork.ts";
 import { WEB_SESSION_FORK } from "../../web/protocol/session-fork.ts";
-import { readSessionTurnEvidence, WEB_TURN_TIMING_ENTRY } from "../../web/protocol/turn-timing.ts";
+import {
+  readSessionTurnEvidence,
+  WEB_TURN_TIMING_ENTRY,
+} from "../../web/protocol/turn-timing.ts";
 import { WEB_TRANSCRIPT_SEARCH_MAX_TOTAL_BYTES } from "../../web/search/transcript-search.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
 
-function runtimeFor(cwd: string, sessionDirectory: string, sessionManager: SessionManager): WebRuntimeController {
+function runtimeFor(
+  cwd: string,
+  sessionDirectory: string,
+  sessionManager: SessionManager,
+): WebRuntimeController {
   return {
     cwd,
     workspaceSelected: true,
@@ -24,7 +31,10 @@ function runtimeFor(cwd: string, sessionDirectory: string, sessionManager: Sessi
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => ({ pendingFollowUps: 0 }),
-    newSession: async () => ({ cancelled: false, sessionId: sessionManager.getSessionId() }),
+    newSession: async () => ({
+      cancelled: false,
+      sessionId: sessionManager.getSessionId(),
+    }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
     searchModels: (query, limit) => projectWebModelSearch([], query, limit),
@@ -45,7 +55,11 @@ const zeroUsage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function persistSession(manager: SessionManager, content: string, timestamp: number) {
+function persistSession(
+  manager: SessionManager,
+  content: string,
+  timestamp: number,
+) {
   manager.appendMessage({ role: "user", content, timestamp });
   return manager.appendMessage({
     role: "assistant",
@@ -75,14 +89,21 @@ test("catalog metadata matches Pi and unchanged files are not read again", async
   branched.branch(forkPoint);
   persistSession(branched, "replacement", 32);
   const oracle = await SessionManager.listAll(directory);
-  const adapter = new PiWebAdapter(runtimeFor(root, directory, SessionManager.inMemory(root)));
+  const adapter = new PiWebAdapter(
+    runtimeFor(root, directory, SessionManager.inMemory(root)),
+  );
   const originalOpen = fsPromises.open;
   const opened: string[] = [];
-  t.mock.method(fsPromises, "open", async (...args: Parameters<typeof originalOpen>) => {
-    const path = String(args[0]);
-    if (path.startsWith(directory) && path.endsWith(".jsonl")) opened.push(path);
-    return originalOpen(...args);
-  });
+  t.mock.method(
+    fsPromises,
+    "open",
+    async (...args: Parameters<typeof originalOpen>) => {
+      const path = String(args[0]);
+      if (path.startsWith(directory) && path.endsWith(".jsonl"))
+        opened.push(path);
+      return originalOpen(...args);
+    },
+  );
   syncBuiltinESMExports();
   t.after(() => {
     t.mock.restoreAll();
@@ -92,7 +113,10 @@ test("catalog metadata matches Pi and unchanged files are not read again", async
   const listed = await adapter.listSessions();
   const files = listed.filter((session) => session.path.endsWith(".jsonl"));
   const byPath = new Map(files.map((session) => [session.path, session]));
-  assert.deepEqual(files.map((session) => session.id), oracle.map((session) => session.id));
+  assert.deepEqual(
+    files.map((session) => session.id),
+    oracle.map((session) => session.id),
+  );
   for (const expected of oracle) {
     const actual = byPath.get(expected.path);
     assert.ok(actual);
@@ -106,7 +130,9 @@ test("catalog metadata matches Pi and unchanged files are not read again", async
   assert.equal(new Set(firstRead).size, oracle.length);
   const again = await adapter.listSessions();
   assert.deepEqual(
-    again.filter((session) => session.path.endsWith(".jsonl")).map((session) => session.id),
+    again
+      .filter((session) => session.path.endsWith(".jsonl"))
+      .map((session) => session.id),
     files.map((session) => session.id),
   );
   assert.deepEqual(opened, firstRead);
@@ -121,23 +147,43 @@ test("catalog metadata matches Pi and unchanged files are not read again", async
   const beforeRename = opened.length;
   await rename(from, to);
   const renamed = await adapter.listSessions();
-  assert.equal(renamed.some((session) => session.path === from), false);
-  assert.equal(renamed.find((session) => session.path === to)?.id, named.getSessionId());
-  const renameReads = opened.slice(beforeRename).filter((path) => path !== to && path !== from);
+  assert.equal(
+    renamed.some((session) => session.path === from),
+    false,
+  );
+  assert.equal(
+    renamed.find((session) => session.path === to)?.id,
+    named.getSessionId(),
+  );
+  const renameReads = opened
+    .slice(beforeRename)
+    .filter((path) => path !== to && path !== from);
   assert.deepEqual(renameReads, []);
 
   const beforeDelete = opened.length;
   await rm(plain.getSessionFile()!);
   const remaining = await adapter.listSessions();
-  assert.equal(remaining.some((session) => session.path === plain.getSessionFile()), false);
+  assert.equal(
+    remaining.some((session) => session.path === plain.getSessionFile()),
+    false,
+  );
   assert.deepEqual(opened.slice(beforeDelete), []);
 
   const replaced = branched.getSessionFile()!;
   const beforeReplace = opened.length;
-  await writeFile(replaced, `${JSON.stringify({ type: "session", version: 3, id: "replaced-id", timestamp: "2026-10-15T00:00:00.000Z", cwd: root })}\n${JSON.stringify({ type: "message", id: "m", parentId: null, timestamp: "2026-10-15T00:00:00.000Z", message: { role: "user", content: "replaced body", timestamp: 50 } })}\n`);
+  await writeFile(
+    replaced,
+    `${JSON.stringify({ type: "session", version: 3, id: "replaced-id", timestamp: "2026-10-15T00:00:00.000Z", cwd: root })}\n${JSON.stringify({ type: "message", id: "m", parentId: null, timestamp: "2026-10-15T00:00:00.000Z", message: { role: "user", content: "replaced body", timestamp: 50 } })}\n`,
+  );
   const afterReplace = await adapter.listSessions();
-  assert.equal(afterReplace.some((session) => session.id === branched.getSessionId()), false);
-  assert.equal(afterReplace.find((session) => session.path === replaced)?.firstMessage, "replaced body");
+  assert.equal(
+    afterReplace.some((session) => session.id === branched.getSessionId()),
+    false,
+  );
+  assert.equal(
+    afterReplace.find((session) => session.path === replaced)?.firstMessage,
+    "replaced body",
+  );
   assert.deepEqual(opened.slice(beforeReplace), [replaced]);
 });
 
@@ -148,7 +194,11 @@ test("non-current history keeps Pi's branch without a synchronous open or a seco
   const manager = SessionManager.create(root, directory);
   persistSession(manager, "kept", 1);
   const forkPoint = manager.getLeafId()!;
-  const abandoned = manager.appendMessage({ role: "user", content: "abandoned", timestamp: 2 });
+  const abandoned = manager.appendMessage({
+    role: "user",
+    content: "abandoned",
+    timestamp: 2,
+  });
   manager.branch(forkPoint);
   const replacement = persistSession(manager, "replacement", 3);
   const assistant = manager.getLeafId()!;
@@ -167,7 +217,11 @@ test("non-current history keeps Pi's branch without a synchronous open or a seco
   manager.appendCustomEntry(WEB_SESSION_FORK, {
     version: 1,
     sessionId: manager.getSessionId(),
-    source: { sessionId: "source-session", sessionPath: join(root, "source.jsonl"), entryId: "source-entry" },
+    source: {
+      sessionId: "source-session",
+      sessionPath: join(root, "source.jsonl"),
+      entryId: "source-entry",
+    },
     environment: "local",
     cwd: root,
     workspacePath: join(root, "project"),
@@ -176,9 +230,19 @@ test("non-current history keeps Pi's branch without a synchronous open or a seco
   const oracle = SessionManager.open(path, directory);
   const oracleBranch = oracle.getBranch();
   const oracleIds = oracleBranch.map((entry) => entry.id);
-  const oracleFork = readSessionFork(oracleBranch, oracle.getSessionId(), oracle.getCwd());
-  const oracleEvidence = readSessionTurnEvidence(oracleBranch, oracle.getSessionId(), false);
-  const adapter = new PiWebAdapter(runtimeFor(root, directory, SessionManager.inMemory(root)));
+  const oracleFork = readSessionFork(
+    oracleBranch,
+    oracle.getSessionId(),
+    oracle.getCwd(),
+  );
+  const oracleEvidence = readSessionTurnEvidence(
+    oracleBranch,
+    oracle.getSessionId(),
+    false,
+  );
+  const adapter = new PiWebAdapter(
+    runtimeFor(root, directory, SessionManager.inMemory(root)),
+  );
   const originalOpen = SessionManager.open;
   const originalRead = fsPromises.readFile;
   let syncOpens = 0;
@@ -187,10 +251,14 @@ test("non-current history keeps Pi's branch without a synchronous open or a seco
     syncOpens++;
     return originalOpen(...args);
   }) as typeof SessionManager.open;
-  t.mock.method(fsPromises, "readFile", async (...args: Parameters<typeof originalRead>) => {
-    if (args[0] === path) bodyReads++;
-    return originalRead(...args);
-  });
+  t.mock.method(
+    fsPromises,
+    "readFile",
+    async (...args: Parameters<typeof originalRead>) => {
+      if (args[0] === path) bodyReads++;
+      return originalRead(...args);
+    },
+  );
   syncBuiltinESMExports();
   t.after(() => {
     SessionManager.open = originalOpen;
@@ -213,11 +281,17 @@ test("non-current history keeps Pi's branch without a synchronous open or a seco
   assert.equal(projected.has(replacement), true);
   const anchor = session.entries[0]?.id;
   assert.ok(anchor);
-  const page = await adapter.getSessionHistory(manager.getSessionId(), path, oracle.getLeafId()!, anchor);
+  const page = await adapter.getSessionHistory(
+    manager.getSessionId(),
+    path,
+    oracle.getLeafId()!,
+    anchor,
+  );
   assert.equal(page.status, "ok");
   assert.equal(bodyReads, 1);
   if (page.status === "ok") {
-    for (const entry of page.session.entries) assert.ok(oracleIds.includes(entry.id));
+    for (const entry of page.session.entries)
+      assert.ok(oracleIds.includes(entry.id));
   }
 });
 
@@ -229,7 +303,9 @@ test("concurrent catalog reads share one scan", async (t) => {
     const manager = SessionManager.create(root, directory);
     persistSession(manager, id, 1);
   }
-  const adapter = new PiWebAdapter(runtimeFor(root, directory, SessionManager.inMemory(root)));
+  const adapter = new PiWebAdapter(
+    runtimeFor(root, directory, SessionManager.inMemory(root)),
+  );
   const originalOpen = fsPromises.open;
   let opens = 0;
   let releaseHold: () => void = () => {};
@@ -240,17 +316,21 @@ test("concurrent catalog reads share one scan", async (t) => {
   const started = new Promise<void>((resolve) => {
     entered = resolve;
   });
-  t.mock.method(fsPromises, "open", async (...args: Parameters<typeof originalOpen>) => {
-    const path = String(args[0]);
-    if (path.startsWith(directory) && path.endsWith(".jsonl")) {
-      opens++;
-      if (opens === 1) {
-        entered();
-        await hold;
+  t.mock.method(
+    fsPromises,
+    "open",
+    async (...args: Parameters<typeof originalOpen>) => {
+      const path = String(args[0]);
+      if (path.startsWith(directory) && path.endsWith(".jsonl")) {
+        opens++;
+        if (opens === 1) {
+          entered();
+          await hold;
+        }
       }
-    }
-    return originalOpen(...args);
-  });
+      return originalOpen(...args);
+    },
+  );
   syncBuiltinESMExports();
   t.after(() => {
     releaseHold();
@@ -276,20 +356,29 @@ test("search cancellation and byte budget include the catalog pre-scan", async (
     const manager = SessionManager.create(root, small);
     persistSession(manager, `needle ${index}`, index + 1);
   }
-  const adapter = new PiWebAdapter(runtimeFor(root, small, SessionManager.inMemory(root)));
+  const adapter = new PiWebAdapter(
+    runtimeFor(root, small, SessionManager.inMemory(root)),
+  );
   const controller = new AbortController();
   const originalOpen = fsPromises.open;
   let opens = 0;
-  t.mock.method(fsPromises, "open", async (...args: Parameters<typeof originalOpen>) => {
-    const path = String(args[0]);
-    if (path.startsWith(small) && path.endsWith(".jsonl")) {
-      opens++;
-      if (opens === 1) controller.abort();
-    }
-    return originalOpen(...args);
-  });
+  t.mock.method(
+    fsPromises,
+    "open",
+    async (...args: Parameters<typeof originalOpen>) => {
+      const path = String(args[0]);
+      if (path.startsWith(small) && path.endsWith(".jsonl")) {
+        opens++;
+        if (opens === 1) controller.abort();
+      }
+      return originalOpen(...args);
+    },
+  );
   syncBuiltinESMExports();
-  await assert.rejects(adapter.searchTranscripts("needle", { signal: controller.signal }), /abort/i);
+  await assert.rejects(
+    adapter.searchTranscripts("needle", { signal: controller.signal }),
+    /abort/i,
+  );
   assert.ok(opens < 6);
   t.mock.restoreAll();
   syncBuiltinESMExports();
@@ -297,21 +386,31 @@ test("search cancellation and byte budget include the catalog pre-scan", async (
   const bulky = join(directory, "bulky");
   await mkdir(bulky, { recursive: true });
   const fileBytes = 1024 * 1024;
-  const fileCount = Math.floor(WEB_TRANSCRIPT_SEARCH_MAX_TOTAL_BYTES / fileBytes) + 2;
-  await Promise.all(Array.from({ length: fileCount }, (_, index) =>
-    writeFile(join(bulky, `${index}.jsonl`), Buffer.alloc(fileBytes, 120))));
+  const fileCount =
+    Math.floor(WEB_TRANSCRIPT_SEARCH_MAX_TOTAL_BYTES / fileBytes) + 2;
+  await Promise.all(
+    Array.from({ length: fileCount }, (_, index) =>
+      writeFile(join(bulky, `${index}.jsonl`), Buffer.alloc(fileBytes, 120)),
+    ),
+  );
   let bulkyOpens = 0;
-  t.mock.method(fsPromises, "open", async (...args: Parameters<typeof originalOpen>) => {
-    const path = String(args[0]);
-    if (path.startsWith(bulky) && path.endsWith(".jsonl")) bulkyOpens++;
-    return originalOpen(...args);
-  });
+  t.mock.method(
+    fsPromises,
+    "open",
+    async (...args: Parameters<typeof originalOpen>) => {
+      const path = String(args[0]);
+      if (path.startsWith(bulky) && path.endsWith(".jsonl")) bulkyOpens++;
+      return originalOpen(...args);
+    },
+  );
   syncBuiltinESMExports();
   t.after(() => {
     t.mock.restoreAll();
     syncBuiltinESMExports();
   });
-  const found = await new PiWebAdapter(runtimeFor(root, bulky, SessionManager.inMemory(root))).searchTranscripts("needle");
+  const found = await new PiWebAdapter(
+    runtimeFor(root, bulky, SessionManager.inMemory(root)),
+  ).searchTranscripts("needle");
   assert.equal(found.partial, true);
   assert.ok(found.partialReasons.includes("byte-limit"));
   assert.ok(bulkyOpens < fileCount);

@@ -1,5 +1,4 @@
 import { open, readdir, stat, type FileHandle } from "node:fs/promises";
-import type { Stats } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -89,7 +88,7 @@ function sameIdentity(left: FileIdentity, right: FileIdentity) {
     left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }
 
-function identityOf(stats: Stats<bigint>): FileIdentity {
+function identityOf(stats: FileIdentity): FileIdentity {
   return {
     dev: stats.dev,
     ino: stats.ino,
@@ -307,19 +306,17 @@ export class SessionCatalog {
       while (statIndex < paths.length) {
         signal?.throwIfAborted();
         const path = paths[statIndex++]!;
-        let stats: Stats<bigint>;
         try {
-          stats = await withSignal(stat(path, { bigint: true }), signal);
+          const stats = await withSignal(stat(path, { bigint: true }), signal);
+          if (!stats.isFile()) continue;
+          listed.push({
+            path,
+            identity: identityOf(stats),
+            mtimeMs: Number(stats.mtimeMs),
+          });
         } catch (error) {
           if (isAbort(error, signal)) throw error;
-          continue;
         }
-        if (!stats.isFile()) continue;
-        listed.push({
-          path,
-          identity: identityOf(stats),
-          mtimeMs: Number(stats.mtimeMs),
-        });
       }
     };
     try {

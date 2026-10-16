@@ -1,5 +1,4 @@
 import { readFile, stat } from "node:fs/promises";
-import type { Stats } from "node:fs";
 import { resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import { SessionManager, type FileEntry } from "@earendil-works/pi-coding-agent";
@@ -29,7 +28,7 @@ let worker: Worker | undefined;
 let nextId = 0;
 const pending = new Map<number, { resolve: (entries: FileEntry[]) => void; reject: (error: Error) => void }>();
 
-function identityOf(stats: Stats<bigint>): FileIdentity {
+function identityOf(stats: FileIdentity): FileIdentity {
   return {
     dev: stats.dev,
     ino: stats.ino,
@@ -69,7 +68,8 @@ function fileWorker() {
     pending.clear();
     if (worker === current) worker = undefined;
     current.unref();
-    for (const request of requests) request.reject(error);
+    const failure = error instanceof Error ? error : new Error(String(error));
+    for (const request of requests) request.reject(failure);
   });
   return current;
 }
@@ -119,14 +119,11 @@ export class SessionLoader {
 
   async open(path: string, sessionDir: string) {
     const resolved = resolve(path);
-    let stats: Stats<bigint>;
-    try {
-      stats = await stat(resolved, { bigint: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return SessionManager.open(path, sessionDir);
+    const stats = await stat(resolved, { bigint: true }).catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
       throw error;
-    }
-    if (!stats.isFile()) return SessionManager.open(path, sessionDir);
+    });
+    if (!stats || !stats.isFile()) return SessionManager.open(path, sessionDir);
     const identity = identityOf(stats);
     const cached = this.cache.get(resolved);
     if (cached && sameIdentity(cached.identity, identity)) {
@@ -139,7 +136,7 @@ export class SessionLoader {
     }
     const manager = readableSession(resolved, sessionDir, entries);
     const after = await stat(resolved, { bigint: true }).catch(() => undefined);
-    if (after?.isFile() && sameIdentity(identity, identityOf(after))) {
+    if (after && after.isFile() && sameIdentity(identity, identityOf(after))) {
       this.cache.set(resolved, { identity, manager });
       this.touch(resolved);
     }
@@ -159,7 +156,7 @@ export class SessionLoader {
   private async readStable(path: string, identity: FileIdentity) {
     const first = await this.readEntries(path);
     const after = await stat(path, { bigint: true }).catch(() => undefined);
-    if (!after?.isFile() || sameIdentity(identity, identityOf(after))) return first;
+    if (!after || !after.isFile() || sameIdentity(identity, identityOf(after))) return first;
     return this.readEntries(path);
   }
 

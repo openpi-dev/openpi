@@ -2026,20 +2026,30 @@ test("archive scan continuations reach old matches after an empty bounded window
       text: string,
     ) => {
       const timestamp = new Date(createdMs).toISOString();
-      return `${JSON.stringify({ type: "session", version: 3, id, timestamp, cwd })}\n${JSON.stringify({
-        type: "message",
-        id: "m",
-        parentId: null,
-        timestamp,
-        message: { role: "user", content: text, timestamp: modifiedMs },
-      })}\n`;
+      return `${JSON.stringify({ type: "session", version: 3, id, timestamp, cwd })}\n${JSON.stringify(
+        {
+          type: "message",
+          id: "m",
+          parentId: null,
+          timestamp,
+          message: { role: "user", content: text, timestamp: modifiedMs },
+        },
+      )}\n`;
     };
     const writes: Promise<void>[] = [];
     for (const session of [...active, ...older]) {
-      writes.push(writeFile(
-        session.path,
-        sessionFile(session.id, session.cwd, session.created.getTime(), session.modified.getTime(), session.firstMessage),
-      ));
+      writes.push(
+        writeFile(
+          session.path,
+          sessionFile(
+            session.id,
+            session.cwd,
+            session.created.getTime(),
+            session.modified.getTime(),
+            session.firstMessage,
+          ),
+        ),
+      );
       if (writes.length === 64) {
         await Promise.all(writes);
         writes.length = 0;
@@ -2097,7 +2107,13 @@ test("archive scan continuations reach old matches after an empty bounded window
     }
     await writeFile(
       older[0]!.path,
-      sessionFile("older-a", project, 200_000, older[0]!.modified.getTime(), "old needle A"),
+      sessionFile(
+        "older-a",
+        project,
+        200_000,
+        older[0]!.modified.getTime(),
+        "old needle A",
+      ),
     );
     const globallyNewest = await adapter.listArchivedSessions({
       sort: "created",
