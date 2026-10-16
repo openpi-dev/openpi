@@ -60,6 +60,10 @@ function git(cwd: string, ...args: string[]) {
   });
 }
 
+function stagedIndex(cwd: string) {
+  return git(cwd, "ls-files", "--stage", "-z");
+}
+
 function fixture(t: TestContext) {
   const root = fs.mkdtempSync(
     path.join(os.tmpdir(), "openpi-session-worktree-test-"),
@@ -86,7 +90,7 @@ function fixture(t: TestContext) {
   fs.symlinkSync("delete.txt", path.join(repo, "link"));
   git(repo, "add", "-A");
   git(repo, "commit", "--quiet", "-m", "initial");
-  return { root, repo, index: path.join(repo, ".git", "index") };
+  return { root, repo };
 }
 
 // The wrapper still executes real Git. It introduces a competing change at a
@@ -111,7 +115,7 @@ const runReal =
   "const result=cp.spawnSync(realGit,args,{stdio:'inherit',env:process.env}); if(result.status!==0) process.exit(result.status??1);";
 
 test("forks source HEAD detached and copies final tracked, untracked, binary, executable and link contents unstaged", async (t) => {
-  const { repo, index } = fixture(t);
+  const { repo } = fixture(t);
   const file = path.join(repo, "packages", "app", "file.txt");
   fs.writeFileSync(file, "staged\n");
   git(repo, "add", "--", "packages/app/file.txt");
@@ -127,7 +131,7 @@ test("forks source HEAD detached and copies final tracked, untracked, binary, ex
   fs.writeFileSync(path.join(repo, "staged.env"), "staged despite ignore\n");
   git(repo, "add", "--force", "--", "staged.env");
   fs.writeFileSync(path.join(repo, "private.env"), "do not copy\n");
-  const beforeIndex = fs.readFileSync(index);
+  const beforeStage = stagedIndex(repo);
   const beforeStatus = git(repo, "status", "--porcelain=v1", "-z");
   const head = git(repo, "rev-parse", "HEAD").trim();
   const result = await createSessionWorktree(
@@ -184,7 +188,7 @@ test("forks source HEAD detached and copies final tracked, untracked, binary, ex
     false,
   );
   assert.equal(git(result.cwd, "diff", "--cached", "--name-only"), "");
-  assert.deepEqual(fs.readFileSync(index), beforeIndex);
+  assert.equal(stagedIndex(repo), beforeStage);
   assert.equal(git(repo, "status", "--porcelain=v1", "-z"), beforeStatus);
   fs.writeFileSync(path.join(result.cwd, "file.txt"), "child edit\n");
   assert.equal(fs.readFileSync(file, "utf8"), "final unstaged\n");
@@ -376,8 +380,8 @@ test("inspection rejects non-Git, unborn, sparse, unmerged and submodule sources
 });
 
 test("cancellation before creation never creates or changes a checkout", async (t) => {
-  const { repo, index } = fixture(t);
-  const previous = fs.readFileSync(index);
+  const { repo } = fixture(t);
+  const previousStage = stagedIndex(repo);
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(
@@ -385,7 +389,7 @@ test("cancellation before creation never creates or changes a checkout", async (
     (error: unknown) =>
       error instanceof SessionWorktreeError && error.code === "cancelled",
   );
-  assert.deepEqual(fs.readFileSync(index), previous);
+  assert.equal(stagedIndex(repo), previousStage);
   assert.equal(
     git(repo, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length,
     1,
@@ -393,8 +397,8 @@ test("cancellation before creation never creates or changes a checkout", async (
 });
 
 test("cancellation during worktree creation waits for identity then removes only its new checkout", async (t) => {
-  const { repo, root, index } = fixture(t);
-  const originalIndex = fs.readFileSync(index);
+  const { repo, root } = fixture(t);
+  const originalStage = stagedIndex(repo);
   const started = path.join(root, "add-finished");
   gitBoundary(
     t,
@@ -414,7 +418,7 @@ test("cancellation during worktree creation waits for identity then removes only
       error.preservedPath === undefined,
   );
   assert.equal(controller.signal.aborted, true);
-  assert.deepEqual(fs.readFileSync(index), originalIndex);
+  assert.equal(stagedIndex(repo), originalStage);
   assert.equal(
     git(repo, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length,
     1,
@@ -491,12 +495,12 @@ test("a HEAD race fails and removes only the unchanged newly created checkout", 
 });
 
 test("a source content race is detected without reverting the user's new content", async (t) => {
-  const { repo, root, index } = fixture(t);
+  const { repo, root } = fixture(t);
   fs.writeFileSync(
     path.join(repo, "packages", "app", "file.txt"),
     "snapshot version\n",
   );
-  const originalIndex = fs.readFileSync(index);
+  const originalStage = stagedIndex(repo);
   gitBoundary(
     t,
     root,
@@ -510,7 +514,7 @@ test("a source content race is detected without reverting the user's new content
     fs.readFileSync(path.join(repo, "packages", "app", "file.txt"), "utf8"),
     "new user content\n",
   );
-  assert.deepEqual(fs.readFileSync(index), originalIndex);
+  assert.equal(stagedIndex(repo), originalStage);
   assert.equal(
     git(repo, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length,
     1,

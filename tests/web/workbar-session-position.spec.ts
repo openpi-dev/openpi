@@ -18,12 +18,12 @@ import type {
 } from "../../web/protocol/types.ts";
 import { App } from "../../web/ui/src/app/App.tsx";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
-import { i18n } from "../../web/ui/src/i18n.ts";
 import {
   loadWorkbarPositions,
   saveWorkbarPositions,
   WORKBAR_POSITION_STORAGE_KEY,
 } from "../../web/ui/src/features/workbar/workbar-position-storage.ts";
+import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
@@ -178,6 +178,56 @@ async function open(tool: "files" | "browser" | "review") {
   );
 }
 
+// File listings and git review both publish through a timer, then React commits
+// on a later task. waitFor/findByRole arm their deadline on that same timer
+// phase. After a Windows runner stalls past the deadline, the timeout callback
+// is already queued behind the read and rejects before the commit. A check-phase
+// turn plus act() sees a result that landed in that batch. Absence still fails
+// at the same 1s budget; this does not extend it.
+async function paintFrame() {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 20);
+  });
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  });
+}
+
+async function paintedRole(
+  container: {
+    getByRole: typeof screen.getByRole;
+    queryByRole: typeof screen.queryByRole;
+  },
+  role: Parameters<typeof screen.getByRole>[0],
+  name?: string | RegExp,
+) {
+  const options = name === undefined ? undefined : { name };
+  const deadline = Date.now() + 1_000;
+  for (;;) {
+    await paintFrame();
+    const found = container.queryByRole(role, options);
+    if (found) return found;
+    if (Date.now() >= deadline) return container.getByRole(role, options);
+  }
+}
+
+async function painted(assert: () => void) {
+  const deadline = Date.now() + 1_000;
+  let failure: unknown;
+  for (;;) {
+    await paintFrame();
+    try {
+      assert();
+      return;
+    } catch (error) {
+      failure = error;
+      if (Date.now() >= deadline) throw failure;
+    }
+  }
+}
+
 it("dismisses only the focused Files tooltip before its preview and Workbar, leaving outside Settings Escape alone", async () => {
   const current = snapshot("/workspace/tooltip-escape.jsonl", "tooltip-escape");
   webStore.setState({
@@ -203,8 +253,8 @@ it("dismisses only the focused Files tooltip before its preview and Workbar, lea
     ),
   );
   await open("files");
-  fireEvent.click(await screen.findByRole("button", { name: "README.md" }));
-  await screen.findByRole("heading", { name: "Read me" });
+  fireEvent.click(await paintedRole(screen, "button", "README.md"));
+  await paintedRole(screen, "heading", "Read me");
   const workbar = view.container.querySelector<HTMLElement>(".workbar-panel")!;
   const preview = view.container.querySelector<HTMLElement>(".artifact-panel")!;
   const copy = within(preview).getByRole("button", {
@@ -217,7 +267,7 @@ it("dismisses only the focused Files tooltip before its preview and Workbar, lea
   const tooltip = (await screen.findByText(i18n.t("copyFilePath"))).closest(
     '[role="tooltip"]',
   )!;
-  await waitFor(() => expect(tooltip.matches(":popover-open")).toBe(true));
+  await painted(() => expect(tooltip.matches(":popover-open")).toBe(true));
   expect(fireEvent.keyDown(copy, { key: "Escape" })).toBe(false);
   expect(tooltip.isConnected && tooltip.matches(":popover-open")).toBe(false);
   expect(view.container.querySelector(".artifact-panel")).toBe(preview);
@@ -289,7 +339,7 @@ it("restores a comparison source, filter and reading position after reloading th
   fireEvent.change(scope().getByRole("combobox"), {
     target: { value: "staged" },
   });
-  await waitFor(() =>
+  await painted(() =>
     expect(
       vi.mocked(WebClient.prototype.gitReview).mock.calls.at(-1)?.[3]?.source,
     ).toBe("staged"),
@@ -297,8 +347,8 @@ it("restores a comparison source, filter and reading position after reloading th
   fireEvent.change(scope().getByRole("searchbox"), {
     target: { value: "example" },
   });
-  fireEvent.click(await scope().findByRole("button", { name: /example\.ts/u }));
-  await scope().findByRole("figure");
+  fireEvent.click(await paintedRole(scope(), "button", /example\.ts/u));
+  await paintedRole(scope(), "figure");
   const preview = view.container.querySelector<HTMLElement>(
     ".review-file-preview",
   )!;
@@ -309,17 +359,17 @@ it("restores a comparison source, filter and reading position after reloading th
   fireEvent.change(scope().getByRole("combobox"), {
     target: { value: "branch" },
   });
-  await waitFor(() =>
+  await painted(() =>
     expect(
       vi.mocked(WebClient.prototype.gitReview).mock.calls.at(-1)?.[3]?.source,
     ).toBe("branch"),
   );
   restoring = true;
   await select("/workspace/a.jsonl");
-  await waitFor(() => expect(resolveRestoredFile).toBeTypeOf("function"));
+  await painted(() => expect(resolveRestoredFile).toBeTypeOf("function"));
   expect(scope().queryByRole("figure")).toBeNull();
   await act(async () => resolveRestoredFile(file));
-  await scope().findByRole("figure");
+  await paintedRole(scope(), "figure");
   expect(scope().getByRole<HTMLSelectElement>("combobox").value).toBe("staged");
   expect(
     view.container.querySelector<HTMLElement>(".review-file-preview")!
@@ -370,7 +420,7 @@ it("quotes an exact deleted line through the workbar into the existing chat draf
     view.container.querySelector<HTMLTextAreaElement>(".composer textarea")!;
   fireEvent.change(composer, { target: { value: "Please reconsider this." } });
   await open("review");
-  fireEvent.click(await screen.findByRole("button", { name: /example\.ts/u }));
+  fireEvent.click(await paintedRole(screen, "button", /example\.ts/u));
   fireEvent.click(
     screen.getByRole("button", {
       name: i18n.t("reviewSelectOldLine", { line: 10 }),
@@ -577,8 +627,8 @@ it("bounds remembered tools to 32 exact Session identities while keeping a recen
 it("reattaches a Session's file position after a copied same-ID Session, releasing the old preview", async () => {
   const view = render(createElement(Providers, null, createElement(App)));
   await open("files");
-  fireEvent.click(await screen.findByRole("button", { name: "README.md" }));
-  await screen.findByRole("heading", { name: "Read me" });
+  fireEvent.click(await paintedRole(screen, "button", "README.md"));
+  await paintedRole(screen, "heading", "Read me");
   const tree = view.container.querySelector<HTMLElement>(".file-tree")!;
   const preview = view.container.querySelector<HTMLElement>(
     ".artifact-panel-body",
@@ -604,14 +654,14 @@ it("reattaches a Session's file position after a copied same-ID Session, releasi
     }).value,
   ).toBe("");
   await select("/workspace/a.jsonl");
-  await screen.findByRole("heading", { name: "Read me" });
+  await paintedRole(screen, "heading", "Read me");
   expect(view.container.querySelectorAll(".workbar-panel")).toHaveLength(1);
   expect(
     screen.getByRole<HTMLInputElement>("textbox", {
       name: i18n.t("filesSearch"),
     }).value,
   ).toBe("README");
-  await waitFor(() =>
+  await painted(() =>
     expect(
       view.container.querySelector<HTMLElement>(".file-tree")!.scrollTop,
     ).toBe(84),

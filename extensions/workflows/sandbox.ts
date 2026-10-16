@@ -75,6 +75,12 @@ export interface RunWorkflowSandboxOptions {
    * mid-run — losing the aggregate that resuming exists to preserve.
    */
   extraAgentRequests?: number;
+  /**
+   * Delay before the child announces it is listening. Process startup stays
+   * outside the synchronous-execution watchdog. Tests use this to show a slow
+   * spawn is not reported as a script timeout.
+   */
+  startDelayMs?: number;
 }
 
 function byteLength(value: string) {
@@ -192,6 +198,15 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         env: {
           PATH: process.env.PATH ?? "",
           NODE_NO_WARNINGS: "1",
+          ...(typeof options.startDelayMs === "number" &&
+          Number.isFinite(options.startDelayMs) &&
+          options.startDelayMs > 0
+            ? {
+                OPENPI_SANDBOX_START_DELAY_MS: String(
+                  Math.floor(options.startDelayMs),
+                ),
+              }
+            : {}),
         },
         stdio: ["ignore", "ignore", "ignore", "ipc"],
       },
@@ -201,6 +216,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     const activeAgentRequests = new Map<number, AbortController>();
     let requestCount = 0;
     let finished = false;
+    let scriptStarted = false;
     let executionSeq = 0;
     let executionWatchdog: NodeJS.Timeout | undefined;
 
@@ -272,12 +288,40 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         );
       }
     });
+    const beginExecution = () => {
+      if (finished || scriptStarted) return;
+      scriptStarted = true;
+      // The 1s budget covers non-yielding script after the child is listening.
+      // Spawn and module load are a precondition, not part of that deadline.
+      const initSeq = armWatchdog();
+      child.send(
+        {
+          kind: "init",
+          token,
+          source: options.source,
+          argsJson,
+          maxConcurrency: options.maxConcurrency,
+          usageJson: usageJson(),
+          seq: initSeq,
+        },
+        (error) => {
+          if (error) finish(error);
+        },
+      );
+    };
+
     child.on("message", (raw: unknown) => {
-      if (
-        !isRecord(raw) ||
-        raw.token !== token ||
-        typeof raw.kind !== "string"
-      ) {
+      if (!isRecord(raw) || typeof raw.kind !== "string") {
+        finish(new Error("Workflow sandbox sent an invalid IPC message"));
+        return;
+      }
+      // The child has no token yet. A later listening message is ignored so it
+      // cannot fall through and kill a run that already started.
+      if (raw.kind === "listening") {
+        beginExecution();
+        return;
+      }
+      if (raw.token !== token) {
         finish(new Error("Workflow sandbox sent an invalid IPC message"));
         return;
       }
@@ -437,24 +481,5 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       }
       finish(new Error("Workflow sandbox sent an unknown IPC message"));
     });
-
-    // Arm the synchronous execution watchdog for the initial script invocation
-    // (covers non-yielding code before and after initial microtask yields).
-    const initSeq = armWatchdog();
-
-    child.send(
-      {
-        kind: "init",
-        token,
-        source: options.source,
-        argsJson,
-        maxConcurrency: options.maxConcurrency,
-        usageJson: usageJson(),
-        seq: initSeq,
-      },
-      (error) => {
-        if (error) finish(error);
-      },
-    );
   });
 }
