@@ -6754,8 +6754,12 @@ test("provider key writes require authentication and sanitize provider failures"
   }
 });
 
-for (const wallShift of [0, 120_000, -120_000]) {
-  test(`stop bounds an authenticated incomplete HTTP request with wall shift ${wallShift}`, async (t) => {
+{
+  // Stop's drain bounds are timers, so only a backward wall-clock jump can
+  // expose a regression to a Date-based deadline (it would never expire). A
+  // forward or zero shift ran the same path and could only stop sooner.
+  const wallShift = -120_000;
+  test("stop bounds an authenticated incomplete HTTP request when the wall clock moves backward", async (t) => {
     const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-http-"));
     const { host, launched, headers } = await startTestHost(testRuntime(cwd));
     const socket = createConnection({

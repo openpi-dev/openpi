@@ -12,7 +12,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { getSystemErrorMap } from "node:util";
 import { Effect, ManagedRuntime } from "effect";
 import type { TerminalSnapshot } from "../../../extensions/background-terminals/src/domain.ts";
@@ -205,9 +205,33 @@ test("Windows taskkill timeout waits for the stopped helper to close", async () 
   });
 });
 
+/**
+ * Run a taskkill wait against Node's mock clock. These cases exercise the
+ * production timeout ladder (seconds of real waiting) without the wall clock.
+ */
+async function onVirtualClock<T>(
+  t: TestContext,
+  start: () => Promise<T>,
+): Promise<T> {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  try {
+    let done = false;
+    const pending = start().finally(() => {
+      done = true;
+    });
+    for (let i = 0; i < 10_000 && !done; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      if (!done) t.mock.timers.tick(50);
+    }
+    return await pending;
+  } finally {
+    t.mock.timers.reset();
+  }
+}
+
 for (const signal of ["SIGTERM", "SIGKILL"] as const) {
   for (const shellExitsDuringTimeout of [false, true]) {
-    test(`Windows ${signal} taskkill timeout stays unresolved when shell exit is ${shellExitsDuringTimeout}`, async () => {
+    test(`Windows ${signal} taskkill timeout stays unresolved when shell exit is ${shellExitsDuringTimeout}`, async (t) => {
       let targetExited = false;
       const killer = new EventEmitter() as ChildProcess;
       killer.kill = () => {
@@ -217,17 +241,19 @@ for (const signal of ["SIGTERM", "SIGKILL"] as const) {
       };
       const signals: Array<NodeJS.Signals | number | undefined> = [];
 
-      const result = await signalWindowsProcessTree(
-        {
-          pid: 47,
-          kill(signal) {
-            signals.push(signal);
-            return true;
+      const result = await onVirtualClock(t, () =>
+        signalWindowsProcessTree(
+          {
+            pid: 47,
+            kill(signal) {
+              signals.push(signal);
+              return true;
+            },
           },
-        },
-        signal,
-        () => targetExited,
-        () => killer,
+          signal,
+          () => targetExited,
+          () => killer,
+        ),
       );
 
       assert.equal(result.outcome, "unresolved");
@@ -258,23 +284,25 @@ test("Windows taskkill helper close has a second explicit bound", async () => {
   assert.equal(unrefed, true);
 });
 
-test("an unclosed graceful taskkill helper blocks force escalation", async () => {
+test("an unclosed graceful taskkill helper blocks force escalation", async (t) => {
   const killer = new EventEmitter() as ChildProcess;
   killer.kill = () => true;
   killer.unref = () => killer;
   const signals: Array<NodeJS.Signals | number | undefined> = [];
 
-  const result = await signalWindowsProcessTree(
-    {
-      pid: 48,
-      kill(signal) {
-        signals.push(signal);
-        return true;
+  const result = await onVirtualClock(t, () =>
+    signalWindowsProcessTree(
+      {
+        pid: 48,
+        kill(signal) {
+          signals.push(signal);
+          return true;
+        },
       },
-    },
-    "SIGTERM",
-    () => false,
-    () => killer,
+      "SIGTERM",
+      () => false,
+      () => killer,
+    ),
   );
 
   assert.equal(result.outcome, "unresolved");

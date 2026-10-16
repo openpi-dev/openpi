@@ -1527,7 +1527,12 @@ test("streamAntigravity bounds the first event wait and releases both bodies", a
   assert.match(error.error.errorMessage ?? "", /first SSE event/);
 });
 
-test("streamAntigravity bounds the full SSE lifetime after the first event", async () => {
+test("streamAntigravity bounds the full SSE lifetime after the first event", async (t) => {
+  // Freeze the wall clock so the first event is always observed before the
+  // shared 5 ms deadline; only the idle second read can then expire. A real
+  // clock let a slow runner miss the first-event deadline (#829).
+  const frozenNow = Date.now();
+  t.mock.method(Date, "now", () => frozenNow);
   const urls: string[] = [];
   let cancellations = 0;
   globalThis.fetch = (async (input: unknown) => {

@@ -171,11 +171,11 @@ jobs:
           server_pid=""
 
   web-e2e-shards:
-    name: Web E2E shard ${{ matrix.shard }}/2
+    name: Web E2E shard ${{ matrix.shard }}/3
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -218,7 +218,9 @@ jobs:
           bunx playwright install --with-deps chromium
           sudo apt-get install --no-install-recommends -y dbus-daemon
       # Independent runners isolate each shard's server, settings and filesystem.
-      - run: dbus-run-session -- bun run test:web:e2e --shard=${{ matrix.shard }}/2
+      # Three shards keep this job off the PR critical path (~8 min of serial
+      # browser time on one worker per runner).
+      - run: dbus-run-session -- bun run test:web:e2e --shard=${{ matrix.shard }}/3
         env:
           # The runner's installed Chrome has Ubuntu's native sandbox profile.
           OPENPI_CHROME_PATH: /opt/google/chrome/chrome

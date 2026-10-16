@@ -1,4 +1,12 @@
+import { configure } from "@testing-library/react";
 import { beforeEach, vi } from "vitest";
+
+// findBy*/waitFor budgets are harness give-up limits, not product deadlines:
+// a missing element still fails, only later. The 1 s library default is less
+// than one App-level jsdom render on a loaded Windows runner, which made
+// unrelated UI tests fail at random there (#829). No case asserts that an
+// element appears within a time bound; product timers use explicit clocks.
+configure({ asyncUtilTimeout: 5_000 });
 
 // jsdom omits this browser API. Components may subscribe before a test opens
 // their menus; viewport-specific cases replace this default with their fixture.

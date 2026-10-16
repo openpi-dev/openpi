@@ -2346,9 +2346,10 @@ test("release authority unknowns never downgrade a resource terminal across clai
   }
 });
 
+// A backward wall shift with no elapsed time cannot fail unless the budget
+// always expires, which forward-wall and budget-left already reject.
 for (const clock of [
   { name: "forward-wall", wall: 120_000, elapsed: 0, expires: false },
-  { name: "backward-wall", wall: -120_000, elapsed: 0, expires: false },
   {
     name: "backward-wall-with-budget-left",
     wall: -120_000,
