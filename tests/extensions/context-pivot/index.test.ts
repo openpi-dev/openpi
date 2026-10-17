@@ -223,3 +223,155 @@ test("reports native no-history failures without a UI", async () => {
     "Context pivot could not run: this session has no discardable history to compact. Continue in the current session, or use /sessions to choose another session; to begin cleanly, start a new Session in Pi.",
   ]);
 });
+
+test("a new session can start a pivot while the previous session is pending", async () => {
+  let tool: ToolDefinition | undefined;
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const pi = {
+    registerTool(candidate: ToolDefinition) {
+      tool = candidate;
+    },
+    getActiveTools: () => [],
+    setActiveTools() {},
+    on(event: string, handler: (...args: unknown[]) => unknown) {
+      handlers.set(event, handler);
+    },
+    registerCommand() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: false,
+    getContextUsage: () => ({
+      tokens: MIN_CONTEXT_PIVOT_TOKENS,
+      contextWindow: 200_000,
+      percent: 15,
+    }),
+    compact() {},
+  } as unknown as ExtensionContext;
+
+  contextPivot(pi);
+  assert.ok(tool);
+  await tool.execute(
+    "first-session-pivot",
+    { brief: "First session pivot." },
+    undefined,
+    undefined,
+    toolExecutionContext(ctx),
+  );
+
+  handlers.get("session_start")?.({}, ctx);
+
+  await assert.doesNotReject(
+    tool.execute(
+      "second-session-pivot",
+      { brief: "Second session pivot." },
+      undefined,
+      undefined,
+      toolExecutionContext(ctx),
+    ),
+  );
+});
+
+for (const hasUI of [true, false]) {
+  test(`replacement isolates stale pivot callbacks from the ${hasUI ? "UI" : "headless"} Session`, async () => {
+    let tool: ToolDefinition | undefined;
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const callbacks: CompactOptions[] = [];
+    const notifications: Array<{ message: string; level: string }> = [];
+    const statuses: Array<string | undefined> = [];
+    const sent: string[] = [];
+    const errors: string[] = [];
+    const pi = {
+      registerTool(candidate: ToolDefinition) {
+        tool = candidate;
+      },
+      getActiveTools: () => [],
+      setActiveTools() {},
+      on(event: string, handler: (...args: unknown[]) => unknown) {
+        handlers.set(event, handler);
+      },
+      registerCommand() {},
+      sendUserMessage(message: string) {
+        sent.push(message);
+      },
+    } as unknown as ExtensionAPI;
+    const ctx = {
+      hasUI,
+      getContextUsage: () => ({ tokens: MIN_CONTEXT_PIVOT_TOKENS }),
+      compact(options: CompactOptions) {
+        callbacks.push(options);
+      },
+      ui: {
+        notify(message: string, level: string) {
+          notifications.push({ message, level });
+        },
+        setStatus(_key: string, value: string | undefined) {
+          statuses.push(value);
+        },
+        theme: { fg: (_color: string, text: string) => text },
+      },
+    } as unknown as ExtensionContext;
+    contextPivot(pi);
+    assert.ok(tool);
+    const pivotTool = tool;
+    const execute = (brief: string) =>
+      pivotTool.execute(
+        brief,
+        { brief },
+        undefined,
+        undefined,
+        toolExecutionContext(ctx),
+      );
+    const originalError = console.error;
+    console.error = (message: unknown) => errors.push(String(message));
+    try {
+      await execute("Old Session A");
+      if (hasUI) assert.match(statuses.at(-1)!, /pivoting/);
+      handlers.get("session_start")?.({}, ctx);
+      if (hasUI) assert.equal(statuses.at(-1), undefined);
+      await execute("New Session B");
+      const currentStatusCount = statuses.length;
+      const compactionResult = {
+        summary: "Native compaction result",
+        firstKeptEntryId: "entry",
+        tokensBefore: MIN_CONTEXT_PIVOT_TOKENS,
+      };
+      callbacks[0]?.onComplete?.(compactionResult);
+      callbacks[0]?.onError?.(new Error("stale old provider failure"));
+      assert.deepEqual(sent, []);
+      assert.equal(notifications.length, 0);
+      assert.deepEqual(errors, []);
+      assert.equal(statuses.length, currentStatusCount);
+      await assert.rejects(execute("Concurrent pivot"), /already in progress/);
+      const compacted = handlers.get("session_before_compact")?.({
+        branchEntries: [],
+        preparation: { tokensBefore: MIN_CONTEXT_PIVOT_TOKENS },
+      }) as { compaction: { summary: string } };
+      assert.equal(
+        compacted.compaction.summary,
+        buildPivotSummary("New Session B"),
+      );
+      callbacks[1]?.onComplete?.(compactionResult);
+      assert.deepEqual(sent, ["Continue with the next phase now."]);
+      if (hasUI) {
+        assert.equal(statuses.at(-1), undefined);
+        assert.equal(notifications.at(-1)?.level, "info");
+      }
+      await execute("Current failure");
+      callbacks[2]?.onError?.(new Error("current provider failure"));
+      if (hasUI) {
+        assert.equal(statuses.at(-1), undefined);
+        assert.deepEqual(notifications.at(-1), {
+          message: "Context pivot failed: current provider failure",
+          level: "error",
+        });
+      } else {
+        assert.deepEqual(errors, [
+          "Context pivot failed: current provider failure",
+        ]);
+      }
+      await assert.doesNotReject(execute("Retry after current failure"));
+    } finally {
+      console.error = originalError;
+    }
+  });
+}

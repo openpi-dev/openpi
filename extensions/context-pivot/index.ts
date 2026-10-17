@@ -102,7 +102,11 @@ export default function contextPivot(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
+    generation += 1;
+    pending = undefined;
+    compacting = false;
     setVisibleForContext(ctx);
+    if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 
   pi.on("agent_start", (_event, ctx) => {
@@ -184,7 +188,8 @@ export default function contextPivot(pi: ExtensionAPI) {
             pi.sendUserMessage("Continue with the next phase now.");
           },
           onError: (error) => {
-            if (pivotGeneration === generation) pending = undefined;
+            if (pivotGeneration !== generation) return;
+            pending = undefined;
             clear();
             const message = formatContextPivotError(error);
             if (ctx.hasUI) {
