@@ -244,7 +244,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .sidebar-collapsed .workspace-tree,
   .sidebar-collapsed .sidebar-scope-note { display: none; }
   /* Reserve the fixed expand button's 40px height and an 8px gap. */
-  .sidebar-collapsed .new-session-button { width: 40px; height: 40px; margin: 48px 0 0; padding: 0; border-color: transparent; border-radius: 6px; background: transparent; }
+  .sidebar-collapsed .new-session-button { width: 40px; height: 40px; margin: calc((var(--shell-header-height) + 40px) / 2) 0 0; padding: 0; border-color: transparent; border-radius: 6px; background: transparent; }
   .sidebar-collapsed .new-session-button span { display: none; }
   .sidebar-collapsed .new-session-button:hover { background: var(--sidebar-hover); }
 }

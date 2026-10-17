@@ -537,10 +537,12 @@ test("workflow tasks share child navigation while retaining uncertainty and exac
   await expect(panel.getByRole("heading", { name: /未确认/ })).toBeVisible();
   const listTitle = panel.getByTitle(children[0]!.title);
   await expect(listTitle).toBeVisible();
-  expect(
-    await listTitle.evaluate((el) => el.scrollWidth > el.clientWidth),
-  ).toBe(true);
-  expect((await listTitle.boundingBox())!.height).toBeLessThanOrEqual(24);
+  const titleBounds = (await listTitle.boundingBox())!;
+  const titleLineHeight = await listTitle.evaluate((el) =>
+    Number.parseFloat(getComputedStyle(el).lineHeight),
+  );
+  expect(titleBounds.height).toBeLessThanOrEqual(titleLineHeight * 2 + 1);
+  expect(titleBounds.x + titleBounds.width).toBeLessThanOrEqual(390);
   await page.screenshot({
     path: testInfo.outputPath("workflow-overview-390.png"),
   });

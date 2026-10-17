@@ -293,6 +293,9 @@ test("an observer keeps its editable draft, pending messages and native progress
     }
     const conversation = page.locator(".conversation");
     const queue = page.getByRole("region", { name: "2 条消息正在排队" });
+    await queue
+      .getByRole("button", { name: "2 条消息正在排队", exact: true })
+      .click();
     const ownPending = queue
       .getByRole("listitem")
       .filter({ hasText: pendingText });
@@ -313,6 +316,9 @@ test("an observer keeps its editable draft, pending messages and native progress
     const hint = page.locator(".composer-hint");
     await expect(hint).toHaveAttribute("data-visible", "false");
     await page.reload();
+    await queue
+      .getByRole("button", { name: "2 条消息正在排队", exact: true })
+      .click();
     await expect(ownPending).toHaveCount(2);
     await page.setViewportSize({ width: 390, height: 740 });
     await expect(queue).toBeInViewport();
