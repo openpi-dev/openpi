@@ -992,6 +992,66 @@ process.stdout.write("preserved\\n");
   await Promise.all(runs);
 });
 
+test("setup-config lock deadlines use monotonic time", async () => {
+  const source = `
+const { performance } = await import("node:perf_hooks");
+const { join } = await import("node:path");
+const { readFileSync, rmSync, writeFileSync } = await import("node:fs");
+const { updateSetupConfig } = await import(process.env.SETUP_CONFIG_MODULE_URL);
+const agentDir = process.env.PI_CODING_AGENT_DIR;
+const lockPath = join(agentDir, "my-pi-setup.json.lock");
+const lockBody = "not trustworthy\\n";
+writeFileSync(lockPath, lockBody);
+const realDateNow = Date.now;
+const realPerformanceNow = performance.now;
+const realSetTimeout = globalThis.setTimeout;
+const wallStart = realDateNow();
+const wallJump = Number(process.env.SETUP_CONFIG_WALL_CLOCK_JUMP);
+let elapsed = 0;
+Date.now = () => wallStart + elapsed + (elapsed > 0 ? wallJump : 0);
+performance.now = () => 1000 + elapsed;
+globalThis.setTimeout = (callback, delay, ...args) => {
+  if (delay <= 500) {
+    elapsed += delay;
+    if (elapsed > 5000) throw new Error("lock deadline did not use monotonic time");
+    return realSetTimeout(callback, 0, ...args);
+  }
+  return realSetTimeout(callback, delay, ...args);
+};
+let mutated = false;
+try {
+  try {
+    await updateSetupConfig((current) => {
+      mutated = true;
+      return current;
+    });
+    throw new Error("an uncertain lock was ignored");
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("Timed out waiting")) throw error;
+  }
+  if (elapsed !== 5000) throw new Error("lock deadline changed with wall time: " + elapsed);
+  if (mutated) throw new Error("config changed under an uncertain lock");
+  if (readFileSync(lockPath, "utf8") !== lockBody) throw new Error("uncertain lock was changed");
+} finally {
+  Date.now = realDateNow;
+  performance.now = realPerformanceNow;
+  globalThis.setTimeout = realSetTimeout;
+  rmSync(agentDir, { recursive: true, force: true });
+}
+process.stdout.write("preserved\\n");
+`;
+
+  const runs = [0, 60_000, -60_000].map((jump) =>
+    runSetupConfigChildScenario({
+      source,
+      tempPrefix: `my-pi-setup-config-clock-${jump}-`,
+      env: { SETUP_CONFIG_WALL_CLOCK_JUMP: String(jump) },
+      failureLabel: `setup-config lock deadline with wall-clock jump ${jump}`,
+    }),
+  );
+  await Promise.all(runs);
+});
+
 test("a stored value that had to be normalized is reported, not hidden", async () => {
   writeFileSync(
     SETUP_CONFIG_PATH,

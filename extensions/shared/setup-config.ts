@@ -11,6 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { Worker } from "node:worker_threads";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -1405,7 +1406,7 @@ const lockTimeoutError = () =>
   );
 
 function waitForSetupConfigLock(deadline: number) {
-  const remaining = deadline - Date.now();
+  const remaining = deadline - performance.now();
   if (remaining <= 0) return Promise.resolve();
 
   return new Promise<void>((resolve, reject) => {
@@ -1578,7 +1579,7 @@ async function withSetupConfigLock<A>(action: () => Promise<A>) {
     flag: "wx",
     mode: 0o600,
   });
-  const started = Date.now();
+  const started = performance.now();
   const patienceDeadline = started + SETUP_CONFIG_LOCK_TIMEOUT_MS;
   const hardDeadline = patienceDeadline + SETUP_CONFIG_LOCK_STALE_MS;
   let acquired = false;
@@ -1596,7 +1597,7 @@ async function withSetupConfigLock<A>(action: () => Promise<A>) {
         if (!isErrno(error, "EEXIST")) throw error;
         if (await recoverStaleSetupConfigLock()) continue;
 
-        const now = Date.now();
+        const now = performance.now();
         if (now >= hardDeadline) throw lockTimeoutError();
         const lockRead = await readLockOwner(SETUP_CONFIG_LOCK_PATH);
         if (lockRead.kind === "missing") continue;
@@ -1619,7 +1620,7 @@ async function withSetupConfigLock<A>(action: () => Promise<A>) {
             // A quiet owner keeps the lease it already published. A holder
             // that refreshed during this wait is still working. A stale lock
             // we could not prove from its companion stops here too.
-            if (holderStillRefreshing || isStaleLock(mtimeMs, now)) {
+            if (holderStillRefreshing || isStaleLock(mtimeMs)) {
               throw lockTimeoutError();
             }
           }
