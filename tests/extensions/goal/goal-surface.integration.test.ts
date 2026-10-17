@@ -40,9 +40,6 @@ beforeEach(() => {
 });
 afterEach(() => restoreAgentDirectory());
 
-const CAPABILITIES_EXTENSION = fileURLToPath(
-  new URL("../../../extensions/capabilities/index.ts", import.meta.url),
-);
 const GOAL_EXTENSION = fileURLToPath(
   new URL("../../../extensions/goal/index.ts", import.meta.url),
 );
@@ -56,7 +53,7 @@ interface CapturedSnapshot {
 }
 
 for (const mode of ["rpc", "web"] as const) {
-  test(`real Pi fixture (${mode}): /goal <objective> loads capability and exposes get_goal/update_goal to continuation`, {
+  test(`real Pi fixture (${mode}): goal tools are resident before /goal <objective> runs`, {
     timeout: 30_000,
   }, async () => {
     const root = await mkdtemp(path.join(tmpdir(), "openpi-goal-surface-"));
@@ -115,7 +112,7 @@ for (const mode of ["rpc", "web"] as const) {
       cwd,
       agentDir,
       settingsManager,
-      additionalExtensionPaths: [CAPABILITIES_EXTENSION, GOAL_EXTENSION],
+      additionalExtensionPaths: [GOAL_EXTENSION],
       noSkills: true,
       noPromptTemplates: true,
     });
@@ -141,31 +138,18 @@ for (const mode of ["rpc", "web"] as const) {
       if (mode === "web")
         detachWeb = registerWebCommandFeedback(sessionManager, () => {});
 
-      // 1. Clean session invariant: no resident OpenPI model tools
+      // 1. Frozen surface invariant: goal tools are resident at session start
       const initialTools = session.getActiveToolNames();
-      assert.equal(initialTools.includes("create_goal"), false);
-      assert.equal(initialTools.includes("get_goal"), false);
-      assert.equal(initialTools.includes("update_goal"), false);
-      assert.equal(initialTools.includes("openpi_load_tools"), false);
+      assert.ok(initialTools.includes("create_goal"));
+      assert.ok(initialTools.includes("get_goal"));
+      assert.ok(initialTools.includes("update_goal"));
 
-      // 2. User runs /goal <objective> with an objective containing NO capability keywords
+      // 2. User runs /goal <objective>; starting a goal is not a tool boundary
       await session.prompt("/goal 修复 README 的一个拼写错误");
       await session.waitForIdle();
 
-      // 3. Active tools now include get_goal and update_goal
-      const activeToolsAfterGoal = session.getActiveToolNames();
-      assert.ok(
-        activeToolsAfterGoal.includes("get_goal"),
-        "get_goal must be active",
-      );
-      assert.ok(
-        activeToolsAfterGoal.includes("update_goal"),
-        "update_goal must be active",
-      );
-      assert.ok(
-        activeToolsAfterGoal.includes("create_goal"),
-        "create_goal must be active",
-      );
+      // 3. Goal lifecycle state did not change the model-facing tool list
+      assert.deepEqual(session.getActiveToolNames(), initialTools);
 
       // 4. First continuation turn ran: verify provider snapshot contains get_goal and update_goal
       assert.ok(snapshots.length >= 1, "at least one turn must have run");
@@ -225,7 +209,7 @@ test("real Pi fixture: reload restores get_goal/update_goal for active goal", {
     cwd,
     agentDir,
     settingsManager,
-    additionalExtensionPaths: [CAPABILITIES_EXTENSION, GOAL_EXTENSION],
+    additionalExtensionPaths: [GOAL_EXTENSION],
     noSkills: true,
     noPromptTemplates: true,
   });
@@ -301,7 +285,7 @@ test("real Pi fixture: fork restores get_goal/update_goal but defers continuatio
     cwd,
     agentDir,
     settingsManager,
-    additionalExtensionPaths: [CAPABILITIES_EXTENSION, GOAL_EXTENSION],
+    additionalExtensionPaths: [GOAL_EXTENSION],
     noSkills: true,
     noPromptTemplates: true,
   });
@@ -430,7 +414,7 @@ test("real Pi fixture: update_goal blocked audit preserves 3-turn requirement", 
     cwd,
     agentDir,
     settingsManager,
-    additionalExtensionPaths: [CAPABILITIES_EXTENSION, GOAL_EXTENSION],
+    additionalExtensionPaths: [GOAL_EXTENSION],
     noSkills: true,
     noPromptTemplates: true,
   });

@@ -575,7 +575,7 @@ export default function (
   pi.on("agent_settled", () => resultDelivery.parentSettled());
   const registerStableToolFamily = () =>
     patchOwnedTools(pi, "subagents", {
-      enable: OPENPI_TOOL_SURFACE.subagents.entry,
+      enable: OPENPI_TOOL_SURFACE.subagents.resident,
     });
 
   const getRuntime = () =>

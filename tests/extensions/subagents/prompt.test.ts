@@ -112,8 +112,15 @@ test("reasoning guidance prioritizes the user and task difficulty without fixing
 });
 
 test("investigator roles describe the same inherited capability that spawn reports", () => {
-  const parentTools = ["read", "bash", "edit", "write", "rg", "subagent_spawn"];
-  const expectedTools = ["read", "bash", "edit", "write", "rg"];
+  const parentTools = [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "subagent_spawn",
+  ];
+  const expectedTools = ["read", "bash", "edit", "write", "grep"];
 
   for (const name of ["explorer", "reviewer", "advisor"]) {
     const role = BUILT_IN_AGENT_TYPES.find(
@@ -149,7 +156,7 @@ test("investigator roles describe the same inherited capability that spawn repor
       agentTypeName: name,
       tools: inherited,
     });
-    assert.match(result, /It can only use: read, bash, edit, write, rg\./);
+    assert.match(result, /It can only use: read, bash, edit, write, grep\./);
     assert.doesNotMatch(result, /subagent_spawn/);
   }
 
@@ -278,9 +285,9 @@ test("a planning child reports its effective tools without an agent type", () =>
     harness: "pi",
     modelLabel: "m",
     cwd: "/repo",
-    tools: ["read", "rg"],
+    tools: ["read", "grep"],
   });
-  assert.match(result, /It can only use: read, rg/);
+  assert.match(result, /It can only use: read, grep/);
   assert.doesNotMatch(result, /Agent type/);
 
   const toolLess = buildSubagentSpawnResult({

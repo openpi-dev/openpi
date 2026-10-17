@@ -1,0 +1,52 @@
+---
+decision-status: accepted
+created: 2026-10-17
+last-reviewed: 2026-10-17
+applies-to: OpenPI source baseline 708a44b plus the feat/frozen-tool-surface branch
+owner: OpenPI maintainers
+related-issues: "#879"
+related-prs: none
+supersedes: 0004-capability-name-discovery
+---
+
+# Decision 0005: Frozen tool surface — one resident set, user boundaries only
+
+## Context
+
+[Issue #879](https://github.com/openpi-dev/openpi/issues/879) reports that OpenPI's dynamic capability loading breaks prompt caching. The mechanism is structural, not incidental: every show/hide runs through `patchOwnedTools` → `setActiveTools`, and Pi's `setActiveToolsByName()` always calls `_rebuildSystemPrompt(activeNames)`, so the wire `tools` list and the tool-attributed system-prompt sections change together on every toggle. Mid-session toggles existed in several places: keyword-driven capability loading (`openpi_load_tools`), a second gate per family (`bg_*` after the first `bg_start`, `tasks_*` per batch, goal tools on create/clear), `context_pivot` at a context-size threshold, and the plan/setup/interaction modes.
+
+Local session measurement (maintainer data, 236 sessions across providers after 0.2.0 — order of magnitude only, not a benchmark) found the request after an `openpi_load_tools` call lost most of its cache hit in 80–100% of sampled cases, versus 0.5–1.7% for ordinary tools. The same data showed capability hiding drove usage toward zero: gated `fd`/`rg` fell from 44%/37% of sessions to 16%/12%, and `bg_*`/`tasks_*` effectively disappeared — hiding a tool behaves close to deleting it. See [this comment](https://github.com/openpi-dev/openpi/issues/879#issuecomment-6235323919) for the discussion record.
+
+A survey of peer harnesses (OpenCode, Codex CLI, Claude Code, DeepSeek's official `deepseek-harness`, Kimi CLI, Goose, plus Anthropic/OpenAI documentation) found the dominant pattern is to freeze the wire-level tool list and deliver changes as appended context or masked availability, not by removing and re-adding tools; DeepSeek's plan mode states this explicitly for request-cache stability.
+
+## Decision
+
+- Within one Session, the model-visible tool list — and therefore the tool-attributed system-prompt sections — is fixed at session start. Model actions and runtime state (`bg_start`, goal state, context thresholds, prompt content, task state) must never change it. Unsatisfied state fails at tool execution time with a clear error or an appended message.
+- The only exceptions are explicit user-controlled boundaries: entering/leaving `/plan`, the `/openpi-setup` episode, and setup-applied browser permission (`openpi_browser`, unchanged: `exposure: "deferred"`, config-gated at `session_start`).
+- One default resident set, no modes and no per-group switches: subagent family (6 tools: `subagent_spawn/wait/cancel/send/check/list`), workflow family (3), background family (5: `bg_start/status/list/kill/watch`), goal family (3: `create_goal`, `get_goal`, `update_goal`) — 17 resident tools. A resident budget test enforces the bound: measured 18,144 characters across the 17 resident tool definitions (name + description + parameters + promptSnippet + promptGuidelines), asserted ≤ 20,000 (~10% headroom). Adding a resident tool requires justifying its value and cost in an Issue first.
+- Deleted with the keyword machinery: `extensions/capabilities/` (the `openpi_load_tools` gateway, keyword routing, skill-guidance injection, editor keyword highlight), `extensions/shared/capability-intent.ts`, `capabilities.discovery` configuration, `fd`/`rg` (`extensions/file-search/` — duplicates of Pi's `grep`/`find`), `runtime_snapshot`, `tasks_*` (3 tools + panel), `context_pivot`. Retired names in user agent-type files and explicit child allowlists are dropped with an informational notice rather than failing child preflight; old saved config keeps loading via the existing unknown-field preservation.
+- `git_show`/`git_diff`/`git_log` remain as a plan-mode boundary and in read-only child surfaces: they are the only way to inspect git history where bash is unavailable (explorer/planning children, workflow replay), and they force `--no-ext-diff --no-textconv`, which the plan bash-policy relies on when refusing raw `git diff`/`show`.
+- The AGENTS.md installation rule is amended: exposing a model-facing tool is not itself expensive behavior; the resident OpenPI tool set is one fixed, measured budget per session, and privileged authority (browser control, optional packages) stays opt-in.
+- Large catalogs (MCP etc.) stay on Pi's deferred / `tool_search` / Code Mode discovery, which appends to context; OpenPI does not build its own gateway.
+
+## Evidence boundary
+
+Validated by tests on this branch: byte-identical `tools` arrays and system prompts across `session_start`, a `bg_start` turn, `create_goal`→clear, and an extra `agent_start`; `/plan` adds exactly `git_*`, `plan_ready`, `ask_user`, `human_handoff` once and restores the original list on exit; the resident budget measurement above; `patchOwnedTools` throws on resident-disable; child preflight drops retired names while preserving `grep`/`find`/`git_*`.
+
+Inferred, not measured here: that cache invalidation after a mid-session tool change is partial rather than total (consistent with appended-tool ordering), and the cost estimate in the proposal (~5% overhead on ~60k-token sessions, ~20% on ~15k-token sessions at cache-read price ratio 0.1). Unknown: post-change tool usage rates and per-session cost, and a Terminal-Bench rerun comparing cache overlap and success — those belong to follow-up evidence, not this Decision.
+
+## Alternatives considered
+
+- Keep the keyword gateway with a smaller resident set: rejected — every load still breaks the cache and capabilities stay invisible to the model (measured usage collapse above).
+- A "slim/full" mode or per-group switches: rejected — adds a user choice the freeze makes unnecessary; a session-start filter can be added later if ever needed.
+- Keep all 33 tools resident: rejected — ~13k tokens of tool definitions is too large; the viable path was delete-and-merge first, then reside.
+- Mask mutation tools by prompt text only (DeepSeek's plan-mode approach for its own tools): rejected as the sole mechanism — AGENTS.md requires runtime checks for invariants; state-dependent calls are rejected at execution instead.
+- Goose-style per-request tool-list rebuild: rejected — that is the churn being removed.
+
+## Consequences
+
+Every OpenPI session pays one fixed tool-definition cost on every request (18,144 chars today, ~4.5k tokens at the chars÷4 estimate), which cache reads make cheap on subsequent turns; "the OpenPI default surface is identical to stock Pi" is no longer a goal. `get_goal`/`update_goal`/`bg_*` calls against missing state now return clear execution-time errors instead of being hidden. `plan_ready` stays visible for the whole plan episode and rejects a second call when a plan is already ready. Tool-family consolidation the proposal sketched (merging `subagent_*`, `bg_*`, and goal into fewer tools) is phase 2 and is **not decided here**.
+
+## Amendments
+
+None.

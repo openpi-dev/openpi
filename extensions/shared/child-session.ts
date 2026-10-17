@@ -36,12 +36,26 @@ export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
  * registration fails the guard rather than escaping it.
  */
 export const CHILD_SAFE_PACKAGE_TOOL_NAMES = [
-  "fd",
-  "rg",
   "git_show",
   "git_diff",
   "git_log",
 ] as const;
+
+/**
+ * OpenPI tool names that no longer exist but may still appear in saved user
+ * configuration (agent-type allowlists, workflow tool lists). They are dropped
+ * silently at the child boundary so a stale entry cannot fail preflight.
+ */
+export const RETIRED_OPENPI_TOOL_NAMES = new Set<string>([
+  "fd",
+  "rg",
+  "runtime_snapshot",
+  "tasks_add",
+  "tasks_update",
+  "tasks_list",
+  "context_pivot",
+  "openpi_load_tools",
+]);
 
 /**
  * These optional packages are parent-only inside concurrent Pi sessions.
@@ -514,10 +528,6 @@ async function createChildSettingsManager(options: {
 export const CHILD_EXCLUDED_TOOL_NAMES = [
   // embedded browser — authority belongs to the initiating parent Web tab
   "openpi_browser",
-  // capability discovery mutates the parent model-facing tool surface
-  "openpi_load_tools",
-  // runtime inspection includes parent configuration and resource summaries
-  "runtime_snapshot",
   // subagents — children cannot spawn/observe more agents
   "subagent_spawn",
   "subagent_wait",
@@ -534,10 +544,6 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "human_handoff",
   // plan-mode — completion controls the parent session's write gate and UI
   "plan_ready",
-  // tasks — the parent session owns its work-intent ledger
-  "tasks_add",
-  "tasks_update",
-  "tasks_list",
   // goal — the parent session owns its persistent goal
   "get_goal",
   "create_goal",
@@ -551,8 +557,6 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "bg_list",
   "bg_kill",
   "bg_watch",
-  // context-pivot — compaction of the conversation is a parent-only decision
-  "context_pivot",
 ] as const;
 
 const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
@@ -562,8 +566,8 @@ const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
     ),
     ...(Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
       .filter((owner) => {
-        const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
-        const toolNames = [...entry, ...deferred];
+        const { resident, boundary } = OPENPI_TOOL_SURFACE[owner];
+        const toolNames = [...resident, ...boundary];
         return (
           toolNames.length > 0 &&
           toolNames.every((name) =>
@@ -607,13 +611,15 @@ function isVerifiedParentOnlyOpenPiExtension(extension: {
  * allowlist naming an excluded tool still cannot obtain it, and the boundary
  * above stays authoritative. Omitting `tools` keeps today's behavior.
  *
- * Remove parent-only tools before exposing or enforcing a requested allowlist.
- * Undefined preserves the normal child tool set; an empty array deliberately
- * means no tools.
+ * Remove parent-only and retired tools before exposing or enforcing a
+ * requested allowlist. Undefined preserves the normal child tool set; an
+ * empty array deliberately means no tools.
  */
 export function effectiveChildToolAllowlist(tools?: readonly string[]) {
   return tools?.filter(
-    (tool) => !CHILD_EXCLUDED_TOOL_NAMES.includes(tool as never),
+    (tool) =>
+      !CHILD_EXCLUDED_TOOL_NAMES.includes(tool as never) &&
+      !RETIRED_OPENPI_TOOL_NAMES.has(tool),
   );
 }
 

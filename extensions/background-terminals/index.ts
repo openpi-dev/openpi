@@ -114,13 +114,11 @@ export default function (pi: ExtensionAPI) {
         ? completionOwnerFor(sessionContext.sessionManager)
         : undefined,
   });
-  const hideLifecycleTools = () =>
+  // Background tools are resident: reconciled once at session start, never
+  // toggled by process lifecycle. Empty-process calls return clear results.
+  const syncResidentTools = () =>
     patchOwnedTools(pi, "background", {
-      disable: OPENPI_TOOL_SURFACE.background.deferred,
-    });
-  const showLifecycleTools = () =>
-    patchOwnedTools(pi, "background", {
-      enable: OPENPI_TOOL_SURFACE.background.deferred,
+      enable: OPENPI_TOOL_SURFACE.background.resident,
     });
   /** Active bg_watch disarm callbacks, keyed by terminal id (one per id). */
   const watchers = new Map<string, () => void>();
@@ -294,7 +292,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
-    hideLifecycleTools();
+    syncResidentTools();
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
   });
@@ -419,8 +417,6 @@ export default function (pi: ExtensionAPI) {
       } finally {
         startReservations--;
       }
-
-      showLifecycleTools();
 
       return {
         content: [{ type: "text", text: buildStartResult(snap) }],

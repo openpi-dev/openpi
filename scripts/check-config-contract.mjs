@@ -71,13 +71,6 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["browser_control"],
   },
   {
-    path: "capabilities.discovery",
-    writerTokens: ["params.capability_discovery"],
-    statusTokens: ["config.capabilities.discovery"],
-    readmeTerms: ["Capability discovery"],
-    setupTerms: ["Capability discovery"],
-  },
-  {
     path: "suggestions.enabled",
     writerTokens: ["enabled: suggestionsEnabled"],
     statusTokens: ["config.suggestions.enabled"],

@@ -238,10 +238,23 @@ test("Web goal commands report results and start only after an explicit objectiv
   }
 });
 
-test("goal lifecycle tools appear only after goal state exists", async () => {
+test("goal tools stay resident regardless of goal state", async () => {
   const h = extensionHarness();
   await h.emit("session_start", { reason: "startup" });
-  assert.deepEqual(h.activeTools(), ["read", "third_party_tool"]);
+  const resident = [
+    "read",
+    "third_party_tool",
+    "get_goal",
+    "create_goal",
+    "update_goal",
+  ];
+  assert.deepEqual(h.activeTools(), resident);
+
+  assert.throws(
+    () =>
+      h.tools.get("get_goal")?.execute("get", {}, undefined, undefined, h.ctx),
+    /No goal is currently set/,
+  );
 
   await h.tools
     .get("create_goal")
@@ -252,21 +265,11 @@ test("goal lifecycle tools appear only after goal state exists", async () => {
       undefined,
       h.ctx,
     );
-  assert.deepEqual(h.activeTools(), [
-    "read",
-    "third_party_tool",
-    "create_goal",
-    "get_goal",
-    "update_goal",
-  ]);
+  assert.deepEqual(h.activeTools(), resident);
 
   h.setBranch([]);
   await h.emit("session_tree");
-  assert.deepEqual(h.activeTools(), [
-    "read",
-    "third_party_tool",
-    "create_goal",
-  ]);
+  assert.deepEqual(h.activeTools(), resident);
 });
 
 test("update_goal requires a blocker description and returns structured rejected-audit feedback", async () => {
@@ -429,7 +432,9 @@ test("slash command creates directly, confirms unfinished replacement, edits, pa
   assert.deepEqual(h.activeTools(), [
     "read",
     "third_party_tool",
+    "get_goal",
     "create_goal",
+    "update_goal",
   ]);
   await command.handler("clear", h.ctx);
   assert.match(h.notifications.at(-1) ?? "", /No goal to clear/);
@@ -542,7 +547,7 @@ test("restored active goals auto-continue, stopped goals prompt, and forks defer
   assert.equal(forked.messages.length, 1);
 });
 
-test("inactive restored goals keep lifecycle tools hidden until resume is accepted", async () => {
+test("inactive restored goals keep resident tools while deferring resume", async () => {
   const active = createGoalSnapshot(
     { objective: "Restore boundary" },
     0,
@@ -560,12 +565,12 @@ test("inactive restored goals keep lifecycle tools hidden until resume is accept
       await h.emit(event, { reason: "reload" });
       assert.equal(
         h.activeTools().includes("get_goal"),
-        false,
+        true,
         `${status}/${event}`,
       );
       assert.equal(
         h.activeTools().includes("update_goal"),
-        false,
+        true,
         `${status}/${event}`,
       );
       assert.equal(h.messages.length, 0);

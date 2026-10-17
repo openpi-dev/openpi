@@ -19,7 +19,7 @@ Types are markdown files with YAML frontmatter, one per file:
 ---
 name: explore
 description: Read-only codebase exploration. Returns file:line references.
-tools: [read, grep, find, ls, fd, rg]
+tools: [read, grep, find, ls, git_show, git_diff, git_log]
 model: anthropic/claude-sonnet-5 # optional
 reasoning_effort: medium # optional
 ---

@@ -120,24 +120,6 @@ test("Code Mode defaults on for old documents and preserves an explicit opt-out"
   assert.match(formatSetupConfig(config), /Code Mode default: off/);
 });
 
-test("capability discovery defaults to explicit and accepts adaptive opt-in", () => {
-  assert.equal(DEFAULT_SETUP_CONFIG.capabilities.discovery, "explicit");
-  assert.equal(
-    parseSetupConfig({ capabilities: { discovery: "adaptive" } }).capabilities
-      .discovery,
-    "adaptive",
-  );
-  assert.equal(
-    parseSetupConfig({ capabilities: { discovery: "unexpected" } }).capabilities
-      .discovery,
-    "explicit",
-  );
-  assert.match(
-    formatSetupConfig(DEFAULT_SETUP_CONFIG),
-    /Capability discovery: explicit/,
-  );
-});
-
 test("response preferences preserve native defaults and bounded Web thinking filters are canonical", async () => {
   assert.deepEqual(parseSetupConfig({}).response, {
     verbosity: "default",

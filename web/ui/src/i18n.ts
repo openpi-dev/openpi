@@ -1050,16 +1050,11 @@ const resources = {
       chatContentWidth: "Chat content width",
       chatFontSize: "Chat font size",
       agentBehavior: "Agent behavior",
-      capabilityDiscovery: "Capability discovery",
-      capabilityDiscovery_explicit: "Explicit",
-      capabilityDiscovery_adaptive: "Adaptive",
       workflowLimits: "Workflow limits",
       workflowConcurrency: "Workflow concurrency",
       workflowCalls: "Total calls",
       agentSettingsSetupHint:
         "Agent changes are applied through /openpi-setup in the current session.",
-      setupRequestDiscovery:
-        "Set capability discovery to {{mode}}. Preserve other settings.",
       setupRequestLimits:
         "Set workflow concurrency to {{concurrency}} and total agent calls to {{calls}}. Preserve other settings.",
       setupRequestEnableSuggestions:
@@ -1949,7 +1944,6 @@ const resources = {
       toolAction_agent: "Agent activity",
       toolAction_workflow: "Workflow",
       toolAction_plan: "Prepare plan",
-      toolAction_task: "Update tasks",
       toolAction_goal: "Update goal",
       toolAction_git: "Review changes",
       toolAction_call: "Use tool",
@@ -1963,7 +1957,6 @@ const resources = {
       toolActionDone_agent: "Agent activity returned",
       toolActionDone_workflow: "Workflow tool returned",
       toolActionDone_plan: "Plan tool returned",
-      toolActionDone_task: "Task tool returned",
       toolActionDone_goal: "Goal tool returned",
       toolActionDone_git: "Reviewed changes",
       toolActionDone_call: "Used tool",
@@ -2985,14 +2978,10 @@ const resources = {
       chatContentWidth: "聊天内容宽度",
       chatFontSize: "聊天字体大小",
       agentBehavior: "Agent 行为",
-      capabilityDiscovery: "能力发现",
-      capabilityDiscovery_explicit: "明确请求",
-      capabilityDiscovery_adaptive: "自适应",
       workflowLimits: "工作流上限",
       workflowConcurrency: "工作流并行上限",
       workflowCalls: "总调用次数",
       agentSettingsSetupHint: "Agent 设置通过当前会话中的 /openpi-setup 生效。",
-      setupRequestDiscovery: "将能力发现设置为 {{mode}}，保留其他配置。",
       setupRequestLimits:
         "将工作流并行上限设置为 {{concurrency}}，总子代理调用上限设置为 {{calls}}，保留其他配置。",
       setupRequestEnableSuggestions:
@@ -3792,7 +3781,6 @@ const resources = {
       toolAction_agent: "使用子代理",
       toolAction_workflow: "调用工作流",
       toolAction_plan: "准备计划",
-      toolAction_task: "处理任务",
       toolAction_goal: "处理目标",
       toolAction_git: "查看变更",
       toolAction_call: "调用工具",
@@ -3806,7 +3794,6 @@ const resources = {
       toolActionDone_agent: "子代理工具已返回",
       toolActionDone_workflow: "工作流工具已返回",
       toolActionDone_plan: "计划工具已返回",
-      toolActionDone_task: "任务工具已返回",
       toolActionDone_goal: "目标工具已返回",
       toolActionDone_git: "已查看变更",
       toolActionDone_call: "已调用工具",

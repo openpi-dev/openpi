@@ -1420,16 +1420,6 @@ it("routes agent controls through canonical setup and waits for a save receipt",
   const configure = vi.fn(async () => true);
   renderSettings({ onConfigureOpenPi: configure });
   await screen.findByText(i18n.t("agentBehavior"));
-  const discovery = screen.getByRole<HTMLSelectElement>("combobox", {
-    name: i18n.t("capabilityDiscovery"),
-  });
-  fireEvent.change(discovery, { target: { value: "adaptive" } });
-  await waitFor(() =>
-    expect(configure).toHaveBeenCalledWith(
-      i18n.t("setupRequestDiscovery", { mode: "adaptive" }),
-    ),
-  );
-  expect(discovery.value).toBe("explicit");
   const concurrency = screen.getByRole<HTMLInputElement>("spinbutton", {
     name: i18n.t("workflowConcurrency"),
   });

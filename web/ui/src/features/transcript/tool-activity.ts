@@ -5,7 +5,6 @@ import {
   Folder,
   GitBranch,
   Globe,
-  ListChecks,
   Pencil,
   Search,
   SquareTerminal,
@@ -27,9 +26,7 @@ export function toolActivity(name: string) {
     case "bash":
       return { action: "command", Icon: SquareTerminal };
     case "grep":
-    case "rg":
     case "find":
-    case "fd":
     case "glob":
     case "tool_search":
       return { action: "search", Icon: Search };
@@ -42,10 +39,6 @@ export function toolActivity(name: string) {
       return { action: "web", Icon: Globe };
     case "plan_ready":
       return { action: "plan", Icon: ClipboardList };
-    case "tasks_add":
-    case "tasks_update":
-    case "tasks_list":
-      return { action: "task", Icon: ListChecks };
     case "get_goal":
     case "create_goal":
     case "update_goal":

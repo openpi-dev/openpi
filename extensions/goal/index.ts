@@ -12,7 +12,6 @@ import {
 } from "../shared/web-command-feedback.ts";
 import {
   OPENPI_TOOL_SURFACE,
-  loadOpenPiCapabilities,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
 import { GOAL_CONTINUATION_TYPE, GoalController } from "./controller.ts";
@@ -97,16 +96,12 @@ export function goalToolResponse(
 
 export default function sessionGoal(pi: ExtensionAPI) {
   const controller = new GoalController(pi);
-  const hideLifecycleTools = () =>
+  // The goal tool family is resident: it is reconciled once at session start
+  // and never follows goal state. Missing-goal calls fail at execution time.
+  const syncResidentTools = () =>
     patchOwnedTools(pi, "goal", {
-      disable: OPENPI_TOOL_SURFACE.goal.deferred,
+      enable: OPENPI_TOOL_SURFACE.goal.resident,
     });
-  const showLifecycleTools = () => {
-    loadOpenPiCapabilities(pi, ["session"]);
-    return patchOwnedTools(pi, "goal", {
-      enable: OPENPI_TOOL_SURFACE.goal.deferred,
-    });
-  };
 
   const updateUi = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
@@ -150,7 +145,6 @@ export default function sessionGoal(pi: ExtensionAPI) {
       controller.createId(),
     );
     controller.replace(goal);
-    showLifecycleTools();
     const started = controller.kickoff(ctx);
     return { goal: controller.snapshot() ?? goal, started };
   };
@@ -173,6 +167,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
     parameters: Type.Object({}, { additionalProperties: false }),
     execute(_id, _params, _signal, _onUpdate, ctx) {
       const goal = controller.snapshot();
+      if (!goal) throw new Error("No goal is currently set.");
       const response = goalToolResponse(
         goal,
         false,
@@ -342,7 +337,6 @@ export default function sessionGoal(pi: ExtensionAPI) {
             throw new Error(`Goal automation is disabled in ${ctx.mode} mode.`);
           }
           controller.resume();
-          showLifecycleTools();
           controller.kickoff(ctx);
           // Report the status AFTER kickoff: dispatching the first turn can
           // change it (e.g. a dispatch failure pauses the goal), so notifying
@@ -351,7 +345,6 @@ export default function sessionGoal(pi: ExtensionAPI) {
           notify(ctx, goalUpdateMessage(controller.snapshot()!));
         } else if (parsed.action === "clear") {
           const cleared = controller.clear();
-          if (cleared) hideLifecycleTools();
           notify(
             ctx,
             cleared
@@ -414,8 +407,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     controller.restore(ctx, event.reason === "fork");
-    if (controller.snapshot()?.status === "active") showLifecycleTools();
-    else hideLifecycleTools();
+    syncResidentTools();
     if (controller.problem()) {
       notify(
         ctx,
@@ -440,7 +432,6 @@ export default function sessionGoal(pi: ExtensionAPI) {
       );
       if (shouldResume) {
         controller.resume();
-        showLifecycleTools();
         controller.kickoff(ctx);
       }
     }
@@ -449,8 +440,6 @@ export default function sessionGoal(pi: ExtensionAPI) {
 
   pi.on("session_tree", (_event, ctx) => {
     controller.restore(ctx, true);
-    if (controller.snapshot()?.status === "active") showLifecycleTools();
-    else hideLifecycleTools();
     updateUi(ctx);
   });
 

@@ -17,7 +17,7 @@ type CapturedTool = {
   ) => Promise<unknown>;
 };
 
-test("session start keeps only the background entry tool active", () => {
+test("session start activates the resident background tool set", () => {
   let active = ["read", "third_party_tool"];
   const registered: string[] = [];
   let sessionStart:
@@ -52,10 +52,18 @@ test("session start keeps only the background entry tool active", () => {
     "bg_kill",
     "bg_watch",
   ]);
-  assert.deepEqual(active, ["read", "third_party_tool", "bg_start"]);
+  assert.deepEqual(active, [
+    "read",
+    "third_party_tool",
+    "bg_start",
+    "bg_status",
+    "bg_list",
+    "bg_kill",
+    "bg_watch",
+  ]);
 });
 
-test("a successful start exposes lifecycle tools but a rejected start does not", async () => {
+test("rejected and successful starts keep the resident lifecycle tools active", async () => {
   let active: string[] = [];
   const tools = new Map<string, CapturedTool>();
   const handlers = new Map<
@@ -91,7 +99,8 @@ test("a successful start exposes lifecycle tools but a rejected start does not",
   for (const handler of handlers.get("session_start") ?? []) {
     await handler({}, ctx);
   }
-  assert.deepEqual(active, ["bg_start"]);
+  const resident = ["bg_start", "bg_status", "bg_list", "bg_kill", "bg_watch"];
+  assert.deepEqual(active, resident);
 
   const start = tools.get("bg_start");
   assert.ok(start);
@@ -109,7 +118,7 @@ test("a successful start exposes lifecycle tools but a rejected start does not",
     ),
     /working_dir is not a directory/,
   );
-  assert.deepEqual(active, ["bg_start"]);
+  assert.deepEqual(active, resident);
 
   try {
     await start.execute(
@@ -119,13 +128,7 @@ test("a successful start exposes lifecycle tools but a rejected start does not",
       undefined,
       ctx,
     );
-    assert.deepEqual(active, [
-      "bg_start",
-      "bg_status",
-      "bg_list",
-      "bg_kill",
-      "bg_watch",
-    ]);
+    assert.deepEqual(active, resident);
   } finally {
     for (const handler of handlers.get("session_shutdown") ?? []) {
       await handler({}, ctx);

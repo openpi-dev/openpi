@@ -28,8 +28,6 @@ export const PLAN_MODE_CHILD_TOOLS: readonly string[] = [
   "grep",
   "find",
   "ls",
-  "fd",
-  "rg",
   "git_show",
   "git_diff",
   "git_log",
