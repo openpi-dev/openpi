@@ -2302,7 +2302,8 @@ for (const width of [320, 390]) {
     expect(dialogBox?.x).toBeGreaterThanOrEqual(0);
     expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(width);
     await page.keyboard.press("Escape");
-    await expect(dialog).not.toBeVisible();
+    // Closing resets the dialog label before its discrete exit finishes.
+    await expect(page.locator("dialog:visible")).toHaveCount(0);
     await expect(menu).toBeFocused();
     await expect(sidebar).toBeVisible();
     await expect(menu).toHaveCSS("outline-style", "solid");
