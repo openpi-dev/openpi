@@ -1984,7 +1984,7 @@ test("archived Session listing is queryable, cursor-bounded, and stale-safe", as
   }
 });
 
-test("archive scan continuations reach old matches after an empty bounded window in global sort order", async (t) => {
+test("archive scan continuations reach old matches after an empty bounded window in global sort order", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-scan-next-"));
   const project = join(root, "old-project");
   try {
@@ -2018,10 +2018,44 @@ test("archive scan continuations reach old matches after an empty bounded window
         firstMessage: "old needle B",
       },
     ];
-    const listing = t.mock.method(SessionManager, "listAll", async () => [
-      ...active,
-      ...older,
-    ]);
+    const sessionFile = (
+      id: string,
+      cwd: string,
+      createdMs: number,
+      modifiedMs: number,
+      text: string,
+    ) => {
+      const timestamp = new Date(createdMs).toISOString();
+      return `${JSON.stringify({ type: "session", version: 3, id, timestamp, cwd })}\n${JSON.stringify(
+        {
+          type: "message",
+          id: "m",
+          parentId: null,
+          timestamp,
+          message: { role: "user", content: text, timestamp: modifiedMs },
+        },
+      )}\n`;
+    };
+    const writes: Promise<void>[] = [];
+    for (const session of [...active, ...older]) {
+      writes.push(
+        writeFile(
+          session.path,
+          sessionFile(
+            session.id,
+            session.cwd,
+            session.created.getTime(),
+            session.modified.getTime(),
+            session.firstMessage,
+          ),
+        ),
+      );
+      if (writes.length === 64) {
+        await Promise.all(writes);
+        writes.length = 0;
+      }
+    }
+    await Promise.all(writes);
     await writeFile(
       join(root, "archived-sessions.json"),
       JSON.stringify(older.map((session) => session.path)),
@@ -2071,11 +2105,16 @@ test("archive scan continuations reach old matches after an empty bounded window
       assert.equal(last.nextCursor, undefined);
       assert.equal(last.truncation.recordsUnscanned, 0);
     }
-    listing.mock.mockImplementation(async () => [
-      ...active,
-      { ...older[0]!, created: new Date(200_000) },
-      older[1]!,
-    ]);
+    await writeFile(
+      older[0]!.path,
+      sessionFile(
+        "older-a",
+        project,
+        200_000,
+        older[0]!.modified.getTime(),
+        "old needle A",
+      ),
+    );
     const globallyNewest = await adapter.listArchivedSessions({
       sort: "created",
       limit: 1,
@@ -2142,34 +2181,38 @@ test("archive cursors produced for long valid Session paths remain bounded and r
   }
 });
 
-test("archived listing rejects pre-cancelled admission and forwards in-progress cancellation to Pi", async (t) => {
+test("archived listing rejects pre-cancelled admission and stops an in-progress catalog read", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-cancel-"));
   const controller = new AbortController();
   const reason = new Error("archive query cancelled");
+  await writeFile(
+    join(root, "one.jsonl"),
+    `${JSON.stringify({ type: "session", version: 3, id: "one", timestamp: "2026-10-15T00:00:00.000Z", cwd: root })}\n`,
+  );
+  const originalOpen = fsPromises.open;
+  let jsonlOpens = 0;
   let admit: () => void = () => {};
   const admitted = new Promise<void>((resolve) => {
     admit = resolve;
   });
-  let receivedSignal: AbortSignal | undefined;
-  const listing = t.mock.method(
-    SessionManager,
-    "listAll",
-    async (
-      ...[_directory, _progress, signal]: Parameters<
-        typeof SessionManager.listAll
-      >
-    ) => {
-      receivedSignal = signal;
-      admit();
-      signal?.throwIfAborted();
-      if (!signal) throw new Error("Pi catalog requires the query signal");
-      return new Promise<never>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), {
-          once: true,
-        });
-      });
+  t.mock.method(
+    fsPromises,
+    "open",
+    async (...args: Parameters<typeof originalOpen>) => {
+      const path = String(args[0]);
+      if (path.startsWith(root) && path.endsWith(".jsonl")) {
+        jsonlOpens++;
+        admit();
+        return new Promise<never>(() => {});
+      }
+      return originalOpen(...args);
     },
   );
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
   try {
     const adapter = new PiWebAdapter(
       runtimeFor(root, root, SessionManager.inMemory(root)),
@@ -2179,14 +2222,13 @@ test("archived listing rejects pre-cancelled admission and forwards in-progress 
       adapter.listArchivedSessions({}, preCancelled),
       (error) => error === reason,
     );
-    assert.equal(listing.mock.callCount(), 0);
+    assert.equal(jsonlOpens, 0);
     const outcome = adapter.listArchivedSessions({}, controller.signal).then(
       () => undefined,
       (error: unknown) => error,
     );
     await admitted;
-    assert.equal(listing.mock.callCount(), 1);
-    assert.equal(receivedSignal, controller.signal);
+    assert.equal(jsonlOpens, 1);
     controller.abort(reason);
     assert.equal(await outcome, reason);
   } finally {
