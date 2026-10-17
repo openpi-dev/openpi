@@ -36,8 +36,19 @@ function byteLength(value: string) {
 }
 
 function boundedPath(parent: string, child: string) {
-  const childPreview =
-    child.length <= 128 ? child : `${child.slice(0, 128)}...[key truncated]`;
+  // Retain whole code points without scanning or allocating the entire key
+  // merely to report a diagnostic path. The 129th proves truncation is needed.
+  let prefix = "";
+  let count = 0;
+  let childPreview = child;
+  for (const character of child) {
+    if (count === 128) {
+      childPreview = `${prefix}...[key truncated]`;
+      break;
+    }
+    prefix += character;
+    count++;
+  }
   const path = `${parent}.${childPreview}`;
   return byteLength(path) <= 256
     ? path
