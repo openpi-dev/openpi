@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { getAntigravityUserAgent } from "../../../extensions/ai-providers/antigravity/oauth.ts";
 import {
@@ -11,6 +12,7 @@ import { DEFAULT_ADAPTERS } from "../../../extensions/usage/providers/registry.t
 import {
   computeUsageStatus,
   parseTimestamp,
+  waitForUsage,
 } from "../../../extensions/usage/providers/utils.ts";
 
 function jwt(payload: Record<string, unknown>) {
@@ -24,6 +26,82 @@ const antiAuth = {
 function payloadFetch(payload: unknown): typeof fetch {
   return async () => Response.json(payload);
 }
+
+test("a pre-cancelled quota wait cannot return an already-fulfilled result", async () => {
+  const controller = new AbortController();
+  const reason = new Error("cancelled fixture");
+  controller.abort(reason);
+
+  await assert.rejects(
+    waitForUsage(Promise.resolve("stale quota"), controller.signal),
+    (error: unknown) => error === reason,
+  );
+});
+
+for (const timing of ["immediate", "delayed", "during-wait"]) {
+  test(`cancelled quota waits observe ${timing} rejection without leaking listeners`, () => {
+    const utilsUrl = new URL(
+      "../../../extensions/usage/providers/utils.ts",
+      import.meta.url,
+    ).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--input-type=module",
+        "--eval",
+        `
+          import assert from "node:assert/strict";
+          import { getEventListeners } from "node:events";
+          import { waitForUsage } from ${JSON.stringify(utilsUrl)};
+          const timing = ${JSON.stringify(timing)};
+          const unhandled = [];
+          process.on("unhandledRejection", (error) => unhandled.push(error));
+          const controller = new AbortController();
+          const reason = new Error("cancelled fixture");
+          const failure = new Error("quota failed fixture");
+          let rejectInput;
+          const input = timing === "immediate"
+            ? Promise.reject(failure)
+            : new Promise((_resolve, reject) => { rejectInput = reject; });
+          if (timing !== "during-wait") controller.abort(reason);
+          const waiting = waitForUsage(input, controller.signal);
+          if (timing === "during-wait") {
+            assert.equal(getEventListeners(controller.signal, "abort").length, 1);
+            controller.abort(reason);
+          } else {
+            assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+          }
+          await assert.rejects(waiting, (error) => error === reason);
+          assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+          rejectInput?.(failure);
+          await new Promise((resolve) => setImmediate(resolve));
+          await new Promise((resolve) => setImmediate(resolve));
+          assert.deepEqual(unhandled, []);
+          process.stdout.write("observed");
+        `,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "observed");
+  });
+}
+
+test("uncancelled quota waits preserve resolved values and rejected errors", async () => {
+  const controller = new AbortController();
+  const value = { quota: 42 };
+  assert.equal(
+    await waitForUsage(Promise.resolve(value), controller.signal),
+    value,
+  );
+  const failure = new Error("quota failed fixture");
+  await assert.rejects(
+    waitForUsage(Promise.reject(failure), controller.signal),
+    (error: unknown) => error === failure,
+  );
+});
 
 test("Cursor uses its session cookie, authoritative percentages and independent account metadata", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
