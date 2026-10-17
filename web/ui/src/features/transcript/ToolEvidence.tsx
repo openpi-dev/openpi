@@ -86,7 +86,9 @@ export function ToolEvidence({
     ? t("toolSnapshotMissingResult")
     : t(`toolState_${state}`);
   const fileReference = view.resolvedPath ?? view.path;
-  const path = view.path ?? "";
+  const fileLabel =
+    view.displayResolvedPath || view.displayPath || "File reference";
+  const path = view.displayPath || view.path || "";
   const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   const filename = path.slice(separator + 1) || path;
   const { Icon } = toolActivity(call.name);
@@ -151,29 +153,33 @@ export function ToolEvidence({
         <span className="evidence-status">{statusLabel}</span>
       </summary>
       <div className="evidence-content">
-        {view.path && !view.diff && (
-          <p>
-            <strong>{t("toolRequestedFile")}</strong>{" "}
-            {artifacts && fileReference ? (
-              <button
-                className="artifact-link"
-                type="button"
-                onClick={() => artifacts.open(fileReference)}
-              >
-                <code>{fileReference}</code>
-              </button>
-            ) : (
-              <code>{fileReference}</code>
-            )}
-            {cwd && (
-              <>
-                <br />
-                <small>
-                  {t("toolWorkspace")}: {cwd}
-                </small>
-              </>
-            )}
-          </p>
+        {(fileReference || view.displayPath || view.pathUnavailable) &&
+          !view.diff && (
+            <p>
+              <strong>{t("toolRequestedFile")}</strong>{" "}
+              {artifacts && fileReference ? (
+                <button
+                  className="artifact-link"
+                  type="button"
+                  onClick={() => artifacts.open(fileReference)}
+                >
+                  <code>{fileLabel}</code>
+                </button>
+              ) : (
+                <code>{fileLabel}</code>
+              )}
+              {cwd && (
+                <>
+                  <br />
+                  <small>
+                    {t("toolWorkspace")}: {cwd}
+                  </small>
+                </>
+              )}
+            </p>
+          )}
+        {view.pathUnavailable && (
+          <p className="evidence-warning">{view.pathUnavailable}</p>
         )}
         {shell && (
           <figure className="evidence-shell" aria-label={t("toolCallOutput")}>
