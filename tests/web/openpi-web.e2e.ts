@@ -2047,6 +2047,19 @@ test("discovers and completes Pi commands without submitting unsupported command
   await expect(unavailableOption).toBeDisabled();
   await expect(unavailableOption).toContainText("此扩展命令尚未接入 Web");
   const menu = page.locator(".slash-command-menu");
+  // The entry transition moves the menu; measure its settled placement.
+  await expect
+    .poll(() =>
+      menu.evaluate((element) =>
+        element
+          .getAnimations()
+          .some(
+            (animation) =>
+              animation.pending || animation.playState === "running",
+          ),
+      ),
+    )
+    .toBe(false);
   const menuBox = await menu.boundingBox();
   const composerBox = await page.locator(".composer").boundingBox();
   expect(menuBox).not.toBeNull();
@@ -2156,6 +2169,8 @@ test.describe("touch viewport", () => {
     expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
     expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(390);
     await page.getByRole("button", { name: "取消" }).click();
+    // Native close removes [open] before the discrete exit transition ends.
+    await expect(page.locator("dialog:visible")).toHaveCount(0);
 
     const accessibility = await new AxeBuilder({ page }).analyze();
     expect(accessibility.violations).toEqual([]);

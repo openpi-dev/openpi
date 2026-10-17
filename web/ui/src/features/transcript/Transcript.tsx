@@ -2623,11 +2623,11 @@ export function Transcript(props: TranscriptProps) {
       const element = viewport.current;
       if (!element) return;
       const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-      const immediate = () => {
+      const immediate = (top = element.scrollHeight) => {
         cancelFollowing();
         if (typeof element.scrollTo === "function")
-          element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
-        else element.scrollTop = element.scrollHeight;
+          element.scrollTo({ top, behavior: "instant" });
+        else element.scrollTop = top;
         lastScrollTop.current = element.scrollTop;
       };
       if (
@@ -2657,14 +2657,16 @@ export function Transcript(props: TranscriptProps) {
         const target = Math.max(0, element.scrollHeight - element.clientHeight);
         const gap = target - element.scrollTop;
         if (gap <= 1) {
-          element.scrollTop = target;
-          lastScrollTop.current = element.scrollTop;
+          immediate(target);
           return;
         }
         const elapsed = Math.min(64, Math.max(1, now - previous));
         previous = now;
-        element.scrollTop += Math.max(1, gap * (1 - Math.exp(-elapsed / 48)));
-        lastScrollTop.current = element.scrollTop;
+        // This loop supplies easing; CSS smooth scrolling must not queue
+        // another animation that survives cancellation of the next frame.
+        immediate(
+          element.scrollTop + Math.max(1, gap * (1 - Math.exp(-elapsed / 48))),
+        );
         followFrame.current = requestAnimationFrame(advance);
       };
       followFrame.current = requestAnimationFrame(advance);
