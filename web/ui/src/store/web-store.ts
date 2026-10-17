@@ -1,6 +1,7 @@
 import { createStore } from "zustand/vanilla";
 import { reduceLiveTools } from "../../../protocol/live-tools.ts";
 import {
+  WEB_MAX_ENTRIES,
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebCommandSummary,
   type WebEvent,
@@ -16,9 +17,9 @@ import {
   type WebThinkingState,
 } from "../../../protocol/types.ts";
 import type {
-  WebWorktreeReleaseTarget,
-  WebWorktreeReleaseResult,
   WebSessionForkRequest,
+  WebWorktreeReleaseResult,
+  WebWorktreeReleaseTarget,
 } from "../../../runtime/types.ts";
 import { i18n } from "../i18n.ts";
 import { sessionTitle } from "../lib/format.ts";
@@ -118,6 +119,69 @@ function trimLiveMessages(entries: LiveEntry[]) {
     if (entry.optimistic || remaining-- > 0) retained.push(entry);
   }
   return retained.reverse();
+}
+
+/** Completed thinking timings follow the transcript reading window, not the session lifetime. */
+export const THINKING_TIMING_RETENTION_LIMIT = WEB_MAX_ENTRIES * 4;
+
+const EMPTY_THINKING_KEYS: ReadonlySet<string> = new Set();
+const historyThinkingKeysCache = new WeakMap<
+  readonly { id: string; message?: WebLiveMessage }[],
+  ReadonlySet<string>
+>();
+
+function thinkingMessageIdentity(message: WebLiveMessage | undefined) {
+  if (!message) return undefined;
+  if (message.role === "toolResult" && message.toolCallId)
+    return `tool-result-${message.toolCallId}`;
+  if (message.timestamp !== undefined)
+    return `message-${message.role}-${message.timestamp}`;
+  return undefined;
+}
+
+function messageHasThinking(message: WebLiveMessage | undefined) {
+  return message?.parts?.some((part) => part.type === "thinking") === true;
+}
+
+function historyThinkingKeys(
+  entries: readonly { id: string; message?: WebLiveMessage }[] | undefined,
+) {
+  if (!entries) return EMPTY_THINKING_KEYS;
+  const cached = historyThinkingKeysCache.get(entries);
+  if (cached) return cached;
+  const keys = new Set<string>();
+  for (const entry of entries) {
+    if (!messageHasThinking(entry.message)) continue;
+    keys.add(entry.id);
+    const identity = thinkingMessageIdentity(entry.message);
+    if (identity) keys.add(identity);
+  }
+  historyThinkingKeysCache.set(entries, keys);
+  return keys;
+}
+
+function pruneTimingRecord(
+  record: Record<string, number>,
+  keep: ReadonlySet<string>,
+) {
+  for (const key of Object.keys(record)) {
+    if (!keep.has(key)) {
+      const next: Record<string, number> = {};
+      for (const kept of Object.keys(record)) {
+        if (keep.has(kept)) next[kept] = record[kept]!;
+      }
+      return next;
+    }
+  }
+  return record;
+}
+
+function sameLiveKeys(previous: LiveEntry[], next: LiveEntry[]) {
+  if (previous.length !== next.length) return false;
+  for (let index = 0; index < next.length; index++) {
+    if (previous[index]!.key !== next[index]!.key) return false;
+  }
+  return true;
 }
 
 function ownPendingMessages(
@@ -497,6 +561,7 @@ export function createWebStore(
   let planSelectionGeneration = 0;
   const terminalPromptIds = new Set<string>();
   const completedActivationIds = new Set<string>();
+  let pendingTimingKeys: string[] = [];
 
   const rememberBounded = (set: Set<string>, value: unknown) => {
     if (typeof value !== "string") return;
@@ -509,6 +574,7 @@ export function createWebStore(
 
   const resetLivePatch = () => {
     planSelectionGeneration++;
+    pendingTimingKeys = [];
     return {
       planSelectionPending: false,
       activeTurn: null,
@@ -523,6 +589,37 @@ export function createWebStore(
       thinkingStarts: {},
       thinkingDurations: {},
     };
+  };
+
+  const rememberPendingTiming = (key: string) => {
+    const existing = pendingTimingKeys.indexOf(key);
+    if (existing >= 0) pendingTimingKeys.splice(existing, 1);
+    pendingTimingKeys.push(key);
+    while (pendingTimingKeys.length > THINKING_TIMING_RETENTION_LIMIT)
+      pendingTimingKeys.shift();
+  };
+
+  const retainThinkingTiming = (
+    liveMessages: LiveEntry[],
+    entries: readonly { id: string; message?: WebLiveMessage }[] | undefined,
+    thinkingStarts: Record<string, number>,
+    thinkingDurations: Record<string, number>,
+  ) => {
+    const history = historyThinkingKeys(entries);
+    if (pendingTimingKeys.some((key) => history.has(key)))
+      pendingTimingKeys = pendingTimingKeys.filter((key) => !history.has(key));
+    const keep = new Set<string>(history);
+    for (const entry of liveMessages) {
+      keep.add(entry.key);
+      const identity = thinkingMessageIdentity(entry.message);
+      if (identity) keep.add(identity);
+    }
+    for (const key of pendingTimingKeys) keep.add(key);
+    const starts = pruneTimingRecord(thinkingStarts, keep);
+    const durations = pruneTimingRecord(thinkingDurations, keep);
+    if (starts === thinkingStarts && durations === thinkingDurations)
+      return null;
+    return { thinkingStarts: starts, thinkingDurations: durations };
   };
 
   const resetModelSearch = (): { modelSearch: ModelSearchState } => {
@@ -941,17 +1038,16 @@ export function createWebStore(
       }
 
       if (current.snapshot) {
-        const liveTools = reduceLiveTools(
-          current.snapshot.runtime.liveTools ?? [],
-          event.type,
-          detail,
-        );
-        set({
-          snapshot: {
-            ...current.snapshot,
-            runtime: { ...current.snapshot.runtime, liveTools },
-          },
-        });
+        const stored = current.snapshot.runtime.liveTools ?? [];
+        const liveTools = reduceLiveTools(stored, event.type, detail);
+        if (liveTools !== stored) {
+          set({
+            snapshot: {
+              ...current.snapshot,
+              runtime: { ...current.snapshot.runtime, liveTools },
+            },
+          });
+        }
       }
       if (sessionTransition) {
         const eventCommandId = detail.commandId;
@@ -1147,15 +1243,44 @@ export function createWebStore(
                 entryIndex === index ? live : entry,
               )
             : trimLiveMessages([...liveMessages, live]);
-        const thinkingStarts = { ...current.thinkingStarts };
-        const thinkingDurations = { ...current.thinkingDurations };
+        const liveKeysChanged = !sameLiveKeys(
+          current.liveMessages,
+          liveMessages,
+        );
+        let thinkingStarts = current.thinkingStarts;
+        let thinkingDurations = current.thinkingDurations;
+        let timingChanged = false;
         if (message.parts?.some((part) => part.type === "thinking")) {
-          thinkingStarts[key] ??= Date.now();
+          if (thinkingStarts[key] === undefined) {
+            thinkingStarts = { ...thinkingStarts, [key]: Date.now() };
+            timingChanged = true;
+          }
           if (event.type === "message_end") {
-            thinkingDurations[key] = Date.now() - thinkingStarts[key];
+            const identity = thinkingMessageIdentity(message);
+            const duration = Date.now() - thinkingStarts[key]!;
+            thinkingDurations = { ...thinkingDurations, [key]: duration };
+            if (identity) thinkingDurations[identity] = duration;
+            rememberPendingTiming(identity ?? key);
+            timingChanged = true;
           }
         }
-        set({ liveMessages, thinkingDurations, thinkingStarts });
+        if (timingChanged || liveKeysChanged) {
+          const retained = retainThinkingTiming(
+            liveMessages,
+            current.snapshot?.selectedSession?.entries,
+            thinkingStarts,
+            thinkingDurations,
+          );
+          if (retained) {
+            thinkingStarts = retained.thinkingStarts;
+            thinkingDurations = retained.thinkingDurations;
+            timingChanged = true;
+          }
+        }
+        set({
+          liveMessages,
+          ...(timingChanged ? { thinkingStarts, thinkingDurations } : {}),
+        });
       }
 
       if (
@@ -1541,6 +1666,15 @@ export function createWebStore(
             snapshot,
             ...(modelSearchChanged ? resetModelSearch() : {}),
           });
+          if (!(shouldReset || controllerChanged || selectionChanged)) {
+            const retained = retainThinkingTiming(
+              get().liveMessages,
+              snapshot.selectedSession?.entries,
+              get().thinkingStarts,
+              get().thinkingDurations,
+            );
+            if (retained) set(retained);
+          }
           acceptThinking();
           return true;
         } catch (error) {

@@ -29,8 +29,14 @@ export interface OutputView {
   readonly totalBytes: number;
   /** Bytes dropped from the head of the in-memory view (0 = complete). */
   readonly truncatedBytes: number;
+  /** UTF-16 code units dropped from the head of `text`. */
+  readonly truncatedChars: number;
+  /** UTF-16 code units currently retained in `text`. */
+  readonly retainedChars: number;
   /** On-disk full capture; always the complete stream when spilling works. */
   readonly spillPath?: string;
+  /** Code-unit slice of the retained text. `to` defaults to the retained end. */
+  slice(from: number, to?: number): string;
 }
 
 export interface TerminalSnapshot {

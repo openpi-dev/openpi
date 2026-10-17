@@ -29,7 +29,14 @@ import {
   type TerminalSnapshot,
 } from "../domain.ts";
 import type { TerminalReadModel } from "../manager.ts";
-import { createOutputLineCache, sanitizeText } from "./output-view.ts";
+import {
+  createOutputLineCache,
+  sanitizeText,
+  toOutputLayoutSource,
+} from "./output-view.ts";
+
+/** Output-driven repaints share this delay. Status changes render immediately. */
+export const OUTPUT_REFRESH_MS = 50;
 
 /** One-line-safe rendering of model-provided text (titles, commands): a
  * newline or control char inside a fixed-height row desyncs the renderer. */
@@ -141,6 +148,15 @@ export interface DashboardSelection {
   index: number;
 }
 
+/** Fields that change a list row. Output retention is intentionally absent. */
+function listStructureKey(terminals: ReadonlyArray<TerminalSnapshot>) {
+  let key = "";
+  for (const snap of terminals) {
+    key += `${snap.id}\0${snap.status}\0${snap.pid ?? ""}\0${snap.exitCode ?? ""}\0${snap.signal ?? ""}\0${snap.settledAt ?? ""}\0${snap.timeoutAt ?? ""}\0${snap.errorText ?? ""}\0${snap.title}\0${snap.command}\0${snap.cwd}\0`;
+  }
+  return key;
+}
+
 export function reconcileDashboardSelection(
   selection: DashboardSelection,
   terminals: ReadonlyArray<Pick<TerminalSnapshot, "id">>,
@@ -158,7 +174,7 @@ export function reconcileDashboardSelection(
   selection.id = terminals[selection.index]?.id;
 }
 
-class TerminalDashboard implements Component {
+export class TerminalDashboard implements Component {
   private tui: TUI;
   private theme: Theme;
   private keybindings: KeybindingsManager;
@@ -169,6 +185,9 @@ class TerminalDashboard implements Component {
   private closed = false;
   private ticker: ReturnType<typeof setInterval>;
   private unsubChange: () => void;
+  private refreshTimer?: ReturnType<typeof setTimeout>;
+  /** Identity of fields the list rows actually draw. Output bytes are omitted. */
+  private listEpoch: string;
 
   constructor(
     tui: TUI,
@@ -184,9 +203,33 @@ class TerminalDashboard implements Component {
     this.view = view;
     this.selection = selection;
     this.done = done;
-    // Elapsed times and output sizes tick along at 1Hz.
+    this.listEpoch = listStructureKey(view.list());
+    // Elapsed times tick along at 1Hz. Output bursts share one repaint.
     this.ticker = setInterval(() => this.tui.requestRender(), 1000);
-    this.unsubChange = view.subscribe(() => this.tui.requestRender());
+    this.unsubChange = view.subscribe(() => this.onListChange());
+  }
+
+  private onListChange() {
+    if (this.closed) return;
+    const next = listStructureKey(this.view.list());
+    if (next !== this.listEpoch) {
+      this.listEpoch = next;
+      this.flushListRender();
+      return;
+    }
+    if (this.refreshTimer) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      if (!this.closed) this.tui.requestRender();
+    }, OUTPUT_REFRESH_MS);
+  }
+
+  private flushListRender() {
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
+    if (!this.closed) this.tui.requestRender();
   }
 
   private terminals(): ReadonlyArray<TerminalSnapshot> {
@@ -197,6 +240,8 @@ class TerminalDashboard implements Component {
     if (this.closed) return false;
     this.closed = true;
     clearInterval(this.ticker);
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = undefined;
     this.unsubChange();
     return true;
   }
@@ -360,7 +405,7 @@ class TerminalDashboard implements Component {
 
 const OUTPUT_SCROLL_STEP = 6;
 
-class TerminalDetailView implements Component {
+export class TerminalDetailView implements Component {
   private tui: TUI;
   private theme: Theme;
   private keybindings: KeybindingsManager;
@@ -408,7 +453,7 @@ class TerminalDetailView implements Component {
     this.renderTimer = setTimeout(() => {
       this.renderTimer = undefined;
       if (!this.closed) this.tui.requestRender();
-    }, 50);
+    }, OUTPUT_REFRESH_MS);
   }
 
   private cleanup() {
@@ -559,11 +604,10 @@ class TerminalDetailView implements Component {
     // Fixed-height output viewport. Notes and scroll status consume rows
     // inside the viewport so streaming/scrolling never changes overlay height.
     const buffer = viewData;
-    const version =
-      // The cached view text identity changes with the buffer; totalBytes is a
-      // monotonically increasing proxy for a version counter.
-      buffer.totalBytes;
-    const output = this.lineCache.get(buffer.text, version, width - 2);
+    // totalBytes is the monotonic version. Unchanged frames reuse the layout;
+    // a new tail updates only that tail plus lines evicted from the head.
+    this.lineCache.sync(toOutputLayoutSource(buffer), width - 2);
+    const outputLength = this.lineCache.length;
     const viewport = this.viewportHeight();
 
     const noteRows: string[] = [];
@@ -590,11 +634,11 @@ class TerminalDetailView implements Component {
     const body: string[] = [...noteRows];
     const scrollRows = this.scrollOffset > 0 ? 1 : 0;
     const capacity = Math.max(1, viewport - body.length - scrollRows);
-    const maxOffset = Math.max(0, output.length - capacity);
+    const maxOffset = Math.max(0, outputLength - capacity);
     if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset;
 
-    const end = output.length - this.scrollOffset;
-    const visible = output.slice(Math.max(0, end - capacity), end);
+    const end = outputLength - this.scrollOffset;
+    const visible = this.lineCache.slice(Math.max(0, end - capacity), end);
     if (visible.length === 0) {
       body.push(theme.fg("dim", `(no ${active} yet)`));
     } else {
