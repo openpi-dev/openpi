@@ -159,39 +159,6 @@ export default function sessionGoal(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "get_goal",
-    label: "Get Goal",
-    description:
-      "Get the current goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget.",
-    promptSnippet: "Get the current goal for this thread",
-    parameters: Type.Object({}, { additionalProperties: false }),
-    execute(_id, _params, _signal, _onUpdate, ctx) {
-      const goal = controller.snapshot();
-      if (!goal) throw new Error("No goal is currently set.");
-      const response = goalToolResponse(
-        goal,
-        false,
-        ctx.sessionManager.getSessionId(),
-      );
-      return Promise.resolve(
-        toolResult(response, JSON.stringify(response), goal),
-      );
-    },
-    renderCall(_args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold("get_goal")), 0, 0);
-    },
-    renderResult(result, options, theme, context) {
-      return renderGoalTool(
-        result.details as GoalToolDetails | undefined,
-        options.expanded,
-        theme,
-        (text) =>
-          theme.bg(context.isError ? "toolErrorBg" : "toolSuccessBg", text),
-      );
-    },
-  });
-
-  pi.registerTool({
     name: "create_goal",
     label: "Create Goal",
     description:

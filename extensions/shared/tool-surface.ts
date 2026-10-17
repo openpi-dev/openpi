@@ -18,7 +18,6 @@ export const OPENPI_TOOL_SURFACE = {
       "subagent_cancel",
       "subagent_send",
       "subagent_check",
-      "subagent_list",
     ],
     boundary: [],
   },
@@ -27,11 +26,11 @@ export const OPENPI_TOOL_SURFACE = {
     boundary: [],
   },
   background: {
-    resident: ["bg_start", "bg_status", "bg_list", "bg_kill", "bg_watch"],
+    resident: ["bg_start", "bg_status", "bg_kill", "bg_watch"],
     boundary: [],
   },
   goal: {
-    resident: ["create_goal", "get_goal", "update_goal"],
+    resident: ["create_goal", "update_goal"],
     boundary: [],
   },
   gitRead: {

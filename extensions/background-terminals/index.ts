@@ -5,8 +5,8 @@
  * Tools (for the LLM):
  * - bg_start: fire-and-forget spawn (command, title, working_dir). Max 8
  *   running at once. The model is notified exactly once when a process exits.
- * - bg_status: peek at one terminal's status + tail-truncated output.
- * - bg_list: list all tracked terminals (running and settled).
+ * - bg_status: peek at one terminal's status + tail-truncated output, or
+ *   list all tracked terminals when called without an id.
  * - bg_kill: SIGTERM→SIGKILL the whole process tree; returns final state.
  *
  * While ≥1 process runs, a one-line widget above the editor shows
@@ -21,10 +21,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type {
+  AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
+import { keyHint } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
@@ -47,7 +50,6 @@ import {
 import {
   BG_KILL_PARAMETER_DESCRIPTIONS,
   BG_KILL_TOOL_DESCRIPTION,
-  BG_LIST_TOOL_DESCRIPTION,
   BG_START_PARAMETER_DESCRIPTIONS,
   BG_START_PROMPT_GUIDELINES,
   BG_START_PROMPT_SNIPPET,
@@ -436,10 +438,31 @@ export default function (pi: ExtensionAPI) {
     label: "Check Background Terminal",
     description: BG_STATUS_TOOL_DESCRIPTION,
     parameters: Type.Object({
-      id: Type.String({ description: BG_STATUS_PARAMETER_DESCRIPTIONS.id }),
+      id: Type.Optional(
+        Type.String({ description: BG_STATUS_PARAMETER_DESCRIPTIONS.id }),
+      ),
     }),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params): Promise<AgentToolResult<unknown>> {
       const manager = await getManager();
+      if (params.id === undefined) {
+        const terminals = manager.view.list();
+        const text =
+          terminals.length === 0
+            ? "No background terminals."
+            : terminals.map((snap) => describeTerminal(snap)).join("\n");
+        return {
+          content: [{ type: "text", text }],
+          details: {
+            terminals: terminals.map((snap) => ({
+              id: snap.id,
+              title: snap.title,
+              status: snap.status,
+              pid: snap.pid,
+              timeoutAt: snap.timeoutAt,
+            })),
+          },
+        };
+      }
       const snap = manager.view.get(params.id);
       if (!snap) {
         const known = manager.view.list().map((s) => s.id);
@@ -471,38 +494,24 @@ export default function (pi: ExtensionAPI) {
     renderResult(result, { expanded }, theme) {
       const first = result.content[0];
       const content = first?.type === "text" ? first.text : "(no output)";
+      if (
+        (result.details as { terminals?: unknown[] } | undefined)?.terminals !==
+        undefined
+      ) {
+        const lines = content.split("\n");
+        const shown = expanded ? lines : lines.slice(0, 10);
+        const hidden = lines.length - shown.length;
+        let text = shown.map((line) => theme.fg("toolOutput", line)).join("\n");
+        if (hidden > 0) {
+          text += `${theme.fg("muted", `\n... (${hidden} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+        }
+        return new Text(text, 0, 0);
+      }
       return renderTerminalResult(
         content,
         expanded || loadSetupConfig().ui.bashToolDisplay === "full",
         theme,
       );
-    },
-  });
-
-  pi.registerTool({
-    name: "bg_list",
-    label: "List Background Terminals",
-    description: BG_LIST_TOOL_DESCRIPTION,
-    parameters: Type.Object({}),
-    async execute() {
-      const manager = await getManager();
-      const terminals = manager.view.list();
-      const text =
-        terminals.length === 0
-          ? "No background terminals."
-          : terminals.map((snap) => describeTerminal(snap)).join("\n");
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          terminals: terminals.map((snap) => ({
-            id: snap.id,
-            title: snap.title,
-            status: snap.status,
-            pid: snap.pid,
-            timeoutAt: snap.timeoutAt,
-          })),
-        },
-      };
     },
   });
 

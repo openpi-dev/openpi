@@ -138,10 +138,8 @@ export const PLAN_SAFE_TOOLS = new Set([
   "get_search_content",
   // Read-only inspection of work already in flight.
   "bg_status",
-  "bg_list",
   "bg_watch",
   "subagent_check",
-  "subagent_list",
   "subagent_wait",
   "workflow_status",
   // Delegated investigation. Exploring several subsystems in parallel without
@@ -157,8 +155,7 @@ export const PLAN_SAFE_TOOLS = new Set([
   // child's session, and one started before `/plan` was armed still holds the
   // full tool set. Narrowing applies at spawn, so only spawning is safe.
   "subagent_spawn",
-  // Advisory state reads and an explicit user clarification.
-  "get_goal",
+  // An explicit user clarification.
   "ask_user",
   // The model's explicit, terminating transition from planning to ready.
   "plan_ready",

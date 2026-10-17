@@ -42,7 +42,6 @@ test("plan mode allows only explicit observational tools", () => {
     "bg_status",
     "subagent_check",
     "workflow_status",
-    "get_goal",
     "ask_user",
     "git_show",
     "git_diff",

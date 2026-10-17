@@ -243,7 +243,7 @@ export function buildSubagentSpawnResult(options: {
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}${structuredNote}\n` +
     `It runs in the background — keep working on independent work. If none remains in an interactive session, briefly tell the user it is still running and end your turn; its result is delivered automatically and you are automatically re-invoked when it finishes. Do not poll or call subagent_wait merely because a later step depends on it. ` +
-    `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
+    `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one or lists all.`
   );
 }
 
@@ -288,16 +288,12 @@ export function buildSubagentSendResult(options: {
 
 /** Describes nonblocking inspection of a subagent without consuming its result. */
 export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
-  "Peek at a subagent's status and recent activity without blocking. Does not consume its result. Do NOT poll with it to wait for completion — a settled subagent's result is delivered to you automatically. Use it when you need a running subagent's partial state (e.g. to decide whether to steer it), or select generation/evidence to retrieve settled Direct owner evidence on the active parent branch. Explicit evidence reads use Pi permissions and native nested-call metadata may include paths; receipts do not. Availability is bounded, not a retention guarantee.";
+  "Peek at one subagent's status and recent activity without blocking, or omit id to list all subagents (running and finished) with their status. Does not consume its result. Do NOT poll with it to wait for completion — a settled subagent's result is delivered to you automatically. Use it when you need a running subagent's partial state (e.g. to decide whether to steer it), or select generation/evidence to retrieve settled Direct owner evidence on the active parent branch. Explicit evidence reads use Pi permissions and native nested-call metadata may include paths; receipts do not. Availability is bounded, not a retention guarantee.";
 
 /** Model-facing schema description for the subagent id to inspect. */
 export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {
-  id: "Subagent id",
+  id: "Subagent id; omit to list all subagents.",
 };
-
-/** Describes listing all tracked running and settled subagents. */
-export const SUBAGENT_LIST_TOOL_DESCRIPTION =
-  "List all subagents (running and finished) with their status.";
 
 const SUBAGENT_RESULT_TRANSPORT_INSTRUCTION =
   "(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)";

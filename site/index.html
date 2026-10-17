@@ -1369,7 +1369,7 @@ function resetTerm() {
 /* frozen-surface demo — groups mirror extensions/shared/tool-surface.ts */
 const GROUPS = [
   { id: 'pi', base: true, tools: ['read', 'bash', 'edit', 'write'] },
-  { id: 'resident', resident: true, tools: ['subagent_spawn', 'subagent_wait', 'subagent_check', 'subagent_send', 'subagent_cancel', 'subagent_list', 'workflow', 'workflow_status', 'workflow_stop', 'bg_start', 'bg_status', 'bg_list', 'bg_watch', 'bg_kill', 'create_goal', 'get_goal', 'update_goal'] },
+  { id: 'resident', resident: true, tools: ['subagent_spawn', 'subagent_wait', 'subagent_check', 'subagent_send', 'subagent_cancel', 'workflow', 'workflow_status', 'workflow_stop', 'bg_start', 'bg_status', 'bg_watch', 'bg_kill', 'create_goal', 'update_goal'] },
   { id: 'plan', tools: ['git_show', 'git_diff', 'git_log', 'plan_ready', 'ask_user', 'human_handoff'] },
   { id: 'setup', tools: ['configure_my_pi_setup', 'ask_user', 'human_handoff'] },
   { id: 'browser', tools: ['openpi_browser'] },
@@ -1377,7 +1377,7 @@ const GROUPS = [
 const GROUP_NAME = { pi: 'pi native', resident: 'resident', plan: 'plan boundary', setup: 'setup boundary', browser: 'browser boundary' };
 const SCENARIOS = {
   zh: [
-    { tag: '普通编码', load: [], prompt: '修复 CartSummary 里折扣为 0 时的空指针', why: '17 个 OpenPI 常驻工具从会话开始就在场，每个请求看到完全相同的工具列表。' },
+    { tag: '普通编码', load: [], prompt: '修复 CartSummary 里折扣为 0 时的空指针', why: '14 个 OpenPI 常驻工具从会话开始就在场，每个请求看到完全相同的工具列表。' },
     { tag: 'background', load: [], prompt: '看看刚才启动的 dev server 输出', why: '<code>bg_start</code> 已执行、进程正在运行——工具列表不变。没有终端时 <code>bg_status</code> 仍在场，返回明确的空状态。' },
     { tag: 'delegate', load: [], prompt: '用子代理分别检查登录流程和相关测试，最后汇总', why: '常驻的 <code>subagent_*</code> 工具直接可用；启动几个、怎么分工由模型决定。' },
     { tag: 'plan mode', load: ['plan'], prompt: '/plan 把支付接口迁移到 v2', why: '<code>/plan</code> 是用户显式边界：加入只读 <code>git_*</code>、<code>plan_ready</code> 与 <code>ask_user</code> / <code>human_handoff</code>；退出时精确还原。' },

@@ -48,7 +48,6 @@ test("session start activates the resident background tool set", () => {
   assert.deepEqual(registered, [
     "bg_start",
     "bg_status",
-    "bg_list",
     "bg_kill",
     "bg_watch",
   ]);
@@ -57,7 +56,6 @@ test("session start activates the resident background tool set", () => {
     "third_party_tool",
     "bg_start",
     "bg_status",
-    "bg_list",
     "bg_kill",
     "bg_watch",
   ]);
@@ -99,8 +97,15 @@ test("rejected and successful starts keep the resident lifecycle tools active", 
   for (const handler of handlers.get("session_start") ?? []) {
     await handler({}, ctx);
   }
-  const resident = ["bg_start", "bg_status", "bg_list", "bg_kill", "bg_watch"];
+  const resident = ["bg_start", "bg_status", "bg_kill", "bg_watch"];
   assert.deepEqual(active, resident);
+
+  const listed = (await tools
+    .get("bg_status")!
+    .execute("list", {}, undefined, undefined, ctx)) as {
+    content: Array<{ text: string }>;
+  };
+  assert.equal(listed.content[0]?.text, "No background terminals.");
 
   const start = tools.get("bg_start");
   assert.ok(start);

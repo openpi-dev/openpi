@@ -85,7 +85,7 @@ pi install npm:@tt-a1i/openpi
 <summary>OpenPI 的固定工具集，以及原生 Skill 的使用方式</summary>
 
 > [!TIP]
-> OpenPI 为每个 Session 提供一套固定的常驻模型工具：`subagent_spawn`/`subagent_wait`/`subagent_cancel`/`subagent_send`/`subagent_check`/`subagent_list`、`workflow`/`workflow_stop`/`workflow_status`、`bg_start`/`bg_status`/`bg_list`/`bg_kill`/`bg_watch`，以及 `create_goal`/`get_goal`/`update_goal`。该列表在 Session 开始时确定一次，之后不因 Prompt 关键词、目标状态或后台进程变化而改变——常驻工具面是缓存稳定的，也是模型可预期的。
+> OpenPI 为每个 Session 提供一套固定的常驻模型工具：`subagent_spawn`/`subagent_wait`/`subagent_cancel`/`subagent_send`/`subagent_check`、`workflow`/`workflow_stop`/`workflow_status`、`bg_start`/`bg_status`/`bg_kill`/`bg_watch`，以及 `create_goal`/`update_goal`。该列表在 Session 开始时确定一次，之后不因 Prompt 关键词、目标状态或后台进程变化而改变——常驻工具面是缓存稳定的，也是模型可预期的。
 > 只有明确的用户边界会临时增减工具：进入 `/plan` 加入 `git_show`/`git_diff`/`git_log`、`plan_ready`、`ask_user`/`human_handoff`，退出时移除；`/openpi-setup` 进行期间提供 `configure_my_pi_setup` 与 `ask_user`/`human_handoff`；浏览器控制经 Setup 授权后启用 `openpi_browser`。缺少对应状态的工具调用（例如没有 Goal 时调用 `update_goal`）在执行层返回明确错误，而不是隐藏工具。
 
 
@@ -717,16 +717,16 @@ TUI 查询中按 Esc/Ctrl+C 取消等待；结果使用可滚动浮层，方向�
 <details>
 <summary><strong>模型工具速查</strong></summary>
 
-OpenPI 提供一套固定的常驻模型工具，在 Session 开始时确定一次：Subagent（`subagent_spawn` 等 6 个）、Workflow（`workflow`/`workflow_stop`/`workflow_status`）、后台终端（`bg_start` 等 5 个）与 Goal（`create_goal`/`get_goal`/`update_goal`）。会话内工具列表不因模型动作或运行时状态改变；缺少对应状态的调用（如无终端时的 `bg_status`、无目标时的 `update_goal`）在执行层返回明确结果或 fail-closed。只有用户显式边界会改变工具：`/plan` 加入只读 Git、`plan_ready` 与 `ask_user`/`human_handoff`；`/openpi-setup` episode 加入 `configure_my_pi_setup` 与 `ask_user`/`human_handoff`；浏览器授权后启用 `openpi_browser`。Background、Subagent 与 Workflow 的 Skill 文件仍随包发布，模型按需用 `read` 读取，不常驻普通系统 Prompt。
+OpenPI 提供一套固定的常驻模型工具，在 Session 开始时确定一次：Subagent（`subagent_spawn` 等 5 个）、Workflow（`workflow`/`workflow_stop`/`workflow_status`）、后台终端（`bg_start` 等 4 个）与 Goal（`create_goal`/`update_goal`）。会话内工具列表不因模型动作或运行时状态改变；缺少对应状态的调用（如无终端时的 `bg_status`、无目标时的 `update_goal`）在执行层返回明确结果或 fail-closed。只有用户显式边界会改变工具：`/plan` 加入只读 Git、`plan_ready` 与 `ask_user`/`human_handoff`；`/openpi-setup` episode 加入 `configure_my_pi_setup` 与 `ask_user`/`human_handoff`；浏览器授权后启用 `openpi_browser`。Background、Subagent 与 Workflow 的 Skill 文件仍随包发布，模型按需用 `read` 读取，不常驻普通系统 Prompt。
 
 普通产品采用 Pi-native execution：保留 Pi 原生完整历史、工具输出上限、Session compaction、显式 Bash timeout 与 provider loop，不额外做固定事务投影、成功 Bash 二次裁剪、测试 timeout 改写、重复失败硬拦或恢复/轨迹提示。OpenPI 只保留一层工作区清理护栏：源码中可识别的 `rm` 只有在整条命令是直接、可静态验证的 literal `rm`，且目标都是工作区内相对路径时，才会进入 provenance 与确认流程；可识别的复合、嵌套或动态 target `rm` 会 fail closed，并提示改用独立的 literal `rm` 重试。单条 standalone 普通命令中可静态识别的 bare、single-quoted 或 double-quoted 参数、Bash comment，以及独占输入的单个非展开 heredoc 中的 `rm` 文本不受影响；复合命令、已知 command forwarder 和带后续命令的 heredoc 会保守阻止 source-visible `rm`，可拆成独立命令重试。Guard 会从实际文件状态识别本轮通过原生写入、文字重定向或 literal `mkdir -p` 创建的 scratch，避免误拦其清理；它不是任意程序文件系统行为的 sandbox，也不承诺识别运行时生成的命令名或其他程序内部的文件系统行为。
 
 | 工具                                                                                                     | 用途                           | 可见时机                         |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------- |
-| `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                                | 后台进程生命周期               | Session 常驻                     |
-| `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                   | Session 常驻                     |
+| `bg_start`, `bg_status`, `bg_watch`, `bg_kill`                                                           | 后台进程生命周期               | Session 常驻                     |
+| `subagent_spawn`, `subagent_check`, `subagent_wait`, `subagent_send`, `subagent_cancel`                  | 独立子 Agent                   | Session 常驻                     |
 | `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段编排与运行管理       | Session 常驻                     |
-| `get_goal`, `create_goal`, `update_goal`                                                                 | Session Goal                   | Session 常驻                     |
+| `create_goal`, `update_goal`                                                                             | Session Goal                   | Session 常驻                     |
 | `ask_user`, `human_handoff`                                                                              | 经复核的用户决策与用户专属操作 | Plan 或 Setup 进行中             |
 | `plan_ready`                                                                                             | 显式完成计划，不自动开始实施   | Plan Mode 进行中                 |
 | `git_show`, `git_diff`, `git_log`                                                                        | 只读 Git 检查                  | Plan Mode 进行中                 |

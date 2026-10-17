@@ -55,6 +55,9 @@ export const RETIRED_OPENPI_TOOL_NAMES = new Set<string>([
   "tasks_list",
   "context_pivot",
   "openpi_load_tools",
+  "subagent_list",
+  "bg_list",
+  "get_goal",
 ]);
 
 /**
@@ -534,7 +537,6 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent_cancel",
   "subagent_send",
   "subagent_check",
-  "subagent_list",
   // workflows — children cannot recursively orchestrate or manage runs
   "workflow",
   "workflow_stop",
@@ -545,7 +547,6 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   // plan-mode — completion controls the parent session's write gate and UI
   "plan_ready",
   // goal — the parent session owns its persistent goal
-  "get_goal",
   "create_goal",
   "update_goal",
   // setup — configuration is a package-owned, parent-only choice
@@ -554,7 +555,6 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   // parent's /ps and could outlive the child, so children cannot start them
   "bg_start",
   "bg_status",
-  "bg_list",
   "bg_kill",
   "bg_watch",
 ] as const;

@@ -44,7 +44,7 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
     "subagent_check",
   ]);
 
-  // subagent_wait/subagent_list missing from active: resident reconcile adds them
+  // subagent_wait missing from active: resident reconcile adds it
   assert.equal(
     patchOwnedTools(h.pi, "subagents", {
       enable: OPENPI_TOOL_SURFACE.subagents.resident,
@@ -59,7 +59,6 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
     "subagent_send",
     "subagent_check",
     "subagent_wait",
-    "subagent_list",
   ]);
 
   h.pi.setActiveTools([...h.active(), "late_third_party_tool"]);
@@ -75,7 +74,6 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
     "subagent_send",
     "subagent_check",
     "subagent_wait",
-    "subagent_list",
     "late_third_party_tool",
   ]);
 });
@@ -89,7 +87,7 @@ test("disabling a resident tool throws instead of churning the frozen surface", 
   assert.throws(
     () =>
       patchOwnedTools(h.pi, "goal", {
-        enable: ["get_goal"],
+        enable: ["create_goal"],
         disable: ["update_goal"],
       }),
     /goal cannot disable resident tool "update_goal"/,
@@ -228,7 +226,6 @@ test("catalog defines resident and boundary names exactly once", () => {
     "subagent_cancel",
     "subagent_send",
     "subagent_check",
-    "subagent_list",
   ]);
   assert.deepEqual(OPENPI_TOOL_SURFACE.subagents.boundary, []);
   // Retired tools are absent from the managed surface.

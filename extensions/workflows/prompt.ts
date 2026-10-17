@@ -37,7 +37,7 @@ export const WORKFLOW_STOP_PARAMETER_DESCRIPTIONS = {
   runId: 'Workflow run id to cancel, e.g. "wf_1a2b3c4d5e6f".',
 };
 
-/** Describes nonblocking inspection of workflow runs, mirroring subagent_check/subagent_list. */
+/** Describes nonblocking inspection of workflow runs, mirroring subagent_check. */
 export const WORKFLOW_STATUS_TOOL_DESCRIPTION =
   "Peek at workflow runs without blocking. With a run id, returns a bounded status and coverage summary plus the artifact location; without one, lists this session's active and recently finished runs. Does not wait, consume a completion, or repeat the full final result.";
 

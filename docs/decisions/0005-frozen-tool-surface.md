@@ -49,4 +49,4 @@ Every OpenPI session pays one fixed tool-definition cost on every request (18,14
 
 ## Amendments
 
-None.
+- 2026-10-17 — Phase 2 consolidated the resident set from 17 to 14 tools: `subagent_list` folded into `subagent_check` (omit `id` to list; evidence reads without `id` reject), `bg_list` folded into `bg_status` (omit `id` to list), and `get_goal` was removed as redundant — the goal continuation prompt already carries objective, usage, and budget. `subagent_wait` stays a separate tool because synchronous waiting must remain an explicit model choice (AGENTS.md). New measured budget: 17,758 characters across 14 resident tools, asserted ≤ 19,600 (~10% headroom).

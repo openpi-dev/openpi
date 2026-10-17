@@ -58,14 +58,11 @@ export const BG_START_PARAMETER_DESCRIPTIONS = {
 };
 
 export const BG_STATUS_TOOL_DESCRIPTION =
-  "Peek at a background terminal's status and current output (tail-truncated) without blocking. If the terminal already exited, this returns its final state.";
+  "Peek at a background terminal's status and current output (tail-truncated) without blocking, or omit id to list all background terminals (running and settled) with pid, elapsed time, exit status, and output sizes. If the terminal already exited, this returns its final state.";
 
 export const BG_STATUS_PARAMETER_DESCRIPTIONS = {
-  id: 'Terminal id, e.g. "bt-1"',
+  id: 'Terminal id, e.g. "bt-1"; omit to list all terminals.',
 };
-
-export const BG_LIST_TOOL_DESCRIPTION =
-  "List all background terminals (running and settled) with pid, elapsed time, exit status, and output sizes.";
 
 export const BG_KILL_TOOL_DESCRIPTION =
   "Stop one or more running background terminals (SIGTERM to the whole process tree, escalating to SIGKILL). Returns each terminal's final state; already-settled ids are reported as such.";
@@ -113,7 +110,7 @@ export function buildStartResult(snap: TerminalSnapshot) {
   return (
     `Started background terminal ${snap.id} "${snap.title}" (pid ${snap.pid ?? "?"}, ${snap.cwd}).\n` +
     `It runs in the background with no stdin${snap.timeoutAt === undefined ? "" : ` and will time out in ${formatDuration((snap.timeoutAt - snap.createdAt) / 1_000)}`}. You'll get a message when it exits, ` +
-    `or use bg_status(id: "${snap.id}") to peek, bg_kill to stop it, bg_list to see all.`
+    `or use bg_status(id: "${snap.id}") to peek, bg_kill to stop it, bg_status with no id to see all.`
   );
 }
 
@@ -198,7 +195,7 @@ export function buildTerminalBatchResultMessage(
     `${sanitizedMessages.length} background terminal result${sanitizedMessages.length === 1 ? "" : "s"}:`,
     ...summaries.map((summary) => `- ${summary}`),
     omitted > 0
-      ? `- ${omitted} older result${omitted === 1 ? "" : "s"} omitted from this bounded batch; use bg_list/bg_status for retained details.`
+      ? `- ${omitted} older result${omitted === 1 ? "" : "s"} omitted from this bounded batch; use bg_status for retained details.`
       : "",
   ]
     .filter(Boolean)

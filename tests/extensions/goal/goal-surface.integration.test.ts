@@ -141,7 +141,6 @@ for (const mode of ["rpc", "web"] as const) {
       // 1. Frozen surface invariant: goal tools are resident at session start
       const initialTools = session.getActiveToolNames();
       assert.ok(initialTools.includes("create_goal"));
-      assert.ok(initialTools.includes("get_goal"));
       assert.ok(initialTools.includes("update_goal"));
 
       // 2. User runs /goal <objective>; starting a goal is not a tool boundary
@@ -151,12 +150,12 @@ for (const mode of ["rpc", "web"] as const) {
       // 3. Goal lifecycle state did not change the model-facing tool list
       assert.deepEqual(session.getActiveToolNames(), initialTools);
 
-      // 4. First continuation turn ran: verify provider snapshot contains get_goal and update_goal
+      // 4. First continuation turn ran: verify provider snapshot contains create_goal and update_goal
       assert.ok(snapshots.length >= 1, "at least one turn must have run");
       const firstTurnTools = snapshots[0]?.tools?.map((t) => t.name) ?? [];
       assert.ok(
-        firstTurnTools.includes("get_goal"),
-        "provider snapshot must include get_goal",
+        firstTurnTools.includes("create_goal"),
+        "provider snapshot must include create_goal",
       );
       assert.ok(
         firstTurnTools.includes("update_goal"),
@@ -173,7 +172,7 @@ for (const mode of ["rpc", "web"] as const) {
   });
 }
 
-test("real Pi fixture: reload restores get_goal/update_goal for active goal", {
+test("real Pi fixture: reload restores goal tools for active goal", {
   timeout: 30_000,
 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "openpi-goal-reload-"));
@@ -240,8 +239,8 @@ test("real Pi fixture: reload restores get_goal/update_goal for active goal", {
     // After reload, active goal tools must be restored
     const activeAfterReload = session.getActiveToolNames();
     assert.ok(
-      activeAfterReload.includes("get_goal"),
-      "get_goal must be restored after reload",
+      activeAfterReload.includes("create_goal"),
+      "create_goal must be restored after reload",
     );
     assert.ok(
       activeAfterReload.includes("update_goal"),
@@ -253,7 +252,7 @@ test("real Pi fixture: reload restores get_goal/update_goal for active goal", {
   }
 });
 
-test("real Pi fixture: fork restores get_goal/update_goal but defers continuation", {
+test("real Pi fixture: fork restores goal tools but defers continuation", {
   timeout: 30_000,
 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "openpi-goal-fork-"));
@@ -322,8 +321,8 @@ test("real Pi fixture: fork restores get_goal/update_goal but defers continuatio
 
     const activeAfterFork = session.getActiveToolNames();
     assert.ok(
-      activeAfterFork.includes("get_goal"),
-      "get_goal must be active on fork",
+      activeAfterFork.includes("create_goal"),
+      "create_goal must be active on fork",
     );
     assert.ok(
       activeAfterFork.includes("update_goal"),

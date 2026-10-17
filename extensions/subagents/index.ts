@@ -9,8 +9,8 @@
  *   pools (MAX_RUNNING and MAX_RUNNING_BTW).
  * - subagent_wait: block until the listed subagents settle, return results.
  * - subagent_cancel: stop one or more running subagents.
- * - subagent_check: peek at a subagent's status and recent activity.
- * - subagent_list: list all subagents.
+ * - subagent_check: peek at a subagent's status and recent activity, or
+ *   list all subagents when called without an id.
  *
  * Unawaited subagents queue their result as a follow-up message when they
  * settle. `/subagents` opens a picker + full interactive takeover view.
@@ -140,7 +140,6 @@ import {
   SUBAGENT_CANCEL_TOOL_DESCRIPTION,
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CHECK_TOOL_DESCRIPTION,
-  SUBAGENT_LIST_TOOL_DESCRIPTION,
   SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
@@ -1541,9 +1540,11 @@ export default function (
     label: "Check Subagent",
     description: SUBAGENT_CHECK_TOOL_DESCRIPTION,
     parameters: Type.Object({
-      id: Type.String({
-        description: SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS.id,
-      }),
+      id: Type.Optional(
+        Type.String({
+          description: SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS.id,
+        }),
+      ),
       generation: Type.Optional(
         Type.Integer({
           minimum: 1,
@@ -1581,13 +1582,44 @@ export default function (
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (params.id === undefined) {
+        if (
+          params.generation !== undefined ||
+          params.evidence !== undefined ||
+          params.offset !== undefined ||
+          params.limit !== undefined
+        ) {
+          throw new Error("Evidence reads require a subagent id.");
+        }
+        const manager = await getManager();
+        const subs = manager.view.list().filter(isModelVisible);
+        const text =
+          subs.length === 0
+            ? "No subagents."
+            : subs.map((snap) => describeSubagent(snap)).join("\n");
+        return {
+          content: [{ type: "text", text }],
+          details: {
+            subagents: subs.map((snap) => ({
+              id: snap.id,
+              title: snap.title,
+              harness: snap.backend,
+              status: snap.status,
+            })),
+          },
+        };
+      }
       if (
         params.generation !== undefined ||
         params.evidence !== undefined ||
         params.offset !== undefined ||
         params.limit !== undefined
       ) {
-        const evidence = await queryDirectEvidence(ctx, params, signal);
+        const evidence = await queryDirectEvidence(
+          ctx,
+          { ...params, id: params.id },
+          signal,
+        );
         return {
           content: [{ type: "text", text: JSON.stringify(evidence) }],
           details: evidence,
@@ -1630,32 +1662,6 @@ export default function (
           status: snap.status,
           turns: snap.turns,
           completion,
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_list",
-    label: "List Subagents",
-    description: SUBAGENT_LIST_TOOL_DESCRIPTION,
-    parameters: Type.Object({}),
-    async execute() {
-      const manager = await getManager();
-      const subs = manager.view.list().filter(isModelVisible);
-      const text =
-        subs.length === 0
-          ? "No subagents."
-          : subs.map((snap) => describeSubagent(snap)).join("\n");
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          subagents: subs.map((snap) => ({
-            id: snap.id,
-            title: snap.title,
-            harness: snap.backend,
-            status: snap.status,
-          })),
         },
       };
     },

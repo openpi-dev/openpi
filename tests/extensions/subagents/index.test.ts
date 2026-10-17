@@ -767,7 +767,6 @@ test("session start preserves the complete registered subagent family", () => {
       "subagent_cancel",
       "subagent_send",
       "subagent_check",
-      "subagent_list",
     ],
   );
   assert.deepEqual(
@@ -828,8 +827,16 @@ test("the complete subagent family fails closed before the first spawn", async (
       );
 
   try {
-    const listed = await invoke("subagent_list", {});
+    const listed = await invoke("subagent_check", {});
     assert.equal(listed.content[0]?.text, "No subagents.");
+    await assert.rejects(
+      invoke("subagent_check", { evidence: "final" }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, "Evidence reads require a subagent id.");
+        return true;
+      },
+    );
     await assert.rejects(
       invoke("subagent_check", { id: "sa-missing" }),
       /Unknown subagent id "sa-missing"\. Known: none\./,

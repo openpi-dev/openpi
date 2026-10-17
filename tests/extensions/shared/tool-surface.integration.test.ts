@@ -370,7 +370,7 @@ test("resident OpenPI tool budget stays inside the measured bound", {
       `resident OpenPI surface: ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools (${breakdown.join(", ")})`,
     );
     // Measured budget; ceiling keeps ~10% headroom for schema text drift.
-    const RESIDENT_BUDGET_CHARS = 20000;
+    const RESIDENT_BUDGET_CHARS = 19600;
     assert.ok(
       chars <= RESIDENT_BUDGET_CHARS,
       `resident OpenPI surface is ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools (${breakdown.join(", ")})`,

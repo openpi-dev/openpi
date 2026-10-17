@@ -241,18 +241,14 @@ test("Web goal commands report results and start only after an explicit objectiv
 test("goal tools stay resident regardless of goal state", async () => {
   const h = extensionHarness();
   await h.emit("session_start", { reason: "startup" });
-  const resident = [
-    "read",
-    "third_party_tool",
-    "get_goal",
-    "create_goal",
-    "update_goal",
-  ];
+  const resident = ["read", "third_party_tool", "create_goal", "update_goal"];
   assert.deepEqual(h.activeTools(), resident);
 
   assert.throws(
     () =>
-      h.tools.get("get_goal")?.execute("get", {}, undefined, undefined, h.ctx),
+      h.tools
+        .get("update_goal")!
+        .execute("update", { status: "complete" }, undefined, undefined, h.ctx),
     /No goal is currently set/,
   );
 
@@ -339,15 +335,11 @@ test("update_goal requires a blocker description and returns structured rejected
 test("model tools create, read, complete, and replace goals with Codex semantics", async () => {
   const h = extensionHarness();
   await h.emit("session_start", { reason: "startup" });
-  assert.deepEqual(
-    [...h.tools.keys()],
-    ["get_goal", "create_goal", "update_goal"],
-  );
+  assert.deepEqual([...h.tools.keys()], ["create_goal", "update_goal"]);
 
   const create = h.tools.get("create_goal");
-  const get = h.tools.get("get_goal");
   const update = h.tools.get("update_goal");
-  assert.ok(create && get && update);
+  assert.ok(create && update);
 
   const created = await create.execute(
     "create-1",
@@ -361,6 +353,7 @@ test("model tools create, read, complete, and replace goals with Codex semantics
     JSON.parse(created.content[0]!.text).goal.threadId,
     "session-test-1",
   );
+  assert.equal(JSON.parse(created.content[0]!.text).goal.objective, "Ship");
   assert.equal(h.messages.length, 1);
   assert.throws(
     () =>
@@ -373,9 +366,6 @@ test("model tools create, read, complete, and replace goals with Codex semantics
       ),
     /unfinished goal/,
   );
-
-  const read = await get.execute("get", {}, undefined, undefined, h.ctx);
-  assert.equal(JSON.parse(read.content[0]!.text).goal.objective, "Ship");
 
   const completed = await update.execute(
     "update",
@@ -432,7 +422,6 @@ test("slash command creates directly, confirms unfinished replacement, edits, pa
   assert.deepEqual(h.activeTools(), [
     "read",
     "third_party_tool",
-    "get_goal",
     "create_goal",
     "update_goal",
   ]);
@@ -564,7 +553,7 @@ test("inactive restored goals keep resident tools while deferring resume", async
       h.confirmations.push(false);
       await h.emit(event, { reason: "reload" });
       assert.equal(
-        h.activeTools().includes("get_goal"),
+        h.activeTools().includes("create_goal"),
         true,
         `${status}/${event}`,
       );
@@ -587,7 +576,7 @@ test("inactive restored goals keep resident tools while deferring resume", async
   });
   h.confirmations.push(true);
   await h.emit("session_start", { reason: "reload" });
-  assert.ok(h.activeTools().includes("get_goal"));
+  assert.ok(h.activeTools().includes("create_goal"));
   assert.ok(h.activeTools().includes("update_goal"));
   assert.equal(h.messages.length, 1);
 });

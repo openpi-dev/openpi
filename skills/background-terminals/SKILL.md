@@ -23,7 +23,7 @@ After starting, continue useful work instead of polling. The terminal sends one 
 ## Inspect and stop
 
 - Use `bg_status` only when current output or status is needed.
-- Use `bg_list` to inventory all tracked terminals.
+- Use `bg_status` with no id to inventory all tracked terminals.
 - Use `bg_kill` when a process is no longer needed or is stuck; termination continues even if the tool wait is aborted.
 - Tell the user they can open `/ps` to inspect live output and kill terminals interactively.
 

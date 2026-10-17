@@ -39,7 +39,6 @@ export function toolActivity(name: string) {
       return { action: "web", Icon: Globe };
     case "plan_ready":
       return { action: "plan", Icon: ClipboardList };
-    case "get_goal":
     case "create_goal":
     case "update_goal":
       return { action: "goal", Icon: Target };
