@@ -8,6 +8,7 @@ import {
   type AgentSessionEvent,
   type AgentSessionEventListener,
   DefaultResourceLoader,
+  initTheme,
   SessionManager,
   SettingsManager,
   type ToolDefinition,
@@ -24,6 +25,14 @@ import {
   type WorkflowAgentSessionFactory,
   workflowChildTools,
 } from "../../../extensions/workflows/runner.ts";
+import {
+  AgentToolRenderLedger,
+  MAX_RETAINED_TOOL_RENDER_BYTES,
+  MAX_RETAINED_TOOL_RENDERS,
+} from "../../../extensions/shared/agent-tool-renderer.ts";
+import { workflowToolRenderer } from "../../../extensions/workflows/tool-renderer.ts";
+
+initTheme("dark", false);
 
 async function withTempDir(run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), "workflow-preflight-"));
@@ -529,6 +538,94 @@ test("runAgent projects a long tool loop without rescanning canonical history", 
     2,
     "context occupancy should be sampled only at hydrate and final reconcile",
   );
+});
+
+test("FAIL: a long Workflow child keeps its tool render ledger bounded without touching canonical results", async () => {
+  const calls = 2_000;
+  const payload = "r".repeat(32 * 1024);
+  const canonical: Array<{ id: string; text: string }> = [];
+  let respond = () => {};
+  const harness = runnerHarness({ prompt: async () => respond() });
+  respond = () => {
+    for (let index = 0; index < calls; index++) {
+      const toolCallId = `call-${index}`;
+      const text = `${index}:${payload}`;
+      canonical.push({ id: toolCallId, text });
+      const assistant = Object.freeze({
+        ...assistantTextMessage(`cycle ${index}`),
+        content: Object.freeze([
+          Object.freeze({
+            type: "toolCall" as const,
+            id: toolCallId,
+            name: "read",
+            arguments: Object.freeze({ path: `fixture-${index}.txt` }),
+          }),
+        ]),
+        stopReason: "toolUse" as const,
+        timestamp: 1_000 + index * 2,
+      });
+      const result = Object.freeze({
+        role: "toolResult" as const,
+        toolCallId,
+        toolName: "read",
+        content: Object.freeze([
+          Object.freeze({ type: "text" as const, text }),
+        ]),
+        isError: false,
+        timestamp: 1_001 + index * 2,
+      });
+      harness.messages.push(assistant as never);
+      harness.emit({ type: "message_end", message: assistant as never });
+      harness.emit({
+        type: "tool_execution_start",
+        toolCallId,
+        toolName: "read",
+        args: assistant.content[0].arguments,
+      });
+      harness.emit({
+        type: "tool_execution_end",
+        toolCallId,
+        toolName: "read",
+        result,
+        isError: false,
+      });
+      harness.messages.push(result as never);
+      harness.emit({ type: "message_end", message: result as never });
+    }
+    harness.messages.push(assistantTextMessage("done"));
+  };
+
+  const outcome = await runHarnessAgent(harness);
+
+  assert.equal(outcome.ok, true);
+  const ledger = workflowToolRenderer(outcome.transcript);
+  assert.ok(ledger instanceof AgentToolRenderLedger);
+  const { toolIds, bytes } = ledger.retention();
+  assert.ok(toolIds.length <= MAX_RETAINED_TOOL_RENDERS, `${toolIds.length}`);
+  assert.ok(bytes <= MAX_RETAINED_TOOL_RENDER_BYTES, `${bytes} bytes`);
+  // Each retained record holds one ~32 KiB result.
+  assert.ok(toolIds.length * payload.length <= MAX_RETAINED_TOOL_RENDER_BYTES);
+  // The newest tool still renders natively; an old one was evicted.
+  assert.ok(
+    ledger.renderTool({ toolId: `call-${calls - 1}`, name: "read" }, 80),
+  );
+  assert.equal(
+    ledger.renderTool({ toolId: "call-0", name: "read" }, 80),
+    undefined,
+  );
+  // Canonical Pi messages are untouched (they are frozen, so a write would
+  // have thrown) and still hold every full result.
+  const results = harness.messages.filter(
+    (message) => message.role === "toolResult",
+  );
+  assert.equal(results.length, calls);
+  for (const [index, message] of results.entries()) {
+    const part = message.content[0];
+    assert.equal(
+      part?.type === "text" ? part.text : undefined,
+      canonical[index]!.text,
+    );
+  }
 });
 
 test("compaction rebuilds progress after Pi finishes mutating active messages", async () => {
