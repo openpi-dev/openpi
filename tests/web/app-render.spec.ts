@@ -461,7 +461,6 @@ it.each([
           "/api/settings/catalog": {
             sessionId: "session",
             setup: {
-              capabilities: { discovery: "explicit" },
               suggestions: { enabled: false },
               workflows: { concurrency: 6, maxAgentCalls: 64 },
               ui: {

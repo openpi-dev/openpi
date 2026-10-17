@@ -42,6 +42,23 @@ export const CHILD_SAFE_PACKAGE_TOOL_NAMES = [
 ] as const;
 
 /**
+ * Read-only inspection tools a role allowlist may grant a child even when the
+ * parent session does not have them active. Pi's default parent surface is
+ * only read/bash/edit/write, and OpenPI's git_* tools sit behind the /plan
+ * boundary, so without this derivation an explicit role list (or the
+ * plan-mode child list) would collapse to `read` alone. Deriving is safe
+ * because every name here is read-only inspection already inside the
+ * parent's `read` authority — the parent must have `read` active, and each
+ * name still passes the provenance and blocked-package checks.
+ */
+export const CHILD_READ_DERIVED_TOOL_NAMES = [
+  "grep",
+  "find",
+  "ls",
+  ...CHILD_SAFE_PACKAGE_TOOL_NAMES,
+] as const;
+
+/**
  * OpenPI tool names that no longer exist but may still appear in saved user
  * configuration (agent-type allowlists, workflow tool lists). They are dropped
  * silently at the child boundary so a stale entry cannot fail preflight.
@@ -58,6 +75,8 @@ export const RETIRED_OPENPI_TOOL_NAMES = new Set<string>([
   "subagent_list",
   "bg_list",
   "get_goal",
+  "create_goal",
+  "update_goal",
 ]);
 
 /**
@@ -546,9 +565,6 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "human_handoff",
   // plan-mode — completion controls the parent session's write gate and UI
   "plan_ready",
-  // goal — the parent session owns its persistent goal
-  "create_goal",
-  "update_goal",
   // setup — configuration is a package-owned, parent-only choice
   "configure_my_pi_setup",
   // background-terminals — a child's processes would be invisible to the
@@ -625,8 +641,11 @@ export function effectiveChildToolAllowlist(tools?: readonly string[]) {
 
 /** Project the parent's active surface into a child; a role can only narrow it.
  * Active tools are a visibility choice, not a filesystem/network sandbox.
- * Inactive tools are not implicitly activated by delegation. Pi supplies the
- * provenance for every inherited tool; unverifiable identities stop startup.
+ * Inactive tools are not implicitly activated by delegation — except the
+ * CHILD_READ_DERIVED_TOOL_NAMES subset, which an explicit role list may grant
+ * while the parent holds `read` (they stay within the parent's read authority
+ * and still pass the provenance/blocked checks). Pi supplies the provenance
+ * for every inherited tool; unverifiable identities stop startup.
  */
 export function inheritedChildToolAllowlist(
   parentTools: readonly string[],
@@ -644,18 +663,29 @@ export function inheritedChildToolAllowlist(
     cwd: options.cwd,
     agentDir: getAgentDir(),
   });
-  return effectiveChildToolAllowlist([...new Set(parentTools)])!.filter(
-    (name) => {
-      if (allowed && !allowed.has(name)) return false;
-      const tool = available.get(name);
-      if (!tool) {
-        throw new Error(
-          `Cannot verify child tool provenance for ${JSON.stringify(name)}`,
-        );
-      }
-      return !isBlocked(tool.sourceInfo);
-    },
+  const permitted = (name: string) => {
+    const tool = available.get(name);
+    if (!tool) {
+      throw new Error(
+        `Cannot verify child tool provenance for ${JSON.stringify(name)}`,
+      );
+    }
+    return !isBlocked(tool.sourceInfo);
+  };
+  const parentActive = new Set(
+    effectiveChildToolAllowlist([...new Set(parentTools)]),
   );
+  const inherited = [...parentActive].filter(
+    (name) => (!allowed || allowed.has(name)) && permitted(name),
+  );
+  if (!allowed || !parentActive.has("read")) return inherited;
+  const readDerived = new Set<string>(CHILD_READ_DERIVED_TOOL_NAMES);
+  const derived = effectiveChildToolAllowlist(
+    [...allowed].filter(
+      (name) => !parentActive.has(name) && readDerived.has(name),
+    ),
+  )!.filter(permitted);
+  return [...inherited, ...derived];
 }
 
 export function childToolPolicy(tools?: readonly string[]) {

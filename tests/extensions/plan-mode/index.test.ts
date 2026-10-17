@@ -133,8 +133,8 @@ test("plan mode fail-closes known mutations and future unknown tools", () => {
     "subagent_cancel",
     "workflow_stop",
     "configure_my_pi_setup",
-    "create_goal",
-    "update_goal",
+    "human_handoff",
+    "openpi_browser",
     "future_mutating_extension_tool",
   ]) {
     assert.equal(
@@ -257,7 +257,7 @@ test("Plan Ready keeps the write gate closed until the user prepares an editable
 
   await commandHandler("", ctx);
   assert.deepEqual(activeTools, ["read", "third_party_tool", "plan_ready"]);
-  assert.deepEqual(toolHandler({ toolName: "update_goal" }), {
+  assert.deepEqual(toolHandler({ toolName: "human_handoff" }), {
     block: true,
     reason: BLOCK_REASON,
   });

@@ -7,7 +7,7 @@
 <meta name="description" content="OpenPI 是一套 Pi 原生能力层：终端与本地 Web 工作台、独立上下文的子代理、Workflow 与后台任务。普通对话不常驻 OpenPI 工具，需要时才展开。" />
 <meta name="theme-color" content="#F6F5F0" />
 <meta property="og:title" content="OpenPI — Pi at the core. Power on demand." />
-<meta property="og:description" content="One package. The full Pi-native workbench: background terminals, isolated subagents, replay-safe workflows, and a local Web UI — zero resident tools until you ask." />
+<meta property="og:description" content="One package. The full Pi-native workbench: background terminals, isolated subagents, replay-safe workflows, and a local Web UI — one fixed resident tool set." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://openpi-dev.github.io/openpi/" />
 <meta property="og:image" content="https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-product-hero-v2.webp" />
@@ -792,7 +792,7 @@ footer { border-top: 1px solid var(--rule); }
 <!-- ============ MARQUEE ============ -->
 <div class="marquee" aria-hidden="true">
   <div class="marquee-track" id="marquee-track">
-    <span>Background Terminal<i>·</i></span><span>Subagent<i>·</i></span><span>Workflow<i>·</i></span><span>Goal<i>·</i></span><span>Plan Mode<i>·</i></span><span>Web Workbench<i>·</i></span><span>Sessions<i>·</i></span><span>Cron<i>·</i></span>
+    <span>Background Terminal<i>·</i></span><span>Subagent<i>·</i></span><span>Workflow<i>·</i></span><span>Plan Mode<i>·</i></span><span>Web Workbench<i>·</i></span><span>Sessions<i>·</i></span><span>Cron<i>·</i></span>
   </div>
 </div>
 
@@ -808,7 +808,7 @@ footer { border-top: 1px solid var(--rule); }
     <h2 class="reveal" data-i18n-html="s1.h2">工具面在会话开始时冻结。</h2>
     <p class="sec-lede reveal" data-i18n-html="s1.lede">
       普通编码任务继续走 Pi 原生路径：<strong>read、bash、edit、write</strong>，完整历史与会话压缩。
-      OpenPI 的一套常驻工具——Subagent、Workflow、后台终端与 Goal——从会话开始就在场，
+      OpenPI 的一套常驻工具——Subagent、Workflow 与后台终端——从会话开始就在场，
       模型的每个请求看到完全相同的工具列表与系统提示。<strong>缓存不失效，能力不隐藏。</strong>
     </p>
 
@@ -896,7 +896,6 @@ footer { border-top: 1px solid var(--rule); }
     </div>
 
     <div class="strip reveal">
-      <div><b data-i18n="s2.c1t">持续目标</b><span data-i18n="s2.c1d">跨回合的自主目标，完成前要求证据审计</span></div>
       <div><b data-i18n="s2.c2t">计划模式</b><span data-i18n="s2.c2d">只读调研与批准门禁，计划就绪后才准备实施</span></div>
       <div><b data-i18n="s2.c3t">会话定时</b><span data-i18n="s2.c3d"><code>/cron</code> 为当前会话安排一次或周期性 Prompt</span></div>
       <div><b data-i18n="s2.c4t">可观测性</b><span data-i18n="s2.c4d">状态栏、仪表盘、产物与完成通知统一呈现状态</span></div>
@@ -970,13 +969,12 @@ footer { border-top: 1px solid var(--rule); }
       <span class="sec-ghost" data-i18n="s3.ghost">任务应该去哪里</span>
     </div>
     <h2 class="reveal" data-i18n-html="s3.h2">Pi 始终拥有主会话。</h2>
-    <p class="sec-lede reveal" data-i18n-html="s3.lede">终端、子代理与工作流是三条执行路径；目标与会话保持连续性；状态栏、仪表盘与清理逻辑负责观察和控制。<strong>增强 Pi 的深度，不扩大隐式权限。</strong></p>
+    <p class="sec-lede reveal" data-i18n-html="s3.lede">终端、子代理与工作流是三条执行路径；会话保持连续性；状态栏、仪表盘与清理逻辑负责观察和控制。<strong>增强 Pi 的深度，不扩大隐式权限。</strong></p>
 
     <div class="routing reveal">
       <div class="route-line"><span class="r-when" data-i18n="s3.q1">长期进程</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a1">后台终端</span></div>
       <div class="route-line"><span class="r-when" data-i18n="s3.q2">自包含、可继续对话的委派</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a2">子代理</span></div>
       <div class="route-line"><span class="r-when" data-i18n="s3.q3">多阶段、依赖、扇出与综合</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a3">工作流</span></div>
-      <div class="route-line"><span class="r-when" data-i18n="s3.q5">持续自主目标</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a5">Goal</span></div>
       <div class="route-line"><span class="r-when" data-i18n="s3.q7">真正跨顶层 Session</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a7">pi-intercom（按需安装）</span></div>
     </div>
   </div>
@@ -1085,7 +1083,6 @@ footer { border-top: 1px solid var(--rule); }
       <div class="cmd-row"><div class="c">/ps</div><div class="d" data-i18n="s6.c2">查看、跟踪与终止后台终端</div></div>
       <div class="cmd-row"><div class="c">/subagents · /btw</div><div class="d" data-i18n="s6.c3">管理子代理 / 在旁路上下文中提问</div></div>
       <div class="cmd-row"><div class="c">/workflows</div><div class="d" data-i18n="s6.c4">查看阶段、代理、图谱与产物；可停止运行</div></div>
-      <div class="cmd-row"><div class="c">/goal</div><div class="d" data-i18n="s6.c5">管理持续目标</div></div>
       <div class="cmd-row"><div class="c">/plan <span class="blue" data-i18n="s6.gl">[目标]</span></div><div class="d" data-i18n="s6.c6">只读调研；计划就绪后显式选择实施方式</div></div>
       <div class="cmd-row"><div class="c">/sessions</div><div class="d" data-i18n="s6.c8">搜索、预览与切换会话</div></div>
       <div class="cmd-row"><div class="c">/cron <span class="blue">…</span></div><div class="d" data-i18n="s6.c10">为当前会话安排一次或周期性 Prompt</div></div>
@@ -1144,7 +1141,7 @@ const I18N = {
     'hero.catalog': 'PI.DEV 包目录 ↗',
     's1.tag': '理念', 's1.ghost': '一个会话，一套工具面',
     's1.h2': '工具面在会话开始时冻结。',
-    's1.lede': '普通编码任务继续走 Pi 原生路径：<strong>read、bash、edit、write</strong>，完整历史与会话压缩。OpenPI 的常驻工具——Subagent、Workflow、后台终端与 Goal——从会话开始就在场，模型每个请求看到完全相同的工具列表与系统提示。',
+    's1.lede': '普通编码任务继续走 Pi 原生路径：<strong>read、bash、edit、write</strong>，完整历史与会话压缩。OpenPI 的常驻工具——Subagent、Workflow 与后台终端——从会话开始就在场，模型每个请求看到完全相同的工具列表与系统提示。',
     's1.pq': '缓存不失效，<br />能力不隐藏<i>。</i>',
     'd.h1': '选一条请求，看模型这一轮拿到哪些工具', 'd.count': 'OpenPI 工具 · 本轮',
     'd.l1': 'Pi 原生，始终存在', 'd.l2': 'OpenPI 常驻，会话开始即确定', 'd.l3': '仅用户显式边界内可见',
@@ -1155,7 +1152,6 @@ const I18N = {
     's2.p2t': '隔离上下文，不另起系统', 's2.p2d': '每个子代理是独立的进程内 Pi 会话，默认继承 Provider 与模型；可 <code>check</code>、<code>wait</code>、<code>cancel</code>，也能继续对话。并行写入用独立 <code>worktree</code>，自定义角色的显式工具列表由运行时强制。',
     's2.p3t': '多阶段编排，有证据有产物', 's2.p3d': '<code>pipeline / parallel</code>、结构化输出、结果交接、调用账本与安全重放。一次调用是可审计的生命周期，而不是「进程退出 0」。',
     'fig.2': '/ps · 进程、日志与终态', 'fig.3': '一个父会话 · 多个独立子会话', 'fig.4': 'pipeline · 每项完成即进入下一阶段',
-    's2.c1t': '持续目标', 's2.c1d': '跨回合的自主目标，完成前要求证据审计',
     's2.c2t': '计划模式', 's2.c2d': '只读调研与批准门禁，计划就绪后才准备实施',
     's2.c3t': '会话定时', 's2.c3d': '<code>/cron</code> 为当前会话安排一次或周期性 Prompt',
     's2.c4t': '可观测性', 's2.c4d': '状态栏、仪表盘、产物与完成通知统一呈现状态',
@@ -1173,11 +1169,10 @@ const I18N = {
     's2b.f4t': '可定制状态栏', 's2b.f4d': '模型、上下文、Git、目录压进一行；powerline、紧凑或多行布局，由 <code>/openpi-setup</code> 调整。',
     's3.tag': '运行模型', 's3.ghost': '任务应该去哪里',
     's3.h2': 'Pi 始终拥有主会话。',
-    's3.lede': '终端、子代理与工作流是三条执行路径；目标与会话保持连续性；状态栏、仪表盘与清理逻辑负责观察和控制。<strong>增强 Pi 的深度，不扩大隐式权限。</strong>',
+    's3.lede': '终端、子代理与工作流是三条执行路径；会话保持连续性；状态栏、仪表盘与清理逻辑负责观察和控制。<strong>增强 Pi 的深度，不扩大隐式权限。</strong>',
     's3.q1': '长期进程', 's3.a1': '后台终端',
     's3.q2': '自包含、可继续对话的委派', 's3.a2': '子代理',
     's3.q3': '多阶段、依赖、扇出与综合', 's3.a3': '工作流',
-    's3.q5': '持续自主目标', 's3.a5': 'Goal',
     's3.q7': '真正跨顶层 Session', 's3.a7': 'pi-intercom（按需安装）',
     's4.tag': '工作流', 's4.ghost': '不只是并行',
     's4.h2': '把一次调用，拆成<br />可以审计的生命周期。',
@@ -1205,7 +1200,6 @@ const I18N = {
     's6.c2': '查看、跟踪与终止后台终端',
     's6.c3': '管理子代理 / 在旁路上下文中提问',
     's6.c4': '查看阶段、代理、图谱与产物；可停止运行',
-    's6.c5': '管理持续目标',
     's6.c6': '只读调研；计划就绪后显式选择实施方式',
     's6.c8': '搜索、预览与切换会话',
     's6.c9': '前台运行独立 Web 工作台；Ctrl+C 回到 Pi', 's6.c10': '为当前会话安排一次或周期性 Prompt',
@@ -1225,7 +1219,7 @@ const I18N = {
     'hero.catalog': 'PI.DEV CATALOG ↗',
     's1.tag': 'Philosophy', 's1.ghost': 'One session, one tool surface',
     's1.h2': 'The tool surface freezes at session start.',
-    's1.lede': 'Ordinary coding stays on Pi\u2019s native path: <strong>read, bash, edit, write</strong>, with full history and session compaction. OpenPI\u2019s resident tools — subagents, workflows, background terminals, and goals — are there from the first request, and every request sees the identical tool list and system prompt.',
+    's1.lede': 'Ordinary coding stays on Pi\u2019s native path: <strong>read, bash, edit, write</strong>, with full history and session compaction. OpenPI\u2019s resident tools — subagents, workflows, and background terminals — are there from the first request, and every request sees the identical tool list and system prompt.',
     's1.pq': 'The cache stays warm.<br /><i>No capability is ever hidden.</i>',
     'd.h1': 'Pick a request to see which tools the model gets this turn', 'd.count': 'OpenPI tools · this turn',
     'd.l1': 'Pi native, always there', 'd.l2': 'OpenPI resident, fixed at session start', 'd.l3': 'Visible only inside explicit user boundaries',
@@ -1236,7 +1230,6 @@ const I18N = {
     's2.p2t': 'Isolated context, no second system', 's2.p2d': 'Every subagent is an independent in-process Pi session that inherits the parent provider and model; <code>check</code>, <code>wait</code>, <code>cancel</code>, or keep talking to it. Parallel writes get an isolated <code>worktree</code>; explicit tool lists in custom roles are enforced at runtime.',
     's2.p3t': 'Multi-stage orchestration with evidence', 's2.p3d': '<code>pipeline / parallel</code>, structured output, result handoff, an invocation ledger, and safe replay. One invocation is an auditable lifecycle, not \u201cprocess exited 0\u201d.',
     'fig.2': '/ps · processes, logs, exit state', 'fig.3': 'one parent · isolated child sessions', 'fig.4': 'pipeline · items advance independently',
-    's2.c1t': 'Persistent Goal', 's2.c1d': 'An autonomous goal across turns, with an evidence audit before completion',
     's2.c2t': 'Plan Mode', 's2.c2d': 'Read-only research and an approval gate; implementation begins only when the plan is ready',
     's2.c3t': 'Session Cron', 's2.c3d': '<code>/cron</code> schedules one-shot or recurring prompts for the current session',
     's2.c4t': 'Observability', 's2.c4d': 'Footer, dashboard, artifacts, and completion notices present state uniformly',
@@ -1254,11 +1247,10 @@ const I18N = {
     's2b.f4t': 'Customizable status bar', 's2b.f4d': 'Model, context, Git, and directory compressed into one line; powerline, compact, or multi-row layouts via <code>/openpi-setup</code>.',
     's3.tag': 'Runtime', 's3.ghost': 'Where a task belongs',
     's3.h2': 'Pi always owns the main session.',
-    's3.lede': 'Terminals, subagents, and workflows are three execution paths; goals and sessions keep continuity; the footer, dashboard, and cleanup logic observe and control. <strong>Deeper Pi, never broader implicit permission.</strong>',
+    's3.lede': 'Terminals, subagents, and workflows are three execution paths; sessions keep continuity; the footer, dashboard, and cleanup logic observe and control. <strong>Deeper Pi, never broader implicit permission.</strong>',
     's3.q1': 'Long-running process', 's3.a1': 'Background Terminal',
     's3.q2': 'Self-contained delegation you can keep talking to', 's3.a2': 'Subagent',
     's3.q3': 'Multi-stage, dependencies, fan-out, synthesis', 's3.a3': 'Workflow',
-    's3.q5': 'Persistent autonomous goal', 's3.a5': 'Goal',
     's3.q7': 'Truly across top-level sessions', 's3.a7': 'pi-intercom (optional)',
     's4.tag': 'Workflow', 's4.ghost': 'More than parallelism',
     's4.h2': 'Every invocation becomes<br />an auditable lifecycle.',
@@ -1286,7 +1278,6 @@ const I18N = {
     's6.c2': 'Inspect, follow, and kill background terminals',
     's6.c3': 'Manage subagents / ask a question in a side context',
     's6.c4': 'Phases, agents, graph, and artifacts; stop a run',
-    's6.c5': 'Manage the persistent goal',
     's6.c6': 'Read-only research; choose implementation explicitly once ready',
     's6.c8': 'Search, preview, and switch sessions',
     's6.c9': 'Run the independent Web workbench; Ctrl+C returns to Pi', 's6.c10': 'Schedule a one-off or recurring prompt for this session',
@@ -1302,17 +1293,17 @@ const I18N = {
 const TERM_LINES = {
   zh: [
     { cls: 't-cmd', text: 'pi install npm:@tt-a1i/openpi' },
-    { cls: 't-ok', text: '✓ 已安装 · 普通对话零常驻工具' },
+    { cls: 't-ok', text: '✓ 已安装 · 12 个常驻工具' },
     { cls: 't-user', text: '在后台启动 dev server，用子代理检查主链路', html: '在<mark>后台启动</mark> dev server，<mark>用子代理</mark>检查主链路' },
-    { cls: 't-load', html: '◆ 当轮加载 <span>background</span> · <span>delegate</span>', tools: 7 },
+    { cls: 't-load', html: '◆ 常驻在场 <span>background</span> · <span>delegate</span>', tools: 12 },
     { cls: 't-out', text: '● 后台终端  web dev server · 运行中' },
     { cls: 't-out', text: '● 子代理    audit main flow · 已回传' },
   ],
   en: [
     { cls: 't-cmd', text: 'pi install npm:@tt-a1i/openpi' },
-    { cls: 't-ok', text: '✓ installed · zero resident tools' },
+    { cls: 't-ok', text: '✓ installed · 12 resident tools' },
     { cls: 't-user', text: 'run the dev server in the background, use a subagent to audit the main flow', html: '<mark>run the dev server in the background</mark>, <mark>use a subagent</mark> to audit the main flow' },
-    { cls: 't-load', html: '◆ loaded this turn <span>background</span> · <span>delegate</span>', tools: 7 },
+    { cls: 't-load', html: '◆ resident from turn one <span>background</span> · <span>delegate</span>', tools: 12 },
     { cls: 't-out', text: '● background  web dev server · running' },
     { cls: 't-out', text: '● subagent    audit main flow · returned' },
   ],
@@ -1369,7 +1360,7 @@ function resetTerm() {
 /* frozen-surface demo — groups mirror extensions/shared/tool-surface.ts */
 const GROUPS = [
   { id: 'pi', base: true, tools: ['read', 'bash', 'edit', 'write'] },
-  { id: 'resident', resident: true, tools: ['subagent_spawn', 'subagent_wait', 'subagent_check', 'subagent_send', 'subagent_cancel', 'workflow', 'workflow_status', 'workflow_stop', 'bg_start', 'bg_status', 'bg_watch', 'bg_kill', 'create_goal', 'update_goal'] },
+  { id: 'resident', resident: true, tools: ['subagent_spawn', 'subagent_wait', 'subagent_check', 'subagent_send', 'subagent_cancel', 'workflow', 'workflow_status', 'workflow_stop', 'bg_start', 'bg_status', 'bg_watch', 'bg_kill'] },
   { id: 'plan', tools: ['git_show', 'git_diff', 'git_log', 'plan_ready', 'ask_user', 'human_handoff'] },
   { id: 'setup', tools: ['configure_my_pi_setup', 'ask_user', 'human_handoff'] },
   { id: 'browser', tools: ['openpi_browser'] },
@@ -1377,14 +1368,14 @@ const GROUPS = [
 const GROUP_NAME = { pi: 'pi native', resident: 'resident', plan: 'plan boundary', setup: 'setup boundary', browser: 'browser boundary' };
 const SCENARIOS = {
   zh: [
-    { tag: '普通编码', load: [], prompt: '修复 CartSummary 里折扣为 0 时的空指针', why: '14 个 OpenPI 常驻工具从会话开始就在场，每个请求看到完全相同的工具列表。' },
+    { tag: '普通编码', load: [], prompt: '修复 CartSummary 里折扣为 0 时的空指针', why: '12 个 OpenPI 常驻工具从会话开始就在场，每个请求看到完全相同的工具列表。' },
     { tag: 'background', load: [], prompt: '看看刚才启动的 dev server 输出', why: '<code>bg_start</code> 已执行、进程正在运行——工具列表不变。没有终端时 <code>bg_status</code> 仍在场，返回明确的空状态。' },
     { tag: 'delegate', load: [], prompt: '用子代理分别检查登录流程和相关测试，最后汇总', why: '常驻的 <code>subagent_*</code> 工具直接可用；启动几个、怎么分工由模型决定。' },
     { tag: 'plan mode', load: ['plan'], prompt: '/plan 把支付接口迁移到 v2', why: '<code>/plan</code> 是用户显式边界：加入只读 <code>git_*</code>、<code>plan_ready</code> 与 <code>ask_user</code> / <code>human_handoff</code>；退出时精确还原。' },
     { tag: 'setup', load: ['setup'], prompt: '/openpi-setup 把 workflow 并发改成 16', why: '<code>/openpi-setup</code> episode 加入受限配置写入与交互工具；一次成功应用后边界关闭。' },
   ],
   en: [
-    { tag: 'ordinary coding', load: [], prompt: 'Fix the null pointer in CartSummary when the discount is 0', why: 'The 17 resident OpenPI tools are present from session start; every request sees the identical tool list.' },
+    { tag: 'ordinary coding', load: [], prompt: 'Fix the null pointer in CartSummary when the discount is 0', why: 'The 12 resident OpenPI tools are present from session start; every request sees the identical tool list.' },
     { tag: 'background', load: [], prompt: 'Check the dev server output I started earlier', why: '<code>bg_start</code> already ran and the process is live — the tool list is unchanged. With no terminals, <code>bg_status</code> is still present and returns a clear empty state.' },
     { tag: 'delegate', load: [], prompt: 'Use subagents to check the login flow and its tests, then summarize', why: 'The resident <code>subagent_*</code> tools are directly available; how many to spawn and how to split is the model\u2019s call.' },
     { tag: 'plan mode', load: ['plan'], prompt: '/plan migrate the payments API to v2', why: '<code>/plan</code> is an explicit user boundary: it adds read-only <code>git_*</code>, <code>plan_ready</code>, and <code>ask_user</code> / <code>human_handoff</code>, and restores the exact list on exit.' },

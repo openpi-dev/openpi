@@ -2,7 +2,7 @@
 decision-status: accepted
 created: 2026-10-17
 last-reviewed: 2026-10-17
-applies-to: OpenPI source baseline 708a44b plus the feat/frozen-tool-surface branch
+applies-to: OpenPI source baseline 708a44b; #879 implementation commits on feat/frozen-tool-surface
 owner: OpenPI maintainers
 related-issues: "#879"
 related-prs: none
@@ -50,3 +50,4 @@ Every OpenPI session pays one fixed tool-definition cost on every request (18,14
 ## Amendments
 
 - 2026-10-17 — Phase 2 consolidated the resident set from 17 to 14 tools: `subagent_list` folded into `subagent_check` (omit `id` to list; evidence reads without `id` reject), `bg_list` folded into `bg_status` (omit `id` to list), and `get_goal` was removed as redundant — the goal continuation prompt already carries objective, usage, and budget. `subagent_wait` stays a separate tool because synchronous waiting must remain an explicit model choice (AGENTS.md). New measured budget: 17,758 characters across 14 resident tools, asserted ≤ 19,600 (~10% headroom).
+- 2026-10-17 — Review follow-ups and goal removal. (a) A child whose role list explicitly names a read-only inspection tool in `CHILD_READ_DERIVED_TOOL_NAMES` (`grep`, `find`, `ls`, `git_show`, `git_diff`, `git_log`) may activate it even when the parent never did, provided the parent holds `read` active — these tools stay within the parent's read authority and still pass provenance, blocked-package, excluded, and retired filtering; this restores search for planning and read-only children without re-widening the parent surface. (b) `/tree` (`session_tree`) navigation re-applies the plan boundary of the target branch and counts as an explicit user boundary. (c) The Goal extension was deleted entirely (`extensions/goal/`, the `/goal` command, `create_goal`, `update_goal`) — maintainer session data showed 0 `create_goal`/`update_goal` calls and 0 `/goal` uses in 236 sessions since 0.2.0; the names are retired for stale allowlists, and old sessions containing goal entries and `goal-continuation` messages still load. The resident set is now 12 tools; new measured budget: 14,963 characters, asserted ≤ 16,500 (~10% headroom). (d) CI smoke tests were repaired for the deleted extensions: the packed-extension smoke runs `extensions/git-read/index.ts` instead of the deleted `file-search`, and the removed tasks widget-key assertion was dropped.

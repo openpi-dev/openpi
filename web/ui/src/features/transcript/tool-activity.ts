@@ -8,7 +8,6 @@ import {
   Pencil,
   Search,
   SquareTerminal,
-  Target,
   Workflow,
   Wrench,
 } from "lucide-react";
@@ -26,7 +25,9 @@ export function toolActivity(name: string) {
     case "bash":
       return { action: "command", Icon: SquareTerminal };
     case "grep":
+    case "rg":
     case "find":
+    case "fd":
     case "glob":
     case "tool_search":
       return { action: "search", Icon: Search };
@@ -39,9 +40,6 @@ export function toolActivity(name: string) {
       return { action: "web", Icon: Globe };
     case "plan_ready":
       return { action: "plan", Icon: ClipboardList };
-    case "create_goal":
-    case "update_goal":
-      return { action: "goal", Icon: Target };
     case "git_show":
     case "git_diff":
     case "git_log":

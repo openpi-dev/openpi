@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import test from "node:test";
 import type {
@@ -833,7 +834,10 @@ test("the complete subagent family fails closed before the first spawn", async (
       invoke("subagent_check", { evidence: "final" }),
       (error: unknown) => {
         assert.ok(error instanceof Error);
-        assert.equal(error.message, "Evidence reads require a subagent id.");
+        assert.equal(
+          error.message,
+          "Evidence reads require a subagent id; call subagent_check without parameters to list subagent ids.",
+        );
         return true;
       },
     );
@@ -1085,6 +1089,11 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
       cwd,
       agentDir,
       settingsManager,
+      additionalExtensionPaths: [
+        fileURLToPath(
+          new URL("../../../extensions/git-read/index.ts", import.meta.url),
+        ),
+      ],
     });
     await loader.reload();
     const { session: parent } = await createAgentSession({
@@ -1107,10 +1116,11 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
       maxTokens: 100,
     } as NonNullable<AgentSession["model"]>;
     let prompts = 0;
+    const spawnedTools: (readonly string[] | undefined)[] = [];
     __setSubagentTestBackends([
       makePiBackend({
         sessionFactory: async (options) => {
-          assert.deepEqual(options?.tools, ["read"]);
+          spawnedTools.push(options?.tools);
           assert.equal(
             options?.resourceLoader
               ?.getExtensions()
@@ -1134,8 +1144,14 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
       { execute: (...args: unknown[]) => Promise<unknown> }
     >();
     const hooks = new Map<string, (...args: unknown[]) => unknown>();
+    const channels = new Map<string, (payload: unknown) => void>();
     const pi = {
-      events: { on() {}, emit() {} },
+      events: {
+        on(channel: string, handler: unknown) {
+          channels.set(channel, handler as (payload: unknown) => void);
+        },
+        emit() {},
+      },
       on(name: string, handler: (...args: unknown[]) => unknown) {
         hooks.set(name, handler);
       },
@@ -1205,7 +1221,40 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
         assert.match(JSON.stringify(waited), /verification=unknown/);
         assert.deepEqual(parent.getActiveToolNames(), ["read", "intercom"]);
       }
-      assert.equal(prompts, 2);
+      assert.deepEqual(spawnedTools, [["read"], ["read"]]);
+
+      // A planning child derives read-only inspection tools the parent never
+      // activates (grep/find/ls) plus the boundary-held git_* set — all within
+      // the parent's `read` authority.
+      channels.get(PLAN_MODE_CHANNEL)!({ planning: true });
+      const planningSpawn = (await tools
+        .get("subagent_spawn")!
+        .execute(
+          "spawn-planning",
+          { prompt: "inspect", name: "planning" },
+          undefined,
+          undefined,
+          ctx,
+        )) as { details: { id: string } };
+      await tools
+        .get("subagent_wait")!
+        .execute(
+          "wait",
+          { ids: [planningSpawn.details.id] },
+          undefined,
+          undefined,
+          ctx,
+        );
+      assert.deepEqual(spawnedTools.at(-1), [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "git_show",
+        "git_diff",
+        "git_log",
+      ]);
+      assert.equal(prompts, 3);
     } finally {
       await hooks.get("session_shutdown")?.({}, ctx);
       __setSubagentTestBackends(undefined);

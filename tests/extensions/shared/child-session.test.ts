@@ -2112,3 +2112,74 @@ test("child delegation inherits active tools and custom restrictions only narrow
     /Cannot verify child package identity/,
   );
 });
+
+test("role lists derive read-only search tools within the parent's read authority", () => {
+  const names = [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls",
+    "git_show",
+    "git_diff",
+    "git_log",
+  ];
+  const options = {
+    cwd: process.cwd(),
+    availableTools: names.map((name) => ({
+      name,
+      sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, { source: "sdk" }),
+    })),
+  };
+  const parent = ["read", "bash", "edit", "write"];
+  const role = [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "git_show",
+    "git_diff",
+    "git_log",
+  ];
+  // Parent-active names keep parent order; derived names append in role order.
+  assert.deepEqual(inheritedChildToolAllowlist(parent, role, options), role);
+  // Without an active parent `read`, derived names are not granted.
+  assert.deepEqual(
+    inheritedChildToolAllowlist(["bash", "edit", "write"], role, options),
+    [],
+  );
+  // A derived name whose provenance cannot be verified still fails closed.
+  assert.throws(
+    () =>
+      inheritedChildToolAllowlist(parent, role, {
+        cwd: process.cwd(),
+        availableTools: options.availableTools.filter(
+          (tool) => tool.name !== "grep",
+        ),
+      }),
+    /Cannot verify child tool provenance/,
+  );
+  // Retired and excluded names are never derived.
+  assert.deepEqual(
+    inheritedChildToolAllowlist(parent, [...role, "rg", "subagent_spawn"], {
+      cwd: process.cwd(),
+      availableTools: [
+        ...options.availableTools,
+        {
+          name: "subagent_spawn",
+          sourceInfo: createSyntheticSourceInfo("<sdk:subagent_spawn>", {
+            source: "sdk",
+          }),
+        },
+      ],
+    }),
+    role,
+  );
+  // roleTools undefined keeps today's behavior: no derivation at all.
+  assert.deepEqual(
+    inheritedChildToolAllowlist(parent, undefined, options),
+    parent,
+  );
+});

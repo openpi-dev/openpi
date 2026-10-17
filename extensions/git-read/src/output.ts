@@ -60,8 +60,8 @@ export function formatCapturedOutput(captured: CapturedOutput) {
   if (captured.captureLimitExceeded) {
     return {
       text:
-        `${content}\n\n[Output truncated: search output exceeded the ${formatSize(captured.captureLimitBytes)} complete-output capture limit. ` +
-        "The search was stopped and its partial temporary artifact was removed.]",
+        `${content}\n\n[Output truncated: output exceeded the ${formatSize(captured.captureLimitBytes)} complete-output capture limit. ` +
+        "The process was stopped and its partial temporary artifact was removed.]",
       lineCount: captured.lineCount,
       truncated: true,
     } satisfies FormattedOutput;

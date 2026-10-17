@@ -86,11 +86,11 @@ test("disabling a resident tool throws instead of churning the frozen surface", 
   );
   assert.throws(
     () =>
-      patchOwnedTools(h.pi, "goal", {
-        enable: ["create_goal"],
-        disable: ["update_goal"],
+      patchOwnedTools(h.pi, "background", {
+        enable: ["bg_kill"],
+        disable: ["bg_watch"],
       }),
-    /goal cannot disable resident tool "update_goal"/,
+    /background cannot disable resident tool "bg_watch"/,
   );
   // The throw happens before any surface write.
   assert.equal(h.writes.length, 0);
@@ -98,7 +98,7 @@ test("disabling a resident tool throws instead of churning the frozen surface", 
 });
 
 test("boundary tools enable and disable while resident tools stay put", () => {
-  const h = harness(["read", ...OPENPI_TOOL_SURFACE.goal.resident]);
+  const h = harness(["read", ...OPENPI_TOOL_SURFACE.background.resident]);
   assert.equal(
     patchOwnedTools(h.pi, "gitRead", {
       enable: OPENPI_TOOL_SURFACE.gitRead.boundary,
@@ -107,7 +107,7 @@ test("boundary tools enable and disable while resident tools stay put", () => {
   );
   assert.deepEqual(h.active(), [
     "read",
-    ...OPENPI_TOOL_SURFACE.goal.resident,
+    ...OPENPI_TOOL_SURFACE.background.resident,
     ...OPENPI_TOOL_SURFACE.gitRead.boundary,
   ]);
 
@@ -117,7 +117,10 @@ test("boundary tools enable and disable while resident tools stay put", () => {
     }),
     true,
   );
-  assert.deepEqual(h.active(), ["read", ...OPENPI_TOOL_SURFACE.goal.resident]);
+  assert.deepEqual(h.active(), [
+    "read",
+    ...OPENPI_TOOL_SURFACE.background.resident,
+  ]);
 });
 
 test("owner patch fails closed on undeclared tools", () => {

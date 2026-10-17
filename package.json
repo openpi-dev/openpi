@@ -1,7 +1,7 @@
 {
   "name": "@tt-a1i/openpi",
   "version": "0.10.0",
-  "description": "OpenPI — a Pi-native multi-agent workbench with background execution, isolated subagents, replay-safe workflows, goals, and observable TUI",
+  "description": "OpenPI — a Pi-native multi-agent workbench with background execution, isolated subagents, replay-safe workflows, and observable TUI",
   "license": "MIT",
   "author": "tt-a1i",
   "bin": {

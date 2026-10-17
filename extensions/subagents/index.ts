@@ -1589,7 +1589,9 @@ export default function (
           params.offset !== undefined ||
           params.limit !== undefined
         ) {
-          throw new Error("Evidence reads require a subagent id.");
+          throw new Error(
+            "Evidence reads require a subagent id; call subagent_check without parameters to list subagent ids.",
+          );
         }
         const manager = await getManager();
         const subs = manager.view.list().filter(isModelVisible);

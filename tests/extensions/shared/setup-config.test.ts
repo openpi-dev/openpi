@@ -1020,6 +1020,26 @@ test("legacy model-free recaps are explicitly migrated to disabled suggestions",
   assert.deepEqual(stored.suggestions, { enabled: false });
 });
 
+test("a retired capabilities block loads without a warning and is dropped on write", async () => {
+  writeFileSync(
+    SETUP_CONFIG_PATH,
+    JSON.stringify({ capabilities: { discovery: "explicit" } }),
+  );
+
+  const inspected = inspectSetupConfig();
+  assert.equal(
+    inspected.diagnostics.some((item) => item.path.startsWith("capabilities")),
+    false,
+  );
+
+  await updateSetupConfig((current) => current);
+  const stored = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal("capabilities" in stored, false);
+});
+
 test("the post-edit command is off by default, trimmed, and fails closed when oversized", () => {
   // Off by default: nothing executes until the user configures a command.
   assert.equal(DEFAULT_SETUP_CONFIG.postEdit.command, "");

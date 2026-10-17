@@ -52,7 +52,6 @@ const OPENPI_EXTENSION_PATHS = [
   "background-terminals",
   "browser",
   "git-read",
-  "goal",
   "plan-mode",
   "setup",
   "subagents",
@@ -174,23 +173,14 @@ test("frozen surface: runtime events never change the request tools or system pr
           { stopReason: "toolUse" },
         ),
       () => fauxAssistantMessage("Started the background command."),
-      // Turn 3: model calls create_goal; goal lifecycle must not churn tools.
+      // Turn 3: model calls subagent_check without an id (the list path); a
+      // tool result must not churn tools either.
       () =>
         fauxAssistantMessage(
-          [
-            fauxToolCall(
-              "create_goal",
-              { objective: "Ship the frozen surface" },
-              { id: "goal-1" },
-            ),
-          ],
+          [fauxToolCall("subagent_check", {}, { id: "check-1" })],
           { stopReason: "toolUse" },
         ),
-      // Generous tail: goal continuations or retries consume these.
-      ...Array.from(
-        { length: 6 },
-        () => () => fauxAssistantMessage("Working on the goal."),
-      ),
+      () => fauxAssistantMessage("No subagents are running."),
     ],
   });
   const { session, requests } = fixture;
@@ -221,10 +211,8 @@ test("frozen surface: runtime events never change the request tools or system pr
     await session.prompt("start a dev server in the background");
     await session.waitForIdle();
 
-    // Non-boundary event 3: create_goal, then the goal is cleared by the user.
-    await session.prompt("track this work as a goal");
-    await session.waitForIdle();
-    await session.prompt("/goal clear");
+    // Non-boundary event 3: a turn whose tool call returns a result.
+    await session.prompt("list any running subagents");
     await session.waitForIdle();
 
     // Non-boundary event 4: a fresh agent loop start (context thresholds and
@@ -370,7 +358,7 @@ test("resident OpenPI tool budget stays inside the measured bound", {
       `resident OpenPI surface: ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools (${breakdown.join(", ")})`,
     );
     // Measured budget; ceiling keeps ~10% headroom for schema text drift.
-    const RESIDENT_BUDGET_CHARS = 19600;
+    const RESIDENT_BUDGET_CHARS = 16500;
     assert.ok(
       chars <= RESIDENT_BUDGET_CHARS,
       `resident OpenPI surface is ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools (${breakdown.join(", ")})`,

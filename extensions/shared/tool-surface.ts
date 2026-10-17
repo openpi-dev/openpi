@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 /**
  * OpenPI-owned model tools, grouped by the extension that owns their runtime
  * state. `resident` tools are active from session start and stay active for
- * the whole session: model actions and runtime state (goals, background
+ * the whole session: model actions and runtime state (background
  * processes, context size, prompt content) never change the model-visible
  * tool list or the rebuilt system prompt. `boundary` tools are visible only
  * while a user-explicit boundary is active — plan mode, an `/openpi-setup`
@@ -27,10 +27,6 @@ export const OPENPI_TOOL_SURFACE = {
   },
   background: {
     resident: ["bg_start", "bg_status", "bg_kill", "bg_watch"],
-    boundary: [],
-  },
-  goal: {
-    resident: ["create_goal", "update_goal"],
     boundary: [],
   },
   gitRead: {
@@ -84,7 +80,6 @@ export const OPENPI_OWNER_SOURCE_PATHS = {
   background: fileURLToPath(
     new URL("../background-terminals/index.ts", import.meta.url),
   ),
-  goal: fileURLToPath(new URL("../goal/index.ts", import.meta.url)),
   interaction: fileURLToPath(new URL("../ask-user/index.ts", import.meta.url)),
   plan: fileURLToPath(new URL("../plan-mode/index.ts", import.meta.url)),
   setup: fileURLToPath(new URL("../setup/index.ts", import.meta.url)),

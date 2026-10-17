@@ -873,6 +873,9 @@ const setupShape: ConfigShape = {
   codeMode: { enabled: booleanValue },
   suggestions: suggestionShape,
   summaries: suggestionShape,
+  // Retired #879 key: recognized so old configs load without warnings; the
+  // normalized document drops it on the next write.
+  capabilities: () => true,
   workflows: {
     concurrency: integerBetween(1, MAX_WORKFLOW_CONCURRENCY),
     maxAgentCalls: integerBetween(1, MAX_WORKFLOW_AGENT_CALLS),
