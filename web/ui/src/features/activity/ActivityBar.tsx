@@ -22,11 +22,13 @@ function Chip({
   kind,
   label,
   status,
+  elapsed,
   onClick,
 }: {
   kind: string;
   label: string;
   status: Status;
+  elapsed?: string;
   onClick?: () => void;
 }) {
   const Tag = onClick ? "button" : "span";
@@ -47,7 +49,14 @@ function Chip({
       ) : (
         <span className="activity-chip-glyph">?</span>
       )}
-      <span className="activity-chip-text">{label}</span>
+      <span
+        key={`${status}:${label}`}
+        className="activity-chip-text"
+        title={label}
+      >
+        {label}
+      </span>
+      {elapsed && <span className="activity-chip-elapsed">{elapsed}</span>}
     </Tag>
   );
 }
@@ -147,6 +156,7 @@ export function ActivityBar({
     kind: string;
     label: string;
     status: Status;
+    elapsed?: string;
     onClick?: () => void;
   }> = [];
   for (const workflow of capabilities?.workflows?.items ?? []) {
@@ -162,7 +172,8 @@ export function ActivityBar({
     chips.push({
       key: `workflow-${workflow.runId}`,
       kind: "workflow",
-      label: `${workflow.name || workflow.runId}${phase}${progress}${elapsed ? ` · ${elapsed}` : ""}`,
+      label: `${workflow.name || workflow.runId}${phase}${progress}`,
+      elapsed,
       status: canonicalStatus(workflow.status),
     });
   }
@@ -174,7 +185,8 @@ export function ActivityBar({
         ? () => onInspectTerminal(terminal.id)
         : undefined,
       kind: "terminal",
-      label: `${terminal.title || terminal.id}${elapsed ? ` · ${elapsed}` : ""}`,
+      label: terminal.title || terminal.id,
+      elapsed,
       status: canonicalStatus(terminal.status),
     });
   }

@@ -991,7 +991,10 @@ it("refreshes the list and preview, retains its diff on failure, and disables du
   const refreshButton = screen.getByRole<HTMLButtonElement>("button", {
     name: i18n.t("gitReviewRefresh"),
   });
-  expect(refreshButton.title).toBe(i18n.t("gitReviewRefresh"));
+  expect(
+    document.getElementById(refreshButton.getAttribute("aria-describedby")!)
+      ?.textContent,
+  ).toBe(i18n.t("gitReviewRefresh"));
   fireEvent.click(refreshButton);
   expect(refresh).toHaveBeenCalledOnce();
   fireEvent.click(

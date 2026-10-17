@@ -146,49 +146,52 @@ export function DraftImagePreview({
         >
           {images.map((attachment) => (
             <div className="composer-attachment" key={attachment.id}>
-              <button
-                type="button"
-                className="composer-attachment-preview"
-                aria-label={`${t("previewAttachment")} ${attachment.name}`}
-                title={t("previewAttachment")}
-                onClick={(event) => {
-                  // Dialog restores its opening focus unconditionally; keep
-                  // that return from crossing draft ownership.
-                  event.currentTarget.focus();
-                  event.currentTarget.blur();
-                  returnFocus.current = null;
-                  setFailedImage(null);
-                  setMode("fit");
-                  setSelection({
-                    ownerKey,
-                    id: attachment.id,
-                    trigger: event.currentTarget,
-                    open: true,
-                  });
-                }}
-              >
-                <img
-                  ref={(element) => {
-                    if (element) thumbnails.current.set(attachment.id, element);
-                    else thumbnails.current.delete(attachment.id);
+              <Tooltip content={t("previewAttachment")} placement="above">
+                <button
+                  type="button"
+                  className="composer-attachment-preview"
+                  aria-label={`${t("previewAttachment")} ${attachment.name}`}
+                  onClick={(event) => {
+                    // Dialog restores its opening focus unconditionally; keep
+                    // that return from crossing draft ownership.
+                    event.currentTarget.focus();
+                    event.currentTarget.blur();
+                    returnFocus.current = null;
+                    setFailedImage(null);
+                    setMode("fit");
+                    setSelection({
+                      ownerKey,
+                      id: attachment.id,
+                      trigger: event.currentTarget,
+                      open: true,
+                    });
                   }}
-                  src={attachment.previewUrl}
-                  alt=""
-                />
-                <span title={attachment.name}>
-                  {attachment.name}
-                  <small>{(attachment.size / 1024).toFixed(1)} KB</small>
-                </span>
-              </button>
-              <button
-                type="button"
-                className="composer-attachment-remove"
-                aria-label={`${t("removeAttachment")} ${attachment.name}`}
-                title={t("removeAttachment")}
-                onClick={() => onRemove(attachment.id)}
-              >
-                <X aria-hidden="true" />
-              </button>
+                >
+                  <img
+                    ref={(element) => {
+                      if (element)
+                        thumbnails.current.set(attachment.id, element);
+                      else thumbnails.current.delete(attachment.id);
+                    }}
+                    src={attachment.previewUrl}
+                    alt=""
+                  />
+                  <span title={attachment.name}>
+                    {attachment.name}
+                    <small>{(attachment.size / 1024).toFixed(1)} KB</small>
+                  </span>
+                </button>
+              </Tooltip>
+              <Tooltip content={t("removeAttachment")} placement="below">
+                <button
+                  type="button"
+                  className="composer-attachment-remove"
+                  aria-label={`${t("removeAttachment")} ${attachment.name}`}
+                  onClick={() => onRemove(attachment.id)}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </Tooltip>
             </div>
           ))}
         </section>
@@ -232,14 +235,16 @@ export function DraftImagePreview({
               <strong title={image.name}>{image.name}</strong>
               {images.length > 1 && (
                 <div className="image-gallery-navigation">
-                  <button
-                    type="button"
-                    aria-label={t("previousImage")}
-                    disabled={imageIndex <= 0}
-                    onClick={() => showImage(-1)}
-                  >
-                    <ChevronLeft aria-hidden="true" />
-                  </button>
+                  <Tooltip content={t("previousImage")} placement="below">
+                    <button
+                      type="button"
+                      aria-label={t("previousImage")}
+                      disabled={imageIndex <= 0}
+                      onClick={() => showImage(-1)}
+                    >
+                      <ChevronLeft aria-hidden="true" />
+                    </button>
+                  </Tooltip>
                   <output
                     aria-label={t("imagePosition", {
                       current: imageIndex + 1,
@@ -248,14 +253,16 @@ export function DraftImagePreview({
                   >
                     {imageIndex + 1} / {images.length}
                   </output>
-                  <button
-                    type="button"
-                    aria-label={t("nextImage")}
-                    disabled={imageIndex >= images.length - 1}
-                    onClick={() => showImage(1)}
-                  >
-                    <ChevronRight aria-hidden="true" />
-                  </button>
+                  <Tooltip content={t("nextImage")} placement="below">
+                    <button
+                      type="button"
+                      aria-label={t("nextImage")}
+                      disabled={imageIndex >= images.length - 1}
+                      onClick={() => showImage(1)}
+                    >
+                      <ChevronRight aria-hidden="true" />
+                    </button>
+                  </Tooltip>
                 </div>
               )}
               <fieldset
@@ -285,15 +292,16 @@ export function DraftImagePreview({
                   </button>
                 </Tooltip>
               </fieldset>
-              <button
-                type="button"
-                data-autofocus
-                aria-label={t("closeImagePreview")}
-                title={t("closeImagePreview")}
-                onClick={close}
-              >
-                <X aria-hidden="true" />
-              </button>
+              <Tooltip content={t("closeImagePreview")} placement="below">
+                <button
+                  type="button"
+                  data-autofocus
+                  aria-label={t("closeImagePreview")}
+                  onClick={close}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </Tooltip>
             </header>
             <ImageViewport
               key={identity}

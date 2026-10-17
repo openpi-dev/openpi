@@ -2,6 +2,7 @@ import {
   ComplexSelector,
   type ComplexSelectorHandle,
 } from "@astryxdesign/core/ComplexSelector";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { ArrowLeft, Check, RotateCcw, Search, Settings2 } from "lucide-react";
 import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -348,15 +349,16 @@ export function ModelPicker(props: ModelPickerProps) {
                   role="alert"
                 >
                   {modelSearch.error ?? t("modelSearchFailed")}
-                  <button
-                    type="button"
-                    className="model-search-retry"
-                    aria-label={t("retryModelSearch")}
-                    title={t("retryModelSearch")}
-                    onClick={() => void searchModels(normalizedQuery)}
-                  >
-                    <RotateCcw aria-hidden="true" />
-                  </button>
+                  <Tooltip content={t("retryModelSearch")} placement="above">
+                    <button
+                      type="button"
+                      className="model-search-retry"
+                      aria-label={t("retryModelSearch")}
+                      onClick={() => void searchModels(normalizedQuery)}
+                    >
+                      <RotateCcw aria-hidden="true" />
+                    </button>
+                  </Tooltip>
                 </p>
               )}
             {hasCatalog &&

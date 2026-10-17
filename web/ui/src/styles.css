@@ -61,6 +61,7 @@
   --control-compact: 28px;
   --control-regular: 34px;
   --control-touch: 40px;
+  --shell-header-height: 64px;
   --radius-compact: 6px;
   --radius-control: 8px;
   --radius-panel: 10px;
@@ -236,6 +237,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .sidebar-expand svg { width: 19px; height: 19px; }
 /* Desktop collapse is an icon rail; narrow screens keep the full drawer. */
 @media (width > 760px) {
+  .sidebar-expand { top: calc((var(--shell-header-height) - 40px) / 2); }
   .sidebar-collapsed .session-sidebar { align-items: center; padding: 8px; }
   .sidebar-collapsed .sidebar-brand,
   .sidebar-collapsed .workspace-heading,
@@ -250,7 +252,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .conversation-shell { @apply relative grid min-h-0 min-w-0; container-name: conversation-shell; container-type: inline-size; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; background: var(--page); }
 .conversation-shell.landing { grid-template-rows: auto auto minmax(0, 1fr); }
 .landing .conversation { grid-area: 3 / 1; }
-.task-header { display: flex; align-items: center; gap: 16px; min-width: 0; min-height: 64px; padding: 10px 24px; border-bottom: 1px solid var(--border); }
+.task-header { display: flex; align-items: center; gap: 16px; min-width: 0; min-height: var(--shell-header-height); padding: 10px 24px; border-bottom: 1px solid var(--border); }
 .task-header-menu { display: none; }
 .task-identity { min-width: 0; flex: 1; }
 .task-workspace { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; line-height: 1.4; }
@@ -293,8 +295,9 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .usage-identity[open] summary svg { transform:rotate(180deg); }
 .usage-identity code { display:block; padding-bottom:4px; overflow-wrap:anywhere; font-size:12px; user-select:text; }
 @container conversation-shell (max-width: 560px) {
-  .task-header { flex-wrap:wrap; }
-  .session-usage { order:1; flex-basis:100%; justify-content:flex-end; }
+  .task-header { gap: 8px; padding-inline: 12px; }
+  .session-usage-trigger { gap: 0; padding-inline: 6px; }
+  .session-usage-trigger .usage-stat:not(:last-child), .session-usage-trigger .usage-capacity { display: none; }
 }
 @media (pointer: coarse) {
   .session-usage-trigger { min-height:44px; }
@@ -410,6 +413,21 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .markdown-code-scroll { max-width: 100%; overflow-x: auto; }
 .markdown pre { width: max-content; min-width: 100%; margin: 0; padding: 12px 14px; border: 0; background: transparent; }
 .markdown pre code { padding: 0; border: 0; background: transparent; color: var(--text); font-size: 12px; white-space: pre; }
+.markdown-code-block pre code { font: 12px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.markdown-code-block .markdown-code-scroll { max-height: min(480px, 60dvh); overflow: auto; overscroll-behavior: contain; }
+.markdown-code-body { position: relative; }
+.markdown-code-block[data-collapsible]:not([data-expanded]) .markdown-code-scroll { max-height: 200px; overflow-y: hidden; }
+.markdown-code-block[data-collapsible]:not([data-expanded]) .markdown-code-body::after { content: ""; position: absolute; inset: auto 0 0; height: 36px; background: linear-gradient(transparent, var(--surface-panel)); pointer-events: none; }
+.markdown-code-expand { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 34px; padding: 7px 12px; border: 0; border-top: var(--hairline) solid var(--border); background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+.markdown-code-expand:hover { color: var(--text); background: var(--sidebar-hover); }
+.markdown-code-expand:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
+.markdown-code-expand svg { width: 14px; height: 14px; }
+.markdown-code-expand[aria-expanded="true"] svg { transform: rotate(180deg); }
+.markdown-code-block .hljs-keyword, .markdown-code-block .hljs-selector-tag { color: light-dark(#a32963, #ea98bc); }
+.markdown-code-block .hljs-string, .markdown-code-block .hljs-attr { color: light-dark(#27763e, #8fc98d); }
+.markdown-code-block .hljs-number, .markdown-code-block .hljs-literal { color: light-dark(#906113, #e6bb75); }
+.markdown-code-block .hljs-title, .markdown-code-block .hljs-built_in { color: light-dark(#246bb2, #87baf1); }
+.markdown-code-block .hljs-comment { color: var(--muted); }
 .markdown-table-scroll { max-width: 100%; margin: 0 0 14px; overflow-x: auto; }
 .markdown table { width: max-content; min-width: 100%; margin: 0; border-collapse: collapse; font-size: .95em; }
 .markdown th, .markdown td { padding: 7px 9px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
@@ -678,6 +696,12 @@ button.subagent-card-open:hover { background:var(--sidebar-hover); }
 .activity-chip { @apply flex min-w-0 items-center gap-1.5; max-width: 320px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: oklch(99% .004 249 / 78%); color: var(--muted); font-size: 11.5px; }
 .activity-chip > svg { width: 12px; height: 12px; }
 .activity-chip-text { @apply overflow-hidden text-ellipsis whitespace-nowrap; }
+.activity-chip:is(.workflow, .terminal) { width: 260px; height: 28px; }
+.activity-chip:is(.workflow, .terminal) > svg, .activity-chip-dot { flex-shrink: 0; }
+.activity-chip-text { flex: 1; min-width: 0; animation: activity-label-change 150ms ease-out; }
+.activity-chip-elapsed { flex: none; width: 7ch; text-align: right; font-variant-numeric: tabular-nums; }
+@keyframes activity-label-change { from { opacity: .35; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .activity-chip-text { animation: none; } }
 .activity-chip.more { color: var(--muted); }
 .activity-chip.done > svg { color: var(--healthy); } .activity-chip.error > svg { color: var(--error); }
 .activity-chip.interrupted > svg { color:var(--warning); }

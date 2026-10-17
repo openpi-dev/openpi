@@ -3,6 +3,7 @@ import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Check,
   Clock3,
+  ChevronDown,
   CornerDownRight,
   FileText,
   Folder,
@@ -12,6 +13,7 @@ import {
   Target,
   ListChecks,
   Minimize2,
+  Maximize2,
   Cpu,
   Square,
   X,
@@ -22,6 +24,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -235,6 +238,27 @@ export function Composer(props: ComposerProps) {
   const [expandedQueuedMessage, setExpandedQueuedMessage] = useState<
     string | null
   >(null);
+  const [expandedQueueOwner, setExpandedQueueOwner] = useState<string | null>(
+    null,
+  );
+  const queueExpanded = expandedQueueOwner === renderedOwnerKey;
+  const [expandedEditorOwner, setExpandedEditorOwner] = useState<string | null>(
+    null,
+  );
+  const editorExpanded = expandedEditorOwner === renderedOwnerKey;
+  const editorId = useId();
+  const queueId = useId();
+  const editorScroll = useRef<{
+    owner: string;
+    compact?: number;
+    expanded?: number;
+  } | null>(null);
+  const editorSelection = useRef<{
+    start: number;
+    end: number;
+    direction: "forward" | "backward" | "none";
+    scrollTop: number;
+  } | null>(null);
   const [steeringDelivery, setSteeringDelivery] = useState<{
     ownerKey: string;
     expectedTurnCommandId: string;
@@ -313,9 +337,23 @@ export function Composer(props: ComposerProps) {
     // measuring the new content, especially a clear during draft hydration.
     previous?.animation?.cancel();
     element.style.height = "auto";
-    const height = Math.min(element.scrollHeight, 220);
-    element.style.height = `${height}px`;
-    element.style.overflowY = element.scrollHeight > 220 ? "auto" : "hidden";
+    element.style.height = editorExpanded
+      ? "min(420px, 50dvh)"
+      : `${Math.min(element.scrollHeight, 220)}px`;
+    const height = element.getBoundingClientRect().height;
+    element.style.overflowY =
+      editorExpanded || element.scrollHeight > 220 ? "auto" : "hidden";
+    const selection = editorSelection.current;
+    if (selection) {
+      element.focus({ preventScroll: true });
+      element.setSelectionRange(
+        selection.start,
+        selection.end,
+        selection.direction,
+      );
+      element.scrollTop = selection.scrollTop;
+      editorSelection.current = null;
+    }
     textareaSize.current = { owner: renderedOwnerKey, height };
     if (
       previous?.owner === renderedOwnerKey &&
@@ -329,7 +367,7 @@ export function Composer(props: ComposerProps) {
         { duration: 180, easing: "cubic-bezier(.16, 1, .3, 1)" },
       );
     }
-  }, [prompt, renderedOwnerKey]);
+  }, [prompt, renderedOwnerKey, editorExpanded]);
   useLayoutEffect(() => {
     void prompt;
     void renderedOwnerKey;
@@ -1715,9 +1753,18 @@ export function Composer(props: ComposerProps) {
         >
           <div className="composer-queue-status" role="status">
             <Clock3 aria-hidden="true" />
-            <strong>
+            <button
+              type="button"
+              className="composer-queue-toggle"
+              aria-expanded={queueExpanded}
+              aria-controls={queueId}
+              onClick={() =>
+                setExpandedQueueOwner(queueExpanded ? null : renderedOwnerKey)
+              }
+            >
               {t("pendingFollowUpsHint", { count: observedQueue })}
-            </strong>
+              <ChevronDown aria-hidden="true" />
+            </button>
             <span className="composer-queue-help">
               {t(
                 execution?.promptQueueBlocked
@@ -1748,40 +1795,46 @@ export function Composer(props: ComposerProps) {
               </span>
             )}
           </div>
-          <ul>
-            {queuedRows.map(({ message, key }) => {
-              const rowKey = `${selected?.id}\0${selected?.path}\0${key}`;
-              const expanded = expandedQueuedMessage === rowKey;
-              const text = message || t("queuedImage");
-              const action = t(
-                expanded ? "queuedMessageCollapse" : "queuedMessageExpand",
-              );
-              return (
-                <li key={key}>
-                  <button
-                    type="button"
-                    className={`composer-queue-row ${expanded ? "expanded" : ""}`}
-                    aria-expanded={expanded}
-                    aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
-                    title={action}
-                    onClick={() =>
-                      setExpandedQueuedMessage(expanded ? null : rowKey)
-                    }
-                  >
-                    <CornerDownRight aria-hidden="true" />
-                    <span>{text}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          {observedQueue > queuedMessages.length && (
-            <small>
-              {t("queuedMore", {
-                count: observedQueue - queuedMessages.length,
+          <div
+            id={queueId}
+            className="composer-queue-details"
+            hidden={!queueExpanded}
+          >
+            <ul>
+              {queuedRows.map(({ message, key }) => {
+                const rowKey = `${selected?.id}\0${selected?.path}\0${key}`;
+                const expanded = expandedQueuedMessage === rowKey;
+                const text = message || t("queuedImage");
+                const action = t(
+                  expanded ? "queuedMessageCollapse" : "queuedMessageExpand",
+                );
+                return (
+                  <li key={key}>
+                    <button
+                      type="button"
+                      className={`composer-queue-row ${expanded ? "expanded" : ""}`}
+                      aria-expanded={expanded}
+                      aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
+                      title={action}
+                      onClick={() =>
+                        setExpandedQueuedMessage(expanded ? null : rowKey)
+                      }
+                    >
+                      <CornerDownRight aria-hidden="true" />
+                      <span>{text}</span>
+                    </button>
+                  </li>
+                );
               })}
-            </small>
-          )}
+            </ul>
+            {observedQueue > queuedMessages.length && (
+              <small>
+                {t("queuedMore", {
+                  count: observedQueue - queuedMessages.length,
+                })}
+              </small>
+            )}
+          </div>
         </section>
       )}
       {showingSteering && (
@@ -1838,6 +1891,7 @@ export function Composer(props: ComposerProps) {
         </section>
       )}
       <form
+        data-editor-expanded={editorExpanded || undefined}
         className={`composer composer-m02 ${props.selectedWorkspace ? "" : "dormant"} ${dragActive ? "is-dragging" : ""}`}
         onSubmit={(event) => void send(event)}
         onDragEnter={(event) => {
@@ -1982,113 +2036,161 @@ export function Composer(props: ComposerProps) {
             <span>{t("dropImagesHere")}</span>
           </div>
         )}
-        <textarea
-          ref={textarea}
-          value={prompt}
-          rows={1}
-          disabled={disabled}
-          readOnly={!props.selectedWorkspace}
-          aria-label={t("describeTask")}
-          aria-invalid={promptTooLong || undefined}
-          aria-describedby={
-            promptTooLong ? "composer-prompt-length-error" : undefined
-          }
-          aria-autocomplete="list"
-          aria-controls={commandListVisible ? slashCommandListId : undefined}
-          aria-activedescendant={
-            commandListVisible && filteredCommands[activeCommand]
-              ? slashCommandOptionId(activeCommand)
-              : undefined
-          }
-          placeholder={placeholder}
-          onChange={(event) => {
-            if (
-              !updateDraft({
-                prompt: event.target.value,
-                caret: event.target.selectionStart,
-              })
-            )
-              return;
-            setCommandError(null);
-            setMenuDismissed(false);
-          }}
-          onClick={(event) =>
-            updateDraft({ caret: event.currentTarget.selectionStart })
-          }
-          onSelect={(event) =>
-            updateDraft({ caret: event.currentTarget.selectionStart })
-          }
-          onFocus={() => {
-            setComposerFocused(true);
-            setMenuDismissed(false);
-          }}
-          onBlur={() => setComposerFocused(false)}
-          onPaste={(event) => {
-            if (!contextEntryAvailable) return;
-            const files = Array.from(event.clipboardData.files);
-            if (files.length === 0) {
-              // Some clipboards expose the image only through their items.
-              for (const item of Array.from(event.clipboardData.items ?? [])) {
-                const file = item.kind === "file" ? item.getAsFile() : null;
-                if (file) files.push(file);
-              }
+        <div className="composer-editor">
+          <textarea
+            id={editorId}
+            ref={textarea}
+            value={prompt}
+            rows={1}
+            disabled={disabled}
+            readOnly={!props.selectedWorkspace}
+            aria-label={t("describeTask")}
+            aria-invalid={promptTooLong || undefined}
+            aria-describedby={
+              promptTooLong ? "composer-prompt-length-error" : undefined
             }
-            if (files.length === 0) return;
-            // Let native text insertion retain its caret and undo transaction.
-            if (!event.clipboardData.getData("text/plain"))
-              event.preventDefault();
-            void stageFiles(files);
-          }}
-          onKeyDown={(event) => {
-            if (
-              event.nativeEvent.isComposing ||
-              event.nativeEvent.keyCode === 229
-            )
-              return;
-            if (commandMenuOpen) {
-              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                event.preventDefault();
-                moveCommand(event.key === "ArrowDown" ? 1 : -1);
+            aria-autocomplete="list"
+            aria-controls={commandListVisible ? slashCommandListId : undefined}
+            aria-activedescendant={
+              commandListVisible && filteredCommands[activeCommand]
+                ? slashCommandOptionId(activeCommand)
+                : undefined
+            }
+            placeholder={placeholder}
+            onChange={(event) => {
+              if (
+                !updateDraft({
+                  prompt: event.target.value,
+                  caret: event.target.selectionStart,
+                })
+              )
                 return;
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setMenuDismissed(true);
-                return;
-              }
-              if (event.key === "Tab") {
-                const command = filteredCommands[activeCommand];
-                if (
-                  !event.shiftKey &&
-                  !event.ctrlKey &&
-                  !event.altKey &&
-                  !event.metaKey &&
-                  command?.availability === "available"
-                ) {
-                  event.preventDefault();
-                  completeCommand(command);
+              setCommandError(null);
+              setMenuDismissed(false);
+            }}
+            onClick={(event) =>
+              updateDraft({ caret: event.currentTarget.selectionStart })
+            }
+            onSelect={(event) =>
+              updateDraft({ caret: event.currentTarget.selectionStart })
+            }
+            onFocus={() => {
+              setComposerFocused(true);
+              setMenuDismissed(false);
+            }}
+            onBlur={() => setComposerFocused(false)}
+            onPaste={(event) => {
+              if (!contextEntryAvailable) return;
+              const files = Array.from(event.clipboardData.files);
+              if (files.length === 0) {
+                // Some clipboards expose the image only through their items.
+                for (const item of Array.from(
+                  event.clipboardData.items ?? [],
+                )) {
+                  const file = item.kind === "file" ? item.getAsFile() : null;
+                  if (file) files.push(file);
                 }
+              }
+              if (files.length === 0) return;
+              // Let native text insertion retain its caret and undo transaction.
+              if (!event.clipboardData.getData("text/plain"))
+                event.preventDefault();
+              void stageFiles(files);
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.nativeEvent.isComposing ||
+                event.nativeEvent.keyCode === 229
+              )
                 return;
+              if (commandMenuOpen) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  moveCommand(event.key === "ArrowDown" ? 1 : -1);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setMenuDismissed(true);
+                  return;
+                }
+                if (event.key === "Tab") {
+                  const command = filteredCommands[activeCommand];
+                  if (
+                    !event.shiftKey &&
+                    !event.ctrlKey &&
+                    !event.altKey &&
+                    !event.metaKey &&
+                    command?.availability === "available"
+                  ) {
+                    event.preventDefault();
+                    completeCommand(command);
+                  }
+                  return;
+                }
+                if (event.key === "Enter" && !event.shiftKey) {
+                  const command = filteredCommands[activeCommand];
+                  if (command) {
+                    event.preventDefault();
+                    completeCommand(command);
+                    return;
+                  }
+                  if (filteredCommands.length > 0) {
+                    event.preventDefault();
+                    return;
+                  }
+                }
               }
               if (event.key === "Enter" && !event.shiftKey) {
-                const command = filteredCommands[activeCommand];
-                if (command) {
-                  event.preventDefault();
-                  completeCommand(command);
-                  return;
-                }
-                if (filteredCommands.length > 0) {
-                  event.preventDefault();
-                  return;
-                }
+                event.preventDefault();
+                void send();
               }
-            }
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void send();
-            }
-          }}
-        />
+            }}
+          />
+          {props.selectedWorkspace && (
+            <Tooltip
+              content={t(editorExpanded ? "collapseInput" : "expandInput")}
+              placement="above"
+            >
+              <button
+                type="button"
+                className="composer-expand-button icon-button"
+                aria-label={t(editorExpanded ? "collapseInput" : "expandInput")}
+                aria-expanded={editorExpanded}
+                aria-controls={editorId}
+                disabled={disabled}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  const input = textarea.current;
+                  if (input) {
+                    if (editorScroll.current?.owner !== renderedOwnerKey)
+                      editorScroll.current = { owner: renderedOwnerKey };
+                    const positions = editorScroll.current;
+                    positions[editorExpanded ? "expanded" : "compact"] =
+                      input.scrollTop;
+                    editorSelection.current = {
+                      start: input.selectionStart,
+                      end: input.selectionEnd,
+                      direction: input.selectionDirection,
+                      scrollTop:
+                        positions[editorExpanded ? "compact" : "expanded"] ??
+                        input.scrollTop,
+                    };
+                  }
+                  setExpandedEditorOwner(
+                    editorExpanded ? null : renderedOwnerKey,
+                  );
+                }}
+              >
+                {editorExpanded ? (
+                  <Minimize2 aria-hidden="true" />
+                ) : (
+                  <Maximize2 aria-hidden="true" />
+                )}
+              </button>
+            </Tooltip>
+          )}
+        </div>
         <SlashCommandMenu
           key={`commands:${renderedOwnerKey}`}
           open={commandMenuOpen}
@@ -2103,21 +2205,25 @@ export function Composer(props: ComposerProps) {
         <div className="composer-toolbar">
           <div className="composer-toolbar-context">
             {contextEntryAvailable && (
-              <button
-                ref={contextTrigger}
-                type="button"
-                className="composer-context-trigger icon-button"
-                aria-label={t("addContext")}
-                aria-haspopup="menu"
-                aria-expanded={actionMenu !== null}
-                aria-controls={actionMenu ? "composer-action-menu" : undefined}
-                onClick={() => {
-                  setMenuDismissed(true);
-                  setActionMenu(actionMenu ? null : "main");
-                }}
-              >
-                <Plus />
-              </button>
+              <Tooltip content={t("addContext")} placement="above">
+                <button
+                  ref={contextTrigger}
+                  type="button"
+                  className="composer-context-trigger icon-button"
+                  aria-label={t("addContext")}
+                  aria-haspopup="menu"
+                  aria-expanded={actionMenu !== null}
+                  aria-controls={
+                    actionMenu ? "composer-action-menu" : undefined
+                  }
+                  onClick={() => {
+                    setMenuDismissed(true);
+                    setActionMenu(actionMenu ? null : "main");
+                  }}
+                >
+                  <Plus />
+                </button>
+              </Tooltip>
             )}
             {!props.landing && (
               <span

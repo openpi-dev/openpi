@@ -1,14 +1,17 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import type { Element, Root, RootContent } from "hast";
-import { Check, Clipboard, WrapText } from "lucide-react";
+import { Check, ChevronDown, Clipboard, WrapText } from "lucide-react";
 import type { ComponentPropsWithoutRef } from "react";
 import {
   isValidElement,
+  createContext,
   lazy,
   memo,
   Suspense,
   useContext,
   useDeferredValue,
   useEffect,
+  useId,
   useRef,
   useState,
 } from "react";
@@ -22,6 +25,9 @@ import { isLocalArtifactLink } from "../../../protocol/artifacts.ts";
 import { ArtifactContext } from "../features/artifacts/context.ts";
 import { InlineFileImage } from "../features/files/InlineFileImage.tsx";
 import { copyText } from "../lib/clipboard.ts";
+import { highlightCode } from "../lib/highlight-code.ts";
+
+const StreamingContext = createContext(false);
 
 const MermaidPreview = lazy(
   () => import("../features/files/MermaidPreview.tsx"),
@@ -120,6 +126,15 @@ function CodeBlock({
 }: ComponentPropsWithoutRef<"pre"> & { node?: Element }) {
   const { t } = useTranslation();
   const [wrapped, setWrapped] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const streaming = useContext(StreamingContext);
+  const regionId = useId();
+  const scroll = useRef<HTMLElement>(null);
+  const [highlighted, setHighlighted] = useState({
+    source: "",
+    language: "",
+    html: "",
+  });
   const [copyStatus, setCopyStatus] = useState<
     "idle" | "copying" | "copied" | "failed"
   >("idle");
@@ -137,8 +152,38 @@ function CodeBlock({
   const language = isValidElement<{ className?: string }>(children)
     ? /(?:^|\s)language-([\w+-]+)/u.exec(children.props.className ?? "")?.[1]
     : undefined;
+  const source =
+    isValidElement<{ children?: unknown }>(children) &&
+    typeof children.props.children === "string"
+      ? children.props.children
+      : "";
+  const lineCount = source.replace(/\n$/u, "").split("\n").length;
+  const collapsible = lineCount > 10;
+  const html =
+    !streaming &&
+    highlighted.source === source &&
+    highlighted.language === language
+      ? highlighted.html
+      : "";
+  useEffect(() => {
+    if (streaming || !language || !source) return;
+    let cancelled = false;
+    void highlightCode(source, language)
+      .then((html) => {
+        if (!cancelled) setHighlighted({ source, language, html });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [source, language, streaming]);
   return (
-    <div className="markdown-code-block" data-wrap={wrapped || undefined}>
+    <div
+      className="markdown-code-block"
+      data-wrap={wrapped || undefined}
+      data-collapsible={collapsible || undefined}
+      data-expanded={expanded || undefined}
+    >
       <div className="markdown-code-toolbar">
         <span className="markdown-code-language">
           {language ?? t("codeBlock")}
@@ -146,60 +191,92 @@ function CodeBlock({
         {copyStatus === "failed" && (
           <span role="status">{t("copyCodeFailed")}</span>
         )}
-        <button
-          type="button"
-          aria-label={t("wrapCode")}
-          title={t("wrapCode")}
-          aria-pressed={wrapped}
-          onClick={() => setWrapped((value) => !value)}
+        <Tooltip content={t("wrapCode")} placement="above">
+          <button
+            type="button"
+            aria-label={t("wrapCode")}
+            aria-pressed={wrapped}
+            onClick={() => setWrapped((value) => !value)}
+          >
+            <WrapText aria-hidden="true" />
+          </button>
+        </Tooltip>
+        <Tooltip
+          content={copied ? t("copiedCode") : t("copyCode")}
+          placement="above"
         >
-          <WrapText aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          aria-label={copied ? t("copiedCode") : t("copyCode")}
-          title={copied ? t("copiedCode") : t("copyCode")}
-          data-copied={copied || undefined}
-          disabled={copyStatus === "copying"}
-          onClick={() => {
-            const generation = ++copyGeneration.current;
-            window.clearTimeout(copyTimer.current);
-            setCopyStatus("copying");
-            void copyText(code.current?.textContent ?? "").then((success) => {
-              if (generation !== copyGeneration.current) return;
-              setCopyStatus(success ? "copied" : "failed");
-              if (success)
-                copyTimer.current = window.setTimeout(
-                  () => setCopyStatus("idle"),
-                  1_200,
-                );
-            });
+          <button
+            type="button"
+            aria-label={copied ? t("copiedCode") : t("copyCode")}
+            data-copied={copied || undefined}
+            disabled={copyStatus === "copying"}
+            onClick={() => {
+              const generation = ++copyGeneration.current;
+              window.clearTimeout(copyTimer.current);
+              setCopyStatus("copying");
+              void copyText(code.current?.textContent ?? "").then((success) => {
+                if (generation !== copyGeneration.current) return;
+                setCopyStatus(success ? "copied" : "failed");
+                if (success)
+                  copyTimer.current = window.setTimeout(
+                    () => setCopyStatus("idle"),
+                    1_200,
+                  );
+              });
+            }}
+          >
+            {copied ? (
+              <Check aria-hidden="true" />
+            ) : (
+              <Clipboard aria-hidden="true" />
+            )}
+          </button>
+        </Tooltip>
+      </div>
+      <div className="markdown-code-body">
+        <section
+          ref={scroll}
+          id={regionId}
+          className="markdown-code-scroll"
+          aria-label={t("codeBlock")}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: Long code needs a keyboard-focusable horizontal scroll region.
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            const target = event.currentTarget;
+            if (target.scrollWidth <= target.clientWidth) return;
+            event.preventDefault();
+            target.scrollLeft += event.key === "ArrowRight" ? 40 : -40;
           }}
         >
-          {copied ? (
-            <Check aria-hidden="true" />
-          ) : (
-            <Clipboard aria-hidden="true" />
-          )}
-        </button>
+          <pre ref={code} {...props}>
+            {html ? (
+              <code
+                className={`language-${language}`}
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: highlightCode admits only sanitized spans/classes; source text is escaped by highlight.js.
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
+            ) : (
+              children
+            )}
+          </pre>
+        </section>
       </div>
-      <section
-        className="markdown-code-scroll"
-        aria-label={t("codeBlock")}
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: Long code needs a keyboard-focusable horizontal scroll region.
-        tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-          const target = event.currentTarget;
-          if (target.scrollWidth <= target.clientWidth) return;
-          event.preventDefault();
-          target.scrollLeft += event.key === "ArrowRight" ? 40 : -40;
-        }}
-      >
-        <pre ref={code} {...props}>
-          {children}
-        </pre>
-      </section>
+      {collapsible && (
+        <button
+          className="markdown-code-expand"
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={regionId}
+          onClick={() => {
+            if (expanded && scroll.current) scroll.current.scrollTop = 0;
+            setExpanded((value) => !value);
+          }}
+        >
+          {expanded ? t("collapseCode") : t("expandCode", { count: lineCount })}
+          <ChevronDown aria-hidden="true" />
+        </button>
+      )}
     </div>
   );
 }
@@ -348,8 +425,10 @@ export const Markdown = memo(function Markdown({
 }) {
   const deferred = useDeferredValue(children);
   return (
-    <MarkdownContent filePreview={filePreview}>
-      {streaming ? deferred : children}
-    </MarkdownContent>
+    <StreamingContext.Provider value={streaming}>
+      <MarkdownContent filePreview={filePreview}>
+        {streaming ? deferred : children}
+      </MarkdownContent>
+    </StreamingContext.Provider>
   );
 });

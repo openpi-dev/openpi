@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import {
   ArrowDown,
@@ -1030,79 +1031,89 @@ function MessageActions({
     <div className={`message-actions${copyFailed ? " copy-failed" : ""}`}>
       {time && <time dateTime={timestamp}>{time}</time>}
       {onFork && (
-        <button
-          type="button"
-          aria-label={t("forkMessage")}
-          title={t(
+        <Tooltip
+          content={t(
             forkPending
               ? "forkSessionPending"
               : canFork
                 ? "forkMessageHint"
                 : "forkSessionUnavailable",
           )}
-          disabled={!canFork || forkPending}
-          onClick={() => void onFork()}
+          placement="above"
         >
-          <GitBranch aria-hidden="true" />
-        </button>
+          <button
+            type="button"
+            aria-label={t("forkMessage")}
+            disabled={!canFork || forkPending}
+            onClick={() => void onFork()}
+          >
+            <GitBranch aria-hidden="true" />
+          </button>
+        </Tooltip>
       )}
       {editable && (
-        <button
-          type="button"
-          aria-label={t("editMessage")}
-          title={t("editMessage")}
-          onClick={() => {
-            setDraft(content);
-            setEditing(true);
-          }}
-        >
-          <Pencil />
-        </button>
+        <Tooltip content={t("editMessage")} placement="above">
+          <button
+            type="button"
+            aria-label={t("editMessage")}
+            onClick={() => {
+              setDraft(content);
+              setEditing(true);
+            }}
+          >
+            <Pencil />
+          </button>
+        </Tooltip>
       )}
       {onRegenerate && (
-        <button
-          type="button"
-          aria-label={t("regenerateMessage")}
-          title={t("regenerateMessageHint")}
-          disabled={!canFork || forkPending}
-          onClick={() => void onRegenerate()}
-        >
-          <RotateCcw aria-hidden="true" />
-        </button>
+        <Tooltip content={t("regenerateMessageHint")} placement="above">
+          <button
+            type="button"
+            aria-label={t("regenerateMessage")}
+            disabled={!canFork || forkPending}
+            onClick={() => void onRegenerate()}
+          >
+            <RotateCcw aria-hidden="true" />
+          </button>
+        </Tooltip>
       )}
-      <button
-        type="button"
-        aria-label={copied ? t("copiedMessage") : t("copyMessage")}
-        data-copied={copied || undefined}
-        title={
+      <Tooltip
+        content={
           copyRequiresFull
             ? t("messageCopyRequiresFull")
             : copied
               ? t("copiedMessage")
               : t("copyMessage")
         }
-        disabled={copying || copyRequiresFull}
-        onClick={() => {
-          const generation = ++copyGeneration.current;
-          window.clearTimeout(copyTimer.current);
-          setCopying(true);
-          setCopied(false);
-          setCopyFailed(false);
-          void copyText(content).then((success) => {
-            if (generation !== copyGeneration.current) return;
-            setCopying(false);
-            setCopied(success);
-            setCopyFailed(!success);
-            if (success)
-              copyTimer.current = window.setTimeout(
-                () => setCopied(false),
-                1_200,
-              );
-          });
-        }}
+        placement="above"
       >
-        {copied ? <Check /> : <Clipboard />}
-      </button>
+        <button
+          type="button"
+          aria-label={copied ? t("copiedMessage") : t("copyMessage")}
+          data-copied={copied || undefined}
+          disabled={copying || copyRequiresFull}
+          onClick={() => {
+            const generation = ++copyGeneration.current;
+            window.clearTimeout(copyTimer.current);
+            setCopying(true);
+            setCopied(false);
+            setCopyFailed(false);
+            void copyText(content).then((success) => {
+              if (generation !== copyGeneration.current) return;
+              setCopying(false);
+              setCopied(success);
+              setCopyFailed(!success);
+              if (success)
+                copyTimer.current = window.setTimeout(
+                  () => setCopied(false),
+                  1_200,
+                );
+            });
+          }}
+        >
+          {copied ? <Check /> : <Clipboard />}
+        </button>
+      </Tooltip>
       {copyFailed && (
         <span className="copy-error" role="status">
           {t("copyFailed")}
@@ -4285,50 +4296,52 @@ export function Transcript(props: TranscriptProps) {
         </div>
       </div>
       {(readingHistory || history.hasNewer) && rows.length > 0 && (
-        <button
-          className="jump-to-latest"
-          type="button"
-          aria-label={t("jumpToLatest")}
-          title={t("jumpToLatest")}
-          onClick={() => {
-            const element = viewport.current;
-            if (!element) return;
-            cancelFollowing();
-            pinned.current = true;
-            setReadingHistory(false);
-            setHighlightedNavigation(null);
-            history.resetToLatest();
-            element.scrollTo({
-              top: element.scrollHeight,
-              behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
-                .matches
-                ? "instant"
-                : "smooth",
-            });
-            // Returning from a reading window can replace its rows in this commit.
-            queueMicrotask(() => {
-              if (viewport.current !== element) return;
-              const latest = Array.from(
-                element.querySelectorAll<HTMLElement>(
-                  '.message-row[tabindex="-1"]',
-                ),
-              )
-                .reverse()
-                .find((row) => !row.closest("[hidden], details:not([open])"));
-              (latest ?? element).focus({ preventScroll: true });
-            });
-          }}
-        >
-          {running && props.activityObserved !== false ? (
-            <span className="latest-activity-dots" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-            </span>
-          ) : (
-            <ArrowDown aria-hidden="true" />
-          )}
-        </button>
+        <Tooltip content={t("jumpToLatest")} placement="above">
+          <button
+            className="jump-to-latest"
+            type="button"
+            aria-label={t("jumpToLatest")}
+            onClick={() => {
+              const element = viewport.current;
+              if (!element) return;
+              cancelFollowing();
+              pinned.current = true;
+              setReadingHistory(false);
+              setHighlightedNavigation(null);
+              history.resetToLatest();
+              element.scrollTo({
+                top: element.scrollHeight,
+                behavior: window.matchMedia?.(
+                  "(prefers-reduced-motion: reduce)",
+                ).matches
+                  ? "instant"
+                  : "smooth",
+              });
+              // Returning from a reading window can replace its rows in this commit.
+              queueMicrotask(() => {
+                if (viewport.current !== element) return;
+                const latest = Array.from(
+                  element.querySelectorAll<HTMLElement>(
+                    '.message-row[tabindex="-1"]',
+                  ),
+                )
+                  .reverse()
+                  .find((row) => !row.closest("[hidden], details:not([open])"));
+                (latest ?? element).focus({ preventScroll: true });
+              });
+            }}
+          >
+            {running && props.activityObserved !== false ? (
+              <span className="latest-activity-dots" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+            ) : (
+              <ArrowDown aria-hidden="true" />
+            )}
+          </button>
+        </Tooltip>
       )}
       <TurnNavigation
         key={promptScope}

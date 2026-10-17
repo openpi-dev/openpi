@@ -140,6 +140,8 @@ body:has(.sidebar-conversation-menu) .astryx-dropdown-menu [role="separator"] { 
 .task-header .sidebar-shell-toggle:hover { background: var(--sidebar-hover); color: var(--text); }
 @keyframes session-spin { to { transform: rotate(360deg); } }
 @media (width > 760px) {
+  .session-sidebar.session-sidebar { padding-top: 0; }
+  .session-sidebar .sidebar-brand { height: var(--shell-header-height); min-height: var(--shell-header-height); margin: 0 -8px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--border); }
   .session-sidebar .sidebar-mobile-close { display: none; }
   .sidebar-collapsed .sidebar-navigation { display: none; }
   .sidebar-collapsed .session-sidebar .new-session-button { justify-content: center; width: 40px; height: 40px; margin: 48px 0 0; padding: 0; }

@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { Dialog } from "@astryxdesign/core/Dialog";
 import { FileText, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -99,14 +100,19 @@ export function DraftFilePreview({
                   </small>
                 </span>
               </button>
-              <button
-                type="button"
-                className="composer-attachment-remove"
-                aria-label={`${t("removeAttachment")} ${attachment.name}`}
-                onClick={() => onRemove(attachment.id)}
+              <Tooltip
+                content={`${t("removeAttachment")} ${attachment.name}`}
+                placement="below"
               >
-                <X aria-hidden="true" />
-              </button>
+                <button
+                  type="button"
+                  className="composer-attachment-remove"
+                  aria-label={`${t("removeAttachment")} ${attachment.name}`}
+                  onClick={() => onRemove(attachment.id)}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </Tooltip>
             </div>
           ))}
         </section>
@@ -130,14 +136,16 @@ export function DraftFilePreview({
                   {status(file)} · {(file.size / 1024).toFixed(1)} KB
                 </p>
               </div>
-              <button
-                type="button"
-                data-autofocus
-                aria-label={t("closePreview")}
-                onClick={close}
-              >
-                <X aria-hidden="true" />
-              </button>
+              <Tooltip content={t("closePreview")} placement="below">
+                <button
+                  type="button"
+                  data-autofocus
+                  aria-label={t("closePreview")}
+                  onClick={close}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </Tooltip>
             </header>
             <div className="draft-file-preview-content">
               {file.extractionError && (

@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { ChevronRight, RotateCcw } from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -64,14 +65,14 @@ export function ThinkingPicker({
   return (
     <div className="thinking-controls">
       <div className="thinking-strength" aria-live="polite">
-        <small>{t("thinkingLevel")}</small>
         <span>{label(displayed)}</span>
       </div>
       <div
         className="thinking-slider"
         style={
           {
-            "--thinking-progress": `${levels.length > 1 ? (index / (levels.length - 1)) * 100 : 0}%`,
+            "--thinking-position":
+              levels.length > 1 ? index / (levels.length - 1) : 0,
           } as CSSProperties
         }
       >
@@ -122,35 +123,39 @@ export function ThinkingPicker({
           }}
         />
       </div>
-      <div className="thinking-slider-labels" aria-hidden="true">
-        <span>{label(levels[0] ?? shown)}</span>
-        <span>{label(levels.at(-1) ?? shown)}</span>
-      </div>
-      <button
-        type="button"
-        className="thinking-model-link"
-        disabled={pending !== null}
-        title={t("selectModel")}
-        onClick={onChooseModel}
+      <Tooltip
+        content={`${model?.name || model?.id || t("selectModel")} · ${t("selectModel")}`}
+        placement="above"
       >
-        <span>{model?.name || model?.id || t("selectModel")}</span>
-        <ChevronRight aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className="thinking-reset"
-        aria-label={t("resetThinking", { level: label(openedLevel) })}
-        title={t("resetThinking", { level: label(openedLevel) })}
-        disabled={
-          disabled || !levels.includes(openedLevel) || shown === openedLevel
-        }
-        onClick={() => {
-          clearPreview();
-          actions.selectThinking(openedLevel);
-        }}
+        <button
+          type="button"
+          className="thinking-model-link"
+          disabled={pending !== null}
+          onClick={onChooseModel}
+        >
+          <span>{model?.name || model?.id || t("selectModel")}</span>
+          <ChevronRight aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <Tooltip
+        content={t("resetThinking", { level: label(openedLevel) })}
+        placement="above"
       >
-        <RotateCcw aria-hidden="true" />
-      </button>
+        <button
+          type="button"
+          className="thinking-reset"
+          aria-label={t("resetThinking", { level: label(openedLevel) })}
+          disabled={
+            disabled || !levels.includes(openedLevel) || shown === openedLevel
+          }
+          onClick={() => {
+            clearPreview();
+            actions.selectThinking(openedLevel);
+          }}
+        >
+          <RotateCcw aria-hidden="true" />
+        </button>
+      </Tooltip>
       {thinking && !levels.includes(thinking.level) && (
         <p className="thinking-control-notice" role="status">
           {t("thinkingLevelMismatch")}
