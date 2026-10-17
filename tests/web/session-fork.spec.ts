@@ -800,7 +800,10 @@ it("forks the exact message into a new empty composer, preserves the original dr
   const button = screen.getAllByRole("button", {
     name: i18n.t("forkMessage"),
   })[0]!;
-  expect(button.title).toBe(i18n.t("forkMessageHint"));
+  expect(
+    document.getElementById(button.getAttribute("aria-describedby")!)
+      ?.textContent,
+  ).toBe(i18n.t("forkMessageHint"));
   fireEvent.click(button);
   await waitFor(() =>
     expect(store.getState().selectedPath).toBe("/project/child.jsonl"),

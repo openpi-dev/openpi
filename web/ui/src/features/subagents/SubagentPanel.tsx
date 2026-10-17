@@ -257,7 +257,16 @@ export function SubagentDetailView({
           <RefreshCw />
         </button>
       </header>
-      {loading && !detail && <p role="status">{t("inspectionLoading")}</p>}
+      {loading && !detail && (
+        <div className="inspection-loading" role="status">
+          <p>{t("inspectionLoading")}</p>
+          <div aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </div>
+        </div>
+      )}
       {error && (
         <div className="inspection-warning" role="alert">
           <p>{detail ? t("subagentStale") : t("subagentUnavailable")}</p>
@@ -605,7 +614,7 @@ export function SubagentPanel({
           ) : (
             <Bot aria-hidden="true" />
           )}
-          <Heading>
+          <Heading title={selected?.title || saved?.title || selectedId}>
             {selectedId
               ? selected?.title || saved?.title || selectedId
               : t("subagentDetails")}
@@ -671,28 +680,20 @@ export function SubagentPanel({
                   {visible.map((item) => (
                     <ListItem
                       key={`${item.kind}:${item.id}`}
-                      className="subagent-task-row"
+                      className={`subagent-task-row ${item.state ?? "unknown"}`}
                       onClick={() => select(item.id, item.kind)}
                       label={
-                        <>
-                          <span
-                            className="subagent-task-title"
-                            title={item.title || item.id}
-                          >
-                            {item.title || item.id}
-                          </span>
-                          <span className="sr-only">
-                            {` · ${t(`subagentState_${item.state ?? "unknown"}`)}`}
-                          </span>
-                        </>
+                        <span
+                          className="subagent-task-title"
+                          title={item.title || item.id}
+                        >
+                          {item.title || item.id}
+                        </span>
                       }
                       description={
                         item.saved
-                          ? t("subagentSaved")
-                          : item.state === "error" ||
-                              item.state === "interrupted"
-                            ? t(`subagentState_${item.state}`)
-                            : undefined
+                          ? `${t("subagentSaved")} · ${t(`subagentState_${item.state ?? "unknown"}`)}`
+                          : t(`subagentState_${item.state ?? "unknown"}`)
                       }
                       startContent={
                         <SubagentAvatar identity={`${sessionId}:${item.id}`} />
@@ -700,15 +701,10 @@ export function SubagentPanel({
                       endContent={
                         <span className="subagent-task-end">
                           {item.state === "running" ? (
-                            <>
-                              <LoaderCircle
-                                className="subagent-running-icon"
-                                aria-hidden="true"
-                              />
-                              <span className="sr-only">
-                                {t("subagentState_running")}
-                              </span>
-                            </>
+                            <LoaderCircle
+                              className="subagent-running-icon"
+                              aria-hidden="true"
+                            />
                           ) : item.timestamp ? (
                             <time
                               dateTime={new Date(item.timestamp).toISOString()}

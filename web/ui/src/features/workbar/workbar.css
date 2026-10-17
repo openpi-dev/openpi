@@ -101,13 +101,13 @@
 
 .workbar-tabbar {
   display: flex;
-  min-height: 46px;
+  min-height: var(--shell-header-height);
   flex: none;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 0 8px 0 10px;
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
+  border-bottom: 1px solid var(--border);
   background: color-mix(in oklab, var(--text) 3%, var(--page));
 }
 
@@ -120,7 +120,6 @@
 }
 
 .workbar-tabs {
-  min-height: 45px;
   flex: 1;
   align-self: stretch;
   gap: 5px;
@@ -817,7 +816,7 @@
   color: var(--text);
 }
 
-.browser-toolbar > button {
+.browser-toolbar button:not(.browser-navigation button) {
   border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
   background: var(--page);
 }

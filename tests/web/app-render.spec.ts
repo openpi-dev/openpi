@@ -3603,6 +3603,11 @@ it("shows Pi's queued messages above the composer after reload and in a backgrou
   expect(queued.querySelector("ol")).toBeNull();
   expect(queued.textContent).toContain("First follow-up");
   expect(queued.textContent).toContain(i18n.t("queuedImage"));
+  const summary = screen.getByRole("button", {
+    name: i18n.t("pendingFollowUpsHint", { count: 2 }),
+  });
+  expect(summary.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(summary);
   expect(
     screen.getByRole("button", {
       name: `${i18n.t("queuedMessageExpand")}: ${i18n.t("queuedImage")}`,

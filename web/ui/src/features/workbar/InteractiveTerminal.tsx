@@ -1,4 +1,5 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { ArrowDown, RefreshCw, RotateCcw } from "lucide-react";
@@ -453,22 +454,23 @@ export function InteractiveTerminal({
               <span>{t("reconnectTerminal")}</span>
             </button>
           )}
-          <button
-            type="button"
-            aria-label={t("restartTerminal")}
-            title={t("restartTerminal")}
-            disabled={
-              restartPending ||
-              status === "connecting" ||
-              status === "reconnecting"
-            }
-            onClick={() => {
-              setRestartError(null);
-              setRestartOpen(true);
-            }}
-          >
-            <RotateCcw aria-hidden="true" />
-          </button>
+          <Tooltip content={t("restartTerminal")} placement="below">
+            <button
+              type="button"
+              aria-label={t("restartTerminal")}
+              disabled={
+                restartPending ||
+                status === "connecting" ||
+                status === "reconnecting"
+              }
+              onClick={() => {
+                setRestartError(null);
+                setRestartOpen(true);
+              }}
+            >
+              <RotateCcw aria-hidden="true" />
+            </button>
+          </Tooltip>
         </div>
       </header>
       <div className="interactive-terminal-notice" aria-live="polite">

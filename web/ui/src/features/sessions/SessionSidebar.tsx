@@ -1226,6 +1226,15 @@ export function SessionSidebar(props: SessionSidebarProps) {
         }
         aria-label={sessionTitle(session, t("untitledSession"))}
         data-session-key={JSON.stringify([session.path, session.id])}
+        data-dragging={
+          (draggingSidebar &&
+            ((draggedPin.current?.kind === "session" &&
+              draggedPin.current.path === session.path &&
+              draggedPin.current.id === session.id) ||
+              (draggedChat.current?.path === session.path &&
+                draggedChat.current.id === session.id))) ||
+          undefined
+        }
         key={session.path}
         draggable={
           !pinSaving &&
@@ -1867,18 +1876,19 @@ export function SessionSidebar(props: SessionSidebarProps) {
         </div>
       </div>
 
-      <button
-        className="new-session-button"
-        type="button"
-        aria-label={t("newSession")}
-        title={t("newSession")}
-        disabled={creating}
-        aria-busy={creating || undefined}
-        onClick={() => void startSession(props.selectedWorkspace)}
-      >
-        <SquarePen />
-        <span>{t("newSession")}</span>
-      </button>
+      <Tooltip content={t("newSession")} placement="end">
+        <button
+          className="new-session-button"
+          type="button"
+          aria-label={t("newSession")}
+          disabled={creating}
+          aria-busy={creating || undefined}
+          onClick={() => void startSession(props.selectedWorkspace)}
+        >
+          <SquarePen />
+          <span>{t("newSession")}</span>
+        </button>
+      </Tooltip>
 
       <TranscriptSearchDialog
         open={transcriptSearchOpen}
@@ -2169,16 +2179,17 @@ export function SessionSidebar(props: SessionSidebarProps) {
             )}
             {archived && (
               <div className="sidebar-archive-actions">
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label={t("refreshArchives")}
-                  title={t("refreshArchives")}
-                  disabled={archiveLoading}
-                  onClick={() => void loadArchives()}
-                >
-                  <RefreshCw aria-hidden="true" />
-                </button>
+                <Tooltip content={t("refreshArchives")} placement="end">
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={t("refreshArchives")}
+                    disabled={archiveLoading}
+                    onClick={() => void loadArchives()}
+                  >
+                    <RefreshCw aria-hidden="true" />
+                  </button>
+                </Tooltip>
                 {archiveLoading && (
                   <span role="status">{t("loadingArchives")}</span>
                 )}
@@ -2401,32 +2412,34 @@ export function SessionSidebar(props: SessionSidebarProps) {
         )}
       </div>
       <div className="sidebar-footer">
-        <button
-          className="sidebar-settings-button sidebar-archive-toggle"
-          type="button"
-          aria-label={t("archivedConversations")}
-          aria-pressed={archived}
-          title={t("archivedConversations")}
-          onClick={() => {
-            setActivityOpen(false);
-            setArchived((value) => !value);
-          }}
-        >
-          <Archive aria-hidden="true" />
-          <span>{t("archivedConversations")}</span>
-        </button>
-        <button
-          className="sidebar-settings-button"
-          type="button"
-          aria-label={t("settings")}
-          title={t("settings")}
-          data-provider-settings-trigger
-          disabled={props.settingsDisabled}
-          onClick={props.onOpenSettings}
-        >
-          <Settings aria-hidden="true" />
-          <span>{t("settings")}</span>
-        </button>
+        <Tooltip content={t("archivedConversations")} placement="above">
+          <button
+            className="sidebar-settings-button sidebar-archive-toggle"
+            type="button"
+            aria-label={t("archivedConversations")}
+            aria-pressed={archived}
+            onClick={() => {
+              setActivityOpen(false);
+              setArchived((value) => !value);
+            }}
+          >
+            <Archive aria-hidden="true" />
+            <span>{t("archivedConversations")}</span>
+          </button>
+        </Tooltip>
+        <Tooltip content={t("settings")} placement="above">
+          <button
+            className="sidebar-settings-button"
+            type="button"
+            aria-label={t("settings")}
+            data-provider-settings-trigger
+            disabled={props.settingsDisabled}
+            onClick={props.onOpenSettings}
+          >
+            <Settings aria-hidden="true" />
+            <span>{t("settings")}</span>
+          </button>
+        </Tooltip>
       </div>
 
       <Dialog

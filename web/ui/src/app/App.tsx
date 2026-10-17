@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Menu,
   PanelLeftClose,
@@ -97,6 +98,7 @@ export function App() {
   const { t } = useTranslation();
   const { actions } = state;
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
+  const sidebarExpandTrigger = useRef<HTMLButtonElement>(null);
   const auxiliaryTrigger = useRef<HTMLElement | null>(null);
   const auxiliaryOpen = useRef(false);
   const inspectionFallbackFocus = useRef<HTMLElement | null>(null);
@@ -899,40 +901,58 @@ export function App() {
             actions={actions}
           />
           {state.sidebarCollapsed && (
-            <button
-              className="sidebar-expand"
-              type="button"
-              aria-label={t("expandSidebar")}
-              title={t("expandSidebar")}
-              onClick={() => actions.toggleSidebar(false)}
-            >
-              <PanelLeftOpen />
-            </button>
+            <>
+              <button
+                ref={sidebarExpandTrigger}
+                className="sidebar-expand"
+                type="button"
+                aria-label={t("expandSidebar")}
+                onClick={() => actions.toggleSidebar(false)}
+              >
+                <PanelLeftOpen />
+              </button>
+              <Tooltip
+                anchorRef={sidebarExpandTrigger}
+                content={t("expandSidebar")}
+                placement="end"
+              />
+            </>
           )}
           <main
             inert={mobileSidebarOpen}
             className={`conversation-shell ${selected ? "has-view" : ""} ${landing && (!selected || view === "chat") ? "landing" : ""}`}
           >
             <header className="task-header">
-              <button
-                className="task-header-menu sidebar-shell-toggle"
-                ref={sidebarTrigger}
-                type="button"
-                aria-label={t(
+              <Tooltip
+                content={t(
                   narrow
                     ? "openSidebar"
                     : state.sidebarCollapsed
                       ? "expandSidebar"
                       : "collapseSidebar",
                 )}
-                aria-controls="session-sidebar"
-                aria-expanded={
-                  narrow ? mobileSidebarOpen : !state.sidebarCollapsed
-                }
-                onClick={() => actions.toggleSidebar(narrow)}
+                placement="below"
               >
-                {narrow ? <Menu /> : <PanelLeftClose />}
-              </button>
+                <button
+                  className="task-header-menu sidebar-shell-toggle"
+                  ref={sidebarTrigger}
+                  type="button"
+                  aria-label={t(
+                    narrow
+                      ? "openSidebar"
+                      : state.sidebarCollapsed
+                        ? "expandSidebar"
+                        : "collapseSidebar",
+                  )}
+                  aria-controls="session-sidebar"
+                  aria-expanded={
+                    narrow ? mobileSidebarOpen : !state.sidebarCollapsed
+                  }
+                  onClick={() => actions.toggleSidebar(narrow)}
+                >
+                  {narrow ? <Menu /> : <PanelLeftClose />}
+                </button>
+              </Tooltip>
               <div className="task-identity">
                 {workspacePath && (
                   <span className="task-workspace" title={workspacePath}>
@@ -995,22 +1015,26 @@ export function App() {
                   onReview={() => openWorkbar("review")}
                 />
               )}
-              <button
-                type="button"
-                className="task-tools-trigger"
-                aria-label={t("openTools")}
-                title={t("openTools")}
-                disabled={!selected || state.sessionSwitching}
-                onClick={(event) => {
-                  if (artifactPanelOpen)
-                    artifactProvider.current?.close({ restoreFocus: false });
-                  workbarReturnFocus.current = event.currentTarget;
-                  if (workbarBound && !workbarVisible) setWorkbarOpen(true);
-                  else openWorkbar("launcher");
-                }}
+              <Tooltip
+                content={t(selected ? "openTools" : "openToolsUnavailable")}
+                placement="below"
               >
-                <PanelRight aria-hidden="true" />
-              </button>
+                <button
+                  type="button"
+                  className="task-tools-trigger"
+                  aria-label={t("openTools")}
+                  disabled={!selected || state.sessionSwitching}
+                  onClick={(event) => {
+                    if (artifactPanelOpen)
+                      artifactProvider.current?.close({ restoreFocus: false });
+                    workbarReturnFocus.current = event.currentTarget;
+                    if (workbarBound && !workbarVisible) setWorkbarOpen(true);
+                    else openWorkbar("launcher");
+                  }}
+                >
+                  <PanelRight aria-hidden="true" />
+                </button>
+              </Tooltip>
               <span className={`connection-state ${state.connection}`}>
                 {t(state.connection)}
               </span>
@@ -1019,6 +1043,7 @@ export function App() {
               <div className="conversation-view-row">
                 <fieldset
                   className="conversation-view-switch"
+                  data-view={view}
                   aria-label={t("conversationView")}
                 >
                   <button
@@ -1290,13 +1315,15 @@ export function App() {
                     ? state.notice
                     : state.notice.message}
                 </span>
-                <button
-                  type="button"
-                  aria-label={t("close")}
-                  onClick={actions.clearNotice}
-                >
-                  <X />
-                </button>
+                <Tooltip content={t("close")} placement="below">
+                  <button
+                    type="button"
+                    aria-label={t("close")}
+                    onClick={actions.clearNotice}
+                  >
+                    <X />
+                  </button>
+                </Tooltip>
               </div>
             )}
           </main>

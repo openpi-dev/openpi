@@ -1275,16 +1275,17 @@ function FileTree({
           aria-hidden="true"
           data-loading={loading || undefined}
         />
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={t("refreshFiles")}
-          title={t("refreshFiles")}
-          onClick={() => setRefresh((value) => value + 1)}
-          disabled={loading}
-        >
-          <RefreshCw aria-hidden="true" />
-        </button>
+        <Tooltip content={t("refreshFiles")} placement="below">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("refreshFiles")}
+            onClick={() => setRefresh((value) => value + 1)}
+            disabled={loading}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
+        </Tooltip>
       </div>
       <div className="file-create-toolbar">
         <fieldset

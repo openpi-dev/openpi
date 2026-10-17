@@ -3,7 +3,11 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
 export function ComposerActionMenu({
   items,
   onClose,
+  open = true,
+  viewKey,
 }: {
+  open?: boolean;
+  viewKey?: string;
   items: Array<{
     id: string;
     section: string;
@@ -17,9 +21,16 @@ export function ComposerActionMenu({
   onClose: (restoreFocus?: boolean) => void;
 }) {
   const menu = useRef<HTMLDivElement>(null);
+  const previousItems = useRef(items);
+  useLayoutEffect(() => {
+    if (open) previousItems.current = items;
+  }, [open, items]);
+  const visibleItems = open ? items : previousItems.current;
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
+    void viewKey;
+    if (!open) return;
     menu.current
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
@@ -34,8 +45,10 @@ export function ComposerActionMenu({
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
-  }, []);
+  }, [open, viewKey]);
   useLayoutEffect(() => {
+    void viewKey;
+    if (!open) return;
     const element = menu.current;
     const composer = element?.closest("form");
     if (!element || !composer) return;
@@ -63,13 +76,15 @@ export function ComposerActionMenu({
       window.visualViewport?.removeEventListener("resize", place);
       window.visualViewport?.removeEventListener("scroll", place);
     };
-  }, []);
+  }, [open, viewKey]);
   return (
     <div
       ref={menu}
       id="composer-action-menu"
       className="composer-action-menu"
       role="menu"
+      hidden={!open}
+      inert={!open}
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing) return;
         if (event.key === "Escape" || event.key === "Tab") {
@@ -100,9 +115,9 @@ export function ComposerActionMenu({
         }
       }}
     >
-      {items.map((item, index) => (
+      {visibleItems.map((item, index) => (
         <div role="none" key={item.id}>
-          {items[index - 1]?.section !== item.section && (
+          {visibleItems[index - 1]?.section !== item.section && (
             <div className="composer-action-section" role="presentation">
               {item.section}
             </div>

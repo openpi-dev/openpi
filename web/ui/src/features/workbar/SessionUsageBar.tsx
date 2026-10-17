@@ -2,6 +2,7 @@ import {
   Popover,
   type PopoverTriggerRenderProps,
 } from "@astryxdesign/core/Popover";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { ArrowDown, ArrowUp, ChevronDown, Gauge, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -55,14 +56,16 @@ export function SessionUsageBar({
           <div className="session-usage-details">
             <div className="usage-details-heading">
               <h2>{t("sessionOverview")}</h2>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label={t("close")}
-                onClick={() => setOpen(false)}
-              >
-                <X aria-hidden="true" />
-              </button>
+              <Tooltip content={t("close")} placement="below">
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label={t("close")}
+                  onClick={() => setOpen(false)}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </Tooltip>
             </div>
             <section className="usage-section">
               <div className="usage-context-heading">
@@ -100,6 +103,14 @@ export function SessionUsageBar({
                   <dd>{format(usage.output)}</dd>
                 </div>
                 <div>
+                  <dt>{t("usageCacheReadLabel")}</dt>
+                  <dd>{format(usage.cacheRead)}</dd>
+                </div>
+                <div>
+                  <dt>{t("usageCacheWriteLabel")}</dt>
+                  <dd>{format(usage.cacheWrite)}</dd>
+                </div>
+                <div>
                   <dt>{t("usageTotalLabel")}</dt>
                   <dd>{format(usage.total)}</dd>
                 </div>
@@ -125,44 +136,46 @@ export function SessionUsageBar({
         }
       >
         {(props: PopoverTriggerRenderProps) => (
-          <button
-            {...props}
-            className="session-usage-trigger"
-            type="button"
-            aria-label={t("usageOpenDetails", {
-              input: compact(usage.input),
-              output: compact(usage.output),
-              percent,
+          <Tooltip
+            content={t("usageOpenDetails", {
+              input: format(usage.input),
+              output: format(usage.output),
+              percent: precisePercent,
               capacity,
             })}
+            placement="below"
+            isEnabled={!open}
           >
-            <span
-              className="usage-stat"
-              title={`${t("sessionInputTokens")}: ${format(usage.input)}`}
+            <button
+              {...props}
+              className="session-usage-trigger"
+              type="button"
+              aria-label={t("usageOpenDetails", {
+                input: compact(usage.input),
+                output: compact(usage.output),
+                percent,
+                capacity,
+              })}
             >
-              <ArrowUp aria-hidden="true" />
-              <span>{compact(usage.input)}</span>
-            </span>
-            <span
-              className="usage-stat"
-              title={`${t("sessionOutputTokens")}: ${format(usage.output)}`}
-            >
-              <ArrowDown aria-hidden="true" />
-              <span>{compact(usage.output)}</span>
-            </span>
-            <span
-              className="usage-stat"
-              title={`${t("sessionContextUsage")}: ${precisePercent}`}
-            >
-              <Gauge aria-hidden="true" />
-              <span>
-                {percent}
-                {context && (
-                  <span className="usage-capacity"> / {capacity}</span>
-                )}
+              <span className="usage-stat">
+                <ArrowUp aria-hidden="true" />
+                <span>{compact(usage.input)}</span>
               </span>
-            </span>
-          </button>
+              <span className="usage-stat">
+                <ArrowDown aria-hidden="true" />
+                <span>{compact(usage.output)}</span>
+              </span>
+              <span className="usage-stat">
+                <Gauge aria-hidden="true" />
+                <span>
+                  {percent}
+                  {context && (
+                    <span className="usage-capacity"> / {capacity}</span>
+                  )}
+                </span>
+              </span>
+            </button>
+          </Tooltip>
         )}
       </Popover>
     </div>

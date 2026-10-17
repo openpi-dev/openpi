@@ -92,6 +92,7 @@
 }
 .session-sidebar :is(.session-row, .workspace-group, .sidebar-project-tail).is-pin-drop-target { box-shadow: 0 -2px var(--accent); }
 .session-sidebar :is(.session-row, .workspace-group, .pinned-section).is-pin-drop-after { box-shadow: 0 2px var(--accent); }
+.session-sidebar .session-row[data-dragging="true"] { opacity:.45; outline:1px dashed var(--accent); outline-offset:-1px; border-radius:10px; }
 .sidebar-drop-hint, .sidebar-project-tail { margin: 4px 0; padding: 8px; color: var(--muted); font-size: 12px; line-height: 20px; }
 .sidebar-show-more { display: block; min-height: 28px; margin: 4px 0; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 14px; line-height: 20px; text-align: left; cursor: pointer; }
 .sidebar-show-more:hover { background: var(--sidebar-hover); color: var(--text); }
@@ -139,9 +140,11 @@ body:has(.sidebar-conversation-menu) .astryx-dropdown-menu [role="separator"] { 
 .task-header .sidebar-shell-toggle:hover { background: var(--sidebar-hover); color: var(--text); }
 @keyframes session-spin { to { transform: rotate(360deg); } }
 @media (width > 760px) {
+  .session-sidebar.session-sidebar { padding-top: 0; }
+  .session-sidebar .sidebar-brand { height: var(--shell-header-height); min-height: var(--shell-header-height); margin: 0 -8px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--border); }
   .session-sidebar .sidebar-mobile-close { display: none; }
   .sidebar-collapsed .sidebar-navigation { display: none; }
-  .sidebar-collapsed .session-sidebar .new-session-button { justify-content: center; width: 40px; height: 40px; margin: 48px 0 0; padding: 0; }
+  .sidebar-collapsed .session-sidebar .new-session-button { justify-content: center; width: 40px; height: 40px; padding: 0; }
   .sidebar-collapsed .sidebar-footer { flex-direction: column; width: 40px; }
   .sidebar-collapsed .sidebar-settings-button { width: 40px; height: 40px; justify-content: center; padding: 0; }
   .sidebar-collapsed .sidebar-settings-button span { display: none; }

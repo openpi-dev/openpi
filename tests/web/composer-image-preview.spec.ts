@@ -12,6 +12,7 @@ import { I18nextProvider } from "react-i18next";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
+import { ImageViewport } from "../../web/ui/src/components/ImageViewport.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore } from "../../web/ui/src/store/web-store.ts";
@@ -268,6 +269,102 @@ it.each(["same", "another"])(
     ).toBe("fit");
   },
 );
+
+it("navigates draft images in the preview and returns focus to its opening attachment", async () => {
+  const { view } = setup();
+  await addImage(view);
+  await addImage(view, "other.png");
+  const { trigger, dialog } = openPreview();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("originalImageSize") }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("nextImage") }));
+  expect(dialog.querySelector("img")?.alt).toBe("other.png");
+  expect(
+    screen.getByRole("region", { name: i18n.t("imageViewMode") }).dataset.mode,
+  ).toBe("fit");
+  fireEvent.keyDown(
+    screen.getByRole("region", { name: i18n.t("imageViewMode") }),
+    { key: "ArrowLeft" },
+  );
+  expect(dialog.querySelector("img")?.alt).toBe("screenshot.png");
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("closeImagePreview") }),
+  );
+  expect(document.activeElement).toBe(trigger);
+});
+
+it("keeps image zoom anchored, bounds panning, and restores a cancelled drag", () => {
+  const view = render(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(
+        ImageViewport,
+        { original: false },
+        createElement("img", {
+          src: `data:image/png;base64,${png}`,
+          alt: "Preview",
+        }),
+      ),
+    ),
+  );
+  const viewport = screen.getByRole("region", {
+    name: i18n.t("imageViewMode"),
+  });
+  const layer = view.container.querySelector<HTMLElement>(".image-zoom-layer")!;
+  const image = screen.getByAltText("Preview");
+  Object.defineProperties(image, {
+    offsetWidth: { value: 600 },
+    offsetHeight: { value: 400 },
+    naturalWidth: { value: 1800 },
+  });
+  Object.defineProperties(layer, {
+    clientWidth: { value: 600 },
+    clientHeight: { value: 400 },
+  });
+  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 0, 600, 400),
+  );
+  const capture = vi.fn();
+  Object.assign(viewport, {
+    setPointerCapture: capture,
+    hasPointerCapture: () => true,
+    releasePointerCapture: vi.fn(),
+  });
+  fireEvent.load(image);
+  fireEvent.doubleClick(image, { clientX: 450, clientY: 200 });
+  expect(layer.style.transform).toBe("translate(-150px, 0px) scale(2)");
+  const pointer = (type: string, x: number, y: number) => {
+    const event = new MouseEvent(type, {
+      bubbles: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+    });
+    Object.defineProperty(event, "pointerId", { value: 1 });
+    fireEvent(image, event);
+  };
+  pointer("pointerdown", 100, 100);
+  pointer("pointermove", 102, 100);
+  expect(layer.style.transform).toBe("translate(-150px, 0px) scale(2)");
+  pointer("pointermove", 2000, 2000);
+  expect(layer.style.transform).toBe("translate(300px, 200px) scale(2)");
+  fireEvent.keyDown(viewport, { key: "Escape" });
+  expect(layer.style.transform).toBe("translate(-150px, 0px) scale(2)");
+  expect(capture).toHaveBeenCalledWith(1);
+  const browserZoom = new KeyboardEvent("keydown", {
+    key: "0",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(viewport, browserZoom);
+  expect(browserZoom.defaultPrevented).toBe(false);
+  expect(layer.style.transform).toBe("translate(-150px, 0px) scale(2)");
+  fireEvent.keyDown(viewport, { key: "0" });
+  expect(layer.style.transform).toBe("translate(0px, 0px) scale(1)");
+});
 
 it("keeps decode failure and close focus intact in original-size mode", async () => {
   const { view } = setup();

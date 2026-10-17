@@ -115,14 +115,16 @@ function open(index = 0) {
   fireEvent.click(trigger);
   const dialog = screen.getByRole("dialog") as HTMLDialogElement;
   expect(dialog.open).toBe(true);
-  expect(document.activeElement).toBe(dialog);
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", { name: i18n.t("closePreview") }),
+  );
   return { trigger, dialog };
 }
 function cancel(dialog: HTMLDialogElement) {
   fireEvent(dialog, new Event("cancel", { cancelable: true }));
 }
 
-it.each(["cancel", "escape", "backdrop"])(
+it.each(["cancel", "escape", "backdrop", "button"])(
   "closes with %s and returns focus to the same owner's file chip",
   (gesture) => {
     const view = setup();
@@ -130,6 +132,10 @@ it.each(["cancel", "escape", "backdrop"])(
     expect(dialog.textContent).toContain("Preview file-a");
     if (gesture === "cancel") cancel(dialog);
     else if (gesture === "escape") fireEvent.keyDown(dialog, { key: "Escape" });
+    else if (gesture === "button")
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("closePreview") }),
+      );
     else fireEvent.click(dialog);
     expect(dialog.open).toBe(false);
     expect(document.activeElement).toBe(trigger);

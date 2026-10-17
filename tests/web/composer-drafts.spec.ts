@@ -313,6 +313,11 @@ it("shows steering and next-turn queues from exact Session execution facts", () 
       name: `${i18n.t("queuedMessageExpand")}: use this tool`,
     }),
   ).toBeDefined();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("pendingFollowUpsHint", { count: 1 }),
+    }),
+  );
   expect(
     screen.getByRole("button", {
       name: `${i18n.t("queuedMessageExpand")}: next task`,

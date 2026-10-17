@@ -933,7 +933,7 @@ test("side conversation shows one editor in narrow layouts and preserves both dr
   const workbar = await openWorkbarTool(page, "侧边对话");
   const sideInput = workbar.getByPlaceholder("提出一个侧边问题…");
   await sideInput.fill("Keep the side conversation draft");
-  const mainForm = mainInput.locator("..");
+  const mainForm = page.locator("form").filter({ has: mainInput });
   const sideForm = workbar.locator(".side-conversation-composer");
   await page.addStyleTag({
     content: ".composer { transition: none !important; }",
@@ -1878,7 +1878,7 @@ for (const theme of ["light", "dark"]) {
     const expand = page.getByRole("button", { name: "展开侧边栏" });
     await expect(expand).toBeVisible();
     await expect(create).toBeVisible();
-    await expect(create).toHaveAttribute("title", "新建会话");
+    await expect(create).toHaveAccessibleDescription("新建会话");
     await expect(current).toBeHidden();
     await expect(archived).toBeVisible();
     await expect(
@@ -2047,6 +2047,19 @@ test("discovers and completes Pi commands without submitting unsupported command
   await expect(unavailableOption).toBeDisabled();
   await expect(unavailableOption).toContainText("此扩展命令尚未接入 Web");
   const menu = page.locator(".slash-command-menu");
+  // The entry transition moves the menu; measure its settled placement.
+  await expect
+    .poll(() =>
+      menu.evaluate((element) =>
+        element
+          .getAnimations()
+          .some(
+            (animation) =>
+              animation.pending || animation.playState === "running",
+          ),
+      ),
+    )
+    .toBe(false);
   const menuBox = await menu.boundingBox();
   const composerBox = await page.locator(".composer").boundingBox();
   expect(menuBox).not.toBeNull();
@@ -2156,6 +2169,8 @@ test.describe("touch viewport", () => {
     expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
     expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(390);
     await page.getByRole("button", { name: "取消" }).click();
+    // Native close removes [open] before the discrete exit transition ends.
+    await expect(page.locator("dialog:visible")).toHaveCount(0);
 
     const accessibility = await new AxeBuilder({ page }).analyze();
     expect(accessibility.violations).toEqual([]);
@@ -2287,7 +2302,8 @@ for (const width of [320, 390]) {
     expect(dialogBox?.x).toBeGreaterThanOrEqual(0);
     expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(width);
     await page.keyboard.press("Escape");
-    await expect(dialog).not.toBeVisible();
+    // Closing resets the dialog label before its discrete exit finishes.
+    await expect(page.locator("dialog:visible")).toHaveCount(0);
     await expect(menu).toBeFocused();
     await expect(sidebar).toBeVisible();
     await expect(menu).toHaveCSS("outline-style", "solid");
@@ -4051,7 +4067,7 @@ test.describe("thinking picker", () => {
     await page.keyboard.press("Escape");
     await expect(
       page.locator('[role="dialog"]:has(.thinking-controls)'),
-    ).toHaveCount(0);
+    ).toBeHidden();
     await expect(picker).toBeFocused();
     expect(fixture.posts).toHaveLength(1);
   });
@@ -4230,7 +4246,7 @@ test.describe("thinking picker", () => {
     await page.mouse.up();
     await expect(
       page.locator('[role="dialog"]:has(.thinking-controls)'),
-    ).toHaveCount(0);
+    ).toBeHidden();
     expect(fixture.posts).toEqual([]);
     await page.locator(".model-picker > button").click();
     await page.mouse.move(bounds.x + 14, y);
@@ -4271,12 +4287,12 @@ test.describe("thinking picker", () => {
     await trigger.click();
     await expect(popup).toBeVisible();
     await trigger.click();
-    await expect(popup).toHaveCount(0);
+    await expect(popup).toBeHidden();
     await trigger.click();
     await expect(popup).toBeVisible();
     const composer = page.getByRole("textbox", { name: "描述任务" });
     await composer.click();
-    await expect(popup).toHaveCount(0);
+    await expect(popup).toBeHidden();
     await expect(composer).toBeFocused();
     await page.keyboard.type("Keep composing");
     await expect(composer).toHaveValue("Keep composing");
