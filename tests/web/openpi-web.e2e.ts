@@ -2866,10 +2866,13 @@ test("inspects session-scoped runtime and subagent details on desktop and mobile
     await page.keyboard.press("Escape");
     await expect(providerSettings).not.toBeVisible();
     await page.getByRole("button", { name: /子代理/ }).click();
-    const subagentPanel = page.getByRole("complementary", {
-      name: "子代理",
-      exact: true,
-    });
+    const subagentPanel = page.getByRole(
+      width <= 640 ? "main" : "complementary",
+      {
+        name: "子代理",
+        exact: true,
+      },
+    );
     await subagentPanel.getByText("Build logs").click();
     await subagentPanel.getByText("分配的任务").click();
     await expect(subagentPanel.locator("pre").first()).toContainText(
@@ -2886,7 +2889,10 @@ test("inspects session-scoped runtime and subagent details on desktop and mobile
       path: testInfo.outputPath(`subagent-${width}.png`),
       fullPage: true,
     });
-    await page.keyboard.press("Escape");
+    await subagentPanel
+      .getByRole("button", { name: "关闭", exact: true })
+      .click();
+    await expect(subagentPanel).not.toBeVisible();
   }
 });
 
