@@ -114,7 +114,7 @@ Skill 正文通过原生用户消息或工具结果进入正常 Session 历史�
 
 **普通编码沿用 Pi，高级能力来自一套固定的常驻工具集。**
 
-普通编码任务继续走 Pi 原生路径：`read`、`bash`、`edit`、`write`，完整历史、Session compaction、工具输出边界、显式 Bash timeout 与 Provider loop。OpenPI 不额外投影历史，不改写测试超时，也不向模型塞恢复提示；只保留独立的工作区删除保护。
+普通编码任务继续走 Pi 原生路径：`read`、`bash`、`edit`、`write`，完整历史、Session compaction、工具输出边界、显式 Bash timeout 与 Provider loop。OpenPI 不额外投影历史，不改写测试超时，也不向模型塞恢复提示；与 Pi 一样不添加删除保护，Bash 沿用 Pi 自身行为。
 
 并行调研、隔离实现、多阶段协作和跨回合推进的能力从一开始就完整可见：Subagent 与 Workflow 工具自 Session 首轮起常驻，模型在当轮即可使用，不需要记住工具名，也不会因运行时状态而消失。长期进程直接使用 Pi 的 Bash（例如 `nohup … &`）。模型可见的工具列表只在明确的用户边界处变化：`/plan`、`/openpi-setup`、浏览器授权。
 
@@ -697,7 +697,7 @@ TUI 查询中按 Esc/Ctrl+C 取消等待；结果使用可滚动浮层，方向�
 
 OpenPI 提供一套固定的常驻模型工具，在 Session 开始时确定一次：Subagent（`subagent_spawn` 等 5 个）与 Workflow（`workflow`/`workflow_stop`/`workflow_status`），共 8 个。会话内工具列表不因模型动作或运行时状态改变；缺少对应状态的调用在执行层返回明确结果或 fail-closed。只有用户显式边界会改变工具：`/plan` 加入只读 Git、`plan_ready` 与 `ask_user`/`human_handoff`；`/openpi-setup` episode 加入 `configure_my_pi_setup` 与 `ask_user`/`human_handoff`；浏览器授权后启用 `openpi_browser`。Subagent 与 Workflow 的 Skill 文件仍随包发布，模型按需用 `read` 读取，不常驻普通系统 Prompt。
 
-普通产品采用 Pi-native execution：保留 Pi 原生完整历史、工具输出上限、Session compaction、显式 Bash timeout 与 provider loop，不额外做固定事务投影、成功 Bash 二次裁剪、测试 timeout 改写、重复失败硬拦或恢复/轨迹提示。OpenPI 只保留一层工作区清理护栏：源码中可识别的 `rm` 只有在整条命令是直接、可静态验证的 literal `rm`，且目标都是工作区内相对路径时，才会进入 provenance 与确认流程；可识别的复合、嵌套或动态 target `rm` 会 fail closed，并提示改用独立的 literal `rm` 重试。单条 standalone 普通命令中可静态识别的 bare、single-quoted 或 double-quoted 参数、Bash comment，以及独占输入的单个非展开 heredoc 中的 `rm` 文本不受影响；复合命令、已知 command forwarder 和带后续命令的 heredoc 会保守阻止 source-visible `rm`，可拆成独立命令重试。Guard 会从实际文件状态识别本轮通过原生写入、文字重定向或 literal `mkdir -p` 创建的 scratch，避免误拦其清理；它不是任意程序文件系统行为的 sandbox，也不承诺识别运行时生成的命令名或其他程序内部的文件系统行为。
+普通产品采用 Pi-native execution：保留 Pi 原生完整历史、工具输出上限、Session compaction、显式 Bash timeout 与 provider loop，不额外做固定事务投影、成功 Bash 二次裁剪、测试 timeout 改写、重复失败硬拦或恢复/轨迹提示。与 Pi 相同，OpenPI 不提供删除保护：Bash 中的 `rm` 完全沿用 Pi 自身行为，不做 provenance 检查或确认拦截。
 
 | 工具                                                                                                     | 用途                           | 可见时机                         |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------- |
@@ -783,7 +783,6 @@ extensions/
 ├── workflows/             # DSL、Ledger、Graph、Replay、Artifacts
 ├── plan-mode/ + cron/     # 批准门禁与 Session 定时 Prompt
 ├── ask-user/              # Reviewed input 与 Human Handoff
-├── workspace-cleanup-guard/ # pre-existing 文件删除保护
 ├── git-read/              # /plan 内只读 git show / diff / log
 ├── sessions/              # Session 搜索与切换
 ├── suggestions/           # Ephemeral next-action suggestion
