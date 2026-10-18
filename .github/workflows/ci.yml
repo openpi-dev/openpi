@@ -329,6 +329,18 @@ jobs:
           test "$WINDOWS_RESULT" = success
           test "$E2E_RESULT" = success
 
+  windows-background-terminals:
+    name: Background terminals (Windows)
+    if: always()
+    needs: [windows-node, test-ui]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Windows runtime and UI tests
+        env:
+          NODE_RESULT: ${{ needs.windows-node.result }}
+          UI_RESULT: ${{ needs.test-ui.result }}
+        run: test "$NODE_RESULT" = success && test "$UI_RESULT" = success
+
   web-e2e:
     name: Web E2E (Node 22.19.0)
     if: always()
