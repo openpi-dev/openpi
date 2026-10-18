@@ -136,6 +136,8 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
     "assets",
     "scripts/prepare-effect-tsgo.mjs",
     "README.md",
+    "README.zh-CN.md",
+    "USAGE.md",
     "SETUP.md",
     "THIRD_PARTY_NOTICES.md",
   ]);

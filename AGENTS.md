@@ -68,7 +68,7 @@ If those answers are unclear, investigate before adding surface area.
 - Avoid explicit return types unless they are necessary. Prefer inference over repeatedly declaring types.
 - Treat `as any` as an absolute last resort; use real type safety.
 - Keep user-visible behavior, model-visible context, and persisted/runtime state tests separate when the distinction matters.
-- Runtime provenance: before diagnosing installed behavior, provider compatibility, a manual Pi smoke, or any UI result, read README section “开发运行时：区分 npm 与当前源码”. Prove both the checkout revision and the single OpenPI source reported by `pi list` before reasoning from source code.
+- Runtime provenance: before diagnosing installed behavior, provider compatibility, a manual Pi smoke, or any UI result, read CONTRIBUTING.md section “Development runtime: npm vs current source”. Prove both the checkout revision and the single OpenPI source reported by `pi list` before reasoning from source code.
 - Preserve ignored local evidence as user work. Never use `git clean -fdx`; ignored benchmark runs, logs, and harnesses may be the only local copy.
 
 ### Knowledge and evidence

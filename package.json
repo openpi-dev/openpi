@@ -38,6 +38,8 @@
     "assets",
     "scripts/prepare-effect-tsgo.mjs",
     "README.md",
+    "README.zh-CN.md",
+    "USAGE.md",
     "SETUP.md",
     "THIRD_PARTY_NOTICES.md"
   ],
