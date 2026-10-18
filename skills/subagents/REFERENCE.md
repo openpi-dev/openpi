@@ -140,7 +140,7 @@ const isAllowedTool = (name) =>
 
 Two consequences worth being precise about:
 
-- **It can only narrow.** Listing a denied tool (`subagent_spawn`, `bg_start`,
+- **It can only narrow.** Listing a denied tool (`subagent_spawn`, `workflow`,
   `ask_user`, …) does not grant it. The child boundary in
   `extensions/shared/child-session.ts` stays authoritative, and the drift guard
   that protects it is unaffected.
@@ -187,3 +187,7 @@ and are not treated as missing, so the child denylist stays authoritative.
 
 Covered by `tests/extensions/subagents/agent-types.test.ts`, including the trust gate and the
 narrowing-only property.
+
+## Evidence reads
+
+`subagent_check` with `evidence` reads a finished subagent's original transcript, final output, or structured result through Pi permissions. Native nested-call metadata may disclose read paths; receipts do not. Availability is bounded and is not a retention guarantee. A restarted subagent re-occupies a running slot, so `subagent_send` fails while the concurrency cap is full.

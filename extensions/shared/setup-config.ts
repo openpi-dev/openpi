@@ -287,7 +287,7 @@ export interface MyPiSetupConfig {
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
-  codeMode: { enabled: true },
+  codeMode: { enabled: false },
   suggestions: { enabled: false },
   webSearch: { enabled: false, modelSupport: [] },
   response: { verbosity: "default", reasoningSummary: "default" },
@@ -693,7 +693,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
-    codeMode: { enabled: codeMode.enabled !== false },
+    codeMode: { enabled: codeMode.enabled === true },
     webSearch: {
       enabled:
         webSearch.enabled === true &&

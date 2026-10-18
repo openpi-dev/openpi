@@ -79,26 +79,26 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
 });
 
 test("disabling a resident tool throws instead of churning the frozen surface", () => {
-  const h = harness(["read", ...OPENPI_TOOL_SURFACE.background.resident]);
+  const h = harness(["read", ...OPENPI_TOOL_SURFACE.workflows.resident]);
   assert.throws(
-    () => patchOwnedTools(h.pi, "background", { disable: ["bg_status"] }),
-    /background cannot disable resident tool "bg_status"/,
+    () => patchOwnedTools(h.pi, "workflows", { disable: ["workflow_status"] }),
+    /workflows cannot disable resident tool "workflow_status"/,
   );
   assert.throws(
     () =>
-      patchOwnedTools(h.pi, "background", {
-        enable: ["bg_kill"],
-        disable: ["bg_watch"],
+      patchOwnedTools(h.pi, "workflows", {
+        enable: ["workflow"],
+        disable: ["workflow_stop"],
       }),
-    /background cannot disable resident tool "bg_watch"/,
+    /workflows cannot disable resident tool "workflow_stop"/,
   );
   // The throw happens before any surface write.
   assert.equal(h.writes.length, 0);
-  assert.ok(h.active().includes("bg_status"));
+  assert.ok(h.active().includes("workflow_status"));
 });
 
 test("boundary tools enable and disable while resident tools stay put", () => {
-  const h = harness(["read", ...OPENPI_TOOL_SURFACE.background.resident]);
+  const h = harness(["read", ...OPENPI_TOOL_SURFACE.workflows.resident]);
   assert.equal(
     patchOwnedTools(h.pi, "gitRead", {
       enable: OPENPI_TOOL_SURFACE.gitRead.boundary,
@@ -107,7 +107,7 @@ test("boundary tools enable and disable while resident tools stay put", () => {
   );
   assert.deepEqual(h.active(), [
     "read",
-    ...OPENPI_TOOL_SURFACE.background.resident,
+    ...OPENPI_TOOL_SURFACE.workflows.resident,
     ...OPENPI_TOOL_SURFACE.gitRead.boundary,
   ]);
 
@@ -119,7 +119,7 @@ test("boundary tools enable and disable while resident tools stay put", () => {
   );
   assert.deepEqual(h.active(), [
     "read",
-    ...OPENPI_TOOL_SURFACE.background.resident,
+    ...OPENPI_TOOL_SURFACE.workflows.resident,
   ]);
 });
 

@@ -112,12 +112,12 @@ async function runSetupConfigChildScenario({
   });
 }
 
-test("Code Mode defaults on for old documents and preserves an explicit opt-out", () => {
-  assert.equal(DEFAULT_SETUP_CONFIG.codeMode.enabled, true);
-  assert.equal(parseSetupConfig({ configVersion: 1 }).codeMode.enabled, true);
-  const config = parseSetupConfig({ codeMode: { enabled: false } });
-  assert.equal(config.codeMode.enabled, false);
-  assert.match(formatSetupConfig(config), /Code Mode default: off/);
+test("Code Mode defaults off for old documents and preserves an explicit opt-in", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.codeMode.enabled, false);
+  assert.equal(parseSetupConfig({ configVersion: 1 }).codeMode.enabled, false);
+  const config = parseSetupConfig({ codeMode: { enabled: true } });
+  assert.equal(config.codeMode.enabled, true);
+  assert.match(formatSetupConfig(config), /Code Mode default: on/);
 });
 
 test("response preferences preserve native defaults and bounded Web thinking filters are canonical", async () => {

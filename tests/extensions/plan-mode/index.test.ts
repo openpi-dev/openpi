@@ -39,7 +39,6 @@ test("plan mode allows only explicit observational tools", () => {
   for (const tool of [
     "read",
     "web_search",
-    "bg_status",
     "subagent_check",
     "workflow_status",
     "ask_user",

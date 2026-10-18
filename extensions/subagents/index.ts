@@ -1548,8 +1548,7 @@ export default function (
       generation: Type.Optional(
         Type.Integer({
           minimum: 1,
-          description:
-            "Actual Direct run generation; omitted selects the latest active-branch owner record when reading evidence.",
+          description: "Run generation to read; defaults to the latest.",
         }),
       ),
       evidence: Type.Optional(
@@ -1561,7 +1560,7 @@ export default function (
           ],
           {
             description:
-              "Explicit original evidence read through Pi permissions. Native nestedCalls may disclose read paths. Missing/legacy/unsealed/pruned/denied/oversized evidence is unavailable.",
+              'Evidence to read from a finished subagent: "transcript", "final", or "structured".',
           },
         ),
       ),
@@ -1569,15 +1568,14 @@ export default function (
         Type.Integer({
           minimum: 0,
           description:
-            "Unicode code-point offset in selected evidence; use nextOffset to continue.",
+            "Code-point offset for paging; pass nextOffset from the previous page.",
         }),
       ),
       limit: Type.Optional(
         Type.Integer({
           minimum: 1,
           maximum: 4096,
-          description:
-            "Maximum code points per page (default 2048); serialized page capped at 16 KiB.",
+          description: "Maximum code points per page (default 2048).",
         }),
       ),
     }),

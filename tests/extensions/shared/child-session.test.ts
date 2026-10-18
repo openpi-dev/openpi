@@ -62,7 +62,7 @@ test("effective child allowlists never advertise parent-only tools", () => {
     effectiveChildToolAllowlist([
       "read",
       "subagent_spawn",
-      "bg_start",
+      "workflow",
       "ask_user",
       "human_handoff",
     ]),
@@ -457,7 +457,7 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
           extensionFactories: [
             (pi) => {
               for (const name of [
-                "bg_start",
+                "hidden_probe",
                 "outside_allowlist",
                 "child_read",
                 "blocked_read",
@@ -467,7 +467,7 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
                   label: name,
                   description: name,
                   exposure:
-                    name === "bg_start" || name === "outside_allowlist"
+                    name === "hidden_probe" || name === "outside_allowlist"
                       ? exposure
                       : "direct",
                   parameters: Type.Object({}),
@@ -494,7 +494,7 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
                 async execute(_id, _args, _signal, _update, ctx) {
                   for (const name of [
                     "child_read",
-                    "bg_start",
+                    "hidden_probe",
                     "outside_allowlist",
                     "blocked_read",
                   ]) {
@@ -525,14 +525,14 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
           await bindChildSessionExtensions(session, tools);
           session.setActiveToolsByName([
             ...tools,
-            "bg_start",
+            "hidden_probe",
             "outside_allowlist",
           ]);
           assert.deepEqual(
             session.getCallableToolNames().sort(),
             [...tools].sort(),
           );
-          assert.equal(session.getToolDefinition("bg_start"), undefined);
+          assert.equal(session.getToolDefinition("hidden_probe"), undefined);
           await session.prompt("Check the child authority boundary.");
           assert.deepEqual(outcomes, [false, true, true, true]);
           assert.deepEqual(calls, ["child_read"]);
@@ -1949,7 +1949,10 @@ test("every registered package tool is classified child-safe or excluded (fail-c
     registered.size >= 15,
     `expected to discover the package tools, found ${registered.size}`,
   );
-  assert.ok(registered.has("bg_start"), "scan should find bg_start");
+  assert.ok(
+    registered.has("subagent_spawn"),
+    "scan should find subagent_spawn",
+  );
   // git-read tools register with a generic type argument; the scan must find
   // them too, otherwise the CHILD_SAFE classification is never exercised and a
   // future parent-only tool in that same style would slip through the guard.

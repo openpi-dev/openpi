@@ -25,10 +25,6 @@ export const OPENPI_TOOL_SURFACE = {
     resident: ["workflow", "workflow_stop", "workflow_status"],
     boundary: [],
   },
-  background: {
-    resident: ["bg_start", "bg_status", "bg_kill", "bg_watch"],
-    boundary: [],
-  },
   gitRead: {
     resident: [],
     boundary: ["git_show", "git_diff", "git_log"],
@@ -77,9 +73,6 @@ export const OPENPI_OWNER_SOURCE_PATHS = {
   gitRead: fileURLToPath(new URL("../git-read/index.ts", import.meta.url)),
   subagents: fileURLToPath(new URL("../subagents/index.ts", import.meta.url)),
   workflows: fileURLToPath(new URL("../workflows/index.ts", import.meta.url)),
-  background: fileURLToPath(
-    new URL("../background-terminals/index.ts", import.meta.url),
-  ),
   interaction: fileURLToPath(new URL("../ask-user/index.ts", import.meta.url)),
   plan: fileURLToPath(new URL("../plan-mode/index.ts", import.meta.url)),
   setup: fileURLToPath(new URL("../setup/index.ts", import.meta.url)),

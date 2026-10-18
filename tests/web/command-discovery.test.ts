@@ -136,7 +136,6 @@ test("offers native setup and existing Web panels only for the actual package co
   const result = projectWebCommands([
     ownedCommand("openpi-setup", "setup"),
     ownedCommand("my-pi-setup", "setup"),
-    ownedCommand("ps", "background-terminals"),
     ownedCommand("lg", "git-info"),
     ownedCommand("subagents", "subagents"),
     ownedCommand("usage", "usage"),
@@ -158,13 +157,12 @@ test("offers native setup and existing Web panels only for the actual package co
   );
   assert.deepEqual(
     result.commands.slice(2, 6).map(({ action }) => action),
-    ["terminal", "review", "subagents", undefined],
+    ["review", "subagents", undefined, "side-conversation"],
   );
-  assert.equal(result.commands[6]?.action, "side-conversation");
-  assert.equal(result.commands[7]?.unavailableReason, "terminal_only");
+  assert.equal(result.commands[6]?.unavailableReason, "terminal_only");
   assert.ok(
     result.commands
-      .slice(8)
+      .slice(7)
       .every(
         (item) =>
           item.availability === "unsupported" && item.action === undefined,
@@ -180,7 +178,7 @@ test("guards the native untruncated registry while leaving ordinary prompts and 
       command(`template-${index}`, "prompt"),
     ),
     ownedCommand("openpi-setup", "setup"),
-    ownedCommand("ps", "background-terminals"),
+    ownedCommand("subagents", "subagents"),
     ownedCommand("btw", "subagents"),
     command("unreviewed", "extension"),
   ];
@@ -207,11 +205,11 @@ test("guards the native untruncated registry while leaving ordinary prompts and 
     assertWebCommandSupported(services, "/openpi-setup inspect settings"),
   );
   assert.throws(
-    () => assertWebCommandSupported(services, "/ps"),
+    () => assertWebCommandSupported(services, "/subagents"),
     /opens a Web panel/u,
   );
   assert.throws(
-    () => assertWebCommandSupported(services, "/ps ignored arguments"),
+    () => assertWebCommandSupported(services, "/subagents ignored arguments"),
     /without arguments/u,
   );
   assert.throws(

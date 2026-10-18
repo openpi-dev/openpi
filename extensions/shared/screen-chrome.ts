@@ -19,8 +19,8 @@ const isStyled = (text: string) => text.includes("\u001b");
  * The chrome every full-screen OpenPI view shares: a title line, one bordered
  * panel, a hint line, and one way to say "there is more above/below".
  *
- * Three views had grown their own copy of this (`/subagents`, `/ps`,
- * `/workflows`), and they had drifted apart in the details you notice without
+ * Several views had grown their own copy of this (`/subagents`,
+ * `/workflows`, and the now-removed `/ps`), and they had drifted apart in the details you notice without
  * being able to name: one framed the body in `border`, another in
  * `borderMuted`; one wrote `... 3 more` and another `… 3 more`; hints were a
  * single dim run in which the keys you are supposed to press read exactly as

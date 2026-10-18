@@ -52,7 +52,6 @@ const ownedSupport: Record<string, {
 }> = {
   "openpi-setup": { extension: "setup", availability: "available" },
   "my-pi-setup": { extension: "setup", availability: "available" },
-  ps: { extension: "background-terminals", availability: "available", action: "terminal" },
   lg: { extension: "git-info", availability: "available", action: "review" },
   subagents: { extension: "subagents", availability: "available", action: "subagents" },
   btw: { extension: "subagents", availability: "available", action: "side-conversation" },

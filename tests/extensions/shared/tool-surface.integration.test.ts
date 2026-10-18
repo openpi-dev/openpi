@@ -49,7 +49,6 @@ const extensionPath = (name: string) =>
 // Every extension that owns model-facing tools in OPENPI_TOOL_SURFACE.
 const OPENPI_EXTENSION_PATHS = [
   "ask-user",
-  "background-terminals",
   "browser",
   "git-read",
   "plan-mode",
@@ -160,19 +159,19 @@ test("frozen surface: runtime events never change the request tools or system pr
     responses: [
       // Turn 1: baseline plain turn.
       () => fauxAssistantMessage("Baseline answer."),
-      // Turn 2: model calls bg_start (a real short-lived process).
+      // Turn 2: model calls workflow_status (a resident tool result).
       () =>
         fauxAssistantMessage(
           [
             fauxToolCall(
-              "bg_start",
-              { command: "echo frozen-surface" },
-              { id: "bg-1" },
+              "workflow_status",
+              { runId: "wf_none" },
+              { id: "wf-1" },
             ),
           ],
           { stopReason: "toolUse" },
         ),
-      () => fauxAssistantMessage("Started the background command."),
+      () => fauxAssistantMessage("No workflows are running."),
       // Turn 3: model calls subagent_check without an id (the list path); a
       // tool result must not churn tools either.
       () =>
@@ -207,8 +206,8 @@ test("frozen surface: runtime events never change the request tools or system pr
     await session.prompt("fix the off-by-one in the cart summary");
     await session.waitForIdle();
 
-    // Non-boundary event 2: a turn that invokes bg_start.
-    await session.prompt("start a dev server in the background");
+    // Non-boundary event 2: a turn that invokes a resident tool.
+    await session.prompt("check the status of workflow wf_none");
     await session.waitForIdle();
 
     // Non-boundary event 3: a turn whose tool call returns a result.
@@ -339,26 +338,29 @@ test("resident OpenPI tool budget stays inside the measured bound", {
     await session.bindExtensions({ mode: "print" });
 
     let chars = 0;
+    let wireChars = 0;
     const breakdown: string[] = [];
     for (const name of RESIDENT_OPENPI_TOOLS) {
       const definition = session.getToolDefinition(name);
       assert.ok(definition, `resident tool ${name} must be registered`);
+      const wire = JSON.stringify({
+        name: definition.name,
+        description: definition.description,
+        parameters: definition.parameters,
+      }).length;
       const toolChars =
-        JSON.stringify({
-          name: definition.name,
-          description: definition.description,
-          parameters: definition.parameters,
-        }).length +
+        wire +
         (definition.promptSnippet?.length ?? 0) +
         (definition.promptGuidelines ?? []).join("\n").length;
+      wireChars += wire;
       chars += toolChars;
       breakdown.push(`${name}:${toolChars}`);
     }
     t.diagnostic(
-      `resident OpenPI surface: ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools (${breakdown.join(", ")})`,
+      `resident OpenPI surface: ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools, wire-only ${wireChars} chars (${breakdown.join(", ")})`,
     );
     // Measured budget; ceiling keeps ~10% headroom for schema text drift.
-    const RESIDENT_BUDGET_CHARS = 16500;
+    const RESIDENT_BUDGET_CHARS = 7300;
     assert.ok(
       chars <= RESIDENT_BUDGET_CHARS,
       `resident OpenPI surface is ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools (${breakdown.join(", ")})`,

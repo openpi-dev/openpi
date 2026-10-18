@@ -2386,9 +2386,7 @@ export class WebHost {
       const kind = url.searchParams.get("kind");
       const id = url.searchParams.get("id");
       if (
-        (kind !== "subagents" &&
-          kind !== "workflows" &&
-          kind !== "background-terminals") ||
+        (kind !== "subagents" && kind !== "workflows") ||
         id === null
       ) {
         return this.json(response, 400, {

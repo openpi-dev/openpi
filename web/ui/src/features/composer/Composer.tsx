@@ -95,7 +95,7 @@ interface ComposerProps {
   modelSelectionPending?: boolean;
   modelSearch?: WebStoreState["modelSearch"];
   thinkingPendingLevel: WebStoreState["thinkingPendingLevel"];
-  onInspect?: (terminalId?: string) => void;
+  onInspect?: () => void;
   onOpenProviders?: () => void;
   onCommandAction?: (
     action: NonNullable<WebCommandSummary["action"]>,
@@ -1479,7 +1479,6 @@ export function Composer(props: ComposerProps) {
         <ActivityBar
           snapshot={props.snapshot}
           observed={props.activityObserved}
-          onInspectTerminal={props.onInspect}
           onInspectSubagent={props.onInspectSubagent}
         />
       )}

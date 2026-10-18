@@ -137,8 +137,6 @@ export const PLAN_SAFE_TOOLS = new Set([
   "fetch_content",
   "get_search_content",
   // Read-only inspection of work already in flight.
-  "bg_status",
-  "bg_watch",
   "subagent_check",
   "subagent_wait",
   "workflow_status",

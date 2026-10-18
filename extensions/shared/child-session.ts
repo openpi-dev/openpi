@@ -74,6 +74,10 @@ export const RETIRED_OPENPI_TOOL_NAMES = new Set<string>([
   "openpi_load_tools",
   "subagent_list",
   "bg_list",
+  "bg_start",
+  "bg_status",
+  "bg_kill",
+  "bg_watch",
   "get_goal",
   "create_goal",
   "update_goal",
@@ -567,12 +571,6 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "plan_ready",
   // setup — configuration is a package-owned, parent-only choice
   "configure_my_pi_setup",
-  // background-terminals — a child's processes would be invisible to the
-  // parent's /ps and could outlive the child, so children cannot start them
-  "bg_start",
-  "bg_status",
-  "bg_kill",
-  "bg_watch",
 ] as const;
 
 const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(

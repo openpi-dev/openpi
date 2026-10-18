@@ -45,8 +45,6 @@ export function toolActivity(name: string) {
     case "git_log":
       return { action: "git", Icon: GitBranch };
     default:
-      if (name.startsWith("bg_"))
-        return { action: "command", Icon: SquareTerminal };
       if (name.startsWith("subagent")) return { action: "agent", Icon: Bot };
       if (name.startsWith("workflow"))
         return { action: "workflow", Icon: Workflow };

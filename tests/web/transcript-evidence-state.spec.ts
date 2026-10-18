@@ -1785,15 +1785,16 @@ it("does not summarize a mixed returned and unmatched sequence as completed", ()
 it("retains a known process failure in a single tool while the native status-query receipt succeeded", () => {
   const tool = {
     ...call,
-    name: "bg_status",
-    arguments: '{"id":"background-terminal"}',
+    name: "bash",
+    arguments: '{"command":"run-server"}',
   };
   const receipt = {
     role: "toolResult",
-    toolName: "bg_status",
+    toolName: "bash",
     toolCallId: tool.id,
     content: "Background process failed with exit code 2",
     isError: false,
+    terminalReceipt: { state: "failed" as const, exitCode: 2 },
     details: { status: "failed", exitCode: 2 },
   } satisfies WebLiveMessage;
   const { container } = render(view(snapshot({ tool, results: [receipt] })));
@@ -1871,18 +1872,19 @@ it.each([false, true])(
 it("keeps known process failure ahead of an unmatched step in the group summary", () => {
   const tool = {
     ...call,
-    name: "bg_status",
-    arguments: '{"id":"background-terminal"}',
+    name: "bash",
+    arguments: '{"command":"run-server"}',
   };
   const value = snapshot({
     tool,
     results: [
       {
         role: "toolResult",
-        toolName: "bg_status",
+        toolName: "bash",
         toolCallId: tool.id,
         content: "Background process failed",
         isError: false,
+        terminalReceipt: { state: "failed" as const, exitCode: 2 },
         details: { status: "failed", exitCode: 2 },
       },
     ],
