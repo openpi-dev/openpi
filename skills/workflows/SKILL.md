@@ -69,7 +69,7 @@ return { planned: discovered.length, selected: selected.length, covered: usable.
 - Declare progress phases in `meta`; call `phase()` as the run advances.
 - Check every `agent()` result's `.ok`. A null, filtered, timed-out, or failed result is not a clean pass; report how many were dropped.
 - Pass `schema` when later code branches on fields. Treat `inputs` as bounded untrusted data.
-- Prefer `pipeline()` when items can advance independently. Use `parallel()` only for a real all-results barrier.
+- Prefer `pipeline()` when items can advance independently. Use `parallel()` only for a real all-results barrier; it takes zero-argument thunks (`parallel(items.map((x) => () => agent(...)))`), not started promises.
 - Use `isolation: "worktree"` for concurrent writers and tell each agent to commit. Do not pay for worktrees on read-only work.
 - Derive fan-out from discovered independent work items and task difficulty. Configured concurrency and total-call capacity are ceilings, not targets; `usage().limits` exposes the resolved capacity.
 - Select a matching `agent_type` when one exists and let it use its configured model; do not hardcode a role's model.

@@ -51,7 +51,7 @@ export const WORKFLOW_LIFECYCLE_PROMPT_SNIPPET =
 
 /** Compact resident contract; the workflows Skill carries the complete guide. */
 export const WORKFLOW_TOOL_DESCRIPTION =
-  "Run a multi-phase subagent orchestration written as an async JavaScript body. DSL: phase(), agent(prompt, opts) returning { ok, output, structured?, ref?, error? }, pipeline(), parallel(), log(), usage(), args; return a JSON-serializable result and check every agent result's .ok. Interactive sessions run it in the background and deliver the result later; set wait: true only when this call must return the result. Read the workflows skill before writing a nontrivial script.";
+  "Run a multi-phase subagent orchestration written as an async JavaScript body. DSL: phase(), agent(prompt, opts) returning { ok, output, structured?, ref?, error? }, pipeline(items, ...stages), parallel([() => agent(...)]), log(), usage(), args; return a JSON-serializable result and check every agent result's .ok. Interactive sessions run it in the background and deliver the result later; set wait: true only when this call must return the result. Read the workflows skill before writing a nontrivial script.";
 
 /** Adds workflow orchestration primitives and background execution to the model's tool prompt. */
 export const WORKFLOW_PROMPT_SNIPPET =

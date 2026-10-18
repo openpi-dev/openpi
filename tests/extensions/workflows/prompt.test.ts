@@ -430,7 +430,8 @@ test("the resident workflow prompt stays compact while the Skill carries the ful
   assert.ok(Buffer.byteLength(WORKFLOW_TOOL_DESCRIPTION, "utf8") < 3_000);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /workflows Skill/i);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /check.*\.ok/i);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /pipeline\(\)/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /pipeline\(items/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /parallel\(\[\(\) => agent/);
   assert.doesNotMatch(WORKFLOW_TOOL_DESCRIPTION, /reliability-review/);
   assert.match(
     WORKFLOW_PROMPT_GUIDELINES.join("\n"),
