@@ -53,6 +53,7 @@ import {
 } from "./control.ts";
 
 import {
+  decodePlanModeState,
   MAX_READY_PLAN_CHARS,
   MAX_READY_PLAN_UTF8_BYTES,
   PLAN_MODE_STATE_ENTRY,
@@ -161,6 +162,12 @@ export const PLAN_SAFE_TOOLS = new Set([
 
 export const BLOCK_REASON =
   "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, Pi's grep/find/ls tools when they are available, read-only rg/fd/ls shell commands, git_log/git_diff/git_show, web search, read-only bash like git log/status, and subagent_spawn for parallel exploration — planning children get read-only tools). Raw git diff/show and diff-generating git log forms are blocked; use the structured Git tools instead. When the plan is decision-complete, call plan_ready alone with the complete Markdown plan; the user then chooses the next action with `/plan`, or cancels with `/plan off`.";
+
+const READY_PLAN_CONTEXT =
+  "The plan is ready. All tools remain blocked until the user explicitly chooses a Plan action or exits planning. Do not start implementation.";
+
+const INACTIVE_PLAN_CONTEXT =
+  "Current Session state: Plan mode is inactive. Earlier Plan-mode restrictions in this conversation are historical and no longer apply. Exiting Plan mode does not authorize implementation of a previous plan; follow the user's current request and normal permissions.";
 
 export function planToolCallDecision(
   toolName: string,
@@ -684,43 +691,64 @@ export default function planMode(pi: ExtensionAPI) {
     });
   };
 
-  // Project the current stance for user and custom-message turns at every
-  // provider call, without persisting a message or
-  // leaving an obsolete restriction in Pi's cached system prompt.
+  // Project one reminder per persisted state entry, anchored at the entry's
+  // position in the branch instead of appended at the tail: a tail message is
+  // displaced by every new message, so request k is never a prefix of request
+  // k+1 and the provider's prompt cache never hits. Reminder text derives only
+  // from the entry itself, so history already sent never changes.
   pi.on("context", (event, ctx) => {
-    if (!planning) {
+    const reminders: Array<{ ms: number; content: string }> = [];
+    let previous: string | undefined;
+    for (const entry of ctx.sessionManager.getBranch()) {
       if (
-        !ctx.sessionManager
-          .getBranch()
-          .some(
-            (entry) =>
-              entry.type === "custom" &&
-              entry.customType === PLAN_MODE_STATE_ENTRY,
-          )
+        !isRecord(entry) ||
+        entry.type !== "custom" ||
+        entry.customType !== PLAN_MODE_STATE_ENTRY
       )
-        return;
-    }
-    const content = !planning
-      ? "Current Session state: Plan mode is inactive. Earlier Plan-mode restrictions in this conversation are historical and no longer apply. Exiting Plan mode does not authorize implementation of a previous plan; follow the user's current request and normal permissions."
-      : readyPlan
-        ? "The plan is ready. All tools remain blocked until the user explicitly chooses a Plan action or exits planning. Do not start implementation."
-        : BLOCK_REASON;
-    return {
-      messages: [
-        ...event.messages.filter(
-          (message) =>
-            message.role !== "custom" ||
-            message.customType !== "openpi-plan-context",
+        continue;
+      const state = decodePlanModeState(entry.data);
+      const content =
+        !state || (state.planning && state.readyPlan === undefined)
+          ? BLOCK_REASON
+          : state.planning
+            ? READY_PLAN_CONTEXT
+            : INACTIVE_PLAN_CONTEXT;
+      if (content === previous) continue;
+      previous = content;
+      reminders.push({
+        ms: Date.parse(
+          typeof entry.timestamp === "string" ? entry.timestamp : "",
         ),
-        {
-          role: "custom" as const,
-          customType: "openpi-plan-context",
-          content,
-          display: false,
-          timestamp: 0,
-        },
-      ],
-    };
+        content,
+      });
+    }
+    if (reminders.length === 0) return;
+    const base = event.messages.filter(
+      (message) =>
+        message.role !== "custom" ||
+        message.customType !== "openpi-plan-context",
+    );
+    // Transitions with no message between them share an anchor; only the
+    // latest state there is meaningful.
+    const anchored = new Map<number, (typeof reminders)[number]>();
+    for (const reminder of reminders) {
+      let index = base.findIndex((message) => message.timestamp > reminder.ms);
+      if (index === -1) index = base.length;
+      // A mid-turn plan_ready commit lands between the assistant tool call
+      // and its results; never split a call from its toolResult run.
+      while (base[index]?.role === "toolResult") index++;
+      anchored.set(index, reminder);
+    }
+    const messages = [...base];
+    for (const [index, reminder] of [...anchored].reverse())
+      messages.splice(index, 0, {
+        role: "custom" as const,
+        customType: "openpi-plan-context",
+        content: reminder.content,
+        display: false,
+        timestamp: Number.isFinite(reminder.ms) ? reminder.ms : 0,
+      });
+    return { messages };
   });
 
   // before_agent_start carries the raw user prompt, so use it only to bind an
