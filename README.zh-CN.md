@@ -128,7 +128,7 @@ const scans = await parallel(
     }),
   ),
 );
-return agent("Synthesize the verified findings", {
+return agent("Synthesize the findings", {
   agent_type: "advisor",
   inputs: scans.filter((r) => r?.ok).map((r) => r.ref),
 });
@@ -283,7 +283,7 @@ openpi web /path/to/repo      # 指定初始工作区
 <details>
 <summary><strong>Subagent 会阻塞主 Agent 吗？</strong></summary>
 
-`subagent_spawn` 立即返回，结束后自动回传并重新唤醒主 Agent。交互会话没有其他工作时应结束当前轮，除非用户明确要求等完。非交互运行（`pi -p`、`--mode json`）在轮次结束时退出进程——最终回答前对每个需要的结果调用 `subagent_wait`。需要机器可验证的输出时，可提供 `output_schema` 获得校验后的 JSON 结果。
+不会。`subagent_spawn` 立即返回，子代理结束后结果自动回传给主 Agent，期间可以继续做别的事。非交互运行（`pi -p`、`--mode json`）在轮次结束时退出进程，因此模型会被要求在最终回答前对每个需要的结果调用 `subagent_wait`。需要机器可验证的输出时，可提供 `output_schema` 获得校验后的 JSON 结果。
 
 </details>
 

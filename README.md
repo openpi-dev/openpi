@@ -130,7 +130,7 @@ const scans = await parallel(
     }),
   ),
 );
-return agent("Synthesize the verified findings", {
+return agent("Synthesize the findings", {
   agent_type: "advisor",
   inputs: scans.filter((r) => r?.ok).map((r) => r.ref),
 });
@@ -287,7 +287,7 @@ No. Suggestions are off by default. The resident tool set is only an interface t
 <details>
 <summary><strong>Does a subagent block the parent agent?</strong></summary>
 
-`subagent_spawn` returns immediately; the result is delivered automatically and re-invokes the parent. In an interactive session, end your turn unless the user asked you to wait. In a non-interactive run (`pi -p`, `--mode json`) the process exits when the turn ends — call `subagent_wait` for every result you need before the final answer. For machine-verifiable output, pass `output_schema` to get a validated JSON result back.
+No. `subagent_spawn` returns immediately, and the result is delivered back to the parent automatically when the subagent finishes, so you can keep working in the meantime. In a non-interactive run (`pi -p`, `--mode json`) the process exits when the turn ends, so the model is told to `subagent_wait` for every result it needs before the final answer. For machine-verifiable output, pass `output_schema` to get a validated JSON result back.
 
 </details>
 
