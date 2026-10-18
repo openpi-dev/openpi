@@ -351,6 +351,21 @@ test("interactive spawn guidance releases the turn instead of waiting on depende
   assert.doesNotMatch(result, /next step truly cannot proceed/i);
 });
 
+test("non-interactive spawn guidance requires subagent_wait before the final answer", () => {
+  const result = buildSubagentSpawnResult({
+    id: "sa-7",
+    title: "review",
+    harness: "pi",
+    modelLabel: "m",
+    cwd: "/repo",
+    exitsAfterTurn: true,
+  });
+  assert.match(result, /non-interactive run/);
+  assert.match(result, /subagent_wait\(ids: \["sa-7"\]\)/);
+  assert.doesNotMatch(result, /automatically re-invoked/);
+  assert.doesNotMatch(result, /keep working on independent work/);
+});
+
 test("blocking wait is reserved for an explicit synchronous contract", () => {
   assert.match(
     SUBAGENT_WAIT_TOOL_DESCRIPTION,

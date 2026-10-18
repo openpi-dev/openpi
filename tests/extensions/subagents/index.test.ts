@@ -1174,6 +1174,7 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
     const ctx = {
       cwd,
       hasUI: false,
+      mode: "print",
       isProjectTrusted: () => false,
       model,
       getContextUsage: () => undefined,
@@ -1194,7 +1195,11 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
           undefined,
           undefined,
           ctx,
-        )) as { details: { id: string } };
+        )) as { content: [{ text: string }]; details: { id: string } };
+        // A print-mode parent exits when the turn ends, so the spawn result
+        // must require subagent_wait instead of relying on delivery.
+        assert.match(spawned.content[0]!.text, /non-interactive run/);
+        assert.match(spawned.content[0]!.text, /subagent_wait\(ids:/);
         const waited = await tools
           .get("subagent_wait")!
           .execute(

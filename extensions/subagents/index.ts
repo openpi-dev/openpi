@@ -1202,6 +1202,7 @@ export default function (
               ...(params.output_schema !== undefined
                 ? { structured: true }
                 : {}),
+              exitsAfterTurn: ctx.mode === "print" || ctx.mode === "json",
             }),
           },
         ],
