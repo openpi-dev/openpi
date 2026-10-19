@@ -115,7 +115,6 @@ test("subagent detail projects cumulative spend verbatim", () => {
     output: 250,
     cacheRead: 600,
     cacheWrite: 40,
-    cost: 0.042,
   };
   assert.deepEqual(
     projectSubagentDetail(subagentSnapshot({ spend })).spend,

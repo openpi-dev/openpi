@@ -232,7 +232,6 @@ export interface SubagentSpend {
   readonly output: number;
   readonly cacheRead: number;
   readonly cacheWrite: number;
-  readonly cost: number;
 }
 
 // --- Snapshot ---------------------------------------------------------------
@@ -267,7 +266,7 @@ export interface SubagentSnapshot {
   readonly errorText?: string;
   readonly meta: SubagentMeta;
   readonly usage: { readonly tokens?: number; readonly contextWindow?: number };
-  /** Cumulative token spend (and cost when known) across the child session. */
+  /** Cumulative token spend across the child session. */
   readonly spend?: SubagentSpend;
   readonly transcript: ReadonlyArray<TranscriptItem>;
   /** Monotonic version bumped on every transcript mutation (see manager). */

@@ -56,7 +56,6 @@ export function stubSpend(turn: number) {
     output: 300 * (turn + 1),
     cacheRead: 800 * (turn + 1),
     cacheWrite: 100 * (turn + 1),
-    cost: 0.0123 * (turn + 1),
   };
 }
 

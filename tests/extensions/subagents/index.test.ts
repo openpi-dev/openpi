@@ -174,7 +174,6 @@ test("delivered result details carry spend while model-facing content is unchang
     output: 250,
     cacheRead: 600,
     cacheWrite: 40,
-    cost: 0.042,
   };
   const withSpend = dispatchEvents(spend);
   const withoutSpend = dispatchEvents(undefined);
@@ -1583,13 +1582,13 @@ test("subagent_check reports the child's cumulative spend", async () => {
       const waited = await tools
         .get("subagent_wait")!
         .execute("wait", { ids: [id] }, undefined, undefined, toolCtx);
-      assert.match(
-        JSON.stringify(
-          (waited as { details: { results: Array<{ spend?: unknown }> } })
-            .details,
-        ),
-        /"cost":0\.042/,
+      // Stats expose cost, but spend details must never carry or show it.
+      const serializedDetails = JSON.stringify(
+        (waited as { details: { results: Array<{ spend?: unknown }> } })
+          .details,
       );
+      assert.match(serializedDetails, /"cacheWrite":40/);
+      assert.equal(serializedDetails.includes('"cost"'), false);
       const checked = (await tools
         .get("subagent_check")!
         .execute("check", { id }, undefined, undefined, toolCtx)) as {
@@ -1598,8 +1597,9 @@ test("subagent_check reports the child's cumulative spend", async () => {
       // in = 1000 + 600 + 40 = 1640 -> "1.6k", cached = 600, out = 250.
       assert.match(
         checked.content[0]!.text,
-        /1\.6k in \(600 cached\) · 250 out · \$0\.0420/,
+        /1\.6k in \(600 cached\) · 250 out/,
       );
+      assert.equal(checked.content[0]!.text.includes("$"), false);
     } finally {
       await hooks.get("session_shutdown")?.({}, ctx);
       __setSubagentTestBackends(undefined);

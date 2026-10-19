@@ -1492,12 +1492,12 @@ test("usage events carry session stats as cumulative spend", async () => {
 
   const usage = events.filter((event) => event._tag === "UsageChanged");
   assert.ok(usage.length > 0);
+  // Pi SessionStats exposes cost, but OpenPI deliberately does not surface it.
   assert.deepEqual(usage.at(-1)?.spend, {
     input: 1_000,
     output: 250,
     cacheRead: 600,
     cacheWrite: 40,
-    cost: 0.042,
   });
 });
 

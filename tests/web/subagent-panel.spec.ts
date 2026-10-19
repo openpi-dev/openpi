@@ -1078,7 +1078,6 @@ it("shows the child's cumulative spend in the detail metadata", async () => {
           output: 250,
           cacheRead: 600,
           cacheWrite: 40,
-          cost: 0.042,
         },
       }),
     ),
@@ -1086,5 +1085,5 @@ it("shows the child's cumulative spend in the detail metadata", async () => {
   showPanel();
   await flush();
   const spend = screen.getByTitle(i18n.t("subagentSpend"));
-  expect(spend.textContent).toBe("1.6k in (600 cached) · 250 out · $0.0420");
+  expect(spend.textContent).toBe("1.6k in (600 cached) · 250 out");
 });

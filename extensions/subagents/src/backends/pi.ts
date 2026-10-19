@@ -369,7 +369,6 @@ const makePiSession = (
             output: stats.tokens.output,
             cacheRead: stats.tokens.cacheRead,
             cacheWrite: stats.tokens.cacheWrite,
-            cost: stats.cost,
           };
         }
       } catch {
