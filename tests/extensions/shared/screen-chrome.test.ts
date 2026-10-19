@@ -85,7 +85,7 @@ test("a title line stays on one bounded row at any width", () => {
   for (const width of [3, 12, 30, 80]) {
     const line = screenTitleLine(
       plain,
-      "Background terminals",
+      "Subagent activity",
       "9 running",
       width,
     );

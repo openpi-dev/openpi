@@ -461,7 +461,6 @@ it.each([
           "/api/settings/catalog": {
             sessionId: "session",
             setup: {
-              capabilities: { discovery: "explicit" },
               suggestions: { enabled: false },
               workflows: { concurrency: 6, maxAgentCalls: 64 },
               ui: {
@@ -1294,7 +1293,6 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
     "cancelled",
     "timed_out",
     "running",
-    "running",
   ]);
 
   view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
@@ -1314,7 +1312,6 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
     "failed",
     "cancelled",
     "timed_out",
-    "unknown",
     "unknown",
   ]);
   expect(view.container.querySelector(".thinking-line.unknown")).toBeTruthy();
@@ -1338,7 +1335,6 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
     "failed",
     "cancelled",
     "timed_out",
-    "running",
     "running",
   ]);
   expect(JSON.stringify(snapshot)).toBe(original);
@@ -1425,23 +1421,24 @@ it("freezes untimed turn and navigation presentation when native activity observ
   expect(JSON.stringify(snapshot)).toBe(original);
 });
 
-it("keeps background evidence observed by default and freezes only its nonterminal presentation", () => {
+it("keeps live terminal evidence observed by default and freezes only its nonterminal presentation", () => {
   const call = {
     type: "toolCall" as const,
-    id: "background-status",
-    name: "bg_status",
-    arguments: '{"id":"background-process"}',
+    id: "bash-live",
+    name: "bash",
+    arguments: '{"command":"run-server"}',
   };
   const result = {
     role: "toolResult",
     toolName: call.name,
     toolCallId: call.id,
-    content: "Exact native background receipt",
+    content: "Exact native bash receipt",
     isError: false,
-    details: { status: "running" },
   };
   const original = JSON.stringify(result);
-  const view = renderWithI18n(createElement(ToolEvidence, { call, result }));
+  const view = renderWithI18n(
+    createElement(ToolEvidence, { call, result, liveState: "running" }),
+  );
   const state = () =>
     view.container
       .querySelector(".tool-evidence-card")
@@ -1451,24 +1448,29 @@ it("keeps background evidence observed by default and freezes only its nontermin
     createElement(
       I18nextProvider,
       { i18n },
-      createElement(ToolEvidence, { call, result, observed: false }),
+      createElement(ToolEvidence, {
+        call,
+        result,
+        liveState: "running",
+        observed: false,
+      }),
     ),
   );
   expect(state()).toBe("unknown");
   expect(JSON.stringify(result)).toBe(original);
-  for (const [status, expected] of [
-    ["done", "returned"],
-    ["failed", "failed"],
-    ["killed", "cancelled"],
-    ["timed_out", "timed_out"],
-  ]) {
+  for (const [receipt, expected] of [
+    [undefined, "returned"],
+    [{ state: "failed", exitCode: 2 }, "failed"],
+    [{ state: "cancelled" }, "cancelled"],
+    [{ state: "timed_out" }, "timed_out"],
+  ] as const) {
     view.rerender(
       createElement(
         I18nextProvider,
         { i18n },
         createElement(ToolEvidence, {
           call,
-          result: { ...result, details: { status, exitCode: 2 } },
+          result: { ...result, terminalReceipt: receipt },
           observed: false,
         }),
       ),
@@ -2614,7 +2616,7 @@ it("keeps background Session files, trajectory and activity scoped to the select
     epoch: 1,
   };
   snapshot.runtime.capabilities = {
-    "background-terminals": {
+    subagents: {
       items: [
         { id: "terminal-a", title: "A build", status: "running", createdAt: 1 },
       ],
@@ -3648,17 +3650,18 @@ it("shows Pi's queued messages above the composer after reload and in a backgrou
   ).toBeNull();
 });
 
-it("keeps background terminal activity and omission receipts visible", () => {
+it("keeps capability activity and omission receipts visible", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.capabilities = {
-    "background-terminals": {
+    workflows: {
       items: [
         {
-          id: "terminal",
-          title: "Build",
+          runId: "wf-build",
+          name: "Build",
           status: "failed",
-          createdAt: 1,
-          settledAt: 2,
+          startedAt: 1,
+          finishedAt: 2,
+          agents: { total: 1, running: 0, done: 0, error: 1, uncertain: 0 },
         },
       ],
       omitted: 3,
@@ -3885,18 +3888,6 @@ it("keeps completed groups collapsed independently of the thinking preference", 
 it("does not attribute current runtime activity to a historical session", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.capabilities = {
-    "background-terminals": {
-      items: [
-        {
-          id: "terminal",
-          title: "Current build",
-          status: "running",
-          createdAt: 1,
-        },
-      ],
-      omitted: 0,
-      truncated: false,
-    },
     subagents: {
       items: [
         {

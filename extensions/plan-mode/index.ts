@@ -40,7 +40,6 @@ import {
   type PlanModeState,
 } from "../shared/plan-mode-state.ts";
 import {
-  loadOpenPiCapabilities,
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
@@ -54,6 +53,7 @@ import {
 } from "./control.ts";
 
 import {
+  decodePlanModeState,
   MAX_READY_PLAN_CHARS,
   MAX_READY_PLAN_UTF8_BYTES,
   PLAN_MODE_STATE_ENTRY,
@@ -129,8 +129,6 @@ export const PLAN_SAFE_TOOLS = new Set([
   "grep",
   "find",
   "ls",
-  "fd",
-  "rg",
   "git_show",
   "git_diff",
   "git_log",
@@ -140,11 +138,7 @@ export const PLAN_SAFE_TOOLS = new Set([
   "fetch_content",
   "get_search_content",
   // Read-only inspection of work already in flight.
-  "bg_status",
-  "bg_list",
-  "bg_watch",
   "subagent_check",
-  "subagent_list",
   "subagent_wait",
   "workflow_status",
   // Delegated investigation. Exploring several subsystems in parallel without
@@ -160,16 +154,20 @@ export const PLAN_SAFE_TOOLS = new Set([
   // child's session, and one started before `/plan` was armed still holds the
   // full tool set. Narrowing applies at spawn, so only spawning is safe.
   "subagent_spawn",
-  // Advisory state reads and an explicit user clarification.
-  "tasks_list",
-  "get_goal",
+  // An explicit user clarification.
   "ask_user",
   // The model's explicit, terminating transition from planning to ready.
   "plan_ready",
 ]);
 
 export const BLOCK_REASON =
-  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, git_log/git_diff/git_show, web search, read-only bash like git log/status, and subagent_spawn for parallel exploration — planning children get read-only tools). Raw git diff/show and diff-generating git log forms are blocked; use the structured Git tools instead. When the plan is decision-complete, call plan_ready alone with the complete Markdown plan; the user then chooses the next action with `/plan`, or cancels with `/plan off`.";
+  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, Pi's grep/find/ls tools when they are available, read-only rg/fd/ls shell commands, git_log/git_diff/git_show, web search, read-only bash like git log/status, and subagent_spawn for parallel exploration — planning children get read-only tools). Raw git diff/show and diff-generating git log forms are blocked; use the structured Git tools instead. When the plan is decision-complete, call plan_ready alone with the complete Markdown plan; the user then chooses the next action with `/plan`, or cancels with `/plan off`.";
+
+const READY_PLAN_CONTEXT =
+  "The plan is ready. All tools remain blocked until the user explicitly chooses a Plan action or exits planning. Do not start implementation.";
+
+const INACTIVE_PLAN_CONTEXT =
+  "Current Session state: Plan mode is inactive. Earlier Plan-mode restrictions in this conversation are historical and no longer apply. Exiting Plan mode does not authorize implementation of a previous plan; follow the user's current request and normal permissions.";
 
 export function planToolCallDecision(
   toolName: string,
@@ -206,9 +204,9 @@ export default function planMode(pi: ExtensionAPI) {
     | undefined;
   const syncPlanTool = () =>
     patchOwnedTools(pi, "plan", {
-      ...(planning && !readyPlan
-        ? { enable: OPENPI_TOOL_SURFACE.plan.deferred }
-        : { disable: OPENPI_TOOL_SURFACE.plan.deferred }),
+      ...(planning
+        ? { enable: OPENPI_TOOL_SURFACE.plan.boundary }
+        : { disable: OPENPI_TOOL_SURFACE.plan.boundary }),
     });
 
   /**
@@ -221,7 +219,6 @@ export default function planMode(pi: ExtensionAPI) {
     hasUI: boolean;
     ui: { setStatus: (key: string, value?: string) => void };
   }) => {
-    if (planning) loadOpenPiCapabilities(pi, ["search"]);
     syncPlanTool();
     pi.events.emit(PLAN_MODE_CHANNEL, { planning } satisfies PlanModeState);
     if (!ctx.hasUI) return;
@@ -391,6 +388,11 @@ export default function planMode(pi: ExtensionAPI) {
       }
       if (!planning) {
         throw new Error("plan_ready requires active Plan Mode.");
+      }
+      if (readyPlan) {
+        throw new Error(
+          "A plan is already ready for this Plan Mode episode; use `/plan` to continue planning or prepare implementation.",
+        );
       }
       const plan = sanitizeTerminalText(params.plan).trim();
       if (!plan) throw new Error("plan_ready requires a non-empty plan.");
@@ -564,7 +566,7 @@ export default function planMode(pi: ExtensionAPI) {
         {
           customType: "plan-mode-armed",
           content:
-            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits and writes are blocked until the user explicitly chooses an implementation action. For files use the read, ls, grep, fd and rg tools. Use \`git_log\`, \`git_diff\` and \`git_show\` for history and changes; they disable repository external diff and textconv programs. Bash is limited to read-only git and gh commands such as \`git log\`, \`git status\`, \`git blame\` and \`gh pr view\` — raw Git commands that render diffs are blocked, and every Bash call must be one plain command with no pipes or redirects. You can still delegate with \`subagent_spawn\` to explore several parts of the codebase at once: children spawned while planning receive read-only tools, so use them for investigation rather than for work to be done later.${objective ? `\n\nPlan for: ${objective}` : ""}` +
+            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits and writes are blocked until the user explicitly chooses an implementation action. For files use the read tool, Pi's \`ls\`, \`grep\` and \`find\` tools when they are available, or read-only \`rg\`/\`fd\`/\`ls\` shell commands. Use \`git_log\`, \`git_diff\` and \`git_show\` for history and changes; they disable repository external diff and textconv programs. Bash is limited to read-only git and gh commands such as \`git log\`, \`git status\`, \`git blame\` and \`gh pr view\` — raw Git commands that render diffs are blocked, and every Bash call must be one plain command with no pipes or redirects. You can still delegate with \`subagent_spawn\` to explore several parts of the codebase at once: children spawned while planning receive read-only tools, so use them for investigation rather than for work to be done later.${objective ? `\n\nPlan for: ${objective}` : ""}` +
             "\n\nUse read-only tools to ground the plan. When it is decision-complete, call `plan_ready` alone with the complete Markdown plan. That records the plan but does not start implementation; the user chooses the next action with `/plan`.",
           display: true,
           details: {},
@@ -689,43 +691,64 @@ export default function planMode(pi: ExtensionAPI) {
     });
   };
 
-  // Project the current stance for user and custom-message turns at every
-  // provider call, without persisting a message or
-  // leaving an obsolete restriction in Pi's cached system prompt.
+  // Project one reminder per persisted state entry, anchored at the entry's
+  // position in the branch instead of appended at the tail: a tail message is
+  // displaced by every new message, so request k is never a prefix of request
+  // k+1 and the provider's prompt cache never hits. Reminder text derives only
+  // from the entry itself, so history already sent never changes.
   pi.on("context", (event, ctx) => {
-    if (!planning) {
+    const reminders: Array<{ ms: number; content: string }> = [];
+    let previous: string | undefined;
+    for (const entry of ctx.sessionManager.getBranch()) {
       if (
-        !ctx.sessionManager
-          .getBranch()
-          .some(
-            (entry) =>
-              entry.type === "custom" &&
-              entry.customType === PLAN_MODE_STATE_ENTRY,
-          )
+        !isRecord(entry) ||
+        entry.type !== "custom" ||
+        entry.customType !== PLAN_MODE_STATE_ENTRY
       )
-        return;
-    }
-    const content = !planning
-      ? "Current Session state: Plan mode is inactive. Earlier Plan-mode restrictions in this conversation are historical and no longer apply. Exiting Plan mode does not authorize implementation of a previous plan; follow the user's current request and normal permissions."
-      : readyPlan
-        ? "The plan is ready. All tools remain blocked until the user explicitly chooses a Plan action or exits planning. Do not start implementation."
-        : BLOCK_REASON;
-    return {
-      messages: [
-        ...event.messages.filter(
-          (message) =>
-            message.role !== "custom" ||
-            message.customType !== "openpi-plan-context",
+        continue;
+      const state = decodePlanModeState(entry.data);
+      const content =
+        !state || (state.planning && state.readyPlan === undefined)
+          ? BLOCK_REASON
+          : state.planning
+            ? READY_PLAN_CONTEXT
+            : INACTIVE_PLAN_CONTEXT;
+      if (content === previous) continue;
+      previous = content;
+      reminders.push({
+        ms: Date.parse(
+          typeof entry.timestamp === "string" ? entry.timestamp : "",
         ),
-        {
-          role: "custom" as const,
-          customType: "openpi-plan-context",
-          content,
-          display: false,
-          timestamp: 0,
-        },
-      ],
-    };
+        content,
+      });
+    }
+    if (reminders.length === 0) return;
+    const base = event.messages.filter(
+      (message) =>
+        message.role !== "custom" ||
+        message.customType !== "openpi-plan-context",
+    );
+    // Transitions with no message between them share an anchor; only the
+    // latest state there is meaningful.
+    const anchored = new Map<number, (typeof reminders)[number]>();
+    for (const reminder of reminders) {
+      let index = base.findIndex((message) => message.timestamp > reminder.ms);
+      if (index === -1) index = base.length;
+      // A mid-turn plan_ready commit lands between the assistant tool call
+      // and its results; never split a call from its toolResult run.
+      while (base[index]?.role === "toolResult") index++;
+      anchored.set(index, reminder);
+    }
+    const messages = [...base];
+    for (const [index, reminder] of [...anchored].reverse())
+      messages.splice(index, 0, {
+        role: "custom" as const,
+        customType: "openpi-plan-context",
+        content: reminder.content,
+        display: false,
+        timestamp: Number.isFinite(reminder.ms) ? reminder.ms : 0,
+      });
+    return { messages };
   });
 
   // before_agent_start carries the raw user prompt, so use it only to bind an

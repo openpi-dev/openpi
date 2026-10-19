@@ -2640,7 +2640,7 @@ test("recovers an unknown prompt admission only after an explicit user decision"
   ).toHaveCount(0);
 });
 
-test("inspects session-scoped runtime and terminal details on desktop and mobile", async ({
+test("inspects session-scoped runtime and subagent details on desktop and mobile", async ({
   page,
 }, testInfo) => {
   const sessionId = "inspection-browser-session";
@@ -2685,10 +2685,10 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     snapshot.runtime = {
       status: "idle",
       capabilities: {
-        "background-terminals": {
+        subagents: {
           items: [
             {
-              id: "bt-1",
+              id: "sa-1",
               title: "Build logs",
               status: "done",
               createdAt: 1,
@@ -2696,6 +2696,7 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
             },
           ],
           omitted: 0,
+          truncated: false,
         },
       },
     };
@@ -2758,22 +2759,20 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
               : {
                   sessionId,
                   detail: {
-                    id: "bt-1",
+                    kind: "subagents",
+                    id: "sa-1",
                     title: "Build logs",
-                    command: "bun run check",
                     cwd: "/inspection",
                     status: "done",
                     createdAt: 1,
-                    exitCode: 0,
-                    stdout: {
-                      text:
-                        '<script>alert("literal output")</script>\n' +
-                        "long output ".repeat(100),
-                      truncated: true,
-                      omittedBytes: 100,
-                    },
-                    stderr: { text: "" },
-                    truncated: true,
+                    prompt:
+                      '<script>alert("literal output")</script>\n' +
+                      "long output ".repeat(100),
+                    transcript: [],
+                    liveTools: [],
+                    finalText: "",
+                    truncated: false,
+                    omittedEntries: 0,
                   },
                 };
       await route.fulfill({ json: body });
@@ -2866,30 +2865,34 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     });
     await page.keyboard.press("Escape");
     await expect(providerSettings).not.toBeVisible();
-    await page.getByRole("button", { name: /Build logs/ }).click();
-    await expect(dialog.locator("pre").first()).toContainText(
+    await page.getByRole("button", { name: /子代理/ }).click();
+    const subagentPanel = page.getByRole(
+      width <= 640 ? "main" : "complementary",
+      {
+        name: "子代理",
+        exact: true,
+      },
+    );
+    await subagentPanel.getByText("Build logs").click();
+    await subagentPanel.getByText("分配的任务").click();
+    await expect(subagentPanel.locator("pre").first()).toContainText(
       '<script>alert("literal output")</script>',
     );
-    const terminalOutput = dialog.getByRole("region", { name: "标准输出" });
-    await terminalOutput.click();
-    await expect(terminalOutput).toBeFocused();
-    expect(
-      await terminalOutput.evaluate(
-        (element) => element.scrollWidth > element.clientWidth,
-      ),
-    ).toBe(true);
-    await expect(dialog.locator("script")).toHaveCount(0);
-    await expect(dialog).toContainText("已完成");
+    await expect(subagentPanel.locator("script")).toHaveCount(0);
+    await expect(subagentPanel).toContainText("已完成");
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
     await page.screenshot({
-      path: testInfo.outputPath(`terminal-${width}.png`),
+      path: testInfo.outputPath(`subagent-${width}.png`),
       fullPage: true,
     });
-    await page.getByRole("button", { name: "关闭", exact: true }).click();
+    await subagentPanel
+      .getByRole("button", { name: "关闭", exact: true })
+      .click();
+    await expect(subagentPanel).not.toBeVisible();
   }
 });
 

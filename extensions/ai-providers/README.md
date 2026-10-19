@@ -21,7 +21,7 @@ select a model:
 ```
 
 For source-checkout testing, follow the repository's
-[development runtime provenance procedure](../../README.md#开发运行时区分-npm-与当前源码).
+[development runtime provenance procedure](../../CONTRIBUTING.md#development-runtime-npm-vs-current-source).
 Remove any previously installed OpenPI source, install the checkout, and verify
 that `pi list` reports this checkout as the only OpenPI source before reloading
 Pi. Do not mix an installed OpenPI package with an explicitly loaded checkout

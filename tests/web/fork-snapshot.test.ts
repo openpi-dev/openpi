@@ -89,7 +89,7 @@ const synthetic = {
 };
 
 test("the exact synthetic tool marker preserves native isError but never invents terminal or test evidence", () => {
-  for (const name of ["bash", "read", "write", "edit", "bg_status"]) {
+  for (const name of ["bash", "read", "write", "edit", "subagent_check"]) {
     const result = projectMessage({
       ...synthetic,
       toolName: name,

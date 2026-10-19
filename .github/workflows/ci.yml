@@ -54,7 +54,6 @@ jobs:
           PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi install "$PWD"
           output="$(PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi --offline --no-session --mode rpc </dev/null)"
           grep -q '"statusKey":"plan-mode"' <<<"$output"
-          grep -q '"widgetKey":"session-tasks-panel"' <<<"$output"
       - name: Smoke-test packed extensions without optional peers
         run: |
           root="$(mktemp -d)"
@@ -71,7 +70,7 @@ jobs:
             --offline \
             --mode rpc \
             --no-extensions \
-            --extension "$package/extensions/file-search/index.ts" \
+            --extension "$package/extensions/git-read/index.ts" \
             --extension "$package/extensions/git-info/index.ts" \
             --extension "$package/extensions/ai-providers/index.ts" \
             </dev/null

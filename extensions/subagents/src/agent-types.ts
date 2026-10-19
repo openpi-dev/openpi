@@ -31,6 +31,7 @@ import {
 import {
   CHILD_EXCLUDED_TOOL_NAMES,
   CHILD_SAFE_PACKAGE_TOOL_NAMES,
+  RETIRED_OPENPI_TOOL_NAMES,
 } from "../../shared/child-session.ts";
 import {
   isSubagentRoleName,
@@ -109,8 +110,6 @@ export const READ_ONLY_AGENT_TOOLS = [
   "grep",
   "find",
   "ls",
-  "fd",
-  "rg",
   "git_show",
   "git_diff",
   "git_log",
@@ -359,6 +358,13 @@ export function parseAgentType(
       diagnostics.push({
         source,
         message: `"${tool}" in ${name} is a parent-only tool; the child cannot receive it, so it is ignored`,
+      });
+      continue;
+    }
+    if (RETIRED_OPENPI_TOOL_NAMES.has(tool)) {
+      diagnostics.push({
+        source,
+        message: `"${tool}" in ${name} is no longer provided by OpenPI and is ignored`,
       });
       continue;
     }

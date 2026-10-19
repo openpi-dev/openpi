@@ -19,59 +19,47 @@ const COMPLETION_DELIVERY_FACTS_LIMIT_ERROR =
 /** Model-facing schema descriptions for workflow source and launch policy. */
 export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
   script:
-    "JavaScript workflow script. May start with `export const meta = {...}`, then use phase(), agent(), parallel(), args, and a final `return`.",
-  args: "Optional JSON string exposed to the script as `args` (parsed when valid JSON, otherwise passed through as the raw string).",
-  background:
-    "Deprecated compatibility alias for published callers only; new calls must use wait. Replace true with wait=false and false with wait=true. Do not provide both fields. The alias will be removed in the next announced breaking release.",
-  wait: "Wait for the final result in this tool call. Interactive sessions default to false and deliver completion later; print/automation defaults to true. Interrupting the wait does not cancel the workflow.",
+    "Async JavaScript body; may start with `export const meta = {...}` and must end with `return`.",
+  args: "Optional JSON string exposed to the script as `args`.",
+  background: "Deprecated alias for wait (true means wait: false). Do not use.",
+  wait: "Return the final result in this call. Defaults to false in interactive sessions and true in print/automation.",
   resumeFromRunId:
-    "Optional prior run id or unique suffix for safe read-only replay. See the workflows Skill for matching rules.",
+    "Prior run id (or unique suffix) whose safe read-only calls may be replayed.",
 };
 
-/** Describes stopping a running workflow, mirroring subagent_cancel/bg_kill. */
+/** Describes stopping a running workflow. */
 export const WORKFLOW_STOP_TOOL_DESCRIPTION =
-  "Cancel a running workflow by its run id (from the workflow launch result). This aborts its remaining agents and settles the run; partial results and artifacts are preserved.";
+  "Cancel a running workflow. Partial results and artifacts are kept.";
 
 /** Model-facing schema description for the workflow run id to stop. */
 export const WORKFLOW_STOP_PARAMETER_DESCRIPTIONS = {
-  runId: 'Workflow run id to cancel, e.g. "wf_1a2b3c4d5e6f".',
+  runId: 'Run id, e.g. "wf_1a2b3c4d5e6f".',
 };
 
-/** Describes nonblocking inspection of workflow runs, mirroring subagent_check/subagent_list. */
+/** Describes nonblocking inspection of workflow runs. */
 export const WORKFLOW_STATUS_TOOL_DESCRIPTION =
-  "Peek at workflow runs without blocking. With a run id, returns a bounded status and coverage summary plus the artifact location; without one, lists this session's active and recently finished runs. Does not wait, consume a completion, or repeat the full final result.";
+  "Show a workflow run's status and artifact location without blocking, or omit runId to list this session's runs.";
 
 /** Model-facing schema description for the optional workflow run id to inspect. */
 export const WORKFLOW_STATUS_PARAMETER_DESCRIPTIONS = {
-  runId:
-    "Optional workflow run id to inspect. Omit to list active and recently finished runs.",
+  runId: "Run id; omit to list runs.",
 };
 
 /** Adds workflow lifecycle inspection/cancellation to the parent model's tools prompt. */
 export const WORKFLOW_LIFECYCLE_PROMPT_SNIPPET =
-  "Inspect (workflow_status) or cancel (workflow_stop) a background workflow by run id";
+  "Inspect or cancel workflow runs";
 
 /** Compact resident contract; the workflows Skill carries the complete guide. */
-export const WORKFLOW_TOOL_DESCRIPTION = [
-  "Use the workflow tool when the user explicitly requests a workflow run or when the task clearly requires multi-phase dynamic orchestration.",
-  "Write an async JavaScript body using optional meta, phase(), log(), usage(), agent(), pipeline(), parallel(), args, and a JSON-serializable return. usage().limits reports the resolved concurrency and remaining call capacity.",
-  "agent() returns { ok, output, structured?, ref?, error? }; always check `.ok`, use a schema for branching, and surface failed or null results.",
-  "Prefer pipeline() for independent multi-stage items. Use parallel() only for a real barrier where the next step needs every prior result.",
-  "Interactive sessions launch in the background by default and deliver completion later. Set wait: true only when this tool call must return the final result inline.",
-  "Derive fan-out from independent verifiable work items and task difficulty. Concurrency is a runtime ceiling, not a target or the total-call limit; user cost, count, model, and effort constraints take precedence.",
-  "For concurrent writers use isolation: 'worktree' and tell each agent to commit. Read-only work should normally stay in the shared checkout.",
-  "Read the workflows Skill before a nontrivial script; it covers the restricted sandbox, full DSL, result refs, replay, background lifecycle, limits, and examples.",
-].join("\n");
+export const WORKFLOW_TOOL_DESCRIPTION =
+  "Run a multi-phase subagent orchestration written as an async JavaScript body. DSL: phase(), agent(prompt, opts) returning { ok, output, structured?, ref?, error? }, pipeline(items, ...stages), parallel([() => agent(...)]), log(), usage(), args; return a JSON-serializable result and check every agent result's .ok. Interactive sessions run it in the background and deliver the result later; set wait: true only when this call must return the result. Read the workflows skill before writing a nontrivial script.";
 
 /** Adds workflow orchestration primitives and background execution to the model's tool prompt. */
 export const WORKFLOW_PROMPT_SNIPPET =
-  "Orchestrate subagents from an inline JS script; read the workflows Skill for the complete DSL";
+  "Orchestrate several dependent subagent calls from a JS script";
 
 /** Guides the model on appropriate workflow fan-out and mandatory agent result checks. */
 export const WORKFLOW_PROMPT_GUIDELINES = [
-  "Use workflow when a task needs several subagents with phase dependencies or dynamic fan-out; keep single small delegations in the main session.",
-  "select a matching agent_type when available; use its configured model and do not hardcode that role's model.",
-  "Read the workflows Skill before a nontrivial script; check every agent result, surface dropped work, and use worktree isolation for concurrent writers.",
+  "Use workflow only for several subagent calls with phase dependencies or dynamic fan-out; a single delegation belongs in subagent_spawn.",
 ];
 
 /** Marks and forwards a workflow script's agent() task as an isolated child-model prompt. */
