@@ -530,6 +530,6 @@ export function planBashDecision(command: unknown): BashPlanDecision {
   }
 
   return refuse(
-    `plan mode does not allow "${program}" — use read-only git and gh investigation commands; available commands are git, gh, rg, fd, ls, wc, head or tail, plus the read/grep/fd tools`,
+    `plan mode does not allow "${program}" — use read-only git and gh investigation commands; available commands are git, gh, rg, fd, ls, wc, head or tail, plus the read tool and Pi's grep/find/ls tools when they are available`,
   );
 }

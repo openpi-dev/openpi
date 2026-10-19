@@ -3,7 +3,7 @@
  *
  * Registers git_show, git_diff, and git_log: the minimal surface a review or
  * exploration agent needs from git history without any write path. All three
- * share the file-search output discipline (bounded preview, complete output
+ * share the same output discipline (bounded preview, complete output
  * persisted up to 10 MiB) and every user-controlled argument is validated
  * before it reaches a child process, so a revision or path can never inject
  * flags or escape the repository. The tools are child-safe by design and are
@@ -20,8 +20,12 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
 import { Type } from "typebox";
-import { formatCapturedOutput } from "../file-search/src/output.ts";
+import { formatCapturedOutput } from "./src/output.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import {
+  PLAN_MODE_CHANNEL,
+  type PlanModeState,
+} from "../shared/plan-mode-state.ts";
 import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
@@ -171,10 +175,26 @@ export default function gitReadTools(pi: ExtensionAPI) {
     }
   };
 
-  pi.on("session_start", () => {
+  // The git-read tools are a plan-mode boundary: they are visible only while
+  // the user has explicitly armed `/plan`, and leave when planning ends.
+  let planning = false;
+  const syncGitReadTools = () =>
     patchOwnedTools(pi, "gitRead", {
-      enable: OPENPI_TOOL_SURFACE.gitRead.entry,
+      ...(planning
+        ? { enable: OPENPI_TOOL_SURFACE.gitRead.boundary }
+        : { disable: OPENPI_TOOL_SURFACE.gitRead.boundary }),
     });
+
+  pi.events.on(PLAN_MODE_CHANNEL, (state: unknown) => {
+    planning =
+      typeof state === "object" &&
+      state !== null &&
+      (state as PlanModeState).planning === true;
+    syncGitReadTools();
+  });
+
+  pi.on("session_start", () => {
+    syncGitReadTools();
   });
 
   pi.on("session_shutdown", () => {

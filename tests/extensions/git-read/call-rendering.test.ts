@@ -17,6 +17,12 @@ initTheme("dark", false);
 const tools: ToolDefinition[] = [];
 gitRead({
   on() {},
+  events: {
+    on() {
+      return () => {};
+    },
+    emit() {},
+  },
   registerTool(tool: ToolDefinition) {
     tools.push(tool);
   },

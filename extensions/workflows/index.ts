@@ -858,7 +858,7 @@ export default function workflows(
     new Map<string, WorkflowDetails>(settledRuns.entriesArray());
   const registerStableToolFamily = () =>
     patchOwnedTools(pi, "workflows", {
-      enable: OPENPI_TOOL_SURFACE.workflows.entry,
+      enable: OPENPI_TOOL_SURFACE.workflows.resident,
     });
   const stripState = new WorkflowStripState();
   const statusWriter = createStatusWriter("workflows");

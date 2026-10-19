@@ -112,30 +112,12 @@ async function runSetupConfigChildScenario({
   });
 }
 
-test("Code Mode defaults on for old documents and preserves an explicit opt-out", () => {
-  assert.equal(DEFAULT_SETUP_CONFIG.codeMode.enabled, true);
-  assert.equal(parseSetupConfig({ configVersion: 1 }).codeMode.enabled, true);
-  const config = parseSetupConfig({ codeMode: { enabled: false } });
-  assert.equal(config.codeMode.enabled, false);
-  assert.match(formatSetupConfig(config), /Code Mode default: off/);
-});
-
-test("capability discovery defaults to explicit and accepts adaptive opt-in", () => {
-  assert.equal(DEFAULT_SETUP_CONFIG.capabilities.discovery, "explicit");
-  assert.equal(
-    parseSetupConfig({ capabilities: { discovery: "adaptive" } }).capabilities
-      .discovery,
-    "adaptive",
-  );
-  assert.equal(
-    parseSetupConfig({ capabilities: { discovery: "unexpected" } }).capabilities
-      .discovery,
-    "explicit",
-  );
-  assert.match(
-    formatSetupConfig(DEFAULT_SETUP_CONFIG),
-    /Capability discovery: explicit/,
-  );
+test("Code Mode defaults off for old documents and preserves an explicit opt-in", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.codeMode.enabled, false);
+  assert.equal(parseSetupConfig({ configVersion: 1 }).codeMode.enabled, false);
+  const config = parseSetupConfig({ codeMode: { enabled: true } });
+  assert.equal(config.codeMode.enabled, true);
+  assert.match(formatSetupConfig(config), /Code Mode default: on/);
 });
 
 test("response preferences preserve native defaults and bounded Web thinking filters are canonical", async () => {
@@ -1036,6 +1018,26 @@ test("legacy model-free recaps are explicitly migrated to disabled suggestions",
   >;
   assert.equal("summaries" in stored, false);
   assert.deepEqual(stored.suggestions, { enabled: false });
+});
+
+test("a retired capabilities block loads without a warning and is dropped on write", async () => {
+  writeFileSync(
+    SETUP_CONFIG_PATH,
+    JSON.stringify({ capabilities: { discovery: "explicit" } }),
+  );
+
+  const inspected = inspectSetupConfig();
+  assert.equal(
+    inspected.diagnostics.some((item) => item.path.startsWith("capabilities")),
+    false,
+  );
+
+  await updateSetupConfig((current) => current);
+  const stored = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal("capabilities" in stored, false);
 });
 
 test("the post-edit command is off by default, trimmed, and fails closed when oversized", () => {

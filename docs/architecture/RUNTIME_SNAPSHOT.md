@@ -1,6 +1,6 @@
 # Parent runtime snapshot
 
-- Status: draft
+- Status: superseded — replaced by [Decision 0005](../decisions/0005-frozen-tool-surface.md) (#879); the runtime_snapshot tool was removed and this record is historical.
 - Created: 2026-10-04
 - Verification boundary: source/tests only; no installed-runtime or TUI smoke
 - Source boundary: #651 implementation based on `c7862b852d866123e2b32c79d309bd49a3cf515f`, rebased onto `94f6dfb29343a699010440f37734ac14582c84af`, principally `extensions/runtime-snapshot/index.ts`

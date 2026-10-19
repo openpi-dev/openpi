@@ -36,12 +36,52 @@ export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
  * registration fails the guard rather than escaping it.
  */
 export const CHILD_SAFE_PACKAGE_TOOL_NAMES = [
-  "fd",
-  "rg",
   "git_show",
   "git_diff",
   "git_log",
 ] as const;
+
+/**
+ * Read-only inspection tools a role allowlist may grant a child even when the
+ * parent session does not have them active. Pi's default parent surface is
+ * only read/bash/edit/write, and OpenPI's git_* tools sit behind the /plan
+ * boundary, so without this derivation an explicit role list (or the
+ * plan-mode child list) would collapse to `read` alone. Deriving is safe
+ * because every name here is read-only inspection already inside the
+ * parent's `read` authority — the parent must have `read` active, and each
+ * name still passes the provenance and blocked-package checks.
+ */
+export const CHILD_READ_DERIVED_TOOL_NAMES = [
+  "grep",
+  "find",
+  "ls",
+  ...CHILD_SAFE_PACKAGE_TOOL_NAMES,
+] as const;
+
+/**
+ * OpenPI tool names that no longer exist but may still appear in saved user
+ * configuration (agent-type allowlists, workflow tool lists). They are dropped
+ * silently at the child boundary so a stale entry cannot fail preflight.
+ */
+export const RETIRED_OPENPI_TOOL_NAMES = new Set<string>([
+  "fd",
+  "rg",
+  "runtime_snapshot",
+  "tasks_add",
+  "tasks_update",
+  "tasks_list",
+  "context_pivot",
+  "openpi_load_tools",
+  "subagent_list",
+  "bg_list",
+  "bg_start",
+  "bg_status",
+  "bg_kill",
+  "bg_watch",
+  "get_goal",
+  "create_goal",
+  "update_goal",
+]);
 
 /**
  * These optional packages are parent-only inside concurrent Pi sessions.
@@ -514,17 +554,12 @@ async function createChildSettingsManager(options: {
 export const CHILD_EXCLUDED_TOOL_NAMES = [
   // embedded browser — authority belongs to the initiating parent Web tab
   "openpi_browser",
-  // capability discovery mutates the parent model-facing tool surface
-  "openpi_load_tools",
-  // runtime inspection includes parent configuration and resource summaries
-  "runtime_snapshot",
   // subagents — children cannot spawn/observe more agents
   "subagent_spawn",
   "subagent_wait",
   "subagent_cancel",
   "subagent_send",
   "subagent_check",
-  "subagent_list",
   // workflows — children cannot recursively orchestrate or manage runs
   "workflow",
   "workflow_stop",
@@ -534,25 +569,8 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "human_handoff",
   // plan-mode — completion controls the parent session's write gate and UI
   "plan_ready",
-  // tasks — the parent session owns its work-intent ledger
-  "tasks_add",
-  "tasks_update",
-  "tasks_list",
-  // goal — the parent session owns its persistent goal
-  "get_goal",
-  "create_goal",
-  "update_goal",
   // setup — configuration is a package-owned, parent-only choice
   "configure_my_pi_setup",
-  // background-terminals — a child's processes would be invisible to the
-  // parent's /ps and could outlive the child, so children cannot start them
-  "bg_start",
-  "bg_status",
-  "bg_list",
-  "bg_kill",
-  "bg_watch",
-  // context-pivot — compaction of the conversation is a parent-only decision
-  "context_pivot",
 ] as const;
 
 const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
@@ -562,8 +580,8 @@ const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
     ),
     ...(Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
       .filter((owner) => {
-        const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
-        const toolNames = [...entry, ...deferred];
+        const { resident, boundary } = OPENPI_TOOL_SURFACE[owner];
+        const toolNames = [...resident, ...boundary];
         return (
           toolNames.length > 0 &&
           toolNames.every((name) =>
@@ -607,20 +625,25 @@ function isVerifiedParentOnlyOpenPiExtension(extension: {
  * allowlist naming an excluded tool still cannot obtain it, and the boundary
  * above stays authoritative. Omitting `tools` keeps today's behavior.
  *
- * Remove parent-only tools before exposing or enforcing a requested allowlist.
- * Undefined preserves the normal child tool set; an empty array deliberately
- * means no tools.
+ * Remove parent-only and retired tools before exposing or enforcing a
+ * requested allowlist. Undefined preserves the normal child tool set; an
+ * empty array deliberately means no tools.
  */
 export function effectiveChildToolAllowlist(tools?: readonly string[]) {
   return tools?.filter(
-    (tool) => !CHILD_EXCLUDED_TOOL_NAMES.includes(tool as never),
+    (tool) =>
+      !CHILD_EXCLUDED_TOOL_NAMES.includes(tool as never) &&
+      !RETIRED_OPENPI_TOOL_NAMES.has(tool),
   );
 }
 
 /** Project the parent's active surface into a child; a role can only narrow it.
  * Active tools are a visibility choice, not a filesystem/network sandbox.
- * Inactive tools are not implicitly activated by delegation. Pi supplies the
- * provenance for every inherited tool; unverifiable identities stop startup.
+ * Inactive tools are not implicitly activated by delegation — except the
+ * CHILD_READ_DERIVED_TOOL_NAMES subset, which an explicit role list may grant
+ * while the parent holds `read` (they stay within the parent's read authority
+ * and still pass the provenance/blocked checks). Pi supplies the provenance
+ * for every inherited tool; unverifiable identities stop startup.
  */
 export function inheritedChildToolAllowlist(
   parentTools: readonly string[],
@@ -638,18 +661,29 @@ export function inheritedChildToolAllowlist(
     cwd: options.cwd,
     agentDir: getAgentDir(),
   });
-  return effectiveChildToolAllowlist([...new Set(parentTools)])!.filter(
-    (name) => {
-      if (allowed && !allowed.has(name)) return false;
-      const tool = available.get(name);
-      if (!tool) {
-        throw new Error(
-          `Cannot verify child tool provenance for ${JSON.stringify(name)}`,
-        );
-      }
-      return !isBlocked(tool.sourceInfo);
-    },
+  const permitted = (name: string) => {
+    const tool = available.get(name);
+    if (!tool) {
+      throw new Error(
+        `Cannot verify child tool provenance for ${JSON.stringify(name)}`,
+      );
+    }
+    return !isBlocked(tool.sourceInfo);
+  };
+  const parentActive = new Set(
+    effectiveChildToolAllowlist([...new Set(parentTools)]),
   );
+  const inherited = [...parentActive].filter(
+    (name) => (!allowed || allowed.has(name)) && permitted(name),
+  );
+  if (!allowed || !parentActive.has("read")) return inherited;
+  const readDerived = new Set<string>(CHILD_READ_DERIVED_TOOL_NAMES);
+  const derived = effectiveChildToolAllowlist(
+    [...allowed].filter(
+      (name) => !parentActive.has(name) && readDerived.has(name),
+    ),
+  )!.filter(permitted);
+  return [...inherited, ...derived];
 }
 
 export function childToolPolicy(tools?: readonly string[]) {

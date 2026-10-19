@@ -1,444 +1,373 @@
 import assert from "node:assert/strict";
-import { toolExecutionContext } from "../../support/extension-tool-context.ts";
-import { execFile } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
-  type ExtensionFactory,
-  type InlineExtension,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { createCapabilitiesExtension } from "../../../extensions/capabilities/index.ts";
 import {
-  DEFAULT_OPENPI_ACTIVE_TOOL_NAMES,
   OPENPI_TOOL_SURFACE,
   OPENPI_TOOL_SURFACE_NAMES,
-  patchOwnedTools,
 } from "../../../extensions/shared/tool-surface.ts";
 
-async function withSession(
-  factories: InlineExtension[],
-  run: (
-    session: Awaited<ReturnType<typeof createAgentSession>>["session"],
-  ) => Promise<void>,
-  additionalExtensionPaths: string[] = [],
-) {
-  const cwd = await mkdtemp(path.join(tmpdir(), "openpi-tool-surface-"));
-  const agentDir = path.join(cwd, "agent");
-  await mkdir(agentDir, { recursive: true });
-  const settingsManager = SettingsManager.inMemory(undefined, {
-    projectTrusted: false,
-  });
-  const loader = new DefaultResourceLoader({
-    cwd,
-    agentDir,
-    settingsManager,
-    additionalExtensionPaths,
-    extensionFactories: factories,
-  });
-  await loader.reload();
-  const { session } = await createAgentSession({
-    cwd,
-    agentDir,
-    settingsManager,
-    resourceLoader: loader,
-    sessionManager: SessionManager.inMemory(cwd),
-  });
-  try {
-    await session.bindExtensions({ mode: "print" });
-    await run(session);
-  } finally {
-    session.dispose();
-    await rm(cwd, { recursive: true, force: true });
-  }
-}
+// Package configuration uses Pi's process-level agent directory, independently
+// of createAgentSession({ agentDir }). Keep developer setup preferences out of
+// this real-host fixture; Node isolates this test file in its own process.
+let restoreAgentDirectory = () => {};
+beforeEach(() => {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const directory = mkdtempSync(path.join(tmpdir(), "openpi-surface-config-"));
+  process.env.PI_CODING_AGENT_DIR = directory;
+  restoreAgentDirectory = () => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  };
+});
+afterEach(() => restoreAgentDirectory());
 
-const extensionPath = (relative: string) =>
-  fileURLToPath(new URL(relative, import.meta.url));
-const CAPABILITIES_EXTENSION = extensionPath(
-  "../../../extensions/capabilities/index.ts",
-);
-const SUBAGENTS_EXTENSION = extensionPath(
-  "../../../extensions/subagents/index.ts",
-);
-const BACKGROUND_EXTENSION = extensionPath(
-  "../../../extensions/background-terminals/index.ts",
-);
-const PLAN_EXTENSION = extensionPath("../../../extensions/plan-mode/index.ts");
+const extensionPath = (name: string) =>
+  fileURLToPath(
+    new URL(`../../../extensions/${name}/index.ts`, import.meta.url),
+  );
+
+// Every extension that owns model-facing tools in OPENPI_TOOL_SURFACE.
 const OPENPI_EXTENSION_PATHS = [
-  extensionPath("../../../extensions/ask-user/index.ts"),
-  extensionPath("../../../extensions/browser/index.ts"),
-  BACKGROUND_EXTENSION,
-  CAPABILITIES_EXTENSION,
-  "../../../extensions/context-pivot/index.ts",
-  "../../../extensions/file-search/index.ts",
-  "../../../extensions/git-read/index.ts",
-  "../../../extensions/goal/index.ts",
-  PLAN_EXTENSION,
-  "../../../extensions/runtime-snapshot/index.ts",
-  "../../../extensions/setup/index.ts",
-  SUBAGENTS_EXTENSION,
-  "../../../extensions/tasks/index.ts",
-  "../../../extensions/workflows/index.ts",
-].map((entry) => (path.isAbsolute(entry) ? entry : extensionPath(entry)));
-const OPENPI_EXTENSION_PATHS_WITHOUT_CAPABILITIES =
-  OPENPI_EXTENSION_PATHS.filter((entry) => entry !== CAPABILITIES_EXTENSION);
-const EXPLICIT_CAPABILITIES_FACTORY = createCapabilitiesExtension({
-  loadConfig: () => ({ capabilities: { discovery: "explicit" } }),
-  sourcePath: "<inline:openpi-capabilities-explicit-test>",
-});
-const EXPLICIT_CAPABILITIES_EXTENSION: InlineExtension = {
-  name: "openpi-capabilities-explicit-test",
-  factory: EXPLICIT_CAPABILITIES_FACTORY,
-};
+  "ask-user",
+  "browser",
+  "git-read",
+  "plan-mode",
+  "setup",
+  "subagents",
+  "workflows",
+].map(extensionPath);
 
-const execFileAsync = promisify(execFile);
+const RESIDENT_OPENPI_TOOLS = Object.values(OPENPI_TOOL_SURFACE).flatMap(
+  ({ resident }) => [...resident],
+);
+const BOUNDARY_OPENPI_TOOLS = Object.values(OPENPI_TOOL_SURFACE).flatMap(
+  ({ boundary }) => [...boundary],
+);
 
-async function createSessionSnapshot(
-  cwd: string,
-  agentDir: string,
-  additionalExtensionPaths: string[],
-  extensionFactories: InlineExtension[] = [],
-) {
+interface CapturedRequest {
+  tools: string;
+  systemPrompt: string;
+}
+
+const serializeTools = (context: TranscriptContext) =>
+  JSON.stringify(
+    getCurrentTools(context.messages).map(
+      ({ name, description, parameters }) => ({
+        name,
+        description,
+        parameters,
+      }),
+    ),
+  );
+
+async function createFrozenFixture(options: {
+  responses: Array<
+    | ReturnType<typeof fauxAssistantMessage>
+    | ((context: TranscriptContext) => ReturnType<typeof fauxAssistantMessage>)
+  >;
+  extensionPaths?: string[];
+}) {
+  const root = await mkdtemp(path.join(tmpdir(), "openpi-frozen-surface-"));
+  const cwd = path.join(root, "workspace");
+  const agentDir = path.join(root, "agent");
+  await mkdir(cwd, { recursive: true });
   await mkdir(agentDir, { recursive: true });
-  const settingsManager = SettingsManager.inMemory(undefined, {
-    projectTrusted: false,
+
+  const requests: CapturedRequest[] = [];
+  const provider = fauxProvider({
+    api: "openpi-frozen-surface-test",
+    provider: `frozen-surface-${path.basename(cwd)}`,
+    models: [{ id: "fixture", name: "Fixture", reasoning: false }],
   });
+  provider.setResponses(
+    options.responses.map((response) => (context: TranscriptContext) => {
+      requests.push({
+        tools: serializeTools(context),
+        systemPrompt: getCurrentSystemPrompt(context.messages),
+      });
+      return typeof response === "function" ? response(context) : response;
+    }),
+  );
+
+  const settingsManager = SettingsManager.inMemory(
+    { retry: { enabled: false }, compaction: { enabled: false } },
+    { projectTrusted: false },
+  );
+  const modelRuntime = await ModelRuntime.create({
+    authPath: path.join(agentDir, "auth.json"),
+    modelsPath: path.join(agentDir, "models.json"),
+  });
+  modelRuntime.registerNativeProvider(provider.provider);
+  await modelRuntime.setRuntimeApiKey(provider.provider.id, "fixture-key");
+
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
     settingsManager,
-    additionalExtensionPaths,
-    extensionFactories,
+    additionalExtensionPaths: options.extensionPaths ?? OPENPI_EXTENSION_PATHS,
+    noSkills: true,
+    noPromptTemplates: true,
   });
   await loader.reload();
+
+  const sessionManager = SessionManager.create(cwd, path.join(cwd, "sessions"));
   const { session } = await createAgentSession({
     cwd,
     agentDir,
+    model: provider.getModel(),
+    modelRuntime,
     settingsManager,
     resourceLoader: loader,
-    sessionManager: SessionManager.inMemory(cwd),
+    sessionManager,
   });
+
+  return {
+    session,
+    requests,
+    provider,
+    cleanup: async () => {
+      session.dispose();
+      await rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
+test("frozen surface: runtime events never change the request tools or system prompt", {
+  timeout: 60_000,
+}, async () => {
+  const fixture = await createFrozenFixture({
+    responses: [
+      // Turn 1: baseline plain turn.
+      () => fauxAssistantMessage("Baseline answer."),
+      // Turn 2: model calls workflow_status (a resident tool result).
+      () =>
+        fauxAssistantMessage(
+          [
+            fauxToolCall(
+              "workflow_status",
+              { runId: "wf_none" },
+              { id: "wf-1" },
+            ),
+          ],
+          { stopReason: "toolUse" },
+        ),
+      () => fauxAssistantMessage("No workflows are running."),
+      // Turn 3: model calls subagent_check without an id (the list path); a
+      // tool result must not churn tools either.
+      () =>
+        fauxAssistantMessage(
+          [fauxToolCall("subagent_check", {}, { id: "check-1" })],
+          { stopReason: "toolUse" },
+        ),
+      () => fauxAssistantMessage("No subagents are running."),
+    ],
+  });
+  const { session, requests } = fixture;
   try {
     await session.bindExtensions({ mode: "print" });
-    const active = session.getActiveToolNames();
-    const activeSet = new Set(active);
-    return {
-      active,
-      systemPrompt: session.systemPrompt,
-      tools: session
-        .getAllTools()
-        .filter(({ name }) => activeSet.has(name))
-        .map(({ name, description, parameters }) => ({
-          name,
-          description,
-          parameters,
-        })),
-    };
-  } finally {
-    session.dispose();
-  }
-}
 
-test("ordinary OpenPI requests match Bare Pi's resident prompt and tools", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "openpi-zero-resident-"));
-  const cwd = path.join(root, "candidate");
-  await mkdir(cwd, { recursive: true });
-  try {
-    const bare = await createSessionSnapshot(
-      cwd,
-      path.join(root, "bare-agent"),
-      [],
-    );
-    const openPi = await createSessionSnapshot(
-      cwd,
-      path.join(root, "openpi-agent"),
-      OPENPI_EXTENSION_PATHS_WITHOUT_CAPABILITIES,
-      [EXPLICIT_CAPABILITIES_EXTENSION],
-    );
-
-    assert.deepEqual(openPi, bare);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("real Pi adaptive discovery exposes only the gateway", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "openpi-adaptive-discovery-"));
-  const cwd = path.join(root, "candidate");
-  await mkdir(cwd, { recursive: true });
-  try {
-    const agentDir = path.join(root, "openpi-agent");
-    await mkdir(agentDir, { recursive: true });
-    await writeFile(
-      path.join(agentDir, "my-pi-setup.json"),
-      `${JSON.stringify({ capabilities: { discovery: "adaptive" } }, null, 2)}\n`,
-    );
-    const script = `
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
-const cwd = process.env.OPENPI_TEST_CWD;
-const agentDir = process.env.PI_CODING_AGENT_DIR;
-const extensionPaths = JSON.parse(process.env.OPENPI_TEST_EXTENSION_PATHS);
-const settingsManager = SettingsManager.inMemory(undefined, { projectTrusted: false });
-const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager, additionalExtensionPaths: extensionPaths });
-await loader.reload();
-const { session } = await createAgentSession({ cwd, agentDir, settingsManager, resourceLoader: loader, sessionManager: SessionManager.inMemory(cwd) });
-try {
-  await session.bindExtensions({ mode: "print" });
-  process.stdout.write(JSON.stringify(session.getActiveToolNames()));
-} finally {
-  session.dispose();
-}
-`;
-    const { stdout } = await execFileAsync(
-      process.execPath,
-      ["--experimental-strip-types", "--input-type=module", "--eval", script],
-      {
-        cwd: fileURLToPath(new URL("../../..", import.meta.url)),
-        env: {
-          ...process.env,
-          PI_CODING_AGENT_DIR: agentDir,
-          OPENPI_TEST_CWD: cwd,
-          OPENPI_TEST_EXTENSION_PATHS: JSON.stringify(OPENPI_EXTENSION_PATHS),
-        },
-      },
-    );
-    const active = JSON.parse(stdout) as string[];
-    const managedNames = new Set<string>(OPENPI_TOOL_SURFACE_NAMES);
-    assert.deepEqual(
-      active.filter((name) => managedNames.has(name)),
-      ["openpi_load_tools"],
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("real Pi session starts with the compact OpenPI parent surface", async () => {
-  await withSession(
-    [EXPLICIT_CAPABILITIES_EXTENSION],
-    async (session) => {
-      const active = session.getActiveToolNames();
-      const defaultOpenPiTools = new Set<string>(
-        DEFAULT_OPENPI_ACTIVE_TOOL_NAMES,
-      );
-      for (const builtin of ["read", "bash", "edit", "write"]) {
-        assert.ok(active.includes(builtin), `${builtin} should stay active`);
-      }
-      assert.deepEqual(
-        active.filter((name) => defaultOpenPiTools.has(name)).sort(),
-        [...DEFAULT_OPENPI_ACTIVE_TOOL_NAMES].sort(),
-      );
-      for (const deferred of Object.values(OPENPI_TOOL_SURFACE).flatMap(
-        ({ deferred }) => [...deferred],
-      )) {
-        assert.equal(
-          active.includes(deferred),
-          false,
-          `${deferred} should hide`,
-        );
-      }
-
-      const allTools = session.getAllTools();
-      const serializedToolChars = (tool: (typeof allTools)[number]) =>
-        JSON.stringify({
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-          promptGuidelines: tool.promptGuidelines,
-        }).length;
-      const managedNames = new Set<string>(OPENPI_TOOL_SURFACE_NAMES);
-      const compactToolChars = allTools
-        .filter(({ name }) => managedNames.has(name) && active.includes(name))
-        .reduce((total, tool) => total + serializedToolChars(tool), 0);
-      const fullToolChars = allTools
-        .filter(({ name }) => managedNames.has(name))
-        .reduce((total, tool) => total + serializedToolChars(tool), 0);
-      const reduction = 1 - compactToolChars / fullToolChars;
-      const compactBreakdown = allTools
-        .filter(({ name }) => managedNames.has(name) && active.includes(name))
-        .map((tool) => `${tool.name}:${serializedToolChars(tool)}`)
-        .join(", ");
+    // session_start reconciled the frozen surface exactly once.
+    const baseline = session.getActiveToolNames();
+    for (const name of RESIDENT_OPENPI_TOOLS) {
       assert.ok(
-        reduction >= 0.85,
-        `default OpenPI tool surface should shrink by at least 85%, got ${(reduction * 100).toFixed(1)}% (${compactToolChars}/${fullToolChars} chars; ${compactBreakdown})`,
+        baseline.includes(name),
+        `resident tool ${name} must be active`,
       );
-    },
-    OPENPI_EXTENSION_PATHS_WITHOUT_CAPABILITIES,
-  );
-});
-
-test("real Pi session exposes one stable subagent family when delegate loads", async () => {
-  let controller: Parameters<ExtensionFactory>[0] | undefined;
-  const controllerFactory: ExtensionFactory = (pi) => {
-    controller = pi;
-  };
-
-  await withSession(
-    [controllerFactory, EXPLICIT_CAPABILITIES_EXTENSION],
-    async (session) => {
-      const beforePrompt = session.systemPrompt;
-      assert.ok(controller);
-      assert.deepEqual(session.getActiveToolNames(), [
-        "read",
-        "bash",
-        "edit",
-        "write",
-      ]);
-      patchOwnedTools(controller, "subagents", {
-        enable: OPENPI_TOOL_SURFACE.subagents.entry,
-      });
-      const gateway = session.getToolDefinition("openpi_load_tools");
-      assert.ok(gateway);
-      await gateway.execute(
-        "capability-1",
-        { groups: ["delegate"] },
-        undefined,
-        undefined,
-        toolExecutionContext(session.createReplacedSessionContext()),
-      );
-      assert.deepEqual(session.getActiveToolNames(), [
-        "read",
-        "bash",
-        "edit",
-        "write",
-        ...OPENPI_TOOL_SURFACE.subagents.entry,
-      ]);
-      const loadedPrompt = session.systemPrompt;
-
-      patchOwnedTools(controller, "subagents", {
-        enable: OPENPI_TOOL_SURFACE.subagents.entry,
-      });
-
-      assert.deepEqual(session.getActiveToolNames(), [
-        "read",
-        "bash",
-        "edit",
-        "write",
-        ...OPENPI_TOOL_SURFACE.subagents.entry,
-      ]);
-      assert.notEqual(session.systemPrompt, beforePrompt);
-      assert.equal(session.systemPrompt, loadedPrompt);
-    },
-    [SUBAGENTS_EXTENSION],
-  );
-});
-
-test("real Pi activates runtime inspection only through the capability gateway", async () => {
-  await withSession(
-    [EXPLICIT_CAPABILITIES_EXTENSION],
-    async (session) => {
-      const ordinary = ["read", "bash", "edit", "write"];
-      assert.deepEqual(session.getActiveToolNames(), ordinary);
+    }
+    for (const name of BOUNDARY_OPENPI_TOOLS) {
       assert.equal(
-        session.getToolDefinition("runtime_snapshot")?.defaultActive,
+        baseline.includes(name),
         false,
+        `boundary tool ${name} must start hidden`,
       );
-      const gateway = session.getToolDefinition("openpi_load_tools");
-      assert.ok(gateway);
-      const ctx = toolExecutionContext(session.createReplacedSessionContext());
-      await gateway.execute("list", {}, undefined, undefined, ctx);
-      assert.deepEqual(session.getActiveToolNames(), ordinary);
-      await gateway.execute(
-        "load-runtime",
-        { groups: ["runtime"] },
-        undefined,
-        undefined,
-        ctx,
+    }
+
+    // Non-boundary event 1: an ordinary prompt turn.
+    await session.prompt("fix the off-by-one in the cart summary");
+    await session.waitForIdle();
+
+    // Non-boundary event 2: a turn that invokes a resident tool.
+    await session.prompt("check the status of workflow wf_none");
+    await session.waitForIdle();
+
+    // Non-boundary event 3: a turn whose tool call returns a result.
+    await session.prompt("list any running subagents");
+    await session.waitForIdle();
+
+    // Non-boundary event 4: a fresh agent loop start (context thresholds and
+    // agent_start must not retune the surface either).
+    await session.extensionRunner.emit({ type: "agent_start" });
+    await session.prompt("now summarize the change");
+    await session.waitForIdle();
+
+    assert.ok(
+      requests.length >= 4,
+      `expected at least 4 provider requests, got ${requests.length}`,
+    );
+    const first = requests[0]!;
+    for (const [index, request] of requests.entries()) {
+      assert.equal(
+        request.tools,
+        first.tools,
+        `request ${index} tools differ from the first request`,
       );
-      assert.deepEqual(session.getActiveToolNames(), [
-        ...ordinary,
-        "runtime_snapshot",
-      ]);
-    },
-    [extensionPath("../../../extensions/runtime-snapshot/index.ts")],
-  );
+      assert.equal(
+        request.systemPrompt,
+        first.systemPrompt,
+        `request ${index} system prompt differs from the first request`,
+      );
+    }
+    // The request view and the session view agree on the frozen set.
+    const wireNames = new Set(
+      (JSON.parse(first.tools) as Array<{ name: string }>).map(
+        (tool) => tool.name,
+      ),
+    );
+    for (const name of RESIDENT_OPENPI_TOOLS) {
+      assert.ok(wireNames.has(name), `wire tools must include ${name}`);
+    }
+    for (const name of BOUNDARY_OPENPI_TOOLS) {
+      assert.equal(
+        wireNames.has(name),
+        false,
+        `wire tools must not include ${name}`,
+      );
+    }
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
-test("real Pi search capability exposes file and git tools as one group", async () => {
-  await withSession(
-    [EXPLICIT_CAPABILITIES_EXTENSION],
-    async (session) => {
-      assert.deepEqual(session.getActiveToolNames(), [
-        "read",
-        "bash",
-        "edit",
-        "write",
-      ]);
-      const gateway = session.getToolDefinition("openpi_load_tools");
-      assert.ok(gateway);
-      await gateway.execute(
-        "capability-search",
-        { groups: ["search"] },
-        undefined,
-        undefined,
-        toolExecutionContext(session.createReplacedSessionContext()),
-      );
-      assert.deepEqual(session.getActiveToolNames(), [
-        "read",
-        "bash",
-        "edit",
-        "write",
-        ...OPENPI_TOOL_SURFACE.fileSearch.entry,
-        ...OPENPI_TOOL_SURFACE.gitRead.entry,
-      ]);
-    },
-    [
-      extensionPath("../../../extensions/file-search/index.ts"),
-      extensionPath("../../../extensions/git-read/index.ts"),
+test("frozen surface: /plan is a user boundary that adds exactly the plan tools", {
+  timeout: 60_000,
+}, async () => {
+  const fixture = await createFrozenFixture({
+    responses: [
+      () => fauxAssistantMessage("Baseline answer."),
+      () => fauxAssistantMessage("Investigating read-only."),
+      () => fauxAssistantMessage("Back to normal."),
     ],
-  );
+  });
+  const { session, requests } = fixture;
+  try {
+    await session.bindExtensions({ mode: "print" });
+    const baseline = session.getActiveToolNames();
+
+    await session.prompt("hello");
+    await session.waitForIdle();
+    assert.deepEqual(session.getActiveToolNames(), baseline);
+    assert.equal(requests.length, 1);
+    const baselineTools = requests[0]!.tools;
+    const baselinePrompt = requests[0]!.systemPrompt;
+
+    // Entering plan mode is the user boundary: exactly the plan-episode tools
+    // are added, and the wire request reflects the new surface exactly once.
+    await session.prompt("/plan investigate the login flow");
+    await session.waitForIdle();
+
+    const planTools = new Set([
+      ...OPENPI_TOOL_SURFACE.gitRead.boundary,
+      ...OPENPI_TOOL_SURFACE.plan.boundary,
+      ...OPENPI_TOOL_SURFACE.interaction.boundary,
+    ]);
+    const duringPlan = session.getActiveToolNames();
+    const added = duringPlan.filter((name) => !baseline.includes(name));
+    assert.deepEqual(
+      [...added].sort(),
+      [...planTools].sort(),
+      "plan entry must add exactly git_*, plan_ready, ask_user, human_handoff",
+    );
+    const removed = baseline.filter((name) => !duringPlan.includes(name));
+    assert.deepEqual(removed, [], "plan entry must not remove tools");
+
+    const planRequest = requests.at(-1)!;
+    assert.notEqual(planRequest.tools, baselineTools);
+    assert.notEqual(planRequest.systemPrompt, baselinePrompt);
+    const planWireNames = new Set(
+      (JSON.parse(planRequest.tools) as Array<{ name: string }>).map(
+        (tool) => tool.name,
+      ),
+    );
+    for (const name of planTools) {
+      assert.ok(planWireNames.has(name), `plan request must include ${name}`);
+    }
+
+    // Leaving plan mode restores the exact original surface.
+    await session.prompt("/plan off");
+    await session.waitForIdle();
+    assert.deepEqual(session.getActiveToolNames(), baseline);
+
+    await session.prompt("one more ordinary turn");
+    await session.waitForIdle();
+    const lastRequest = requests.at(-1)!;
+    assert.equal(lastRequest.tools, baselineTools);
+    assert.equal(lastRequest.systemPrompt, baselinePrompt);
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
-test("separate owner wrappers cannot remove each other's lifecycle tools", async () => {
-  let controller: Parameters<ExtensionFactory>[0] | undefined;
-  const controllerFactory: ExtensionFactory = (pi) => {
-    controller = pi;
-  };
+test("resident OpenPI tool budget stays inside the measured bound", {
+  timeout: 30_000,
+}, async (t) => {
+  const fixture = await createFrozenFixture({
+    responses: [() => fauxAssistantMessage("ok")],
+  });
+  const { session } = fixture;
+  try {
+    await session.bindExtensions({ mode: "print" });
 
-  await withSession(
-    [controllerFactory, EXPLICIT_CAPABILITIES_EXTENSION],
-    async (session) => {
-      assert.ok(controller);
-      patchOwnedTools(controller, "subagents", {
-        disable: ["subagent_wait"],
-      });
-      patchOwnedTools(controller, "background", {
-        disable: ["bg_status"],
-      });
-      const gateway = session.getToolDefinition("openpi_load_tools");
-      assert.ok(gateway);
-      await gateway.execute(
-        "capability-cross-owner",
-        { groups: ["delegate", "background"] },
-        undefined,
-        undefined,
-        toolExecutionContext(session.createReplacedSessionContext()),
-      );
-
-      patchOwnedTools(controller, "subagents", {
-        enable: ["subagent_wait"],
-      });
-      assert.ok(session.getActiveToolNames().includes("subagent_wait"));
-
-      patchOwnedTools(controller, "background", { enable: ["bg_status"] });
-      assert.ok(session.getActiveToolNames().includes("subagent_wait"));
-      assert.ok(session.getActiveToolNames().includes("bg_status"));
-    },
-    [SUBAGENTS_EXTENSION, BACKGROUND_EXTENSION],
-  );
+    let chars = 0;
+    let wireChars = 0;
+    const breakdown: string[] = [];
+    for (const name of RESIDENT_OPENPI_TOOLS) {
+      const definition = session.getToolDefinition(name);
+      assert.ok(definition, `resident tool ${name} must be registered`);
+      const wire = JSON.stringify({
+        name: definition.name,
+        description: definition.description,
+        parameters: definition.parameters,
+      }).length;
+      const toolChars =
+        wire +
+        (definition.promptSnippet?.length ?? 0) +
+        (definition.promptGuidelines ?? []).join("\n").length;
+      wireChars += wire;
+      chars += toolChars;
+      breakdown.push(`${name}:${toolChars}`);
+    }
+    t.diagnostic(
+      `resident OpenPI surface: ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools, wire-only ${wireChars} chars (${breakdown.join(", ")})`,
+    );
+    // Measured budget; ceiling keeps ~10% headroom for schema text drift.
+    const RESIDENT_BUDGET_CHARS = 7300;
+    assert.ok(
+      chars <= RESIDENT_BUDGET_CHARS,
+      `resident OpenPI surface is ${chars} chars across ${RESIDENT_OPENPI_TOOLS.length} tools (${breakdown.join(", ")})`,
+    );
+  } finally {
+    await fixture.cleanup();
+  }
 });
 
 test("filesystem ownership does not hide a first-registered foreign namesake", async () => {
@@ -462,20 +391,40 @@ test("filesystem ownership does not hide a first-registered foreign namesake", a
 `,
   );
 
+  const cwd = await mkdtemp(path.join(tmpdir(), "openpi-foreign-session-"));
+  const agentDir = path.join(cwd, "agent");
+  await mkdir(agentDir, { recursive: true });
   try {
-    await withSession(
-      [],
-      async (session) => {
-        assert.ok(session.getActiveToolNames().includes("plan_ready"));
-        const tool = session
-          .getAllTools()
-          .find(({ name }) => name === "plan_ready");
-        assert.equal(tool?.description, "FOREIGN_SENTINEL");
-        assert.equal(tool?.sourceInfo.path, foreignExtension);
-      },
-      [foreignExtension, PLAN_EXTENSION],
-    );
+    const settingsManager = SettingsManager.inMemory(undefined, {
+      projectTrusted: false,
+    });
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager,
+      additionalExtensionPaths: [foreignExtension, extensionPath("plan-mode")],
+    });
+    await loader.reload();
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      settingsManager,
+      resourceLoader: loader,
+      sessionManager: SessionManager.inMemory(cwd),
+    });
+    try {
+      await session.bindExtensions({ mode: "print" });
+      assert.ok(session.getActiveToolNames().includes("plan_ready"));
+      const tool = session
+        .getAllTools()
+        .find(({ name }) => name === "plan_ready");
+      assert.equal(tool?.description, "FOREIGN_SENTINEL");
+      assert.equal(tool?.sourceInfo.path, foreignExtension);
+    } finally {
+      session.dispose();
+    }
   } finally {
+    await rm(cwd, { recursive: true, force: true });
     await rm(fixtureRoot, { recursive: true, force: true });
   }
 });

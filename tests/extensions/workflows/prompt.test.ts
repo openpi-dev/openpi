@@ -288,7 +288,6 @@ test("lifecycle tool descriptions state their scope and non-blocking nature", ()
   assert.match(WORKFLOW_STOP_TOOL_DESCRIPTION, /Cancel a running workflow/);
   assert.doesNotMatch(WORKFLOW_STOP_TOOL_DESCRIPTION, /interrupting the turn/);
   assert.match(WORKFLOW_STATUS_TOOL_DESCRIPTION, /without blocking/);
-  assert.match(WORKFLOW_STATUS_TOOL_DESCRIPTION, /Does not wait/);
 });
 
 function agentRecord(overrides: Partial<AgentRecord>): AgentRecord {
@@ -431,17 +430,21 @@ test("the resident workflow prompt stays compact while the Skill carries the ful
   assert.ok(Buffer.byteLength(WORKFLOW_TOOL_DESCRIPTION, "utf8") < 3_000);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /workflows Skill/i);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /check.*\.ok/i);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /pipeline\(\)/);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /isolation: ['"]worktree['"]/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /pipeline\(items/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /parallel\(\[\(\) => agent/);
   assert.doesNotMatch(WORKFLOW_TOOL_DESCRIPTION, /reliability-review/);
   assert.match(
     WORKFLOW_PROMPT_GUIDELINES.join("\n"),
-    /select a matching agent_type.*do not hardcode that role's model/,
+    /phase dependencies or dynamic fan-out.*single delegation belongs in subagent_spawn/i,
   );
 
   const skill = await readFile(
     new URL("../../../skills/workflows/SKILL.md", import.meta.url),
     "utf8",
+  );
+  assert.match(
+    skill,
+    /select a matching `agent_type`.*do not hardcode a role's model/i,
   );
   assert.doesNotMatch(skill, /maxItems:\s*32/);
   assert.match(skill, /capacity\.callsRemaining < 1/);

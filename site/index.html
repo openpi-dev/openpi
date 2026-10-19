@@ -4,10 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>OpenPI — Pi at the core. Power on demand.</title>
-<meta name="description" content="OpenPI 是一套 Pi 原生能力层：终端与本地 Web 工作台、独立上下文的子代理、Workflow 与后台任务。普通对话不常驻 OpenPI 工具，需要时才展开。" />
+<meta name="description" content="OpenPI 是一套 Pi 原生能力层：终端与本地 Web 工作台、独立上下文的子代理与 Workflow。一套固定常驻工具面在会话开始时确定。" />
 <meta name="theme-color" content="#F6F5F0" />
 <meta property="og:title" content="OpenPI — Pi at the core. Power on demand." />
-<meta property="og:description" content="One package. The full Pi-native workbench: background terminals, isolated subagents, replay-safe workflows, and a local Web UI — zero resident tools until you ask." />
+<meta property="og:description" content="One package. The full Pi-native workbench: isolated subagents, replay-safe workflows, and a local Web UI — one fixed resident tool set." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://openpi-dev.github.io/openpi/" />
 <meta property="og:image" content="https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-product-hero-v2.webp" />
@@ -768,7 +768,7 @@ footer { border-top: 1px solid var(--rule); }
         </div>
       </div>
       <div class="hero-side">
-        <p class="hero-sub fade-up" style="animation-delay:0.45s" data-i18n="hero.sub">终端与本地 Web 工作台、独立上下文的子代理、Workflow 与后台任务，装进同一个 Pi。普通对话不常驻任何 OpenPI 工具——不用时，依然是 Pi。</p>
+        <p class="hero-sub fade-up" style="animation-delay:0.45s" data-i18n="hero.sub">终端与本地 Web 工作台、独立上下文的子代理与 Workflow，装进同一个 Pi。一套固定常驻工具面在会话开始时确定——同一轮对话里，工具列表从不改变。</p>
         <div class="term fade-up" style="animation-delay:0.6s" id="install">
           <div class="term-bar">
             <span><span class="dot"></span><span data-i18n="term.title">openpi 工作台</span></span>
@@ -792,7 +792,7 @@ footer { border-top: 1px solid var(--rule); }
 <!-- ============ MARQUEE ============ -->
 <div class="marquee" aria-hidden="true">
   <div class="marquee-track" id="marquee-track">
-    <span>Background Terminal<i>·</i></span><span>Subagent<i>·</i></span><span>Workflow<i>·</i></span><span>Tasks<i>·</i></span><span>Goal<i>·</i></span><span>Plan Mode<i>·</i></span><span>Context Pivot<i>·</i></span><span>Web Workbench<i>·</i></span><span>Sessions<i>·</i></span><span>Cron<i>·</i></span>
+    <span>Subagent<i>·</i></span><span>Workflow<i>·</i></span><span>Plan Mode<i>·</i></span><span>Web Workbench<i>·</i></span><span>Sessions<i>·</i></span><span>Cron<i>·</i></span>
   </div>
 </div>
 
@@ -803,13 +803,13 @@ footer { border-top: 1px solid var(--rule); }
       <span class="sec-num">01</span>
       <span class="sec-tag" data-i18n="s1.tag">理念</span>
       <span class="spacer"></span>
-      <span class="sec-ghost" data-i18n="s1.ghost">默认轻，按需强</span>
+      <span class="sec-ghost" data-i18n="s1.ghost">一个会话，一套工具面</span>
     </div>
-    <h2 class="reveal" data-i18n-html="s1.h2">复杂度只在值得的时候出现。</h2>
+    <h2 class="reveal" data-i18n-html="s1.h2">工具面在会话开始时冻结。</h2>
     <p class="sec-lede reveal" data-i18n-html="s1.lede">
       普通编码任务继续走 Pi 原生路径：<strong>read、bash、edit、write</strong>，完整历史与会话压缩。
-      任务一旦需要长期进程、并行调研、隔离实现或跨回合推进，高级能力仍然完整存在——
-      直接说出需求，OpenPI 就在当轮加载对应能力。<strong>轻路径不缴复杂度税，重任务不缺工程能力。</strong>
+      OpenPI 的一套常驻工具——Subagent 与 Workflow——从会话开始就在场，
+      模型的每个请求看到完全相同的工具列表与系统提示。<strong>缓存不失效，能力不隐藏。</strong>
     </p>
 
     <p class="pull-quote reveal" data-i18n-html="s1.pq">轻路径不缴复杂度税，<br />重任务不缺工程能力<i>。</i></p>
@@ -817,7 +817,7 @@ footer { border-top: 1px solid var(--rule); }
     <div class="demand reveal">
       <div class="demand-head">
         <span class="sec-num">fig. 1</span>
-        <span data-i18n="d.h1">选一条请求，看模型这一轮实际拿到哪些工具</span>
+        <span data-i18n="d.h1">选一条请求，看模型这一轮拿到哪些工具</span>
       </div>
       <div class="demand-grid">
         <div class="scn-list" role="tablist" aria-label="Scenarios" id="scenarios"></div>
@@ -829,7 +829,7 @@ footer { border-top: 1px solid var(--rule); }
           <div class="grp-rows" id="groups"></div>
         </div>
       </div>
-      <p class="demand-note"><span class="lg lg-base" data-i18n="d.l1">Pi 原生，始终存在</span><span class="lg lg-on" data-i18n="d.l2">本轮加载</span><span class="lg lg-def" data-i18n="d.l3">资源真实存在后才出现</span><span class="lg-text" data-i18n-html="d.note">只讨论「子代理是什么」不会加载；否定与条件句保持 fail closed。想让模型自己判断，可在 <code>/openpi-setup</code> 开启 <code>adaptive</code>——只常驻一个小型 <code>openpi_load_tools</code> 网关。</span></p>
+      <p class="demand-note"><span class="lg lg-base" data-i18n="d.l1">Pi 原生，始终存在</span><span class="lg lg-on" data-i18n="d.l2">OpenPI 常驻，会话开始即确定</span><span class="lg lg-def" data-i18n="d.l3">仅用户显式边界内可见</span><span class="lg-text" data-i18n-html="d.note">模型动作与运行时状态从不改变工具列表。只有 <code>/plan</code>、<code>/openpi-setup</code> 与浏览器授权这些用户边界会改变可见性。</span></p>
     </div>
   </div>
 </section>
@@ -841,25 +841,11 @@ footer { border-top: 1px solid var(--rule); }
       <span class="sec-num">02</span>
       <span class="sec-tag" data-i18n="s2.tag">能力</span>
       <span class="spacer"></span>
-      <span class="sec-ghost" data-i18n="s2.ghost">三条执行路径</span>
+      <span class="sec-ghost" data-i18n="s2.ghost">两条执行路径</span>
     </div>
     <h2 class="reveal" data-i18n-html="s2.h2">一个工作台，<br />而不是一组互不协调的插件。</h2>
 
     <div class="paths reveal">
-      <div class="path-col">
-        <figure class="plate" aria-hidden="true">
-          <svg viewBox="0 0 320 150">
-            <g class="ps-row"><rect x="6" y="10" width="308" height="36" rx="5"/><circle class="pulse" cx="24" cy="28" r="4"/><text x="40" y="25">web dev server</text><text class="sm" x="40" y="38">npm run dev</text><text class="st b" x="300" y="32" text-anchor="end">running</text></g>
-            <g class="ps-row"><rect x="6" y="56" width="308" height="36" rx="5"/><circle class="done" cx="24" cy="74" r="4"/><text x="40" y="71">unit tests</text><text class="sm" x="40" y="84">vitest run · 41s</text><text class="st" x="300" y="78" text-anchor="end">exit 0</text></g>
-            <g class="ps-row"><rect x="6" y="102" width="308" height="36" rx="5"/><circle class="ring" cx="24" cy="120" r="4"/><text x="40" y="117">e2e suite</text><text class="sm" x="40" y="130">bg_watch "Ready in|ERROR"</text><text class="st" x="300" y="124" text-anchor="end">watching</text></g>
-          </svg>
-          <figcaption><span>fig. 2</span><span data-i18n="fig.2">/ps · 进程、日志与终态</span></figcaption>
-        </figure>
-        <span class="path-num">i.</span>
-        <span class="path-en">Background Terminal</span>
-        <div class="path-name" data-i18n="s2.p1t">长期进程不阻塞对话</div>
-        <p class="path-desc" data-i18n-html="s2.p1d">开发服务器、监听任务、长测试放进后台。独立日志、超时与完成通知；<code>bg_kill</code> 终止整个进程树，会话结束时有界清理。</p>
-      </div>
       <div class="path-col">
         <figure class="plate" aria-hidden="true">
           <svg viewBox="0 0 320 150">
@@ -870,9 +856,9 @@ footer { border-top: 1px solid var(--rule); }
             <rect class="box" x="176" y="58" width="138" height="34" rx="5"/><text class="r" x="188" y="73">reviewer</text><text class="sm" x="188" y="85">isolated context</text>
             <rect class="box" x="176" y="106" width="138" height="34" rx="5"/><text class="r" x="188" y="121">implementer</text><text class="sm" x="188" y="133">worktree</text>
           </svg>
-          <figcaption><span>fig. 3</span><span data-i18n="fig.3">一个父会话 · 多个独立子会话</span></figcaption>
+          <figcaption><span>fig. 2</span><span data-i18n="fig.3">一个父会话 · 多个独立子会话</span></figcaption>
         </figure>
-        <span class="path-num">ii.</span>
+        <span class="path-num">i.</span>
         <span class="path-en">Subagent</span>
         <div class="path-name" data-i18n="s2.p2t">隔离上下文，不另起系统</div>
         <p class="path-desc" data-i18n-html="s2.p2d">每个子代理是独立的进程内 Pi 会话，默认继承 Provider 与模型；可 <code>check</code>、<code>wait</code>、<code>cancel</code>，也能继续对话。并行写入用独立 <code>worktree</code>，自定义角色的显式工具列表由运行时强制。</p>
@@ -886,9 +872,9 @@ footer { border-top: 1px solid var(--rule); }
             <rect class="cell" style="--d:0.00s" x="14" y="24" width="70" height="22" rx="4"/><rect class="cell" style="--d:0.25s" x="14" y="54" width="70" height="22" rx="4"/><rect class="cell" style="--d:0.50s" x="14" y="84" width="70" height="22" rx="4"/><rect class="cell" style="--d:0.75s" x="14" y="114" width="70" height="22" rx="4"/><rect class="cell v" style="--d:0.90s" x="126" y="24" width="70" height="22" rx="4"/><rect class="cell v" style="--d:1.25s" x="126" y="54" width="70" height="22" rx="4"/><rect class="cell v" style="--d:1.60s" x="126" y="84" width="70" height="22" rx="4"/><rect class="cell v" style="--d:1.95s" x="126" y="114" width="70" height="22" rx="4"/>
             <rect class="cell r" style="--d:2.6s" x="240" y="54" width="70" height="52" rx="4"/><text class="sm ref" x="275" y="84" text-anchor="middle">ref × 4</text>
           </svg>
-          <figcaption><span>fig. 4</span><span data-i18n="fig.4">pipeline · 每项完成即进入下一阶段</span></figcaption>
+          <figcaption><span>fig. 3</span><span data-i18n="fig.4">pipeline · 每项完成即进入下一阶段</span></figcaption>
         </figure>
-        <span class="path-num">iii.</span>
+        <span class="path-num">ii.</span>
         <span class="path-en">Workflow</span>
         <div class="path-name" data-i18n="s2.p3t">多阶段编排，有证据有产物</div>
         <p class="path-desc" data-i18n-html="s2.p3d"><code>pipeline / parallel</code>、结构化输出、结果交接、调用账本与安全重放。一次调用是可审计的生命周期，而不是「进程退出 0」。</p>
@@ -896,9 +882,8 @@ footer { border-top: 1px solid var(--rule); }
     </div>
 
     <div class="strip reveal">
-      <div><b data-i18n="s2.c1t">工作项与目标</b><span data-i18n="s2.c1d">跨回合的工作清单与持续自主目标，完成前要求证据审计</span></div>
       <div><b data-i18n="s2.c2t">计划模式</b><span data-i18n="s2.c2d">只读调研与批准门禁，计划就绪后才准备实施</span></div>
-      <div><b data-i18n="s2.c3t">上下文切换</b><span data-i18n="s2.c3d">同一会话的阶段切换，用自包含简报替换旧噪音</span></div>
+      <div><b data-i18n="s2.c3t">会话定时</b><span data-i18n="s2.c3d"><code>/cron</code> 为当前会话安排一次或周期性 Prompt</span></div>
       <div><b data-i18n="s2.c4t">可观测性</b><span data-i18n="s2.c4d">状态栏、仪表盘、产物与完成通知统一呈现状态</span></div>
     </div>
   </div>
@@ -927,7 +912,7 @@ footer { border-top: 1px solid var(--rule); }
           <div class="mt-strip"><span class="r">explorer</span><span>audit auth flow</span><span class="bar"><i></i></span><span class="ok">● 4 tools</span></div>
           <div class="mt-foot"><span>◇ model</span><span>▣ ctx 18%</span><span class="sp"></span><span>⎇ feat/checkout</span><span>~/work/shop-web</span></div>
         </div>
-        <figcaption><span>fig. 5</span><span data-i18n="fig.5">终端 · 一个动作一行</span></figcaption>
+        <figcaption><span>fig. 4</span><span data-i18n="fig.5">终端 · 一个动作一行</span></figcaption>
       </figure>
       <figure class="plate">
         <div class="mock-web">
@@ -939,13 +924,13 @@ footer { border-top: 1px solid var(--rule); }
             </div>
             <div class="mw-chat">
               <span class="bub" data-i18n="mock.bub">在后台启动 dev server</span>
-              <span class="tc"><span><b>bg_start</b> npm run dev</span><span class="ok">● running</span></span>
-              <span class="ans" data-i18n="mock.ans">已在后台启动，日志在 /ps 面板。我继续看价格计算……</span>
+              <span class="tc"><span><b>Bash</b> nohup npm run dev &amp;</span><span class="ok">● running</span></span>
+              <span class="ans" data-i18n="mock.ans">已通过 nohup 后台启动。我继续看价格计算……</span>
               <span class="inp"><span data-i18n="mock.msg">输入消息，/ 查看命令</span><span>↵</span></span>
             </div>
           </div>
         </div>
-        <figcaption><span>fig. 6</span><span data-i18n="fig.6">/web · 按工作区组织的独立会话</span></figcaption>
+        <figcaption><span>fig. 5</span><span data-i18n="fig.6">/web · 按工作区组织的独立会话</span></figcaption>
       </figure>
     </div>
 
@@ -955,7 +940,7 @@ footer { border-top: 1px solid var(--rule); }
       <div class="surface-item"><b><i>03.3</i><span data-i18n="s2b.f3t">自定义角色</span></b><span data-i18n-html="s2b.f3d">全局 <code>~/.pi/agent/agents/*.md</code> 或项目 <code>.pi/agents/*.md</code> 覆盖内置角色，可指定独立模型与推理档位。</span></div>
       <div class="surface-item"><b><i>03.4</i><span data-i18n="s2b.f4t">可定制状态栏</span></b><span data-i18n-html="s2b.f4d">模型、上下文、Git、目录压进一行；powerline、紧凑或多行布局，由 <code>/openpi-setup</code> 调整。</span></div>
       <div class="surface-item"><b><i>03.5</i><span data-i18n="s2b.f5t">本地 Web 工作台</span></b><span data-i18n-html="s2b.f5d">只监听 loopback；查看已保存的 Prompt、工具参数与结果轨迹。不接管、不写入终端里正在进行的对话；也可用 <code>openpi web /path/to/repo</code> 单独启动。</span></div>
-      <div class="surface-item"><b><i>03.6</i><span data-i18n="s2b.f6t">结构化搜索与只读 Git</span></b><span data-i18n-html="s2b.f6d"><code>fd</code>、<code>rg</code>、<code>git_show / git_diff / git_log</code> 以结构化参数调用，不拼接 Shell，输出有界。</span></div>
+      <div class="surface-item"><b><i>03.6</i><span data-i18n="s2b.f6t">只读 Git 检查</span></b><span data-i18n-html="s2b.f6d"><code>git_show / git_diff / git_log</code> 以结构化参数调用，不拼接 Shell，输出有界，仅 <code>/plan</code> 期间可见。</span></div>
     </div>
   </div>
 </section>
@@ -970,15 +955,12 @@ footer { border-top: 1px solid var(--rule); }
       <span class="sec-ghost" data-i18n="s3.ghost">任务应该去哪里</span>
     </div>
     <h2 class="reveal" data-i18n-html="s3.h2">Pi 始终拥有主会话。</h2>
-    <p class="sec-lede reveal" data-i18n-html="s3.lede">终端、子代理与工作流是三条执行路径；工作项、目标与上下文切换保持连续性；状态栏、仪表盘与清理逻辑负责观察和控制。<strong>增强 Pi 的深度，不扩大隐式权限。</strong></p>
+    <p class="sec-lede reveal" data-i18n-html="s3.lede">子代理与工作流是两条执行路径；会话保持连续性；状态栏、仪表盘与清理逻辑负责观察和控制。<strong>增强 Pi 的深度，不扩大隐式权限。</strong></p>
 
     <div class="routing reveal">
-      <div class="route-line"><span class="r-when" data-i18n="s3.q1">长期进程</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a1">后台终端</span></div>
+      <div class="route-line"><span class="r-when" data-i18n="s3.q1">长期进程</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a1">Pi 的 Bash（nohup … &amp;）</span></div>
       <div class="route-line"><span class="r-when" data-i18n="s3.q2">自包含、可继续对话的委派</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a2">子代理</span></div>
       <div class="route-line"><span class="r-when" data-i18n="s3.q3">多阶段、依赖、扇出与综合</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a3">工作流</span></div>
-      <div class="route-line"><span class="r-when" data-i18n="s3.q4">跨回合工作项</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a4">Tasks</span></div>
-      <div class="route-line"><span class="r-when" data-i18n="s3.q5">持续自主目标</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a5">Goal</span></div>
-      <div class="route-line"><span class="r-when" data-i18n="s3.q6">同一会话的阶段切换</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a6">上下文切换</span></div>
       <div class="route-line"><span class="r-when" data-i18n="s3.q7">真正跨顶层 Session</span><span class="r-arrow">→</span><span class="r-to" data-i18n="s3.a7">pi-intercom（按需安装）</span></div>
     </div>
   </div>
@@ -1065,7 +1047,7 @@ footer { border-top: 1px solid var(--rule); }
       <div class="safety-item"><span class="s-key">worktree.cleanup</span><span class="s-val" data-i18n="s5.i5">未知即保留；状态不确定时绝不删除现场</span></div>
       <div class="safety-item"><span class="s-key">terminal.output</span><span class="s-val" data-i18n="s5.i6">控制字符与超长内容在渲染边界清洗、限长</span></div>
       <div class="safety-item"><span class="s-key">shutdown</span><span class="s-val" data-i18n="s5.i7">终端、子代理、工作流都有有界取消、清理与唯一终态</span></div>
-      <div class="safety-item"><span class="s-key">model.usage</span><span class="s-val" data-i18n="s5.i8">下一步建议默认关闭；自适应模式仅在显式开启后可自主加载能力</span></div>
+      <div class="safety-item"><span class="s-key">model.usage</span><span class="s-val" data-i18n="s5.i8">下一步建议默认关闭；工具面在会话开始冻结，仅用户边界可改变</span></div>
     </div>
   </div>
 </section>
@@ -1084,12 +1066,9 @@ footer { border-top: 1px solid var(--rule); }
     <div class="cmd-list reveal">
       <div class="cmd-row"><div class="c">/openpi-setup <span class="blue" data-i18n="s6.nl">[自然语言]</span></div><div class="d" data-i18n="s6.c1">查看或修改统一配置；可选择安装会话间通信</div></div>
       <div class="cmd-row"><div class="c">/web</div><div class="d" data-i18n="s6.c9">前台运行独立 Web 工作台；Ctrl+C 回到 Pi</div></div>
-      <div class="cmd-row"><div class="c">/ps</div><div class="d" data-i18n="s6.c2">查看、跟踪与终止后台终端</div></div>
       <div class="cmd-row"><div class="c">/subagents · /btw</div><div class="d" data-i18n="s6.c3">管理子代理 / 在旁路上下文中提问</div></div>
       <div class="cmd-row"><div class="c">/workflows</div><div class="d" data-i18n="s6.c4">查看阶段、代理、图谱与产物；可停止运行</div></div>
-      <div class="cmd-row"><div class="c">/tasks · /goal</div><div class="d" data-i18n="s6.c5">查看工作项 / 管理持续目标</div></div>
       <div class="cmd-row"><div class="c">/plan <span class="blue" data-i18n="s6.gl">[目标]</span></div><div class="d" data-i18n="s6.c6">只读调研；计划就绪后显式选择实施方式</div></div>
-      <div class="cmd-row"><div class="c">/context-pivot <span class="blue" data-i18n="s6.pl">&lt;阶段&gt;</span></div><div class="d" data-i18n="s6.c7">在同一会话中压缩旧阶段并继续</div></div>
       <div class="cmd-row"><div class="c">/sessions</div><div class="d" data-i18n="s6.c8">搜索、预览与切换会话</div></div>
       <div class="cmd-row"><div class="c">/cron <span class="blue">…</span></div><div class="d" data-i18n="s6.c10">为当前会话安排一次或周期性 Prompt</div></div>
     </div>
@@ -1143,46 +1122,41 @@ const I18N = {
     'hero.eyebrowR': '一个安装包 · 完整工作台',
     'term.title': 'openpi 工作台', 'term.toolsL': 'OpenPI 工具',
     'hero.promise': 'Pi 为核心，<br /><i>能力随需而至。</i>',
-    'hero.sub': '终端与本地 Web 工作台、独立上下文的子代理、Workflow 与后台任务，装进同一个 Pi。普通对话不常驻任何 OpenPI 工具——不用时，依然是 Pi。',
+    'hero.sub': '终端与本地 Web 工作台、独立上下文的子代理与 Workflow，装进同一个 Pi。一套固定常驻工具面在会话开始时确定——同一轮对话里，工具列表从不改变。',
     'hero.catalog': 'PI.DEV 包目录 ↗',
-    's1.tag': '理念', 's1.ghost': '默认轻，按需强',
-    's1.h2': '复杂度只在值得的时候出现。',
-    's1.lede': '普通编码任务继续走 Pi 原生路径：<strong>read、bash、edit、write</strong>，完整历史与会话压缩。任务一旦需要长期进程、并行调研、隔离实现或跨回合推进，高级能力仍然完整存在——直接说出需求，OpenPI 就在当轮加载对应能力。',
-    's1.pq': '轻路径不缴复杂度税，<br />重任务不缺工程能力<i>。</i>',
-    'd.h1': '选一条请求，看模型这一轮实际拿到哪些工具', 'd.count': 'OpenPI 工具 · 本轮',
-    'd.l1': 'Pi 原生，始终存在', 'd.l2': '本轮加载', 'd.l3': '资源真实存在后才出现',
-    'd.note': '只讨论「子代理是什么」不会加载；否定与条件句保持 fail closed。想让模型自己判断，可在 <code>/openpi-setup</code> 开启 <code>adaptive</code>——只常驻一个小型 <code>openpi_load_tools</code> 网关。',
-    's2.tag': '能力', 's2.ghost': '三条执行路径',
+    's1.tag': '理念', 's1.ghost': '一个会话，一套工具面',
+    's1.h2': '工具面在会话开始时冻结。',
+    's1.lede': '普通编码任务继续走 Pi 原生路径：<strong>read、bash、edit、write</strong>，完整历史与会话压缩。OpenPI 的常驻工具——Subagent 与 Workflow——从会话开始就在场，模型每个请求看到完全相同的工具列表与系统提示。',
+    's1.pq': '缓存不失效，<br />能力不隐藏<i>。</i>',
+    'd.h1': '选一条请求，看模型这一轮拿到哪些工具', 'd.count': 'OpenPI 工具 · 本轮',
+    'd.l1': 'Pi 原生，始终存在', 'd.l2': 'OpenPI 常驻，会话开始即确定', 'd.l3': '仅用户显式边界内可见',
+    'd.note': '模型动作与运行时状态从不改变工具列表。只有 <code>/plan</code>、<code>/openpi-setup</code> 与浏览器授权这些用户边界会改变可见性。',
+    's2.tag': '能力', 's2.ghost': '两条执行路径',
     's2.h2': '一个工作台，<br />而不是一组互不协调的插件。',
-    's2.p1t': '长期进程不阻塞对话', 's2.p1d': '开发服务器、监听任务、长测试放进后台。独立日志、超时与完成通知；<code>bg_kill</code> 终止整个进程树，会话结束时有界清理。',
     's2.p2t': '隔离上下文，不另起系统', 's2.p2d': '每个子代理是独立的进程内 Pi 会话，默认继承 Provider 与模型；可 <code>check</code>、<code>wait</code>、<code>cancel</code>，也能继续对话。并行写入用独立 <code>worktree</code>，自定义角色的显式工具列表由运行时强制。',
     's2.p3t': '多阶段编排，有证据有产物', 's2.p3d': '<code>pipeline / parallel</code>、结构化输出、结果交接、调用账本与安全重放。一次调用是可审计的生命周期，而不是「进程退出 0」。',
-    'fig.2': '/ps · 进程、日志与终态', 'fig.3': '一个父会话 · 多个独立子会话', 'fig.4': 'pipeline · 每项完成即进入下一阶段',
-    's2.c1t': '工作项与目标', 's2.c1d': '跨回合的工作清单与持续自主目标，完成前要求证据审计',
+    'fig.3': '一个父会话 · 多个独立子会话', 'fig.4': 'pipeline · 每项完成即进入下一阶段',
     's2.c2t': '计划模式', 's2.c2d': '只读调研与批准门禁，计划就绪后才准备实施',
-    's2.c3t': '上下文切换', 's2.c3d': '同一会话的阶段切换，用自包含简报替换旧噪音',
+    's2.c3t': '会话定时', 's2.c3d': '<code>/cron</code> 为当前会话安排一次或周期性 Prompt',
     's2.c4t': '可观测性', 's2.c4d': '状态栏、仪表盘、产物与完成通知统一呈现状态',
     's2b.tag': '界面', 's2b.ghost': '终端里的样子',
     's2b.h2': '看得见，才停得住。',
     's2b.lede': '终端里，状态压进一行，工具结果折叠成语义摘要；需要看清多个项目的对话与工具轨迹时，输入 <code>/web</code> 打开本机 Web 工作台。两边使用同一套能力，会话彼此独立。',
     's2b.f5t': '本地 Web 工作台', 's2b.f5d': '只监听 loopback；查看已保存的 Prompt、工具参数与结果轨迹。不接管、不写入终端里正在进行的对话；也可用 <code>openpi web /path/to/repo</code> 单独启动。',
-    's2b.f6t': '结构化搜索与只读 Git', 's2b.f6d': '<code>fd</code>、<code>rg</code>、<code>git_show / git_diff / git_log</code> 以结构化参数调用，不拼接 Shell，输出有界。',
+    's2b.f6t': '只读 Git 检查', 's2b.f6d': '<code>git_show / git_diff / git_log</code> 以结构化参数调用，不拼接 Shell，输出有界，仅 <code>/plan</code> 期间可见。',
     'fig.5': '终端 · 一个动作一行', 'fig.6': '/web · 按工作区组织的独立会话',
     'mock.expand': '  Ctrl+O 展开完整证据', 'mock.ws': '工作区', 'mock.ss': '会话', 'mock.s1': '结账流程修复', 'mock.s2': '依赖升级调研',
-    'mock.bub': '在后台启动 dev server', 'mock.ans': '已在后台启动，日志在 /ps 面板。我继续看价格计算……', 'mock.msg': '输入消息，/ 查看命令',
+    'mock.bub': '在后台启动 dev server', 'mock.ans': '已通过 nohup 后台启动。我继续看价格计算……', 'mock.msg': '输入消息，/ 查看命令',
     's2b.f1t': '紧凑工具结果', 's2b.f1d': '每个动作一行语义摘要：目标、状态、关键规模；<code>Ctrl+O</code> 随时展开完整证据。',
     's2b.f2t': '下一步建议', 's2b.f2d': '运行结束后，空输入框出现一条暗色幽灵建议；<code>→</code> 只填入不提交。默认关闭，写入会话之外。',
     's2b.f3t': '自定义角色', 's2b.f3d': '全局 <code>~/.pi/agent/agents/*.md</code> 或项目 <code>.pi/agents/*.md</code> 覆盖内置角色，可指定独立模型与推理档位。',
     's2b.f4t': '可定制状态栏', 's2b.f4d': '模型、上下文、Git、目录压进一行；powerline、紧凑或多行布局，由 <code>/openpi-setup</code> 调整。',
     's3.tag': '运行模型', 's3.ghost': '任务应该去哪里',
     's3.h2': 'Pi 始终拥有主会话。',
-    's3.lede': '终端、子代理与工作流是三条执行路径；工作项、目标与上下文切换保持连续性；状态栏、仪表盘与清理逻辑负责观察和控制。<strong>增强 Pi 的深度，不扩大隐式权限。</strong>',
-    's3.q1': '长期进程', 's3.a1': '后台终端',
+    's3.lede': '子代理与工作流是两条执行路径；会话保持连续性；状态栏、仪表盘与清理逻辑负责观察和控制。<strong>增强 Pi 的深度，不扩大隐式权限。</strong>',
+    's3.q1': '长期进程', 's3.a1': 'Pi 的 Bash（nohup … &）',
     's3.q2': '自包含、可继续对话的委派', 's3.a2': '子代理',
     's3.q3': '多阶段、依赖、扇出与综合', 's3.a3': '工作流',
-    's3.q4': '跨回合工作项', 's3.a4': 'Tasks',
-    's3.q5': '持续自主目标', 's3.a5': 'Goal',
-    's3.q6': '同一会话的阶段切换', 's3.a6': '上下文切换',
     's3.q7': '真正跨顶层 Session', 's3.a7': 'pi-intercom（按需安装）',
     's4.tag': '工作流', 's4.ghost': '不只是并行',
     's4.h2': '把一次调用，拆成<br />可以审计的生命周期。',
@@ -1201,18 +1175,15 @@ const I18N = {
     's5.i4': '只有可证明只读、指纹完整且无不安全重叠的调用才缓存',
     's5.i5': '未知即保留；状态不确定时绝不删除现场',
     's5.i6': '控制字符与超长内容在渲染边界清洗、限长',
-    's5.i7': '终端、子代理、工作流都有有界取消、清理与唯一终态',
-    's5.i8': '下一步建议默认关闭；自适应模式仅在显式开启后可自主加载能力',
+    's5.i7': '子代理与工作流都有有界取消、清理与唯一终态',
+    's5.i8': '下一步建议默认关闭；工具面在会话开始冻结，仅用户边界可改变',
     's6.tag': '命令速查', 's6.ghost': '一个配置入口',
     's6.h2': '一个配置入口，<br />一组可检查的控制面。',
-    's6.nl': '[自然语言]', 's6.gl': '[目标]', 's6.pl': '<阶段>',
+    's6.nl': '[自然语言]', 's6.gl': '[目标]',
     's6.c1': '查看或修改统一配置；可选择安装会话间通信',
-    's6.c2': '查看、跟踪与终止后台终端',
     's6.c3': '管理子代理 / 在旁路上下文中提问',
     's6.c4': '查看阶段、代理、图谱与产物；可停止运行',
-    's6.c5': '查看工作项 / 管理持续目标',
     's6.c6': '只读调研；计划就绪后显式选择实施方式',
-    's6.c7': '在同一会话中压缩旧阶段并继续',
     's6.c8': '搜索、预览与切换会话',
     's6.c9': '前台运行独立 Web 工作台；Ctrl+C 回到 Pi', 's6.c10': '为当前会话安排一次或周期性 Prompt',
     's7.tag': '安装', 's7.fb': '参与体验改进',
@@ -1227,46 +1198,41 @@ const I18N = {
     'hero.eyebrowR': 'One package · the full workbench',
     'term.title': 'openpi workbench', 'term.toolsL': 'OpenPI tools',
     'hero.promise': 'Pi at the core.<br /><i>Power on demand.</i>',
-    'hero.sub': 'A terminal and local Web workbench, isolated subagents, workflows, and background tasks — inside Pi. Ordinary turns carry zero resident OpenPI tools; when not in use, it is still just Pi.',
+    'hero.sub': 'A terminal and local Web workbench, isolated subagents, and workflows — inside Pi. One fixed resident tool set is determined at session start; within a conversation, the tool list never changes.',
     'hero.catalog': 'PI.DEV CATALOG ↗',
-    's1.tag': 'Philosophy', 's1.ghost': 'Light by default, strong on demand',
-    's1.h2': 'Complexity appears only when it earns its place.',
-    's1.lede': 'Ordinary coding stays on Pi\u2019s native path: <strong>read, bash, edit, write</strong>, with full history and session compaction. When work calls for long-running processes, parallel research, isolated implementation, or multi-turn progress, the advanced capabilities are all still there — state the need, and OpenPI loads the matching capability that very turn.',
-    's1.pq': 'Light paths pay no complexity tax.<br /><i>Heavy tasks lack no engineering depth.</i>',
-    'd.h1': 'Pick a request to see which tools the model actually gets this turn', 'd.count': 'OpenPI tools · this turn',
-    'd.l1': 'Pi native, always there', 'd.l2': 'Loaded this turn', 'd.l3': 'Appears once a real resource exists',
-    'd.note': 'Merely discussing \u201cwhat is a subagent\u201d loads nothing; negations and conditionals stay fail-closed. Want the model to decide? Enable <code>adaptive</code> in <code>/openpi-setup</code> — only one small <code>openpi_load_tools</code> gateway stays resident.',
-    's2.tag': 'Capabilities', 's2.ghost': 'Three execution paths',
+    's1.tag': 'Philosophy', 's1.ghost': 'One session, one tool surface',
+    's1.h2': 'The tool surface freezes at session start.',
+    's1.lede': 'Ordinary coding stays on Pi\u2019s native path: <strong>read, bash, edit, write</strong>, with full history and session compaction. OpenPI\u2019s resident tools — subagents and workflows — are there from the first request, and every request sees the identical tool list and system prompt.',
+    's1.pq': 'The cache stays warm.<br /><i>No capability is ever hidden.</i>',
+    'd.h1': 'Pick a request to see which tools the model gets this turn', 'd.count': 'OpenPI tools · this turn',
+    'd.l1': 'Pi native, always there', 'd.l2': 'OpenPI resident, fixed at session start', 'd.l3': 'Visible only inside explicit user boundaries',
+    'd.note': 'Model actions and runtime state never change the tool list. Only user boundaries such as <code>/plan</code>, <code>/openpi-setup</code>, and browser authorization change visibility.',
+    's2.tag': 'Capabilities', 's2.ghost': 'Two execution paths',
     's2.h2': 'One workbench,<br />not a pile of uncoordinated plugins.',
-    's2.p1t': 'Long processes never block the agent', 's2.p1d': 'Dev servers, watchers, and long test runs move to the background. Separate logs, timeouts, and completion notifications; <code>bg_kill</code> stops the whole process tree, with bounded cleanup at session end.',
     's2.p2t': 'Isolated context, no second system', 's2.p2d': 'Every subagent is an independent in-process Pi session that inherits the parent provider and model; <code>check</code>, <code>wait</code>, <code>cancel</code>, or keep talking to it. Parallel writes get an isolated <code>worktree</code>; explicit tool lists in custom roles are enforced at runtime.',
     's2.p3t': 'Multi-stage orchestration with evidence', 's2.p3d': '<code>pipeline / parallel</code>, structured output, result handoff, an invocation ledger, and safe replay. One invocation is an auditable lifecycle, not \u201cprocess exited 0\u201d.',
-    'fig.2': '/ps · processes, logs, exit state', 'fig.3': 'one parent · isolated child sessions', 'fig.4': 'pipeline · items advance independently',
-    's2.c1t': 'Tasks & Goals', 's2.c1d': 'Cross-turn work items and persistent goals, with an evidence audit before completion',
+    'fig.3': 'one parent · isolated child sessions', 'fig.4': 'pipeline · items advance independently',
     's2.c2t': 'Plan Mode', 's2.c2d': 'Read-only research and an approval gate; implementation begins only when the plan is ready',
-    's2.c3t': 'Context Pivot', 's2.c3d': 'Phase transitions within one session, replacing stale noise with a self-contained brief',
+    's2.c3t': 'Session Cron', 's2.c3d': '<code>/cron</code> schedules one-shot or recurring prompts for the current session',
     's2.c4t': 'Observability', 's2.c4d': 'Footer, dashboard, artifacts, and completion notices present state uniformly',
     's2b.tag': 'Surface', 's2b.ghost': 'How it looks in the terminal',
     's2b.h2': 'Visible enough to stop.',
     's2b.lede': 'In the terminal, state fits in one line and tool results fold into semantic summaries. When you need to see conversations and tool trails across projects, type <code>/web</code> for the local Web workbench. Same capabilities, independent sessions.',
     's2b.f5t': 'Local Web workbench', 's2b.f5d': 'Loopback only; inspect saved prompts, tool arguments, and result trails. It never takes over or writes into a running terminal conversation; or launch it with <code>openpi web /path/to/repo</code>.',
-    's2b.f6t': 'Structured search & read-only Git', 's2b.f6d': '<code>fd</code>, <code>rg</code>, and <code>git_show / git_diff / git_log</code> take structured arguments — no shell concatenation, bounded output.',
+    's2b.f6t': 'Read-only Git inspection', 's2b.f6d': '<code>git_show / git_diff / git_log</code> take structured arguments — no shell concatenation, bounded output, visible only inside <code>/plan</code>.',
     'fig.5': 'terminal · one line per action', 'fig.6': '/web · independent sessions by workspace',
     'mock.expand': '  Ctrl+O expands the full evidence', 'mock.ws': 'Workspaces', 'mock.ss': 'Sessions', 'mock.s1': 'Fix checkout flow', 'mock.s2': 'Dependency survey',
-    'mock.bub': 'Start the dev server in the background', 'mock.ans': 'Started in the background; logs are in the /ps panel. On to the price math…', 'mock.msg': 'Message, or / for commands',
+    'mock.bub': 'Start the dev server in the background', 'mock.ans': 'Started in the background via nohup. On to the price math…', 'mock.msg': 'Message, or / for commands',
     's2b.f1t': 'Compact tool results', 's2b.f1d': 'Every action becomes a one-line semantic summary — target, status, key size; <code>Ctrl+O</code> expands the full evidence any time.',
     's2b.f2t': 'Next-action suggestion', 's2b.f2d': 'After a run, an empty editor shows one dim ghost suggestion; <code>→</code> fills it in without submitting. Off by default, never written into the session.',
     's2b.f3t': 'Custom roles', 's2b.f3d': 'Global <code>~/.pi/agent/agents/*.md</code> or project-level <code>.pi/agents/*.md</code> override built-in roles, with their own model and reasoning effort.',
     's2b.f4t': 'Customizable status bar', 's2b.f4d': 'Model, context, Git, and directory compressed into one line; powerline, compact, or multi-row layouts via <code>/openpi-setup</code>.',
     's3.tag': 'Runtime', 's3.ghost': 'Where a task belongs',
     's3.h2': 'Pi always owns the main session.',
-    's3.lede': 'Terminals, subagents, and workflows are three execution paths; tasks, goals, and context pivots keep continuity; the footer, dashboard, and cleanup logic observe and control. <strong>Deeper Pi, never broader implicit permission.</strong>',
-    's3.q1': 'Long-running process', 's3.a1': 'Background Terminal',
+    's3.lede': 'Subagents and workflows are two execution paths; sessions keep continuity; the footer, dashboard, and cleanup logic observe and control. <strong>Deeper Pi, never broader implicit permission.</strong>',
+    's3.q1': 'Long-running process', 's3.a1': 'Pi bash (nohup … &)',
     's3.q2': 'Self-contained delegation you can keep talking to', 's3.a2': 'Subagent',
     's3.q3': 'Multi-stage, dependencies, fan-out, synthesis', 's3.a3': 'Workflow',
-    's3.q4': 'Cross-turn work items', 's3.a4': 'Tasks',
-    's3.q5': 'Persistent autonomous goal', 's3.a5': 'Goal',
-    's3.q6': 'Phase transition within one session', 's3.a6': 'Context Pivot',
     's3.q7': 'Truly across top-level sessions', 's3.a7': 'pi-intercom (optional)',
     's4.tag': 'Workflow', 's4.ghost': 'More than parallelism',
     's4.h2': 'Every invocation becomes<br />an auditable lifecycle.',
@@ -1285,18 +1251,15 @@ const I18N = {
     's5.i4': 'Only calls proven read-only, fingerprint-complete, and free of unsafe overlap are ever cached',
     's5.i5': 'Unknown means kept; a scene is never deleted while its state is uncertain',
     's5.i6': 'Control characters and oversized output are sanitized and bounded at the render boundary',
-    's5.i7': 'Terminals, subagents, and workflows all get bounded cancellation, cleanup, and a single terminal state',
-    's5.i8': 'Suggestions are off by default; adaptive mode may self-load capabilities only after explicit opt-in',
+    's5.i7': 'Subagents and workflows get bounded cancellation, cleanup, and a single terminal state',
+    's5.i8': 'Suggestions are off by default; the tool surface freezes at session start and only user boundaries change it',
     's6.tag': 'Commands', 's6.ghost': 'One configuration entry',
     's6.h2': 'One configuration entry.<br />One inspectable control plane.',
-    's6.nl': '[natural language]', 's6.gl': '[goal]', 's6.pl': '<phase>',
+    's6.nl': '[natural language]', 's6.gl': '[goal]',
     's6.c1': 'View or change unified configuration; optional inter-session messaging',
-    's6.c2': 'Inspect, follow, and kill background terminals',
     's6.c3': 'Manage subagents / ask a question in a side context',
     's6.c4': 'Phases, agents, graph, and artifacts; stop a run',
-    's6.c5': 'List work items / manage persistent goals',
     's6.c6': 'Read-only research; choose implementation explicitly once ready',
-    's6.c7': 'Compact the old phase and continue in the same session',
     's6.c8': 'Search, preview, and switch sessions',
     's6.c9': 'Run the independent Web workbench; Ctrl+C returns to Pi', 's6.c10': 'Schedule a one-off or recurring prompt for this session',
     's7.tag': 'Install', 's7.fb': 'Help improve the UX',
@@ -1311,18 +1274,18 @@ const I18N = {
 const TERM_LINES = {
   zh: [
     { cls: 't-cmd', text: 'pi install npm:@tt-a1i/openpi' },
-    { cls: 't-ok', text: '✓ 已安装 · 普通对话零常驻工具' },
+    { cls: 't-ok', text: '✓ 已安装 · 8 个常驻工具' },
     { cls: 't-user', text: '在后台启动 dev server，用子代理检查主链路', html: '在<mark>后台启动</mark> dev server，<mark>用子代理</mark>检查主链路' },
-    { cls: 't-load', html: '◆ 当轮加载 <span>background</span> · <span>delegate</span>', tools: 7 },
-    { cls: 't-out', text: '● 后台终端  web dev server · 运行中' },
+    { cls: 't-load', html: '◆ 常驻在场 <span>delegate</span> · <span>orchestrate</span>', tools: 8 },
+    { cls: 't-out', text: '● Bash      nohup npm run dev &amp; · 运行中' },
     { cls: 't-out', text: '● 子代理    audit main flow · 已回传' },
   ],
   en: [
     { cls: 't-cmd', text: 'pi install npm:@tt-a1i/openpi' },
-    { cls: 't-ok', text: '✓ installed · zero resident tools' },
+    { cls: 't-ok', text: '✓ installed · 8 resident tools' },
     { cls: 't-user', text: 'run the dev server in the background, use a subagent to audit the main flow', html: '<mark>run the dev server in the background</mark>, <mark>use a subagent</mark> to audit the main flow' },
-    { cls: 't-load', html: '◆ loaded this turn <span>background</span> · <span>delegate</span>', tools: 7 },
-    { cls: 't-out', text: '● background  web dev server · running' },
+    { cls: 't-load', html: '◆ resident from turn one <span>delegate</span> · <span>orchestrate</span>', tools: 8 },
+    { cls: 't-out', text: '● bash      nohup npm run dev &amp; · running' },
     { cls: 't-out', text: '● subagent    audit main flow · returned' },
   ],
 };
@@ -1375,30 +1338,29 @@ function resetTerm() {
   termTimer = setTimeout(nextLine, 900);
 }
 
-/* on-demand demo — groups mirror extensions/shared/tool-surface.ts */
+/* frozen-surface demo — groups mirror extensions/shared/tool-surface.ts */
 const GROUPS = [
   { id: 'pi', base: true, tools: ['read', 'bash', 'edit', 'write'] },
-  { id: 'search', tools: ['fd', 'rg', 'git_show', 'git_diff', 'git_log'] },
-  { id: 'delegate', tools: ['subagent_spawn', 'subagent_wait', 'subagent_check', 'subagent_send', 'subagent_cancel', 'subagent_list'] },
-  { id: 'workflow', tools: ['workflow', 'workflow_status', 'workflow_stop'] },
-  { id: 'background', tools: ['bg_start'], deferred: ['bg_status', 'bg_list', 'bg_watch', 'bg_kill'] },
-  { id: 'session', tools: ['tasks_add', 'create_goal'], deferred: ['tasks_update', 'tasks_list', 'get_goal', 'update_goal'] },
+  { id: 'resident', resident: true, tools: ['subagent_spawn', 'subagent_wait', 'subagent_check', 'subagent_send', 'subagent_cancel', 'workflow', 'workflow_status', 'workflow_stop'] },
+  { id: 'plan', tools: ['git_show', 'git_diff', 'git_log', 'plan_ready', 'ask_user', 'human_handoff'] },
+  { id: 'setup', tools: ['configure_my_pi_setup', 'ask_user', 'human_handoff'] },
+  { id: 'browser', tools: ['openpi_browser'] },
 ];
-const GROUP_NAME = { pi: 'pi native', search: 'search', delegate: 'delegate', workflow: 'workflow', background: 'background', session: 'session' };
+const GROUP_NAME = { pi: 'pi native', resident: 'resident', plan: 'plan boundary', setup: 'setup boundary', browser: 'browser boundary' };
 const SCENARIOS = {
   zh: [
-    { tag: '普通编码', load: [], prompt: '修复 CartSummary 里折扣为 0 时的空指针', why: '普通编码只走 Pi 原生工具。没有 OpenPI 工具常驻，上下文里也没有它们的说明。' },
-    { tag: 'background', load: ['background'], prompt: '在后台启动 dev server，我继续改页面', why: '当轮开始前加载 <code>background</code> 组；<code>bg_status</code>、<code>bg_kill</code> 等管理工具等进程真实存在后才出现。' },
-    { tag: 'delegate', load: ['delegate'], prompt: '用子代理分别检查登录流程和相关测试，最后汇总', why: '加载 <code>delegate</code> 组。启动几个、怎么分工由模型决定——加载不等于立即启动任务。' },
-    { tag: 'workflow', load: ['workflow'], prompt: '用工作流分批审查这些模块，先并行收集问题再汇总', why: '加载 <code>workflow</code> 组：phase、pipeline 与结构化结果在沙箱脚本中组合。' },
-    { tag: 'plan mode', load: ['search'], prompt: '/plan 把支付接口迁移到 v2', why: 'Plan Mode 是运行时例外：自动加载 <code>search</code> 组，只读调研直接使用 fd、rg 与结构化 Git。' },
+    { tag: '普通编码', load: [], prompt: '修复 CartSummary 里折扣为 0 时的空指针', why: '8 个 OpenPI 常驻工具从会话开始就在场，每个请求看到完全相同的工具列表。' },
+    { tag: 'long-running', load: [], prompt: '看看刚才启动的 dev server 输出', why: 'dev server 是上一轮通过 Pi 的 Bash（<code>nohup … &amp;</code>）启动的——后台进程不是 OpenPI 工具，常驻列表不变。' },
+    { tag: 'delegate', load: [], prompt: '用子代理分别检查登录流程和相关测试，最后汇总', why: '常驻的 <code>subagent_*</code> 工具直接可用；启动几个、怎么分工由模型决定。' },
+    { tag: 'plan mode', load: ['plan'], prompt: '/plan 把支付接口迁移到 v2', why: '<code>/plan</code> 是用户显式边界：加入只读 <code>git_*</code>、<code>plan_ready</code> 与 <code>ask_user</code> / <code>human_handoff</code>；退出时精确还原。' },
+    { tag: 'setup', load: ['setup'], prompt: '/openpi-setup 把 workflow 并发改成 16', why: '<code>/openpi-setup</code> episode 加入受限配置写入与交互工具；一次成功应用后边界关闭。' },
   ],
   en: [
-    { tag: 'ordinary coding', load: [], prompt: 'Fix the null pointer in CartSummary when the discount is 0', why: 'Ordinary coding uses Pi\u2019s native tools only. No OpenPI tool is resident, and none of their instructions sit in context.' },
-    { tag: 'background', load: ['background'], prompt: 'Run the dev server in the background while I edit the page', why: 'Loads the <code>background</code> group before the turn; <code>bg_status</code> and <code>bg_kill</code> appear only once a process really exists.' },
-    { tag: 'delegate', load: ['delegate'], prompt: 'Use subagents to check the login flow and its tests, then summarize', why: 'Loads the <code>delegate</code> group. How many to spawn and how to split is the model\u2019s call — loading never starts work by itself.' },
-    { tag: 'workflow', load: ['workflow'], prompt: 'Use a workflow to review these modules in batches, then synthesize', why: 'Loads the <code>workflow</code> group: phases, pipelines, and structured results composed in a sandboxed script.' },
-    { tag: 'plan mode', load: ['search'], prompt: '/plan migrate the payments API to v2', why: 'Plan Mode is a runtime exception: it loads the <code>search</code> group so read-only research can use fd, rg, and structured git directly.' },
+    { tag: 'ordinary coding', load: [], prompt: 'Fix the null pointer in CartSummary when the discount is 0', why: 'The 8 resident OpenPI tools are present from session start; every request sees the identical tool list.' },
+    { tag: 'long-running', load: [], prompt: 'Check the dev server output I started earlier', why: 'The dev server was started last turn through Pi bash (<code>nohup … &amp;</code>) — background processes are not OpenPI tools, and the resident list is unchanged.' },
+    { tag: 'delegate', load: [], prompt: 'Use subagents to check the login flow and its tests, then summarize', why: 'The resident <code>subagent_*</code> tools are directly available; how many to spawn and how to split is the model\u2019s call.' },
+    { tag: 'plan mode', load: ['plan'], prompt: '/plan migrate the payments API to v2', why: '<code>/plan</code> is an explicit user boundary: it adds read-only <code>git_*</code>, <code>plan_ready</code>, and <code>ask_user</code> / <code>human_handoff</code>, and restores the exact list on exit.' },
+    { tag: 'setup', load: ['setup'], prompt: '/openpi-setup set workflow concurrency to 16', why: 'An <code>/openpi-setup</code> episode adds the scoped config writer plus the interaction tools; the boundary closes after a successful apply.' },
   ],
 };
 const ROMAN = ['i.', 'ii.', 'iii.', 'iv.', 'v.'];
@@ -1418,11 +1380,12 @@ function selectScenario(i, focus) {
   document.getElementById('demand-panel').setAttribute('aria-labelledby', `scn-${i}`);
   let n = 0;
   document.getElementById('groups').innerHTML = GROUPS.map((g) => {
-    const on = s.load.includes(g.id);
-    if (on) n += g.tools.length;
+    const on = g.resident || s.load.includes(g.id);
+    if (on && !g.base) n += g.tools.length;
     let d = 0;
-    const t = (x, def) => `<span${def ? ' class="def"' : ''} style="--d:${(d++) * 70}ms">${x}</span>`;
-    return `<div class="grp${g.base ? ' base' : ''}${on ? ' on' : ''}"><span class="gn">${GROUP_NAME[g.id]}</span><span class="tools">${g.tools.map((x) => t(x)).join('')}${(g.deferred || []).map((x) => t(x, true)).join('')}</span></div>`;
+    const boundary = !g.base && !g.resident;
+    const t = (x) => `<span${boundary ? ' class="def"' : ''} style="--d:${(d++) * 70}ms">${x}</span>`;
+    return `<div class="grp${g.base ? ' base' : ''}${on ? ' on' : ''}"><span class="gn">${GROUP_NAME[g.id]}</span><span class="tools">${g.tools.map((x) => t(x)).join('')}</span></div>`;
   }).join('');
   const c = document.getElementById('count');
   c.textContent = n;

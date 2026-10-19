@@ -69,24 +69,12 @@ export function toolArguments(call: Extract<WebMessagePart, { type: "toolCall" }
 }
 
 export function isEvidenceTool(name: string) {
-  return ["read", "write", "edit", "bash", "bg_start", "bg_status"].includes(name);
+  return ["read", "write", "edit", "bash"].includes(name);
 }
 
 function terminalOutcome(name: string, result?: WebLiveMessage) {
   if (result?.forkSnapshotToolResult) return { state: "unknown" as const };
   if (name === "bash" && result?.terminalReceipt) return result.terminalReceipt;
-  const details = evidenceRecord(result?.details);
-  if (name.startsWith("bg_")) {
-    const status = details.status;
-    if (status === "running") return { state: "running" as const };
-    if (typeof status === "string" && ["done", "failed", "killed", "timed_out"].includes(status)) {
-      return {
-        state: status === "killed" ? "cancelled" as const : status === "timed_out" ? "timed_out" as const : status === "failed" ? "failed" as const : "returned" as const,
-        exitCode: typeof details.exitCode === "number" && Number.isSafeInteger(details.exitCode) ? details.exitCode : undefined,
-        signal: typeof details.signal === "string" ? evidenceText(details.signal).text : undefined,
-      };
-    }
-  }
   // Pi 0.85.1 appends these terminal receipts to failed bash results.
   // Require isError and an intact final line; ordinary stdout is not a receipt.
   if (name === "bash" && result?.isError === true && !result.truncation) {
@@ -137,8 +125,8 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
   const args = toolArguments(call);
   const details = evidenceRecord(result?.details);
   const terminal = terminalOutcome(call.name, result);
-  const state = terminal?.state ?? (liveState === "running" || liveState === "cancelled" || liveState === "timed_out" ? liveState : result?.isError === true ? "failed" : result?.isError === false ? "returned" : "unknown");
-  const isTerminal = ["bash", "bg_start", "bg_status"].includes(call.name);
+  const state: EvidenceState = terminal?.state ?? (liveState === "running" || liveState === "cancelled" || liveState === "timed_out" ? liveState : result?.isError === true ? "failed" : result?.isError === false ? "returned" : "unknown");
+  const isTerminal = call.name === "bash";
   const output = evidenceText(result?.content ?? "", isTerminal);
   const readFooter = call.name === "read" ? /\n\n(\[(?:\d+ more lines in file\. Use offset=\d+ to continue\.|Showing lines [^\n]+)\])$/u.exec(output.text) : null;
   const truncated = output.truncated || Boolean(result?.truncation) || evidenceRecord(details.truncation).truncated === true || call.evidenceTruncated === true;

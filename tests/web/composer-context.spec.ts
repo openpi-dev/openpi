@@ -436,7 +436,6 @@ it("groups native actions like DSH without extra settings, permission, feedback 
     screen.getAllByRole("menuitem").map((item) => item.textContent),
   ).toEqual([
     expect.stringContaining("Filefile"),
-    expect.stringContaining("Goalgoal"),
     expect.stringContaining("Planplan"),
     expect.stringContaining("Compactcompact"),
     expect.stringContaining("Modelmodel"),
@@ -444,16 +443,13 @@ it("groups native actions like DSH without extra settings, permission, feedback 
   expect(
     screen.queryByRole("button", { name: i18n.t("providerAvailability") }),
   ).toBeNull();
-  fireEvent.click(screen.getByRole("menuitem", { name: /^Goal goal/u }));
   const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
     name: i18n.t("describeTask"),
   });
-  await waitFor(() => expect(document.activeElement).toBe(input));
-  expect(input.value).toBe("/goal ");
-  expect(input.selectionStart).toBe(6);
-  expect(sendPrompt).not.toHaveBeenCalled();
-  fireEvent.keyDown(input, { key: "Escape" });
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  input.focus();
   expect(document.activeElement).toBe(input);
+  expect(sendPrompt).not.toHaveBeenCalled();
 });
 
 it("bounds a prompt-derived target while retaining the complete identity", () => {
@@ -478,9 +474,9 @@ it("keeps a nonempty draft and its exact text-only prompt contract", async () =>
   fireEvent.change(input, { target: { value: "  Review this\ncarefully  " } });
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
   expect(
-    screen.getByRole<HTMLButtonElement>("menuitem", { name: /^Goal goal/u })
+    screen.getByRole<HTMLButtonElement>("menuitem", { name: /^Plan plan/u })
       .disabled,
-  ).toBe(true);
+  ).toBe(false);
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   input.focus();
   fireEvent(

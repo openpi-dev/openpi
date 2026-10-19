@@ -21,7 +21,6 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { createCapabilitiesExtension } from "../../extensions/capabilities/index.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import type { WebRuntimeEvent } from "../../web/runtime/types.ts";
 
@@ -472,7 +471,6 @@ test("Pi 1.2 custom-message runs pass capability hooks without a user prompt", {
   const { session } = await nativeRuntime(
     t,
     (pi) => {
-      createCapabilitiesExtension()(pi);
       pi.on("before_agent_start", (event, ctx) => {
         assert.equal(
           (event as { messageType?: unknown }).messageType,
