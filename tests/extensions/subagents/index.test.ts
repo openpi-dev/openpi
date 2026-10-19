@@ -1259,7 +1259,30 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
         "git_diff",
         "git_log",
       ]);
-      assert.equal(prompts, 3);
+
+      // An rpc host stays alive across turns, so it keeps the interactive
+      // auto-delivery guidance instead of the non-interactive wait rule.
+      const rpcSpawn = (await tools
+        .get("subagent_spawn")!
+        .execute(
+          "spawn-rpc",
+          { prompt: "inspect", name: "rpc-check" },
+          undefined,
+          undefined,
+          { ...ctx, mode: "rpc" },
+        )) as { content: [{ text: string }]; details: { id: string } };
+      assert.doesNotMatch(rpcSpawn.content[0]!.text, /non-interactive run/);
+      assert.match(rpcSpawn.content[0]!.text, /automatically.*re-invoked/i);
+      await tools
+        .get("subagent_wait")!
+        .execute(
+          "wait",
+          { ids: [rpcSpawn.details.id] },
+          undefined,
+          undefined,
+          ctx,
+        );
+      assert.equal(prompts, 4);
     } finally {
       await hooks.get("session_shutdown")?.({}, ctx);
       __setSubagentTestBackends(undefined);
