@@ -9,6 +9,8 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { sanitizeText } from "../../../shared/agent-transcript.ts";
+import { formatSubagentSpend } from "../../../shared/context-utilization.ts";
+import type { SubagentSpend } from "../domain.ts";
 
 const MAX_STATUS_ROWS = 4;
 
@@ -19,6 +21,7 @@ export interface WaitResultItem {
   readonly outcome?: "completed" | "failed" | "interrupted";
   readonly worktreeBranch?: string;
   readonly elapsed?: string;
+  readonly spend?: SubagentSpend;
   readonly artifactSaveFailed?: boolean;
   readonly fullResultSaved?: boolean;
 }
@@ -105,6 +108,7 @@ export function buildWaitResultPreview(
       ? "uncertain"
       : singleLine(result.status ?? "settled");
     const elapsed = result.elapsed ? singleLine(result.elapsed) : "";
+    const spend = formatSubagentSpend(result.spend);
     const notices = [
       result.artifactSaveFailed ? "artifact not saved" : "",
       result.worktreeBranch
@@ -116,7 +120,7 @@ export function buildWaitResultPreview(
       ? theme.fg("warning", `${notices.join(" · ")} · `)
       : "";
     lines.push(
-      `  ${icon} ${attention}${theme.fg("accent", id)}${title ? theme.fg("muted", ` · ${title}`) : ""}${theme.fg("dim", ` · ${status}${elapsed ? ` · ${elapsed}` : ""}`)}`,
+      `  ${icon} ${attention}${theme.fg("accent", id)}${title ? theme.fg("muted", ` · ${title}`) : ""}${theme.fg("dim", ` · ${status}${elapsed ? ` · ${elapsed}` : ""}${spend ? ` · ${spend}` : ""}`)}`,
     );
   }
   if (results.length > statusRows.length) {

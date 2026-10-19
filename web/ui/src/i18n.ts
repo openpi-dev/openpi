@@ -655,6 +655,7 @@ const resources = {
       subagentTask: "Assigned task",
       subagentTranscript: "Subagent conversation",
       subagentResult: "Result",
+      subagentSpend: "Cumulative token spend",
       subagentSaved: "Saved record",
       subagentRecordedState: "Last recorded state",
       subagentSavedHint:
@@ -2597,6 +2598,7 @@ const resources = {
       subagentTask: "分配的任务",
       subagentTranscript: "子代理对话",
       subagentResult: "执行结果",
+      subagentSpend: "累计 token 消耗",
       subagentSaved: "已保存记录",
       subagentRecordedState: "最后记录的状态",
       subagentSavedHint:
