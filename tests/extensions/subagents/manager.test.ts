@@ -12,7 +12,7 @@ import {
   BackendRegistry,
   type SubagentBackend,
 } from "../../../extensions/subagents/src/backend.ts";
-import { makeStubBackend } from "../../support/subagents-stub.ts";
+import { makeStubBackend, stubSpend } from "../../support/subagents-stub.ts";
 import type {
   BackendName,
   ParentContext,
@@ -406,6 +406,29 @@ test("stub subagent completes and delivers a final result", async () => {
     assert.ok(done.transcript.some((item) => item.kind === "toolResult"));
     // The waitFor marked the settle as consumed.
     assert.deepEqual(settled, [{ id: snap.id, consumed: true }]);
+  });
+});
+
+test("usage events fold cumulative spend onto the snapshot", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("pi", task("measure spend")),
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+    // The stub emits spend on the mid-turn UsageChanged only; the final
+    // usage event carries none, so the settled snapshot kept the last value.
+    assert.deepEqual(manager.view.get(snap.id)?.spend, stubSpend(0));
+
+    await runTool(runtime, manager.send(snap.id, "Second turn"));
+    await waitForManagerStatus(
+      manager,
+      snap.id,
+      "start the second run",
+      (status) => status === "running",
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+    assert.deepEqual(manager.view.get(snap.id)?.spend, stubSpend(1));
   });
 });
 

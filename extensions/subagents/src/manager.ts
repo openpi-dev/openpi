@@ -41,6 +41,7 @@ import type {
   SubagentOrigin,
   SubagentMeta,
   SubagentSnapshot,
+  SubagentSpend,
   SubagentStatus,
   TranscriptItem,
 } from "./domain.ts";
@@ -115,6 +116,7 @@ interface MutableSnapshot {
   errorText?: string;
   meta: SubagentMeta;
   usage: { tokens?: number; contextWindow?: number };
+  spend?: SubagentSpend;
   transcript: TranscriptItem[];
   /** Bumped on every transcript mutation; UI caches key on this. */
   transcriptVersion: number;
@@ -533,6 +535,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             tokens: event.tokens ?? s.usage.tokens,
             contextWindow: event.contextWindow ?? s.usage.contextWindow,
           };
+          s.spend = event.spend ?? s.spend;
           break;
         case "MetaChanged":
           s.meta = { ...s.meta, ...event.meta };

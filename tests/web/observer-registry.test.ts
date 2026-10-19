@@ -109,6 +109,21 @@ test("subagent detail clones display data, redacts private thinking, and preserv
   assert.deepEqual(source.transcript[0], { kind: "user", text: "inspect" });
 });
 
+test("subagent detail projects cumulative spend verbatim", () => {
+  const spend = {
+    input: 1_000,
+    output: 250,
+    cacheRead: 600,
+    cacheWrite: 40,
+    cost: 0.042,
+  };
+  assert.deepEqual(
+    projectSubagentDetail(subagentSnapshot({ spend })).spend,
+    spend,
+  );
+  assert.equal(projectSubagentDetail(subagentSnapshot()).spend, undefined);
+});
+
 test("subagent detail bounds nested counts and UTF-8 text with honest omission evidence", () => {
   const huge = "界".repeat(30_000);
   const detail = projectSubagentDetail(

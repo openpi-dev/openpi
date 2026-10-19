@@ -55,6 +55,7 @@ import type {
   SpawnTask,
   SubagentEvent,
   SubagentMeta,
+  SubagentSpend,
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
@@ -359,10 +360,26 @@ const makePiSession = (
 
     const emitUsage = () => {
       const usage = session.getContextUsage();
+      let spend: SubagentSpend | undefined;
+      try {
+        const stats = session.getSessionStats?.();
+        if (stats) {
+          spend = {
+            input: stats.tokens.input,
+            output: stats.tokens.output,
+            cacheRead: stats.tokens.cacheRead,
+            cacheWrite: stats.tokens.cacheWrite,
+            cost: stats.cost,
+          };
+        }
+      } catch {
+        // Session stats are observational; never fail a run over them.
+      }
       emit({
         _tag: "UsageChanged",
         tokens: usage?.tokens ?? undefined,
         contextWindow: activeModel()?.contextWindow ?? usage?.contextWindow,
+        ...(spend ? { spend } : {}),
       });
     };
 
@@ -402,6 +419,8 @@ const makePiSession = (
     const settle = (prompt = state.activePrompt) => {
       if (!prompt || state.activePrompt !== prompt || state.settled) return;
       state.settled = true;
+      // Final cumulative spend before the settled snapshot is read.
+      emitUsage();
       const last = prompt.lastAssistant;
       const partialText = prompt.liveText || prompt.finalText || undefined;
       const errorText =

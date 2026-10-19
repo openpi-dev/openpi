@@ -1453,3 +1453,86 @@ for (const stage of ["factory", "binding"] as const) {
     }
   });
 }
+
+test("usage events carry session stats as cumulative spend", async () => {
+  const stats = () => ({
+    sessionFile: undefined,
+    sessionId: "fixture-session",
+    userMessages: 1,
+    assistantMessages: 1,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 2,
+    tokens: {
+      input: 1_000,
+      output: 250,
+      cacheRead: 600,
+      cacheWrite: 40,
+      total: 1_890,
+    },
+    cost: 0.042,
+  });
+  const fixtures = harnessFactory(() => ({ sessionStats: stats }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+
+  const events = await spawnDirect(backend, task("measure spend"), () => {
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitUser("measure spend");
+    harness.emitAssistant("Done");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
+    harness.resolvePrompt();
+  });
+
+  const usage = events.filter((event) => event._tag === "UsageChanged");
+  assert.ok(usage.length > 0);
+  assert.deepEqual(usage.at(-1)?.spend, {
+    input: 1_000,
+    output: 250,
+    cacheRead: 600,
+    cacheWrite: 40,
+    cost: 0.042,
+  });
+});
+
+test("a failing getSessionStats omits spend but never fails the run", async () => {
+  const fixtures = harnessFactory(() => ({
+    sessionStats: () => {
+      throw new Error("stats unavailable");
+    },
+  }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+
+  const events = await spawnDirect(backend, task("measure spend"), () => {
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitUser("measure spend");
+    harness.emitAssistant("Done");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled", ...{ aborted: false } });
+    harness.resolvePrompt();
+  });
+
+  assert.ok(
+    events.every(
+      (event) => event._tag !== "UsageChanged" || event.spend === undefined,
+    ),
+  );
+  assert.deepEqual(
+    events
+      .filter((event) => event._tag === "RunSettled")
+      .map((event) => event.outcome),
+    [{ _tag: "Completed", finalText: "Done" }],
+  );
+});

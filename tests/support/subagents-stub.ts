@@ -49,6 +49,17 @@ export interface StubProfile {
 const STUB_DIR = path.join(os.tmpdir(), "subagents-stub");
 let sessionCounter = 0;
 
+/** Deterministic fake cumulative spend; grows with each scripted turn. */
+export function stubSpend(turn: number) {
+  return {
+    input: 1_200 * (turn + 1),
+    output: 300 * (turn + 1),
+    cacheRead: 800 * (turn + 1),
+    cacheWrite: 100 * (turn + 1),
+    cost: 0.0123 * (turn + 1),
+  };
+}
+
 export function makeStubBackend(profile: StubProfile): SubagentBackend {
   return {
     name: profile.backend,
@@ -171,6 +182,9 @@ const makeStubSession = (
           _tag: "UsageChanged",
           tokens: Math.min(profile.contextWindow, 2400 * (turn + 1)),
           contextWindow: profile.contextWindow,
+          // Only the mid-turn event carries spend; the final emit exercises
+          // the manager's "keep the last known spend" fold.
+          spend: stubSpend(turn),
         });
 
         if (failing) {

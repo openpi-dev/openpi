@@ -1,6 +1,7 @@
 import type {
   LiveToolState,
   SubagentSnapshot,
+  SubagentSpend,
   TranscriptItem,
   TranscriptPart,
 } from "../subagents/src/domain.ts";
@@ -62,6 +63,8 @@ export interface WebSubagentDetail extends WebSubagentActivity {
   readonly liveTools: readonly LiveToolState[];
   readonly finalText: string;
   readonly errorText?: string;
+  /** Cumulative token spend (and cost when known) for the child session. */
+  readonly spend?: SubagentSpend;
   readonly truncated: boolean;
   readonly omittedEntries: number;
 }
@@ -405,6 +408,7 @@ function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
     liveTools,
     finalText,
     ...(errorText !== undefined ? { errorText } : {}),
+    ...(source.spend !== undefined ? { spend: source.spend } : {}),
     truncated:
       truncated ||
       omittedEntries > 0 ||

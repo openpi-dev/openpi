@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   contextPercent,
   formatContextUtilization,
+  formatSubagentSpend,
 } from "../../../extensions/shared/context-utilization.ts";
 
 test("formats current context occupancy against model capacity", () => {
@@ -44,5 +45,78 @@ test("handles missing usage or capacity without NaN or Infinity", () => {
   assert.equal(
     formatContextUtilization({ tokens: 12_000, contextWindow: 0 }),
     "",
+  );
+});
+
+test("spend is absent or all-zero stays unrendered", () => {
+  assert.equal(formatSubagentSpend(undefined), undefined);
+  assert.equal(
+    formatSubagentSpend({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    }),
+    undefined,
+  );
+});
+
+test("spend compacts token counts and groups cache reads into input", () => {
+  assert.equal(
+    formatSubagentSpend({
+      input: 1_200,
+      output: 340,
+      cacheRead: 800,
+      cacheWrite: 100,
+      cost: 0,
+    }),
+    "2.1k in (800 cached) · 340 out",
+  );
+  assert.equal(
+    formatSubagentSpend({
+      input: 50_000,
+      output: 1_250_000,
+      cacheRead: 0,
+      cacheWrite: 4_000,
+      cost: 0,
+    }),
+    "54k in · 1.3M out",
+  );
+});
+
+test("spend omits the cached part and the cost when each is zero", () => {
+  assert.equal(
+    formatSubagentSpend({
+      input: 2_000,
+      output: 500,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    }),
+    "2.0k in · 500 out",
+  );
+});
+
+test("spend renders cost with four decimals below one dollar, two otherwise", () => {
+  assert.equal(
+    formatSubagentSpend({
+      input: 10,
+      output: 10,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0.01234,
+    }),
+    "10 in · 10 out · $0.0123",
+  );
+  assert.equal(
+    formatSubagentSpend({
+      input: 10,
+      output: 10,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 1.234,
+    }),
+    "10 in · 10 out · $1.23",
   );
 });

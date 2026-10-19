@@ -1,5 +1,7 @@
 /** Compact, defensive context-window utilization formatting for child agents. */
 
+import type { SubagentSpend } from "../subagents/src/domain.ts";
+
 export interface ContextUtilization {
   /** Current conversation context occupancy; null while it is unknown after compaction. */
   tokens?: number | null;
@@ -44,4 +46,23 @@ export function formatContextUtilization(usage: ContextUtilization) {
   if (capacity === undefined) return "";
   const percent = contextPercent(usage);
   return `${percent === undefined ? "?" : percent}%/${formatCompactTokens(capacity)}`;
+}
+
+/**
+ * Render cumulative spend as `"<in> in (<cached> cached) · <out> out"` with an
+ * optional `" · $<cost>"` tail (4 decimals below $1, 2 decimals otherwise).
+ * Returns `undefined` when spend is absent or all token fields are zero, so
+ * callers can omit the statistic entirely.
+ */
+export function formatSubagentSpend(spend?: SubagentSpend) {
+  if (!spend) return undefined;
+  const { input, output, cacheRead, cacheWrite, cost } = spend;
+  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0)
+    return undefined;
+  const inTokens = input + cacheRead + cacheWrite;
+  const cachedPart =
+    cacheRead > 0 ? ` (${formatCompactTokens(cacheRead)} cached)` : "";
+  let text = `${formatCompactTokens(inTokens)} in${cachedPart} · ${formatCompactTokens(output)} out`;
+  if (cost > 0) text += ` · $${cost < 1 ? cost.toFixed(4) : cost.toFixed(2)}`;
+  return text;
 }

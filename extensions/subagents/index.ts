@@ -72,7 +72,10 @@ import {
 } from "../shared/child-session.ts";
 import { onSetupApply } from "../shared/setup-apply.ts";
 import { completionOwnerFor } from "../shared/completion-inbox.ts";
-import { formatContextUtilization } from "../shared/context-utilization.ts";
+import {
+  formatContextUtilization,
+  formatSubagentSpend,
+} from "../shared/context-utilization.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
@@ -122,6 +125,7 @@ import {
   formatElapsed,
   latestText,
   type SubagentSnapshot,
+  type SubagentSpend,
 } from "./src/domain.ts";
 import {
   restoreSubagentIdCounters,
@@ -205,6 +209,7 @@ interface SubagentResultDetails {
   readonly outcome?: SubagentSnapshot["outcome"];
   readonly worktreeBranch?: string;
   readonly elapsed?: string;
+  readonly spend?: SubagentSpend;
   readonly artifactSaveFailed?: boolean;
   readonly fullResultSaved?: boolean;
   readonly structured?: unknown;
@@ -218,6 +223,7 @@ interface SubagentResultDetails {
     readonly outcome?: SubagentSnapshot["outcome"];
     readonly worktreeBranch?: string;
     readonly elapsed?: string;
+    readonly spend?: SubagentSpend;
     readonly artifactSaveFailed?: boolean;
     readonly fullResultSaved?: boolean;
     readonly structured?: unknown;
@@ -246,6 +252,7 @@ function describeSubagent(snap: SubagentSnapshot) {
   const details = [
     `${snap.backend}: ${snap.meta.modelLabel ?? "?"}`,
     formatContextUtilization(snap.usage),
+    formatSubagentSpend(snap.spend),
     formatElapsed(snap),
     snap.cwd,
   ].filter(Boolean);
@@ -399,6 +406,7 @@ export function createSubagentResultDispatcher(
               ? { worktreeBranch: snaps[0]!.worktreeBranch }
               : {}),
             elapsed: formatElapsed(snaps[0]!),
+            ...(snaps[0]!.spend ? { spend: snaps[0]!.spend } : {}),
             ...(projections[0]!.artifactPath ? { fullResultSaved: true } : {}),
             ...(projections[0]!.artifactSaveFailed
               ? { artifactSaveFailed: true }
@@ -423,6 +431,7 @@ export function createSubagentResultDispatcher(
                 ? { worktreeBranch: snap.worktreeBranch }
                 : {}),
               elapsed: formatElapsed(snap),
+              ...(snap.spend ? { spend: snap.spend } : {}),
               ...(projections[index]!.artifactPath
                 ? { fullResultSaved: true }
                 : {}),
@@ -476,6 +485,7 @@ function renderSubagentResult(
             outcome: details.outcome,
             worktreeBranch: details.worktreeBranch,
             elapsed: details.elapsed,
+            spend: details.spend,
             artifactSaveFailed: details.artifactSaveFailed,
             fullResultSaved: details.fullResultSaved,
           },
@@ -507,13 +517,23 @@ function renderSubagentResult(
     : displayContent.split("\n").slice(1).join("\n").trim();
   const md = new Markdown(body, 0, 0, getMarkdownTheme());
   const container = new Text(header, 0, 0);
+  const spendLines = results.flatMap((result) => {
+    const text = formatSubagentSpend(result.spend);
+    if (!text) return [];
+    return [batched ? `${sanitizeText(result.id)} · ${text}` : text];
+  });
+  const spendText = spendLines.length
+    ? new Text(theme.fg("dim", spendLines.join("\n")), 0, 0)
+    : undefined;
   return {
     render: (width: number) => [
       ...container.render(width),
+      ...(spendText?.render(width) ?? []),
       ...md.render(width),
     ],
     invalidate: () => {
       container.invalidate();
+      spendText?.invalidate();
       md.invalidate();
     },
   };
@@ -1384,6 +1404,7 @@ export default function (
                 ? { worktreeBranch: snap.worktreeBranch }
                 : {}),
               ...(snap ? { elapsed: formatElapsed(snap) } : {}),
+              ...(snap?.spend ? { spend: snap.spend } : {}),
               ...(fullResultsSaved.has(id) ? { fullResultSaved: true } : {}),
               ...(artifactSaveFailures.has(id)
                 ? { artifactSaveFailed: true }
