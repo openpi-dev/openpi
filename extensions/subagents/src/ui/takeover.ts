@@ -22,7 +22,10 @@ import { AgentSessionPage } from "../../../shared/agent-session-page.ts";
 import { hintLine, panelFrame } from "../../../shared/screen-chrome.ts";
 import { sanitizeTerminalText } from "../../../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
-import { formatContextUtilization } from "../../../shared/context-utilization.ts";
+import {
+  formatContextUtilization,
+  formatSubagentSpend,
+} from "../../../shared/context-utilization.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "../../../shared/spinner.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import { subagentTranscriptDocument } from "./transcript.ts";
@@ -359,6 +362,7 @@ export class SubagentDashboard implements Component {
       const prefix = ` ${glyph} `;
 
       const utilization = formatContextUtilization(snap.usage);
+      const spend = formatSubagentSpend(snap.spend);
       const metadata = [
         theme.fg("muted", snap.backend),
         theme.fg(
@@ -366,6 +370,7 @@ export class SubagentDashboard implements Component {
           sanitizeSubagentDisplayLine(snap.meta.modelLabel ?? "?") || "?",
         ),
         ...(utilization ? [theme.fg("muted", utilization)] : []),
+        ...(spend ? [theme.fg("dim", spend)] : []),
         theme.fg("muted", formatElapsed(snap)),
       ];
       const dot = theme.fg("dim", " · ");
@@ -448,6 +453,7 @@ export class TakeoverView implements Component, Focusable {
               options?.badge,
               snap.meta.modelLabel,
               formatContextUtilization(snap.usage),
+              formatSubagentSpend(snap.spend),
               formatElapsed(snap),
             ],
             errorText: snap.errorText,

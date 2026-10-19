@@ -28,7 +28,7 @@ Pi 的价值在于小：Agent loop、工具、Session 与扩展 API 已经足够
 
 主 Pi Session 始终拥有用户交互、配置和生命周期。Subagent 与 Workflow 是两条执行路径；Session 保持连续性；Footer、Dashboard、Artifacts 与清理逻辑负责观察和控制。
 
-执行沿用 Pi 的 Bash 合同：`timeout` 可选且没有统一默认值，是否设置以及设置多长由模型或用户按命令语义决定。OpenPI 不再通过正则改写测试命令 timeout；确实需要有界执行时应显式传入 timeout。长期运行的 build、test、migration 或 server 由 Bash 直接后台运行，例如 `nohup npm run dev &`。
+执行沿用 Pi 的 Bash 合同：`timeout` 可选且没有统一默认值，是否设置以及设置多长由模型或用户按命令语义决定。OpenPI 不再通过正则改写测试命令 timeout；确实需要有界执行时应显式传入 timeout。长期运行的 build、test、migration 或 server 由 Bash 直接后台运行，例如 `nohup npm run dev &`。唯一例外是无人能按 Esc 的会话：`pi -p`/`--mode json` 运行以及 Subagent/Workflow 子会话中，未带 `timeout` 的 Bash 调用会获得 120 秒默认上限，超时结果会附注说明如何显式放宽或改用后台运行；交互会话（终端与 Web 工作台）保持 Pi 原生的无默认行为。
 
 ## Subagent 细节
 

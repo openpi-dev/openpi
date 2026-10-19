@@ -292,7 +292,8 @@ type LifecycleSession = {
   isStreaming: boolean;
   readonly isIdle: boolean;
   sessionManager: { getSessionId: () => string };
-  bindExtensions: () => Promise<void>;
+  bindExtensions: (bindings?: { mode?: string }) => Promise<void>;
+  bindModes: string[];
   abort: () => Promise<void>;
   subscribe: (listener: (event: { type: string }) => void) => () => void;
   binds: number;
@@ -353,8 +354,10 @@ function lifecycleSession(
     subscriptions: 0,
     unsubscribes: 0,
     aborts: 0,
-    async bindExtensions() {
+    bindModes: [],
+    async bindExtensions(bindings?: { mode?: string }) {
       session.binds += 1;
+      session.bindModes.push(bindings?.mode ?? "");
     },
     async abort() {
       session.aborts += 1;
@@ -2442,6 +2445,24 @@ test("a retained runtime rebind cannot replace the active Session subscription",
   assert.equal(harness.unsubscribeSession, activeUnsubscribe);
   assert.equal(sessionB.unsubscribes, activeUnsubscribes);
   assert.equal(harness.retainedRuntimes.has(runtimeA), false);
+});
+
+test("web sessions bind extensions as rpc, not print", async () => {
+  const session = lifecycleSession("session-a", false, 0);
+  const runtime = lifecycleRuntime(session);
+  const harness = lifecycleHarness(runtime);
+  const bindExtensions = (
+    PiWebRuntime.prototype as unknown as {
+      bindExtensions(
+        this: LifecycleHarness,
+        runtime: LifecycleRuntime,
+        session: LifecycleSession,
+      ): Promise<void>;
+    }
+  ).bindExtensions;
+  await bindExtensions.call(harness, runtime, session);
+  await bindExtensions.call(harness, runtime, session);
+  assert.deepEqual(session.bindModes, ["rpc", "rpc"]);
 });
 
 test("failed replacement activation restores the previous runtime without rebinding it", async () => {

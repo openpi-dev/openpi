@@ -12,7 +12,10 @@ import {
 import { spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "./src/domain.ts";
-import { contextPercent } from "../shared/context-utilization.ts";
+import {
+  contextPercent,
+  formatSubagentSpend,
+} from "../shared/context-utilization.ts";
 
 export interface SubagentStripEntry {
   snapshot: SubagentSnapshot;
@@ -170,6 +173,7 @@ export class SubagentStripWidget {
         ...activity,
         formatElapsed(snapshot),
         percent === undefined ? undefined : `${percent}% ctx`,
+        formatSubagentSpend(snapshot.spend),
       ],
       this.strip.focused ? "enter open · ↑ back" : "↓ to manage",
       single || snapshot.status === "running"
