@@ -76,7 +76,7 @@ OpenPI 自有偏好通过自然语言配置：
 
 ## 默认轻，按需强
 
-普通编码任务继续走 Pi 原生路径：`read`、`bash`、`edit`、`write`，完整历史、Session compaction、工具输出边界、显式 Bash timeout 与 Provider loop。与 Pi 一样，OpenPI 不添加删除保护：Bash 中的 `rm` 完全沿用 Pi 自身行为。长期进程（dev server、watcher、长测试）直接使用 Pi 的 Bash 后台运行，例如 `nohup npm run dev &`。
+普通编码任务继续走 Pi 原生路径：`read`、`bash`、`edit`、`write`，完整历史、Session compaction、工具输出边界、显式 Bash timeout 与 Provider loop。在 `pi -p`/`--mode json` 运行和 Subagent/Workflow 子会话中——没有人可以中断挂起的命令——未带 `timeout` 的 Bash 调用使用 120 秒默认上限；交互会话（终端与 Web 工作台）沿用 Pi 行为，无默认超时。与 Pi 一样，OpenPI 不添加删除保护：Bash 中的 `rm` 完全沿用 Pi 自身行为。长期进程（dev server、watcher、长测试）直接使用 Pi 的 Bash 后台运行，例如 `nohup npm run dev &`。
 
 每个 Session 获得一套固定的常驻工具集——Subagent 5 个（`subagent_spawn`、`subagent_wait`、`subagent_cancel`、`subagent_send`、`subagent_check`）与 Workflow 3 个（`workflow`、`workflow_stop`、`workflow_status`）——在 Session 开始时确定一次，之后不因 Prompt 关键词或运行时状态变化而改变，模型可见的工具面因此稳定且对缓存友好。只有明确的用户边界会临时增减工具：进入 `/plan` 加入只读 Git、`plan_ready` 与 `ask_user`/`human_handoff`；`/openpi-setup` 进行期间加入 `configure_my_pi_setup` 与 `ask_user`/`human_handoff`；浏览器控制经授权后启用 `openpi_browser`。
 
