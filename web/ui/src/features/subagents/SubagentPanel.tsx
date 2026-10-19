@@ -2,6 +2,7 @@ import { List, ListItem } from "@astryxdesign/core/List";
 import { ArrowLeft, Bot, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { formatSubagentSpend } from "../../../../../extensions/shared/context-utilization.ts";
 import type {
   WebCapabilityProjection,
   WebSubagentActivity,
@@ -214,6 +215,7 @@ export function SubagentDetailView({
   );
   const state =
     detail?.outcome === "interrupted" ? "interrupted" : detail?.status;
+  const spend = formatSubagentSpend(detail?.spend);
   const finalInTranscript = detail?.transcript.some(
     (item) =>
       item.kind === "assistant" &&
@@ -269,6 +271,7 @@ export function SubagentDetailView({
           <div className="subagent-metadata">
             <code>{detail.id}</code>
             {detail.model && <span>{detail.model}</span>}
+            {spend && <span title={t("subagentSpend")}>{spend}</span>}
             <span title={detail.cwd}>{detail.cwd}</span>
           </div>
           <details className="subagent-task">

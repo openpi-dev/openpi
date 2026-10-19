@@ -9,6 +9,7 @@ import type {
   AgentSession,
   AgentSessionEvent,
   AgentSessionEventListener,
+  SessionStats,
 } from "@earendil-works/pi-coding-agent";
 
 const ZERO_USAGE = {
@@ -35,6 +36,8 @@ export interface PiAgentSessionHarnessOptions {
     readonly contextWindow: number;
   };
   readonly sessionFile?: string;
+  /** Source for `getSessionStats`; a throwing function exercises the guard. */
+  readonly sessionStats?: () => SessionStats;
   readonly bind?: () => Promise<void>;
   readonly preflight?: (
     text: string,
@@ -108,6 +111,7 @@ export function createPiAgentSessionHarness(
   };
   let streaming = false;
   let contextUsage = options.contextUsage;
+  let statsSource = options.sessionStats;
   let activeTools = [...(options.activeTools ?? [])];
   let harness: PiAgentSessionHarness;
   const pendingDefaultPrompts: Array<() => void> = [];
@@ -214,6 +218,9 @@ export function createPiAgentSessionHarness(
     },
     getContextUsage() {
       return contextUsage;
+    },
+    getSessionStats() {
+      return statsSource?.();
     },
     getAllTools() {
       return activeTools.map((name) => ({ name }));
