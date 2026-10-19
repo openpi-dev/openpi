@@ -158,10 +158,6 @@ export const DEFAULT_WEB_CHAT_FONT_SIZE = 14;
 export const MIN_WEB_CHAT_FONT_SIZE = 12;
 export const MAX_WEB_CHAT_FONT_SIZE = 24;
 
-export const CAPABILITY_DISCOVERY_MODES = ["explicit", "adaptive"] as const;
-export type CapabilityDiscoveryMode =
-  (typeof CAPABILITY_DISCOVERY_MODES)[number];
-
 /** Canonical default layout: one-line plain footer with flex alignment. */
 export const DEFAULT_FOOTER_LINES: FooterLines = [
   ["model", "context", "flex", "git", "pr", "cwd"],
@@ -237,9 +233,6 @@ export interface MyPiSetupConfig {
   readonly codeMode: {
     readonly enabled: boolean;
   };
-  readonly capabilities: {
-    readonly discovery: CapabilityDiscoveryMode;
-  };
   readonly suggestions: {
     readonly enabled: boolean;
     readonly model?: SuggestionModelConfig;
@@ -294,8 +287,7 @@ export interface MyPiSetupConfig {
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
-  codeMode: { enabled: true },
-  capabilities: { discovery: "explicit" },
+  codeMode: { enabled: false },
   suggestions: { enabled: false },
   webSearch: { enabled: false, modelSupport: [] },
   response: { verbosity: "default", reasoningSummary: "default" },
@@ -430,12 +422,6 @@ export const isFooterStyle = (value: unknown): value is FooterStyle =>
 
 const isFooterPreset = (value: unknown): value is FooterPreset =>
   typeof value === "string" && FOOTER_PRESETS.includes(value as FooterPreset);
-
-const isCapabilityDiscoveryMode = (
-  value: unknown,
-): value is CapabilityDiscoveryMode =>
-  typeof value === "string" &&
-  CAPABILITY_DISCOVERY_MODES.includes(value as CapabilityDiscoveryMode);
 
 export const isWebTheme = (value: unknown): value is WebTheme =>
   typeof value === "string" && WEB_THEMES.includes(value as WebTheme);
@@ -670,7 +656,6 @@ function boundedIntegerRange(
 export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   if (!isRecord(value)) return DEFAULT_SETUP_CONFIG;
 
-  const capabilities = isRecord(value.capabilities) ? value.capabilities : {};
   const codeMode = isRecord(value.codeMode) ? value.codeMode : {};
 
   // `summaries` is the pre-suggestion config key. Read it once as a migration
@@ -708,12 +693,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
-    capabilities: {
-      discovery: isCapabilityDiscoveryMode(capabilities.discovery)
-        ? capabilities.discovery
-        : "explicit",
-    },
-    codeMode: { enabled: codeMode.enabled !== false },
+    codeMode: { enabled: codeMode.enabled === true },
     webSearch: {
       enabled:
         webSearch.enabled === true &&
@@ -891,9 +871,11 @@ const suggestionShape = { enabled: booleanValue, model: modelShape };
 const setupShape: ConfigShape = {
   configVersion: (value) => value === SETUP_CONFIG_VERSION,
   codeMode: { enabled: booleanValue },
-  capabilities: { discovery: isCapabilityDiscoveryMode },
   suggestions: suggestionShape,
   summaries: suggestionShape,
+  // Retired #879 key: recognized so old configs load without warnings; the
+  // normalized document drops it on the next write.
+  capabilities: () => true,
   workflows: {
     concurrency: integerBetween(1, MAX_WORKFLOW_CONCURRENCY),
     maxAgentCalls: integerBetween(1, MAX_WORKFLOW_AGENT_CALLS),
@@ -1707,7 +1689,6 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     : "off";
   return [
     `Code Mode default: ${config.codeMode.enabled ? "on" : "off"} · Pi native codemode in CLI and Web parents · native tool selections take precedence · children retain inherited tool limits`,
-    `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
     `Browser control: ${config.browser.control ? "on" : "off"} · default ${config.browser.defaultBrowser} · embedded ${config.browser.embedded ? "allowed" : "blocked"} · external ${config.browser.externalBrowsers.join(", ") || "none"}`,
     `Browser choices: embedded (Chromium host), ${EXTERNAL_BROWSERS.join(", ")}; Safari/Firefox use native tabs.`,

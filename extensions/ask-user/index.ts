@@ -374,8 +374,8 @@ export default function askUser(pi: ExtensionAPI) {
   const syncInteractionTools = () =>
     patchOwnedTools(pi, "interaction", {
       ...(planning || setupActive
-        ? { enable: OPENPI_TOOL_SURFACE.interaction.deferred }
-        : { disable: OPENPI_TOOL_SURFACE.interaction.deferred }),
+        ? { enable: OPENPI_TOOL_SURFACE.interaction.boundary }
+        : { disable: OPENPI_TOOL_SURFACE.interaction.boundary }),
     });
 
   pi.events.on(PLAN_MODE_CHANNEL, (state: unknown) => {

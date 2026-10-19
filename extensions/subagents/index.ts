@@ -9,8 +9,8 @@
  *   pools (MAX_RUNNING and MAX_RUNNING_BTW).
  * - subagent_wait: block until the listed subagents settle, return results.
  * - subagent_cancel: stop one or more running subagents.
- * - subagent_check: peek at a subagent's status and recent activity.
- * - subagent_list: list all subagents.
+ * - subagent_check: peek at a subagent's status and recent activity, or
+ *   list all subagents when called without an id.
  *
  * Unawaited subagents queue their result as a follow-up message when they
  * settle. `/subagents` opens a picker + full interactive takeover view.
@@ -140,7 +140,6 @@ import {
   SUBAGENT_CANCEL_TOOL_DESCRIPTION,
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CHECK_TOOL_DESCRIPTION,
-  SUBAGENT_LIST_TOOL_DESCRIPTION,
   SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
@@ -575,7 +574,7 @@ export default function (
   pi.on("agent_settled", () => resultDelivery.parentSettled());
   const registerStableToolFamily = () =>
     patchOwnedTools(pi, "subagents", {
-      enable: OPENPI_TOOL_SURFACE.subagents.entry,
+      enable: OPENPI_TOOL_SURFACE.subagents.resident,
     });
 
   const getRuntime = () =>
@@ -1203,6 +1202,7 @@ export default function (
               ...(params.output_schema !== undefined
                 ? { structured: true }
                 : {}),
+              exitsAfterTurn: ctx.mode === "print" || ctx.mode === "json",
             }),
           },
         ],
@@ -1541,14 +1541,15 @@ export default function (
     label: "Check Subagent",
     description: SUBAGENT_CHECK_TOOL_DESCRIPTION,
     parameters: Type.Object({
-      id: Type.String({
-        description: SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS.id,
-      }),
+      id: Type.Optional(
+        Type.String({
+          description: SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS.id,
+        }),
+      ),
       generation: Type.Optional(
         Type.Integer({
           minimum: 1,
-          description:
-            "Actual Direct run generation; omitted selects the latest active-branch owner record when reading evidence.",
+          description: "Run generation to read; defaults to the latest.",
         }),
       ),
       evidence: Type.Optional(
@@ -1560,7 +1561,7 @@ export default function (
           ],
           {
             description:
-              "Explicit original evidence read through Pi permissions. Native nestedCalls may disclose read paths. Missing/legacy/unsealed/pruned/denied/oversized evidence is unavailable.",
+              'Evidence to read from a finished subagent: "transcript", "final", or "structured".',
           },
         ),
       ),
@@ -1568,26 +1569,58 @@ export default function (
         Type.Integer({
           minimum: 0,
           description:
-            "Unicode code-point offset in selected evidence; use nextOffset to continue.",
+            "Code-point offset for paging; pass nextOffset from the previous page.",
         }),
       ),
       limit: Type.Optional(
         Type.Integer({
           minimum: 1,
           maximum: 4096,
-          description:
-            "Maximum code points per page (default 2048); serialized page capped at 16 KiB.",
+          description: "Maximum code points per page (default 2048).",
         }),
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (params.id === undefined) {
+        if (
+          params.generation !== undefined ||
+          params.evidence !== undefined ||
+          params.offset !== undefined ||
+          params.limit !== undefined
+        ) {
+          throw new Error(
+            "Evidence reads require a subagent id; call subagent_check without parameters to list subagent ids.",
+          );
+        }
+        const manager = await getManager();
+        const subs = manager.view.list().filter(isModelVisible);
+        const text =
+          subs.length === 0
+            ? "No subagents."
+            : subs.map((snap) => describeSubagent(snap)).join("\n");
+        return {
+          content: [{ type: "text", text }],
+          details: {
+            subagents: subs.map((snap) => ({
+              id: snap.id,
+              title: snap.title,
+              harness: snap.backend,
+              status: snap.status,
+            })),
+          },
+        };
+      }
       if (
         params.generation !== undefined ||
         params.evidence !== undefined ||
         params.offset !== undefined ||
         params.limit !== undefined
       ) {
-        const evidence = await queryDirectEvidence(ctx, params, signal);
+        const evidence = await queryDirectEvidence(
+          ctx,
+          { ...params, id: params.id },
+          signal,
+        );
         return {
           content: [{ type: "text", text: JSON.stringify(evidence) }],
           details: evidence,
@@ -1630,32 +1663,6 @@ export default function (
           status: snap.status,
           turns: snap.turns,
           completion,
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_list",
-    label: "List Subagents",
-    description: SUBAGENT_LIST_TOOL_DESCRIPTION,
-    parameters: Type.Object({}),
-    async execute() {
-      const manager = await getManager();
-      const subs = manager.view.list().filter(isModelVisible);
-      const text =
-        subs.length === 0
-          ? "No subagents."
-          : subs.map((snap) => describeSubagent(snap)).join("\n");
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          subagents: subs.map((snap) => ({
-            id: snap.id,
-            title: snap.title,
-            harness: snap.backend,
-            status: snap.status,
-          })),
         },
       };
     },

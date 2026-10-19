@@ -120,21 +120,6 @@ test("terminal receipts, TAP observations, and tool returns remain separate", ()
     }).state,
     "failed",
   );
-  assert.equal(
-    projectToolEvidence(call("bg_status"), {
-      content: "output",
-      isError: false,
-      details: { status: "running" },
-    }).state,
-    "running",
-  );
-  assert.equal(
-    projectToolEvidence(call("bg_status"), {
-      content: "output",
-      details: { status: "killed", signal: "SIGTERM" },
-    }).state,
-    "cancelled",
-  );
   assert.equal(testSummary("PASS test"), undefined);
   assert.equal(testSummary("# tests 1\n# pass 3\n# fail 0"), undefined);
   assert.equal(isEvidenceTool("future_test_tool"), false);
@@ -206,59 +191,13 @@ test("tool updates replace snapshots, final results resist replay, caches are bo
   );
   assert.deepEqual(reduceLiveTools(tools, "session_switched", {}), []);
 });
-test("successful foreground completion does not invent an exit code or complete background jobs", () => {
+test("successful foreground completion does not invent an exit code or process state for other tools", () => {
   const result = projectMessage({ content: "done", isError: false });
   const foreground = projectToolEvidence(call("bash"), result);
   assert.equal(foreground.processState, "returned");
   assert.equal(foreground.exitCode, undefined);
   assert.equal(
-    projectToolEvidence(call("bg_start"), result).processState,
+    projectToolEvidence(call("subagent_check"), result).processState,
     "unknown",
   );
-});
-
-test("background process outcomes require literal status identities and integral exit codes", () => {
-  for (const status of [
-    ["done"],
-    ["failed"],
-    ["killed"],
-    ["timed_out"],
-    null,
-    {},
-    1,
-  ]) {
-    const evidence = projectToolEvidence(call("bg_status"), {
-      content: "status",
-      isError: false,
-      details: { status, exitCode: 7, signal: "SIGTERM" },
-    });
-    assert.equal(evidence.state, "returned");
-    assert.equal(evidence.processState, "unknown");
-    assert.equal(evidence.exitCode, undefined);
-    assert.equal(evidence.signal, undefined);
-  }
-  for (const [status, expected] of [
-    ["done", "returned"],
-    ["failed", "failed"],
-    ["killed", "cancelled"],
-    ["timed_out", "timed_out"],
-    ["running", "running"],
-  ]) {
-    const evidence = projectToolEvidence(call("bg_status"), {
-      content: "status",
-      isError: false,
-      details: { status, exitCode: 7 },
-    });
-    assert.equal(evidence.processState, expected);
-    assert.equal(evidence.exitCode, status === "running" ? undefined : 7);
-  }
-  for (const exitCode of [0.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN]) {
-    assert.equal(
-      projectToolEvidence(call("bg_status"), {
-        content: "status",
-        details: { status: "failed", exitCode },
-      }).exitCode,
-      undefined,
-    );
-  }
 });

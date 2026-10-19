@@ -17,8 +17,8 @@ export const SUBAGENT_SCHEMA_BUDGETS = Object.freeze({
 
 /** Describes subagent_spawn, including the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background Pi subagent with isolated context and child-safe tools. Returns immediately; its result arrives automatically. It cannot see this chat, ask the user, or orchestrate. Use trusted directories. " +
-  `Max ${MAX_RUNNING} subagents can run at once.`;
+  "Start a background Pi subagent with its own context. Returns an id immediately; the result is delivered to you automatically when it finishes. The child cannot see this conversation or ask the user. " +
+  `Max ${MAX_RUNNING} running at once.`;
 
 /** UTF-8 bounded, whitespace-normalized text for the parent-facing roster. */
 function boundedPurpose(description: string) {
@@ -88,9 +88,8 @@ export function buildAgentTypeParameterDescription(
 ) {
   const ordered = orderedAgentTypes(agentTypes);
   const intro =
-    "Optional named preset for the child prompt and capability boundary. Omit for a general-purpose child. Available: ";
-  const outro =
-    " Preset restrictions are enforced; read the Subagents Skill or role file for full details.";
+    "Role preset (prompt plus enforced tool limits). Omit for a general child. Roles: ";
+  const outro = "";
   const entries: string[] = [];
   for (const agentType of ordered) {
     const summary = agentTypeSummary(agentType);
@@ -130,29 +129,27 @@ export function createAgentTypeParameterSchema(
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
-  "Spawn a background subagent (own context, normal tools) for a self-contained task";
+  "Delegate a self-contained task to a background subagent";
 
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
-  "Delegate substantial independent work; do a single lookup or edit inline.",
-  "After spawning, continue independent work. In an interactive session, end your turn when none remains; automatic delivery will re-invoke you. Do not call subagent_wait merely because the next step depends on the result; use it only when the user explicitly asks to keep the response open, or the same non-interactive invocation must return the result. Never poll or guess the result.",
+  "Delegate only substantial, independent work. After spawning, keep working or end your turn: results arrive automatically, so never poll or wait just because a later step depends on them.",
 ];
 
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   prompt:
-    "Self-contained task: include needed context, file paths, and expected report.",
-  name: "Short human-readable name shown in listings and the UI",
-  harness: 'Optional; "pi" is the only harness and the default.',
-  workingDir:
-    "Child cwd, absolute or relative to parent. Target project trust is checked separately.",
+    "Complete standalone task: context, file paths, constraints, and the expected report.",
+  name: "Short label for listings.",
+  harness: 'Only "pi" (the default).',
+  workingDir: "Child working directory, absolute or relative to this one.",
   isolation:
-    'Use "worktree" for concurrent writers and tell the child to commit. See the Subagents Skill for lifecycle details.',
+    '"worktree" gives the child its own git worktree; use it for concurrent writers and tell the child to commit.',
   model:
-    'Optional "provider/model-id" or current-provider model override. Omit to use the preset, configured role, or parent default. Never guess a model name.',
+    '"provider/model-id" override. Omit to inherit. Never guess a model name.',
   reasoningEffort:
-    "Optional child thinking level. Honor the user's requested level. Otherwise choose a level supported by the resolved child model based on the selected role and task difficulty. An explicit value overrides a role default.",
-  outputSchema: "Optional result JSON Schema.",
+    "Child thinking level. Omit to use the role default or the parent level; honor any level the user requested.",
+  outputSchema: "JSON Schema the child's final result must match.",
 };
 
 /** The exact name/description/wire-schema source used by registration/tests. */
@@ -218,6 +215,7 @@ export function buildSubagentSpawnResult(options: {
   tools?: readonly string[];
   worktreeBranch?: string;
   structured?: boolean;
+  exitsAfterTurn?: boolean;
 }) {
   const typeNote = options.agentTypeName
     ? ` Agent type "${options.agentTypeName}" applied.`
@@ -240,39 +238,42 @@ export function buildSubagentSpawnResult(options: {
   const structuredNote = options.structured
     ? " This run must finish with the requested validated structured result."
     : "";
+  const continuation = options.exitsAfterTurn
+    ? `It runs in the background. This is a non-interactive run: the process exits when your turn ends, which stops any running subagent and discards its result. Before your final answer, call subagent_wait(ids: ["${options.id}"]) for every result you need; subagent_cancel stops it, subagent_check peeks at a running one or lists all.`
+    : `It runs in the background — keep working on independent work. If none remains in an interactive session, briefly tell the user it is still running and end your turn; its result is delivered automatically and you are automatically re-invoked when it finishes. Do not poll or call subagent_wait merely because a later step depends on it. ` +
+      `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one or lists all.`;
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}${structuredNote}\n` +
-    `It runs in the background — keep working on independent work. If none remains in an interactive session, briefly tell the user it is still running and end your turn; its result is delivered automatically and you are automatically re-invoked when it finishes. Do not poll or call subagent_wait merely because a later step depends on it. ` +
-    `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
+    continuation
   );
 }
 
 /** Describes explicit blocking collection of one or more subagent results. */
 export const SUBAGENT_WAIT_TOOL_DESCRIPTION =
-  "Block until all listed subagents have settled, then return their final outputs. This is an explicit synchronous barrier, not the default. In an interactive session, call it only when the user explicitly asks you to keep the current response open for these results. A dependent next step or having nothing else to do is not sufficient: end your turn and let automatic result delivery re-invoke you while the user remains free to interact. In a non-interactive automation, use it only when the same invocation must return the completed results. Never poll for completion and never answer from a guessed result before it arrives.";
+  "Block until the listed subagents finish and return their results. Use only when the user explicitly asks to keep this response open for them, or a non-interactive run must return them now; otherwise end your turn and the results arrive automatically.";
 
 /** Model-facing schema description for the subagent ids to await. */
 export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {
-  ids: 'Subagent ids to wait for, e.g. ["sa-1", "sa-2"]',
+  ids: 'Subagent ids, e.g. ["sa-1"].',
 };
 
 /** Describes aborting running subagents while retaining their partial transcripts. */
 export const SUBAGENT_CANCEL_TOOL_DESCRIPTION =
-  "Cancel one or more running subagents. This aborts their active work but preserves their partial session transcripts on disk.";
+  "Stop running subagents. Their partial transcripts are kept.";
 
 /** Model-facing schema description for the subagent ids to cancel. */
 export const SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS = {
-  ids: 'Subagent ids to cancel, e.g. ["sa-1", "sa-2"]',
+  ids: 'Subagent ids, e.g. ["sa-1"].',
 };
 
 /** Describes sending a follow-up to one subagent: steer a running one or restart a settled one. */
 export const SUBAGENT_SEND_TOOL_DESCRIPTION =
-  "Send a message to one subagent: steer a running one mid-run, or restart a finished/failed one for another turn with its transcript and context intact. Use this to correct course, add missing context, or ask a follow-up on the SAME subagent instead of cancelling and respawning it. Spawn a fresh subagent for unrelated work. Restarting a settled subagent re-occupies a running slot, so it fails when the concurrency cap is full — wait for one to finish first. The subagent still cannot see this conversation, so make the message self-contained. Its result is delivered back to you when it next settles, exactly like subagent_spawn.";
+  "Send a message to an existing subagent: steers it if it is running, or starts another turn on its transcript if it has finished. Prefer this over respawning for follow-ups on the same task. The result is delivered automatically.";
 
 /** Model-facing schema descriptions for the subagent id and follow-up message. */
 export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
-  id: 'Subagent id to send to, e.g. "sa-1"',
-  text: "Message for the subagent: steering guidance for a running one, or the next instruction for a finished one. Must be self-contained — it cannot see this conversation.",
+  id: 'Subagent id, e.g. "sa-1".',
+  text: "Self-contained message; the child cannot see this conversation.",
 };
 
 /** Builds the subagent_send result, distinguishing a live steer from a restart. */
@@ -288,16 +289,12 @@ export function buildSubagentSendResult(options: {
 
 /** Describes nonblocking inspection of a subagent without consuming its result. */
 export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
-  "Peek at a subagent's status and recent activity without blocking. Does not consume its result. Do NOT poll with it to wait for completion — a settled subagent's result is delivered to you automatically. Use it when you need a running subagent's partial state (e.g. to decide whether to steer it), or select generation/evidence to retrieve settled Direct owner evidence on the active parent branch. Explicit evidence reads use Pi permissions and native nested-call metadata may include paths; receipts do not. Availability is bounded, not a retention guarantee.";
+  "Show one subagent's status and latest output without blocking, or omit id to list all subagents. Not for waiting: results arrive automatically. Set evidence to page through a finished subagent's transcript, final output, or structured result.";
 
 /** Model-facing schema description for the subagent id to inspect. */
 export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {
-  id: "Subagent id",
+  id: "Subagent id; omit to list all.",
 };
-
-/** Describes listing all tracked running and settled subagents. */
-export const SUBAGENT_LIST_TOOL_DESCRIPTION =
-  "List all subagents (running and finished) with their status.";
 
 const SUBAGENT_RESULT_TRANSPORT_INSTRUCTION =
   "(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)";

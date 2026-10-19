@@ -54,12 +54,10 @@ function Chip({
 
 export function ActivityBar({
   snapshot,
-  onInspectTerminal,
   onInspectSubagent,
   observed = true,
 }: {
   snapshot: WebSnapshot | null;
-  onInspectTerminal?: (id: string) => void;
   onInspectSubagent?: (id?: string) => void;
   observed?: boolean;
 }) {
@@ -129,10 +127,9 @@ export function ActivityBar({
     .filter(Boolean)
     .join(" · ");
   const admission = liveSubagents?.childExecutionAdmission;
-  const running = [
-    ...(capabilities?.workflows?.items ?? []),
-    ...(capabilities?.["background-terminals"]?.items ?? []),
-  ].some((item) => item.status === "running");
+  const running = (capabilities?.workflows?.items ?? []).some(
+    (item) => item.status === "running",
+  );
   useEffect(() => {
     if (!running) return;
     const interval = window.setInterval(
@@ -166,28 +163,13 @@ export function ActivityBar({
       status: canonicalStatus(workflow.status),
     });
   }
-  for (const terminal of capabilities?.["background-terminals"]?.items ?? []) {
-    const elapsed = formatElapsedMs(terminal.createdAt, terminal.settledAt);
-    chips.push({
-      key: `terminal-${terminal.id}`,
-      onClick: onInspectTerminal
-        ? () => onInspectTerminal(terminal.id)
-        : undefined,
-      kind: "terminal",
-      label: `${terminal.title || terminal.id}${elapsed ? ` · ${elapsed}` : ""}`,
-      status: canonicalStatus(terminal.status),
-    });
-  }
   chips.sort(
     (left, right) =>
       Number(right.status === "running") - Number(left.status === "running"),
   );
   const visible = chips.slice(0, 5);
   const omitted =
-    chips.length -
-    visible.length +
-    (capabilities?.workflows?.omitted ?? 0) +
-    (capabilities?.["background-terminals"]?.omitted ?? 0);
+    chips.length - visible.length + (capabilities?.workflows?.omitted ?? 0);
   if (
     !visible.length &&
     !omitted &&

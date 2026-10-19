@@ -4,17 +4,14 @@ import { fileURLToPath } from "node:url";
 import {
   CHILD_EXCLUDED_TOOL_NAMES,
   CHILD_SAFE_PACKAGE_TOOL_NAMES,
+  RETIRED_OPENPI_TOOL_NAMES,
 } from "../../../extensions/shared/child-session.ts";
 import {
-  DEFAULT_OPENPI_ACTIVE_TOOL_NAMES,
   isOwnedToolActive,
   isOwnedToolAvailable,
-  loadOpenPiCapabilities,
-  OPENPI_CAPABILITY_NAMES,
   OPENPI_TOOL_SURFACE,
   OPENPI_TOOL_SURFACE_NAMES,
   patchOwnedTools,
-  resetOpenPiToolSurface,
 } from "../../../extensions/shared/tool-surface.ts";
 
 function harness(
@@ -41,17 +38,16 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
   const h = harness([
     "read",
     "third_party_tool",
-    "subagent_wait",
     "subagent_spawn",
+    "subagent_cancel",
+    "subagent_send",
+    "subagent_check",
   ]);
-  resetOpenPiToolSurface(h.pi);
-  loadOpenPiCapabilities(h.pi, ["delegate"]);
-  h.writes.length = 0;
 
+  // subagent_wait missing from active: resident reconcile adds it
   assert.equal(
     patchOwnedTools(h.pi, "subagents", {
-      disable: ["subagent_wait"],
-      enable: ["subagent_list", "subagent_check"],
+      enable: OPENPI_TOOL_SURFACE.subagents.resident,
     }),
     true,
   );
@@ -62,7 +58,7 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
     "subagent_cancel",
     "subagent_send",
     "subagent_check",
-    "subagent_list",
+    "subagent_wait",
   ]);
 
   h.pi.setActiveTools([...h.active(), "late_third_party_tool"]);
@@ -77,9 +73,53 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
     "subagent_cancel",
     "subagent_send",
     "subagent_check",
-    "subagent_list",
-    "late_third_party_tool",
     "subagent_wait",
+    "late_third_party_tool",
+  ]);
+});
+
+test("disabling a resident tool throws instead of churning the frozen surface", () => {
+  const h = harness(["read", ...OPENPI_TOOL_SURFACE.workflows.resident]);
+  assert.throws(
+    () => patchOwnedTools(h.pi, "workflows", { disable: ["workflow_status"] }),
+    /workflows cannot disable resident tool "workflow_status"/,
+  );
+  assert.throws(
+    () =>
+      patchOwnedTools(h.pi, "workflows", {
+        enable: ["workflow"],
+        disable: ["workflow_stop"],
+      }),
+    /workflows cannot disable resident tool "workflow_stop"/,
+  );
+  // The throw happens before any surface write.
+  assert.equal(h.writes.length, 0);
+  assert.ok(h.active().includes("workflow_status"));
+});
+
+test("boundary tools enable and disable while resident tools stay put", () => {
+  const h = harness(["read", ...OPENPI_TOOL_SURFACE.workflows.resident]);
+  assert.equal(
+    patchOwnedTools(h.pi, "gitRead", {
+      enable: OPENPI_TOOL_SURFACE.gitRead.boundary,
+    }),
+    true,
+  );
+  assert.deepEqual(h.active(), [
+    "read",
+    ...OPENPI_TOOL_SURFACE.workflows.resident,
+    ...OPENPI_TOOL_SURFACE.gitRead.boundary,
+  ]);
+
+  assert.equal(
+    patchOwnedTools(h.pi, "gitRead", {
+      disable: OPENPI_TOOL_SURFACE.gitRead.boundary,
+    }),
+    true,
+  );
+  assert.deepEqual(h.active(), [
+    "read",
+    ...OPENPI_TOOL_SURFACE.workflows.resident,
   ]);
 });
 
@@ -90,7 +130,7 @@ test("owner patch fails closed on undeclared tools", () => {
       patchOwnedTools(h.pi, "subagents", {
         disable: ["workflow_status"],
       }),
-    /does not own tool "workflow_status"/,
+    /subagents does not own tool "workflow_status"/,
   );
   assert.equal(h.writes.length, 0);
 });
@@ -137,133 +177,65 @@ test("owned-tool activity requires both visibility and matching provenance", () 
 });
 
 test("inline ownership fails open without hiding foreign tools", () => {
-  let active = ["read", "openpi_load_tools", "subagent_spawn", "subagent_wait"];
+  let active = ["read", "subagent_spawn", "subagent_wait"];
   const openPiSource = "<inline:openpi-subagents>";
   const pi = {
     getActiveTools: () => [...active],
     getAllTools: () => [
-      { name: "openpi_load_tools" },
       {
         name: "subagent_spawn",
         sourceInfo: { path: "<inline:foreign>", source: "inline" },
       },
-      ...OPENPI_TOOL_SURFACE.subagents.deferred.map((name) => ({
-        name,
-        sourceInfo: { path: openPiSource, source: "inline" },
-      })),
+      ...OPENPI_TOOL_SURFACE.subagents.resident
+        .filter((name) => name !== "subagent_spawn")
+        .map((name) => ({
+          name,
+          sourceInfo: { path: openPiSource, source: "inline" },
+        })),
     ],
     setActiveTools(names: string[]) {
       active = [...names];
     },
   };
 
-  resetOpenPiToolSurface(pi);
+  // reconcile does not remove an active namesake owned by a foreign source
   patchOwnedTools(pi, "subagents", {
-    disable: OPENPI_TOOL_SURFACE.subagents.deferred,
+    enable: OPENPI_TOOL_SURFACE.subagents.resident,
   });
   assert.ok(active.includes("subagent_spawn"));
   assert.ok(active.includes("subagent_wait"));
-
-  loadOpenPiCapabilities(pi, ["delegate"]);
-  patchOwnedTools(pi, "subagents", { enable: ["subagent_wait"] });
   assert.equal(active.filter((name) => name === "subagent_spawn").length, 1);
-  assert.ok(active.includes("subagent_wait"));
-});
-
-test("an explicitly bound inline owner controls only its declared source", () => {
-  let active = ["read", "openpi_load_tools"];
-  const pi = {
-    getActiveTools: () => [...active],
-    getAllTools: () => [
-      { name: "read" },
-      {
-        name: "openpi_load_tools",
-        sourceInfo: {
-          path: "<inline:openpi-capabilities-test>",
-          source: "inline",
-        },
-      },
-    ],
-    setActiveTools(names: string[]) {
-      active = [...names];
-    },
-  };
-
-  resetOpenPiToolSurface(pi, {
-    capabilities: "<inline:openpi-capabilities-test>",
-  });
-
-  assert.deepEqual(active, ["read"]);
 });
 
 test("owner patch is a no-op when the desired surface is already active", () => {
-  const h = harness([
-    "read",
-    "openpi_load_tools",
-    ...OPENPI_TOOL_SURFACE.subagents.entry,
-  ]);
-  resetOpenPiToolSurface(h.pi);
-  loadOpenPiCapabilities(h.pi, ["delegate"]);
-  h.writes.length = 0;
+  const h = harness(["read", ...OPENPI_TOOL_SURFACE.subagents.resident]);
   assert.equal(
     patchOwnedTools(h.pi, "subagents", {
-      enable: OPENPI_TOOL_SURFACE.subagents.entry,
+      enable: OPENPI_TOOL_SURFACE.subagents.resident,
     }),
     false,
   );
   assert.deepEqual(h.writes, []);
 });
 
-test("catalog defines the compact parent entry surface and every managed name once", () => {
-  assert.deepEqual(DEFAULT_OPENPI_ACTIVE_TOOL_NAMES, []);
-  assert.deepEqual(OPENPI_CAPABILITY_NAMES, [
-    "search",
-    "delegate",
-    "workflow",
-    "background",
-    "session",
-    "runtime",
-  ]);
+test("catalog defines resident and boundary names exactly once", () => {
   assert.equal(
     OPENPI_TOOL_SURFACE_NAMES.length,
     new Set(OPENPI_TOOL_SURFACE_NAMES).size,
   );
-  assert.deepEqual(OPENPI_TOOL_SURFACE.subagents.entry, [
+  assert.deepEqual(OPENPI_TOOL_SURFACE.subagents.resident, [
     "subagent_spawn",
     "subagent_wait",
     "subagent_cancel",
     "subagent_send",
     "subagent_check",
-    "subagent_list",
   ]);
-  assert.deepEqual(OPENPI_TOOL_SURFACE.subagents.deferred, []);
-});
-
-test("an unloaded capability remembers lifecycle state without exposing its tools", () => {
-  const h = harness(["read", "openpi_load_tools", "tasks_add", "tasks_update"]);
-  resetOpenPiToolSurface(h.pi);
-  patchOwnedTools(h.pi, "tasks", {
-    enable: OPENPI_TOOL_SURFACE.tasks.deferred,
-  });
-  patchOwnedTools(h.pi, "goal", {
-    disable: OPENPI_TOOL_SURFACE.goal.deferred,
-  });
-  assert.deepEqual(h.active(), ["read"]);
-
-  const loaded = loadOpenPiCapabilities(h.pi, ["session"]);
-  assert.deepEqual(loaded.activatedTools, [
-    "tasks_add",
-    "tasks_update",
-    "tasks_list",
-    "create_goal",
-  ]);
-  assert.deepEqual(h.active(), [
-    "read",
-    "tasks_add",
-    "tasks_update",
-    "tasks_list",
-    "create_goal",
-  ]);
+  assert.deepEqual(OPENPI_TOOL_SURFACE.subagents.boundary, []);
+  // Retired tools are absent from the managed surface.
+  const managed = new Set<string>(OPENPI_TOOL_SURFACE_NAMES);
+  for (const retired of RETIRED_OPENPI_TOOL_NAMES) {
+    assert.equal(managed.has(retired), false, retired);
+  }
 });
 
 test("visibility catalog and child-session policy classify the same package tools", () => {

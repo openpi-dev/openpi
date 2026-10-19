@@ -31,7 +31,6 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type {
-  WebBackgroundTerminalActivity,
   WebCapabilityProjection,
   WebCapabilitySnapshot,
   WebSubagentActivity,
@@ -510,20 +509,16 @@ function SideConversationPanel({
 function TerminalPanel({
   sessionId,
   cwd,
-  activity,
   tabId,
   active,
   onConnectionChange,
 }: {
   sessionId: string;
   cwd: string;
-  activity?: WebCapabilityProjection<WebBackgroundTerminalActivity>;
   tabId: string;
   active: boolean;
   onConnectionChange: (state: { id: string | null; pending: boolean }) => void;
 }) {
-  const { t } = useTranslation();
-  const items = activity?.items ?? [];
   return (
     <div className="terminal-workspace">
       <InteractiveTerminal
@@ -533,30 +528,6 @@ function TerminalPanel({
         active={active}
         onConnectionChange={onConnectionChange}
       />
-      {items.length > 0 && (
-        <details className="terminal-agent-activity">
-          <summary>
-            <SquareTerminal aria-hidden="true" />
-            <span>{t("backgroundTerminalActivity")}</span>
-            <small>{items.length}</small>
-            <ChevronRight aria-hidden="true" />
-          </summary>
-          <ul>
-            {items.map((item) => (
-              <li key={item.id}>
-                <span>
-                  <strong>{item.title || item.id}</strong>
-                  <small>
-                    {t(`execution_${item.status}`, {
-                      defaultValue: item.status,
-                    })}
-                  </small>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
     </div>
   );
 }
@@ -1061,7 +1032,6 @@ export function WorkbarPanel({
                           [tool]: state,
                         }))
                       }
-                      activity={capabilities["background-terminals"]}
                     />
                   ) : kind === "browser" &&
                     visible &&

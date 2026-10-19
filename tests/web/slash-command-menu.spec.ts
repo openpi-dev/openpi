@@ -46,11 +46,11 @@ const commands: WebCommandSummary[] = [
     argumentHint: "[arguments]",
   },
   {
-    name: "ps",
-    description: "List background terminals",
+    name: "workflows",
+    description: "Inspect workflow runs",
     source: "extension",
     availability: "available",
-    action: "terminal",
+    action: "subagents",
   },
   {
     name: "btw",
@@ -170,7 +170,7 @@ describe("Web slash command discovery", () => {
     expect(filterWebCommands(commands, "").map((item) => item.name)).toEqual([
       "review",
       "release",
-      "ps",
+      "workflows",
       "btw",
       "openpi-setup",
       "extension:setup",
@@ -184,9 +184,9 @@ describe("Web slash command discovery", () => {
     expect(
       filterWebCommands(commands, "skill").map((item) => item.name),
     ).toEqual(["release"]);
-    expect(filterWebCommands(commands, "ps").map((item) => item.name)).toEqual([
-      "ps",
-    ]);
+    expect(
+      filterWebCommands(commands, "workflows").map((item) => item.name),
+    ).toEqual(["workflows"]);
   });
 
   it("shows a loading state while commands are being discovered", () => {
@@ -341,7 +341,7 @@ describe("Web slash command discovery", () => {
   });
 
   it.each([
-    ["ps", "terminal"],
+    ["workflows", "subagents"],
     ["lg", "review"],
     ["subagents", "subagents"],
     ["usage", "runtime"],
@@ -369,13 +369,13 @@ describe("Web slash command discovery", () => {
 
   it("keeps panel command arguments and attachments instead of dropping them", async () => {
     const { sendPrompt, onCommandAction } = renderComposer();
-    const input = enterCommand("/ps retain these arguments");
+    const input = enterCommand("/workflows retain these arguments");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(screen.getByRole("alert").textContent).toBe(
       i18n.t("commandPanelArguments"),
     );
-    expect(input.value).toBe("/ps retain these arguments");
-    fireEvent.change(input, { target: { value: "/ps " } });
+    expect(input.value).toBe("/workflows retain these arguments");
+    fireEvent.change(input, { target: { value: "/workflows " } });
     const file = new File(
       [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
       "image.png",
@@ -391,7 +391,7 @@ describe("Web slash command discovery", () => {
       i18n.t("commandPanelArguments"),
     );
     expect(screen.getByText("image.png")).toBeTruthy();
-    expect(input.value).toBe("/ps ");
+    expect(input.value).toBe("/workflows ");
     expect(onCommandAction).not.toHaveBeenCalled();
     expect(sendPrompt).not.toHaveBeenCalled();
   });
@@ -399,10 +399,10 @@ describe("Web slash command discovery", () => {
   it("retains the command if its panel cannot open", () => {
     const action = vi.fn(() => false);
     const { sendPrompt } = renderComposer({ onCommandAction: action });
-    const input = enterCommand("/ps ");
+    const input = enterCommand("/workflows ");
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(action).toHaveBeenCalledWith("terminal");
-    expect(input.value).toBe("/ps ");
+    expect(action).toHaveBeenCalledWith("subagents");
+    expect(input.value).toBe("/workflows ");
     expect(screen.getByRole("alert").textContent).toBe(
       i18n.t("commandPanelUnavailable"),
     );

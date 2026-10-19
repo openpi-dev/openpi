@@ -29,7 +29,9 @@ export function isBoundedReadyPlan(value: unknown): value is string {
   );
 }
 
-function decodePlanModeState(data: unknown): RestoredPlanModeState | undefined {
+export function decodePlanModeState(
+  data: unknown,
+): RestoredPlanModeState | undefined {
   if (
     !isRecord(data) ||
     data.version !== 1 ||

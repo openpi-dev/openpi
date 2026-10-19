@@ -15,7 +15,7 @@ function fixture() {
   const root = mkdtempSync(join(tmpdir(), "openpi-test-runner-"));
   for (const directory of [
     "scripts",
-    "tests/extensions/background-terminals",
+    "tests/extensions/setup",
     "node_modules/vitest",
   ]) {
     mkdirSync(join(root, directory), { recursive: true });
@@ -40,7 +40,7 @@ function fixture() {
     `import test from "node:test"; test("second node marker", () => {});`,
   );
   writeFileSync(
-    join(root, "tests/extensions/background-terminals", "process.test.ts"),
+    join(root, "tests/extensions/setup", "integration.test.ts"),
     `
     import assert from "node:assert/strict";
     import test from "node:test";
@@ -172,7 +172,7 @@ test("invalid and empty shards fail before executing any tests", () => {
     ]) {
       assert.match(runner.run(args).stderr, /Usage:/);
     }
-    rmSync(join(runner.root, "tests/extensions/background-terminals"), {
+    rmSync(join(runner.root, "tests/extensions/setup"), {
       recursive: true,
     });
     const result = runner.run(["node-parallel"]);

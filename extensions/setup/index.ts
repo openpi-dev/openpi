@@ -21,8 +21,6 @@ import { restorePlanModeState } from "../plan-mode/persisted-state.ts";
 import { applySetupConfiguration } from "../shared/setup-apply.ts";
 import {
   applyFooterConfig,
-  CAPABILITY_DISCOVERY_MODES,
-  type CapabilityDiscoveryMode,
   DEFAULT_WEB_AUXILIARY_WIDTH,
   DEFAULT_WEB_CHAT_FONT_SIZE,
   DEFAULT_WEB_CHAT_WIDTH,
@@ -170,12 +168,12 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Code Mode, Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Code Mode, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
         "This is the first setup. Explain the available choices and their impact in the user's language, then collect the initial preferences.",
-        "Prefer one ask_user call with up to three independent questions covering Capability discovery plus Workflow limits, Next-action suggestions, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command. Explain that built-in Agent roles used by subagent_spawn and workflow agent_type inherit the parent model unless the user assigns an available model to a role.",
+        "Prefer one ask_user call with up to three independent questions covering Workflow limits, Next-action suggestions, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command. Explain that built-in Agent roles used by subagent_spawn and workflow agent_type inherit the parent model unless the user assigns an available model to a role.",
       ];
 
   return [
@@ -193,21 +191,18 @@ export function buildInteractiveSetupPrompt(options: {
     "",
     "Before asking, briefly explain what can be configured and the practical impact:",
     `- Web search: off by default. web_search_enabled toggles the repository-owned native search extension. It uses the current Session model, protocol and Pi credentials; unsupported or unknown connections receive no native search tool, and there is no fallback to Exa or another provider. web_search_model_support declares support only for the exact current provider/model/protocol/base URL, only when the user explicitly confirms capability or a real native search has been verified; null removes that declaration. Never infer support from a model name or an API-compatible gateway. Legacy web_access_action remains only for managing previously installed ${WEB_ACCESS_PACKAGE.source}; never install or activate it as a fallback.`,
-    "- Capability discovery: explicit is the safe default and keeps OpenPI model tools absent until the user asks for a capability. adaptive is opt-in and keeps only the small openpi_load_tools gateway visible, allowing the model to load Subagents, Workflows, background terminals, structured search, or Session tracking when it judges them useful. Loaded groups remain session-stable, and normal permission, concurrency, and workflow limits still apply.",
-    "- Code Mode: code_mode_enabled defaults to true and activates Pi's native codemode alongside ordinary tools in CLI and Web parent sessions. false removes this package default. Native defaultTools selections and CLI/SDK tool restrictions take precedence; do not rewrite them to force activation. The model chooses when to compose calls. Children retain their inherited tool allowlists; this default does not widen them. No provider request or native settings write occurs on activation.",
+    "- Code Mode: code_mode_enabled defaults to false; true activates Pi's native codemode alongside ordinary tools in CLI and Web parent sessions. Native defaultTools selections and CLI/SDK tool restrictions take precedence; do not rewrite them to force activation. The model chooses when to compose calls. Children retain their inherited tool allowlists; this default does not widen them. No provider request or native settings write occurs on activation.",
     "- Response preferences: response_verbosity is default, low, medium, or high; response_reasoning_summary is default, auto, concise, detailed, or none. Both default to default, preserving Pi's native request. Overrides apply only to OpenAI Responses/Codex Responses. Summary changes require the current model's native reasoning and an existing reasoning request; none removes only its summary field, keeping effort. These are request preferences, not a guarantee about provider output.",
     "- Visible Web thinking levels: web_hidden_thinking_levels replaces the presentation-only hidden list. Empty (default) shows every native supported level; legal levels are off/minimal/low/medium/high/xhigh/max. A hidden current level stays visible. This does not change Pi model support, active thinking effort, defaults, or child authority.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
     `- UI: OpenPI Web mode is system (default), light, or dark. The complete ui_web_appearance object defaults to {palette:"default",accent:"",background:"",foreground:"",font:"codex"}; palette supports default/mist/rose/pine, font supports codex/sans/serif/mono (system is a legacy alias for codex), and each color must be empty for the theme default or #RRGGBB. Preserve unrequested fields when replacing this object. Legacy ui_web_theme values mist, rose, and pine remain valid and take precedence over the new palette; replacing a legacy preset requires selecting system/light/dark together with the appearance object. Chat content width defaults to ${DEFAULT_WEB_CHAT_WIDTH}px (${MIN_WEB_CHAT_WIDTH}-${MAX_WEB_CHAT_WIDTH}px), chat font size defaults to ${DEFAULT_WEB_CHAT_FONT_SIZE}px (${MIN_WEB_CHAT_FONT_SIZE}-${MAX_WEB_CHAT_FONT_SIZE}px), and thinking blocks are collapsed by default. These values are projected from canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web appearance changes apply on its next canonical snapshot.`,
-    "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
+    "- Operational activity for Subagents and Workflows is core status and always remains visible whenever the custom footer is enabled.",
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact; all three default to compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Recommend compact for users who scan activity first and inspect evidence on demand.",
     "- Agent role models: built-in explorer, implementer, reviewer, and advisor roles are shared by subagent_spawn and workflow agent_type, and inherit the parent model by default. Assign only an available registry model to an individual role when needed; clearing that role returns it to inheritance. Custom agent-type files still override a built-in role's complete definition.",
     "",
     "Natural-language configuration examples the user might ask for:",
-    '- "let the model discover OpenPI capabilities when useful" → capability_discovery=adaptive',
-    '- "only use OpenPI capabilities when I ask" → capability_discovery=explicit',
     '- "use dark theme in OpenPI Web" → ui_web_theme=dark',
     '- "allow the model to use the embedded browser" → browser_control=true (off by default; Browser Bridge debugger permission is reviewed in Chrome/Edge)',
     '- "allow Chrome and use it by default" → browser_control=true, browser_external=["chrome"], browser_default="chrome"; preserve other existing grants unless the user asks to revoke them. Installation and connection remain native browser steps in Settings → Browser.',
@@ -532,12 +527,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure OpenPI",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures current-model native web search, Responses output verbosity/reasoning summary, capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (mode, palette, colors, font, chat width, font size, thinking expansion, visible thinking levels), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Native web search reuses the current Session connection and credentials; unknown or unsupported connections receive no search tool and never fall back to a search provider. Legacy web_access_action alone manages the reviewed optional Pi package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
+      "Apply a user-requested configuration change for this Pi setup. Configures current-model native web search, Responses output verbosity/reasoning summary, next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (mode, palette, colors, font, chat width, font size, thinking expansion, visible thinking levels), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Native web search reuses the current Session connection and credentials; unknown or unsupported connections receive no search tool and never fall back to a search provider. Legacy web_access_action alone manages the reviewed optional Pi package with native confirmation and explicit later reloading. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the active TUI footer; Web observes appearance changes through canonical snapshots.",
     parameters: Type.Object({
       code_mode_enabled: Type.Optional(
         Type.Boolean({
           description:
-            "Default activation of Pi's native codemode in CLI and Web parent sessions. Defaults to true. Native defaultTools and CLI/SDK restrictions take precedence. No native settings are rewritten; child allowlists remain authoritative. Omit to preserve.",
+            "Default activation of Pi's native codemode in CLI and Web parent sessions. Defaults to false. Native defaultTools and CLI/SDK restrictions take precedence. No native settings are rewritten; child allowlists remain authoritative. Omit to preserve.",
         }),
       ),
       web_search_enabled: Type.Optional(
@@ -576,12 +571,6 @@ export default function openPiSetup(pi: ExtensionAPI) {
         StringEnum(WEB_ACCESS_ACTIONS, {
           description:
             "Reviewed optional pi-web-access package operation. install-exa selects keyless Exa with a minimal new profile; install-existing preserves existing plugin preferences; disable disables its native Pi resources. Native confirmation is required. Use this field alone. Never reload the Session automatically.",
-        }),
-      ),
-      capability_discovery: Type.Optional(
-        StringEnum(CAPABILITY_DISCOVERY_MODES, {
-          description:
-            "Capability adoption policy. explicit keeps OpenPI tools absent until the user asks for a capability; adaptive keeps only the small openpi_load_tools gateway visible so the model may load a useful group on its own. Adaptive can start expensive work such as Subagents or Workflows, so it is opt-in. Omit to preserve the current value.",
         }),
       ),
       suggestions_enabled: Type.Optional(
@@ -989,12 +978,6 @@ export default function openPiSetup(pi: ExtensionAPI) {
             enabled: params.web_search_enabled ?? current.webSearch.enabled,
             modelSupport,
           },
-          capabilities: {
-            discovery:
-              (params.capability_discovery as
-                | CapabilityDiscoveryMode
-                | undefined) ?? current.capabilities.discovery,
-          },
           suggestions: {
             enabled: suggestionsEnabled,
             ...(model ? { model } : {}),
@@ -1145,7 +1128,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
           EXPLICIT_VALUE_GUIDANCE,
           FOOTER_PRESET_GUIDANCE,
           "",
-          "Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
+          "Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
           "",
           "configure_my_pi_setup is available only for this setup run. If the run settles without a successful apply, the writer is hidden and a later change requires /openpi-setup <request>. Use configure_my_pi_setup to apply only the requested OpenPI-owned changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
           SETUP_REQUEST_VALIDATION,
