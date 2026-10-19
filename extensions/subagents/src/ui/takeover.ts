@@ -294,8 +294,8 @@ export class SubagentDashboard implements Component {
     const rowLines = this.renderRows(subs, innerWidth, bodyHeight, now);
     const keys = (binding: Parameters<KeybindingsManager["getKeys"]>[0]) =>
       configuredKeys(this.keybindings, binding);
-    // Shared chrome, so this panel and its hints read the same as /ps and
-    // /workflows. The frame is padded to the rows it was given, which keeps
+    // Shared chrome, so this panel and its hints read the same as the other
+    // full-screen views. The frame is padded to the rows it was given, which keeps
     // this view's content-fit height rather than reintroducing a fixed one.
     return [
       // One empty row of air between the conversation and the docked panel.

@@ -11,7 +11,6 @@ import {
   planModeAllowsDeclaredTools,
   planModeChildTools,
 } from "../../../extensions/shared/plan-mode-state.ts";
-import { getLoadedOpenPiCapabilities } from "../../../extensions/shared/tool-surface.ts";
 import planMode, {
   BLOCK_REASON,
   buildPlanImplementationPrompt,
@@ -39,14 +38,9 @@ type PlanReadyExecute = (
 test("plan mode allows only explicit observational tools", () => {
   for (const tool of [
     "read",
-    "fd",
-    "rg",
     "web_search",
-    "bg_status",
     "subagent_check",
     "workflow_status",
-    "tasks_list",
-    "get_goal",
     "ask_user",
     "git_show",
     "git_diff",
@@ -58,14 +52,27 @@ test("plan mode allows only explicit observational tools", () => {
   }
 });
 
-test("entering Plan Mode loads the structured search capability", async () => {
+test("entering Plan Mode enables plan_ready as a boundary and broadcasts the channel", async () => {
   let commandHandler:
     | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
     | undefined;
+  let activeTools = ["read", "third_party_tool"];
+  const emitted: Array<{ channel: string; data: unknown }> = [];
+  const handlers = new Map<
+    string,
+    (event: unknown, ctx: ExtensionCommandContext) => void
+  >();
   const pi = {
-    registerTool() {},
-    getActiveTools: () => [],
-    setActiveTools() {},
+    registerTool(definition: { name: string }) {
+      activeTools = [
+        ...activeTools.filter((name) => name !== definition.name),
+        definition.name,
+      ];
+    },
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names: string[]) {
+      activeTools = [...names];
+    },
     registerCommand(
       _name: string,
       command: {
@@ -74,12 +81,16 @@ test("entering Plan Mode loads the structured search capability", async () => {
     ) {
       commandHandler = command.handler;
     },
-    on() {},
+    on(name: string, handler: (event: unknown, ctx: unknown) => void) {
+      handlers.set(name, handler);
+    },
     events: {
       on() {
         return () => {};
       },
-      emit() {},
+      emit(channel: string, data: unknown) {
+        emitted.push({ channel, data });
+      },
     },
     appendEntry() {},
     sendMessage() {},
@@ -87,15 +98,27 @@ test("entering Plan Mode loads the structured search capability", async () => {
   const ctx = {
     hasUI: true,
     ui: { setStatus() {}, notify() {} },
+    sessionManager: { getBranch: () => [] },
   } as unknown as ExtensionCommandContext;
 
   planMode(pi);
+  handlers.get("session_start")?.({}, ctx);
   assert.ok(commandHandler);
-  assert.deepEqual(getLoadedOpenPiCapabilities(pi), []);
+  assert.equal(activeTools.includes("plan_ready"), false);
 
   await commandHandler("inspect history", ctx);
 
-  assert.deepEqual(getLoadedOpenPiCapabilities(pi), ["search"]);
+  assert.equal(activeTools.includes("plan_ready"), true);
+  assert.ok(
+    emitted.some(
+      ({ channel, data }) =>
+        channel === PLAN_MODE_CHANNEL &&
+        (data as { planning?: boolean }).planning === true,
+    ),
+  );
+
+  await commandHandler("off", ctx);
+  assert.equal(activeTools.includes("plan_ready"), false);
 });
 
 test("plan mode fail-closes known mutations and future unknown tools", () => {
@@ -109,11 +132,8 @@ test("plan mode fail-closes known mutations and future unknown tools", () => {
     "subagent_cancel",
     "workflow_stop",
     "configure_my_pi_setup",
-    "context_pivot",
-    "tasks_add",
-    "tasks_update",
-    "create_goal",
-    "update_goal",
+    "human_handoff",
+    "openpi_browser",
     "future_mutating_extension_tool",
   ]) {
     assert.equal(
@@ -236,7 +256,7 @@ test("Plan Ready keeps the write gate closed until the user prepares an editable
 
   await commandHandler("", ctx);
   assert.deepEqual(activeTools, ["read", "third_party_tool", "plan_ready"]);
-  assert.deepEqual(toolHandler({ toolName: "tasks_add" }), {
+  assert.deepEqual(toolHandler({ toolName: "human_handoff" }), {
     block: true,
     reason: BLOCK_REASON,
   });
@@ -587,7 +607,10 @@ test("planning children get investigation tools and never gain any", () => {
     [...PLAN_MODE_CHILD_TOOLS],
   );
   assert.deepEqual(planModeChildTools(["read", "write", "bash"]), ["read"]);
-  assert.deepEqual(planModeChildTools(["read", "rg"]), ["read", "rg"]);
+  assert.deepEqual(planModeChildTools(["read", "git_show"]), [
+    "read",
+    "git_show",
+  ]);
   assert.deepEqual(planModeChildTools(["write", "edit"]), []);
   for (const tool of ["write", "edit", "bash", "subagent_spawn"]) {
     assert.ok(
@@ -598,7 +621,7 @@ test("planning children get investigation tools and never gain any", () => {
 });
 
 test("plan mode rejects type declarations it would silently narrow", () => {
-  assert.equal(planModeAllowsDeclaredTools(["read", "rg"]), true);
+  assert.equal(planModeAllowsDeclaredTools(["read", "git_show"]), true);
   assert.equal(planModeAllowsDeclaredTools(["read", "write"]), false);
   assert.equal(planModeAllowsDeclaredTools(["bash"]), false);
   // Omitting a type allowlist inherits the normal write-capable child tools,
@@ -658,10 +681,13 @@ test("session reload and tree navigation restore the branch-local write gate", (
       data: { version: 1, status: "ready", plan: "# Restored plan" },
     },
   ];
+  let activeTools: string[] = [];
   const pi = {
     registerTool() {},
-    getActiveTools: () => [],
-    setActiveTools() {},
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names: string[]) {
+      activeTools = [...names];
+    },
     registerCommand() {},
     appendEntry() {},
     sendMessage() {},
@@ -698,10 +724,11 @@ test("session reload and tree navigation restore the branch-local write gate", (
   assert.ok(sessionStart);
   assert.ok(sessionTree);
   assert.ok(toolHandler);
-  assert.deepEqual(getLoadedOpenPiCapabilities(pi), []);
+  assert.equal(activeTools.includes("plan_ready"), false);
   sessionStart({}, ctx);
 
-  assert.deepEqual(getLoadedOpenPiCapabilities(pi), ["search"]);
+  // Restoring a ready plan re-arms the boundary tools for the episode.
+  assert.equal(activeTools.includes("plan_ready"), true);
   assert.equal(toolHandler({ toolName: "write" })?.block, true);
   assert.match(status, /ready/);
 

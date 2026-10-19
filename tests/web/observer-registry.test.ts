@@ -8,8 +8,6 @@ import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SubagentSnapshot } from "../../extensions/subagents/src/domain.ts";
 import {
   notifyWebCapabilities,
-  projectBackgroundTerminalCapability,
-  projectBackgroundTerminalDetail,
   projectSubagentCapability,
   projectSubagentDetail,
   projectWorkflowAgentDetail,
@@ -437,7 +435,7 @@ test("disconnects provider subscriptions when the observer closes", () => {
   const scope = sessionScope();
   let disconnected = false;
   const unregister = registerWebCapability(scope, {
-    kind: "background-terminals",
+    kind: "workflows",
     snapshot: () => ({ items: [], omitted: 0, truncated: false }),
     subscribe: () => () => {
       disconnected = true;
@@ -525,30 +523,6 @@ test("projects bounded canonical activity without private payloads", () => {
   ]);
   assert.equal(boundedAgents.items[0]?.agents.omitted, 976);
   assert.equal(boundedAgents.truncated, true);
-
-  const terminalSources = [
-    {
-      id: "bg-1",
-      title: "server",
-      status: "done" as const,
-      createdAt: 1,
-      settledAt: 2,
-      exitCode: 0,
-      command: "secret command",
-      stdout: { text: "private output" },
-    },
-  ];
-  const terminals = projectBackgroundTerminalCapability(terminalSources);
-  assert.deepEqual(terminals.items, [
-    {
-      id: "bg-1",
-      title: "server",
-      status: "done",
-      createdAt: 1,
-      settledAt: 2,
-      exitCode: 0,
-    },
-  ]);
 });
 
 test("workflow children retain exact run/call identity and uncertain or interrupted outcomes", () => {
@@ -749,85 +723,33 @@ test("workflow detail shares body limits and marks retained or replayed missing 
   );
 });
 
-test("projects bounded terminal detail with exact identity and recovery evidence", () => {
-  const detail = projectBackgroundTerminalDetail({
-    id: "bt-exact",
-    title: "dev server",
-    command: `prefix-${"c".repeat(5_000)}`,
-    cwd: `/workspace/${"d".repeat(3_000)}`,
-    pid: 42,
-    status: "failed",
-    createdAt: 1,
-    settledAt: 2,
-    exitCode: 1,
-    errorText: "e".repeat(3_000),
-    stdout: {
-      modelSafeText: `old-${"x".repeat(20_000)}-tail`,
-      totalBytes: 30_000,
-      truncatedBytes: 4_000,
-      spillPath: "/private/full-stdout.log",
-    },
-    stderr: {
-      modelSafeText: "failure",
-      totalBytes: 7,
-      truncatedBytes: 0,
-    },
-  });
-
-  assert.equal(detail.id, "bt-exact");
-  assert.equal(detail.kind, "background-terminals");
-  assert.equal(detail.command.endsWith("c".repeat(100)), true);
-  assert.equal(Buffer.byteLength(detail.command) <= 4 * 1024, true);
-  assert.equal(Buffer.byteLength(detail.cwd) <= 2 * 1024, true);
-  assert.equal(Buffer.byteLength(detail.errorText ?? "") <= 2 * 1024, true);
-  assert.equal(Buffer.byteLength(detail.stdout.text) <= 16 * 1024, true);
-  assert.equal(detail.stdout.text.endsWith("-tail"), true);
-  assert.equal(detail.stdout.omittedBytes > 0, true);
-  assert.equal(detail.stdout.recoveryAvailable, true);
-  assert.equal("spillPath" in detail.stdout, false);
-  assert.equal(detail.stderr.truncated, false);
-  assert.equal(detail.truncated, true);
-});
-
 test("detail lookup is Session-scoped, exact, and fail-closed", () => {
   const scope = sessionScope();
   const otherScope = sessionScope();
-  const detail = projectBackgroundTerminalDetail({
-    id: "bt-1",
-    title: "server",
-    command: "run-server",
-    cwd: process.cwd(),
-    status: "running",
-    createdAt: 1,
-    stdout: {
-      modelSafeText: "ready",
-      totalBytes: 5,
-      truncatedBytes: 0,
-    },
-    stderr: { modelSafeText: "", totalBytes: 0, truncatedBytes: 0 },
+  const detail = projectWorkflowAgentDetail("wf_a1", {
+    index: 1,
+    state: "done",
+    transcript: [],
+    transcriptUnavailable: true,
   });
+  assert.ok(detail);
   const unregister = registerWebCapability(scope, {
-    kind: "background-terminals",
+    kind: "workflows",
     snapshot: () => ({ items: [], omitted: 0, truncated: false }),
     detail: (id) => (id === detail.id ? detail : undefined),
   });
   try {
-    assert.deepEqual(
-      webCapabilityDetail(scope, "background-terminals", "bt-1"),
-      {
-        status: "found",
-        detail,
-      },
-    );
-    assert.deepEqual(
-      webCapabilityDetail(scope, "background-terminals", "bt-missing"),
-      { status: "missing" },
-    );
-    assert.deepEqual(
-      webCapabilityDetail(otherScope, "background-terminals", "bt-1"),
-      { status: "unavailable" },
-    );
-    assert.deepEqual(webCapabilityDetail(scope, "background-terminals", ""), {
+    assert.deepEqual(webCapabilityDetail(scope, "workflows", detail.id), {
+      status: "found",
+      detail,
+    });
+    assert.deepEqual(webCapabilityDetail(scope, "workflows", "wf_a1:call:9"), {
+      status: "missing",
+    });
+    assert.deepEqual(webCapabilityDetail(otherScope, "workflows", detail.id), {
+      status: "unavailable",
+    });
+    assert.deepEqual(webCapabilityDetail(scope, "workflows", ""), {
       status: "invalid",
     });
   } finally {

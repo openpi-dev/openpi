@@ -34,7 +34,6 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import capabilities from "../../../extensions/capabilities/index.ts";
 import {
   bindChildSessionExtensions,
   CHILD_EXCLUDED_TOOL_NAMES,
@@ -63,13 +62,34 @@ test("effective child allowlists never advertise parent-only tools", () => {
     effectiveChildToolAllowlist([
       "read",
       "subagent_spawn",
-      "bg_start",
+      "workflow",
       "ask_user",
       "human_handoff",
     ]),
     ["read"],
   );
   assert.deepEqual(effectiveChildToolAllowlist(["subagent_spawn"]), []);
+  // Retired OpenPI names (e.g. in a saved role allowlist) drop silently rather
+  // than failing child preflight; valid tools survive alongside them.
+  assert.deepEqual(
+    effectiveChildToolAllowlist([
+      "read",
+      "grep",
+      "find",
+      "git_show",
+      "git_diff",
+      "git_log",
+      "fd",
+      "rg",
+      "runtime_snapshot",
+      "tasks_add",
+      "tasks_update",
+      "tasks_list",
+      "context_pivot",
+      "openpi_load_tools",
+    ]),
+    ["read", "grep", "find", "git_show", "git_diff", "git_log"],
+  );
   assert.equal(effectiveChildToolAllowlist(undefined), undefined);
   assert.deepEqual(childToolPolicy(["read", "subagent_spawn"]), {
     tools: ["read"],
@@ -264,7 +284,6 @@ test("child binding restores only requested child-safe package tools after paren
       agentDir: path.join(directory, "capability-agent"),
       settingsManager,
       extensionFactories: [
-        capabilities,
         (pi) => {
           for (const name of CHILD_SAFE_PACKAGE_TOOL_NAMES) {
             pi.registerTool({
@@ -308,16 +327,87 @@ test("child binding restores only requested child-safe package tools after paren
         .sort(),
       [...CHILD_SAFE_PACKAGE_TOOL_NAMES].sort(),
     );
-    assert.equal(
-      defaults.getActiveToolNames().includes("openpi_load_tools"),
-      false,
-    );
     await shutdownAndDisposeChildSession(defaults);
 
     const narrowed = await create(["read"]);
-    assert.equal(narrowed.getActiveToolNames().includes("fd"), false);
-    assert.equal(narrowed.getActiveToolNames().includes("rg"), false);
+    assert.equal(narrowed.getActiveToolNames().includes("git_show"), false);
+    assert.equal(narrowed.getActiveToolNames().includes("git_diff"), false);
     await shutdownAndDisposeChildSession(narrowed);
+
+    // Retired OpenPI tool names in an explicit allowlist are dropped at the
+    // boundary instead of failing preflight, while real tools still bind.
+    const stale = await create(["read", "fd", "rg", "tasks_add"]);
+    assert.deepEqual(
+      stale
+        .getActiveToolNames()
+        .filter((name) =>
+          (CHILD_SAFE_PACKAGE_TOOL_NAMES as readonly string[]).includes(name),
+        ),
+      [],
+    );
+    assert.equal(stale.getActiveToolNames().includes("read"), true);
+    await shutdownAndDisposeChildSession(stale);
+  });
+});
+
+test("real git-read tools stay active in children despite the plan boundary", async () => {
+  // git-read's session_start reconcile disables its tools outside plan mode.
+  // A child never arms plan mode, so the child allowlist — not the boundary —
+  // must be authoritative: preflight and activation happen after extension
+  // startup, restoring the child-safe git tools the reconcile just disabled.
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({
+        packages: [fileURLToPath(new URL("../../../", import.meta.url))],
+      }),
+    );
+    const { loader, settingsManager } = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    assert.deepEqual(loader.getExtensions().errors, []);
+
+    const create = async (tools?: readonly string[]) => {
+      const { session } = await createAgentSession({
+        cwd,
+        agentDir,
+        resourceLoader: loader,
+        settingsManager,
+        sessionManager: SessionManager.inMemory(cwd),
+        ...childToolPolicy(tools),
+      });
+      await bindChildSessionExtensions(session, tools);
+      return session;
+    };
+
+    // Explorer-style allowlist including retired names; preflight must not
+    // fail on them and the git tools must be active after binding.
+    const explicit = await create([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "git_show",
+      "git_diff",
+      "git_log",
+      "fd",
+      "rg",
+    ]);
+    for (const name of ["git_show", "git_diff", "git_log"]) {
+      assert.equal(explicit.getActiveToolNames().includes(name), true, name);
+    }
+    await shutdownAndDisposeChildSession(explicit);
+
+    const defaults = await create();
+    for (const name of ["git_show", "git_diff", "git_log"]) {
+      assert.equal(defaults.getActiveToolNames().includes(name), true, name);
+    }
+    await shutdownAndDisposeChildSession(defaults);
   });
 });
 
@@ -367,7 +457,7 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
           extensionFactories: [
             (pi) => {
               for (const name of [
-                "bg_start",
+                "hidden_probe",
                 "outside_allowlist",
                 "child_read",
                 "blocked_read",
@@ -377,7 +467,7 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
                   label: name,
                   description: name,
                   exposure:
-                    name === "bg_start" || name === "outside_allowlist"
+                    name === "hidden_probe" || name === "outside_allowlist"
                       ? exposure
                       : "direct",
                   parameters: Type.Object({}),
@@ -404,7 +494,7 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
                 async execute(_id, _args, _signal, _update, ctx) {
                   for (const name of [
                     "child_read",
-                    "bg_start",
+                    "hidden_probe",
                     "outside_allowlist",
                     "blocked_read",
                   ]) {
@@ -435,14 +525,14 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
           await bindChildSessionExtensions(session, tools);
           session.setActiveToolsByName([
             ...tools,
-            "bg_start",
+            "hidden_probe",
             "outside_allowlist",
           ]);
           assert.deepEqual(
             session.getCallableToolNames().sort(),
             [...tools].sort(),
           );
-          assert.equal(session.getToolDefinition("bg_start"), undefined);
+          assert.equal(session.getToolDefinition("hidden_probe"), undefined);
           await session.prompt("Check the child authority boundary.");
           assert.deepEqual(outcomes, [false, true, true, true]);
           assert.deepEqual(calls, ["child_read"]);
@@ -503,14 +593,14 @@ test("child resources remove only verified parent-only OpenPI extensions", async
       "parent response preferences and setup writer must not reach child Sessions",
     );
     assert.equal(
-      extensions.some((extension) => extension.tools.has("openpi_load_tools")),
+      extensions.some((extension) => extension.tools.has("plan_ready")),
       false,
       "parent-only OpenPI extension should not reach the child runtime",
     );
     assert.equal(
-      extensions.some((extension) => extension.tools.has("fd")),
+      extensions.some((extension) => extension.tools.has("git_diff")),
       true,
-      "child-safe OpenPI file-search extension should remain",
+      "child-safe OpenPI git-read extension should remain",
     );
     assert.equal(
       extensions.some((extension) => extension.tools.has("git_show")),
@@ -1749,8 +1839,8 @@ async function discoverRegisteredToolNames() {
   const factoryRegistrations: string[] = [];
   // Matches `registerTool(` then the first `name:` string literal after it.
   // The optional `<...>` skips a generic type-argument list, because some tools
-  // register as `pi.registerTool<Params, Details>({ ... })` (e.g. file-search's
-  // fd/rg). `[^(]*` safely spans nested generics like `<ReturnType<...>, D>`
+  // register as `pi.registerTool<Params, Details>({ ... })` (e.g. git-read's
+  // git_show). `[^(]*` safely spans nested generics like `<ReturnType<...>, D>`
   // since a type-argument list contains no `(`. Missing this style silently
   // drops those tools from the scan and defeats the fail-closed guard below.
   const registerToolRe =
@@ -1859,13 +1949,21 @@ test("every registered package tool is classified child-safe or excluded (fail-c
     registered.size >= 15,
     `expected to discover the package tools, found ${registered.size}`,
   );
-  assert.ok(registered.has("bg_start"), "scan should find bg_start");
-  assert.ok(registered.has("context_pivot"), "scan should find context_pivot");
-  // fd/rg register with a generic type argument; the scan must find them too,
-  // otherwise the CHILD_SAFE classification is never exercised and a future
-  // parent-only tool in that same style would slip through the guard.
-  assert.ok(registered.has("fd"), "scan should find generic-typed fd");
-  assert.ok(registered.has("rg"), "scan should find generic-typed rg");
+  assert.ok(
+    registered.has("subagent_spawn"),
+    "scan should find subagent_spawn",
+  );
+  // git-read tools register with a generic type argument; the scan must find
+  // them too, otherwise the CHILD_SAFE classification is never exercised and a
+  // future parent-only tool in that same style would slip through the guard.
+  assert.ok(
+    registered.has("git_show"),
+    "scan should find generic-typed git_show",
+  );
+  assert.ok(
+    registered.has("git_log"),
+    "scan should find generic-typed git_log",
+  );
 
   // Factory-registered tools carry no inline name literal, so the inline scan
   // is blind to them. Fail closed: every factory registration must be a KNOWN
@@ -2015,5 +2113,76 @@ test("child delegation inherits active tools and custom restrictions only narrow
         availableTools: [{ name: "read", sourceInfo: undefined! }],
       }),
     /Cannot verify child package identity/,
+  );
+});
+
+test("role lists derive read-only search tools within the parent's read authority", () => {
+  const names = [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls",
+    "git_show",
+    "git_diff",
+    "git_log",
+  ];
+  const options = {
+    cwd: process.cwd(),
+    availableTools: names.map((name) => ({
+      name,
+      sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, { source: "sdk" }),
+    })),
+  };
+  const parent = ["read", "bash", "edit", "write"];
+  const role = [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "git_show",
+    "git_diff",
+    "git_log",
+  ];
+  // Parent-active names keep parent order; derived names append in role order.
+  assert.deepEqual(inheritedChildToolAllowlist(parent, role, options), role);
+  // Without an active parent `read`, derived names are not granted.
+  assert.deepEqual(
+    inheritedChildToolAllowlist(["bash", "edit", "write"], role, options),
+    [],
+  );
+  // A derived name whose provenance cannot be verified still fails closed.
+  assert.throws(
+    () =>
+      inheritedChildToolAllowlist(parent, role, {
+        cwd: process.cwd(),
+        availableTools: options.availableTools.filter(
+          (tool) => tool.name !== "grep",
+        ),
+      }),
+    /Cannot verify child tool provenance/,
+  );
+  // Retired and excluded names are never derived.
+  assert.deepEqual(
+    inheritedChildToolAllowlist(parent, [...role, "rg", "subagent_spawn"], {
+      cwd: process.cwd(),
+      availableTools: [
+        ...options.availableTools,
+        {
+          name: "subagent_spawn",
+          sourceInfo: createSyntheticSourceInfo("<sdk:subagent_spawn>", {
+            source: "sdk",
+          }),
+        },
+      ],
+    }),
+    role,
+  );
+  // roleTools undefined keeps today's behavior: no derivation at all.
+  assert.deepEqual(
+    inheritedChildToolAllowlist(parent, undefined, options),
+    parent,
   );
 });

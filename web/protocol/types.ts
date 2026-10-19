@@ -232,9 +232,6 @@ export interface WebSettingsResourceCatalog {
 export interface WebOpenPiSetupProjection {
   webSearch?: { enabled: boolean };
   response?: MyPiSetupConfig["response"];
-  capabilities: {
-    discovery: "explicit" | "adaptive";
-  };
   suggestions: {
     enabled: boolean;
     model?: {

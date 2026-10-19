@@ -1,5 +1,4 @@
 import type {
-  WebBackgroundTerminalDetail,
   WebCapabilityActionRequest,
   WebSubagentDetail,
   WebWorkflowAgentDetail,
@@ -1073,16 +1072,6 @@ export class WebClient {
       body: JSON.stringify({ sessionId, revision, models }),
       signal,
     });
-  }
-
-  terminalDetail(sessionId: string, id: string, signal: AbortSignal) {
-    return this.request<{
-      sessionId: string;
-      detail: WebBackgroundTerminalDetail;
-    }>(
-      `/api/capabilities/detail?kind=background-terminals&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
-      { signal },
-    );
   }
 
   subagentDetail(sessionId: string, id: string, signal: AbortSignal) {

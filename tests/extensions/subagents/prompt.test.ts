@@ -99,21 +99,24 @@ test("the generated agent_type schema exposes a compact, enforced role index", (
 test("reasoning guidance prioritizes the user and task difficulty without fixing a built-in level", () => {
   assert.match(
     SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
-    /user's requested level/i,
+    /level the user requested/i,
   );
   assert.match(
     SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
-    /task difficulty/i,
-  );
-  assert.match(
-    SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
-    /supported by the resolved child model/i,
+    /role default or the parent level/i,
   );
 });
 
 test("investigator roles describe the same inherited capability that spawn reports", () => {
-  const parentTools = ["read", "bash", "edit", "write", "rg", "subagent_spawn"];
-  const expectedTools = ["read", "bash", "edit", "write", "rg"];
+  const parentTools = [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "subagent_spawn",
+  ];
+  const expectedTools = ["read", "bash", "edit", "write", "grep"];
 
   for (const name of ["explorer", "reviewer", "advisor"]) {
     const role = BUILT_IN_AGENT_TYPES.find(
@@ -149,7 +152,7 @@ test("investigator roles describe the same inherited capability that spawn repor
       agentTypeName: name,
       tools: inherited,
     });
-    assert.match(result, /It can only use: read, bash, edit, write, rg\./);
+    assert.match(result, /It can only use: read, bash, edit, write, grep\./);
     assert.doesNotMatch(result, /subagent_spawn/);
   }
 
@@ -252,7 +255,7 @@ test("role summaries are deterministic and truncate UTF-8 without splitting it",
 test("the spawn description derives its concurrency cap from the manager", () => {
   assert.match(
     SUBAGENT_SPAWN_TOOL_DESCRIPTION,
-    new RegExp(`Max ${MAX_RUNNING} subagents`),
+    new RegExp(`Max ${MAX_RUNNING} running at once`),
   );
 });
 
@@ -260,7 +263,7 @@ test("the spawn schema keeps isolation compact while the Skill carries its trade
   const description = SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.isolation;
   assert.ok(Buffer.byteLength(description, "utf8") < 300);
   assert.match(description, /concurrent writers/i);
-  assert.match(description, /subagents Skill/i);
+  assert.match(description, /git worktree/i);
 
   const skill = await readFile(
     new URL("../../../skills/subagents/SKILL.md", import.meta.url),
@@ -278,9 +281,9 @@ test("a planning child reports its effective tools without an agent type", () =>
     harness: "pi",
     modelLabel: "m",
     cwd: "/repo",
-    tools: ["read", "rg"],
+    tools: ["read", "grep"],
   });
-  assert.match(result, /It can only use: read, rg/);
+  assert.match(result, /It can only use: read, grep/);
   assert.doesNotMatch(result, /Agent type/);
 
   const toolLess = buildSubagentSpawnResult({
@@ -334,10 +337,7 @@ test("a spawned isolated child reports the branch its work will land on", () => 
 test("interactive spawn guidance releases the turn instead of waiting on dependent work", () => {
   const guidance = SUBAGENT_SPAWN_PROMPT_GUIDELINES.join("\n");
   assert.match(guidance, /end (?:this|your) turn/i);
-  assert.match(
-    guidance,
-    /do not (?:call )?subagent_wait merely because .*next step.*depend/i,
-  );
+  assert.match(guidance, /never poll or wait.*later step.*depend/i);
 
   const result = buildSubagentSpawnResult({
     id: "sa-1",
@@ -351,10 +351,25 @@ test("interactive spawn guidance releases the turn instead of waiting on depende
   assert.doesNotMatch(result, /next step truly cannot proceed/i);
 });
 
+test("non-interactive spawn guidance requires subagent_wait before the final answer", () => {
+  const result = buildSubagentSpawnResult({
+    id: "sa-7",
+    title: "review",
+    harness: "pi",
+    modelLabel: "m",
+    cwd: "/repo",
+    exitsAfterTurn: true,
+  });
+  assert.match(result, /non-interactive run/);
+  assert.match(result, /subagent_wait\(ids: \["sa-7"\]\)/);
+  assert.doesNotMatch(result, /automatically re-invoked/);
+  assert.doesNotMatch(result, /keep working on independent work/);
+});
+
 test("blocking wait is reserved for an explicit synchronous contract", () => {
   assert.match(
     SUBAGENT_WAIT_TOOL_DESCRIPTION,
-    /user explicitly (?:asks|asked).*current (?:response|turn)/i,
+    /user explicitly asks to keep this response open/i,
   );
   assert.match(SUBAGENT_WAIT_TOOL_DESCRIPTION, /non-interactive|automation/i);
   assert.doesNotMatch(

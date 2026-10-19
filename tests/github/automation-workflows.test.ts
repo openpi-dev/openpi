@@ -56,7 +56,6 @@ test("project-specific CI remains defined in this repository", () => {
 
   assert.match(source, /^\s*matrix:/mu);
   assert.match(source, /Smoke-test Pi package discovery/u);
-  assert.match(source, /Background terminals \(Windows\)/u);
   assert.doesNotMatch(source, /openpi-dev\/automation/u);
 });
 
@@ -77,7 +76,6 @@ test("the PR labeler covers OpenPI's stable ownership boundaries", () => {
   for (const label of [
     "area:workflows",
     "area:subagents",
-    "area:background-terminals",
     "area:setup",
     "area:ui",
     "area:github",
