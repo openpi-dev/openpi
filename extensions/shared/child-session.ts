@@ -6,6 +6,7 @@ import {
   DefaultResourceLoader,
   getAgentDir,
   type LoadExtensionsResult,
+  type LoadSkillsResult,
   type PackageSource,
   ProjectTrustStore,
   type ResolvedPaths,
@@ -271,6 +272,13 @@ function packageSourceValue(source: PackageSource) {
 const CHILD_DISABLED_OPENPI_EXTENSION =
   "-extensions/git-info/index.ts" as const;
 
+/**
+ * Orchestration skills are parent-only: children get no subagent/workflow
+ * tools (CHILD_EXCLUDED_TOOL_NAMES), so advertising these skills in
+ * `<available_skills>` only costs child context.
+ */
+const CHILD_DISABLED_OPENPI_SKILL_DIRS = ["subagents", "workflows"] as const;
+
 function canonicalExistingPath(value: string) {
   try {
     return realpathSync.native(value);
@@ -311,6 +319,47 @@ function excludeOpenPiGitInfoExtension(
     extensions: resources.extensions.filter(
       (extension) =>
         canonicalExistingPath(extension.resolvedPath) !== gitInfoPath,
+    ),
+  };
+}
+
+/**
+ * Same rule as resolveGitInfoPathOrThrow: ENOENT means a skill directory is
+ * truly absent (trimmed fork, partial install); any other failure means we
+ * cannot verify it, so fail closed.
+ */
+export function resolveOrchestrationSkillDirsOrThrow(
+  resolve: (value: string) => string = realpathSync.native,
+): string[] {
+  const dirs: string[] = [];
+  for (const name of CHILD_DISABLED_OPENPI_SKILL_DIRS) {
+    try {
+      dirs.push(
+        resolve(
+          fileURLToPath(new URL(`../../skills/${name}`, import.meta.url)),
+        ),
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+  }
+  return dirs;
+}
+
+function excludeOpenPiOrchestrationSkills(
+  resources: LoadSkillsResult,
+  resolve: (value: string) => string = realpathSync.native,
+): LoadSkillsResult {
+  const orchestrationDirs = new Set(
+    resolveOrchestrationSkillDirsOrThrow(resolve),
+  );
+  if (orchestrationDirs.size === 0) return resources;
+  return {
+    ...resources,
+    skills: resources.skills.filter(
+      (skill) =>
+        !orchestrationDirs.has(canonicalExistingPath(skill.baseDir) ?? ""),
     ),
   };
 }
@@ -727,6 +776,7 @@ export async function createChildResources(options: ChildResourceOptions) {
         ),
       };
     },
+    skillsOverride: excludeOpenPiOrchestrationSkills,
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }
       : {}),
