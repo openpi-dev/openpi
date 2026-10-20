@@ -469,3 +469,39 @@ test("preview observes cancellation and rejects a file changed during scanning",
     /changed while preview was loading/,
   );
 });
+
+test("sessions with retired goal entries still load and project like Pi", async (t) => {
+  const fixture = await writeSession([
+    header(),
+    message("m1", null, "user", "root"),
+    // Retired goal state entry (type "custom" stays opaque to the context).
+    {
+      type: "custom",
+      id: "g2",
+      parentId: "m1",
+      timestamp: timestamp(2),
+      customType: "session-goal",
+      data: { id: "goal-1", objective: "ship it", status: "active" },
+    },
+    // Retired goal continuation message still projects into context.
+    {
+      type: "custom_message",
+      id: "m3",
+      parentId: "g2",
+      timestamp: timestamp(3),
+      customType: "goal-continuation",
+      content: "Continue working toward the goal.",
+      display: true,
+      details: { kind: "continuation", goalId: "goal-1", revision: 0 },
+    },
+    message("m4", "m3", "assistant", "latest"),
+  ]);
+  t.after(() => rm(fixture.directory, { recursive: true, force: true }));
+
+  const expected = SessionManager.open(fixture.path).buildSessionContext()
+    .messages;
+  const result = await loadSessionPreviewData(fixture.path);
+
+  assert.deepEqual(result.messages, expected);
+  assert.equal(result.totalMessages, expected.length);
+});

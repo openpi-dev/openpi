@@ -10,12 +10,12 @@ import {
   ImagePlus,
   Plus,
   ArrowUp,
-  Target,
   ListChecks,
   Minimize2,
   Maximize2,
   Cpu,
   Square,
+  Target,
   X,
 } from "lucide-react";
 import {
@@ -100,7 +100,7 @@ interface ComposerProps {
   modelSelectionPending?: boolean;
   modelSearch?: WebStoreState["modelSearch"];
   thinkingPendingLevel: WebStoreState["thinkingPendingLevel"];
-  onInspect?: (terminalId?: string) => void;
+  onInspect?: () => void;
   onOpenProviders?: () => void;
   onCommandAction?: (
     action: NonNullable<WebCommandSummary["action"]>,
@@ -676,8 +676,6 @@ export function Composer(props: ComposerProps) {
     !props.workspaceDraft &&
     commandDiscovery.status === "ready" &&
     filteredCommands.length > 0;
-  const commandEntryAvailable =
-    active && !prompt.trim() && !props.sessionSwitching;
   const contextEntryAvailable =
     canCompose &&
     Boolean(props.selectedWorkspace) &&
@@ -1534,20 +1532,6 @@ export function Composer(props: ComposerProps) {
             onClick: () => setActionMenu("files"),
           },
           {
-            id: "goal",
-            section: t("composerAdd"),
-            label: t("composerGoal"),
-            alias: "goal",
-            description: t("composerGoalDescription"),
-            icon: <Target />,
-            disabled: !commandEntryAvailable,
-            onClick: choose(() => {
-              if (!updateDraft({ prompt: "/goal ", caret: 6 })) return;
-              setMenuDismissed(true);
-              queueMicrotask(() => textarea.current?.focus());
-            }),
-          },
-          {
             id: "plan",
             section: t("composerAdd"),
             label: t("composerPlan"),
@@ -1674,7 +1658,6 @@ export function Composer(props: ComposerProps) {
         <ActivityBar
           snapshot={props.snapshot}
           observed={props.activityObserved}
-          onInspectTerminal={props.onInspect}
           onInspectSubagent={props.onInspectSubagent}
         />
       )}

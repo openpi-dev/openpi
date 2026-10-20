@@ -126,12 +126,12 @@ function replayKey(cwd: string, resourcePath: string, projectTrusted = true) {
 test("only provably read-only agent calls are replay-safe", () => {
   assert.equal(
     isReplaySafeAgentCall({
-      tools: ["read", "grep", "find", "ls", "fd", "rg"],
+      tools: ["read", "grep", "find", "ls", "git_show"],
     }),
     true,
   );
   assert.equal(isReplaySafeAgentCall({ tools: ["read"] }), true);
-  // The read-only git tools are as side-effect-free as fd/rg and replay-safe.
+  // The read-only git tools are side-effect-free and replay-safe.
   assert.equal(
     isReplaySafeAgentCall({
       tools: ["read", "git_show", "git_diff", "git_log"],
@@ -143,7 +143,7 @@ test("only provably read-only agent calls are replay-safe", () => {
   assert.equal(isReplaySafeAgentCall({}), false);
   // The built-in implementer and explicit writable allowlists are never safe.
   assert.equal(
-    isReplaySafeAgentCall({ tools: ["read", "bash", "edit", "write", "rg"] }),
+    isReplaySafeAgentCall({ tools: ["read", "bash", "edit", "write", "grep"] }),
     false,
   );
   for (const tool of ["bash", "edit", "write"]) {
@@ -161,26 +161,19 @@ test("only provably read-only agent calls are replay-safe", () => {
 });
 
 function replayToolSource(name: string) {
-  return name === "fd" || name === "rg"
+  return name.startsWith("git_")
     ? {
-        path: "/fixture/extensions/file-search/index.ts",
+        path: "/fixture/extensions/git-read/index.ts",
         source: "fixture-package",
         scope: "user" as const,
         origin: "package" as const,
       }
-    : name.startsWith("git_")
-      ? {
-          path: "/fixture/extensions/git-read/index.ts",
-          source: "fixture-package",
-          scope: "user" as const,
-          origin: "package" as const,
-        }
-      : {
-          path: `<builtin:${name}>`,
-          source: "builtin",
-          scope: "temporary" as const,
-          origin: "top-level" as const,
-        };
+    : {
+        path: `<builtin:${name}>`,
+        source: "builtin",
+        scope: "temporary" as const,
+        origin: "top-level" as const,
+      };
 }
 
 function filesystemTool(name: string, observe: (path: string) => string) {
@@ -206,7 +199,7 @@ test("replay filesystem boundary permits repo-local observers and rejects escapi
     writeFileSync(outsideFile, "external one\n");
     const observations: string[] = [];
     const definitions = new Map(
-      ["read", "grep", "find", "ls", "fd", "rg"].map((name) => {
+      ["read", "grep", "find", "ls", "git_show"].map((name) => {
         const definition = filesystemTool(name, (pathname) => {
           observations.push(pathname);
           return readFileSync(path.resolve(cwd, pathname), "utf8");

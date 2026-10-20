@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import test from "node:test";
 import type {
@@ -31,6 +32,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { SubagentSnapshot } from "../../../extensions/subagents/src/domain.ts";
 import { shutdownAndDisposeChildSession } from "../../../extensions/shared/child-session.ts";
 import { makePiBackend } from "../../../extensions/subagents/src/backends/pi.ts";
 import { __setSubagentTestBackends } from "../../../extensions/subagents/src/runtime.ts";
@@ -116,6 +118,78 @@ test("subagent results render before the hidden wake-up message", () => {
       options: { deliverAs: "followUp", triggerTurn: true },
     },
   ]);
+});
+
+test("delivered result details carry spend while model-facing content is unchanged", () => {
+  const dispatchEvents = (spend?: SubagentSnapshot["spend"]) => {
+    const events: Array<{
+      kind: string;
+      data?: { content: string; details: Record<string, unknown> };
+      message?: { content: string; details: Record<string, unknown> };
+    }> = [];
+    const pi = {
+      appendEntry(
+        customType: string,
+        data: { content: string; details: Record<string, unknown> },
+      ) {
+        events.push({ kind: "entry", data });
+      },
+      sendMessage(message: {
+        content: string;
+        details: Record<string, unknown>;
+      }) {
+        events.push({ kind: "message", message });
+      },
+    } as unknown as ExtensionAPI;
+    createSubagentResultDispatcher(
+      pi,
+      () => "report",
+    )([
+      {
+        id: "sa-9",
+        origin: "model",
+        backend: "pi",
+        title: "measure spend",
+        prompt: "inspect",
+        cwd: process.cwd(),
+        status: "done",
+        createdAt: 0,
+        settledAt: 1_000,
+        meta: { backend: "pi" },
+        usage: {},
+        ...(spend ? { spend } : {}),
+        transcriptVersion: 0,
+        transcript: [],
+        liveTools: [],
+        queued: [],
+        finalText: "report",
+        turns: 1,
+      },
+    ]);
+    return events;
+  };
+
+  const spend = {
+    input: 1_000,
+    output: 250,
+    cacheRead: 600,
+    cacheWrite: 40,
+  };
+  const withSpend = dispatchEvents(spend);
+  const withoutSpend = dispatchEvents(undefined);
+  const entry = withSpend.find((event) => event.kind === "entry");
+  const sent = withSpend.find((event) => event.kind === "message");
+  assert.deepEqual(entry?.data?.details.spend, spend);
+  assert.deepEqual(sent?.message?.details.spend, spend);
+  // The model-facing projection must not change because of spend.
+  assert.equal(
+    entry?.data?.content,
+    withoutSpend.find((event) => event.kind === "entry")?.data?.content,
+  );
+  assert.equal(
+    sent?.message?.content,
+    withoutSpend.find((event) => event.kind === "message")?.message?.content,
+  );
 });
 
 test("automatic delivery exposes structured data and its canonical artifact", () => {
@@ -767,7 +841,6 @@ test("session start preserves the complete registered subagent family", () => {
       "subagent_cancel",
       "subagent_send",
       "subagent_check",
-      "subagent_list",
     ],
   );
   assert.deepEqual(
@@ -828,8 +901,19 @@ test("the complete subagent family fails closed before the first spawn", async (
       );
 
   try {
-    const listed = await invoke("subagent_list", {});
+    const listed = await invoke("subagent_check", {});
     assert.equal(listed.content[0]?.text, "No subagents.");
+    await assert.rejects(
+      invoke("subagent_check", { evidence: "final" }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(
+          error.message,
+          "Evidence reads require a subagent id; call subagent_check without parameters to list subagent ids.",
+        );
+        return true;
+      },
+    );
     await assert.rejects(
       invoke("subagent_check", { id: "sa-missing" }),
       /Unknown subagent id "sa-missing"\. Known: none\./,
@@ -1078,6 +1162,11 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
       cwd,
       agentDir,
       settingsManager,
+      additionalExtensionPaths: [
+        fileURLToPath(
+          new URL("../../../extensions/git-read/index.ts", import.meta.url),
+        ),
+      ],
     });
     await loader.reload();
     const { session: parent } = await createAgentSession({
@@ -1100,10 +1189,11 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
       maxTokens: 100,
     } as NonNullable<AgentSession["model"]>;
     let prompts = 0;
+    const spawnedTools: (readonly string[] | undefined)[] = [];
     __setSubagentTestBackends([
       makePiBackend({
         sessionFactory: async (options) => {
-          assert.deepEqual(options?.tools, ["read"]);
+          spawnedTools.push(options?.tools);
           assert.equal(
             options?.resourceLoader
               ?.getExtensions()
@@ -1127,8 +1217,14 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
       { execute: (...args: unknown[]) => Promise<unknown> }
     >();
     const hooks = new Map<string, (...args: unknown[]) => unknown>();
+    const channels = new Map<string, (payload: unknown) => void>();
     const pi = {
-      events: { on() {}, emit() {} },
+      events: {
+        on(channel: string, handler: unknown) {
+          channels.set(channel, handler as (payload: unknown) => void);
+        },
+        emit() {},
+      },
       on(name: string, handler: (...args: unknown[]) => unknown) {
         hooks.set(name, handler);
       },
@@ -1151,6 +1247,7 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
     const ctx = {
       cwd,
       hasUI: false,
+      mode: "print",
       isProjectTrusted: () => false,
       model,
       getContextUsage: () => undefined,
@@ -1171,7 +1268,11 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
           undefined,
           undefined,
           ctx,
-        )) as { details: { id: string } };
+        )) as { content: [{ text: string }]; details: { id: string } };
+        // A print-mode parent exits when the turn ends, so the spawn result
+        // must require subagent_wait instead of relying on delivery.
+        assert.match(spawned.content[0]!.text, /non-interactive run/);
+        assert.match(spawned.content[0]!.text, /subagent_wait\(ids:/);
         const waited = await tools
           .get("subagent_wait")!
           .execute(
@@ -1198,7 +1299,63 @@ test("ordinary and typed Direct spawns inherit real single-file package provenan
         assert.match(JSON.stringify(waited), /verification=unknown/);
         assert.deepEqual(parent.getActiveToolNames(), ["read", "intercom"]);
       }
-      assert.equal(prompts, 2);
+      assert.deepEqual(spawnedTools, [["read"], ["read"]]);
+
+      // A planning child derives read-only inspection tools the parent never
+      // activates (grep/find/ls) plus the boundary-held git_* set — all within
+      // the parent's `read` authority.
+      channels.get(PLAN_MODE_CHANNEL)!({ planning: true });
+      const planningSpawn = (await tools
+        .get("subagent_spawn")!
+        .execute(
+          "spawn-planning",
+          { prompt: "inspect", name: "planning" },
+          undefined,
+          undefined,
+          ctx,
+        )) as { details: { id: string } };
+      await tools
+        .get("subagent_wait")!
+        .execute(
+          "wait",
+          { ids: [planningSpawn.details.id] },
+          undefined,
+          undefined,
+          ctx,
+        );
+      assert.deepEqual(spawnedTools.at(-1), [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "git_show",
+        "git_diff",
+        "git_log",
+      ]);
+
+      // An rpc host stays alive across turns, so it keeps the interactive
+      // auto-delivery guidance instead of the non-interactive wait rule.
+      const rpcSpawn = (await tools
+        .get("subagent_spawn")!
+        .execute(
+          "spawn-rpc",
+          { prompt: "inspect", name: "rpc-check" },
+          undefined,
+          undefined,
+          { ...ctx, mode: "rpc" },
+        )) as { content: [{ text: string }]; details: { id: string } };
+      assert.doesNotMatch(rpcSpawn.content[0]!.text, /non-interactive run/);
+      assert.match(rpcSpawn.content[0]!.text, /automatically.*re-invoked/i);
+      await tools
+        .get("subagent_wait")!
+        .execute(
+          "wait",
+          { ids: [rpcSpawn.details.id] },
+          undefined,
+          undefined,
+          ctx,
+        );
+      assert.equal(prompts, 4);
     } finally {
       await hooks.get("session_shutdown")?.({}, ctx);
       __setSubagentTestBackends(undefined);
@@ -1319,6 +1476,130 @@ test("Direct spawn tolerates inherited misses but rejects a missing explicit rol
         /Child tool preflight failed: requested tool "parent_fixture" is unavailable/,
       );
       assert.equal(prompts, 1, "an explicit miss must fail before prompting");
+    } finally {
+      await hooks.get("session_shutdown")?.({}, ctx);
+      __setSubagentTestBackends(undefined);
+    }
+  });
+});
+
+test("subagent_check reports the child's cumulative spend", async () => {
+  await withTempDir(async (cwd) => {
+    const model = {
+      provider: "fixture",
+      id: "model",
+      name: "fixture",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 100,
+    } as NonNullable<AgentSession["model"]>;
+    __setSubagentTestBackends([
+      makePiBackend({
+        sessionFactory: async (options) => {
+          const harness = createPiAgentSessionHarness({
+            model: options?.model ?? model,
+            activeTools: options?.tools,
+            sessionStats: () => ({
+              sessionFile: undefined,
+              sessionId: "fixture-session",
+              userMessages: 1,
+              assistantMessages: 1,
+              toolCalls: 0,
+              toolResults: 0,
+              totalMessages: 2,
+              tokens: {
+                input: 1_000,
+                output: 250,
+                cacheRead: 600,
+                cacheWrite: 40,
+                total: 1_890,
+              },
+              cost: 0.042,
+            }),
+            prompt: async (_text, child) => {
+              child.emit({ type: "agent_start" });
+              child.emitAssistant("inspection done");
+              child.emit({ type: "agent_settled", ...{ aborted: false } });
+            },
+          });
+          return { session: harness.session };
+        },
+      }),
+    ]);
+    const tools = new Map<string, ToolDefinition>();
+    const hooks = new Map<string, (...args: unknown[]) => unknown>();
+    const pi = {
+      events: { on() {}, emit() {} },
+      on(name: string, handler: (...args: unknown[]) => unknown) {
+        hooks.set(name, handler);
+      },
+      registerTool(tool: ToolDefinition) {
+        tools.set(tool.name, tool);
+      },
+      registerCommand() {},
+      registerMessageRenderer() {},
+      registerEntryRenderer() {},
+      appendEntry() {},
+      sendMessage() {},
+      setActiveTools() {},
+      getActiveTools: () => ["read"],
+      getAllTools: () =>
+        ["read"].map((name) => ({
+          name,
+          sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, {
+            source: "sdk",
+          }),
+        })),
+      getThinkingLevel: () => "off",
+    } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd,
+      hasUI: false,
+      isProjectTrusted: () => false,
+      model,
+      getContextUsage: () => undefined,
+      modelRegistry: { find: () => model, getAll: () => [model] },
+      sessionManager: SessionManager.inMemory(cwd),
+    } as unknown as ExtensionContext;
+    const toolCtx = toolExecutionContext(ctx);
+    try {
+      subagents(pi);
+      await hooks.get("session_start")?.({}, ctx);
+      const spawned = (await tools
+        .get("subagent_spawn")!
+        .execute(
+          "spawn",
+          { prompt: "inspect", name: "spend-check" },
+          undefined,
+          undefined,
+          toolCtx,
+        )) as { details: { id: string } };
+      const id = spawned.details.id;
+      const waited = await tools
+        .get("subagent_wait")!
+        .execute("wait", { ids: [id] }, undefined, undefined, toolCtx);
+      // Stats expose cost, but spend details must never carry or show it.
+      const serializedDetails = JSON.stringify(
+        (waited as { details: { results: Array<{ spend?: unknown }> } })
+          .details,
+      );
+      assert.match(serializedDetails, /"cacheWrite":40/);
+      assert.equal(serializedDetails.includes('"cost"'), false);
+      const checked = (await tools
+        .get("subagent_check")!
+        .execute("check", { id }, undefined, undefined, toolCtx)) as {
+        content: Array<{ type: string; text: string }>;
+      };
+      // in = 1000 + 600 + 40 = 1640 -> "1.6k", cached = 600, out = 250.
+      assert.match(
+        checked.content[0]!.text,
+        /1\.6k in \(600 cached\) · 250 out/,
+      );
+      assert.equal(checked.content[0]!.text.includes("$"), false);
     } finally {
       await hooks.get("session_shutdown")?.({}, ctx);
       __setSubagentTestBackends(undefined);

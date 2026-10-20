@@ -18,6 +18,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { WEB_TURN_TIMING_ENTRY } from "../../web/protocol/turn-timing.ts";
 import {
+  projectWorkflowAgentDetail,
   registerWebCapability,
   registerWebCapabilityActions,
 } from "../../extensions/shared/web-observer-registry.ts";
@@ -555,6 +556,13 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   const imported = await mkdtemp(join(tmpdir(), "openpi-web-import-"));
   let runtimeCwd = cwd;
   let sessionManager = SessionManager.inMemory(cwd);
+  const workflowDetail = projectWorkflowAgentDetail("wf_a1", {
+    index: 1,
+    state: "done",
+    transcript: [],
+    transcriptUnavailable: true,
+  });
+  assert.ok(workflowDetail);
   const unregister = registerWebCapability(sessionManager, {
     kind: "workflows",
     snapshot: () => ({
@@ -569,40 +577,9 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       omitted: 0,
       truncated: false,
     }),
+    detail: (id) => (id === workflowDetail.id ? workflowDetail : undefined),
   });
-  const unregisterTerminalDetails = registerWebCapability(sessionManager, {
-    kind: "background-terminals",
-    snapshot: () => ({ items: [], omitted: 0, truncated: false }),
-    detail: (id) =>
-      id === "bt-test"
-        ? {
-            kind: "background-terminals",
-            id,
-            title: "server",
-            command: "run-server",
-            cwd,
-            status: "running",
-            createdAt: 1,
-            stdout: {
-              text: "ready",
-              totalBytes: 5,
-              retainedBytes: 5,
-              omittedBytes: 0,
-              truncated: false,
-              recoveryAvailable: false,
-            },
-            stderr: {
-              text: "",
-              totalBytes: 0,
-              retainedBytes: 0,
-              omittedBytes: 0,
-              truncated: false,
-              recoveryAvailable: false,
-            },
-            truncated: false,
-          }
-        : undefined,
-  });
+  const workflowDetailUrl = `/api/capabilities/detail?kind=workflows&id=${encodeURIComponent(workflowDetail.id)}`;
   const capabilityActions: string[] = [];
   const unregisterCapabilityActions = registerWebCapabilityActions(
     sessionManager,
@@ -997,11 +974,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     });
     delete runtime.getThinkingState;
     assert.equal(
-      (
-        await fetch(
-          `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
-        )
-      ).status,
+      (await fetch(`${launched.origin}${workflowDetailUrl}`)).status,
       401,
     );
 
@@ -1171,7 +1144,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       "/api/thinking",
       "/api/trust",
       "/api/providers/auth-status",
-      "/api/capabilities/detail?kind=background-terminals&id=bt-test",
+      workflowDetailUrl,
     ]) {
       const separator = route.includes("?") ? "&" : "?";
       const mismatched = await fetch(
@@ -1182,7 +1155,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       assert.equal((await mismatched.json()).code, "SESSION_CHANGED");
     }
     const scopedDetail = await fetch(
-      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test&sessionId=${encodeURIComponent(sessionManager.getSessionId())}`,
+      `${launched.origin}${workflowDetailUrl}&sessionId=${encodeURIComponent(sessionManager.getSessionId())}`,
       { headers: authorized },
     );
     assert.equal(scopedDetail.status, 200);
@@ -1191,38 +1164,16 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       sessionManager.getSessionId(),
     );
     const terminalDetailResponse = await fetch(
-      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
+      `${launched.origin}${workflowDetailUrl}`,
       { headers: authorized },
     );
     assert.equal(terminalDetailResponse.status, 200);
-    assert.deepEqual((await terminalDetailResponse.json()).detail, {
-      kind: "background-terminals",
-      id: "bt-test",
-      title: "server",
-      command: "run-server",
-      cwd,
-      status: "running",
-      createdAt: 1,
-      stdout: {
-        text: "ready",
-        totalBytes: 5,
-        retainedBytes: 5,
-        omittedBytes: 0,
-        truncated: false,
-        recoveryAvailable: false,
-      },
-      stderr: {
-        text: "",
-        totalBytes: 0,
-        retainedBytes: 0,
-        omittedBytes: 0,
-        truncated: false,
-        recoveryAvailable: false,
-      },
-      truncated: false,
-    });
+    assert.deepEqual(
+      (await terminalDetailResponse.json()).detail,
+      JSON.parse(JSON.stringify(workflowDetail)),
+    );
     const staleTerminalResponse = await fetch(
-      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-missing`,
+      `${launched.origin}/api/capabilities/detail?kind=workflows&id=${encodeURIComponent("wf_a1:call:9")}`,
       { headers: authorized },
     );
     assert.equal(staleTerminalResponse.status, 404);
@@ -1720,7 +1671,6 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   } finally {
     await host.stop();
     assert.equal(disposed, true);
-    unregisterTerminalDetails();
     unregisterCapabilityActions();
     unregister();
     await Promise.all(

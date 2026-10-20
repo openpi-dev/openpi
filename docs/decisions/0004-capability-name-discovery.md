@@ -1,5 +1,5 @@
 ---
-decision-status: accepted
+decision-status: superseded
 created: 2026-10-04
 last-reviewed: 2026-10-04
 applies-to: OpenPI source baseline 6c449731ccfe1a11b743ebf9ed51cb76bb825293; delegate/workflow discovery
@@ -10,6 +10,8 @@ supersedes: none
 ---
 
 # Decision 0004: Capability names select discovery; models judge use
+
+> Superseded by [Decision 0005](0005-frozen-tool-surface.md) ([#879](https://github.com/openpi-dev/openpi/issues/879)): keyword-driven capability discovery and `openpi_load_tools` were removed; the resident OpenPI tool set is fixed at session start.
 
 ## Context
 

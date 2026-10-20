@@ -25,7 +25,7 @@ import {
 const VALID = `---
 name: explore
 description: Read-only exploration. Returns file:line references.
-tools: [read, grep, find, ls, fd, rg]
+tools: [read, grep, find, ls]
 model: anthropic/claude-sonnet-5
 reasoning_effort: medium
 ---
@@ -129,14 +129,7 @@ test("a valid agent type parses into prompt, tools, model, and effort", () => {
   assert.ok(result.agentType);
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.agentType.name, "explore");
-  assert.deepEqual(result.agentType.tools, [
-    "read",
-    "grep",
-    "find",
-    "ls",
-    "fd",
-    "rg",
-  ]);
+  assert.deepEqual(result.agentType.tools, ["read", "grep", "find", "ls"]);
   assert.equal(result.agentType.model, "anthropic/claude-sonnet-5");
   assert.equal(result.agentType.reasoningEffort, "medium");
   assert.equal(result.agentType.body, "You are a read-only exploration agent.");
@@ -218,6 +211,23 @@ test("an unrecognized tool name is reported but still applied", () => {
     result.diagnostics[0]?.message ?? "",
     /unrecognized tool "gerp"/,
   );
+});
+
+test("retired OpenPI tool names are reported and ignored", () => {
+  const result = parseAgentType(
+    "---\nname: explore\ndescription: Stale tools.\ntools: [read, fd, rg, tasks_add]\n---\nBody.",
+    "explore",
+  );
+
+  assert.ok(result.agentType);
+  const messages = result.diagnostics.map((entry) => entry.message).join("\n");
+  assert.match(messages, /"fd" in explore is no longer provided by OpenPI/);
+  assert.match(messages, /"rg" in explore is no longer provided by OpenPI/);
+  assert.match(
+    messages,
+    /"tasks_add" in explore is no longer provided by OpenPI/,
+  );
+  assert.doesNotMatch(messages, /unrecognized tool "fd"/);
 });
 
 test("an over-long body is rejected rather than silently truncated", () => {

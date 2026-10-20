@@ -326,7 +326,7 @@ export function App() {
   }, [subagentVisible]);
   const currentModel = state.snapshot?.models.find((model) => model.current);
   const modelKey = JSON.stringify([currentModel?.provider, currentModel?.id]);
-  const inspect = (terminalId?: string) => {
+  const inspect = () => {
     const snapshot = state.snapshot;
     const session = snapshot?.selectedSession;
     if (
@@ -345,7 +345,6 @@ export function App() {
       cwd: session.cwd,
       model: currentModel?.label ?? "",
       modelKey,
-      terminalId,
     });
   };
   const inspectionVisible =
@@ -1380,7 +1379,7 @@ export function App() {
           </main>
           {inspectionVisible && (
             <InspectionPanel
-              key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
+              key={`${inspection.sessionId}:${inspection.sessionPath}`}
               target={inspection}
               onClose={closeInspection}
               onOpenProviders={() => void openProviderSettings("credentials")}
