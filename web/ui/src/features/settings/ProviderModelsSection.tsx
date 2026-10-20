@@ -364,6 +364,14 @@ export function ProviderModelsSection({
         {saved && (
           <p className="models-saved" role="status">
             {t("providerSaved", { provider: saved })}
+            {currentModel && (
+              <span>
+                {" "}
+                {t("providerCurrentSessionModel", {
+                  model: `${currentModel.provider} / ${currentModel.id}`,
+                })}
+              </span>
+            )}
           </p>
         )}
         {loadError && (

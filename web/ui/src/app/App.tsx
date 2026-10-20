@@ -1,4 +1,5 @@
 import { Tooltip } from "@astryxdesign/core/Tooltip";
+import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import {
   Menu,
   PanelLeftClose,
@@ -65,7 +66,10 @@ import { useBrowserConnector } from "../features/workbar/browser-connector.ts";
 import { useBrowserControl } from "../features/workbar/browser-control.ts";
 import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
-import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
+import {
+  launcherTools,
+  WorkbarPanel,
+} from "../features/workbar/WorkbarPanel.tsx";
 import {
   loadWorkbarPositions,
   saveWorkbarPositions,
@@ -98,6 +102,7 @@ export function App() {
   const { t } = useTranslation();
   const { actions } = state;
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
+  const workbarTrigger = useRef<HTMLButtonElement>(null);
   const sidebarExpandTrigger = useRef<HTMLButtonElement>(null);
   const auxiliaryTrigger = useRef<HTMLElement | null>(null);
   const auxiliaryOpen = useRef(false);
@@ -657,7 +662,11 @@ export function App() {
       workbarTarget.sessionId === selected.id &&
       workbarTarget.sessionPath === selected.path,
   );
-  const workbarVisible = workbarOpen && workbarBound && !state.sessionSwitching;
+  const workbarVisible =
+    workbarOpen &&
+    workbarBound &&
+    workbarTarget?.tool !== "launcher" &&
+    !state.sessionSwitching;
   useEffect(() => {
     // Switching only detaches this view. It never cancels a tool or discards
     // its reading position; stale focus must not cross Session identities.
@@ -713,8 +722,11 @@ export function App() {
     setWorkbarOpen(false);
     const trigger = workbarReturnFocus.current;
     workbarReturnFocus.current = null;
+    if (!trigger) return;
     requestAnimationFrame(() => {
-      if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus();
+      // The header switches between a menu trigger and a restore button.
+      const target = trigger.isConnected ? trigger : workbarTrigger.current;
+      if (target?.isConnected && target.checkVisibility()) target.focus();
     });
   };
   const browserScope =
@@ -977,6 +989,7 @@ export function App() {
                   workspace?.name || (selected && workspaceName(selected.cwd))
                 }
                 sessionId={selected?.id}
+                model={controlled ? currentModel : undefined}
               />
               {selected && !state.sessionSwitching && (
                 <SessionOverview
@@ -1015,28 +1028,66 @@ export function App() {
                   onReview={() => openWorkbar("review")}
                 />
               )}
-              <Tooltip
-                content={t(selected ? "openTools" : "openToolsUnavailable")}
-                placement="below"
-              >
-                <button
-                  type="button"
-                  className="task-tools-trigger"
-                  aria-label={t("openTools")}
-                  disabled={!selected || state.sessionSwitching}
-                  onClick={(event) => {
-                    if (artifactPanelOpen)
-                      artifactProvider.current?.close({ restoreFocus: false });
-                    workbarReturnFocus.current = event.currentTarget;
-                    if (workbarBound && !workbarVisible) setWorkbarOpen(true);
-                    else openWorkbar("launcher");
-                  }}
+              {workbarBound &&
+              !workbarVisible &&
+              workbarTarget?.tool !== "launcher" ? (
+                <Tooltip
+                  content={t(selected ? "openTools" : "openToolsUnavailable")}
+                  placement="below"
                 >
-                  <PanelRight aria-hidden="true" />
-                </button>
-              </Tooltip>
-              <span className={`connection-state ${state.connection}`}>
-                {t(state.connection)}
+                  <button
+                    type="button"
+                    ref={workbarTrigger}
+                    className="task-tools-trigger"
+                    aria-label={t("openTools")}
+                    disabled={!selected || state.sessionSwitching}
+                    onClick={(event) => {
+                      if (artifactPanelOpen)
+                        artifactProvider.current?.close({
+                          restoreFocus: false,
+                        });
+                      workbarReturnFocus.current = event.currentTarget;
+                      setWorkbarOpen(true);
+                    }}
+                  >
+                    <PanelRight aria-hidden="true" />
+                  </button>
+                </Tooltip>
+              ) : (
+                <DropdownMenu
+                  button={{
+                    ref: workbarTrigger,
+                    className: "task-tools-trigger",
+                    label: t("openTools"),
+                    "aria-label": t("openTools"),
+                    icon: <PanelRight aria-hidden="true" />,
+                    isIconOnly: true,
+                    isDisabled: !selected || state.sessionSwitching,
+                    variant: "ghost",
+                    tooltip: t(selected ? "openTools" : "openToolsUnavailable"),
+                  }}
+                  items={launcherTools.map((tool) => ({
+                    id: tool.kind,
+                    icon: <tool.icon aria-hidden="true" />,
+                    label: t(tool.title),
+                    description: t(tool.description),
+                    onClick: () => {
+                      openWorkbar(tool.kind);
+                      workbarReturnFocus.current = workbarTrigger.current;
+                    },
+                  }))}
+                  menuWidth="min(300px, calc(100vw - 24px))"
+                  alignment="end"
+                  hasChevron={false}
+                />
+              )}
+              <span
+                className={`connection-state ${state.connection}`}
+                role="status"
+                title={t(state.connection)}
+                aria-label={t(state.connection)}
+              >
+                <span>{t(state.connection)}</span>
               </span>
             </header>
             {selected && !state.sessionSwitching && (

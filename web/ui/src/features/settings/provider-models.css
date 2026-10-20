@@ -75,6 +75,7 @@
 .models-empty { margin: 0; padding: 12px; border: 1px dashed var(--models-border); border-radius: 12px; color: var(--muted); font-size: 12px; line-height: 18px; text-align: center; }
 .models-entry-list { display: flex; flex-direction: column; gap: 8px; }
 .models-entry { border: 1px solid var(--models-border); border-radius: 10px; padding: 6px; }
+.models-current-label { margin: 0 4px 6px; color: var(--muted); font-size: 12px; line-height: 18px; }
 .models-entry-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto auto; align-items: center; gap: 6px; }
 .models-icon { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .models-icon svg { width: 14px; height: 14px; }

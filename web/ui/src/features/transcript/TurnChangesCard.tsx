@@ -20,14 +20,17 @@ export function TurnChangesCard({
   const partial = changes.state === "partial";
   const toolEvidence = changes.source === "file-tools";
   const incompleteList = changes.fileCount === null;
-  const files = expanded ? changes.files : changes.files.slice(0, 3);
   return (
     <section className="turn-changes" aria-label={t("turnChangesReview")}>
       <header className="turn-changes-header">
-        <span className="turn-changes-icon" aria-hidden="true">
-          <FileDiff />
-        </span>
-        <div className="turn-changes-summary">
+        <button
+          type="button"
+          className="turn-changes-summary"
+          aria-expanded={expanded}
+          aria-controls={listId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <FileDiff className="turn-changes-icon" aria-hidden="true" />
           <strong
             title={t(toolEvidence ? "turnEditsScope" : "turnChangesScope")}
           >
@@ -58,7 +61,8 @@ export function TurnChangesCard({
               {t("turnChangesIncomplete")}
             </span>
           )}
-        </div>
+          <ChevronDown className={expanded ? "up" : ""} aria-hidden="true" />
+        </button>
         <button
           type="button"
           className="turn-changes-review-button"
@@ -71,8 +75,8 @@ export function TurnChangesCard({
           {t("reviewChanges")}
         </button>
       </header>
-      <div className="turn-changes-list" id={listId}>
-        {files.map((file) => {
+      <div className="turn-changes-list" id={listId} hidden={!expanded}>
+        {changes.files.map((file) => {
           const slash = Math.max(
             file.path.lastIndexOf("/"),
             file.path.lastIndexOf("\\"),
@@ -83,12 +87,13 @@ export function TurnChangesCard({
               type="button"
               className="turn-changes-file"
               title={file.path}
+              aria-label={file.path}
               disabled={!onReview}
               onClick={() => onReview?.(changes.promptEntryId, file.path)}
             >
               <span className="turn-changes-path">
-                <span>{file.path.slice(0, slash + 1)}</span>
                 <strong>{file.path.slice(slash + 1)}</strong>
+                {slash >= 0 && <span>{file.path.slice(0, slash)}</span>}
               </span>
               <span className="turn-changes-file-stats">
                 {file.binary ? (
@@ -108,20 +113,6 @@ export function TurnChangesCard({
           );
         })}
       </div>
-      {changes.files.length > 3 && (
-        <button
-          type="button"
-          className="turn-changes-more"
-          aria-expanded={expanded}
-          aria-controls={listId}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {t(expanded ? "turnChangesLess" : "turnChangesMore", {
-            count: changes.files.length - 3,
-          })}
-          <ChevronDown className={expanded ? "up" : ""} aria-hidden="true" />
-        </button>
-      )}
     </section>
   );
 }

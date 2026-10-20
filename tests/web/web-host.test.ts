@@ -306,6 +306,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
       { auxiliaryWidth: 520.5 },
       { chatFontSize: 12.5 },
       { expandThinking: "true" },
+      { followUpBehavior: "unknown" },
       { pinnedSort: "unknown" },
       { sidebarGrouping: "connection" },
       { chatsSort: "updated_at" },
@@ -334,6 +335,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
       auxiliaryWidth: 600,
       chatFontSize: 16,
       expandThinking: true,
+      followUpBehavior: "steer",
       pinnedSort: "updated",
       sidebarGrouping: "list",
       chatsSort: "manual",
@@ -360,6 +362,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
         webAuxiliaryWidth: 600,
         webChatFontSize: 16,
         webExpandThinking: true,
+        webFollowUpBehavior: "steer",
         webPinnedSort: "updated",
         webSidebarGrouping: "list",
         webChatsSort: "manual",
@@ -373,6 +376,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
     });
     const status = formatSetupConfig(loadSetupConfig());
     assert.match(status, /Subagent results: full by default/u);
+    assert.match(status, /Web follow-up behavior: steer the active turn/u);
     assert.match(status, /Bash operations: expanded by default/u);
     assert.match(status, /Write\/Edit operations: expanded by default/u);
     assert.match(status, /custom footer off/u);
@@ -399,6 +403,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
     assert.equal(preferences.chatWidth, 1200);
     assert.equal(preferences.sidebarWidth, 320);
     assert.equal(preferences.auxiliaryWidth, 600);
+    assert.equal(preferences.followUpBehavior, "steer");
     assert.equal(preferences.subagentResultDisplay, "full");
     assert.equal(preferences.bashToolDisplay, "full");
     assert.equal(preferences.fileMutationDisplay, "full");

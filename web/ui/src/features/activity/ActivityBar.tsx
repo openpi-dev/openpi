@@ -1,4 +1,4 @@
-import { Check, CircleStop, X } from "lucide-react";
+import { Activity, Check, ChevronDown, CircleStop, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
@@ -194,39 +194,61 @@ export function ActivityBar({
     (left, right) =>
       Number(right.status === "running") - Number(left.status === "running"),
   );
-  const visible = chips.slice(0, 5);
   const omitted =
-    chips.length -
-    visible.length +
     (capabilities?.workflows?.omitted ?? 0) +
     (capabilities?.["background-terminals"]?.omitted ?? 0);
   if (
-    !visible.length &&
+    !chips.length &&
     !omitted &&
     !(onInspectSubagent && subagentCount) &&
     !admission?.enabled
   )
     return null;
+  const activeCount =
+    chips.filter((chip) => chip.status === "running").length +
+    activeSubagentCount;
+  const failedCount =
+    chips.filter((chip) => chip.status === "error").length +
+    subagents.filter((item) => item.state === "error").length;
   return (
-    <div className="activity-bar" role="status" aria-label="Runtime activity">
-      {onInspectSubagent && subagentCount > 0 && (
-        <button
-          className="activity-chip subagent-list-trigger"
-          type="button"
-          onClick={() => onInspectSubagent()}
-        >
-          {subagentLabel}
-        </button>
-      )}
-      {admission?.enabled && admission.limit !== undefined && (
-        <span className="activity-chip subagent-list-trigger">
-          {`${admission.held}/${admission.limit} child slots · ${admission.queued} queued · wf ${admission.heldByOrigin.workflow} / direct ${admission.heldByOrigin.direct} / btw ${admission.heldByOrigin.btw}`}
+    <details className="activity-summary">
+      <summary>
+        <Activity aria-hidden="true" />
+        <span>{t("runtimeActivities")}</span>
+        <span className="activity-summary-count" role="status">
+          {observed && activeCount > 0
+            ? t("runtimeActivityRunning", { count: activeCount })
+            : t("runtimeActivityCount", {
+                count: chips.length + subagentCount + omitted,
+              })}
         </span>
-      )}
-      {visible.map(({ key, ...chip }) => (
-        <Chip key={key} {...chip} />
-      ))}
-      {omitted > 0 && <span className="activity-chip more">+{omitted}</span>}
-    </div>
+        {failedCount > 0 && (
+          <span className="activity-summary-failed">
+            {t("processFailureCount", { count: failedCount })}
+          </span>
+        )}
+        <ChevronDown className="activity-summary-chevron" aria-hidden="true" />
+      </summary>
+      <div className="activity-bar" role="status" aria-label="Runtime activity">
+        {onInspectSubagent && subagentCount > 0 && (
+          <button
+            className="activity-chip subagent-list-trigger"
+            type="button"
+            onClick={() => onInspectSubagent()}
+          >
+            {subagentLabel}
+          </button>
+        )}
+        {admission?.enabled && admission.limit !== undefined && (
+          <span className="activity-chip subagent-list-trigger">
+            {`${admission.held}/${admission.limit} child slots · ${admission.queued} queued · wf ${admission.heldByOrigin.workflow} / direct ${admission.heldByOrigin.direct} / btw ${admission.heldByOrigin.btw}`}
+          </span>
+        )}
+        {chips.map(({ key, ...chip }) => (
+          <Chip key={key} {...chip} />
+        ))}
+        {omitted > 0 && <span className="activity-chip more">+{omitted}</span>}
+      </div>
+    </details>
   );
 }

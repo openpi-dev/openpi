@@ -17,7 +17,6 @@ import { parseDiffRows } from "../review/DiffCodePreview.tsx";
 import {
   toolActivity,
   toolActivityLabel,
-  toolActivityTag,
   toolActivityTarget,
 } from "./tool-activity.ts";
 
@@ -69,6 +68,7 @@ export function ToolEvidence({
   observed = true,
   cwd,
   defaultOpen = false,
+  children,
 }: {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
   result?: WebLiveMessage;
@@ -76,6 +76,7 @@ export function ToolEvidence({
   observed?: boolean;
   cwd?: string;
   defaultOpen?: boolean;
+  children?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState<{
@@ -133,9 +134,6 @@ export function ToolEvidence({
       <summary>
         <span className="evidence-icon" aria-hidden="true">
           <Icon />
-        </span>
-        <span className="tool-kind" aria-hidden="true" title={call.name}>
-          {toolActivityTag(call.name)}
         </span>
         <span className="evidence-target" title={view.path || target}>
           <span className="tool-action">
@@ -358,6 +356,7 @@ export function ToolEvidence({
           </p>
           <pre>{view.rawResult}</pre>
         </details>
+        {children}
       </div>
     </details>
   );

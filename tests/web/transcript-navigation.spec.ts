@@ -1326,6 +1326,14 @@ it.each(
       });
     };
     const view = render(stream("First native output"));
+    if (owner === "process") {
+      const sequence =
+        view.container.querySelector<HTMLDetailsElement>(".process-sequence")!;
+      act(() => {
+        sequence.open = true;
+        fireEvent(sequence, new Event("toggle"));
+      });
+    }
     const scroller = view.container.querySelector<HTMLElement>(
       ".process-sequence-scroll",
     )!;

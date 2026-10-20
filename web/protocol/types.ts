@@ -255,6 +255,7 @@ export interface WebOpenPiSetupProjection {
     webAuxiliaryWidth?: number;
     webChatFontSize: number;
     webExpandThinking: boolean;
+    webFollowUpBehavior?: "followUp" | "steer";
     webHiddenThinkingLevels?: readonly ReasoningLevel[];
     webPinnedSort?: "manual" | "updated";
     webSidebarGrouping?: "project" | "list";
@@ -318,6 +319,7 @@ export interface WebSettingsPreferencesPatch {
   auxiliaryWidth?: number;
   chatFontSize?: number;
   expandThinking?: boolean;
+  followUpBehavior?: "followUp" | "steer";
 }
 
 export interface WebProjectionTruncation {
@@ -571,6 +573,7 @@ export interface WebSnapshot {
     auxiliaryWidth?: number;
     chatFontSize?: number;
     expandThinking?: boolean;
+    followUpBehavior?: "followUp" | "steer";
     hiddenThinkingLevels?: readonly ReasoningLevel[];
     subagentResultDisplay?: "full" | "compact";
     bashToolDisplay?: "full" | "compact";

@@ -3247,6 +3247,8 @@ export function createWebStore(
             ["PLAN_BUSY", "PLAN_CONFLICT", "PLAN_CONTROL_UNAVAILABLE"].includes(
               error.code ?? "",
             );
+          const turnConflict =
+            error instanceof WebApiError && error.code === "TURN_CONFLICT";
           const knownRejection =
             planAdmissionRejected ||
             (error instanceof WebApiError &&
@@ -3349,6 +3351,9 @@ export function createWebStore(
           }
           if (promptAdmission?.commandId === commandId) promptAdmission = null;
           set({
+            // A definite rejection has settled admission. Let the refreshed
+            // runtime clear the previous turn instead of preserving it as pending.
+            promptAdmissionPending: false,
             liveMessages: get().liveMessages.filter(
               (entry) => entry.key !== optimisticKey,
             ),
@@ -3359,7 +3364,7 @@ export function createWebStore(
               ? { promptAdmissionRecovery: null }
               : {}),
           });
-          if (planAdmissionRejected) {
+          if (planAdmissionRejected || turnConflict) {
             await actions.refreshSnapshot({ epoch });
             if (
               epoch !== sessionEpoch ||
@@ -3368,7 +3373,7 @@ export function createWebStore(
             )
               return false;
           }
-          showError(error);
+          showError(turnConflict ? new Error(i18n.t("steerStaleTurn")) : error);
           return false;
         } finally {
           if (epoch === sessionEpoch && promptAdmissionToken === admission) {

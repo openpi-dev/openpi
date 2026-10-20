@@ -1239,6 +1239,8 @@ test("Web appearance fields accept canonical bounds and remain known on explicit
       { webChatWidth: 820, webChatFontSize: 12, webExpandThinking: false },
       { webChatWidth: 960, webChatFontSize: 16, webExpandThinking: true },
       { webChatWidth: 2000, webChatFontSize: 24, webExpandThinking: true },
+      { webFollowUpBehavior: "followUp" },
+      { webFollowUpBehavior: "steer" },
       { webSidebarWidth: 220, webAuxiliaryWidth: 360 },
       { webSidebarWidth: 520, webAuxiliaryWidth: 720 },
       {
@@ -1298,6 +1300,7 @@ test("invalid Web appearance values are diagnosed and block both stored and cand
     webSidebarWidth: [219, 521, 320.5, "320", null, false],
     webAuxiliaryWidth: [359, 721, 520.5, "520", null, false],
     webExpandThinking: [0, 1, "true", null, {}, []],
+    webFollowUpBehavior: ["queue", "unknown", null, true, {}, []],
     webSidebarGrouping: ["connection", "unknown", false, null, {}, []],
     webChatsSort: ["updated_at", "unknown", false, null, {}, []],
     webProjectsInRecents: [0, 1, "true", null, {}, []],

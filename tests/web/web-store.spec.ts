@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../../web/ui/src/i18n.ts";
 import {
   WEB_MAX_ENTRIES,
   WEB_PROMPT_MAX_TEXT_LENGTH,
@@ -207,6 +208,7 @@ it("treats a runtime steering conflict as a known rejection with no optimistic a
   const prompt = vi
     .spyOn(client, "prompt")
     .mockRejectedValue(new WebApiError("target ended", 409, "TURN_CONFLICT"));
+  client.snapshots.push(Promise.resolve(snapshot()));
   const store = createWebStore(client);
   await store.getState().actions.refreshSnapshot();
   expect(
@@ -220,6 +222,11 @@ it("treats a runtime steering conflict as a known rejection with no optimistic a
   expect(prompt).toHaveBeenCalledTimes(1);
   expect(store.getState().promptAdmissionRecovery).toBeNull();
   expect(store.getState().liveMessages).toEqual([]);
+  expect(store.getState().notice).toBe(i18n.t("steerStaleTurn"));
+  expect(store.getState().activeTurn).toBeNull();
+  expect(store.getState().liveRunning).toBe(false);
+  expect(store.getState().livePhase).toBe("idle");
+  expect(store.getState().promptAdmissionPending).toBe(false);
 });
 
 function unboundSnapshot(workspaces: WebSnapshot["workspaces"] = []) {

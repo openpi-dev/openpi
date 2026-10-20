@@ -259,9 +259,10 @@ export function Composer(props: ComposerProps) {
     direction: "forward" | "backward" | "none";
     scrollTop: number;
   } | null>(null);
-  const [steeringDelivery, setSteeringDelivery] = useState<{
+  const [deliveryOverride, setDeliveryOverride] = useState<{
     ownerKey: string;
     expectedTurnCommandId: string;
+    mode: "followUp" | "steer";
   } | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const attachmentShelf = useRef<HTMLDivElement>(null);
@@ -528,7 +529,7 @@ export function Composer(props: ComposerProps) {
     setDraft(nextDraft);
     setAttachmentError(limit ? t("draftLimit") : null);
     setCommandError(null);
-    setSteeringDelivery(null);
+    setDeliveryOverride(null);
     setDragActive(false);
     setFileReferenceOpen(false);
     setMenuDismissed(true);
@@ -638,8 +639,13 @@ export function Composer(props: ComposerProps) {
     !props.turnCancellationPending &&
     activeTurn?.sessionId === selected?.id &&
     Boolean(activeTurn?.commandId);
+  const deliveryMode =
+    deliveryOverride?.ownerKey === renderedOwnerKey &&
+    deliveryOverride.expectedTurnCommandId === activeTurn?.commandId
+      ? deliveryOverride.mode
+      : (props.snapshot?.preferences.followUpBehavior ?? "followUp");
   const selectedSteering =
-    steeringDelivery?.ownerKey === renderedOwnerKey ? steeringDelivery : null;
+    canSteer && deliveryMode === "steer" && activeTurn ? activeTurn : null;
   const disabled =
     props.sessionSwitching ||
     Boolean(props.planSelectionPending) ||
@@ -1091,7 +1097,7 @@ export function Composer(props: ComposerProps) {
               ? await sendPrompt(content, captured.images)
               : await sendPrompt(content);
       if (accepted) {
-        if (delivery?.streamingBehavior === "steer") setSteeringDelivery(null);
+        setDeliveryOverride(null);
         if (approval === planImplementationApproval.current)
           planImplementationApproval.current = null;
         const cleared = draftMemory.clear(
@@ -1132,7 +1138,7 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  const send = async (event?: FormEvent) => {
+  const send = async (event?: FormEvent, invertDelivery = false) => {
     event?.preventDefault();
     if (
       !canCompose ||
@@ -1148,12 +1154,9 @@ export function Composer(props: ComposerProps) {
     )
       return;
     if (attachmentImport.current) return;
-    if (
-      selectedSteering &&
-      (!canSteer ||
-        activeTurn?.commandId !== selectedSteering.expectedTurnCommandId ||
-        planImplementationApproval.current)
-    ) {
+    const steer =
+      canSteer && (invertDelivery ? !selectedSteering : selectedSteering);
+    if (steer && planImplementationApproval.current) {
       setCommandError(t("steerStaleTurn"));
       return;
     }
@@ -1189,10 +1192,10 @@ export function Composer(props: ComposerProps) {
       props.actions.sendPrompt,
       false,
       planImplementationApproval.current ?? undefined,
-      selectedSteering
+      steer && activeTurn
         ? {
             streamingBehavior: "steer",
-            expectedTurnCommandId: selectedSteering.expectedTurnCommandId,
+            expectedTurnCommandId: activeTurn.commandId,
           }
         : undefined,
     );
@@ -1436,15 +1439,34 @@ export function Composer(props: ComposerProps) {
     if (!active || !selected || sessionActionPending || props.sessionSwitching)
       return;
     setSessionActionOwner(renderedOwnerKey);
+    setCommandError(null);
     try {
       if (action === "compact")
         await client.compactSession(selected.id, selected.path);
-      else await client.updatePromptQueue(selected.id, selected.path, action);
-      await props.actions.refreshSnapshot();
+      else {
+        const receipt = await client.updatePromptQueue(
+          selected.id,
+          selected.path,
+          action,
+        );
+        if (receipt.sessionId !== selected.id)
+          throw new Error(t("queueUpdateFailed"));
+      }
+      const refreshed = await props.actions.refreshSnapshot();
+      if (
+        !refreshed &&
+        action !== "compact" &&
+        draftOwner.current.key === renderedOwnerKey
+      )
+        setCommandError(t("queueStatusUnconfirmed"));
     } catch (error) {
       if (draftOwner.current.key === renderedOwnerKey)
         setCommandError(
-          error instanceof Error ? error.message : t("commandPanelUnavailable"),
+          action !== "compact"
+            ? t("queueUpdateFailed")
+            : error instanceof Error
+              ? error.message
+              : t("commandPanelUnavailable"),
         );
     } finally {
       setSessionActionOwner((owner) =>
@@ -1749,7 +1771,9 @@ export function Composer(props: ComposerProps) {
         <section
           className="composer-queue"
           data-state={execution?.promptQueueBlocked ? "blocked" : "waiting"}
+          data-expanded={queueExpanded || undefined}
           aria-label={t("pendingFollowUpsHint", { count: observedQueue })}
+          aria-busy={sessionActionPending}
         >
           <div className="composer-queue-status" role="status">
             <Clock3 aria-hidden="true" />
@@ -2143,7 +2167,7 @@ export function Composer(props: ComposerProps) {
               }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                void send();
+                void send(undefined, event.metaKey || event.ctrlKey);
               }
             }}
           />
@@ -2243,11 +2267,30 @@ export function Composer(props: ComposerProps) {
               )}
           </div>
           <div className="composer-toolbar-controls">
-            {(canSteer || selectedSteering) && (
+            {canSteer && (
               <DropdownMenu
                 button={{
+                  className: "composer-delivery-trigger",
                   label: t(
                     selectedSteering ? "steerCurrentTurn" : "sendNextTurn",
+                  ),
+                  children: (
+                    <span className="composer-delivery-label">
+                      {t(
+                        selectedSteering ? "steerCurrentTurn" : "sendNextTurn",
+                      )}
+                    </span>
+                  ),
+                  "aria-label": t(
+                    selectedSteering ? "steerCurrentTurn" : "sendNextTurn",
+                  ),
+                  tooltip: t(
+                    selectedSteering ? "steerCurrentTurn" : "sendNextTurn",
+                  ),
+                  icon: selectedSteering ? (
+                    <Target aria-hidden="true" />
+                  ) : (
+                    <CornerDownRight aria-hidden="true" />
                   ),
                   variant: "ghost",
                   size: "sm",
@@ -2260,7 +2303,12 @@ export function Composer(props: ComposerProps) {
                     id: "followUp",
                     label: t("sendNextTurn"),
                     onClick: () => {
-                      setSteeringDelivery(null);
+                      if (!activeTurn) return;
+                      setDeliveryOverride({
+                        ownerKey: renderedOwnerKey,
+                        expectedTurnCommandId: activeTurn.commandId,
+                        mode: "followUp",
+                      });
                       setCommandError(null);
                     },
                   },
@@ -2270,9 +2318,10 @@ export function Composer(props: ComposerProps) {
                     isDisabled: !canSteer,
                     onClick: () => {
                       if (!canSteer || !activeTurn) return;
-                      setSteeringDelivery({
+                      setDeliveryOverride({
                         ownerKey: renderedOwnerKey,
                         expectedTurnCommandId: activeTurn.commandId,
+                        mode: "steer",
                       });
                       setCommandError(null);
                     },

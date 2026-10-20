@@ -66,6 +66,15 @@
 .files-preview-empty > svg { width:32px; height:32px; stroke-width:1.2; opacity:.6; }
 .files-preview-empty h3 { color:var(--text); font-size:14px; font-weight:500; margin:14px 0 6px; }
 .files-preview-empty p { font-size:12px; line-height:1.7; max-width:260px; margin:0; }
+.files-preview-empty > button, .file-tree-error > button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:36px; margin-top:14px; padding:6px 12px; border:1px solid var(--border); border-radius:6px; background:var(--page); color:var(--text); font:inherit; font-size:12px; cursor:pointer; }
+.files-preview-empty > button svg { width:14px; height:14px; }
+.files-preview-empty > button:hover:not(:disabled), .file-tree-error > button:hover:not(:disabled) { background:var(--sidebar-hover); }
+.files-preview-empty > button:disabled, .file-tree-error > button:disabled { opacity:.55; cursor:default; }
+.file-tree-error p { margin:0; }
+.files-read-failure { min-width:0; max-width:280px; }
+.files-read-failure details, .file-tree-error details { margin-top:12px; text-align:left; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+.files-read-failure summary, .file-tree-error summary { cursor:pointer; }
+.files-read-failure details p { margin-top:6px; }
 .files-tree-toggle { position:relative; grid-column:1 / -1; grid-row:1; align-self:start; justify-self:end; width:32px; min-height:32px; margin:8px; z-index:2; background:var(--page); }
 .files-tree-toggle[aria-pressed="true"] { background:var(--sidebar-hover); color:var(--text); }
 .files-tree-toggle:hover { background:var(--sidebar-hover); }

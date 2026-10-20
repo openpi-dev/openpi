@@ -655,19 +655,14 @@ it("folds one native execution across steering while preserving user inputs, its
     promptEntryId: "initial",
   };
   const view = render(node(value));
-  const button = view.container.querySelector<HTMLButtonElement>(
-    ".turn-duration-toggle",
-  )!;
+  expect(view.container.querySelector(".turn-duration-toggle")).toBeTruthy();
   expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
-  fireEvent.click(button);
   for (const text of [
     "First progress",
     "Second progress",
     "Native final answer",
   ])
-    expect(
-      screen.getByText(text).closest<HTMLElement>("[hidden]")?.hidden,
-    ).toBe(true);
+    expect(screen.getByText(text).closest<HTMLElement>("[hidden]")).toBeNull();
   for (const text of [
     "Initial task",
     "First additional detail",
@@ -702,6 +697,9 @@ it("folds one native execution across steering while preserving user inputs, its
   expect(
     screen.getByText("First progress").closest<HTMLElement>("[hidden]")?.hidden,
   ).toBe(true);
+  const button = view.container.querySelector<HTMLButtonElement>(
+    ".turn-duration-toggle",
+  )!;
   fireEvent.click(button);
   expect(
     [
@@ -859,7 +857,7 @@ it("formats readable localized durations for both running and settled turns", ()
   expect(formatTurnDuration(3601000, "en")).toBe("1h0m1s");
 });
 
-it("keeps one top timer through streaming, manual folding, settlement, and a late running notification", () => {
+it("keeps elapsed time above streaming content and only exposes answer actions after settlement", () => {
   const value = snapshot();
   const entries = [
     {
@@ -888,33 +886,23 @@ it("keeps one top timer through streaming, manual folding, settlement, and a lat
   ].map((entry) => ({ ...entry, timestamp: "2026-09-22T00:00:00Z" }));
   value.selectedSession!.entries = entries;
   const view = render(node(value));
-  const header = view.container.querySelector(".turn-duration")!;
-  const prompt = screen.getByText("Question");
+  const progress = view.container.querySelector(".turn-duration")!;
+  expect(view.container.querySelector(".turn-progress")).toBeNull();
   expect(
-    prompt.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-  expect(
-    header.compareDocumentPosition(screen.getByText("First update")) &
+    progress.compareDocumentPosition(screen.getByText("First update")) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+  expect(progress.querySelector("[role=timer]")).toBeTruthy();
   expect(
-    view.container.querySelector(".conversation-running [role=timer]"),
-  ).toBeNull();
-  const toggle = view.container.querySelector<HTMLButtonElement>(
-    ".turn-duration-toggle",
-  )!;
+    view.container.querySelectorAll(".response > .message-actions"),
+  ).toHaveLength(0);
   const body = view.container.querySelector<HTMLElement>(
     ".turn-response-body",
   )!;
-  expect(toggle.getAttribute("aria-controls")).toBe(body.id);
   expect(body.hidden).toBe(false);
-  fireEvent.click(toggle);
-  expect(body.hidden).toBe(true);
   view.rerender(node({ ...value, cursor: 2 }));
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(screen.getByText("First update").closest("[hidden]")).toBe(body);
-  expect(screen.getByText("Final answer").closest("[hidden]")).toBe(body);
-  fireEvent.click(toggle);
+  expect(screen.getByText("First update").closest("[hidden]")).toBeNull();
+  expect(screen.getByText("Final answer").closest("[hidden]")).toBeNull();
   expect(body.hidden).toBe(false);
 
   const settled = {
@@ -954,6 +942,9 @@ it("keeps one top timer through streaming, manual folding, settlement, and a lat
   expect(screen.getByText("Final answer").closest("[hidden]")).toBeNull();
   expect(screen.queryByRole("timer")).toBeNull();
   expect(view.container.querySelectorAll(".turn-duration")).toHaveLength(1);
+  expect(
+    view.container.querySelectorAll(".response > .message-actions"),
+  ).toHaveLength(1);
   expect(
     screen
       .getByRole("button", { name: "Worked for 2m37s" })

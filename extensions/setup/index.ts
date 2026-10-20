@@ -740,6 +740,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "Whether OpenPI Web thinking blocks are expanded by default. Existing blocks remain individually collapsible. Omit to preserve the current value.",
         }),
       ),
+      ui_web_follow_up_behavior: Type.Optional(
+        StringEnum(["followUp", "steer"] as const, {
+          description:
+            "Default delivery for messages sent while OpenPI Web is running: followUp queues the next turn (default), steer guides the active turn after its current tool step. This only sets the composer default; it never sends a message. Omit to preserve the current value.",
+        }),
+      ),
       ui_web_pinned_sort: Type.Optional(
         StringEnum(["manual", "updated"] as const, {
           description:
@@ -1034,6 +1040,9 @@ export default function openPiSetup(pi: ExtensionAPI) {
               params.ui_web_chat_font_size ?? current.ui.webChatFontSize,
             webExpandThinking:
               params.ui_web_expand_thinking ?? current.ui.webExpandThinking,
+            webFollowUpBehavior:
+              params.ui_web_follow_up_behavior ??
+              current.ui.webFollowUpBehavior,
             webHiddenThinkingLevels:
               params.web_hidden_thinking_levels ??
               current.ui.webHiddenThinkingLevels,

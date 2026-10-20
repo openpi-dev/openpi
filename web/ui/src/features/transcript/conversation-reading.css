@@ -104,6 +104,11 @@
 
 .conversation .message-row.response > .message-actions { justify-content: flex-start; gap: 4px; height: 32px; margin-top: 12px; color: var(--muted); opacity: 1; }
 .conversation .message-row.response > .message-actions.copy-failed { height: auto; min-height: 32px; }
+@media (hover: hover) and (pointer: fine) {
+  .conversation .conversation-turn:not(:last-child) .message-row.response > .message-actions { opacity: 0; transition: opacity var(--motion-feedback) ease; }
+  .conversation .conversation-turn:not(:last-child) .message-row.response:is(:hover, :focus-within) > .message-actions,
+  .conversation .conversation-turn:not(:last-child) .message-row.response > .message-actions.copy-failed { opacity: 1; }
+}
 .conversation .message-row.response > .message-actions time { order: 1; margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
 .conversation .message-actions button { width: var(--control-compact); height: var(--control-compact); border-radius: var(--radius-compact); color: inherit; }
 .conversation .message-actions button:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text); }
@@ -145,13 +150,21 @@
 
 .conversation .process-sequence:not(.single-process) > summary { min-height: 32px; padding: 4px 8px; margin-left: -8px; font-size: max(12px, calc(var(--conversation-font-size) - 1px)); }
 .conversation .process-sequence[open]:not(.single-process) > summary { background: var(--sidebar); }
-.conversation .process-sequence > summary :is(.process-sequence-counts, .tool-disclosure) { opacity: 1; }
+.conversation .process-sequence > summary .tool-disclosure { opacity: 1; }
 .conversation .process-sequence-title strong { color: var(--text); }
-.conversation .process-sequence-counts { color: var(--muted); font-size: 12px; }
+.conversation .process-sequence.running .process-sequence-title { flex-shrink: 0; }
+.conversation .process-sequence-preview { flex: 1; }
+.conversation .process-sequence > summary > .tool-disclosure { margin-left: auto; }
 .conversation .process-sequence-body { margin-top: 8px; }
-.conversation .process-sequence:not(.running) > .process-sequence-scroll { mask-image: none; scroll-padding: 12px; }
-.conversation .process-sequence-scroll[data-scroll-below] { border-bottom: 1px solid var(--border); }
-.conversation .process-sequence-scroll[data-scroll-above] { border-top: 1px solid var(--border); }
+.conversation .process-sequence-scroll { overscroll-behavior-y: auto; }
+.conversation .process-sequence:not(.running) > .process-sequence-scroll { max-height: none; overflow: visible; overscroll-behavior: auto; mask-image: none; }
+.conversation .process-sequence:not(.running):not(.single-process) .thinking-evidence { max-height: 280px; overflow: auto; }
+.conversation .process-sequence.running > .process-sequence-scroll[data-scroll-below] { border-bottom: 1px solid var(--border); }
+.conversation .process-sequence.running > .process-sequence-scroll[data-scroll-above] { border-top: 1px solid var(--border); }
+.conversation .process-step :is(.tool-line, .tool-evidence-card) > summary { padding-inline: 8px; }
+.conversation .single-tool-step :is(.tool-line, .tool-evidence-card) > summary { padding-inline: 0; }
+.conversation .process-step :is(.details-title, .evidence-target) { flex: 1 1 auto; }
+.conversation .process-step > .message-row :is(.tool-disclosure, .evidence-chevron) { order: 1; }
 
 .conversation .tool-evidence-card[open] > summary { color: var(--text); }
 .conversation .tool-evidence-card[open] > summary .evidence-chevron { opacity: 1; }
@@ -176,10 +189,6 @@
 .conversation .evidence-test-summary figcaption { color: var(--text); }
 .conversation .evidence-test-summary p { margin: 4px 0; }
 .conversation .evidence-test-summary p:last-child { color: var(--muted); }
-
-@container conversation-shell (min-width: 561px) {
-  .conversation .process-sequence:not(.single-process):not(.running) > .process-sequence-scroll { max-height: min(620px, 70dvh); }
-}
 
 @container conversation-shell (max-width: 560px) {
   .conversation .message-row.user .message-content { max-width: 94%; }

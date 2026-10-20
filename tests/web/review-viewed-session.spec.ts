@@ -129,7 +129,7 @@ function panel() {
 async function openReview() {
   fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
   fireEvent.click(
-    panel().getByRole("button", {
+    screen.getByRole("menuitem", {
       name: new RegExp("^" + i18n.t("changeEvidence")),
     }),
   );

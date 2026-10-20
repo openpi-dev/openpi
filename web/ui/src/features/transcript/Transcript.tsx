@@ -165,7 +165,6 @@ interface RenderRow {
   processPreview?: string;
   processToolName?: string;
   processStatus?: Status;
-  processMessageKey?: string;
   error?: boolean;
   outcome?: "completed" | "failed" | "interrupted";
   pendingPrompt?: boolean;
@@ -505,6 +504,7 @@ function EvidenceDetails({
   evidenceState,
   note,
   rawDetails,
+  children,
   snapshotMissingResult = false,
   defaultOpen = false,
 }: {
@@ -517,6 +517,7 @@ function EvidenceDetails({
   evidenceState?: EvidenceState;
   note?: string;
   rawDetails?: unknown;
+  children?: ReactNode;
   snapshotMissingResult?: boolean;
   defaultOpen?: boolean;
 }) {
@@ -543,13 +544,11 @@ function EvidenceDetails({
         <span className="tool-icon" aria-hidden="true">
           {icon}
         </span>
-        <span
-          className="tool-kind"
-          aria-hidden={toolActivity(name).action !== "call"}
-          title={name}
-        >
-          {toolActivityTag(name)}
-        </span>
+        {toolActivity(name).action === "call" && (
+          <span className="tool-kind" title={name}>
+            {toolActivityTag(name)}
+          </span>
+        )}
         <span className="details-title">
           <span className="tool-action">
             {toolActivityLabel(t, name, state)}
@@ -589,6 +588,7 @@ function EvidenceDetails({
           <pre>{evidenceText(JSON.stringify(rawDetails, null, 2)).text}</pre>
         </details>
       )}
+      {children}
     </details>
   );
 }
@@ -1758,29 +1758,6 @@ function buildEntries(
   };
 }
 
-// Hold only presentation; terminal evidence and disclosure state never wait.
-function useProcessHeadline(current: RenderRow | undefined) {
-  const [held, setHeld] = useState(() => ({
-    row: current,
-    since: Date.now(),
-  }));
-  useEffect(() => {
-    if (current?.key === held.row?.key) return;
-    if (!current || !held.row) {
-      setHeld({ row: current, since: Date.now() });
-      return;
-    }
-    const timer = window.setTimeout(
-      () => setHeld({ row: current, since: Date.now() }),
-      Math.max(0, 1000 - (Date.now() - held.since)),
-    );
-    return () => window.clearTimeout(timer);
-  }, [current, held]);
-  return !current || current.key === held.row?.key
-    ? current
-    : (held.row ?? current);
-}
-
 function ProcessSequence({
   rows,
   active,
@@ -1789,10 +1766,10 @@ function ProcessSequence({
   active: boolean;
 }) {
   const { t } = useTranslation();
-  let thinkingMessageKey: string | undefined;
-  const [open, setOpen] = useState(active);
+  const [open, setOpen] = useState(false);
   const single = rows.length === 1;
   const previousSingle = useRef(single);
+  const summary = useRef<HTMLElement>(null);
   const viewport = useRef<HTMLElement>(null);
   const following = useRef(true);
   const lastScrollTop = useRef(0);
@@ -1810,10 +1787,14 @@ function ProcessSequence({
         : { above, below },
     );
   }, []);
-  useEffect(() => setOpen(active), [active]);
   useLayoutEffect(() => {
     const element = viewport.current;
     const promoted = previousSingle.current && !single;
+    // Adding the first tool must not fold reasoning the user is already reading.
+    if (promoted && !open && element?.querySelector(".thinking-line[open]")) {
+      setOpen(true);
+      return;
+    }
     previousSingle.current = single;
     if (!element || single || !open || rows.length === 0) return;
     // A native bookmark can move this scrollport before its scroll event arrives.
@@ -1860,28 +1841,31 @@ function ProcessSequence({
   const current = [...rows]
     .reverse()
     .find((row) => row.processStatus === "running");
-  const headline = useProcessHeadline(current);
   const preview =
-    headline?.processPreview ??
+    current?.processPreview ??
     (active ? [...rows].reverse() : rows).find((row) => row.processPreview)
       ?.processPreview;
   const previewText =
-    headline?.processToolName &&
-    ["read", "write", "edit"].includes(headline.processToolName)
+    current?.processToolName &&
+    ["read", "write", "edit"].includes(current.processToolName)
       ? preview?.slice(
           Math.max(preview.lastIndexOf("/"), preview.lastIndexOf("\\")) + 1,
         )
       : preview;
-  const failed = rows.some((row) => row.error || row.processStatus === "error");
-  const status: Status = current
-    ? "running"
-    : failed
-      ? "error"
-      : rows.some((row) => row.processStatus === "warn")
-        ? "warn"
-        : rows.every((row) => row.processStatus === "done")
-          ? "done"
-          : "unknown";
+  const failures = rows.filter(
+    (row) => row.error || row.processStatus === "error",
+  ).length;
+  const failed = failures > 0;
+  const status: Status =
+    current || active
+      ? "running"
+      : failed
+        ? "error"
+        : rows.some((row) => row.processStatus === "warn")
+          ? "warn"
+          : rows.every((row) => row.processStatus === "done")
+            ? "done"
+            : "unknown";
   const toolNames = rows.flatMap((row) =>
     row.processToolName ? [row.processToolName] : [],
   );
@@ -1897,172 +1881,179 @@ function ProcessSequence({
         },
       )
     : t(status === "running" ? "processRunning" : "processDetails");
-  const title = headline?.processToolName
-    ? toolActivityLabel(t, headline.processToolName, "running")
-    : headline?.processType === "thinking"
+  const title = current?.processToolName
+    ? toolActivityLabel(t, current.processToolName, "running")
+    : current?.processType === "thinking"
       ? t("thinkingActive")
-      : groupTitle;
-  const representative = headline?.processToolName ?? toolNames[0];
+      : active
+        ? t("processRunning")
+        : open
+          ? t("processDetails")
+          : groupTitle;
+  const representative = current?.processToolName ?? toolNames[0];
   const Icon =
-    headline?.processType === "thinking"
+    current?.processType === "thinking"
       ? Lightbulb
       : representative
         ? toolActivity(representative).Icon
         : Wrench;
   return (
-    <details
-      className={`process-sequence ${single ? "single-process " : ""}${status}`}
-      open={single || open}
-      data-status={status}
-      data-running={status === "running" ? "true" : undefined}
-      data-history-entry={rows[0]?.key}
-      onToggle={(event) => {
-        if (!single) setOpen(event.currentTarget.open);
-      }}
-    >
-      <summary
-        hidden={single}
-        aria-label={[title, current ? preview : "", ...counts]
-          .filter(Boolean)
-          .join(" · ")}
+    <>
+      <details
+        className={`process-sequence ${single ? "single-process " : ""}${status}`}
+        open={single || open}
+        data-status={status}
+        data-running={status === "running" ? "true" : undefined}
+        data-history-entry={rows[0]?.key}
+        onToggle={(event) => {
+          if (!single) setOpen(event.currentTarget.open);
+        }}
       >
-        <span className="tool-icon" aria-hidden="true">
-          <Icon />
-        </span>
-        <span
-          className="process-sequence-title"
-          title={[actionLabels.join(t("toolGroupSeparator")), ...counts]
+        <summary
+          ref={summary}
+          hidden={single}
+          aria-label={[
+            title,
+            current ? preview : "",
+            ...counts,
+            failed ? t("processFailureCount", { count: failures }) : "",
+          ]
             .filter(Boolean)
             .join(" · ")}
         >
-          <strong>{title}</strong>
-        </span>
-        {preview && (current || !actions.length) && (
-          <span className="process-sequence-preview" title={preview}>
-            {previewText}
+          <span className="tool-icon" aria-hidden="true">
+            <Icon />
           </span>
-        )}
-        <span className="process-sequence-counts">{counts.join(" · ")}</span>
-        <ChevronRight className="tool-disclosure" aria-hidden="true" />
-        <StatusMark status={status} />
-      </summary>
-      <section
-        ref={viewport}
-        className="process-sequence-scroll"
-        aria-label={
-          single ? undefined : [t("processDetails"), ...counts].join(" · ")
-        }
-        tabIndex={single ? undefined : 0}
-        data-scroll-above={edges.above || undefined}
-        data-scroll-below={edges.below || undefined}
-        onScrollCapture={(event) => {
-          const target = event.target;
-          if (
-            single &&
-            target instanceof HTMLElement &&
-            target.classList.contains("thinking-evidence")
-          ) {
-            const top =
-              target.getBoundingClientRect().top -
-              event.currentTarget.getBoundingClientRect().top +
-              target.scrollTop;
-            const downward = top > lastScrollTop.current;
-            lastScrollTop.current = top;
+          <span className="process-sequence-title">
+            <strong>{title}</strong>
+          </span>
+          {preview && (current || (!active && !actions.length)) && (
+            <span className="process-sequence-preview" title={preview}>
+              {previewText}
+            </span>
+          )}
+          <ChevronRight className="tool-disclosure" aria-hidden="true" />
+          {!failed && <StatusMark status={status} />}
+        </summary>
+        <section
+          ref={viewport}
+          className="process-sequence-scroll"
+          aria-label={
+            single ? undefined : [t("processDetails"), ...counts].join(" · ")
+          }
+          tabIndex={single ? undefined : 0}
+          data-scroll-above={edges.above || undefined}
+          data-scroll-below={edges.below || undefined}
+          onScrollCapture={(event) => {
+            const target = event.target;
+            if (
+              single &&
+              target instanceof HTMLElement &&
+              target.classList.contains("thinking-evidence")
+            ) {
+              const top =
+                target.getBoundingClientRect().top -
+                event.currentTarget.getBoundingClientRect().top +
+                target.scrollTop;
+              const downward = top > lastScrollTop.current;
+              lastScrollTop.current = top;
+              following.current =
+                (following.current || downward) &&
+                target.scrollHeight - target.clientHeight - target.scrollTop <=
+                  24;
+            }
+          }}
+          onScroll={(event) => {
+            if (single) return;
+            const element = event.currentTarget;
+            const downward = element.scrollTop > lastScrollTop.current;
+            lastScrollTop.current = element.scrollTop;
             following.current =
               (following.current || downward) &&
-              target.scrollHeight - target.clientHeight - target.scrollTop <=
+              element.scrollHeight - element.clientHeight - element.scrollTop <=
                 24;
-          }
-        }}
-        onScroll={(event) => {
-          if (single) return;
-          const element = event.currentTarget;
-          const downward = element.scrollTop > lastScrollTop.current;
-          lastScrollTop.current = element.scrollTop;
-          following.current =
-            (following.current || downward) &&
-            element.scrollHeight - element.clientHeight - element.scrollTop <=
-              24;
-          updateEdges();
-        }}
-        onWheel={(event) => {
-          if (
-            !event.defaultPrevented &&
-            !event.ctrlKey &&
-            !event.metaKey &&
-            event.deltaY < 0 &&
-            (single ||
-              upwardInputReachesConversation(
-                event.nativeEvent,
-                event.currentTarget,
-              ))
-          )
-            following.current = false;
-        }}
-        onKeyDown={(event) => {
-          const target = event.target;
-          if (
-            !event.defaultPrevented &&
-            !event.altKey &&
-            !event.metaKey &&
-            (!event.ctrlKey || event.key === "Home") &&
-            (["ArrowUp", "PageUp", "Home"].includes(event.key) ||
-              (event.key === " " && event.shiftKey)) &&
-            target instanceof HTMLElement &&
-            !target.isContentEditable &&
-            !target.closest("input, textarea, select") &&
-            !(event.key === " " && target.closest("button, summary")) &&
-            (single ||
-              upwardInputReachesConversation(
-                event.nativeEvent,
-                event.currentTarget,
-              ))
-          )
-            following.current = false;
-        }}
-        onTouchStart={(event) => {
-          touchY.current = event.touches[0]?.clientY;
-        }}
-        onTouchMove={(event) => {
-          const next = event.touches[0]?.clientY;
-          if (
-            next !== undefined &&
-            touchY.current !== undefined &&
-            next > touchY.current &&
-            (single ||
-              upwardInputReachesConversation(
-                event.nativeEvent,
-                event.currentTarget,
-              ))
-          )
-            following.current = false;
-          touchY.current = next;
-        }}
-      >
-        <div className="process-sequence-body">
-          {rows.map((row) => {
-            // Native message order establishes this visual association;
-            // chronological proximity across messages does not.
-            if (row.processType === "thinking")
-              thinkingMessageKey = row.processMessageKey;
-            else if (row.processMessageKey !== thinkingMessageKey)
-              thinkingMessageKey = undefined;
-            const followsThinking =
-              thinkingMessageKey !== undefined &&
-              row.processType !== "thinking";
-            return (
+            updateEdges();
+          }}
+          onWheel={(event) => {
+            if (
+              !event.defaultPrevented &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              event.deltaY < 0 &&
+              (single ||
+                upwardInputReachesConversation(
+                  event.nativeEvent,
+                  event.currentTarget,
+                ))
+            )
+              following.current = false;
+          }}
+          onKeyDown={(event) => {
+            const target = event.target;
+            if (
+              !event.defaultPrevented &&
+              !event.altKey &&
+              !event.metaKey &&
+              (!event.ctrlKey || event.key === "Home") &&
+              (["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+                (event.key === " " && event.shiftKey)) &&
+              target instanceof HTMLElement &&
+              !target.isContentEditable &&
+              !target.closest("input, textarea, select") &&
+              !(event.key === " " && target.closest("button, summary")) &&
+              (single ||
+                upwardInputReachesConversation(
+                  event.nativeEvent,
+                  event.currentTarget,
+                ))
+            )
+              following.current = false;
+          }}
+          onTouchStart={(event) => {
+            touchY.current = event.touches[0]?.clientY;
+          }}
+          onTouchMove={(event) => {
+            const next = event.touches[0]?.clientY;
+            if (
+              next !== undefined &&
+              touchY.current !== undefined &&
+              next > touchY.current &&
+              (single ||
+                upwardInputReachesConversation(
+                  event.nativeEvent,
+                  event.currentTarget,
+                ))
+            )
+              following.current = false;
+            touchY.current = next;
+          }}
+        >
+          <div className="process-sequence-body">
+            {rows.map((row) => (
               <div
-                className={`process-step ${single ? "single-tool-step " : ""}${followsThinking ? "thought-tool-step " : ""}${row.processStatus ?? "unknown"}`}
+                className={`process-step ${single ? "single-tool-step " : ""}${row.processStatus ?? "unknown"}`}
                 data-status={row.processStatus ?? "unknown"}
                 key={row.key}
               >
                 {row.content}
               </div>
-            );
-          })}
-        </div>
-      </section>
-    </details>
+            ))}
+          </div>
+        </section>
+      </details>
+      <Tooltip
+        anchorRef={summary}
+        focusTrigger="always"
+        content={[
+          ...counts,
+          failed ? t("processFailureCount", { count: failures }) : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        placement="above"
+        isEnabled={!single}
+      />
+    </>
   );
 }
 
@@ -3194,7 +3185,6 @@ export function Transcript(props: TranscriptProps) {
               turn,
               kind: "process",
               processType: "tool",
-              processMessageKey: entry.key,
               processToolName: "web_search",
               processPreview: search.query,
               processStatus: status,
@@ -3259,6 +3249,16 @@ export function Transcript(props: TranscriptProps) {
             !message.stopReason &&
             index === entries.length - 1 &&
             lastVisiblePart === lastTextIndex;
+          const finalResponse =
+            actions &&
+            lastAssistantByTurn.has(index) &&
+            !streaming &&
+            (message.stopReason === "stop" ||
+              message.stopReason === "length" ||
+              message.stopReason === "error" ||
+              message.stopReason === "aborted" ||
+              (!running &&
+                !message.parts?.some((part) => part.type === "toolCall")));
           detailRows.push({
             key,
             turn,
@@ -3270,7 +3270,7 @@ export function Transcript(props: TranscriptProps) {
                 message.stopReason === "length"),
             content: (
               <article
-                className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
+                className={`message-row assistant response${finalResponse ? " final-response" : ""}`}
                 data-streaming={streaming || undefined}
                 data-history-message={entry.entryId ?? entry.key}
                 data-history-highlighted={
@@ -3310,7 +3310,7 @@ export function Transcript(props: TranscriptProps) {
                     </Markdown>
                   )}
                 </div>
-                {actions && lastAssistantByTurn.has(index) && (
+                {finalResponse && (
                   <MessageActions
                     content={hydrated ?? message.content}
                     editable={false}
@@ -3399,7 +3399,6 @@ export function Transcript(props: TranscriptProps) {
               turn,
               kind: "process",
               processType: "thinking",
-              processMessageKey: entry.key,
               processPreview: thinkingPreview(part.text),
               processStatus: status,
               content: (
@@ -3525,6 +3524,16 @@ export function Transcript(props: TranscriptProps) {
                 props.activityObserved === false && nativeStatus === "running"
                   ? "unknown"
                   : nativeStatus;
+              const rawEvidence =
+                projection &&
+                projectedIndex === projectedTools.length - 1 &&
+                !projection.showWrapper ? (
+                  <details className="evidence-raw">
+                    <summary>{t("toolCodemodeDetails")}</summary>
+                    <pre>{evidenceText(outer.arguments).text}</pre>
+                    <pre>{evidenceText(outerResult?.content ?? "").text}</pre>
+                  </details>
+                ) : null;
               const card =
                 part.name === "plan_ready" &&
                 result &&
@@ -3545,7 +3554,9 @@ export function Transcript(props: TranscriptProps) {
                     observed={props.activityObserved}
                     cwd={selectedCwd}
                     defaultOpen={defaultOpen}
-                  />
+                  >
+                    {rawEvidence}
+                  </ToolEvidence>
                 ) : child?.outputMissing ? null : (
                   familyCard(part, result, {
                     sessionId: selectedId ?? "",
@@ -3583,7 +3594,6 @@ export function Transcript(props: TranscriptProps) {
                 processType: /^(subagent|workflow)/u.test(part.name)
                   ? "activity"
                   : "tool",
-                processMessageKey: entry.key,
                 processToolName: part.name,
                 processPreview: toolActivityTarget(part.name, args)
                   .split("\n")
@@ -3653,7 +3663,9 @@ export function Transcript(props: TranscriptProps) {
                           }
                           snapshotMissingResult={result?.forkSnapshotToolResult}
                           defaultOpen={defaultOpen}
-                        />
+                        >
+                          {rawEvidence}
+                        </EvidenceDetails>
                       )}
                       {projection?.incomplete &&
                         projectedIndex === projectedTools.length - 1 && (
@@ -3661,17 +3673,7 @@ export function Transcript(props: TranscriptProps) {
                             {t("toolNestedIncomplete")}
                           </p>
                         )}
-                      {projection &&
-                        projectedIndex === projectedTools.length - 1 &&
-                        !projection.showWrapper && (
-                          <details className="evidence-raw">
-                            <summary>{t("toolCodemodeDetails")}</summary>
-                            <pre>{evidenceText(outer.arguments).text}</pre>
-                            <pre>
-                              {evidenceText(outerResult?.content ?? "").text}
-                            </pre>
-                          </details>
-                        )}
+                      {card && !isEvidenceTool(part.name) && rawEvidence}
                     </div>
                   </article>
                 ),

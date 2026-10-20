@@ -162,16 +162,18 @@ it("attaches a saved change receipt to its native prompt, not an adjacent turn",
   expect(container.querySelectorAll(".turn-changes")).toHaveLength(1);
 });
 
-it("shows three file names and line counts, expands locally, and opens the exact saved turn in the workbar", () => {
+it("starts with a summary, reveals files locally, and opens the exact saved turn in the workbar", () => {
   const onReview = vi.fn();
   const read = vi.spyOn(WebClient.prototype, "turnChanges");
   const { container } = render(
     withI18n(createElement(TurnChangesCard, { changes, onReview })),
   );
-  expect(container.querySelectorAll(".turn-changes-file")).toHaveLength(3);
+  expect(screen.queryByRole("button", { name: /file-1.ts/u })).toBeNull();
   expect(screen.queryByText("Modified")).toBeNull();
   expect(screen.getByText("+15")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /Show 2 more files/u }));
+  const disclosure = screen.getByRole("button", { expanded: false });
+  fireEvent.click(disclosure);
+  expect(disclosure.getAttribute("aria-expanded")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: /file-5.ts/u }));
   expect(onReview).toHaveBeenLastCalledWith(
     "prompt-1",
@@ -183,6 +185,8 @@ it("shows three file names and line counts, expands locally, and opens the exact
     "src/feature/file-1.ts",
   );
   expect(read).not.toHaveBeenCalled();
+  fireEvent.click(disclosure);
+  expect(screen.queryByRole("button", { name: /file-5.ts/u })).toBeNull();
   expect(container.querySelector(".turn-changes-review")).toBeNull();
 });
 

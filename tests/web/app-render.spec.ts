@@ -902,16 +902,12 @@ describe("OpenPI React transcript", () => {
     expect(
       process?.querySelector("summary")?.getAttribute("aria-label"),
     ).not.toContain(i18n.t("processActivityCount", { count: 1 }));
-    const counts = process?.querySelector(".process-sequence-counts");
-    expect(counts?.textContent).toContain(
-      i18n.t("processThinkingCount", { count: 1 }),
-    );
-    expect(counts?.textContent).toContain(
-      i18n.t("processToolCount", { count: 4 }),
-    );
-    expect(counts?.textContent).not.toContain(
-      i18n.t("processActivityCount", { count: 1 }),
-    );
+    const counts = process
+      ?.querySelector("summary")
+      ?.getAttribute("aria-label");
+    expect(counts).toContain(i18n.t("processThinkingCount", { count: 1 }));
+    expect(counts).toContain(i18n.t("processToolCount", { count: 4 }));
+    expect(counts).not.toContain(i18n.t("processActivityCount", { count: 1 }));
     expect(
       process?.querySelector(".process-step:first-child .thinking-line"),
     ).toBeTruthy();
@@ -1136,7 +1132,7 @@ it("marks only live execution evidence for shimmer styling", () => {
   const sequence = view.container.querySelector<HTMLDetailsElement>(
     ".process-sequence:not(.single-process)",
   );
-  expect(sequence?.open).toBe(true);
+  expect(sequence?.open).toBe(false);
   expect(sequence?.dataset.status).toBe("running");
   const process = view.container.querySelector<HTMLElement>(
     ".process-step.running",
@@ -1398,7 +1394,7 @@ it("freezes untimed turn and navigation presentation when native activity observ
   const sequence = view.container.querySelector<HTMLDetailsElement>(
     ".process-sequence:not(.single-process)",
   )!;
-  expect(sequence.open).toBe(true);
+  expect(sequence.open).toBe(false);
   view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
   expect(
     view.container.querySelector(".turn-state.unknown")?.textContent,
@@ -1414,7 +1410,7 @@ it("freezes untimed turn and navigation presentation when native activity observ
   expect(
     view.container.querySelector(".process-sequence:not(.single-process)"),
   ).toBe(sequence);
-  expect(sequence.open).toBe(true);
+  expect(sequence.open).toBe(false);
   expect(JSON.stringify(snapshot)).toBe(original);
   view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
   expect(view.container.querySelector(".turn-state.running")).toBeTruthy();
@@ -2732,7 +2728,7 @@ it("keeps background Session files, trajectory and activity scoped to the select
     fireEvent.click(screen.getByRole("button", { name: i18n.t("chatView") }));
     fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
     fireEvent.click(
-      screen.getByRole("button", {
+      screen.getByRole("menuitem", {
         name: new RegExp(i18n.t("files"), "u"),
       }),
     );
@@ -2747,6 +2743,20 @@ it("keeps background Session files, trajectory and activity scoped to the select
     );
     expect(files.textContent).toContain("b.txt");
     expect(files.textContent).not.toContain("a.txt");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt)
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("openTools") }),
+        );
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("workbarCollapseTools") }),
+      );
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          screen.getByRole("button", { name: i18n.t("openTools") }),
+        ),
+      );
+    }
   } finally {
     view.unmount();
     start.mockRestore();

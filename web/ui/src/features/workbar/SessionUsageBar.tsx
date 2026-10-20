@@ -6,16 +6,21 @@ import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { ArrowDown, ArrowUp, ChevronDown, Gauge, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebSessionUsage } from "../../../../protocol/types.ts";
+import type {
+  WebModelSummary,
+  WebSessionUsage,
+} from "../../../../protocol/types.ts";
 
 export function SessionUsageBar({
   usage,
   workspace,
   sessionId,
+  model,
 }: {
   usage?: WebSessionUsage;
   workspace?: string;
   sessionId?: string;
+  model?: WebModelSummary;
 }) {
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -90,6 +95,14 @@ export function SessionUsageBar({
                 />
               )}
               <p className="usage-help">{t("usageContextHelp")}</p>
+              {model && (
+                <div className="usage-context-model">
+                  <span>{model.name}</span>
+                  <span>
+                    {model.provider} / {model.id}
+                  </span>
+                </div>
+              )}
             </section>
             <section className="usage-section">
               <h3>{t("usageSessionTotals")}</h3>

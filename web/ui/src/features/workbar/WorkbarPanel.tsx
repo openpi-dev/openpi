@@ -69,7 +69,7 @@ import {
   workbarTabTool,
 } from "./workbar-tabs.ts";
 
-const launcherTools = [
+export const launcherTools = [
   {
     kind: "side-conversation" as const,
     icon: MessageCirclePlus,

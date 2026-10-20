@@ -11,7 +11,7 @@ import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FilesPanel } from "../../web/ui/src/features/files/FilesPanel.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
-import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
 import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
 
 installCheckVisibilityFixture();
@@ -64,6 +64,33 @@ const node = (sessionPath = "/session/a", active = true) =>
     cwd: "/workspace",
     active,
   });
+
+it("replaces the choose-file empty state with a localized read error and recovers on retry", async () => {
+  vi.mocked(WebClient.prototype.workspaceFiles).mockRejectedValueOnce(
+    new WebApiError(
+      "Internal workspace identity detail",
+      403,
+      "ARTIFACT_DENIED",
+    ),
+  );
+  render(node());
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    i18n.t("filesReadDenied"),
+  );
+  expect(
+    screen.queryByRole("heading", { name: i18n.t("filesChoose") }),
+  ).toBeNull();
+  expect(
+    screen.getByText("Internal workspace identity detail").closest("details")
+      ?.open,
+  ).toBe(false);
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("filesRetryRead") }),
+  );
+  await screen.findByRole("button", { name: "report.md" });
+  await screen.findByRole("heading", { name: i18n.t("filesChoose") });
+  expect(screen.queryByRole("alert")).toBeNull();
+});
 
 it("keeps the explorer mounted beside nested previews and returns focus without opening another panel", async () => {
   const view = render(node());
