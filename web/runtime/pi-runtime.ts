@@ -2651,7 +2651,11 @@ export class PiWebRuntime implements WebRuntimeController {
       }
     });
     try {
-      await session.bindExtensions({ mode: "print", onError: (error) => {
+      // A Web host stays alive across turns and auto-delivers async results,
+      // so it is not a print-style run that exits when the turn ends. rpc
+      // keeps hasUI false (no uiContext is passed), leaving every tui-gated
+      // path unchanged.
+      await session.bindExtensions({ mode: "rpc", onError: (error) => {
         publishWebCommandFeedback(session.sessionManager, error.error, "error");
       } });
     } catch (error) {

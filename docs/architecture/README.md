@@ -8,6 +8,6 @@ Each new or materially revised architecture record should identify its evidence 
 
 - [`WORKTREE_HANDOFF_INVENTORY.md`](WORKTREE_HANDOFF_INVENTORY.md) - #661 bounded Git inventory coverage and preservation semantics (draft candidate)
 - [`WEB_MODEL_DISCOVERY.md`](WEB_MODEL_DISCOVERY.md) - bounded Web model snapshots and full-catalog discovery through Pi's model runtime
-- [`RUNTIME_SNAPSHOT.md`](RUNTIME_SNAPSHOT.md) - parent-only, bounded runtime observation through the existing capability gateway
+- [`RUNTIME_SNAPSHOT.md`](RUNTIME_SNAPSHOT.md) - historical record of a removed parent-only runtime snapshot tool ([#879](https://github.com/openpi-dev/openpi/issues/879))
 
 - [`WORKFLOW_EXECUTION_TIMING.md`](WORKFLOW_EXECUTION_TIMING.md) - privacy-safe bounded timing observation, explicit coverage and replay provenance (#662)

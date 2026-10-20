@@ -20,4 +20,6 @@ Start from [`TEMPLATE.md`](TEMPLATE.md).
 
 - [`0003-local-web-browser-entry.md`](0003-local-web-browser-entry.md) — direct local browser entry with authenticated APIs and isolated document bootstrap ([#448](https://github.com/openpi-dev/openpi/issues/448)).
 
-- [`0004-capability-name-discovery.md`](0004-capability-name-discovery.md) — named delegate/workflow discovery with model-owned execution judgment and unchanged authority ([#655](https://github.com/openpi-dev/openpi/issues/655)).
+- [`0004-capability-name-discovery.md`](0004-capability-name-discovery.md) — named delegate/workflow discovery with model-owned execution judgment and unchanged authority ([#655](https://github.com/openpi-dev/openpi/issues/655)). **Superseded** by Decision 0005 ([#879](https://github.com/openpi-dev/openpi/issues/879)).
+
+- [`0005-frozen-tool-surface.md`](0005-frozen-tool-surface.md) — one fixed resident tool set per Session; model-visible tools change only at explicit user boundaries ([#879](https://github.com/openpi-dev/openpi/issues/879)).

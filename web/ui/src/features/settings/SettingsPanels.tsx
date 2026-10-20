@@ -203,25 +203,6 @@ export function GeneralSettingsPanel({
           <section className="settings-section-block">
             <h2>{t("agentBehavior")}</h2>
             <div className="settings-chat-controls">
-              <label className="settings-inline-control">
-                <Sparkles aria-hidden="true" />
-                <span>{t("capabilityDiscovery")}</span>
-                <select
-                  value={setup.capabilities.discovery}
-                  disabled={setupPending || setupBlocked}
-                  onChange={(event) =>
-                    void onConfigure(
-                      t("setupRequestDiscovery", { mode: event.target.value }),
-                    )
-                  }
-                >
-                  {(["explicit", "adaptive"] as const).map((mode) => (
-                    <option key={mode} value={mode}>
-                      {t(`capabilityDiscovery_${mode}`)}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <form
                 className="settings-limits-control"
                 onSubmit={(event) => {

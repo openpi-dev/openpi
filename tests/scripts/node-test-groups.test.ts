@@ -7,18 +7,6 @@ import {
 } from "../../scripts/node-test-groups.mjs";
 import { discoverTestFiles } from "../../scripts/discover-tests.mjs";
 
-const backgroundTest = resolve(
-  "tests",
-  "extensions",
-  "background-terminals",
-  "manager.test.ts",
-);
-const backgroundUnitTest = resolve(
-  "tests",
-  "extensions",
-  "background-terminals",
-  "output.test.ts",
-);
 const setupIntegrationTest = resolve(
   "tests/extensions/setup/integration.test.ts",
 );
@@ -32,19 +20,6 @@ const gitInfoUnitTest = resolve(
   "tests/extensions/git-info/refresh-coordinator.test.ts",
 );
 const unrelatedTest = resolve("tests", "test-discovery.test.ts");
-
-test("Windows isolates background-terminal tests from other Node files", () => {
-  assert.deepEqual(
-    partitionNodeTestsByPlatform(
-      [backgroundTest, unrelatedTest, backgroundUnitTest],
-      "win32",
-    ),
-    {
-      parallel: [unrelatedTest],
-      serial: [backgroundTest, backgroundUnitTest],
-    },
-  );
-});
 
 test("Windows isolates the real Pi subprocess but keeps setup unit tests parallel", () => {
   assert.deepEqual(
@@ -63,9 +38,7 @@ test("non-Windows keeps all Node files in the parallel group", () => {
   assert.deepEqual(
     partitionNodeTestsByPlatform(
       [
-        backgroundTest,
         unrelatedTest,
-        backgroundUnitTest,
         setupIntegrationTest,
         workflowExecutionTest,
         gitInfoProcessTest,
@@ -74,9 +47,7 @@ test("non-Windows keeps all Node files in the parallel group", () => {
     ),
     {
       parallel: [
-        backgroundTest,
         unrelatedTest,
-        backgroundUnitTest,
         setupIntegrationTest,
         workflowExecutionTest,
         gitInfoProcessTest,

@@ -21,7 +21,7 @@ test("recursive discovery includes nested Node and Vitest suites", () => {
   );
   assert.ok(
     discovered.includes(
-      resolve(testsRoot, "extensions", "file-search", "index.spec.ts"),
+      resolve(testsRoot, "extensions", "sessions", "index.spec.ts"),
     ),
   );
   for (const name of ["full-message-ui", "turn-changes-ui"]) {

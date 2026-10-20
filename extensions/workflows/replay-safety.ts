@@ -17,8 +17,6 @@ const REPLAY_FILESYSTEM_TOOL_NAMES = new Set([
   "grep",
   "find",
   "ls",
-  "fd",
-  "rg",
   "git_show",
   "git_diff",
   "git_log",
@@ -30,8 +28,6 @@ const REPLAY_BUILTIN_FILESYSTEM_TOOL_NAMES = new Set([
   "ls",
 ]);
 const REPLAY_PACKAGE_FILESYSTEM_TOOL_NAMES = new Set([
-  "fd",
-  "rg",
   "git_show",
   "git_diff",
   "git_log",
@@ -190,13 +186,13 @@ function hasKnownReplayFilesystemImplementation(tool: {
     );
   }
   if (!REPLAY_PACKAGE_FILESYSTEM_TOOL_NAMES.has(tool.name)) return false;
-  // fd/rg come from file-search; the read-only git tools from git-read.
-  const ownerSourceSuffix = tool.name.startsWith("git_")
-    ? "/extensions/git-read/index.ts"
-    : "/extensions/file-search/index.ts";
+  // The read-only git tools come from git-read.
   return (
     tool.sourceInfo?.origin === "package" &&
-    tool.sourceInfo.path.split(path.sep).join("/").endsWith(ownerSourceSuffix)
+    tool.sourceInfo.path
+      .split(path.sep)
+      .join("/")
+      .endsWith("/extensions/git-read/index.ts")
   );
 }
 

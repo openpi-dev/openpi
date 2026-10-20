@@ -329,7 +329,7 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   };
   assert.equal("suggestions_enabled" in parameters.properties, true);
   assert.equal("suggestion_model" in parameters.properties, true);
-  assert.equal("capability_discovery" in parameters.properties, true);
+  assert.equal("capability_discovery" in parameters.properties, false);
   assert.equal("ui_web_theme" in parameters.properties, true);
   const appearance = parameters.properties.ui_web_appearance as {
     required: string[];
@@ -1212,13 +1212,13 @@ test("setup receipts distinguish real changes from equivalent presets without ex
 
 test("successful setup result closes the episode and names the only re-entry", () => {
   const result = buildSetupSuccessText(
-    "Capability discovery: explicit.",
-    ["capabilities.discovery"],
+    "Footer style: plain.",
+    ["ui.footerStyle"],
     " Normalized or migrated stored values: ui.footerStyle.",
   );
 
   assert.match(result, /Saved OpenPI setup/);
-  assert.match(result, /Capability discovery: explicit/);
+  assert.match(result, /Footer style: plain/);
   assert.match(result, /Normalized or migrated.*ui\.footerStyle/);
   assert.match(result, /setup episode is complete/i);
   assert.match(result, /configure_my_pi_setup.*hidden/i);
@@ -1453,13 +1453,13 @@ test("session_start after host re-includes tools hides configure tool", async ()
 
 test("setActiveTools never snapshot-restores unrelated tools away", async () => {
   const h = visibilityHarness({
-    initialActive: ["read", "bash", "ask_user", "workflow", "fd"],
+    initialActive: ["read", "bash", "ask_user", "workflow", "git_show"],
   });
   await h.emit("session_start");
   assert.deepEqual(h.activeNames().sort(), [
     "ask_user",
     "bash",
-    "fd",
+    "git_show",
     "read",
     "workflow",
   ]);
@@ -1468,7 +1468,7 @@ test("setActiveTools never snapshot-restores unrelated tools away", async () => 
     "ask_user",
     "bash",
     CONFIGURE_MY_PI_SETUP_TOOL_NAME,
-    "fd",
+    "git_show",
     "read",
     "workflow",
   ]);
@@ -1476,7 +1476,7 @@ test("setActiveTools never snapshot-restores unrelated tools away", async () => 
   assert.deepEqual(h.activeNames().sort(), [
     "ask_user",
     "bash",
-    "fd",
+    "git_show",
     "read",
     "workflow",
   ]);
@@ -1530,9 +1530,6 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /This is the first setup/);
   assert.match(message, /Use ask_user/);
   assert.match(message, /Current Pi model: seal\/gpt-5\.6-sol/);
-  assert.match(message, /Capability discovery/);
-  assert.match(message, /explicit.*adaptive/);
-  assert.match(message, /adaptive.*opt-in/);
   assert.match(message, /dim inline text on the first row/);
   assert.match(message, /reserved cells.*CJK IME preedit/);
   assert.match(message, /Right accepts it without submitting/);
@@ -1619,7 +1616,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Code Mode, Capability discovery, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Code Mode, optional Web search, Response preferences, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);
