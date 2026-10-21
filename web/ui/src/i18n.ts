@@ -686,7 +686,6 @@ const resources = {
       subagentRecordedState: "Last recorded state",
       subagentSavedHint:
         "From this parent session's saved receipts. A result may include other tasks from the same batch; this is not the child's full live conversation.",
-      subagentLive: "Working · updates automatically",
       subagentReadOnly:
         "Read-only view · closing this panel does not stop the task",
       subagentUnavailable:
@@ -701,14 +700,11 @@ const resources = {
       subagentState_unknown: "Unconfirmed",
       subagentUnconfirmedGroup: "Unconfirmed",
       subagentTruncated:
-        "Showing a bounded excerpt; {{count}} earlier messages omitted. Some text may be shortened.",
+        "Showing recent messages. {{count}} earlier messages are not included in this view.",
+      subagentTextTruncated: "Some long content is shown as an excerpt.",
       subagentListTruncated:
         "{{count}} additional tasks are outside the loaded list.",
       subagentThinkingRedacted: "Reasoning was redacted by the provider.",
-      subagentTool_running: "Running",
-      subagentTool_done: "Returned",
-      subagentTool_error: "Failed",
-      subagentTool_unknown: "Result not retained",
       inspectionChanged: "The active session changed. Reopen this panel.",
       inspectionUnavailable: "Details are unavailable.",
       inspectionLoading: "Loading status…",
@@ -2696,7 +2692,6 @@ const resources = {
       subagentRecordedState: "最后记录的状态",
       subagentSavedHint:
         "来自当前父会话已保存的回执；结果可能包含同批其他任务，并非子代理的完整实时对话。",
-      subagentLive: "正在执行 · 自动更新",
       subagentReadOnly: "只读查看 · 关闭此面板不会停止任务",
       subagentUnavailable:
         "当前会话已无法提供此子代理的实时详情。启动回执不代表任务已完成。",
@@ -2709,13 +2704,10 @@ const resources = {
       subagentState_unknown: "未确认",
       subagentUnconfirmedGroup: "未确认",
       subagentTruncated:
-        "当前显示有界摘录，已省略 {{count}} 条较早消息，部分文本可能已截短。",
+        "当前显示最近的消息，另有 {{count}} 条较早消息未包含在此视图中。",
+      subagentTextTruncated: "部分较长内容仅显示节选。",
       subagentListTruncated: "另有 {{count}} 个任务未包含在当前列表中。",
       subagentThinkingRedacted: "服务商已隐藏此段思考内容。",
-      subagentTool_running: "执行中",
-      subagentTool_done: "已返回",
-      subagentTool_error: "失败",
-      subagentTool_unknown: "结果未保留",
       inspectionChanged: "当前会话已切换，请重新打开详情。",
       inspectionUnavailable: "暂时无法读取详情。",
       inspectionLoading: "正在读取状态…",

@@ -64,17 +64,18 @@ function detail(id = "A", status: "running" | "done" = "done") {
 
 function readingPosition(container: HTMLElement) {
   const viewport = container.querySelector<HTMLElement>(
-    ".subagent-transcript",
+    ".subagent-conversation .conversation",
   )!;
   Object.defineProperties(viewport, {
     scrollHeight: { configurable: true, value: 1_000 },
     clientHeight: { configurable: true, value: 200 },
   });
+  fireEvent.wheel(viewport, { deltaY: -100 });
   viewport.scrollTop = 150;
   fireEvent.scroll(viewport);
   const disclosures = Array.from(
     container.querySelectorAll<HTMLDetailsElement>(
-      ".subagent-task, .subagent-thinking, .subagent-tool",
+      ".subagent-task, .process-sequence, .thinking-line, .tool-evidence-card",
     ),
   );
   for (const disclosure of disclosures) disclosure.open = true;
@@ -121,9 +122,9 @@ it("keeps the current child reading position across overview/back while pausing 
   await act(async () => {});
   expect(read).toHaveBeenCalledTimes(2);
   expect(section.hidden).toBe(false);
-  expect(view.container.querySelector(".subagent-transcript")).toBe(
-    position.viewport,
-  );
+  expect(
+    view.container.querySelector(".subagent-conversation .conversation"),
+  ).toBe(position.viewport);
   expect(position.viewport.scrollTop).toBe(150);
   expect(position.disclosures.every((disclosure) => disclosure.open)).toBe(
     true,
@@ -173,9 +174,9 @@ it("refreshes a child after a native action without remounting its disclosures o
   view.rerender(node(1));
   await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   expect(read.mock.calls[0]![2]!.aborted).toBe(true);
-  expect(view.container.querySelector(".subagent-transcript")).toBe(
-    position.viewport,
-  );
+  expect(
+    view.container.querySelector(".subagent-conversation .conversation"),
+  ).toBe(position.viewport);
   expect(position.viewport.scrollTop).toBe(150);
   expect(position.disclosures.every((disclosure) => disclosure.open)).toBe(
     true,

@@ -465,7 +465,7 @@ it("renders real transcript, paired tool errors and redacted thinking without ex
                 type: "toolCall",
                 toolId: "call-1",
                 name: "read",
-                argsPreview: "missing.txt",
+                argsPreview: JSON.stringify({ path: "missing.txt" }),
               },
             ],
           },
@@ -493,12 +493,20 @@ it("renders real transcript, paired tool errors and redacted thinking without ex
   const log = screen.getByRole("log");
   expect(within(log).getByText("Child task")).toBeTruthy();
   expect(within(log).getByText("Read attempt")).toBeTruthy();
+  expect(
+    log.querySelector('.tool-evidence-card[data-tool="read"] summary')
+      ?.textContent,
+  ).toContain("missing.txt");
+  // A stopped child cannot leave its last pending tool looking as if it is still running.
+  expect(
+    log.querySelector('[data-running="true"], [data-state="running"]'),
+  ).toBeNull();
   expect(within(log).queryByText("Hidden sensitive thought")).toBeNull();
   expect(
     within(log).getByText(i18n.t("subagentThinkingRedacted")),
   ).toBeTruthy();
   expect(within(log).getAllByText("File unavailable")).toHaveLength(1);
-  expect(within(log).getByText(i18n.t("subagentTool_error"))).toBeTruthy();
+  expect(within(log).getByText(i18n.t("toolState_failed"))).toBeTruthy();
   expect(within(log).getByText("Searching")).toBeTruthy();
   expect(screen.getByRole("alert").textContent).toBe("Stopped by parent");
   expect(screen.getByText(i18n.t("subagentState_interrupted"))).toBeTruthy();
@@ -569,6 +577,48 @@ function snapshot(): WebSnapshot {
     },
   };
 }
+
+it("uses the same child name in the running process summary and the task row", () => {
+  const value = snapshot();
+  const call = {
+    type: "toolCall" as const,
+    id: "send-call",
+    name: "subagent_send",
+    arguments: JSON.stringify({ id: "sa-1", message: "Check the workspace" }),
+  };
+  value.selectedSession!.entries.push({
+    type: "message",
+    id: "send",
+    timestamp: "",
+    message: { role: "assistant", content: "", parts: [call] },
+  });
+  value.runtime.liveTools = [{ call, state: "running" }];
+  const { container } = render(
+    createElement(
+      Providers,
+      null,
+      createElement(Transcript, {
+        snapshot: value,
+        liveMessages: [],
+        liveRunning: true,
+        livePhase: "running",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+      }),
+    ),
+  );
+  expect(
+    container.querySelector(
+      ".process-sequence.running > summary .process-sequence-preview",
+    )?.textContent,
+  ).toBe("Package review");
+  expect(
+    container.querySelector(".subagent-card-open .subagent-activity-title")
+      ?.textContent,
+  ).toBe("Package review");
+});
 
 it("opens only the selected saved child record without fetching a historical Session", async () => {
   const read = vi.spyOn(WebClient.prototype, "subagentDetail");

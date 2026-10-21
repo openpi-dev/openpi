@@ -1,5 +1,5 @@
-import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   ArrowDown,
   Bot,
@@ -66,6 +66,7 @@ import type { LiveEntry } from "../../store/web-store.ts";
 import {
   type RecordedSubagent,
   recordedSubagents,
+  subagentTitle,
 } from "../subagents/recorded-subagents.ts";
 import { SubagentTaskRow } from "../subagents/SubagentTaskRow.tsx";
 import { CompactionStatus } from "./CompactionStatus.tsx";
@@ -112,6 +113,8 @@ interface DisplayEntry {
 }
 
 interface TranscriptProps {
+  label?: string;
+  notice?: ReactNode;
   activityObserved?: boolean;
   snapshot: WebSnapshot;
   liveMessages: LiveEntry[];
@@ -131,7 +134,7 @@ interface TranscriptProps {
         restorePosition?: ReadingPosition;
       })
     | null;
-  onResend: (content: string, retryEntryId?: string) => Promise<boolean>;
+  onResend?: (content: string, retryEntryId?: string) => Promise<boolean>;
   onEdit?: (anchor: WebHistoryAnchor, content: string) => Promise<boolean>;
   onRegenerate?: (anchor: WebHistoryAnchor) => Promise<boolean>;
   onOpenOriginal?: (anchor: WebHistoryAnchor) => Promise<boolean>;
@@ -288,7 +291,7 @@ function ProviderOutcome({
   retryPrompt?: string;
   retryEntryId?: string;
   canRetry: boolean;
-  onRetry: (content: string, retryEntryId?: string) => Promise<boolean>;
+  onRetry?: (content: string, retryEntryId?: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
@@ -303,7 +306,7 @@ function ProviderOutcome({
       label={t("modelRequestFailed")}
       message={error || t("modelFailureUnknown")}
     >
-      {retryPrompt !== undefined && retryEntryId && (
+      {retryPrompt !== undefined && retryEntryId && onRetry && (
         <div className="provider-outcome-actions">
           <button
             type="button"
@@ -678,14 +681,15 @@ function familyCard(
   }
   if (name.startsWith("subagent")) {
     const action = name.replaceAll("_", " ").replace(/^subagent /u, "");
-    const child =
-      subagents.find((item) => item.id === args.id) ??
-      records.find((item) => item.id === args.id);
+    const title =
+      typeof args.id === "string"
+        ? subagentTitle(args.id, subagents, records)
+        : "Subagent";
     return (
       <ActivityCard
         family="subagent"
         defaultOpen={defaultOpen}
-        title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} · ${child?.title || args.id || "Subagent"}`}
+        title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} · ${title}`}
         body={result?.content || part.arguments}
         status={status}
       />
@@ -948,7 +952,7 @@ function MessageActions({
   editable: boolean;
   copyRequiresFull?: boolean;
   timestamp?: string;
-  onResend: (value: string) => Promise<boolean>;
+  onResend?: (value: string) => Promise<boolean>;
   onRegenerate?: () => Promise<boolean>;
   onFork?: () => Promise<boolean>;
   canFork?: boolean;
@@ -976,7 +980,7 @@ function MessageActions({
     if (editing) editInput.current?.focus();
   }, [editing]);
   const submitEdit = async () => {
-    if (submitting || !draft.trim() || !editable) return;
+    if (submitting || !draft.trim() || !editable || !onResend) return;
     setSubmitting(true);
     try {
       if (await onResend(draft.trim())) setEditing(false);
@@ -3575,6 +3579,16 @@ export function Transcript(props: TranscriptProps) {
                 );
               const args = parseArguments(part.arguments);
               const { Icon, action } = toolActivity(part.name);
+              const target =
+                action === "agent" && typeof args.id === "string"
+                  ? subagentTitle(
+                      args.id,
+                      active
+                        ? props.snapshot.runtime.capabilities.subagents?.items
+                        : undefined,
+                      records,
+                    )
+                  : toolActivityTarget(part.name, args);
               const toolIcon = (
                 <Icon key={`${entry.key}-${part.id || partIndex}-icon`} />
               );
@@ -3595,9 +3609,7 @@ export function Transcript(props: TranscriptProps) {
                   ? "activity"
                   : "tool",
                 processToolName: part.name,
-                processPreview: toolActivityTarget(part.name, args)
-                  .split("\n")
-                  .find(Boolean),
+                processPreview: target.split("\n").find(Boolean),
                 processStatus: status,
                 error: status === "error",
                 content: (
@@ -4305,7 +4317,7 @@ export function Transcript(props: TranscriptProps) {
         ref={viewport}
         className="conversation"
         role="log"
-        aria-label="Conversation"
+        aria-label={props.label ?? "Conversation"}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: The scrollport needs keyboard reading with automatic pagination.
         tabIndex={0}
         onPointerDownCapture={() => {
@@ -4420,6 +4432,7 @@ export function Transcript(props: TranscriptProps) {
         }}
       >
         <div ref={conversationContent} className="conversation-content">
+          {props.notice}
           {selected?.rerun && props.onOpenOriginal && (
             <div className="message-branch-origin">
               <button

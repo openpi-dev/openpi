@@ -160,17 +160,18 @@ it("preserves the displayed child while refreshing after a successful send", asy
     .spyOn(WebClient.prototype, "subagentAction")
     .mockResolvedValue({ sessionId: "parent", detail });
   const { container, form, read, input } = panel();
-  await screen.findByText("Child thinking");
+  await screen.findAllByText("Child thinking");
   const thinking =
-    container.querySelector<HTMLDetailsElement>(".subagent-thinking")!;
+    container.querySelector<HTMLDetailsElement>(".thinking-line")!;
   thinking.open = true;
   const viewport = container.querySelector<HTMLElement>(
-    ".subagent-transcript",
+    ".subagent-conversation .conversation",
   )!;
   Object.defineProperties(viewport, {
     scrollHeight: { configurable: true, value: 1_000 },
     clientHeight: { configurable: true, value: 200 },
   });
+  fireEvent.wheel(viewport, { deltaY: -100 });
   viewport.scrollTop = 150;
   fireEvent.scroll(viewport);
 
@@ -178,8 +179,10 @@ it("preserves the displayed child while refreshing after a successful send", asy
   await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   expect(action).toHaveBeenCalledOnce();
   expect(input.value).toBe("");
-  expect(container.querySelector(".subagent-thinking")).toBe(thinking);
+  expect(container.querySelector(".thinking-line")).toBe(thinking);
   expect(thinking.open).toBe(true);
-  expect(container.querySelector(".subagent-transcript")).toBe(viewport);
+  expect(container.querySelector(".subagent-conversation .conversation")).toBe(
+    viewport,
+  );
   expect(viewport.scrollTop).toBe(150);
 });

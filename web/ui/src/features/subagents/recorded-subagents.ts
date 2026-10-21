@@ -8,6 +8,19 @@ export interface RecordedSubagent {
   state?: "running" | "done" | "error" | "interrupted";
 }
 
+/** Resolve a presentation name from the exact child ID, shared by rows and process summaries. */
+export function subagentTitle(
+  id: string,
+  activity: readonly Pick<RecordedSubagent, "id" | "title">[] = [],
+  records: readonly RecordedSubagent[] = [],
+) {
+  return (
+    activity.find((item) => item.id === id)?.title ||
+    records.find((item) => item.id === id)?.title ||
+    id
+  );
+}
+
 function object(value: unknown) {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)

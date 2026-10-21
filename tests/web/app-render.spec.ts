@@ -2546,14 +2546,16 @@ it("renders side conversation messages with transcript role styling", async () =
 
   const user = await screen.findByText("Right aligned question");
   const assistant = await screen.findByText("Natural assistant answer");
+  expect(user.closest(".message-row.user")).toBeTruthy();
+  expect(assistant.closest(".message-row.assistant")).toBeTruthy();
   expect(
-    user.closest<HTMLElement>(".subagent-message.user")?.dataset.role,
-  ).toBe("user");
+    view.container.querySelector(".subagent-conversation .thinking-line.done"),
+  ).toBeTruthy();
   expect(
-    assistant.closest<HTMLElement>(".subagent-message.assistant")?.dataset.role,
-  ).toBe("assistant");
-  expect(view.container.querySelector(".subagent-thinking.done")).toBeTruthy();
-  expect(view.container.querySelector(".subagent-tool.running")).toBeTruthy();
+    view.container.querySelector(
+      '.subagent-conversation [data-tool="read"][data-state="unknown"]',
+    ),
+  ).toBeTruthy();
   expect(detail).toHaveBeenCalledWith(
     "session",
     "btw-1",
