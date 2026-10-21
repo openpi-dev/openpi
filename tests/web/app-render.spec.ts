@@ -3945,7 +3945,7 @@ it("does not attribute current runtime activity to a historical session", () => 
     actions: store.getState().actions,
   };
   const { rerender } = renderWithI18n(createElement(Composer, props));
-  expect(screen.getByLabelText("Runtime activity")).toBeTruthy();
+  expect(screen.getByLabelText(i18n.t("runtimeActivities"))).toBeTruthy();
   rerender(
     createElement(
       I18nextProvider,
@@ -3956,7 +3956,7 @@ it("does not attribute current runtime activity to a historical session", () => 
       }),
     ),
   );
-  expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+  expect(screen.queryByLabelText(i18n.t("runtimeActivities"))).toBeNull();
   expect(
     screen.queryByText(/Current build|Current agent|Current workflow/),
   ).toBeNull();

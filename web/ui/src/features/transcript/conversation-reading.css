@@ -90,7 +90,7 @@
 .conversation .markdown-code-toolbar button { width: var(--control-compact); height: var(--control-compact); border-radius: var(--radius-compact); }
 .conversation .markdown-code-toolbar button[aria-pressed="true"] { color: var(--text); background: var(--sidebar-active); }
 .conversation .markdown-code-toolbar button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.conversation .markdown-code-scroll { max-height: 480px; overflow: auto; overscroll-behavior: contain; }
+.conversation .markdown-code-scroll { max-height: min(480px, 60dvh); overflow: auto; overscroll-behavior: auto; }
 .conversation .markdown-code-block[data-wrap="true"] pre { width: 100%; }
 .conversation .markdown-code-block[data-wrap="true"] pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .conversation .markdown-code-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }

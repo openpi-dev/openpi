@@ -332,19 +332,23 @@ it("shows steering and next-turn queues from exact Session execution facts", () 
     pendingFollowUpsReceipt: 8,
   });
   expect(
-    screen.getByRole("region", { name: i18n.t("steeringMessagesTitle") })
-      .textContent,
-  ).toContain(i18n.t("pendingSteeringHint", { count: 2 }));
-  expect(
-    screen.getByRole("button", {
-      name: `${i18n.t("queuedMessageExpand")}: use this tool`,
-    }),
-  ).toBeDefined();
+    screen.getByRole("region", {
+      name: i18n.t("pendingFollowUpsHint", { count: 1 }),
+    }).textContent,
+  ).toContain(i18n.t("composerSteeringCount", { count: 2 }));
   fireEvent.click(
     screen.getByRole("button", {
       name: i18n.t("pendingFollowUpsHint", { count: 1 }),
     }),
   );
+  expect(
+    screen.getByText(i18n.t("pendingSteeringHint", { count: 2 })),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", {
+      name: `${i18n.t("queuedMessageExpand")}: use this tool`,
+    }),
+  ).toBeDefined();
   expect(
     screen.getByRole("button", {
       name: `${i18n.t("queuedMessageExpand")}: next task`,

@@ -297,6 +297,63 @@ function FileCodeBlock(
   return <CodeBlock {...props} />;
 }
 
+// Keep scroll regions and links mounted while later Markdown chunks arrive.
+function MarkdownTable({
+  children,
+  node: _node,
+  ...props
+}: ComponentPropsWithoutRef<"table"> & { node?: Element }) {
+  return (
+    <section
+      className="markdown-table-scroll"
+      aria-label="Table"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: Wide tables need a keyboard-focusable horizontal scroll region.
+      tabIndex={0}
+    >
+      <table {...props}>{children}</table>
+    </section>
+  );
+}
+
+function MarkdownLink({
+  href,
+  node,
+  children: label,
+  ...props
+}: ComponentPropsWithoutRef<"a"> & { node?: Element }) {
+  const { t } = useTranslation();
+  const artifacts = useContext(ArtifactContext);
+  href = windowsLink(node) ?? href;
+  if (isLocalArtifactLink(href ?? ""))
+    return artifacts && !artifacts.disabled ? (
+      <button
+        type="button"
+        className="artifact-link"
+        title={`Open read-only file: ${href}`}
+        onClick={() => artifacts.open(href ?? "", artifacts.parent)}
+      >
+        {label}
+        <small className="artifact-link-path" aria-hidden="true">
+          {" "}
+          ({href})
+        </small>
+      </button>
+    ) : (
+      <span title={t("artifactReferenceUnavailable", { path: href })}>
+        {label}
+        <small className="artifact-link-path"> ({href})</small>
+      </span>
+    );
+  const safeHref = safeUrl(href ?? "");
+  return safeHref ? (
+    <a {...props} href={safeHref} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  ) : (
+    label
+  );
+}
+
 const MarkdownContent = memo(function MarkdownContent({
   children,
   filePreview = false,
@@ -322,49 +379,8 @@ const MarkdownContent = memo(function MarkdownContent({
         }
         components={{
           pre: filePreview ? FileCodeBlock : CodeBlock,
-          table({ children, ...props }) {
-            return (
-              <section
-                className="markdown-table-scroll"
-                aria-label="Table"
-                // biome-ignore lint/a11y/noNoninteractiveTabindex: Wide tables need a keyboard-focusable horizontal scroll region.
-                tabIndex={0}
-              >
-                <table {...props}>{children}</table>
-              </section>
-            );
-          },
-          a({ href, node, children: label, ...props }) {
-            href = windowsLink(node) ?? href;
-            if (isLocalArtifactLink(href ?? ""))
-              return artifacts && !artifacts.disabled ? (
-                <button
-                  type="button"
-                  className="artifact-link"
-                  title={`Open read-only file: ${href}`}
-                  onClick={() => artifacts.open(href ?? "", artifacts.parent)}
-                >
-                  {label}
-                  <small className="artifact-link-path" aria-hidden="true">
-                    {" "}
-                    ({href})
-                  </small>
-                </button>
-              ) : (
-                <span title={t("artifactReferenceUnavailable", { path: href })}>
-                  {label}
-                  <small className="artifact-link-path"> ({href})</small>
-                </span>
-              );
-            const safeHref = safeUrl(href ?? "");
-            return safeHref ? (
-              <a {...props} href={safeHref} target="_blank" rel="noreferrer">
-                {label}
-              </a>
-            ) : (
-              label
-            );
-          },
+          table: MarkdownTable,
+          a: MarkdownLink,
           img({ src, node, alt, title }) {
             src = windowsLink(node) ?? src;
             if (

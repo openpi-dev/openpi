@@ -238,10 +238,17 @@ export function Composer(props: ComposerProps) {
   const [expandedQueuedMessage, setExpandedQueuedMessage] = useState<
     string | null
   >(null);
-  const [expandedQueueOwner, setExpandedQueueOwner] = useState<string | null>(
-    null,
-  );
-  const queueExpanded = expandedQueueOwner === renderedOwnerKey;
+  const [expandedStatus, setExpandedStatus] = useState<{
+    owner: string;
+    panel: "activity" | "queue";
+  } | null>(null);
+  const statusPanel =
+    expandedStatus?.owner === renderedOwnerKey ? expandedStatus.panel : null;
+  const queueExpanded = statusPanel === "queue";
+  const toggleStatus = (panel: "activity" | "queue") =>
+    setExpandedStatus(
+      statusPanel === panel ? null : { owner: renderedOwnerKey, panel },
+    );
   const [expandedEditorOwner, setExpandedEditorOwner] = useState<string | null>(
     null,
   );
@@ -1382,6 +1389,10 @@ export function Composer(props: ComposerProps) {
     !props.sessionSwitching &&
     observedQueue !== undefined &&
     queuedMessages.length > 0;
+  useEffect(() => {
+    if (!showingQueue && !showingSteering)
+      setExpandedStatus((value) => (value?.panel === "queue" ? null : value));
+  }, [showingQueue, showingSteering]);
   const hint = compacting
     ? t("compactionDraftHelp")
     : props.promptAdmissionPending && !canStop
@@ -1654,13 +1665,6 @@ export function Composer(props: ComposerProps) {
             </button>
           </div>
         )}
-      {active && (
-        <ActivityBar
-          snapshot={props.snapshot}
-          observed={props.activityObserved}
-          onInspectSubagent={props.onInspectSubagent}
-        />
-      )}
       {props.accessory}
       {props.landing && (
         <div className="workspace-picker-row">
@@ -1750,153 +1754,187 @@ export function Composer(props: ComposerProps) {
           </div>
         </section>
       )}
-      {showingQueue && (
-        <section
-          className="composer-queue"
-          data-state={execution?.promptQueueBlocked ? "blocked" : "waiting"}
-          data-expanded={queueExpanded || undefined}
-          aria-label={t("pendingFollowUpsHint", { count: observedQueue })}
-          aria-busy={sessionActionPending}
-        >
-          <div className="composer-queue-status" role="status">
-            <Clock3 aria-hidden="true" />
-            <button
-              type="button"
-              className="composer-queue-toggle"
-              aria-expanded={queueExpanded}
-              aria-controls={queueId}
-              onClick={() =>
-                setExpandedQueueOwner(queueExpanded ? null : renderedOwnerKey)
-              }
-            >
-              {t("pendingFollowUpsHint", { count: observedQueue })}
-              <ChevronDown aria-hidden="true" />
-            </button>
-            <span className="composer-queue-help">
-              {t(
-                execution?.promptQueueBlocked
-                  ? "compactionQueueBlocked"
-                  : compacting
-                    ? "compactionQueueWaiting"
-                    : "queuedHint",
-              )}
-            </span>
-            {active && (
-              <span>
-                {execution?.promptQueueBlocked && (
-                  <button
-                    type="button"
-                    disabled={sessionActionPending || compacting}
-                    onClick={() => void sessionAction("retry")}
-                  >
-                    {t("retryPrompt")}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={sessionActionPending}
-                  onClick={() => void sessionAction("clear")}
-                >
-                  {t("clearPromptQueue")}
-                </button>
-              </span>
-            )}
-          </div>
-          <div
-            id={queueId}
-            className="composer-queue-details"
-            hidden={!queueExpanded}
+      <div className="composer-status-strip">
+        {active && (
+          <ActivityBar
+            snapshot={props.snapshot}
+            observed={props.activityObserved}
+            onInspectSubagent={props.onInspectSubagent}
+            expanded={statusPanel === "activity"}
+            onExpandedChange={(open) =>
+              setExpandedStatus((value) =>
+                open
+                  ? { owner: renderedOwnerKey, panel: "activity" }
+                  : value?.panel === "activity"
+                    ? null
+                    : value,
+              )
+            }
+          />
+        )}
+        {(showingQueue || showingSteering) && (
+          <section
+            className="composer-queue"
+            data-state={execution?.promptQueueBlocked ? "blocked" : "waiting"}
+            aria-label={
+              showingQueue
+                ? t("pendingFollowUpsHint", { count: observedQueue })
+                : t("steeringMessagesTitle")
+            }
+            aria-busy={sessionActionPending}
           >
-            <ul>
-              {queuedRows.map(({ message, key }) => {
-                const rowKey = `${selected?.id}\0${selected?.path}\0${key}`;
-                const expanded = expandedQueuedMessage === rowKey;
-                const text = message || t("queuedImage");
-                const action = t(
-                  expanded ? "queuedMessageCollapse" : "queuedMessageExpand",
-                );
-                return (
-                  <li key={key}>
-                    <button
-                      type="button"
-                      className={`composer-queue-row ${expanded ? "expanded" : ""}`}
-                      aria-expanded={expanded}
-                      aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
-                      title={action}
-                      onClick={() =>
-                        setExpandedQueuedMessage(expanded ? null : rowKey)
-                      }
-                    >
-                      <CornerDownRight aria-hidden="true" />
-                      <span>{text}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            {observedQueue > queuedMessages.length && (
-              <small>
-                {t("queuedMore", {
-                  count: observedQueue - queuedMessages.length,
-                })}
-              </small>
-            )}
-          </div>
-        </section>
-      )}
-      {showingSteering && (
-        <section
-          className="composer-queue"
-          aria-label={t("steeringMessagesTitle")}
-        >
-          <div className="composer-queue-status" role="status">
-            <span>{t("pendingSteeringHint", { count: steeringCount })}</span>
-            {active && (
+            <div className="composer-queue-status" role="status">
+              <Clock3 aria-hidden="true" />
               <button
                 type="button"
-                disabled={sessionActionPending}
-                onClick={() => void sessionAction("clear")}
+                className="composer-queue-toggle"
+                aria-expanded={queueExpanded}
+                aria-controls={queueId}
+                aria-label={
+                  showingQueue
+                    ? t("pendingFollowUpsHint", { count: observedQueue })
+                    : t("pendingSteeringHint", { count: steeringCount })
+                }
+                onClick={() => toggleStatus("queue")}
               >
-                {t("clearPromptQueue")}
+                {[
+                  showingQueue
+                    ? t("composerQueuedCount", { count: observedQueue })
+                    : "",
+                  showingSteering
+                    ? t("composerSteeringCount", { count: steeringCount })
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                <ChevronDown aria-hidden="true" />
               </button>
-            )}
-          </div>
-          <ul>
-            {steeringMessages.map((message, index) => {
-              const rowKey = `${selected?.id}\0${selected?.path}\0steer:${index}:${message}`;
-              const expanded = expandedQueuedMessage === rowKey;
-              const text = message || t("queuedImage");
-              const action = t(
-                expanded ? "queuedMessageCollapse" : "queuedMessageExpand",
-              );
-              return (
-                <li key={rowKey}>
+              {active && (
+                <span>
+                  {execution?.promptQueueBlocked && (
+                    <button
+                      type="button"
+                      disabled={sessionActionPending || compacting}
+                      onClick={() => void sessionAction("retry")}
+                    >
+                      {t("retryPrompt")}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className={`composer-queue-row ${expanded ? "expanded" : ""}`}
-                    aria-expanded={expanded}
-                    aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
-                    title={action}
-                    onClick={() =>
-                      setExpandedQueuedMessage(expanded ? null : rowKey)
-                    }
+                    disabled={sessionActionPending}
+                    onClick={() => void sessionAction("clear")}
                   >
-                    <CornerDownRight aria-hidden="true" />
-                    <span>{text}</span>
+                    {t("clearPromptQueue")}
                   </button>
-                </li>
-              );
-            })}
-          </ul>
-          {(steeringCount ?? 0) > steeringMessages.length && (
-            <small>
-              {t("queuedMore", {
-                count: (steeringCount ?? 0) - steeringMessages.length,
-              })}
-            </small>
-          )}
-        </section>
-      )}
+                </span>
+              )}
+            </div>
+            <div
+              id={queueId}
+              className="composer-queue-details composer-status-details"
+              hidden={!queueExpanded}
+            >
+              {(execution?.promptQueueBlocked || compacting) && (
+                <p className="composer-queue-help">
+                  {t(
+                    execution?.promptQueueBlocked
+                      ? "compactionQueueBlocked"
+                      : "compactionQueueWaiting",
+                  )}
+                </p>
+              )}
+              {showingQueue && (
+                <ul>
+                  {queuedRows.map(({ message, key }) => {
+                    const rowKey = `${selected?.id}\0${selected?.path}\0${key}`;
+                    const expanded = expandedQueuedMessage === rowKey;
+                    const text = message || t("queuedImage");
+                    const action = t(
+                      expanded
+                        ? "queuedMessageCollapse"
+                        : "queuedMessageExpand",
+                    );
+                    return (
+                      <li key={key}>
+                        <button
+                          type="button"
+                          className={`composer-queue-row ${expanded ? "expanded" : ""}`}
+                          aria-expanded={expanded}
+                          aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
+                          title={action}
+                          onClick={() =>
+                            setExpandedQueuedMessage(expanded ? null : rowKey)
+                          }
+                        >
+                          <CornerDownRight aria-hidden="true" />
+                          <span>{text}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {observedQueue !== undefined &&
+                observedQueue > queuedMessages.length && (
+                  <small>
+                    {t("queuedMore", {
+                      count: observedQueue - queuedMessages.length,
+                    })}
+                  </small>
+                )}
+              {showingSteering && (
+                <>
+                  <p className="composer-queue-help">
+                    {t("pendingSteeringHint", { count: steeringCount })}
+                  </p>
+                  <ul>
+                    {steeringMessages.map((message, index) => {
+                      const rowKey = `${selected?.id}\0${selected?.path}\0steer:${index}:${message}`;
+                      const expanded = expandedQueuedMessage === rowKey;
+                      const text = message || t("queuedImage");
+                      const action = t(
+                        expanded
+                          ? "queuedMessageCollapse"
+                          : "queuedMessageExpand",
+                      );
+                      return (
+                        <li key={rowKey}>
+                          <button
+                            type="button"
+                            className={`composer-queue-row ${expanded ? "expanded" : ""}`}
+                            aria-expanded={expanded}
+                            aria-label={`${action}: ${expanded ? text : compactSummary(text, 80)}`}
+                            title={action}
+                            onClick={() =>
+                              setExpandedQueuedMessage(expanded ? null : rowKey)
+                            }
+                          >
+                            <CornerDownRight aria-hidden="true" />
+                            <span>{text}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {(steeringCount ?? 0) > steeringMessages.length && (
+                    <small>
+                      {t("queuedMore", {
+                        count: (steeringCount ?? 0) - steeringMessages.length,
+                      })}
+                    </small>
+                  )}
+                </>
+              )}
+            </div>
+            {execution?.promptQueueBlocked && !queueExpanded && (
+              <p className="composer-queue-blocked" role="status">
+                {t("compactionQueueBlocked")}
+              </p>
+            )}
+          </section>
+        )}
+      </div>
       <form
         data-editor-expanded={editorExpanded || undefined}
         className={`composer composer-m02 ${props.selectedWorkspace ? "" : "dormant"} ${dragActive ? "is-dragging" : ""}`}

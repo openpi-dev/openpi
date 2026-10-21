@@ -32,6 +32,36 @@ afterEach(() => {
   parsing.inputs.length = 0;
 });
 
+it("preserves table scrolling and focused links while an answer streams and settles", () => {
+  const content =
+    "| Name | Status |\n| --- | --- |\n| Reader | Ready |\n\n[Reading guide](https://example.com/guide)\n\n";
+  const node = (suffix: string, streaming = true) => {
+    const props = { children: content + suffix, streaming };
+    return createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Markdown, props),
+    );
+  };
+  const view = render(node("First chunk"));
+  const table = screen.getByRole("region", { name: "Table" });
+  table.focus();
+  table.scrollLeft = 120;
+
+  view.rerender(node("First chunk\n\nMore content"));
+  expect(document.activeElement).toBe(
+    screen.getByRole("region", { name: "Table" }),
+  );
+  expect(screen.getByRole("region", { name: "Table" }).scrollLeft).toBe(120);
+
+  screen.getByRole("link", { name: "Reading guide" }).focus();
+  view.rerender(node("First chunk\n\nMore content\n\nFinished", false));
+  expect(document.activeElement).toBe(
+    screen.getByRole("link", { name: "Reading guide" }),
+  );
+  expect(screen.getByRole("region", { name: "Table" }).scrollLeft).toBe(120);
+});
+
 it("scrolls overflowing code blocks with deterministic arrow-key controls", () => {
   const { container } = render(
     createElement(
