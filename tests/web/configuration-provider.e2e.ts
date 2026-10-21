@@ -440,10 +440,18 @@ test("Appearance and reasoning visibility synchronize across browsers, share the
     await expect(
       second.getByRole("menuitem", { name: "衬线", exact: true }),
     ).toHaveCSS("color", "rgb(171, 205, 239)");
-    await expect(second.getByRole("menu").locator("..")).toHaveCSS(
-      "background-color",
-      "rgb(23, 25, 28)",
-    );
+    const menuSurface = second.getByRole("menu").locator("..");
+    // Popovers follow the active theme's raised surface, including its
+    // foreground tint; a fixed old palette value rejects valid theme changes.
+    const raisedSurface = await menuSurface.evaluate((element) => {
+      const sample = document.createElement("div");
+      sample.style.backgroundColor = "var(--surface-raised)";
+      element.append(sample);
+      const color = getComputedStyle(sample).backgroundColor;
+      sample.remove();
+      return color;
+    });
+    await expect(menuSurface).toHaveCSS("background-color", raisedSurface);
     await second.keyboard.press("Escape");
     await page
       .context()

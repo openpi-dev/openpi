@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -265,7 +266,7 @@ it("keeps the selected worksheet across the same tool remount", async () => {
   fireEvent.click(await screen.findByRole("button", { name: fixture.name }));
   fireEvent.click(await screen.findByRole("button", { name: "Second sheet" }));
   view.rerender(panel("browser", 1));
-  view.rerender(panel("files", 2));
+  await act(async () => view.rerender(panel("files", 2)));
   await screen.findByRole("button", { name: "Second sheet" });
   expect(
     screen

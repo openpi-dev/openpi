@@ -232,10 +232,15 @@ for (const [width, touch] of [
       await expect(
         dialog.getByText("Read-only verification complete."),
       ).toBeVisible();
-      await dialog.getByText("read", { exact: true }).click();
-      await expect(
-        dialog.getByText('{"name":"example-app"}', { exact: true }),
-      ).toBeVisible();
+      const readEvidence = dialog.locator(
+        '.tool-evidence-card[data-tool="read"]',
+      );
+      await readEvidence.locator(":scope > summary").click();
+      const fileContent = readEvidence.getByRole("figure", {
+        name: "File content",
+      });
+      await expect(fileContent).toBeVisible();
+      await expect(fileContent).toContainText('{"name":"example-app"}');
       await dialog.getByRole("button", { name: "返回子代理列表" }).click();
       await expect(list.getByRole("button")).toHaveCount(6);
       if (width > 1100) {
