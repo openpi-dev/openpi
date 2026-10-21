@@ -637,14 +637,17 @@ test("long session titles stay compact and elapsed time survives refresh with co
   const row = page.locator(".session.active");
   await expect(row).toBeVisible();
   expect((await row.boundingBox())!.height).toBeLessThanOrEqual(40);
-  await expect(row.locator(".session-title")).toHaveAttribute("title", title);
-  await expect(page.getByRole("timer")).toContainText("已处理 35m");
+  await row.locator(".session-title").hover();
+  await expect(page.getByRole("tooltip").locator("strong")).toHaveText(title);
+  await page.mouse.move(0, 0);
+  await expect(page.getByRole("tooltip")).toBeHidden();
+  await expect(page.getByRole("timer")).toContainText("正在处理 · 35m");
   await expect(page.getByText("用时 2m 37s", { exact: true })).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("compact-sidebar-running-time.png"),
   });
   await page.reload();
-  await expect(page.getByRole("timer")).toContainText("已处理 35m");
+  await expect(page.getByRole("timer")).toContainText("正在处理 · 35m");
   settled = true;
   await page.reload();
   await expect(page.getByRole("timer")).toHaveCount(0);

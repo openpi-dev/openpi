@@ -997,6 +997,7 @@ test("native turn rail indexes unloaded prompts, lazily previews, and reveals ex
     await expect(rail).toBeHidden();
     await page.setViewportSize({ width: 2000, height: 900 });
     await page.getByRole("button", { name: "打开工具", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^文件/u }).click();
     await expect(page.locator(".workbar-panel")).toBeVisible();
     await expect(rail).toBeVisible();
     const workbar = await geometry();

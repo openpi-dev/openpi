@@ -32,8 +32,8 @@ test("real document parsers preserve PDF page and zoom and the selected workshee
       .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
       .click();
     await page
-      .locator(".workbar-launcher")
-      .getByRole("button", { name: /^(文件|Files)/u })
+      .getByRole("menu", { name: /打开工具|Open tools/u })
+      .getByRole("menuitem", { name: /^(文件|Files)/u })
       .click();
     await page.locator('[data-pane-resizer="right"]').press("End");
 

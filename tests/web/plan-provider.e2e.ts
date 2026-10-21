@@ -275,7 +275,7 @@ test("Plan switch changes only owner state; first message gets planning context 
     ).toBeEnabled();
     await settings.getByRole("radio", { name: "深色", exact: true }).click();
     await expect(
-      settings.getByText("显示设置已保存。", { exact: true }),
+      settings.getByText("偏好设置已保存。", { exact: true }),
     ).toBeVisible();
     await expect(
       settings.getByRole("radio", { name: "深色", exact: true }),

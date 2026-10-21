@@ -490,7 +490,7 @@ test("an observer keeps its editable draft, pending messages and native progress
         .locator(".message-row.user .message-body")
         .filter({ hasText: pendingText }),
     ).toHaveCount(0);
-    await queue.getByRole("button", { name: "清空队列", exact: true }).click();
+    await queue.getByRole("button", { name: "取消排队", exact: true }).click();
     await expect
       .poll(() => fixture.a.session.getFollowUpMessages().length)
       .toBe(0);

@@ -652,10 +652,20 @@ async function dragPane(page: Page, side: "left" | "right", deltaX: number) {
 }
 
 async function openWorkbarTool(page: Page, name: string) {
-  await page
-    .locator('button.task-tools-trigger[aria-label="打开工具"]')
-    .click();
+  const trigger = page.locator(
+    'button.task-tools-trigger[aria-label="打开工具"]',
+  );
+  const opensMenu = (await trigger.getAttribute("aria-haspopup")) === "menu";
+  await trigger.click();
   const workbar = page.locator(".workbar-panel");
+  if (opensMenu) {
+    await page
+      .getByRole("menu", { name: "打开工具" })
+      .getByRole("menuitem", { name: new RegExp(`^${name}`, "u") })
+      .click();
+    await expect(workbar).toBeVisible();
+    return workbar;
+  }
   await expect(workbar).toBeVisible();
   const existingTab = workbar
     .locator(".workbar-tab > button:first-child")
@@ -664,7 +674,11 @@ async function openWorkbarTool(page: Page, name: string) {
     await existingTab.click();
   } else {
     await workbar
-      .getByRole("button", { name: new RegExp(`^${name}`, "u") })
+      .getByRole("button", { name: "打开工具", exact: true })
+      .click();
+    await page
+      .getByRole("menu", { name: "打开工具" })
+      .getByRole("menuitem", { name: new RegExp(`^${name}`, "u") })
       .click();
   }
   return workbar;
@@ -1106,17 +1120,15 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
   await page
     .locator('button.task-tools-trigger[aria-label="打开工具"]')
     .click();
+  const toolsMenu = page.getByRole("menu", { name: "打开工具" });
+  await expect(toolsMenu.getByRole("menuitem")).toHaveCount(5);
+  for (const name of ["侧边对话", "变更", "终端", "浏览器", "文件"]) {
+    await expect(
+      toolsMenu.getByRole("menuitem", { name: new RegExp(`^${name}`, "u") }),
+    ).toBeVisible();
+  }
+  await toolsMenu.getByRole("menuitem", { name: /^变更/u }).click();
   const launcher = page.locator(".workbar-panel");
-  const launcherButtons = launcher.locator(".workbar-launcher-list > button");
-  await expect(launcherButtons).toHaveCount(5);
-  expect(await launcherButtons.locator("strong").allTextContents()).toEqual([
-    "侧边对话",
-    "变更",
-    "终端",
-    "浏览器",
-    "文件",
-  ]);
-  await launcher.getByRole("button", { name: /^变更/u }).click();
   const review = launcher.locator(".review-panel");
   await expect(review).toBeVisible();
   await launcher
@@ -2881,6 +2893,13 @@ test("inspects session-scoped runtime and subagent details on desktop and mobile
     });
     await page.keyboard.press("Escape");
     await expect(providerSettings).not.toBeVisible();
+    const activities = page.locator(".activity-summary");
+    if (
+      !(await activities.evaluate(
+        (element) => (element as HTMLDetailsElement).open,
+      ))
+    )
+      await activities.locator(":scope > summary").click();
     await page.getByRole("button", { name: /子代理/ }).click();
     const subagentPanel = page.getByRole(
       width <= 640 ? "main" : "complementary",

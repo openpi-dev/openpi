@@ -40,8 +40,8 @@ test("embedded computer-use targets exact same-process and cross-process documen
     await page.goto("/");
     await page.getByRole("button", { name: "打开工具", exact: true }).click();
     await page
-      .locator(".workbar-panel")
-      .getByRole("button", { name: /^浏览器/ })
+      .getByRole("menu", { name: "打开工具" })
+      .getByRole("menuitem", { name: /^浏览器/ })
       .click();
     // Native readiness is acknowledged only after this tab's DNR rules install.
     // Use the existing bounded native-control handoff budget before DENY navigation.

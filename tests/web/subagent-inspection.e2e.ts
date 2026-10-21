@@ -202,6 +202,7 @@ for (const [width, touch] of [
         .getByRole("button", { name: "关闭", exact: true })
         .click();
       await expect(overviewTrigger).toBeFocused();
+      await page.locator(".activity-summary > summary").click();
       await page
         .getByRole("button", {
           name: "子代理：1 运行中 · 4 已完成 · 1 其他记录",
