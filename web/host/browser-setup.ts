@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { access } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { EXTERNAL_BROWSERS, type ExternalBrowser } from "../../extensions/shared/browser-config.ts";
@@ -41,8 +41,12 @@ export async function installedBrowsers() {
 /** Explicit UI actions only. A launch receipt is never installation or permission evidence. */
 export async function browserSetupAction(browser: ExternalBrowser, action: "folder" | "manage" | "connect", origin: string) {
   if (action === "folder") {
+    // Reveal the install target itself, rather than opening its JavaScript files.
+    const folder = browser === "safari" || browser === "firefox" ? portableBrowserExtensionPath : browserExtensionPath;
+    const target = browser === "firefox" ? join(folder, "manifest.json") : resolve(folder);
     const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-    await exec(command, [browser === "safari" || browser === "firefox" ? portableBrowserExtensionPath : browserExtensionPath], { timeout: 5000 });
+    const args = process.platform === "darwin" ? ["-R", target] : process.platform === "win32" ? [`/select,${target}`] : [dirname(target)];
+    await exec(command, args, { timeout: 5000 });
     return { opened: true };
   }
   const app = await application(browser);

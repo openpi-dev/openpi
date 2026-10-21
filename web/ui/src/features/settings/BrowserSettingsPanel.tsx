@@ -80,7 +80,7 @@ export function BrowserSettingsPanel({
   useEffect(() => {
     if (guide) {
       guideElement.current?.scrollIntoView?.({
-        block: "nearest",
+        block: "start",
       });
       stepHeading.current?.focus({ preventScroll: true });
     }
@@ -163,10 +163,7 @@ export function BrowserSettingsPanel({
         method: "POST",
         body: JSON.stringify({ browser, action }),
       });
-      if (mounted.current) {
-        if (action === "folder") setNotice(t("browserFolderOpened"));
-        return true;
-      }
+      if (mounted.current) return true;
     } catch (reason) {
       if (mounted.current)
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -304,6 +301,9 @@ export function BrowserSettingsPanel({
     installer === "firefox"
       ? `${extensionPath.replace(/[\\/]+$/, "")}/manifest.json`
       : extensionPath;
+  const folderName = portable
+    ? "browser-extension-portable"
+    : "browser-extension";
   const extensionPage =
     installer === "safari"
       ? t("browserSafariSettings")
@@ -600,7 +600,7 @@ export function BrowserSettingsPanel({
                                 ? "browserFirefoxLoadHint"
                                 : "browserLoadHint"
                             : "browserConnectHint",
-                      { browser: names[installer] },
+                      { browser: names[installer], loadLabel },
                     )}
                   </p>
                   {step === 1 && (
@@ -609,7 +609,7 @@ export function BrowserSettingsPanel({
                       <code>{extensionPage}</code>
                     </div>
                   )}
-                  {(step === 2 || step === 3) && (
+                  {step === 2 && (
                     <figure
                       className={`browser-settings-illustration ${installer}`}
                     >
@@ -627,27 +627,13 @@ export function BrowserSettingsPanel({
                         </div>
                         <div className="browser-settings-demo-heading">
                           <span>{t("browserExtensions")}</span>
-                          <span
-                            className={`browser-settings-demo-toggle ${step === 2 ? "highlight" : ""}`}
-                          >
-                            {step === 2 && (
-                              <b className="browser-settings-target-number">
-                                2
-                              </b>
-                            )}
+                          <span className="browser-settings-demo-toggle highlight">
                             {developerLabel}
                             {installer !== "firefox" && <i />}
                           </span>
                         </div>
                         <div className="browser-settings-demo-toolbar">
-                          <span className={step === 3 ? "highlight" : ""}>
-                            {step === 3 && (
-                              <b className="browser-settings-target-number">
-                                3
-                              </b>
-                            )}
-                            {loadLabel}
-                          </span>
+                          <span>{loadLabel}</span>
                           <i />
                           <i />
                         </div>
@@ -655,53 +641,140 @@ export function BrowserSettingsPanel({
                     </figure>
                   )}
                   {step === 3 && (
-                    <div className="browser-settings-folder">
-                      <div className="browser-settings-folder-heading">
-                        <FolderOpen />
-                        <strong>
-                          {portable
-                            ? "browser-extension-portable"
-                            : "browser-extension"}
-                        </strong>
-                        <span>{t("browserFolderBundled")}</span>
-                      </div>
-                      <div className="browser-settings-path">
-                        <code>{installPath}</code>
-                      </div>
-                      <div className="browser-settings-guide-actions">
-                        <button
-                          type="button"
-                          className="browser-settings-button"
-                          onClick={async (event) => {
-                            const success = await copyText(
-                              installPath,
-                              event.currentTarget.ownerDocument,
-                            );
-                            setCopied(success);
-                            if (!success) setNotice(t("browserCopyFailed"));
-                          }}
-                        >
-                          {copied ? <Check /> : <Copy />}
-                          {t(copied ? "browserPathCopied" : "browserCopyPath")}
-                        </button>
-                        <button
-                          type="button"
-                          className="browser-settings-button"
-                          disabled={pending}
-                          onClick={() => void action(installer, "folder")}
-                        >
-                          <FolderOpen />
-                          {t("browserOpenFolder")}
-                        </button>
-                      </div>
-                      <p>
-                        {t(
-                          navigator.userAgent.includes("Mac")
-                            ? "browserChooseFolderMac"
-                            : "browserChooseFolderOther",
-                        )}
+                    <>
+                      <ol className="browser-settings-install-steps">
+                        <li>
+                          <div className="browser-settings-install-label">
+                            <strong>
+                              {t(
+                                installer === "firefox"
+                                  ? "browserLocateManifest"
+                                  : "browserLocateTarget",
+                              )}
+                            </strong>
+                            <button
+                              type="button"
+                              className="browser-settings-button"
+                              disabled={pending}
+                              onClick={() => void action(installer, "folder")}
+                            >
+                              {t(
+                                installer === "firefox"
+                                  ? "browserRevealManifest"
+                                  : "browserRevealTarget",
+                              )}
+                            </button>
+                          </div>
+                          <div className="browser-settings-selection">
+                            <FolderOpen aria-hidden="true" />
+                            <div>
+                              <strong>
+                                {installer === "firefox"
+                                  ? "manifest.json"
+                                  : folderName}
+                              </strong>
+                              <p>
+                                {t(
+                                  installer === "firefox"
+                                    ? "browserSelectManifestHint"
+                                    : "browserSelectFolderHint",
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                        </li>
+                        <li>
+                          <strong>
+                            {t(
+                              portable
+                                ? "browserLoadInBrowser"
+                                : "browserDragToBrowser",
+                              {
+                                browser: names[installer],
+                                loadLabel,
+                              },
+                            )}
+                          </strong>
+                          <p>
+                            {t(
+                              portable
+                                ? "browserSelectLocatedTarget"
+                                : "browserDragFolderHint",
+                              { browser: names[installer], folder: folderName },
+                            )}
+                          </p>
+                          <button
+                            type="button"
+                            className="browser-settings-text-button"
+                            disabled={pending || !installed}
+                            onClick={() => void action(installer, "manage")}
+                          >
+                            {t("browserOpenManager", {
+                              browser: names[installer],
+                            })}
+                            <ExternalLink />
+                          </button>
+                        </li>
+                      </ol>
+                      <details className="browser-settings-picker-help">
+                        <summary>
+                          {t(
+                            portable
+                              ? "browserManualSelection"
+                              : "browserManualInstall",
+                          )}
+                        </summary>
+                        <div className="browser-settings-install-label">
+                          <strong>{t("browserCopyLocation")}</strong>
+                          <button
+                            type="button"
+                            className="browser-settings-button"
+                            onClick={async (event) => {
+                              const success = await copyText(
+                                installPath,
+                                event.currentTarget.ownerDocument,
+                              );
+                              setCopied(success);
+                              setNotice(
+                                success ? undefined : t("browserCopyFailed"),
+                              );
+                            }}
+                          >
+                            {copied ? <Check /> : <Copy />}
+                            {t(
+                              copied ? "browserPathCopied" : "browserCopyPath",
+                            )}
+                          </button>
+                        </div>
+                        <code className="browser-settings-install-path">
+                          {installPath}
+                        </code>
+                        <p>
+                          {t("browserLoadInBrowser", {
+                            browser: names[installer],
+                            loadLabel,
+                          })}
+                        </p>
+                        {!portable && <p>{t("browserLoadAlternate")}</p>}
+                        <p>
+                          {t(
+                            navigator.userAgent.includes("Mac")
+                              ? "browserChooseFolderMac"
+                              : "browserChooseFolderOther",
+                            {
+                              confirm: t(
+                                installer === "firefox"
+                                  ? "browserConfirmFile"
+                                  : "browserConfirmFolder",
+                              ),
+                            },
+                          )}
+                        </p>
+                      </details>
+                      <p className="browser-settings-install-checkpoint">
+                        {t("browserInstallCheckpoint")}
                       </p>
-                    </div>
+                    </>
                   )}
                   {step === 4 && (
                     <div className="browser-settings-waiting" role="status">
@@ -747,10 +820,6 @@ export function BrowserSettingsPanel({
                         className="browser-settings-primary"
                         disabled={pending || !installed}
                         onClick={async () => {
-                          if (step === 1 && !guideWindow.isOpen()) {
-                            if (!(await guideWindow.open()))
-                              setNotice(t("browserGuideBlocked"));
-                          }
                           if (
                             step === 2 ||
                             (await action(
@@ -762,13 +831,15 @@ export function BrowserSettingsPanel({
                         }}
                       >
                         {t(
-                          step === 1
-                            ? "browserOpenManager"
-                            : step === 2
-                              ? installer === "firefox"
-                                ? "browserFirefoxDone"
-                                : "browserDeveloperDone"
-                              : "browserInstalledConnect",
+                          pending
+                            ? "browserOpening"
+                            : step === 1
+                              ? "browserOpenManager"
+                              : step === 2
+                                ? installer === "firefox"
+                                  ? "browserFirefoxDone"
+                                  : "browserDeveloperDone"
+                                : "browserInstalledConnect",
                           { browser: names[installer] },
                         )}
                         {step === 2 ? <ArrowRight /> : <ExternalLink />}
@@ -825,7 +896,7 @@ export function BrowserSettingsPanel({
                       </button>
                     </div>
                   ) : (
-                    step > 1 && (
+                    step === 2 && (
                       <button
                         type="button"
                         className="browser-settings-text-button"
