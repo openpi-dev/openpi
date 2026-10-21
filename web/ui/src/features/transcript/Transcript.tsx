@@ -8,6 +8,7 @@ import {
   CircleAlert,
   Clipboard,
   Clock3,
+  Ellipsis,
   GitBranch,
   Globe,
   Lightbulb,
@@ -217,11 +218,18 @@ function resultStatus(
   if (message?.forkSnapshotToolResult) return "unknown";
   if (liveState === "running") return "running";
   if (liveState === "unknown") return "unknown";
-  if (!message) return "unknown";
-  if (message.isError) return "error";
-  const status = canonicalStatus(record(message.details).status);
-  if (status !== "unknown") return status;
-  return message.isError === false ? "done" : "unknown";
+  if (liveState === "failed" || message?.isError) return "error";
+  if (liveState === "cancelled" || liveState === "timed_out") return "warn";
+  // Returned snapshots can describe a still-running background task. Only
+  // execution events keep the call busy; the task owns its separate indicator.
+  // Preserve explicit process failures/uncertainty in ordinary tool evidence.
+  if (!message?.toolName?.startsWith("subagent")) {
+    const status = canonicalStatus(record(message?.details).status);
+    if (status !== "unknown" && status !== "running") return status;
+  }
+  return liveState === "returned" || message?.isError === false
+    ? "done"
+    : "unknown";
 }
 
 function StatusMark({ status }: { status: Status }) {
@@ -632,6 +640,87 @@ function ActivityCard({
   );
 }
 
+function subagentTargets(
+  args: Record<string, unknown>,
+  details: Record<string, unknown>,
+) {
+  const ids =
+    typeof args.id === "string"
+      ? [args.id]
+      : Array.isArray(args.ids)
+        ? args.ids
+        : typeof details.id === "string"
+          ? [details.id]
+          : Array.isArray(details.results)
+            ? details.results.map((item) => record(item).id)
+            : [];
+  return [
+    ...new Set(
+      ids.filter((id): id is string => typeof id === "string" && Boolean(id)),
+    ),
+  ];
+}
+
+function SubagentToolCall({
+  call,
+  result,
+  status,
+  sessionId,
+  subagents,
+  records,
+  onInspect,
+  defaultOpen,
+}: {
+  call: Extract<WebMessagePart, { type: "toolCall" }>;
+  result?: WebLiveMessage;
+  status: Status;
+  sessionId: string;
+  subagents: readonly WebSubagentActivity[];
+  records: readonly RecordedSubagent[];
+  onInspect?: (id: string) => void;
+  defaultOpen: boolean;
+}) {
+  const { t } = useTranslation();
+  const targets = subagentTargets(
+    parseArguments(call.arguments),
+    record(result?.details),
+  );
+  const action = toolActivityLabel(
+    t,
+    call.name,
+    status === "done" ? "returned" : status === "error" ? "failed" : status,
+  );
+  return (
+    <section className="subagent-operation">
+      {(targets.length ? targets : [undefined]).map((id) => (
+        <SubagentTaskRow
+          key={id ?? call.id}
+          identity={`${sessionId}:${id ?? call.id}`}
+          title={id ? subagentTitle(id, subagents, records) : ""}
+          action={action}
+          state={status === "warn" ? "unknown" : status}
+          label={t(
+            `toolState_${status === "done" ? "returned" : status === "error" ? "failed" : status === "warn" ? "unknown" : status}`,
+          )}
+          onInspect={id && onInspect ? () => onInspect(id) : undefined}
+        />
+      ))}
+      <details
+        className="subagent-operation-receipt"
+        open={defaultOpen || undefined}
+      >
+        <summary aria-label={t("toolRawEvidence")} title={t("toolRawEvidence")}>
+          <Ellipsis aria-hidden="true" />
+        </summary>
+        {call.arguments !== "{}" && (
+          <pre>{evidenceText(call.arguments).text}</pre>
+        )}
+        <pre>{evidenceText(result?.content ?? "").text || t("noOutput")}</pre>
+      </details>
+    </section>
+  );
+}
+
 function familyCard(
   part: Extract<WebMessagePart, { type: "toolCall" }>,
   result?: WebLiveMessage,
@@ -680,17 +769,15 @@ function familyCard(
     );
   }
   if (name.startsWith("subagent")) {
-    const action = name.replaceAll("_", " ").replace(/^subagent /u, "");
-    const title =
-      typeof args.id === "string"
-        ? subagentTitle(args.id, subagents, records)
-        : "Subagent";
     return (
-      <ActivityCard
-        family="subagent"
+      <SubagentToolCall
+        call={part}
+        result={result}
+        sessionId={sessionId}
+        subagents={subagents}
+        records={records}
+        onInspect={onInspectSubagent}
         defaultOpen={defaultOpen}
-        title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} · ${title}`}
-        body={result?.content || part.arguments}
         status={status}
       />
     );
@@ -1860,16 +1947,15 @@ function ProcessSequence({
     (row) => row.error || row.processStatus === "error",
   ).length;
   const failed = failures > 0;
-  const status: Status =
-    current || active
-      ? "running"
-      : failed
-        ? "error"
-        : rows.some((row) => row.processStatus === "warn")
-          ? "warn"
-          : rows.every((row) => row.processStatus === "done")
-            ? "done"
-            : "unknown";
+  const status: Status = current
+    ? "running"
+    : failed
+      ? "error"
+      : rows.some((row) => row.processStatus === "warn")
+        ? "warn"
+        : rows.every((row) => row.processStatus === "done")
+          ? "done"
+          : "unknown";
   const toolNames = rows.flatMap((row) =>
     row.processToolName ? [row.processToolName] : [],
   );
@@ -1889,11 +1975,9 @@ function ProcessSequence({
     ? toolActivityLabel(t, current.processToolName, "running")
     : current?.processType === "thinking"
       ? t("thinkingActive")
-      : active
-        ? t("processRunning")
-        : open
-          ? t("processDetails")
-          : groupTitle;
+      : open
+        ? t("processDetails")
+        : groupTitle;
   const representative = current?.processToolName ?? toolNames[0];
   const Icon =
     current?.processType === "thinking"
@@ -3580,14 +3664,19 @@ export function Transcript(props: TranscriptProps) {
               const args = parseArguments(part.arguments);
               const { Icon, action } = toolActivity(part.name);
               const target =
-                action === "agent" && typeof args.id === "string"
-                  ? subagentTitle(
-                      args.id,
-                      active
-                        ? props.snapshot.runtime.capabilities.subagents?.items
-                        : undefined,
-                      records,
-                    )
+                action === "agent"
+                  ? subagentTargets(args, record(result?.details))
+                      .map((id) =>
+                        subagentTitle(
+                          id,
+                          active
+                            ? props.snapshot.runtime.capabilities.subagents
+                                ?.items
+                            : undefined,
+                          records,
+                        ),
+                      )
+                      .join(t("toolGroupSeparator"))
                   : toolActivityTarget(part.name, args);
               const toolIcon = (
                 <Icon key={`${entry.key}-${part.id || partIndex}-icon`} />
@@ -3828,7 +3917,27 @@ export function Transcript(props: TranscriptProps) {
         const { Icon } = toolActivity(toolName);
         const icon = <Icon key={`${entry.key}-icon`} />;
         const content =
-          family && !message.forkSnapshotToolResult ? (
+          family === "subagent" && !message.forkSnapshotToolResult ? (
+            familyCard(
+              {
+                type: "toolCall",
+                id: message.toolCallId,
+                name: toolName,
+                arguments: "{}",
+              },
+              message,
+              {
+                sessionId: selectedId ?? "",
+                subagents: active
+                  ? props.snapshot.runtime.capabilities.subagents?.items
+                  : undefined,
+                records,
+                onInspectSubagent: props.onInspectSubagent,
+                defaultOpen,
+                observed: props.activityObserved !== false,
+              },
+            )
+          ) : family && !message.forkSnapshotToolResult ? (
             <ActivityCard
               key={`${entry.key}-card`}
               family={family}

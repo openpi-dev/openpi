@@ -54,13 +54,23 @@ export function toolActivity(name: string) {
 
 export function toolActivityLabel(t: TFunction, name: string, state: string) {
   const { action } = toolActivity(name);
+  const operation = name.replace(/^subagent_/u, "");
+  const subagent =
+    action === "agent" &&
+    ["spawn", "send", "check", "wait", "cancel"].includes(operation);
+  if (subagent && state === "returned")
+    return t(`subagentActionDone_${operation}`);
   if (state === "returned") return t(`toolActionDone_${action}`);
   const labelState = ["running", "failed", "cancelled", "timed_out"].includes(
     state,
   )
     ? state
     : "unknown";
-  return t(`toolActivity_${labelState}`, { action: t(`toolAction_${action}`) });
+  return t(`toolActivity_${labelState}`, {
+    action: t(
+      subagent ? `subagentAction_${operation}` : `toolAction_${action}`,
+    ),
+  });
 }
 
 export function toolActivityTag(name: string) {

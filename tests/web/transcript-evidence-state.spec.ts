@@ -500,7 +500,7 @@ it.each([
   },
 );
 
-it("shows the current tool until the whole group ends and is collapsed", () => {
+it("shows the current tool until all calls return, even while the parent keeps working", () => {
   vi.useFakeTimers();
   const reader = {
     ...call,
@@ -569,8 +569,8 @@ it("shows the current tool until the whole group ends and is collapsed", () => {
   );
   rendered.rerender(frame(1));
   rendered.rerender(frame(undefined, true));
-  expect(sequence.getAttribute("data-status")).toBe("running");
-  expect(title()).toBe(i18n.t("processRunning"));
+  expect(sequence.getAttribute("data-status")).toBe("done");
+  expect(title()).not.toBe(i18n.t("processRunning"));
   expect(sequence.querySelector(".process-sequence-preview")).toBeNull();
   rendered.rerender(frame(undefined));
   expect(sequence.open).toBe(false);
@@ -1753,6 +1753,47 @@ it("keeps family activity status aligned with the exact live tool execution", ()
       ?.getAttribute("aria-label"),
   ).toBe(i18n.t("toolState_running"));
 });
+
+it.each(["subagent_send", "subagent_check", "bash"])(
+  "settles a returned %s receipt independently of the background task, including history without the call",
+  (name) => {
+    const tool = { ...call, name, arguments: '{"id":"sa-1"}' };
+    const receipt = {
+      role: "toolResult",
+      toolName: name,
+      toolCallId: tool.id,
+      content: "The operation returned; background work continues.",
+      isError: false,
+      details: { id: "sa-1", status: "running" },
+    } satisfies WebLiveMessage;
+    const value = snapshot({
+      tool,
+      running: true,
+      liveTools: [{ call: tool, result: receipt, state: "running" }],
+    });
+    const rendered = render(view(value));
+    const status = () =>
+      rendered.container
+        .querySelector(".process-step")
+        ?.getAttribute("data-status");
+    // An intermediate update containing a result is not an execution-end event.
+    expect(status()).toBe("running");
+    value.runtime.liveTools = [
+      { call: tool, result: receipt, state: "returned" },
+    ];
+    rendered.rerender(view({ ...value }));
+    expect(status()).toBe("done");
+    expect(
+      rendered.container.querySelector(".process-sequence.running"),
+    ).toBeNull();
+    const saved = snapshot({ tool, results: [receipt], running: true });
+    rendered.rerender(view(saved));
+    expect(status()).toBe("done");
+    saved.selectedSession.entries.splice(1, 1);
+    rendered.rerender(view({ ...saved }));
+    expect(status()).toBe("done");
+  },
+);
 
 it("does not borrow a later turn's execution state for an earlier unmatched tool", () => {
   const current = { ...call, id: "current-tool" };

@@ -3,6 +3,7 @@ import type { WebLiveMessage } from "../../../../protocol/types.ts";
 export interface RecordedSubagent {
   id: string;
   title: string;
+  model?: string;
   receipt?: string;
   result?: string;
   state?: "running" | "done" | "error" | "interrupted";
@@ -63,6 +64,7 @@ export function recordedSubagents(messages: readonly WebLiveMessage[]) {
             ? item.title
             : (previous?.title ?? item.id),
       };
+      if (typeof item.model === "string") record.model = item.model;
       if (spawn) record.receipt = message.content;
       else if (send) {
         // A successful steer/restart supersedes terminal evidence from an older turn.

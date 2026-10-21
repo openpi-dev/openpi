@@ -36,6 +36,7 @@ export function SubagentDetailView({
   active = true,
   refreshRevision = 0,
   onDetail,
+  showModel = true,
 }: {
   sessionId: string;
   id: string;
@@ -48,7 +49,8 @@ export function SubagentDetailView({
   readOnlyNote?: boolean;
   active?: boolean;
   refreshRevision?: number;
-  onDetail?: (detail: WebSubagentDetail) => void;
+  onDetail?: (detail: WebSubagentDetail | WebWorkflowAgentDetail) => void;
+  showModel?: boolean;
 }) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<
@@ -113,8 +115,7 @@ export function SubagentDetailView({
         }
         running = response.detail.status === "running";
         setDetail(response.detail);
-        if (response.detail.kind === "subagents")
-          detailListener.current?.(response.detail);
+        detailListener.current?.(response.detail);
         setError(null);
         setUpdatedAt(new Date().toLocaleTimeString());
       } catch (caught) {
@@ -217,7 +218,7 @@ export function SubagentDetailView({
         <>
           <div className="subagent-metadata">
             <code>{detail.id}</code>
-            {detail.model && <span>{detail.model}</span>}
+            {showModel && detail.model && <span>{detail.model}</span>}
             {spend && <span title={t("subagentSpend")}>{spend}</span>}
             <span title={detail.cwd}>{detail.cwd}</span>
           </div>
@@ -340,6 +341,11 @@ export function SubagentPanel({
     kind: "subagents" | "workflows";
   } | null>(initialId ? { id: initialId, kind: initialKind } : null);
   const [detailTarget, setDetailTarget] = useState(selection);
+  const [modelIdentity, setModelIdentity] = useState<{
+    id: string;
+    kind: "subagents" | "workflows";
+    model?: string;
+  } | null>(null);
   const selectedId = selection?.id;
   useLayoutEffect(() => {
     if (!selectedId && listViewport.current)
@@ -378,6 +384,10 @@ export function SubagentPanel({
     selection?.kind === "subagents"
       ? records.find((item) => item.id === selectedId)
       : undefined;
+  const model =
+    modelIdentity?.id === selectedId && modelIdentity?.kind === selection?.kind
+      ? modelIdentity?.model
+      : saved?.model;
   const navigationButton = useRef<HTMLButtonElement>(null);
   const previousFocus = useRef(document.activeElement);
   useEffect(() => {
@@ -477,6 +487,11 @@ export function SubagentPanel({
               : t("subagentDetails")}
           </Heading>
         </div>
+        {selectedId && model && (
+          <span className="subagent-panel-model" title={model}>
+            {model.split("/").at(-1)}
+          </span>
+        )}
         <button
           ref={selectedId ? undefined : navigationButton}
           type="button"
@@ -508,7 +523,17 @@ export function SubagentPanel({
           }
           liveAvailable={liveAvailable}
           fullView={fullView}
+          showModel={false}
           active={Boolean(selectedId)}
+          onDetail={(detail) =>
+            setModelIdentity((previous) =>
+              previous?.id === detail.id &&
+              previous.kind === detail.kind &&
+              previous.model === detail.model
+                ? previous
+                : { id: detail.id, kind: detail.kind, model: detail.model },
+            )
+          }
         />
       )}
       {!selectedId && (

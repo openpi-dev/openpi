@@ -522,6 +522,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .process-step.running .tool-evidence-card > summary > * { position:relative; z-index:1; }
 @supports (background-clip:text) {
   :is(.tool-evidence-card[data-state="running"], .tool-line.running) > summary :is(.tool-action, .tool-summary, .evidence-command, .evidence-filename),
+  .single-process .subagent-operation [data-status="running"] .subagent-operation-label,
   .process-sequence.running > summary :is(strong, .process-sequence-preview) { background:linear-gradient(100deg, var(--muted) 35%, var(--text) 50%, var(--muted) 65%); background-size:250% 100%; background-position:150% 0; background-clip:text; -webkit-text-fill-color:transparent; animation:process-text-shimmer 2.4s linear infinite; }
   .context-compaction[data-state="running"] .context-compaction-text { background:linear-gradient(100deg, var(--subtle) 25%, var(--text) 45%, var(--subtle) 65%); background-size:250% 100%; background-clip:text; -webkit-text-fill-color:transparent; animation:activity-text-shimmer 6s ease-in-out infinite; }
   .process-sequence:not(.single-process) :is(.tool-evidence-card[data-state="running"], .tool-line.running) > summary :is(.tool-action, .tool-summary, .evidence-command, .evidence-filename) { animation:none; background:none; -webkit-text-fill-color:currentColor; }
@@ -551,6 +552,17 @@ button.subagent-card-open:hover { background:var(--sidebar-hover); }
 .subagent-state.done { color:var(--healthy); }
 .subagent-state.error, .subagent-state.interrupted { color:var(--error); }
 .subagent-card-open .subagent-state:is(.running,.done) { color:var(--muted); }
+.subagent-state-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.subagent-card-open :is(.subagent-running-icon, .subagent-open-icon, .subagent-operation-icon) { width:14px; height:14px; flex-shrink:0; color:var(--muted); }
+.subagent-operation { position:relative; min-width:0; padding-right:28px; }
+.subagent-operation-label { flex-shrink:0; color:var(--muted); }
+.subagent-operation-receipt > summary { position:absolute; right:0; top:0; display:grid; place-items:center; width:28px; height:28px; padding:0; border-radius:5px; color:var(--muted); cursor:pointer; list-style:none; opacity:0; }
+.subagent-operation-receipt > summary::-webkit-details-marker { display:none; }
+.subagent-operation-receipt > summary svg { width:14px; height:14px; }
+.subagent-operation:is(:hover, :focus-within) > .subagent-operation-receipt > summary, .subagent-operation-receipt[open] > summary { opacity:1; }
+.subagent-operation-receipt > summary:hover { background:var(--sidebar-hover); }
+.subagent-operation-receipt > summary:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.subagent-operation-receipt pre { margin:4px 0 4px 22px; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); font-size:12px; }
 .subagent-receipt { border-top:1px solid var(--border); color:var(--muted); font-size:11px; }
 .subagent-receipt > summary { min-height:0; cursor:pointer; padding:6px 12px; }
 .subagent-receipt > p { margin:4px 12px; }
@@ -558,11 +570,12 @@ button.subagent-card-open:hover { background:var(--sidebar-hover); }
 .subagent-result-evidence { color:var(--muted); font-size:12px; }
 .subagent-result-evidence > summary { min-height:0; padding:2px 0 2px 22px; cursor:pointer; }
 .subagent-result-evidence pre { white-space:pre-wrap; overflow-wrap:anywhere; }
-@media (pointer:coarse), (hover:none) { .subagent-card-open { min-height:44px; } }
+@media (pointer:coarse), (hover:none) { .subagent-card-open { min-height:44px; } .subagent-operation-receipt > summary { opacity:1; width:44px; height:44px; } .subagent-operation { padding-right:44px; } }
 .app-shell.with-subagent-panel { grid-template-columns:var(--sidebar-width) minmax(0,1fr) var(--auxiliary-width); }
 .app-shell.with-subagent-panel.sidebar-collapsed { grid-template-columns:56px minmax(0,1fr) var(--auxiliary-width); }
 .subagent-panel { position:relative; min-width:0; min-height:0; height:100dvh; color:var(--text); background:var(--page); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
 .subagent-panel-heading { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:16px; min-height:58px; padding:12px 20px; border-bottom:1px solid var(--border); }
+.subagent-panel-model { min-width:0; max-width:40%; flex-shrink:1; margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:var(--muted); }
 .subagent-breadcrumb { display:flex; align-items:center; gap:10px; min-width:0; }
 .subagent-panel-heading :is(h1,h2) { margin:0; font-size:13px; font-weight:500; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .subagent-breadcrumb > svg { width:17px; height:17px; color:var(--accent); flex-shrink:0; }
@@ -730,6 +743,7 @@ button.subagent-card-open:hover { background:var(--sidebar-hover); }
   .process-sequence.running > summary::after { animation:none; content:none; }
   :is(.tool-evidence-card[data-state="running"], .tool-line.running) > summary :is(.tool-action, .tool-summary, .evidence-command, .evidence-filename),
   .process-sequence.running > summary :is(strong, .process-sequence-preview),
+  .single-process .subagent-operation [data-status="running"] .subagent-operation-label,
   .context-compaction[data-state="running"] .context-compaction-text { animation:none; background:none; -webkit-text-fill-color:currentColor; }
 }
 .switching { @apply flex items-center; }

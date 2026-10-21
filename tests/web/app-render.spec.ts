@@ -1277,7 +1277,7 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
     "error",
     "error",
     "error",
-    "running",
+    "done",
     "running",
     "running",
     "running",
@@ -1297,7 +1297,7 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
     "error",
     "error",
     "error",
-    "unknown",
+    "done",
     "unknown",
     "unknown",
     "unknown",
@@ -1319,7 +1319,7 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
 
   view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
   expect(statuses().slice(4)).toEqual([
-    "running",
+    "done",
     "running",
     "running",
     "running",
@@ -1477,7 +1477,7 @@ it("keeps live terminal evidence observed by default and freezes only its nonter
   expect(JSON.stringify(result)).toBe(original);
 });
 
-it("freezes orphan native running receipts after observation loss without changing terminal evidence", () => {
+it("keeps returned background queries settled through observation loss without changing terminal evidence", () => {
   const snapshot = activeSnapshot();
   const states = [
     "running",
@@ -1520,7 +1520,7 @@ it("freezes orphan native running receipts after observation loss without changi
       step.getAttribute("data-status"),
     );
   expect(statuses()).toEqual([
-    "running",
+    "done",
     "done",
     "error",
     "error",
@@ -1530,7 +1530,7 @@ it("freezes orphan native running receipts after observation loss without changi
   expect(view.container.querySelector(".tool-evidence-card")).toBeNull();
   view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
   expect(statuses()).toEqual([
-    "unknown",
+    "done",
     "done",
     "error",
     "error",
@@ -1546,7 +1546,7 @@ it("freezes orphan native running receipts after observation loss without changi
   expect(JSON.stringify(snapshot)).toBe(original);
   view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
   expect(statuses()).toEqual([
-    "running",
+    "done",
     "done",
     "error",
     "error",
@@ -1731,7 +1731,7 @@ it("shows an unobserved pending child as unknown while preserving a native faile
   ]);
 });
 
-it("freezes native running workflow cards while preserving their terminal and uncertain receipts", () => {
+it("keeps returned workflow queries settled while preserving their terminal and uncertain receipts", () => {
   const snapshot = activeSnapshot();
   const states = ["running", "completed", "failed", "aborted", "uncertain"];
   snapshot.selectedSession!.entries = [
@@ -1787,9 +1787,9 @@ it("freezes native running workflow cards while preserving their terminal and un
           card.querySelector(".status-mark")?.classList.contains(status),
         ) ?? "unknown",
     );
-  expect(statuses()).toEqual(["running", "done", "error", "error", "warn"]);
+  expect(statuses()).toEqual(["done", "done", "error", "error", "warn"]);
   view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
-  expect(statuses()).toEqual(["unknown", "done", "error", "error", "warn"]);
+  expect(statuses()).toEqual(["done", "done", "error", "error", "warn"]);
   for (const status of states)
     expect(view.container.textContent).toContain(
       `Exact native workflow receipt: ${status}`,
