@@ -44,6 +44,7 @@ import {
   effectiveChildToolAllowlist,
   inheritedChildToolAllowlist,
   resolveGitInfoPathOrThrow,
+  resolveOrchestrationSkillDirsOrThrow,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
 } from "../../../extensions/shared/child-session.ts";
@@ -1315,7 +1316,7 @@ test("child resources exclude pi-intercom npm, Git, and local packages without m
   });
 });
 
-test("headless child resources exclude OpenPI git polling at 1/8/64 retained sessions", async () => {
+test("headless child resources exclude OpenPI git polling and orchestration skills at 1/8/64 retained sessions", async () => {
   await withTempDir(async (directory) => {
     const cwd = path.join(directory, "project");
     const agentDir = path.join(directory, "agent");
@@ -1330,8 +1331,17 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
         new URL("../../../extensions/git-read/index.ts", import.meta.url),
       ),
     );
+    const orchestrationSkillNames = ["subagents", "workflows"] as const;
     await mkdir(cwd, { recursive: true });
     await mkdir(agentDir, { recursive: true });
+    // A user's own skill must keep loading in the child.
+    await mkdir(path.join(agentDir, "skills", "global-fixture"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(agentDir, "skills", "global-fixture", "SKILL.md"),
+      "---\nname: global-fixture\ndescription: fixture\n---\n",
+    );
     await writeFile(
       path.join(agentDir, "settings.json"),
       JSON.stringify({
@@ -1364,6 +1374,16 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
       (extensionPath) => extensionPath === gitInfoPath,
     ).length;
     assert.equal(topLevelPollers, 1, "the parent loader must keep git-info");
+    const topLevelSkillNames = topLevelLoader
+      .getSkills()
+      .skills.map((skill) => skill.name);
+    for (const name of orchestrationSkillNames) {
+      assert.equal(
+        topLevelSkillNames.includes(name),
+        true,
+        `the parent loader must keep the ${name} skill`,
+      );
+    }
 
     const child = await createChildResources({
       cwd,
@@ -1405,6 +1425,57 @@ test("headless child resources exclude OpenPI git polling at 1/8/64 retained ses
       childPaths.includes(gitReadPath),
       true,
       "ordinary child-safe OpenPI extensions must remain loaded",
+    );
+
+    const childSkills = child.loader.getSkills().skills;
+    for (const name of orchestrationSkillNames) {
+      assert.equal(
+        childSkills.some((skill) => skill.name === name),
+        false,
+        `the child must not load the ${name} orchestration skill`,
+      );
+    }
+    assert.equal(
+      childSkills.some((skill) => skill.name === "global-fixture"),
+      true,
+      "unrelated user skills must keep loading in the child",
+    );
+    // A symlinked skill dir (e.g. under ~/.agents/skills) reaches the loader
+    // outside any package path; the canonical-path post-filter drops it too.
+    fs.symlinkSync(
+      path.join(repoRoot, "skills", "subagents"),
+      path.join(agentDir, "skills", "subagents"),
+    );
+    const symlinkedParent = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager: SettingsManager.create(cwd, agentDir, {
+        projectTrusted: true,
+      }),
+    });
+    await symlinkedParent.reload();
+    assert.equal(
+      symlinkedParent
+        .getSkills()
+        .skills.some((skill) => skill.name === "subagents"),
+      true,
+      "the parent must load a symlinked subagents skill as the control",
+    );
+    const symlinkedChild = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const symlinkedChildSkills = symlinkedChild.loader.getSkills().skills;
+    assert.equal(
+      symlinkedChildSkills.some((skill) => skill.name === "subagents"),
+      false,
+      "the child post-filter must drop the symlinked orchestration skill",
+    );
+    assert.equal(
+      symlinkedChildSkills.some((skill) => skill.name === "global-fixture"),
+      true,
+      "unrelated user skills must keep loading in the child",
     );
 
     for (const retained of [1, 8, 64]) {
@@ -2075,6 +2146,31 @@ test("git-info exclusion: ENOENT degrades, other errors fail closed", async () =
     (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES",
     "non-ENOENT realpath failures must fail closed",
   );
+});
+
+test("orchestration skill exclusion: ENOENT degrades, other errors fail closed", () => {
+  const enoent: NodeJS.ErrnoException = new Error("no such file");
+  enoent.code = "ENOENT";
+  // Absent (ENOENT) -> the dir is skipped, so nothing is excluded.
+  assert.deepEqual(
+    resolveOrchestrationSkillDirsOrThrow(() => {
+      throw enoent;
+    }),
+    [],
+  );
+  // Unverifiable (non-ENOENT) -> must throw, not silently degrade.
+  const eacces: NodeJS.ErrnoException = new Error("permission denied");
+  eacces.code = "EACCES";
+  assert.throws(
+    () =>
+      resolveOrchestrationSkillDirsOrThrow(() => {
+        throw eacces;
+      }),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES",
+    "non-ENOENT realpath failures must fail closed",
+  );
+  // The real checkout resolves both skill dirs.
+  assert.equal(resolveOrchestrationSkillDirsOrThrow().length, 2);
 });
 
 test("child delegation inherits active tools and custom restrictions only narrow", () => {
