@@ -1389,10 +1389,6 @@ export function Composer(props: ComposerProps) {
     !props.sessionSwitching &&
     observedQueue !== undefined &&
     queuedMessages.length > 0;
-  useEffect(() => {
-    if (!showingQueue && !showingSteering)
-      setExpandedStatus((value) => (value?.panel === "queue" ? null : value));
-  }, [showingQueue, showingSteering]);
   const hint = compacting
     ? t("compactionDraftHelp")
     : props.promptAdmissionPending && !canStop

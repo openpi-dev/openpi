@@ -3676,7 +3676,14 @@ it("keeps capability activity and omission receipts visible", () => {
           status: "failed",
           startedAt: 1,
           finishedAt: 2,
-          agents: { total: 1, running: 0, done: 0, error: 1, uncertain: 0 },
+          agents: {
+            total: 3,
+            running: 0,
+            done: 0,
+            error: 1,
+            uncertain: 1,
+            omitted: 1,
+          },
         },
       ],
       omitted: 3,
@@ -3685,6 +3692,9 @@ it("keeps capability activity and omission receipts visible", () => {
   };
   render(createElement(ActivityBar, { snapshot }));
   expect(screen.getByText(/Build/)).toBeTruthy();
+  expect(screen.getByText(/Build/).textContent).toContain(
+    i18n.t("activityAgentProgress", { completed: 1, total: 3 }),
+  );
   expect(screen.getByText("+3")).toBeTruthy();
 });
 

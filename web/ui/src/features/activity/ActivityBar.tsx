@@ -163,7 +163,7 @@ export function ActivityBar({
     onClick?: () => void;
   }> = [];
   for (const workflow of capabilities?.workflows?.items ?? []) {
-    const settled = workflow.agents.total - workflow.agents.running;
+    const settled = workflow.agents.done + workflow.agents.error;
     const progress = workflow.agents.total
       ? ` · ${t("activityAgentProgress", { completed: settled, total: workflow.agents.total })}`
       : "";

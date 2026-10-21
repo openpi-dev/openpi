@@ -321,8 +321,14 @@ test("an observer keeps its editable draft, pending messages and native progress
       .click();
     await expect(ownPending).toHaveCount(2);
     await page.setViewportSize({ width: 390, height: 740 });
-    await expect(queue).toBeInViewport();
-    const queueBounds = await queue.boundingBox();
+    const statusStrip = page.locator(".composer-status-strip");
+    await expect(statusStrip).toBeInViewport();
+    await expect(
+      queue.getByRole("button", { name: "2 条消息正在排队", exact: true }),
+    ).toBeInViewport();
+    await expect(ownPending.first()).toBeInViewport();
+    await expect(ownPending.last()).toBeInViewport();
+    const queueBounds = await statusStrip.boundingBox();
     const dockBounds = await page.locator(".composer-dock").boundingBox();
     const composerBounds = await page.locator(".composer").boundingBox();
     expect(
