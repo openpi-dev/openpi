@@ -161,6 +161,8 @@ export interface WebPromptAdmissionReceipt {
 }
 
 export interface WebActiveTurn {
+  /** Exact Web invocation inherited by an asynchronous native continuation. */
+  originCommandId?: string;
   sessionId: string;
   commandId: string;
   epoch: number;

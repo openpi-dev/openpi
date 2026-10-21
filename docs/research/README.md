@@ -22,6 +22,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_NATIVE_CONTINUATION_CONTROL_2026-10-21.md`](WEB_NATIVE_CONTINUATION_CONTROL_2026-10-21.md) — exact Web origin for native continuations, cancellation revocation and file-summary settlement, with local Pi/Host/UI evidence and deployment limits ([#867](https://github.com/openpi-dev/openpi/issues/867), [PR #865](https://github.com/openpi-dev/openpi/pull/865)).
+
 - [`HARNESS_LATENCY_OWNERSHIP_2026-10-14.md`](HARNESS_LATENCY_OWNERSHIP_2026-10-14.md) — frozen Codex, Claude reconstruction, Maka and Pi source comparison; existing batching/output/background/cache mechanisms, Pi-owned lifecycle gaps and gateway incident boundaries; no comparative speedup claimed ([#763](https://github.com/openpi-dev/openpi/issues/763), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).
 
 - [`WEB_DOCUMENT_FEEDBACK_2026-10-13.md`](WEB_DOCUMENT_FEEDBACK_2026-10-13.md) — document-reported timing, retry, conversation continuation and typography symptoms; current Codex artifact evidence, Pi-native fixes and local validation ([#763](https://github.com/openpi-dev/openpi/issues/763), [PR #711](https://github.com/openpi-dev/openpi/pull/711)).

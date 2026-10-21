@@ -94,12 +94,24 @@ function snapshot(
 
 function transcript(
   entries: NonNullable<WebSnapshot["selectedSession"]>["entries"],
+  running = false,
+  compacting = false,
 ) {
+  const value = snapshot(entries);
+  if (compacting)
+    value.selectedExecution = {
+      sessionId: "session",
+      sessionPath: "/tmp/session",
+      status: "running",
+      liveTools: [],
+      liveToolsOmitted: 0,
+      compaction: { state: "running" },
+    };
   return withI18n(
     createElement(Transcript, {
-      snapshot: snapshot(entries),
+      snapshot: value,
       liveMessages: [],
-      liveRunning: false,
+      liveRunning: running,
       livePhase: "idle" as const,
       liveRetry: null,
       thinkingStarts: {},
@@ -159,6 +171,17 @@ it("attaches a saved change receipt to its native prompt, not an adjacent turn",
   rerender(transcript(entries.slice(1)));
   expect(container.querySelector(".turn-changes")).toBeNull();
   rerender(transcript(entries));
+  expect(container.querySelectorAll(".turn-changes")).toHaveLength(1);
+
+  // A receipt may be saved while tools or an automatic continuation still run.
+  rerender(transcript(entries.slice(0, 3), true));
+  expect(container.querySelector(".turn-changes")).toBeNull();
+  rerender(transcript(entries.slice(0, 3), true, true));
+  expect(container.querySelector(".turn-changes")).toBeNull();
+  rerender(transcript(entries.slice(0, 3)));
+  expect(container.querySelectorAll(".turn-changes")).toHaveLength(1);
+  // Starting the next user turn must not hide the previous turn's receipt.
+  rerender(transcript(entries, true));
   expect(container.querySelectorAll(".turn-changes")).toHaveLength(1);
 });
 

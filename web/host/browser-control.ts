@@ -342,7 +342,8 @@ export class WebBrowserBroker {
     signal?.throwIfAborted();
     this.reconcile();
     const owner = this.owner();
-    if (!loadSetupConfig().browser.control || !owner) throw new Error("Browser control needs an enabled, active OpenPI turn.");
+    if (!loadSetupConfig().browser.control) throw new Error("Browser control is off. Enable it in Settings → Browser or /openpi-setup.");
+    if (!owner) throw new Error("This run has no originating Web tab for browser control. Send a new message in the OpenPI chat to continue; reinstalling the browser extension is not required.");
     if (request.operation === "browsers") {
       const config = loadSetupConfig().browser;
       const details = { defaultBrowser: config.defaultBrowser, browsers: BROWSER_IDS.map((id) => ({ id, allowed: browserAllowed(config, id) })), profiles: this.profiles(owner.controllerId) };

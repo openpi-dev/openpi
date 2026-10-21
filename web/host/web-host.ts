@@ -358,7 +358,7 @@ export class WebHost {
     const turnOwner = () => {
       if (this.stopping || !this.runtime.workspaceSelected) return undefined;
       const turn = this.runtime.getActiveTurn();
-      const admission = turn && this.promptAdmissions.get(turn.commandId);
+      const admission = turn && this.promptAdmissions.get(turn.originCommandId ?? turn.commandId);
       if (!turn || !admission?.controllerId || admission.sessionId !== turn.sessionId ||
           !this.adapter.isCurrentSession({ id: admission.sessionId, path: admission.sessionPath })) return undefined;
       return { ...turn, workspace: this.runtime.cwd, controllerId: admission.controllerId };
@@ -2725,10 +2725,11 @@ export class WebHost {
   }
 
   private makePromptAdmissionSpace() {
+    const activeTurn = this.runtime.getActiveTurn();
     while (this.promptAdmissions.size >= MAX_PROMPT_ADMISSIONS) {
       const settled = [...this.promptAdmissions.entries()].find(
         ([commandId, admission]) => admission.result !== undefined &&
-          commandId !== this.runtime.getActiveTurn()?.commandId,
+          commandId !== activeTurn?.commandId && commandId !== activeTurn?.originCommandId,
       );
       if (!settled) return false;
       this.promptAdmissions.delete(settled[0]);

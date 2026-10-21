@@ -2507,10 +2507,11 @@ function renderTurns(
   timedTurn?: ActiveTurn,
   onReviewTurn?: OpenTurnReview,
   observed = true,
+  executionRunning = running,
 ) {
   const { turns, activeTurn } = groupConversationTurns(
     rows,
-    running,
+    executionRunning,
     activeCommandId,
     timedTurn,
   );
@@ -2524,10 +2525,15 @@ function renderTurns(
         !turn.rows.some((row) => row.forkSnapshotBoundary)
       }
       observed={observed}
-      changes={changesByPrompt?.get(
-        turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
-          ?.promptEntryId ?? "",
-      )}
+      changes={
+        executionRunning && turn.id === activeTurn
+          ? undefined
+          : changesByPrompt?.get(
+              turn.rows.find(
+                (row) => row.kind === "prompt" && !row.pendingPrompt,
+              )?.promptEntryId ?? "",
+            )
+      }
       session={session}
       timedTurn={
         running &&
@@ -4592,6 +4598,8 @@ export function Transcript(props: TranscriptProps) {
             props.activityObserved !== false ? visibleTimedTurn : undefined,
             props.onReviewTurn,
             props.activityObserved !== false,
+            // Compaction hides activity animation, but does not finish a turn.
+            running && (!historyPaused || Boolean(visibleTimedTurn)),
           )}
           {running &&
             props.activityObserved !== false &&
