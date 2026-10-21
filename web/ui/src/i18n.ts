@@ -798,7 +798,7 @@ const resources = {
       configurationModelFeatures: "Model features",
       configurationReasoningLevels: "Available reasoning efforts",
       configurationReasoningDetail:
-        "Choose which supported levels appear in model controls. The current level stays visible; its value is unchanged.",
+        "Choose which levels appear in model controls. Only levels supported by the current model are shown; the current level stays visible.",
       configurationReasoningCount: "{{count}} selected",
       configurationDependencies: "Workspace dependencies",
       configurationEnvironment: "Local environment",
@@ -2790,7 +2790,7 @@ const resources = {
       configurationModelFeatures: "模型功能",
       configurationReasoningLevels: "可用推理强度",
       configurationReasoningDetail:
-        "选择在模型控件中显示哪些受支持的级别。当前级别仍会显示，推理强度不变。",
+        "选择在模型控件中显示哪些级别。控件只显示当前模型支持的档位，当前档位始终保留。",
       configurationReasoningCount: "已选择 {{count}} 个",
       configurationDependencies: "工作空间依赖项",
       configurationEnvironment: "本地运行环境",
