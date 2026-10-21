@@ -1296,7 +1296,11 @@ interface PersistedProjection {
   customIndexes: Map<string, number[]>;
   nativeByIdentity: Map<string, number[]>;
   nativeByLegacySignature: Map<string, number[]>;
-  nativeMessages: { identity: string | undefined; signature: string }[];
+  nativeMessages: {
+    identity: string | undefined;
+    signature: string;
+    content: string;
+  }[];
   promptCandidates: {
     key: string;
     position: number | undefined;
@@ -1422,6 +1426,7 @@ function persistedTranscriptProjection(
   const nativeMessages = baseEntries.map((entry) => ({
     identity: messageIdentity(entry.message),
     signature: legacySignature(entry.message),
+    content: entry.message.content,
   }));
   const nativeByIdentity = new Map<string, number[]>();
   const nativeByLegacySignature = new Map<string, number[]>();
@@ -1663,6 +1668,11 @@ function buildEntries(
       }
       const identity = messageIdentity(message);
       const legacy = legacySignature(message);
+      // A live message shortened to fit one SSE event never equals its
+      // persisted entry; the same identity with a matching text prefix does.
+      const transportPrefix = message.truncation?.transport
+        ? message.content.replace(/\n\[truncated\]$/, "")
+        : undefined;
       const match =
         identity === undefined
           ? firstUnmatched(
@@ -1672,7 +1682,11 @@ function buildEntries(
           : ((projection.nativeByIdentity.get(identity) ?? []).find(
               (index) =>
                 !matchedMessages.has(index) &&
-                projection.nativeMessages[index]?.signature === legacy,
+                (transportPrefix !== undefined
+                  ? projection.nativeMessages[index]?.content.startsWith(
+                      transportPrefix,
+                    )
+                  : projection.nativeMessages[index]?.signature === legacy),
             ) ?? -1);
       if (match >= 0) {
         matchedMessages.add(match);
