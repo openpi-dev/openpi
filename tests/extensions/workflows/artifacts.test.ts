@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ import { test } from "node:test";
 import {
   boundedArtifactTranscript,
   createWorkflowPersistence,
+  JOURNAL_FILE,
   loadJournal,
   persistWorkflowAgentResult,
   persistWorkflowDeliveryState,
@@ -636,4 +638,175 @@ test("workflow checkpoints throttle updates and support immediate/final flushes"
 
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(snapshots.length, 3);
+});
+
+function checkpointFixture(directory: string) {
+  const journal = createJournalAccumulator();
+  for (let index = 0; index < 64; index++)
+    journal.append({ key: `id-${index}`, output: "y".repeat(24 * 1024) });
+  const details: WorkflowDetails = {
+    ...workflowDetails(),
+    agents: Array.from({ length: 64 }, (_, index) => ({
+      index,
+      label: `agent ${index}`,
+      prompt: `task ${index}`,
+      state: index === 0 ? ("running" as const) : ("done" as const),
+      startedAt: 1,
+      preview: "",
+      usage: emptyUsage(),
+      transcript: Array.from({ length: 8 }, (_, entry) => ({
+        role: "toolResult" as const,
+        name: "read",
+        text: `${index}-${entry}${"z".repeat(4096)}`,
+      })),
+    })),
+  };
+  const persistence = createWorkflowPersistence(directory, details, {
+    intervalMs: 0,
+    journal: () => journal,
+  });
+  // Atomic writes replace a file, so a changed inode is one logical write.
+  const inodes = () =>
+    Object.fromEntries(
+      ["workflow.json", "transcripts.json", JOURNAL_FILE].map((name) => [
+        name,
+        statSync(join(directory, name)).ino,
+      ]),
+    );
+  const rewritten = (before: Record<string, number>) => {
+    const after = inodes();
+    return Object.keys(after)
+      .filter((name) => after[name] !== before[name])
+      .sort();
+  };
+  return { details, journal, persistence, inodes, rewritten };
+}
+
+/** What a fresh, cache-free persist of the same state would write. */
+function freshArtifacts(
+  details: WorkflowDetails,
+  journal: ReturnType<typeof createJournalAccumulator>,
+) {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-fresh-"));
+  try {
+    persistWorkflowJson(directory, structuredClone(details), journal);
+    return {
+      transcripts: readFileSync(join(directory, "transcripts.json"), "utf8"),
+      journal: readFileSync(join(directory, JOURNAL_FILE), "utf8"),
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("FAIL: a live checkpoint that only changes a preview rewrites only the manifest", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-checkpoint-"));
+  try {
+    const { details, persistence, inodes, rewritten } =
+      checkpointFixture(directory);
+    persistence.checkpoint({ immediate: true });
+    for (let tick = 0; tick < 5; tick++) {
+      const before = inodes();
+      details.agents[0]!.preview = `tick ${tick}`;
+      persistence.checkpoint({ immediate: true });
+      assert.deepEqual(rewritten(before), ["workflow.json"], `tick ${tick}`);
+    }
+    const stored = JSON.parse(
+      readFileSync(join(directory, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.agents[0]?.preview, "tick 4");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("FAIL: live checkpoints rewrite exactly the artifact that changed, with fresh-persist content", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-checkpoint-"));
+  try {
+    const { details, journal, persistence, inodes, rewritten } =
+      checkpointFixture(directory);
+    persistence.checkpoint({ immediate: true });
+
+    // Progress replaces a child's transcript array.
+    let before = inodes();
+    details.agents[0]!.transcript = [
+      ...details.agents[0]!.transcript,
+      { role: "assistant", text: "next step" },
+    ];
+    persistence.checkpoint({ immediate: true });
+    assert.deepEqual(rewritten(before), ["transcripts.json", "workflow.json"]);
+
+    // A journal append or eviction.
+    before = inodes();
+    journal.append({ key: "late", output: "x".repeat(600 * 1024) });
+    assert.ok(journal.dropped > 0, "the append evicted older entries");
+    persistence.checkpoint({ immediate: true });
+    assert.deepEqual(rewritten(before), [JOURNAL_FILE, "workflow.json"]);
+
+    const fresh = freshArtifacts(details, journal);
+    assert.equal(
+      readFileSync(join(directory, "transcripts.json"), "utf8"),
+      fresh.transcripts,
+    );
+    assert.equal(
+      readFileSync(join(directory, JOURNAL_FILE), "utf8"),
+      fresh.journal,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a terminal flush rewrites every artifact behind its commit receipt", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-checkpoint-"));
+  try {
+    const { details, persistence, inodes, rewritten } =
+      checkpointFixture(directory);
+    persistence.checkpoint({ immediate: true });
+    const before = inodes();
+    details.agents[0]!.state = "done";
+    details.status = "completed";
+    details.finishedAt = 2;
+    persistence.flush();
+    assert.deepEqual(rewritten(before), [
+      JOURNAL_FILE,
+      "transcripts.json",
+      "workflow.json",
+    ]);
+    const stored = JSON.parse(
+      readFileSync(join(directory, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.status, "completed");
+    assert.equal(stored.transcriptArtifact, "transcripts.json");
+    assert.equal(existsSync(join(directory, WORKFLOW_COMMIT_FILE)), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a checkpoint whose artifact write failed retries that artifact next time", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-checkpoint-"));
+  try {
+    const { details, persistence } = checkpointFixture(directory);
+    persistence.checkpoint({ immediate: true });
+    details.agents[0]!.transcript = [
+      ...details.agents[0]!.transcript,
+      { role: "assistant", text: "lost write" },
+    ];
+    // Make the transcripts write fail once; the checkpoint swallows it.
+    rmSync(join(directory, "transcripts.json"));
+    mkdirSync(join(directory, "transcripts.json"));
+    persistence.checkpoint({ immediate: true });
+    rmSync(join(directory, "transcripts.json"), { recursive: true });
+
+    // Nothing else changes, yet the retry must still write the new content.
+    details.agents[0]!.preview = "after failure";
+    persistence.checkpoint({ immediate: true });
+    assert.match(
+      readFileSync(join(directory, "transcripts.json"), "utf8"),
+      /lost write/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
