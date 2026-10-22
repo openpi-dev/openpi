@@ -330,23 +330,63 @@ export function AppearanceSettingsPanel({
                   <Copy aria-hidden="true" />
                 </button>
               </Tooltip>
-              <AppearanceMenu
-                label={t("appearanceTheme")}
-                value={palette}
-                options={palettes.map((id) => ({
-                  id,
-                  label:
-                    id === "default"
-                      ? "OpenPI"
-                      : t(`theme${id[0]!.toUpperCase()}${id.slice(1)}`),
-                }))}
-                disabled={disabled}
-                onSelect={(id) => {
-                  const next = palettes.find((item) => item === id);
-                  if (next) void saveAppearance({ palette: next });
-                }}
-              />
             </div>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label={t("appearanceTheme")}
+            aria-busy={pending}
+            className="appearance-palette-options"
+          >
+            {palettes.map((id) => {
+              const colors = appearanceColors(id, dark);
+              const label =
+                id === "default"
+                  ? "OpenPI"
+                  : t(`theme${id[0]!.toUpperCase()}${id.slice(1)}`);
+              return (
+                <label key={id} className="appearance-palette-option">
+                  <input
+                    type="radio"
+                    name="openpi-appearance-palette"
+                    aria-label={label}
+                    checked={palette === id}
+                    disabled={disabled}
+                    onChange={() => void saveAppearance({ palette: id })}
+                  />
+                  <span
+                    className="appearance-palette-preview"
+                    aria-hidden="true"
+                    style={{
+                      background: colors.background,
+                      color: colors.foreground,
+                    }}
+                  >
+                    <span className="appearance-palette-shell">
+                      <span className="appearance-palette-sidebar">
+                        <b />
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <span
+                        className="appearance-palette-canvas"
+                        style={{ background: colors.background }}
+                      >
+                        <b />
+                        <i />
+                        <i />
+                        <em />
+                      </span>
+                    </span>
+                    <span className="appearance-palette-check">
+                      <Check />
+                    </span>
+                  </span>
+                  <span className="appearance-palette-label">{label}</span>
+                </label>
+              );
+            })}
           </div>
           <div className="appearance-row">
             <span>{t("appearanceAccent")}</span>

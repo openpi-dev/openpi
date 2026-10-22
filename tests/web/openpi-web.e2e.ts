@@ -693,24 +693,24 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   const conversation = page.locator(".conversation-shell");
   const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
   await sidebarHandle.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
   await expect(sidebarHandle).toHaveAttribute("aria-valuemin", "220");
   await expect(sidebarHandle).toHaveAttribute("aria-valuemax", "520");
   await sidebarHandle.press("Home");
   await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "220");
   await expect(sidebar).toHaveCSS("width", "220px");
   await sidebarHandle.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
   const initialSidebar = await sidebar.boundingBox();
   const initialConversation = await conversation.boundingBox();
   expect(initialSidebar).not.toBeNull();
   expect(initialConversation).not.toBeNull();
 
   await sidebarHandle.press("ArrowRight");
-  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "356");
-  await expect(sidebar).toHaveCSS("width", "356px");
+  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "276");
+  await expect(sidebar).toHaveCSS("width", "276px");
   await sidebarHandle.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
 
   await dragPane(page, "left", 80);
   await expect
@@ -765,11 +765,11 @@ test("left divider follows visible sidebar between desktop breakpoints", async (
   await expect(sidebar).toBeVisible();
   await expect(left).toBeVisible();
   await left.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
   await dragPane(page, "left", 80);
-  await expect(sidebar).toHaveCSS("width", "420px");
+  await expect(sidebar).toHaveCSS("width", "340px");
   await dragPane(page, "left", -60);
-  await expect(sidebar).toHaveCSS("width", "360px");
+  await expect(sidebar).toHaveCSS("width", "280px");
   await page.setViewportSize({ width: 760, height: 900 });
   await expect(sidebar).toBeHidden();
   await expect(left).toHaveCount(0);
@@ -788,13 +788,13 @@ test("left divider still expands after the workbar takes the main view", async (
   const sidebar = page.locator(".session-sidebar");
   const left = page.locator('[data-pane-resizer="left"]');
   await left.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
   const workbar = await openWorkbarTool(page, "文件");
   const right = page.locator('[data-pane-resizer="right"]');
   await right.press("Enter");
   await expect(right).toHaveAttribute("aria-valuenow", "520");
   await right.press("End");
-  await expect(right).toHaveAttribute("aria-valuenow", "660");
+  await expect(right).toHaveAttribute("aria-valuenow", "720");
   await dragPane(page, "right", -100);
   await expect(right).toHaveCount(0);
   await expect(page.locator(".app-shell")).toHaveClass(/center-collapsed/);
@@ -813,7 +813,7 @@ test("left divider still expands after the workbar takes the main view", async (
     ),
   ).toBe("left");
   await dragPane(page, "left", 80);
-  await expect(sidebar).toHaveCSS("width", "420px");
+  await expect(sidebar).toHaveCSS("width", "340px");
   await expect(composer).toHaveValue("keep drafting while resizing");
   expect(
     await composer.evaluate(
@@ -825,19 +825,19 @@ test("left divider still expands after the workbar takes the main view", async (
     (response) =>
       response.url().endsWith("/api/settings/preferences") &&
       response.request().method() === "POST" &&
-      response.request().postDataJSON().sidebarWidth === 360,
+      response.request().postDataJSON().sidebarWidth === 280,
   );
   await dragPane(page, "left", -60);
-  await expect(sidebar).toHaveCSS("width", "360px");
+  await expect(sidebar).toHaveCSS("width", "280px");
   await save;
   await workbar.getByRole("button", { name: "返回聊天", exact: true }).click();
   await expect(right).toHaveCount(1);
   await workbar
     .getByRole("button", { name: "收起工具栏", exact: true })
     .click();
-  await expect(sidebar).toHaveCSS("width", "360px");
+  await expect(sidebar).toHaveCSS("width", "280px");
   await page.reload();
-  await expect(sidebar).toHaveCSS("width", "360px");
+  await expect(sidebar).toHaveCSS("width", "280px");
   await expect(composer).toHaveValue("keep drafting while resizing");
 });
 

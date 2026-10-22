@@ -1,12 +1,12 @@
-.models-page, .models-picker-dialog { --models-border: color-mix(in srgb, var(--text) 18%, var(--page)); --models-surface: color-mix(in srgb, var(--text) 4%, var(--page)); --models-track: color-mix(in srgb, var(--text) 7%, var(--page)); }
+.models-page, .models-picker-dialog { --models-border: var(--border); --models-surface: color-mix(in srgb, var(--text) 4%, var(--page)); --models-track: color-mix(in srgb, var(--text) 7%, var(--page)); }
 /* Adapted from DSH ui-settings-models 0.1.7-rc.2 (MIT, © 2026 DeepSeek).
    See THIRD_PARTY_NOTICES.md. Scoped to model content; the settings shell stays unchanged. */
-.models-page { width: 100%; min-width: 0; overflow-y: auto; padding: 28px 32px 40px; }
+.models-page { width: 100%; min-width: 0; overflow-y: auto; padding: 56px 32px 64px; }
 .models-section { display: flex; flex-direction: column; gap: 12px; max-width: 720px; margin: 0 auto; color: var(--text); }
-.models-section > h2 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 500; }
+.models-section > h2 { margin: 0; font-size: 28px; line-height: 1.3; font-weight: 600; letter-spacing: -.7px; }
 .models-intro { margin: 0; font-size: 14px; line-height: 22px; color: var(--muted); }
-.models-provider-list { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 12px 0 0; padding: 0; }
-.models-provider-card { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border: 1px solid var(--models-border); border-radius: 16px; }
+.models-provider-list { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 20px 0 0; padding: 0; }
+.models-provider-card { display: flex; flex-direction: column; gap: 12px; padding: 18px; border: 1px solid var(--models-border); border-radius: 12px; background: var(--page); box-shadow: 0 2px 4px color-mix(in srgb, var(--text) 2%, transparent); }
 .models-provider-head { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 .models-provider-identity { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
 .models-provider-avatar { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 12px; background: var(--models-surface); color: var(--text); }
@@ -118,7 +118,7 @@
 .models-picker-dialog { padding: 0 !important; border: 1px solid var(--models-border) !important; border-radius: 24px !important; background: var(--page) !important; color: var(--text); overflow: hidden !important; max-width: calc(100vw - 24px) !important; }
 .models-picker { display: flex; flex-direction: column; gap: 14px; padding: 24px; max-height: min(620px, 85dvh); }
 .models-picker header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.models-picker h2 { margin: 0; font-size: 16px; line-height: 24px; font-weight: 500; }
+.models-picker h2 { margin: 0; font-size: 28px; line-height: 1.3; font-weight: 600; letter-spacing: -.7px; }
 .models-picker > p { margin: 0; font-size: 14px; line-height: 22px; }
 .models-picker-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .models-picker-toolbar input { flex: 1; }

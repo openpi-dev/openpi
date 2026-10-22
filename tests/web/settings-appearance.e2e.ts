@@ -184,7 +184,11 @@ test("settings shell, hover/focus, mode previews, menus and disclosure follow th
   await expect(
     dialog.getByRole("radiogroup", { name: "模式", exact: true }),
   ).toBeVisible();
-  await expect(dialog.getByRole("radio")).toHaveCount(3);
+  await expect(
+    dialog
+      .getByRole("radiogroup", { name: "模式", exact: true })
+      .getByRole("radio"),
+  ).toHaveCount(3);
   await expect(dialog.getByRole("slider")).toHaveCount(0);
   const font = dialog.getByRole("button", { name: "字体", exact: true });
   await expect(font).toHaveText("Codex 默认");
@@ -242,13 +246,13 @@ test("settings shell, hover/focus, mode previews, menus and disclosure follow th
   await expect(
     dialog.getByRole("tab", { name: "外观", exact: true }),
   ).toBeFocused();
-  const theme = dialog.getByRole("button", { name: "主题", exact: true });
-  await theme.click();
-  await expect(
-    page.getByRole("menuitem", { name: "雾青", exact: true }),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(theme).toBeFocused();
+  const themes = dialog.getByRole("radiogroup", { name: "主题", exact: true });
+  await expect(themes.getByRole("radio")).toHaveCount(4);
+  const mist = themes.getByRole("radio", { name: "雾青", exact: true });
+  await mist.focus();
+  await expect(mist).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(mist).toBeChecked();
   const advanced = dialog.getByRole("button", { name: "高级", exact: true });
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
@@ -260,6 +264,28 @@ test("settings shell, hover/focus, mode previews, menus and disclosure follow th
   await dialog.screenshot({
     path: testInfo.outputPath("appearance-desktop.png"),
   });
+});
+
+test("palette preview cards save, survive reload, and retain the previous palette on failure", async ({
+  page,
+}) => {
+  const fixture = await installSettingsFixture(page);
+  await page.goto("/?settings=appearance");
+  const themes = page.getByRole("radiogroup", { name: "主题", exact: true });
+  const mist = themes.getByRole("radio", { name: "雾青", exact: true });
+  await mist.click();
+  await expect(mist).toBeChecked();
+  expect(fixture.posts.at(-1)).toEqual({ appearance: { palette: "mist" } });
+  await page.reload();
+  await expect(mist).toBeChecked();
+  fixture.failNextWrite();
+  const rose = themes.getByRole("radio", { name: "蔷薇", exact: true });
+  await rose.click();
+  await expect(
+    page.getByText("无法保存显示设置，请检查配置诊断后重试。", { exact: true }),
+  ).toBeVisible();
+  await expect(mist).toBeChecked();
+  await expect(rose).not.toBeChecked();
 });
 
 test("appearance import applies canonical tokens and font, survives reload, and rolls failed writes back", async ({
@@ -360,10 +386,15 @@ test("narrow mouse and touch layouts remain distinct and fit the viewport", asyn
     dialog.getByRole("combobox", { name: "设置导航", exact: true }),
   ).toBeVisible();
   await expect(dialog.getByRole("tablist")).toBeHidden();
-  const theme = dialog.getByRole("button", { name: "主题", exact: true });
+  const font = dialog.getByRole("button", { name: "字体", exact: true });
   expect(
-    await theme.evaluate((node) => node.getBoundingClientRect().height),
+    await font.evaluate((node) => node.getBoundingClientRect().height),
   ).toBeLessThan(44);
+  const themes = dialog.getByRole("radiogroup", { name: "主题", exact: true });
+  await expect(themes.getByRole("radio")).toHaveCount(4);
+  expect(
+    await themes.evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true);
   expect(
     await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth),
   ).toBe(true);
@@ -384,16 +415,26 @@ test("narrow mouse and touch layouts remain distinct and fit the viewport", asyn
       name: "设置",
       exact: true,
     });
-    const touchTheme = touchDialog.getByRole("button", {
+    const touchFont = touchDialog.getByRole("button", {
+      name: "字体",
+      exact: true,
+    });
+    await expect(touchFont).toBeVisible();
+    await expect
+      .poll(() =>
+        touchFont.evaluate((node) => node.getBoundingClientRect().height),
+      )
+      .toBeGreaterThanOrEqual(44);
+    const touchThemes = touchDialog.getByRole("radiogroup", {
       name: "主题",
       exact: true,
     });
-    await expect(touchTheme).toBeVisible();
-    await expect
-      .poll(() =>
-        touchTheme.evaluate((node) => node.getBoundingClientRect().height),
-      )
-      .toBeGreaterThanOrEqual(44);
+    await expect(touchThemes.getByRole("radio")).toHaveCount(4);
+    expect(
+      await touchThemes.evaluate(
+        (node) => node.scrollWidth <= node.clientWidth,
+      ),
+    ).toBe(true);
     expect(
       await touchDialog.evaluate(
         (node) => node.scrollWidth <= node.clientWidth,

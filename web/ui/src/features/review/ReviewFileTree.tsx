@@ -71,7 +71,7 @@ export function ReviewFileTree({
             <button
               type="button"
               className="review-tree-directory"
-              style={{ paddingLeft: 8 + depth * 16 }}
+              style={{ paddingLeft: 8 + depth * 10 }}
               title={path}
               aria-expanded={open}
               disabled={searching}
@@ -96,7 +96,7 @@ export function ReviewFileTree({
             <button
               className="session-review-file review-tree-file"
               type="button"
-              style={{ paddingLeft: 8 + depth * 16 }}
+              style={{ paddingLeft: 8 + depth * 10 }}
               data-review-file={file.path}
               title={file.path}
               aria-label={file.path}

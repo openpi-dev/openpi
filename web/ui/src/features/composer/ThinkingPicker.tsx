@@ -7,6 +7,8 @@ import type {
   WebSnapshot,
 } from "../../../../protocol/types.ts";
 import type { WebStoreActions } from "../../store/web-store.ts";
+import { ProviderIcon } from "../settings/ProviderIcon.tsx";
+import { modelIdentity } from "./model-identity.ts";
 
 export function ThinkingPicker({
   snapshot,
@@ -65,6 +67,7 @@ export function ThinkingPicker({
   return (
     <div className="thinking-controls">
       <div className="thinking-strength" aria-live="polite">
+        <small>{t("thinkingLevel")}</small>
         <span>{label(displayed)}</span>
       </div>
       <div
@@ -124,7 +127,7 @@ export function ThinkingPicker({
         />
       </div>
       <Tooltip
-        content={`${model?.name || model?.id || t("selectModel")} · ${t("selectModel")}`}
+        content={`${model ? modelIdentity(model) : t("selectModel")} · ${t("selectModel")}`}
         placement="above"
       >
         <button
@@ -133,6 +136,7 @@ export function ThinkingPicker({
           disabled={pending !== null}
           onClick={onChooseModel}
         >
+          {model && <ProviderIcon id={model.provider} />}
           <span>{model?.name || model?.id || t("selectModel")}</span>
           <ChevronRight aria-hidden="true" />
         </button>

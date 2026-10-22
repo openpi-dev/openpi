@@ -773,8 +773,8 @@ it.each([
     for (const radio of screen.getAllByRole<HTMLInputElement>("radio"))
       expect(radio.disabled).toBe(true);
     expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: i18n.t("appearanceTheme"),
+      screen.getByRole<HTMLInputElement>("radio", {
+        name: i18n.t("themeMist"),
       }).disabled,
     ).toBe(true);
     expect(
@@ -799,7 +799,6 @@ it.each([
 );
 
 it.each([
-  { menu: "appearanceTheme", option: "themeMist", readonly: false },
   { menu: "appearanceAccent", option: "appearanceAccent1", readonly: false },
   { menu: "appearanceFont", option: "appearanceFont_serif", readonly: false },
   { menu: "appearanceFont", option: "appearanceFont_serif", readonly: true },
@@ -873,17 +872,73 @@ it("sends only the edited appearance field or mode, including legacy themes", as
   expect(onUpdatePreferences).toHaveBeenLastCalledWith({
     appearance: { background: "#112233" },
   });
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("appearanceTheme") }),
-  );
-  fireEvent.click(
-    await screen.findByRole("menuitem", { name: i18n.t("themeMist") }),
-  );
+  fireEvent.click(screen.getByRole("radio", { name: i18n.t("themeMist") }));
   expect(onUpdatePreferences).toHaveBeenLastCalledWith({
     appearance: { palette: "mist" },
   });
   fireEvent.click(screen.getByRole("radio", { name: i18n.t("themeLight") }));
   expect(onUpdatePreferences).toHaveBeenLastCalledWith({ theme: "light" });
+});
+
+it("saves palette cards through the existing writer and keeps the saved palette after a failed write", async () => {
+  const fallback = settingsFetcher();
+  let fail = false;
+  let finishWrite: (() => void) | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/settings/preferences")) {
+        await new Promise<void>((resolve) => {
+          finishWrite = resolve;
+        });
+        if (fail)
+          return new Response(JSON.stringify({ error: "failed" }), {
+            status: 422,
+          });
+      }
+      return fallback(input, init);
+    }),
+  );
+  const view = renderSettings();
+  await screen.findByText(i18n.t("agentBehavior"));
+  openAppearance();
+  const group = () =>
+    within(screen.getByRole("radiogroup", { name: i18n.t("appearanceTheme") }));
+  expect(group().getAllByRole("radio")).toHaveLength(4);
+  fireEvent.click(group().getByRole("radio", { name: i18n.t("themeMist") }));
+  await waitFor(() => expect(finishWrite).toBeTypeOf("function"));
+  for (const radio of group().getAllByRole<HTMLInputElement>("radio"))
+    expect(radio.disabled).toBe(true);
+  await act(async () => finishWrite?.());
+  await waitFor(() =>
+    expect(
+      group().getByRole<HTMLInputElement>("radio", {
+        name: i18n.t("themeMist"),
+      }).checked,
+    ).toBe(true),
+  );
+  view.unmount();
+  renderSettings();
+  await screen.findByText(i18n.t("agentBehavior"));
+  openAppearance();
+  expect(
+    group().getByRole<HTMLInputElement>("radio", { name: i18n.t("themeMist") })
+      .checked,
+  ).toBe(true);
+  fail = true;
+  finishWrite = undefined;
+  fireEvent.click(group().getByRole("radio", { name: i18n.t("themeRose") }));
+  await waitFor(() => expect(finishWrite).toBeTypeOf("function"));
+  await act(async () => finishWrite?.());
+  await screen.findByText(i18n.t("settingsPreferencesSaveFailed"));
+  expect(
+    group().getByRole<HTMLInputElement>("radio", { name: i18n.t("themeMist") })
+      .checked,
+  ).toBe(true);
+  expect(
+    group().getByRole<HTMLInputElement>("radio", { name: i18n.t("themeRose") })
+      .checked,
+  ).toBe(false);
 });
 
 it("validates and cancels theme imports without writes; a failed valid import keeps its draft and saved mode", async () => {
@@ -1223,7 +1278,13 @@ it("shows canonical General state and routes real setup/runtime actions", async 
   expect(within(generalPanel).getByText(/6 concurrent/u)).toBeTruthy();
   openAppearance();
   const appearancePanel = screen.getByRole("tabpanel");
-  expect(within(appearancePanel).getAllByRole("radio")).toHaveLength(3);
+  expect(
+    within(
+      within(appearancePanel).getByRole("radiogroup", {
+        name: i18n.t("appearanceMode"),
+      }),
+    ).getAllByRole("radio"),
+  ).toHaveLength(3);
   expect(within(appearancePanel).queryByRole("slider")).toBeNull();
   fireEvent.click(
     within(appearancePanel).getByRole("radio", { name: i18n.t("themeDark") }),

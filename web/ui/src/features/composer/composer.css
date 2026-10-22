@@ -1,15 +1,15 @@
 .composer.composer-m02 {
   min-width: 0;
-  border-radius: 20px;
+  border-radius: 16px;
   border-color: var(--border);
   background: var(--surface-input);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 4%, transparent);
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--text) 3%, transparent), 0 12px 32px color-mix(in srgb, var(--text) 5%, transparent);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .composer.composer-m02:focus-within {
   border-color: color-mix(in srgb, var(--focus) 55%, var(--border));
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 6%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 10%, transparent), 0 12px 32px color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 form.composer-m02 textarea {
@@ -481,4 +481,15 @@ form.composer-m02[data-editor-expanded] textarea { max-height: min(420px, 50dvh)
   .composer-action-description { white-space: normal; font-size: 11px; }
   .composer-workspace-label { max-width: 75px; }
   .composer-m02 .composer-toolbar-context { gap: 4px; }
+}
+
+.composer-m02 .composer-toolbar {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--text) 10%, var(--page));
+}
+.composer-m02 .composer-context-trigger {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-panel);
 }

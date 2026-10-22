@@ -1244,6 +1244,7 @@ test("Web appearance fields accept canonical bounds and remain known on explicit
       { webFollowUpBehavior: "followUp" },
       { webFollowUpBehavior: "steer" },
       { webSidebarWidth: 220, webAuxiliaryWidth: 360 },
+      { webSidebarWidth: 340, webAuxiliaryWidth: 520 },
       { webSidebarWidth: 520, webAuxiliaryWidth: 720 },
       {
         webSidebarGrouping: "project",

@@ -80,7 +80,7 @@ import { isControlledSession } from "../lib/session-control.ts";
 import { WebClient } from "../protocol/client.ts";
 import { webStore } from "../store/web-store.ts";
 
-const SIDEBAR_DEFAULT_WIDTH = 340;
+const SIDEBAR_DEFAULT_WIDTH = 260;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 520;
 const SIDEBAR_COLLAPSE_THRESHOLD = 190;

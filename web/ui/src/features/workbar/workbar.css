@@ -187,7 +187,7 @@
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 7px;
   background: transparent;
   color: var(--subtle);
   cursor: pointer;
@@ -216,7 +216,7 @@
 .workbar-add-tab {
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: 8px;
 }
 
 .workbar-panels,
@@ -240,27 +240,25 @@
 }
 
 .workbar-launcher-list {
+  display: grid;
+  gap: 8px;
   width: min(100%, 390px);
 }
 
 .workbar-launcher-list > button {
   display: grid;
   width: 100%;
-  min-height: 58px;
+  min-height: 68px;
   grid-template-columns: 20px minmax(0, 1fr) 16px;
   align-items: center;
   gap: 13px;
-  padding: 9px 8px;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  background: transparent;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--page);
   color: var(--text);
   text-align: left;
   cursor: pointer;
-}
-
-.workbar-launcher-list > button:first-child {
-  border-top: 1px solid var(--border);
 }
 
 .workbar-launcher-list > button:hover,
@@ -285,7 +283,7 @@
 .side-conversation-list span {
   display: grid;
   min-width: 0;
-  gap: 1px;
+  gap: 4px;
 }
 
 .workbar-launcher-list strong,
@@ -418,8 +416,9 @@
 .side-conversation-intro p,
 .workbar-empty p {
   max-width: 300px;
-  margin: 5px 0 0;
-  font-size: 11px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
 }
 
 .side-conversation-list[data-empty="true"] .side-conversation-intro {

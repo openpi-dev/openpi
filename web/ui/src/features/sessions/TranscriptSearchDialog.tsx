@@ -279,7 +279,7 @@ export function TranscriptSearchDialog({
       isOpen={open}
       onOpenChange={(next: boolean) => !next && onClose()}
       purpose="info"
-      width="min(520px, 92vw)"
+      width="min(700px, 92vw)"
       maxHeight="calc(var(--transcript-search-list-height) + 64px)"
       padding={0}
       className="transcript-search-modal"

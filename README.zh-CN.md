@@ -232,7 +232,7 @@ openpi web /path/to/repo      # 指定初始工作区
 | Web 主题 | `system`；另有 `light` / `dark`，兼容旧 `mist` / `rose` / `pine` 预设 |
 | Web 外观（`ui.webAppearance`） | 配色 `default`，强调色/背景/前景 `""`（主题默认色），字体 `codex` |
 | Web 聊天宽度 / 聊天字号 | 820px / 14px；范围 820-2000px / 12-24px |
-| Web 侧栏宽度 / 工具面板宽度 | 340px（范围 220–520px）/ 520px（范围 360–720px） |
+| Web 侧栏宽度 / 工具面板宽度 | 260px（范围 220–520px）/ 520px（范围 360–720px） |
 | Web 思考块 | 默认折叠 |
 | Web 跟进处理方式（`ui_web_follow_up_behavior`） | `followUp` 排队到下一轮；可选 `steer` 引导当前轮次 |
 | 隐藏推理强度（`web_hidden_thinking_levels`） | `[]`；显示全部原生支持的级别，不改当前选择 |

@@ -1,16 +1,4 @@
-/* Default desktop row geometry; the native window material uses an opaque Web surface. */
-:root:not([data-theme="dark"], [data-theme="pine"]) .session-sidebar {
-  --sidebar: #f9fafb;
-  --sidebar-hover: #eceeef;
-  --sidebar-active: #e8eaec;
-  --muted: #6e7378;
-  --text: #1a1c1f;
-}
-:root[data-theme="dark"] .session-sidebar {
-  --sidebar: #202326;
-  --sidebar-hover: #2a2e32;
-  --sidebar-active: #32373d;
-}
+/* Keep navigation on the same palette as the workspace, including custom themes. */
 .session-sidebar.session-sidebar { --sidebar-row-height: 30px; padding: 8px; font-size: 14px; font-weight: 400; }
 .session-sidebar .sidebar-brand { height: 32px; min-height: 32px; flex-shrink: 0; padding: 0 4px 0 8px; gap: 8px; }
 .session-sidebar .sidebar-brand-title { display: flex; align-items: center; height: 32px; color: var(--text); font-size: 18px; line-height: 24px; font-weight: 600; }
@@ -20,7 +8,7 @@
 .session-sidebar .sidebar-activity-toggle { position: relative; }
 .session-sidebar .sidebar-activity-toggle[aria-pressed="true"] { color: var(--link, #4263eb); background: color-mix(in srgb, var(--link, #4263eb) 10%, transparent); }
 .sidebar-unread-dot { position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--link, #4263eb); box-shadow: 0 0 0 2px var(--sidebar); }
-.session-sidebar .new-session-button { justify-content: flex-start; width: 100%; height: var(--sidebar-row-height); margin: 8px 0 12px; padding: 0 8px; gap: 8px; border: 0; border-radius: 10px; background: transparent; box-shadow: none; font-size: 14px; font-weight: 400; }
+.session-sidebar .new-session-button { justify-content: flex-start; width: 100%; height: 36px; margin: 12px 0 16px; padding: 0 10px; gap: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 3%, transparent); font-size: 13px; font-weight: 500; }
 .session-sidebar .new-session-button svg { width: 20px; height: 20px; }
 .session-sidebar .new-session-button:hover { background: var(--sidebar-hover); }
 .sidebar-navigation { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; padding-top: 4px; padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent; }
@@ -29,7 +17,7 @@
 .session-sidebar :is(.pinned-sessions, .workspace-sessions, .recent-sessions, .sidebar-activity-sessions) { display: flex; flex-direction: column; gap: 1px; list-style: none; padding: 0; margin: 0; }
 .session-sidebar :is(.pinned-sessions, .recent-sessions, .sidebar-activity-sessions) { padding-top: 4px; }
 .session-sidebar .sidebar-section-heading { display: flex; align-items: center; justify-content: space-between; min-height: var(--sidebar-row-height); gap: 8px; padding: 0 6px 0 8px; }
-.session-sidebar :is(.workspace-heading-label, .sidebar-section-label) { display: flex; min-width: 0; flex: 1; align-items: center; gap: 4px; margin: 0; padding: 2px 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 500; line-height: 21px; letter-spacing: normal; text-transform: none; text-align: left; }
+.session-sidebar :is(.workspace-heading-label, .sidebar-section-label) { display: flex; min-width: 0; flex: 1; align-items: center; gap: 4px; margin: 0; padding: 2px 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; line-height: 21px; letter-spacing: normal; text-transform: none; text-align: left; }
 .session-sidebar .workspace-heading-label { border-radius: 6px; cursor: pointer; }
 .session-sidebar .workspace-heading-label svg { width: 12px; height: 12px; flex-shrink: 0; }
 .workspace-heading-label .lucide-chevron-down { opacity: 0; transition: transform 140ms, opacity 140ms; }
@@ -66,7 +54,7 @@
 .session-sidebar .session-row { border-radius: 10px; }
 .session-sidebar .session { height: var(--sidebar-row-height); min-height: var(--sidebar-row-height); padding: 0 8px 0 32px; border-radius: 10px; color: var(--text); }
 .session-sidebar :is(.pinned-sessions, .recent-sessions, .sidebar-activity-sessions) > .session-row .session { padding-left: 8px; }
-.session-sidebar .session.active { background: var(--sidebar-active); font-weight: 400; }
+.session-sidebar .session.active { background: var(--sidebar-active); font-weight: 500; }
 .session-sidebar .session-row:has([aria-haspopup="menu"][aria-expanded="true"]) { background: var(--sidebar-hover); }
 .session-sidebar .session-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .session-sidebar .session-title { display: block; font-size: 14px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -121,16 +109,15 @@
 .sidebar-settings-button:disabled { cursor: default; opacity: .45; }
 .sidebar-settings-button svg { width: 16px; height: 16px; flex-shrink: 0; }
 .sidebar-settings-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Astryx portals flyouts outside their parent menu; style the open sidebar
-   menu family together so a submenu does not revert to the generic density. */
-body:has(.sidebar-action-menu) .astryx-dropdown-menu[role="menu"] { min-width: 240px; padding: 8px; border-radius: 20px; gap: 0; max-height: min(480px, 80vh); font-size: 14px; }
-.astryx-popover-surface:has(> .sidebar-action-menu) { border-radius: 20px; }
-body:has(.sidebar-action-menu) .astryx-dropdown-menu [role^="menuitem"] { min-height: 36px; padding: 8px; border-radius: 12px; font-size: 14px; }
-body:has(.sidebar-action-menu) .astryx-dropdown-menu [role="separator"] { margin: 4px 0; }
-body:has(.sidebar-conversation-menu) .astryx-dropdown-menu[role="menu"] { min-width: 248px; padding: 5px; border-radius: 12px; gap: 0; max-height: min(560px, calc(100dvh - 24px)); }
-body:has(.sidebar-conversation-menu) .astryx-popover-surface:has(> .astryx-dropdown-menu) { border-radius: 12px; }
-body:has(.sidebar-conversation-menu) .astryx-dropdown-menu [role^="menuitem"] { min-height: 28px; padding: 4px 8px; border-radius: 7px; line-height: 20px; }
-body:has(.sidebar-conversation-menu) .astryx-dropdown-menu [role="separator"] { margin: 5px 8px; }
+/* Menus own their nested Astryx layers; keep density within that family. */
+.astryx-popover-surface:has(> .sidebar-action-menu) { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); box-shadow: var(--shadow-popover); }
+.sidebar-action-menu.astryx-dropdown-menu[role="menu"],
+.sidebar-action-menu .astryx-dropdown-menu[role="menu"] { min-width: 240px; padding: 6px; border-radius: 12px; gap: 1px; max-height: min(560px, calc(100dvh - 24px)); color: var(--text); font-size: 13px; }
+.sidebar-action-menu .astryx-dropdown-menu[role="menu"] { border: 1px solid var(--border); background: var(--surface-raised); box-shadow: var(--shadow-popover); }
+.sidebar-action-menu.sidebar-conversation-menu[role="menu"] { min-width: 248px; }
+.sidebar-action-menu [role^="menuitem"] { min-height: 34px; padding: 6px 9px; border-radius: 7px; font-size: 13px; line-height: 20px; }
+.sidebar-action-menu [role^="menuitem"] svg { width: 15px; height: 15px; }
+.sidebar-action-menu [role="separator"] { margin: 6px 8px; }
 .sidebar-menu-unavailable { display: flex; flex-direction: column; gap: 2px; }
 .sidebar-menu-unavailable small { color: var(--muted); font-size: 11px; line-height: 15px; white-space: normal; }
 .sidebar-action-feedback { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
@@ -166,7 +153,7 @@ body:has(.sidebar-conversation-menu) .astryx-dropdown-menu [role="separator"] { 
   .session-sidebar .session-row .session-status { right: 50px; opacity: 1; }
   .session-sidebar .session-row:has(.session-queue) .session { padding-right: 104px; }
   .sidebar-show-more { min-height: 44px; }
-  body:has(.sidebar-action-menu) .astryx-dropdown-menu [role^="menuitem"] { min-height: 44px; }
+  .sidebar-action-menu [role^="menuitem"] { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .session-sidebar .session-state, .sidebar-activity-tail svg { animation: none; }

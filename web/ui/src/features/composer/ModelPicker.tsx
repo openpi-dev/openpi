@@ -450,7 +450,9 @@ export function ModelPicker(props: ModelPickerProps) {
                           optionRefs.current[moveTo]?.focus();
                         }}
                       >
-                        <ProviderIcon id={model.provider} />
+                        <span className="model-option-icon" aria-hidden="true">
+                          <ProviderIcon id={model.provider} />
+                        </span>
                         <span className="model-menu-item-text">
                           <span className="model-menu-item-label">
                             {model.name || model.id}

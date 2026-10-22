@@ -207,7 +207,7 @@ export function buildInteractiveSetupPrompt(options: {
     '- "allow the model to use the embedded browser" → browser_control=true (off by default; Browser Bridge debugger permission is reviewed in Chrome/Edge)',
     '- "allow Chrome and use it by default" → browser_control=true, browser_external=["chrome"], browser_default="chrome"; preserve other existing grants unless the user asks to revoke them. Installation and connection remain native browser steps in Settings → Browser.',
     '- "set OpenPI Web chat width to 960px" → ui_web_chat_width=960',
-    `- Web sidebar width defaults to ${DEFAULT_WEB_SIDEBAR_WIDTH}px (${MIN_WEB_SIDEBAR_WIDTH}-${MAX_WEB_SIDEBAR_WIDTH}); tool pane width defaults to ${DEFAULT_WEB_AUXILIARY_WIDTH}px (${MIN_WEB_AUXILIARY_WIDTH}-${MAX_WEB_AUXILIARY_WIDTH}). Dragging a pane saves the same canonical preferences; small viewports temporarily clamp the visible width.`,
+    `- Web sidebar width defaults to ${DEFAULT_WEB_SIDEBAR_WIDTH}px (${MIN_WEB_SIDEBAR_WIDTH}-${MAX_WEB_SIDEBAR_WIDTH}); tool pane width defaults to ${DEFAULT_WEB_AUXILIARY_WIDTH}px (${MIN_WEB_AUXILIARY_WIDTH}-${MAX_WEB_AUXILIARY_WIDTH}). Existing saved widths are preserved. Dragging a pane saves the same canonical preferences; small viewports temporarily clamp the visible width.`,
     '- "use a 320px sidebar and 600px tool pane" → ui_web_sidebar_width=320, ui_web_auxiliary_width=600',
     '- "use 16px chat text and expand thinking by default" → ui_web_chat_font_size=16, ui_web_expand_thinking=true',
     '- "give detailed responses without a reasoning summary" → response_verbosity=high, response_reasoning_summary=none',

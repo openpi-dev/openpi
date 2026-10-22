@@ -234,7 +234,7 @@ Safety here is a runtime constraint, not a prompt.
 | Web theme | `system`; also `light` / `dark`; legacy `mist` / `rose` / `pine` palettes still honored |
 | Web appearance (`ui.webAppearance`) | palette `default`; accent/background/foreground `""` (theme colors); font `codex` |
 | Web chat width / chat font size | 820px / 14px; ranges 820–2000px / 12–24px |
-| Web sidebar width / auxiliary pane width | 340px (range 220–520px) / 520px (range 360–720px) |
+| Web sidebar width / auxiliary pane width | 260px (range 220–520px) / 520px (range 360–720px) |
 | Web thinking blocks | Collapsed by default |
 | Web follow-up behavior (`ui_web_follow_up_behavior`) | `followUp` (queue); `steer` (guide the active turn) also available |
 | Hidden thinking levels (`web_hidden_thinking_levels`) | `[]` — every natively supported level shown, current selection unchanged |
