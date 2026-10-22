@@ -1,3 +1,4 @@
+import { webRuntimeStartup } from "./runtime-info.ts";
 import { execFile } from "node:child_process";
 import { registerWebBrowserBridge } from "../../extensions/browser/web-bridge.ts";
 import { WebBrowserBroker, validBrowserPages, validBrowserIdentity } from "./browser-control.ts";
@@ -2432,6 +2433,7 @@ export class WebHost {
     if (url.pathname === "/api/diagnostics")
       return this.json(response, 200, {
         node: process.version,
+        openpi: webRuntimeStartup,
         cwd: this.runtime.cwd,
         sessionId: this.runtime.sessionManager.getSessionId(),
         workspaceSelected: this.runtime.workspaceSelected,

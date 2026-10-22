@@ -298,6 +298,24 @@ const resources = {
       trajectory_error: "Tool returned an error",
       trajectory_unknown: "Outcome not established",
       runtimeStatus: "Runtime status",
+      runtimeIdentity: "OpenPI runtime information",
+      runtimeIdentityHint:
+        "Backend information was captured at startup. It does not track later disk changes or Session reloads, and is not proof of every loaded module. Frontend identity describes this page build.",
+      runtimeIdentityFailed:
+        "Could not read backend runtime information. Try again.",
+      runtimeBackendVersion: "Backend package version",
+      runtimePackageRoot: "Backend package directory",
+      runtimeStartedAt: "Process started",
+      runtimeGitRevision: "Git revision at startup",
+      runtimeGitState: "Working tree at startup",
+      runtimeGitDirty: "Local changes present",
+      runtimeGitClean: "Clean",
+      runtimeFrontendVersion: "Page package version",
+      runtimeFrontendBuild: "Page build ID",
+      runtimeStartupBuild: "Page build ID recorded at startup",
+      runtimeDevelopmentBuild: "Development server (no production build ID)",
+      runtimeBuildMismatch:
+        "This page build differs from the build recorded when the backend started. Refresh the page or restart the service, then check again.",
       refreshStatus: "Refresh status",
       openTools: "Open tools",
       openToolsUnavailable: "Select a chat to open tools",
@@ -325,6 +343,9 @@ const resources = {
       terminalExitCode: "Terminal exited with code {{code}}.",
       terminalDisconnected: "Terminal connection ended unexpectedly.",
       terminalError: "Terminal unavailable.",
+      terminalLoadError:
+        "The terminal interface could not load. Refresh the page to try again.",
+      reloadPage: "Refresh page",
       browser: "Browser",
       sessionFileRecords: "Session file records",
       gitReviewSource: "Changes",
@@ -493,7 +514,7 @@ const resources = {
       filesRow: "Row",
       filesSheets: "Worksheets",
       filesTableTruncated:
-        "Showing a bounded table preview. Download the file for all rows and columns.",
+        "Showing a partial table preview. Download the original file for complete content.",
       filesOfficeLayout:
         "Document content preview; pagination and typography may differ from Office.",
       filesSlidesLayout:
@@ -509,6 +530,8 @@ const resources = {
       filesPreviewFailed:
         "Unable to preview this file. You can still download it.",
       filesDiagram: "Mermaid diagram",
+      filesDiagramLoadError:
+        "Unable to load diagram preview. The source is shown below. Refresh the page to try again.",
       filesExpandDiagram: "Expand diagram",
       filesFitImage: "Fit",
       filesOriginalImage: "Original size",
@@ -2351,6 +2374,23 @@ const resources = {
       trajectory_error: "工具返回错误",
       trajectory_unknown: "尚无法确定结果",
       runtimeStatus: "运行状态",
+      runtimeIdentity: "OpenPI 运行信息",
+      runtimeIdentityHint:
+        "后端信息在启动时采样，不随之后的磁盘改动或会话重新加载更新，也不证明所有模块的加载版本。前端标识对应当前页面构建。",
+      runtimeIdentityFailed: "无法读取后端运行信息，请重试。",
+      runtimeBackendVersion: "后端包版本",
+      runtimePackageRoot: "后端包目录",
+      runtimeStartedAt: "进程启动时间",
+      runtimeGitRevision: "启动时 Git 提交",
+      runtimeGitState: "启动时工作区状态",
+      runtimeGitDirty: "存在本地改动",
+      runtimeGitClean: "干净",
+      runtimeFrontendVersion: "页面包版本",
+      runtimeFrontendBuild: "页面构建标识",
+      runtimeStartupBuild: "后端启动时记录的页面构建标识",
+      runtimeDevelopmentBuild: "开发服务器（无生产构建标识）",
+      runtimeBuildMismatch:
+        "当前页面构建与后端启动时记录的构建不同。请刷新页面或重启服务后重新检查。",
       refreshStatus: "刷新状态",
       openTools: "打开工具",
       openToolsUnavailable: "选择会话后可打开工具",
@@ -2376,6 +2416,8 @@ const resources = {
       terminalExitCode: "终端已退出，状态码 {{code}}。",
       terminalDisconnected: "终端连接意外中断。",
       terminalError: "终端不可用。",
+      terminalLoadError: "终端界面加载失败，请刷新页面后重试。",
+      reloadPage: "刷新页面",
       browser: "浏览器",
       sessionFileRecords: "本会话文件记录",
       gitReviewSource: "变更范围",
@@ -2529,7 +2571,7 @@ const resources = {
       filesTable: "表格预览",
       filesRow: "行",
       filesSheets: "工作表",
-      filesTableTruncated: "当前显示部分表格；下载文件可查看全部行列。",
+      filesTableTruncated: "当前仅显示部分表格内容；下载原文件可查看完整内容。",
       filesOfficeLayout: "文档内容预览；分页和排版可能与 Office 不同。",
       filesSlidesLayout:
         "幻灯片文字与图片预览；主题、图表和动画可能与 PowerPoint 不同。",
@@ -2542,6 +2584,7 @@ const resources = {
       filesDocumentLimit: "此文档超出预览处理范围，请下载后在本地打开。",
       filesPreviewFailed: "无法预览此文件，仍可下载后打开。",
       filesDiagram: "Mermaid 图表",
+      filesDiagramLoadError: "图表预览加载失败，已显示源码。刷新页面后可重试。",
       filesExpandDiagram: "放大图表",
       filesFitImage: "适应宽度",
       filesOriginalImage: "原始尺寸",

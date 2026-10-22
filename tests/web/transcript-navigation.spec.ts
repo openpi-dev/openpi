@@ -154,6 +154,64 @@ it("rejects a copied-path or branch-invalid navigation window", () => {
   expect(result.current.engaged).toBe(false);
 });
 
+it.each(["false", "rejection"])(
+  "ignores an obsolete history refresh %s after returning to the same Session id and path",
+  async (failure) => {
+    const selected = session(29, 30);
+    const other = { ...selected, path: "/sessions/copy.jsonl" };
+    const cache: SessionReadingCache = new Map([
+      [
+        sessionReadingScope(selected),
+        {
+          window: {
+            session: session(0, 10, 20),
+            anchor: "e10",
+            validatedLeaf: "e20",
+          },
+        },
+      ],
+    ]);
+    let failOld!: () => void;
+    let failCurrent!: () => void;
+    const old = new Promise<boolean>((resolve, reject) => {
+      failOld = () =>
+        failure === "false"
+          ? resolve(false)
+          : reject(new Error("Obsolete refresh failed"));
+    });
+    const current = new Promise<boolean>((resolve, reject) => {
+      failCurrent = () =>
+        failure === "false"
+          ? resolve(false)
+          : reject(new Error("Current refresh failed"));
+    });
+    const onRefresh = vi
+      .fn()
+      .mockReturnValueOnce(old)
+      .mockReturnValueOnce(current);
+    const { result, rerender } = renderHook(
+      ({ selected }) =>
+        useSessionHistory(
+          selected,
+          { beforePrepend: vi.fn(), onRefresh },
+          cache,
+        ),
+      { initialProps: { selected } },
+    );
+    expect(onRefresh).toHaveBeenCalledOnce();
+    rerender({ selected: other });
+    rerender({ selected });
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeNull();
+    await act(async () => failOld());
+    expect(result.current.error).toBeNull();
+    expect(result.current.session?.path).toBe(selected.path);
+    expect(result.current.session?.entries[0]?.id).toBe("e0");
+    await act(async () => failCurrent());
+    expect(result.current.error).toBe("historyValidationUnavailable");
+  },
+);
+
 it("cancels an old page request when a new search navigation takes ownership of reading", async () => {
   const latest = session(29, 30);
   let finish!: (

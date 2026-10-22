@@ -735,6 +735,37 @@ it("filters settings by translated setting names and preserves the active page u
 });
 
 it.each([
+  { language: "en", queries: ["runtime", "version", "build"] },
+  { language: "zh", queries: ["运行信息", "版本", "构建"] },
+])(
+  "finds runtime information from settings search in $language",
+  async ({ language, queries }) => {
+    const previousLanguage = i18n.language;
+    await i18n.changeLanguage(language);
+    try {
+      vi.stubGlobal("fetch", settingsFetcher());
+      renderSettings({ entry: "appearance" });
+      const search = screen.getByRole("searchbox", {
+        name: i18n.t("settingsSearch"),
+      });
+      for (const query of queries) {
+        fireEvent.change(search, { target: { value: query } });
+        fireEvent.click(
+          screen.getByRole("tab", { name: i18n.t("generalSettings") }),
+        );
+        expect(
+          screen.getByRole("region", { name: i18n.t("runtimeIdentity") }),
+        ).toBeTruthy();
+        expect((search as HTMLInputElement).value).toBe("");
+      }
+    } finally {
+      cleanup();
+      await i18n.changeLanguage(previousLanguage);
+    }
+  },
+);
+
+it.each([
   { setupWritable: false, settingsErrors: 0 },
   { setupWritable: true, settingsErrors: 1 },
 ])(
@@ -1043,6 +1074,69 @@ it("commits only complete color values and rolls a failed change back to canonic
   expect(save).toHaveBeenCalledOnce();
   await waitFor(() => expect(color.value).toBe("#FFFFFF"));
 });
+
+it.each(["color", "width", "fontSize"])(
+  "preserves a newer canonical %s when an earlier appearance save fails",
+  async (field) => {
+    const catalog = settingsPayload() as WebSettingsCatalog;
+    catalog.setup.ui.webChatWidth = 1200;
+    catalog.setup.ui.webChatFontSize = 18;
+    const save = Promise.withResolvers<boolean>();
+    const onUpdatePreferences = vi.fn(() => save.promise);
+    const element = (current: WebSettingsCatalog, pending: boolean) =>
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(AppearanceSettingsPanel, {
+          catalog: current,
+          theme: "system",
+          pending,
+          error: null,
+          onRefresh: vi.fn(),
+          onUpdatePreferences,
+        }),
+      );
+    const view = render(element(catalog, false));
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("appearanceAdvanced") }),
+    );
+    const color = screen.getByRole<HTMLInputElement>("textbox", {
+      name: i18n.t("appearanceBackground"),
+    });
+    if (field === "color")
+      fireEvent.change(color, { target: { value: "#AABBCC" } });
+    else
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: i18n.t(
+            field === "width" ? "resetChatContentWidth" : "resetChatFontSize",
+          ),
+        }),
+      );
+    expect(onUpdatePreferences).toHaveBeenCalledOnce();
+    const newer = structuredClone(catalog);
+    newer.setup.ui.webAppearance = {
+      ...newer.setup.ui.webAppearance!,
+      background: "#112233",
+    };
+    newer.setup.ui.webChatWidth = 1500;
+    newer.setup.ui.webChatFontSize = 20;
+    view.rerender(element(newer, true));
+    expect(color.value).toBe("#112233");
+    await act(async () => save.resolve(false));
+    expect(color.value).toBe("#112233");
+    expect(
+      screen
+        .getByRole("slider", { name: i18n.t("chatContentWidth") })
+        .getAttribute("aria-valuenow"),
+    ).toBe("1500");
+    expect(
+      screen
+        .getByRole("slider", { name: i18n.t("chatFontSize") })
+        .getAttribute("aria-valuenow"),
+    ).toBe("20");
+  },
+);
 
 it("reviews an exact plugin source and scope without claiming installation or reusing an old setup failure", async () => {
   vi.stubGlobal("fetch", settingsFetcher());

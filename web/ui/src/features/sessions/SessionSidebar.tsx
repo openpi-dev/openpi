@@ -33,6 +33,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -179,6 +180,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [readingAll, setReadingAll] = useState(false);
   const reading = useRef(new Set<string>());
   const lastReadView = useRef<string | null>(null);
+  const automaticRead = useRef<{
+    state: "pending" | "failed";
+    revision: string;
+  } | null>(null);
+  const readConnected = useRef(props.connected);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [draft, setDraft] = useState("");
   const [editError, setEditError] = useState(false);
@@ -206,12 +212,28 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const completedSelection = completionKey(
     selectedSummary ?? { id: "", path: "" },
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     void completedSelection;
     void props.selectedPath;
     lastReadView.current = null;
+    automaticRead.current = null;
+    setReadError(false);
   }, [completedSelection, props.selectedPath]);
   useEffect(() => {
+    const reconnected =
+      readConnected.current === false && props.connected !== false;
+    readConnected.current = props.connected;
+    // A changed read revision may carry a newer manual choice. Preserve it
+    // until the view is reopened, even if an automatic response was lost.
+    if (
+      automaticRead.current &&
+      selectedSummary?.readRevision &&
+      automaticRead.current.revision !== selectedSummary.readRevision
+    ) {
+      automaticRead.current = null;
+      lastReadView.current = completedSelection;
+      setReadError(false);
+    }
     if (
       !props.sessionViewVisible ||
       !selectedSummary ||
@@ -220,8 +242,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
       props.connected === false
     )
       return;
-    let active = true;
-    const acknowledge = () => {
+    const acknowledge = (retryFailure = false) => {
       if (
         document.visibilityState !== "visible" ||
         !document.hasFocus() ||
@@ -229,8 +250,22 @@ export function SessionSidebar(props: SessionSidebarProps) {
       )
         return;
       if (lastReadView.current === completedSelection) return;
-      lastReadView.current = completedSelection;
-      if (!selectedSummary.unread || !selectedSummary.readRevision) return;
+      if (!selectedSummary.unread || !selectedSummary.readRevision) {
+        lastReadView.current = completedSelection;
+        automaticRead.current = null;
+        return;
+      }
+      if (
+        automaticRead.current?.state === "pending" ||
+        (automaticRead.current?.state === "failed" && !retryFailure)
+      )
+        return;
+      const attempt: { state: "pending" | "failed"; revision: string } = {
+        state: "pending",
+        revision: selectedSummary.readRevision,
+      };
+      automaticRead.current = attempt;
+      setReadError(false);
       void props.actions
         .setSessionRead(
           selectedSummary.path,
@@ -238,19 +273,28 @@ export function SessionSidebar(props: SessionSidebarProps) {
           true,
           selectedSummary.readRevision,
         )
+        .then(() => {
+          if (!mounted.current || automaticRead.current !== attempt) return;
+          automaticRead.current = null;
+          lastReadView.current = completedSelection;
+        })
         .catch(() => {
-          if (active) setReadError(true);
+          if (!mounted.current || automaticRead.current !== attempt) return;
+          attempt.state = "failed";
+          setReadError(true);
         });
     };
-    acknowledge();
-    document.addEventListener("visibilitychange", acknowledge);
-    window.addEventListener("focus", acknowledge);
-    document.addEventListener("close", acknowledge, true);
+    // A failed attempt retries on deliberate visibility/focus or reconnect,
+    // never just because a background snapshot rebuilt the same summary.
+    const retryAcknowledge = () => acknowledge(true);
+    acknowledge(reconnected);
+    document.addEventListener("visibilitychange", retryAcknowledge);
+    window.addEventListener("focus", retryAcknowledge);
+    document.addEventListener("close", retryAcknowledge, true);
     return () => {
-      active = false;
-      document.removeEventListener("visibilitychange", acknowledge);
-      window.removeEventListener("focus", acknowledge);
-      document.removeEventListener("close", acknowledge, true);
+      document.removeEventListener("visibilitychange", retryAcknowledge);
+      window.removeEventListener("focus", retryAcknowledge);
+      document.removeEventListener("close", retryAcknowledge, true);
     };
   }, [
     completedSelection,
@@ -339,7 +383,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
     if (!session.readRevision) return;
     const key = completionKey(session);
     if (reading.current.has(key)) return;
-    if (session.path === props.selectedPath) lastReadView.current = key;
+    if (session.path === props.selectedPath) {
+      automaticRead.current = null;
+      lastReadView.current = key;
+    }
     reading.current.add(key);
     setReadError(false);
     try {

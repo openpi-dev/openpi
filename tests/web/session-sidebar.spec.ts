@@ -1323,6 +1323,212 @@ it("keeps a visible conversation manually marked unread elsewhere unread until t
   expect(document.querySelector(".session-state-completed")).toBeTruthy();
 });
 
+function selectedReadFixture() {
+  const entry = session("/viewed", "/repos/long-example", "Viewed chat");
+  entry.unread = true;
+  entry.execution = {
+    status: "idle",
+    lastTurn: { commandId: "viewed-turn", finishedAt: 1, outcome: "completed" },
+  };
+  const data = snapshot([entry]);
+  data.selectedSession = {
+    id: entry.id,
+    path: entry.path,
+    cwd: entry.cwd,
+    entries: [],
+    bytes: 0,
+    truncation: {
+      maxBytes: 1000,
+      entriesOmitted: 0,
+      messagesTruncated: 0,
+      messagePartsOmitted: 0,
+      truncated: false,
+    },
+  };
+  return { entry, data };
+}
+
+it.each(["focus", "reconnect"] as const)(
+  "retries a failed automatic read on %s after a same-revision snapshot replacement",
+  async (trigger) => {
+    const { entry, data } = selectedReadFixture();
+    const actions = createWebStore().getState().actions;
+    let reject!: (error: Error) => void;
+    const read = vi
+      .spyOn(actions, "setSessionRead")
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, fail) => {
+            reject = fail;
+          }),
+      )
+      .mockResolvedValue();
+    const view = mount(data, {
+      actions,
+      selectedPath: entry.path,
+      connected: true,
+      sessionViewVisible: true,
+    });
+    expect(read).toHaveBeenCalledOnce();
+    view.rerender({
+      snapshot: { ...data, cursor: 2, sessions: [{ ...entry }] },
+    });
+    await act(async () => reject(new Error("offline")));
+    expect(screen.getByRole("alert").textContent).toBe(
+      i18n.t("sidebarReadFailed"),
+    );
+    // Snapshot churn is not an unbounded retry loop.
+    view.rerender({
+      snapshot: { ...data, cursor: 3, sessions: [{ ...entry }] },
+    });
+    expect(read).toHaveBeenCalledOnce();
+    if (trigger === "focus") fireEvent(window, new Event("focus"));
+    else {
+      view.rerender({ connected: false });
+      view.rerender({ connected: true });
+    }
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(read).toHaveBeenLastCalledWith(
+      entry.path,
+      entry.id,
+      true,
+      entry.readRevision,
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent(window, new Event("focus"));
+    expect(read).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("does not let an obsolete automatic read failure undo a manual unread intent", async () => {
+  const { entry, data } = selectedReadFixture();
+  const actions = createWebStore().getState().actions;
+  let reject!: (error: Error) => void;
+  const read = vi
+    .spyOn(actions, "setSessionRead")
+    .mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        }),
+    )
+    .mockResolvedValue();
+  const view = mount(data, {
+    actions,
+    selectedPath: entry.path,
+    connected: true,
+    sessionViewVisible: true,
+  });
+  expect(read).toHaveBeenCalledOnce();
+  const confirmed = { ...entry, unread: false, readRevision: "read-confirmed" };
+  view.rerender({ snapshot: { ...data, sessions: [confirmed] } });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("conversationOptions") }),
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", {
+      name: i18n.t("markConversationUnread"),
+    }),
+  );
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  expect(read).toHaveBeenLastCalledWith(
+    entry.path,
+    entry.id,
+    false,
+    "read-confirmed",
+  );
+  view.rerender({
+    snapshot: {
+      ...data,
+      sessions: [{ ...entry, readRevision: "manual-unread" }],
+    },
+  });
+  await act(async () => reject(new Error("obsolete read failed")));
+  fireEvent(window, new Event("focus"));
+  view.rerender({ connected: false });
+  view.rerender({ connected: true });
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("preserves an external unread edit that supersedes a pending automatic read", async () => {
+  const { entry, data } = selectedReadFixture();
+  const actions = createWebStore().getState().actions;
+  let reject!: (error: Error) => void;
+  const read = vi
+    .spyOn(actions, "setSessionRead")
+    .mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        }),
+    )
+    .mockResolvedValue();
+  const view = mount(data, {
+    actions,
+    selectedPath: entry.path,
+    connected: true,
+    sessionViewVisible: true,
+  });
+  expect(read).toHaveBeenCalledOnce();
+  view.rerender({
+    snapshot: {
+      ...data,
+      sessions: [{ ...entry, readRevision: "external-unread" }],
+    },
+  });
+  await act(async () =>
+    reject(
+      new WebApiError("read state changed", 409, "SESSION_READ_STATE_CHANGED"),
+    ),
+  );
+  fireEvent(window, new Event("focus"));
+  view.rerender({ connected: false });
+  view.rerender({ connected: true });
+  expect(read).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(document.querySelector(".session-state-completed")).toBeTruthy();
+});
+
+it("does not attach an old automatic read failure to a newer completion", async () => {
+  const { entry, data } = selectedReadFixture();
+  const actions = createWebStore().getState().actions;
+  let reject!: (error: Error) => void;
+  const read = vi
+    .spyOn(actions, "setSessionRead")
+    .mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        }),
+    )
+    .mockResolvedValue();
+  const view = mount(data, {
+    actions,
+    selectedPath: entry.path,
+    connected: true,
+    sessionViewVisible: true,
+  });
+  const next = {
+    ...entry,
+    readRevision: "next-revision",
+    execution: {
+      status: "idle" as const,
+      lastTurn: {
+        commandId: "next-turn",
+        finishedAt: 2,
+        outcome: "completed" as const,
+      },
+    },
+  };
+  view.rerender({ snapshot: { ...data, sessions: [next] } });
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  await act(async () => reject(new Error("old completion failed")));
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent(window, new Event("focus"));
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
 it("clears sidebar execution markers when the runtime releases the Session", () => {
   const working = session(
     "/repos/long-example/one.jsonl",

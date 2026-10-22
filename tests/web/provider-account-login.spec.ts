@@ -215,6 +215,81 @@ it("recovers a lost start response without creating a second login", async () =>
   expect(view.onAuthenticated).not.toHaveBeenCalled();
 });
 
+it("does not restore answered login choices when an earlier poll arrives late", async () => {
+  const oldPoll = Promise.withResolvers<WebProviderLogin | null>();
+  let captured: WebProviderLogin | null = null;
+  let held = false;
+  vi.mocked(WebClient.prototype.providerLogin).mockImplementation(
+    async (_session, flowId) => {
+      if (flowId && !held) {
+        held = true;
+        captured = structuredClone(state);
+        return oldPoll.promise;
+      }
+      return structuredClone(state);
+    },
+  );
+  vi.mocked(WebClient.prototype.respondProviderLogin).mockImplementation(
+    async () => {
+      state = { ...base };
+      return structuredClone(state);
+    },
+  );
+  mount();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("accountLoginStart") }),
+  );
+  const browser = await screen.findByRole("button", {
+    name: new RegExp(i18n.t("accountLoginBrowser")),
+  });
+  await waitFor(() => expect(held).toBe(true));
+  await act(async () => fireEvent.click(browser));
+  expect(
+    screen.queryByRole("button", {
+      name: new RegExp(i18n.t("accountLoginBrowser")),
+    }),
+  ).toBeNull();
+  await act(async () => oldPoll.resolve(captured));
+  expect(
+    screen.queryByRole("button", {
+      name: new RegExp(i18n.t("accountLoginBrowser")),
+    }),
+  ).toBeNull();
+});
+
+it("keeps unknown login recovery pending until its status is confirmed", async () => {
+  vi.mocked(WebClient.prototype.startProviderLogin).mockRejectedValue(
+    new Error("Connection lost"),
+  );
+  mount();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("accountLoginStart") }),
+  );
+  await screen.findByText(i18n.t("accountLoginRequestFailed"));
+  const recovery = Promise.withResolvers<WebProviderLogin | null>();
+  vi.mocked(WebClient.prototype.providerLogin).mockReturnValue(
+    recovery.promise,
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("refreshStatus") }),
+  );
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("accountLoginStart"),
+    }).disabled,
+  ).toBe(true);
+  expect(
+    screen.queryByRole("button", { name: i18n.t("refreshStatus") }),
+  ).toBeNull();
+  await act(async () => recovery.resolve(null));
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("accountLoginStart"),
+    }).disabled,
+  ).toBe(false);
+  expect(screen.queryByText(i18n.t("accountLoginRequestFailed"))).toBeNull();
+});
+
 it("cancels an orphaned start result after the panel has unmounted", async () => {
   const start = Promise.withResolvers<WebProviderLogin>();
   vi.mocked(WebClient.prototype.startProviderLogin).mockReturnValue(

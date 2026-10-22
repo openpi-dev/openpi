@@ -3,8 +3,8 @@ import type { Element, Root, RootContent } from "hast";
 import { Check, ChevronDown, Clipboard, WrapText } from "lucide-react";
 import type { ComponentPropsWithoutRef } from "react";
 import {
-  isValidElement,
   createContext,
+  isValidElement,
   lazy,
   memo,
   Suspense,
@@ -29,8 +29,10 @@ import { highlightCode } from "../lib/highlight-code.ts";
 
 const StreamingContext = createContext(false);
 
-const MermaidPreview = lazy(
-  () => import("../features/files/MermaidPreview.tsx"),
+const MermaidPreview = lazy(() =>
+  import("../features/files/MermaidPreview.tsx").catch(() => ({
+    default: MermaidLoadFallback,
+  })),
 );
 
 function labelTaskCheckboxes() {
@@ -67,6 +69,7 @@ function labelTaskCheckboxes() {
 declare module "hast" {
   interface ElementData {
     openpiWindowsPath?: string;
+    openpiInlineImage?: boolean;
   }
 }
 
@@ -281,6 +284,23 @@ function CodeBlock({
   );
 }
 
+function MermaidLoadFallback({ source }: { source: string }) {
+  const { t } = useTranslation();
+  return (
+    <div>
+      <div className="evidence-warning" role="alert">
+        <p>{t("filesDiagramLoadError")}</p>
+        <button type="button" onClick={() => window.location.reload()}>
+          {t("reloadPage")}
+        </button>
+      </div>
+      <CodeBlock>
+        <code className="language-mermaid">{source}</code>
+      </CodeBlock>
+    </div>
+  );
+}
+
 function FileCodeBlock(
   props: ComponentPropsWithoutRef<"pre"> & { node?: Element },
 ) {
@@ -354,6 +374,80 @@ function MarkdownLink({
   );
 }
 
+// Mark the first sixteen local images once per parsed document, independent of
+// React render attempts or context updates. Node data cannot come from raw HTML.
+function limitInlineImages() {
+  return (tree: Root) => {
+    let count = 0;
+    const walk = (node: Root | Element) => {
+      if (node.type === "element" && node.tagName === "img") {
+        const src = windowsLink(node) ?? node.properties.src;
+        if (typeof src === "string" && isLocalArtifactLink(src))
+          node.data = { ...node.data, openpiInlineImage: count++ < 16 };
+      }
+      for (const child of node.children)
+        if (child.type === "element") walk(child);
+    };
+    walk(tree);
+  };
+}
+
+function MarkdownImage({
+  src,
+  node,
+  alt,
+  title,
+}: Omit<ComponentPropsWithoutRef<"img">, "src"> & {
+  src?: string;
+  node?: Element;
+}) {
+  const { t } = useTranslation();
+  const artifacts = useContext(ArtifactContext);
+  src = windowsLink(node) ?? src;
+  if (
+    node?.data?.openpiInlineImage &&
+    src &&
+    artifacts?.parent &&
+    !artifacts.disabled
+  )
+    return (
+      <InlineFileImage
+        key={JSON.stringify([artifacts.sessionId, artifacts.parent, src])}
+        src={src}
+        alt={alt || ""}
+      />
+    );
+  if (isLocalArtifactLink(src ?? ""))
+    return artifacts && !artifacts.disabled ? (
+      <button
+        type="button"
+        className="artifact-link"
+        title={`Open read-only file: ${src}`}
+        onClick={() => artifacts.open(src ?? "", artifacts.parent)}
+      >
+        [image: {alt || "image"}]
+        <small className="artifact-link-path" aria-hidden="true">
+          {" "}
+          ({src})
+        </small>
+      </button>
+    ) : (
+      <span title={t("artifactReferenceUnavailable", { path: src })}>
+        [image: {alt || "image"}]
+        <small className="artifact-link-path"> ({src})</small>
+      </span>
+    );
+  const safeHref = safeUrl(src ?? "");
+  const label = alt || "image";
+  return safeHref ? (
+    <a href={safeHref} title={title} target="_blank" rel="noreferrer">
+      [image: {label}]
+    </a>
+  ) : (
+    <span>{label}</span>
+  );
+}
+
 const MarkdownContent = memo(function MarkdownContent({
   children,
   filePreview = false,
@@ -361,9 +455,6 @@ const MarkdownContent = memo(function MarkdownContent({
   children: string;
   filePreview?: boolean;
 }) {
-  const { t } = useTranslation();
-  const artifacts = useContext(ArtifactContext);
-  let imageCount = 0;
   return (
     <div className="markdown">
       <ReactMarkdown
@@ -373,6 +464,7 @@ const MarkdownContent = memo(function MarkdownContent({
           preserveWindowsLinks,
           rehypeSanitize,
           labelTaskCheckboxes,
+          ...(filePreview ? [limitInlineImages] : []),
         ]}
         urlTransform={(value) =>
           isLocalArtifactLink(value) ? value : safeUrl(value)
@@ -381,47 +473,7 @@ const MarkdownContent = memo(function MarkdownContent({
           pre: filePreview ? FileCodeBlock : CodeBlock,
           table: MarkdownTable,
           a: MarkdownLink,
-          img({ src, node, alt, title }) {
-            src = windowsLink(node) ?? src;
-            if (
-              filePreview &&
-              src &&
-              isLocalArtifactLink(src) &&
-              artifacts?.parent &&
-              !artifacts.disabled &&
-              imageCount++ < 16
-            )
-              return <InlineFileImage src={src} alt={alt || ""} />;
-            if (isLocalArtifactLink(src ?? ""))
-              return artifacts && !artifacts.disabled ? (
-                <button
-                  type="button"
-                  className="artifact-link"
-                  title={`Open read-only file: ${src}`}
-                  onClick={() => artifacts.open(src ?? "", artifacts.parent)}
-                >
-                  [image: {alt || "image"}]
-                  <small className="artifact-link-path" aria-hidden="true">
-                    {" "}
-                    ({src})
-                  </small>
-                </button>
-              ) : (
-                <span title={t("artifactReferenceUnavailable", { path: src })}>
-                  [image: {alt || "image"}]
-                  <small className="artifact-link-path"> ({src})</small>
-                </span>
-              );
-            const safeHref = safeUrl(src ?? "");
-            const label = alt || "image";
-            return safeHref ? (
-              <a href={safeHref} title={title} target="_blank" rel="noreferrer">
-                [image: {label}]
-              </a>
-            ) : (
-              <span>{label}</span>
-            );
-          },
+          img: MarkdownImage,
         }}
       >
         {children}

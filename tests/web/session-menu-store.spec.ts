@@ -91,6 +91,89 @@ it("shows archive receipts only after native success and keeps each undo target 
   expect(store.getState().archiveNotices).toEqual([]);
 });
 
+it("retains an undo receipt after snapshot failure and clears it only after an explicit confirmed retry", async () => {
+  const client = new WebClient();
+  const restore = vi.spyOn(client, "unarchiveSession").mockResolvedValue({
+    path,
+    archived: false,
+  });
+  vi.spyOn(client, "snapshot")
+    .mockRejectedValueOnce(new Error("Temporary snapshot failure"))
+    .mockResolvedValueOnce(snapshot());
+  const receipt = { key: "original", path, sessionId: id, title: id };
+  const store = createWebStore(client);
+  store.setState({
+    snapshot: snapshot(),
+    selectedPath: path,
+    archiveNotices: [receipt],
+  });
+  expect(await store.getState().actions.unarchiveSession(path)).toBe(false);
+  expect(store.getState().archiveNotices).toEqual([receipt]);
+  expect(await store.getState().actions.unarchiveSession(path)).toBe(true);
+  expect(restore.mock.calls).toEqual([[path], [path]]);
+  expect(store.getState().archiveNotices).toEqual([]);
+});
+
+it.each([false, true])(
+  "preserves a newer same-path archive receipt during delayed restore (Session changed: %s)",
+  async (changed) => {
+    const client = new WebClient();
+    let finish!: () => void;
+    vi.spyOn(client, "unarchiveSession").mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return { path, archived: false };
+    });
+    vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+    const original = { key: "original", path, sessionId: id, title: id };
+    const newer = { ...original, key: "newer" };
+    const other = { key: "other", path: "/other.jsonl", title: "Other" };
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: snapshot(),
+      selectedPath: path,
+      archiveNotices: [original],
+    });
+    const pending = store.getState().actions.unarchiveSession(path);
+    if (changed) store.getState().actions.setWorkspace("/other");
+    store.setState({ archiveNotices: [newer, original, other] });
+    finish();
+    expect(await pending).toBe(true);
+    expect(store.getState().archiveNotices).toEqual([newer, other]);
+  },
+);
+
+it("keeps a new archive receipt that arrives while restore snapshot confirmation is pending", async () => {
+  const client = new WebClient();
+  vi.spyOn(client, "unarchiveSession").mockResolvedValue({
+    path,
+    archived: false,
+  });
+  let finish!: (value: WebSnapshot) => void;
+  vi.spyOn(client, "snapshot").mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const original = { key: "original", path, sessionId: id, title: id };
+  const newer = { ...original, key: "newer" };
+  const store = createWebStore(client);
+  store.setState({
+    snapshot: snapshot(),
+    selectedPath: path,
+    archiveNotices: [original],
+  });
+  const pending = store.getState().actions.unarchiveSession(path);
+  await vi.waitFor(() => expect(client.snapshot).toHaveBeenCalledOnce());
+  store.setState({
+    archiveNotices: [newer, ...store.getState().archiveNotices],
+  });
+  finish(snapshot());
+  expect(await pending).toBe(true);
+  expect(store.getState().archiveNotices).toEqual([newer]);
+});
+
 it("forks a complete conversation without treating the last displayed message as the native branch tip", async () => {
   const client = new WebClient();
   const read = vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());

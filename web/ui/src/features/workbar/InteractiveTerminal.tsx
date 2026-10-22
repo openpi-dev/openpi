@@ -53,12 +53,14 @@ export function InteractiveTerminal({
   cwd,
   tabId,
   active = true,
+  canFocusOnMount,
   onConnectionChange,
 }: {
   sessionId: string;
   cwd: string;
   tabId?: string;
   active?: boolean;
+  canFocusOnMount?: () => boolean;
   onConnectionChange?: (state: { id: string | null; pending: boolean }) => void;
 }) {
   const { t } = useTranslation();
@@ -72,6 +74,7 @@ export function InteractiveTerminal({
       .pop() || cwd;
   const activeRef = useRef(active);
   activeRef.current = active;
+  const mountFocus = useRef(canFocusOnMount);
   const container = useRef<HTMLDivElement>(null);
   const restartFocusIntent = useRef<{
     sessionId: string;
@@ -145,7 +148,7 @@ export function InteractiveTerminal({
     // steal focus back after the user has moved to another input or panel.
     if (
       !host.closest("[hidden], [inert]") &&
-      (generation === 0 ||
+      ((generation === 0 && (mountFocus.current?.() ?? true)) ||
         host
           .closest(".interactive-terminal")
           ?.contains(document.activeElement) ||

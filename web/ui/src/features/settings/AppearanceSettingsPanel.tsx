@@ -13,7 +13,7 @@ import {
   RefreshCw,
   RotateCcw,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebAppearancePreference,
@@ -107,13 +107,15 @@ function AppearanceColor({
   onSave: (color: string) => Promise<boolean>;
 }) {
   const saved = (value || fallback).toUpperCase();
+  const latestSaved = useRef(saved);
+  latestSaved.current = saved;
   const [draft, setDraft] = useState(saved);
   useEffect(() => setDraft(saved), [saved]);
   const save = (color: string) => {
     setDraft(color);
     if (color !== saved && /^#[0-9a-f]{6}$/iu.test(color))
       void onSave(color).then((ok) => {
-        if (!ok) setDraft(saved);
+        if (!ok) setDraft(latestSaved.current);
       });
   };
   return (
@@ -172,6 +174,12 @@ export function AppearanceSettingsPanel({
   const [copyStatus, setCopyStatus] = useState<"saved" | "failed" | null>(null);
   const [chatWidth, setChatWidth] = useState(setup?.ui.webChatWidth ?? 820);
   const [fontSize, setFontSize] = useState(setup?.ui.webChatFontSize ?? 14);
+  const savedLayout = useRef({ chatWidth, fontSize });
+  if (setup)
+    savedLayout.current = {
+      chatWidth: setup.ui.webChatWidth,
+      fontSize: setup.ui.webChatFontSize,
+    };
   useEffect(() => {
     if (!setup) return;
     setChatWidth(setup.ui.webChatWidth);
@@ -506,7 +514,7 @@ export function AppearanceSettingsPanel({
                   onClick={() => {
                     setChatWidth(820);
                     void onUpdatePreferences({ chatWidth: 820 }).then((ok) => {
-                      if (!ok) setChatWidth(setup.ui.webChatWidth);
+                      if (!ok) setChatWidth(savedLayout.current.chatWidth);
                     });
                   }}
                 >
@@ -528,7 +536,7 @@ export function AppearanceSettingsPanel({
                   if (value !== setup.ui.webChatWidth)
                     void onUpdatePreferences({ chatWidth: value }).then(
                       (ok) => {
-                        if (!ok) setChatWidth(setup.ui.webChatWidth);
+                        if (!ok) setChatWidth(savedLayout.current.chatWidth);
                       },
                     );
                 }}
@@ -547,7 +555,7 @@ export function AppearanceSettingsPanel({
                     setFontSize(14);
                     void onUpdatePreferences({ chatFontSize: 14 }).then(
                       (ok) => {
-                        if (!ok) setFontSize(setup.ui.webChatFontSize);
+                        if (!ok) setFontSize(savedLayout.current.fontSize);
                       },
                     );
                   }}
@@ -570,7 +578,7 @@ export function AppearanceSettingsPanel({
                   if (value !== setup.ui.webChatFontSize)
                     void onUpdatePreferences({ chatFontSize: value }).then(
                       (ok) => {
-                        if (!ok) setFontSize(setup.ui.webChatFontSize);
+                        if (!ok) setFontSize(savedLayout.current.fontSize);
                       },
                     );
                 }}

@@ -37,6 +37,7 @@ export function ProviderAccountLogin({
   const mounted = useRef(false);
   const live = useRef<WebProviderLogin | null>(null);
   const lock = useRef(false);
+  const readGeneration = useRef(0);
   const completed = useRef<string | null>(null);
   const callbacks = useRef({ onSaving, onAuthenticated });
   callbacks.current = { onSaving, onAuthenticated };
@@ -91,11 +92,14 @@ export function ProviderAccountLogin({
     setCopied(false);
     setLogoutRefreshRequired(false);
     const controller = new AbortController();
+    const generation = readGeneration.current;
     void new WebClient()
       .providerLogin(sessionId, undefined, controller.signal)
       .then((next) => {
         if (
           !controller.signal.aborted &&
+          generation === readGeneration.current &&
+          !lock.current &&
           next?.provider === provider &&
           providerLoginActive(next)
         )
@@ -129,8 +133,9 @@ export function ProviderAccountLogin({
   }, [flowId]);
   useEffect(() => {
     void revision;
-    if (!active || !flowId) return;
+    if (pending || lock.current || !active || !flowId) return;
     const controller = new AbortController();
+    const generation = readGeneration.current;
     let timer = 0;
     const poll = async () => {
       try {
@@ -139,12 +144,22 @@ export function ProviderAccountLogin({
           flowId,
           controller.signal,
         );
-        if (controller.signal.aborted) return;
+        if (
+          controller.signal.aborted ||
+          generation !== readGeneration.current ||
+          lock.current
+        )
+          return;
         accept(next, flowId);
         if (providerLoginActive(next))
           timer = window.setTimeout(() => void poll(), 900);
       } catch {
-        if (!controller.signal.aborted) setPollError(true);
+        if (
+          !controller.signal.aborted &&
+          generation === readGeneration.current &&
+          !lock.current
+        )
+          setPollError(true);
       }
     };
     void poll();
@@ -152,21 +167,30 @@ export function ProviderAccountLogin({
       controller.abort();
       clearTimeout(timer);
     };
-  }, [sessionId, accept, flowId, active, revision]);
+  }, [sessionId, accept, flowId, active, pending, revision]);
 
-  const run = async (operation: () => Promise<WebProviderLogin>) => {
+  const run = async (
+    operation: () => Promise<WebProviderLogin | null>,
+    id?: string,
+  ) => {
     if (lock.current) return;
     lock.current = true;
+    readGeneration.current++;
     setPending(true);
     setError(false);
     try {
-      accept(await operation());
+      accept(await operation(), id);
     } catch {
       if (mounted.current && owner.current === scope) setError(true);
     } finally {
       if (owner.current === scope) {
         lock.current = false;
-        if (mounted.current) setPending(false);
+        readGeneration.current++;
+        if (mounted.current) {
+          setPending(false);
+          // Even a batched pending update must restart reads after a write.
+          refresh((count) => count + 1);
+        }
       }
     }
   };
@@ -182,17 +206,9 @@ export function ProviderAccountLogin({
       new WebClient().respondProviderLogin(sessionId, id, prompt.id, answer),
     );
   };
-  const recover = async () => {
-    try {
-      const next = await new WebClient().providerLogin(sessionId, flow?.id);
-      accept(next, flow?.id);
-      if (mounted.current && owner.current === scope) {
-        setError(false);
-        refresh((count) => count + 1);
-      }
-    } catch {
-      if (mounted.current && owner.current === scope) setError(true);
-    }
+  const recover = () => {
+    const id = flow?.id;
+    return run(() => new WebClient().providerLogin(sessionId, id), id);
   };
   const prompt = flow?.prompt;
   const waiting = flow?.auth || flow?.device;
@@ -490,6 +506,7 @@ export function ProviderAccountLogin({
           onAction={() => {
             if (lock.current || busy) return;
             lock.current = true;
+            readGeneration.current++;
             setPending(true);
             setError(false);
             void new WebClient()
@@ -509,7 +526,11 @@ export function ProviderAccountLogin({
               .finally(() => {
                 if (owner.current === scope) {
                   lock.current = false;
-                  if (mounted.current) setPending(false);
+                  readGeneration.current++;
+                  if (mounted.current) {
+                    setPending(false);
+                    refresh((count) => count + 1);
+                  }
                 }
               });
           }}

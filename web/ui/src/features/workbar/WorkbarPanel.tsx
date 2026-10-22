@@ -18,6 +18,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   Plus,
+  RefreshCw,
   SquareTerminal,
   Square,
   X,
@@ -51,7 +52,7 @@ import {
 import { useTurnReview } from "../review/use-turn-review.ts";
 import { SubagentDetailView } from "../subagents/SubagentPanel.tsx";
 import { BrowserPanel } from "./BrowserPanel.tsx";
-import { InteractiveTerminal } from "./InteractiveTerminal.tsx";
+import type { InteractiveTerminal } from "./InteractiveTerminal.tsx";
 import type { WorkbarTool } from "./types.ts";
 import {
   useWorkbarReadingState,
@@ -523,15 +524,78 @@ function TerminalPanel({
   active: boolean;
   onConnectionChange: (state: { id: string | null; pending: boolean }) => void;
 }) {
+  const { t } = useTranslation();
+  const reading = useWorkbarReadingState();
+  const host = useRef<HTMLDivElement>(null);
+  const connectionChange = useRef(onConnectionChange);
+  connectionChange.current = onConnectionChange;
+  const focusIntent = useRef(true);
+  const [Terminal, setTerminal] = useState<typeof InteractiveTerminal | null>(
+    null,
+  );
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    focusIntent.current = true;
+    const preserveFocus = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      // The workbar may transfer focus to its selected tab after menu dismissal.
+      // Any later move into chat, another tool, or an action cancels autofocus.
+      if (
+        !host.current?.contains(target) &&
+        !target.matches(".workbar-tab[data-active] > button:first-child")
+      )
+        focusIntent.current = false;
+    };
+    document.addEventListener("focusin", preserveFocus);
+    const id = reading?.terminals?.[tabId]?.id ?? null;
+    connectionChange.current({ id, pending: true });
+    void import("./InteractiveTerminal.tsx").then(
+      (module) => {
+        if (!disposed) setTerminal(() => module.InteractiveTerminal);
+      },
+      () => {
+        if (disposed) return;
+        setFailed(true);
+        connectionChange.current({ id, pending: false });
+      },
+    );
+    return () => {
+      disposed = true;
+      document.removeEventListener("focusin", preserveFocus);
+    };
+  }, [reading, tabId]);
   return (
-    <div className="terminal-workspace">
-      <InteractiveTerminal
-        sessionId={sessionId}
-        cwd={cwd}
-        tabId={tabId}
-        active={active}
-        onConnectionChange={onConnectionChange}
-      />
+    <div className="terminal-workspace" ref={host}>
+      {Terminal ? (
+        <Terminal
+          sessionId={sessionId}
+          cwd={cwd}
+          tabId={tabId}
+          active={active}
+          canFocusOnMount={() => focusIntent.current}
+          onConnectionChange={onConnectionChange}
+        />
+      ) : (
+        <section className="interactive-terminal" aria-label={t("terminal")}>
+          <div className="interactive-terminal-notice" aria-live="polite">
+            <span className={failed ? "error" : undefined}>
+              {t(failed ? "terminalLoadError" : "terminalConnecting")}
+            </span>
+            {failed && (
+              <button
+                type="button"
+                className="terminal-reconnect-action"
+                onClick={() => window.location.reload()}
+              >
+                <RefreshCw aria-hidden="true" />
+                <span>{t("reloadPage")}</span>
+              </button>
+            )}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

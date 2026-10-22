@@ -877,10 +877,28 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(pageHtml, /href="\/favicon\.svg"/);
     assert.doesNotMatch(pageHtml, /marked\.js|https?:\/\//u);
 
-    const app = await fetch(`${launched.origin}/app.js`);
-    assert.equal(app.status, 200);
-    assert.match(app.headers.get("content-type") || "", /javascript/);
-    const appSource = await app.text();
+    const preloadScripts = [...pageHtml.matchAll(/<link\b[^>]*>/gu)]
+      .map(([tag]) => tag)
+      .filter((tag) => /\brel="modulepreload"/u.test(tag))
+      .map((tag) => {
+        const href = tag.match(/\bhref="([^"]+)"/u)?.[1];
+        assert.ok(href, "Module preload must name its script");
+        return href;
+      });
+    const appSource = (
+      await Promise.all(
+        ["/app.js", ...preloadScripts].map(async (path) => {
+          const script = await fetch(new URL(path, launched.origin));
+          assert.equal(script.status, 200, path);
+          assert.match(
+            script.headers.get("content-type") || "",
+            /javascript/,
+            path,
+          );
+          return script.text();
+        }),
+      )
+    ).join("\n");
     assert.ok(!appSource.includes(token));
     assert.match(appSource, /OpenPI Web root is missing/);
     assert.match(appSource, /openpi\.web\.token/);
@@ -1331,6 +1349,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(diagnosticsResponse.status, 200);
     const diagnosticsBody = await diagnosticsResponse.json();
     assert.deepEqual(diagnosticsBody, {
+      openpi: (await import("../../web/host/runtime-info.ts"))
+        .webRuntimeStartup,
       node: process.version,
       cwd,
       sessionId: sessionManager.getSessionId(),

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../web/ui/src/i18n.ts";
 import {
   WEB_MAX_ENTRIES,
   WEB_PROMPT_MAX_TEXT_LENGTH,
@@ -13,6 +12,7 @@ import {
   type WebSnapshot,
   type WebThinkingState,
 } from "../../web/protocol/types.ts";
+import { i18n } from "../../web/ui/src/i18n.ts";
 import {
   type CommandReceipt,
   type SessionCreationResult,
@@ -2476,6 +2476,100 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  it("restores connection after snapshot recovery while the same event stream remains live", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    expect(store.getState().connection).toBe("connecting");
+    store.getState().actions.start();
+    try {
+      expect(store.getState().connection).toBe("connected");
+      client.snapshots.push(
+        Promise.reject(new Error("Temporary snapshot failure")),
+      );
+      expect(await store.getState().actions.refreshSnapshot()).toBe(false);
+      expect(store.getState().connection).toBe("unavailable");
+      client.snapshots.push(Promise.resolve(snapshot()));
+      expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+      expect(store.getState().connection).toBe("connected");
+      expect(stream.consumeEvents).toHaveBeenCalledOnce();
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("does not infer a healthy event stream from successful HTTP recovery after a disconnect", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const disconnected = deferred<void>();
+    const consumeEvents = vi.fn((options: EventStreamOptions) => {
+      options.onConnected();
+      return disconnected.promise;
+    });
+    const store = createWebStore(client, { consumeEvents });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    try {
+      client.snapshots.push(Promise.resolve(snapshot()));
+      disconnected.reject(new Error("Event stream closed"));
+      await vi.waitFor(() => expect(client.snapshotPaths).toHaveLength(2));
+      expect(store.getState().connection).toBe("reconnecting");
+      client.snapshots.push(Promise.resolve(snapshot()));
+      expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+      expect(store.getState().connection).toBe("reconnecting");
+      expect(consumeEvents).toHaveBeenCalledOnce();
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("ignores old connection callbacks and cleanup after stopping and restarting the stream", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const old = deferred<void>();
+    const callbacks: EventStreamOptions[] = [];
+    const consumeEvents = vi.fn((options: EventStreamOptions) => {
+      callbacks.push(options);
+      if (callbacks.length === 1) return old.promise;
+      return new Promise<void>((resolve) => {
+        options.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      });
+    });
+    const store = createWebStore(client, { consumeEvents });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    callbacks[0]!.onConnected();
+    client.snapshots.push(
+      Promise.reject(new Error("Temporary snapshot failure")),
+    );
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.stop();
+    store.getState().actions.start();
+    try {
+      callbacks[0]!.onConnected();
+      expect(store.getState().connection).toBe("unavailable");
+      callbacks[1]!.onConnected();
+      expect(store.getState().connection).toBe("connected");
+      old.resolve();
+      await old.promise;
+      client.snapshots.push(
+        Promise.reject(new Error("Another snapshot failure")),
+      );
+      await store.getState().actions.refreshSnapshot();
+      client.snapshots.push(Promise.resolve(snapshot()));
+      expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+      expect(store.getState().connection).toBe("connected");
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
   it("preserves a business notice when the event stream reconnects", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));
@@ -4355,6 +4449,143 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  for (const transition of ["events", "snapshot", "Session switch"] as const) {
+    for (const outcome of ["success", "rejection"] as const) {
+      it(`keeps the next turn cancellable after ${transition} and ignores an old cancellation ${outcome}`, async () => {
+        const client = new FakeClient();
+        client.snapshots.push(Promise.resolve(snapshot()));
+        const first = deferred<{ state: "accepted" }>();
+        const second = deferred<{ state: "accepted" }>();
+        const cancel = vi
+          .spyOn(client, "cancelActiveTurn")
+          .mockReturnValueOnce(first.promise)
+          .mockReturnValueOnce(second.promise);
+        const stream = eventStreamHarness();
+        const store = createWebStore(client, {
+          consumeEvents: stream.consumeEvents,
+        });
+        await store.getState().actions.refreshSnapshot();
+        store.getState().actions.start();
+        const firstTurn = {
+          sessionId: "session-1",
+          sessionPath: "/tmp/ws/session.jsonl",
+          commandId: "turn-1",
+          epoch: 1,
+        };
+        const secondTurn = {
+          sessionId:
+            transition === "Session switch" ? "session-2" : "session-1",
+          sessionPath:
+            transition === "Session switch"
+              ? "/tmp/ws/b.jsonl"
+              : "/tmp/ws/session.jsonl",
+          commandId: "turn-2",
+          epoch: 2,
+        };
+        stream.emit(runtimeEvent(5, "turn_started", firstTurn));
+        const stoppingFirst = store.getState().actions.cancelActiveTurn();
+        let stoppingSecond: Promise<void> | undefined;
+        try {
+          if (transition === "events") {
+            stream.emit(
+              runtimeEvent(6, "turn_settled", {
+                ...firstTurn,
+                commandId: "another-turn",
+                outcome: "cancelled",
+              }),
+            );
+            stream.emit(
+              runtimeEvent(7, "turn_settled", {
+                ...firstTurn,
+                epoch: 99,
+                outcome: "cancelled",
+              }),
+            );
+            expect(store.getState().turnCancellationPending).toBe(true);
+            stream.emit(
+              runtimeEvent(8, "turn_settled", {
+                ...firstTurn,
+                outcome: "cancelled",
+              }),
+            );
+            expect(store.getState().turnCancellationPending).toBe(false);
+            stream.emit(runtimeEvent(9, "turn_started", secondTurn));
+          } else {
+            const next = activeSnapshot(
+              secondTurn.sessionId,
+              secondTurn.sessionPath,
+              { cursor: 9 },
+            );
+            next.runtime = {
+              ...next.runtime,
+              status: "running",
+              activeTurn: secondTurn,
+            };
+            client.snapshots.push(Promise.resolve(next));
+            if (transition === "Session switch") {
+              client.selectionResults.push(Promise.resolve({}));
+              expect(
+                await store
+                  .getState()
+                  .actions.selectSession(secondTurn.sessionPath),
+              ).toBe(true);
+            } else {
+              expect(await store.getState().actions.refreshSnapshot()).toBe(
+                true,
+              );
+            }
+            expect(store.getState().turnCancellationPending).toBe(false);
+          }
+          stoppingSecond = store.getState().actions.cancelActiveTurn();
+          expect(cancel.mock.calls.map(([turn]) => turn)).toEqual([
+            firstTurn,
+            secondTurn,
+          ]);
+          expect(store.getState().turnCancellationPending).toBe(true);
+          if (transition === "events") {
+            const stale = snapshot();
+            stale.cursor = 8;
+            stale.runtime = {
+              ...stale.runtime,
+              status: "running",
+              activeTurn: firstTurn,
+            };
+            client.snapshots.push(Promise.resolve(stale));
+            await store.getState().actions.refreshSnapshot();
+            expect(store.getState().activeTurn).toEqual(secondTurn);
+            expect(store.getState().turnCancellationPending).toBe(true);
+          }
+          stream.emit(
+            runtimeEvent(10, "turn_settled", {
+              ...firstTurn,
+              outcome: "cancelled",
+            }),
+          );
+          expect(store.getState().turnCancellationPending).toBe(true);
+          const snapshotsBeforeReceipt = client.snapshotPaths.length;
+          if (outcome === "success") first.resolve({ state: "accepted" });
+          else first.reject(new Error("old cancellation response lost"));
+          await stoppingFirst;
+          expect(store.getState().turnCancellationPending).toBe(true);
+          expect(store.getState().activeTurn).toEqual(secondTurn);
+          expect(store.getState().notice).toBeNull();
+          expect(client.snapshotPaths).toHaveLength(snapshotsBeforeReceipt);
+          second.resolve({ state: "accepted" });
+          await stoppingSecond;
+          expect(store.getState().turnCancellationPending).toBe(false);
+          expect(store.getState().activeTurn).toEqual(secondTurn);
+          expect(store.getState().liveRunning).toBe(true);
+        } finally {
+          first.resolve({ state: "accepted" });
+          second.resolve({ state: "accepted" });
+          await stoppingFirst;
+          await stoppingSecond;
+          store.getState().actions.stop();
+        }
+      });
+    }
+  }
+
   it.each([true, false])(
     "clears retry presentation on native retry end (success %s), keeping execution until settled",
     async (success) => {
@@ -4799,6 +5030,37 @@ describe("draft model selection", () => {
     expect(store.getState().notice).toContain("no longer active");
   });
 
+  it("sends the first prompt when a concurrent refresh supersedes model confirmation", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    const confirmation = deferred<WebSnapshot>();
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      confirmation.promise,
+      Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
+    );
+    try {
+      const sending = store.getState().actions.sendPrompt("hello");
+      await vi.waitFor(() => expect(client.snapshotPaths).toHaveLength(2));
+      expect(client.prompts).toEqual([]);
+      expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+      confirmation.resolve(snapshot());
+
+      expect(await sending).toBe(true);
+      expect(client.creations).toHaveLength(1);
+      expect(client.modelSelections).toHaveLength(1);
+      expect(client.prompts).toEqual([
+        { sessionId: "session-1", content: "hello" },
+      ]);
+      expect(store.getState().draftModel).toBeNull();
+      expect(store.getState().notice).toBeNull();
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
   it("blocks fallback on unavailable model and retries using the already-created Session", async () => {
     const { client, store } = draftHarness();
     await store.getState().actions.selectModel("test/model");
@@ -5216,6 +5478,62 @@ describe("thinking level selection", () => {
     store.getState().actions.stop();
   });
 
+  for (const outcome of ["success", "ambiguous rejection"] as const) {
+    it(`confirms a return to the original level after a superseded ${outcome}`, async () => {
+      const { client, store } = await harness({ level: "medium", revision: 4 });
+      const first = deferred<WebThinkingState & { sessionId: string }>();
+      const latest = deferred<WebThinkingState & { sessionId: string }>();
+      client.setThinkingResults.push(first.promise, latest.promise);
+      try {
+        store.getState().actions.selectThinking("low");
+        store.getState().actions.selectThinking("medium");
+        expect(store.getState().thinkingPendingLevel).toBe("medium");
+        expect(client.thinkings).toEqual([
+          { sessionId: "session-1", level: "low" },
+        ]);
+
+        // The first native write can complete before its event/snapshot reaches
+        // the browser, including when its response is lost after applying it.
+        if (outcome === "success") {
+          first.resolve({
+            ...store.getState().snapshot!.thinking!,
+            sessionId: "session-1",
+            level: "low",
+            revision: 5,
+          });
+        } else {
+          first.reject(new Error("response lost after applying the level"));
+        }
+        await vi.waitFor(() =>
+          expect(client.thinkings).toEqual([
+            { sessionId: "session-1", level: "low" },
+            { sessionId: "session-1", level: "medium" },
+          ]),
+        );
+        expect(store.getState().thinkingPendingLevel).toBe("medium");
+        expect(store.getState().snapshot?.thinking?.revision).toBe(4);
+        expect(store.getState().notice).toBeNull();
+
+        latest.resolve({
+          ...store.getState().snapshot!.thinking!,
+          sessionId: "session-1",
+          level: "medium",
+          revision: 6,
+        });
+        await vi.waitFor(() =>
+          expect(store.getState().thinkingPendingLevel).toBeNull(),
+        );
+        expect(store.getState().snapshot?.thinking).toMatchObject({
+          level: "medium",
+          revision: 6,
+        });
+        expect(store.getState().notice).toBeNull();
+      } finally {
+        store.getState().actions.stop();
+      }
+    });
+  }
+
   it("clears pending on a Session switch without touching the new Session", async () => {
     const { client, store } = await harness();
     const first = deferred<WebThinkingState & { sessionId: string }>();
@@ -5526,6 +5844,184 @@ describe("thinking level selection", () => {
     });
     store.getState().actions.stop();
   });
+
+  it("reconfirms a pending level without importing receipts from the previous host", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 40 });
+    const old = deferred<WebThinkingState & { sessionId: string }>();
+    const current = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(old.promise, current.promise);
+    try {
+      store.getState().actions.selectThinking("high");
+      client.snapshots.push(
+        Promise.resolve(
+          withThinking(snapshot(), { level: "high", revision: 0 }),
+        ),
+      );
+      await store.getState().actions.refreshSnapshot({ resetCursor: true });
+      expect(store.getState().thinkingPendingLevel).toBe("high");
+      old.resolve({
+        ...store.getState().snapshot!.thinking!,
+        sessionId: "session-1",
+        level: "high",
+        revision: 41,
+      });
+      await vi.waitFor(() => expect(client.thinkings).toHaveLength(2));
+      expect(store.getState().thinkingPendingLevel).toBe("high");
+      expect(store.getState().snapshot?.thinking?.revision).toBe(0);
+      current.resolve({
+        ...store.getState().snapshot!.thinking!,
+        sessionId: "session-1",
+        level: "high",
+        revision: 1,
+      });
+      await vi.waitFor(() =>
+        expect(store.getState().thinkingPendingLevel).toBeNull(),
+      );
+      client.setThinkingResults.push(
+        Promise.resolve({
+          ...store.getState().snapshot!.thinking!,
+          sessionId: "session-1",
+          level: "low",
+          revision: 2,
+        }),
+      );
+      store.getState().actions.selectThinking("low");
+      await vi.waitFor(() =>
+        expect(store.getState().thinkingPendingLevel).toBeNull(),
+      );
+      expect(store.getState().snapshot?.thinking).toMatchObject({
+        level: "low",
+        revision: 2,
+      });
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("keeps the latest queued intent through a same-host reconnect reset", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 40 });
+    const first = deferred<WebThinkingState & { sessionId: string }>();
+    const latest = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(first.promise, latest.promise);
+    try {
+      store.getState().actions.selectThinking("high");
+      store.getState().actions.selectThinking("low");
+      client.snapshots.push(
+        Promise.resolve(
+          withThinking(snapshot(), { level: "medium", revision: 40 }),
+        ),
+      );
+      await store.getState().actions.refreshSnapshot({ resetCursor: true });
+      expect(store.getState().thinkingPendingLevel).toBe("low");
+      first.resolve({
+        ...store.getState().snapshot!.thinking!,
+        sessionId: "session-1",
+        level: "high",
+        revision: 41,
+      });
+      await vi.waitFor(() =>
+        expect(client.thinkings).toEqual([
+          { sessionId: "session-1", level: "high" },
+          { sessionId: "session-1", level: "low" },
+        ]),
+      );
+      expect(store.getState().thinkingPendingLevel).toBe("low");
+      latest.resolve({
+        ...store.getState().snapshot!.thinking!,
+        sessionId: "session-1",
+        level: "low",
+        revision: 42,
+      });
+      await vi.waitFor(() =>
+        expect(store.getState().thinkingPendingLevel).toBeNull(),
+      );
+      expect(store.getState().snapshot?.thinking).toMatchObject({
+        level: "low",
+        revision: 42,
+      });
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("drops a reconciliation GET from before the host revision gate reset", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 40 });
+    const reconciliation = deferred<WebThinkingState & { sessionId: string }>();
+    client.thinkingResult = reconciliation.promise;
+    client.setThinkingResults.push(
+      Promise.reject(new Error("old request failed")),
+    );
+    try {
+      store.getState().actions.selectThinking("high");
+      await vi.waitFor(() => expect(client.thinkingRequests).toHaveLength(1));
+      client.snapshots.push(
+        Promise.resolve(
+          withThinking(snapshot(), { level: "low", revision: 0 }),
+        ),
+      );
+      await store.getState().actions.refreshSnapshot({ resetCursor: true });
+      reconciliation.resolve({
+        ...store.getState().snapshot!.thinking!,
+        sessionId: "session-1",
+        level: "high",
+        revision: 41,
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(store.getState().snapshot?.thinking).toMatchObject({
+        level: "low",
+        revision: 0,
+      });
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  for (const outcome of ["success", "rejection"] as const) {
+    it(`drops a reset same-Session flush after late ${outcome} without touching newer intent`, async () => {
+      const { client, store } = await harness({ level: "medium", revision: 4 });
+      const old = deferred<WebThinkingState & { sessionId: string }>();
+      const current = deferred<WebThinkingState & { sessionId: string }>();
+      client.setThinkingResults.push(old.promise, current.promise);
+      try {
+        store.getState().actions.selectThinking("high");
+        store.getState().actions.stop();
+        store.getState().actions.selectThinking("low");
+        if (outcome === "success") {
+          old.resolve({
+            ...store.getState().snapshot!.thinking!,
+            sessionId: "session-1",
+            level: "high",
+            revision: 5,
+          });
+        } else {
+          old.reject(new Error("superseded request failed"));
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        expect(client.thinkings).toEqual([
+          { sessionId: "session-1", level: "high" },
+          { sessionId: "session-1", level: "low" },
+        ]);
+        expect(store.getState().thinkingPendingLevel).toBe("low");
+        expect(store.getState().snapshot?.thinking?.revision).toBe(4);
+        expect(store.getState().notice).toBeNull();
+        current.resolve({
+          ...store.getState().snapshot!.thinking!,
+          sessionId: "session-1",
+          level: "low",
+          revision: 6,
+        });
+        await vi.waitFor(() =>
+          expect(store.getState().thinkingPendingLevel).toBeNull(),
+        );
+        expect(store.getState().snapshot?.thinking).toMatchObject({
+          level: "low",
+          revision: 6,
+        });
+      } finally {
+        store.getState().actions.stop();
+      }
+    });
+  }
 
   it("clears the revision gate on a cursor reset after a host restart", async () => {
     const { client, store } = await harness({ level: "medium", revision: 40 });

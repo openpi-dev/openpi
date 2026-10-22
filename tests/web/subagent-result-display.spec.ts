@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { projectEntry, type WebSnapshot } from "../../web/protocol/types.ts";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
@@ -62,12 +62,13 @@ function snapshot(
   } satisfies WebSnapshot;
 }
 
-function view(value: WebSnapshot) {
+function view(value: WebSnapshot, onInspectSubagent?: (id: string) => void) {
   return createElement(
     Providers,
     null,
     createElement(Transcript, {
       snapshot: value,
+      onInspectSubagent,
       liveMessages: [],
       liveRunning: false,
       livePhase: "idle",
@@ -97,6 +98,35 @@ const receipt = (
     customType: "subagent-result",
     data: { content, details },
   });
+
+it("keeps the completed child name, status and inspection action when detailed evidence is clipped", () => {
+  const onInspect = vi.fn();
+  const value = snapshot([
+    receipt(
+      "child-result",
+      {
+        id: "sa-1",
+        title: "sleep child",
+        status: "done",
+        outcome: "completed",
+        completion: {
+          observed: {
+            tools: { items: [{ processExit: { status: "unknown" } }] },
+          },
+        },
+      },
+      "CHILD_DONE",
+    ),
+  ]);
+  render(view(value, onInspect));
+  const button = screen.getByRole("button", {
+    name: i18n.t("inspectSubagent", { name: "sleep child" }),
+  });
+  expect(button.textContent).toContain("sleep child");
+  expect(button.textContent).toContain(i18n.t("subagentState_done"));
+  fireEvent.click(button);
+  expect(onInspect).toHaveBeenCalledExactlyOnceWith("sa-1");
+});
 
 it("shows exact background result batches once and keeps the parent's historical text intact", () => {
   const results = [1, 2, 3].map((number) => ({

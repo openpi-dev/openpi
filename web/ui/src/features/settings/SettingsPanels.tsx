@@ -1,3 +1,4 @@
+import { RuntimeInfoPanel } from "./RuntimeInfoPanel.tsx";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Slider } from "@astryxdesign/core/Slider";
@@ -421,6 +422,8 @@ export function GeneralSettingsPanel({
           </section>
         </>
       )}
+
+      <RuntimeInfoPanel />
 
       <section className="settings-section-block">
         <h2>{t("sessionSettings")}</h2>

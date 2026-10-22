@@ -753,6 +753,33 @@ function detailsProjection(value: unknown) {
   };
 }
 
+/** Keep exact display facts when a completion's detailed evidence exceeds the budget. */
+function subagentDisplayDetails(value: unknown) {
+  const own = (object: unknown, key: string): unknown => object && typeof object === "object"
+    ? Object.getOwnPropertyDescriptor(object, key)?.value : undefined;
+  const results = own(value, "results");
+  const batch = Array.isArray(results);
+  const rows: Record<string, unknown>[] = [];
+  let bytes = 32;
+  const length = batch ? Math.min(results.length, WEB_MAX_STRUCTURED_ARRAY_ITEMS) : 1;
+  for (let index = 0; index < length; index++) {
+    const source = batch ? own(results, String(index)) : value;
+    const id = own(source, "id");
+    if (typeof id !== "string" || !id || id.length > 160 || /[\u0000-\u001f\u007f]/u.test(id)) continue;
+    const row: Record<string, unknown> = { id };
+    const title = own(source, "title");
+    if (typeof title === "string") row.title = boundedText(title, WEB_MAX_METADATA_TEXT);
+    const status = own(source, "status");
+    if (status === "done" || status === "error" || status === "running") row.status = status;
+    const outcome = own(source, "outcome");
+    if (outcome === "completed" || outcome === "interrupted" || outcome === "uncertain") row.outcome = outcome;
+    bytes += jsonByteLength(row) + 1;
+    if (bytes > WEB_MAX_DETAILS_BYTES) break;
+    rows.push(row);
+  }
+  return batch ? { results: rows } : rows[0];
+}
+
 /** Keep structured tool details only when they serialize small and clean. */
 export function boundedDetails(value: unknown): unknown {
   return detailsProjection(value).value;
@@ -966,6 +993,9 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
   const content = projectContent(value, resolvePath);
   const webSearch = projectNativeSearch(value, content.parts.length);
   const details = detailsProjection(value.details);
+  if (details.truncated && value.role === "custom" && value.customType === "subagent-result") {
+    details.value = subagentDisplayDetails(value.details);
+  }
   const nestedCalls = value.role === "toolResult" ? projectNestedCalls(value.nestedCalls, resolvePath) : undefined;
   const role =
     typeof value.role === "string"
