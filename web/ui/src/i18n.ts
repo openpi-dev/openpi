@@ -154,6 +154,9 @@ const resources = {
       overviewReviewUnavailable: "Unavailable",
       sessionSources: "Sources",
       sourcesAdd: "Add source",
+      sourcesDescription:
+        "Browse this conversation's attached images and files",
+      sourceAttached: "Attached to this conversation",
       sourcesEmpty: "No sources yet",
       sourcesFailed: "Could not load sources.",
       sourcesViewAll: "View all",
@@ -2312,6 +2315,8 @@ const resources = {
       overviewReviewUnavailable: "暂不可用",
       sessionSources: "来源",
       sourcesAdd: "添加来源",
+      sourcesDescription: "查看此对话附加的图片与文件",
+      sourceAttached: "已附加到对话",
       sourcesEmpty: "暂无来源",
       sourcesFailed: "来源加载失败。",
       sourcesViewAll: "查看全部",

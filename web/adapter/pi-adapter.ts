@@ -1974,7 +1974,7 @@ export class PiWebAdapter {
     const current = manager.getLeafId() ?? "empty";
     if (revision !== undefined && revision !== current) return { changed: true as const };
     const result = collectSessionSources(manager.getBranch());
-    return { sessionId, path, revision: current, sources: result.sources.slice(offset, offset + 50),
+    return { sessionId, path, revision: current, total: result.sources.length, sources: result.sources.slice(offset, offset + 50),
       ...(offset + 50 < result.sources.length ? { nextOffset: offset + 50 } : {}), truncated: result.truncated };
   }
 

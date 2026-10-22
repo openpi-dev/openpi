@@ -1021,6 +1021,7 @@ export function App() {
                   }
                   onSubagents={() => inspectSubagent()}
                   onReview={() => openWorkbar("review")}
+                  onSources={() => openWorkbar("sources")}
                 />
               )}
               {workbarBound &&

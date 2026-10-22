@@ -4,4 +4,5 @@ export type WorkbarTool =
   | "review"
   | "terminal"
   | "browser"
-  | "files";
+  | "files"
+  | "sources";
