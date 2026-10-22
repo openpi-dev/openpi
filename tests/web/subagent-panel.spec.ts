@@ -108,6 +108,71 @@ it("reports omitted Workflow runs separately in the conversation overview", () =
   ).toBeNull();
 });
 
+it("shows assigned tasks and elapsed time while completed rows remain compact", async () => {
+  vi.useFakeTimers();
+  const now = new Date("2026-10-22T07:00:00Z").getTime();
+  vi.setSystemTime(now);
+  const read = vi.spyOn(WebClient.prototype, "subagentDetail");
+  const { container } = render(
+    createElement(
+      Providers,
+      null,
+      createElement(SubagentPanel, {
+        sessionId: "parent",
+        activity: {
+          items: [
+            {
+              id: "assigned",
+              title: "Master chain audit",
+              status: "running",
+              createdAt: now - 7_000,
+              taskPreview:
+                "Check the task master against the assigned acceptance criteria.",
+            },
+            {
+              id: "starting",
+              title: "Input review",
+              status: "running",
+              createdAt: now - 382_000,
+            },
+            {
+              id: "finished",
+              title: "React185 review",
+              status: "done",
+              createdAt: now - 900_000,
+              settledAt: now - 840_000,
+            },
+          ],
+          omitted: 0,
+          truncated: false,
+        },
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+  const assigned = screen.getByRole("button", { name: /Master chain audit/ });
+  expect(
+    assigned.querySelector(".subagent-task-description")?.textContent,
+  ).toBe("Check the task master against the assigned acceptance criteria.");
+  expect(assigned.querySelector(".subagent-task-end")?.textContent).toBe("7s");
+  expect(
+    screen.getByRole("button", { name: /Input review/ }).textContent,
+  ).toContain(i18n.t("subagentProcessing"));
+  const finished = screen.getByRole("button", { name: /React185 review/ });
+  expect(finished.querySelector(".subagent-task-description")).toBeNull();
+  expect(finished.querySelector("time")?.dateTime).toBe(
+    new Date(now - 840_000).toISOString(),
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(assigned.querySelector(".subagent-task-end")?.textContent).toBe("8s");
+  expect(
+    container.querySelector(".subagent-task-row .subagent-running-icon"),
+  ).toBeNull();
+  expect(read).not.toHaveBeenCalled();
+});
+
 it("shows active tasks progressively without mixing omitted workflow counts with child counts", () => {
   render(
     createElement(

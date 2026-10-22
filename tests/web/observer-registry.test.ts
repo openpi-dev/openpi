@@ -478,7 +478,7 @@ test("disconnects provider subscriptions when the observer closes", () => {
   unregister();
 });
 
-test("projects bounded canonical activity without private payloads", () => {
+test("projects bounded canonical activity without full prompts or result payloads", () => {
   const subagents = projectSubagentCapability(
     Array.from({ length: 40 }, (_, index) => ({
       id: `sa-${index}`,
@@ -527,7 +527,10 @@ test("projects bounded canonical activity without private payloads", () => {
       currentPhase: "test",
       startedAt: 1,
       agents: [
-        { state: "running" as const, transcript: ["private"] },
+        {
+          state: "running" as const,
+          transcript: [{ role: "assistant", text: "private" }],
+        },
         { state: "done" as const, preview: "private" },
       ],
       result: "private",
@@ -652,7 +655,7 @@ test("workflow child snapshots bound nested data and never truncate navigable id
       startedAt: index,
       prompt: "private prompt",
       preview: "private result",
-      transcript: ["private transcript"],
+      transcript: [{ role: "assistant", text: "private transcript" }],
     })),
   }));
   const snapshot = projectWorkflowCapability(sources);
@@ -785,6 +788,36 @@ test("detail lookup is Session-scoped, exact, and fail-closed", () => {
   } finally {
     unregister();
   }
+});
+
+test("task previews use bounded assigned inputs for Direct and Workflow children", () => {
+  const prompt = `Read\n  package.json ${"\u{1F680}".repeat(120)} full task tail`;
+  const direct = projectSubagentCapability([{ ...subagentSnapshot(), prompt }]);
+  const workflow = projectWorkflowCapability([
+    {
+      runId: "wf_a1",
+      status: "running",
+      startedAt: 1,
+      agents: [
+        {
+          index: 1,
+          state: "running",
+          transcript: [
+            { role: "user", text: prompt },
+            { role: "assistant", text: "Do not show this output as the task" },
+          ],
+        },
+      ],
+    },
+  ]);
+  const preview = direct.items[0]?.taskPreview;
+  assert.equal(workflow.items[0]?.children?.items[0]?.taskPreview, preview);
+  assert.ok(preview?.startsWith("Read package.json "));
+  assert.equal([...preview!].length, 96);
+  assert.ok(preview?.endsWith("…"));
+  assert.equal(preview?.includes("full task tail"), false);
+  assert.equal(direct.truncated, true);
+  assert.equal(workflow.truncated, true);
 });
 
 test("projects bounded activity text on code points instead of splitting a surrogate pair", () => {

@@ -1,5 +1,155 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { projectSubagentCapability } from "../../extensions/shared/web-observer-registry.ts";
+
+for (const width of [1280, 390]) {
+  test(`groups child tasks with short assigned inputs and elapsed time at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const now = new Date("2026-10-22T07:00:00Z");
+    await page.clock.setFixedTime(now);
+    const tasks = projectSubagentCapability([
+      {
+        id: "sa-1",
+        title: "Master chain audit",
+        prompt: "",
+        status: "running",
+        createdAt: now.getTime() - 7_000,
+      },
+      {
+        id: "sa-2",
+        title: "Running task master parity",
+        prompt:
+          "检查运行中任务的标题、状态和耗时，并核对桌面与窄屏下长任务输入是否保持单行省略。".repeat(
+            4,
+          ),
+        status: "running",
+        createdAt: now.getTime() - 382_000,
+      },
+      {
+        id: "sa-3",
+        title: "Input card master parity",
+        prompt: "核对输入卡片与任务要求，保留已有键盘操作和详情入口。",
+        status: "running",
+        createdAt: now.getTime() - 401_000,
+      },
+      {
+        id: "sa-4",
+        title: "React185 review",
+        prompt: "核对 React 错误的根因。",
+        status: "done",
+        createdAt: now.getTime() - 900_000,
+        settledAt: now.getTime() - 840_000,
+      },
+      {
+        id: "sa-5",
+        title: "Result acceptance review",
+        status: "done",
+        createdAt: now.getTime() - 4_000_000,
+        settledAt: now.getTime() - 3_600_000,
+      },
+      {
+        id: "sa-6",
+        title: "Interrupted audit",
+        status: "error",
+        outcome: "interrupted",
+        createdAt: now.getTime() - 1_000_000,
+        settledAt: now.getTime() - 900_000,
+      },
+      {
+        id: "sa-7",
+        title: "Saved task without an owner",
+        status: "unknown",
+        createdAt: now.getTime() - 2_000_000,
+      },
+    ]);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.preferences = { ...snapshot.preferences, theme: "light" };
+      snapshot.runtime = { status: "idle", capabilities: { subagents: tasks } };
+      snapshot.selectedSession.entries = [
+        {
+          id: "prompt",
+          type: "message",
+          timestamp: now.toISOString(),
+          message: { role: "user", content: "查看子代理任务。" },
+        },
+      ];
+      await route.fulfill({ response, json: snapshot });
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "会话概览", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "会话概览" })
+      .getByRole("button", { name: /^子代理:/ })
+      .click();
+    const panel = page.locator(".subagent-panel");
+    const list = panel.getByRole("navigation", { name: "子代理任务列表" });
+    await expect(
+      panel.getByRole("heading", { name: /已开启.*3/ }),
+    ).toBeVisible();
+    await expect(panel.getByRole("heading", { name: /完成.*2/ })).toBeVisible();
+    const running = list.getByRole("button", {
+      name: /Running task master parity/,
+    });
+    await expect(running.locator(".subagent-task-end")).toHaveText("6m22s");
+    const task = running.locator(".subagent-task-description");
+    await expect(task).toHaveText(
+      tasks.items.find((item) => item.id === "sa-2")!.taskPreview!,
+    );
+    expect(
+      await task.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return (
+          style.whiteSpace === "nowrap" &&
+          style.textOverflow === "ellipsis" &&
+          element.scrollWidth > element.clientWidth
+        );
+      }),
+    ).toBe(true);
+    await expect(
+      list
+        .getByRole("button", { name: /Master chain audit/ })
+        .locator(".subagent-task-description"),
+    ).toHaveText("处理中");
+    await expect(
+      list
+        .getByRole("button", { name: /React185 review/ })
+        .locator(".subagent-task-description"),
+    ).toHaveCount(0);
+    await expect(
+      list.getByRole("button", { name: /Interrupted audit/ }),
+    ).toContainText("已中断");
+    await expect(
+      list.getByRole("button", { name: /Saved task without an owner/ }),
+    ).toContainText("未确认");
+    expect(
+      await panel.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    expect(
+      await running.evaluate(
+        (element) => element.getBoundingClientRect().height,
+      ),
+    ).toBeGreaterThanOrEqual(44);
+    await page.evaluate(() => document.fonts.ready);
+    await page.mouse.move(0, 0);
+    await panel.screenshot({
+      path: testInfo.outputPath(`subagent-task-list-${width}.png`),
+    });
+    expect(
+      (await new AxeBuilder({ page }).include(".subagent-panel").analyze())
+        .violations,
+    ).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+}
 
 for (const [width, touch] of [
   [1280, false],
