@@ -20,7 +20,8 @@ export function subagentOverview(
       state:
         item.outcome === "interrupted"
           ? ("interrupted" as const)
-          : !observed && item.status === "running"
+          : item.status === "unknown" ||
+              (!observed && item.status === "running")
             ? undefined
             : item.status,
       timestamp: item.settledAt ?? item.createdAt,

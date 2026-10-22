@@ -25,6 +25,7 @@ import { subagentTranscriptSnapshot } from "./subagent-transcript.ts";
 
 export function SubagentDetailView({
   sessionId,
+  sessionPath,
   id,
   kind = "subagents",
   activity,
@@ -39,6 +40,7 @@ export function SubagentDetailView({
   showModel = true,
 }: {
   sessionId: string;
+  sessionPath?: string;
   id: string;
   kind?: "subagents" | "workflows";
   activity?: WebSubagentActivity | WebWorkflowAgentActivity;
@@ -101,8 +103,18 @@ export function SubagentDetailView({
       let running = activity?.status === "running";
       try {
         const response = await (kind === "workflows"
-          ? client.workflowAgentDetail(sessionId, id, controller.signal)
-          : client.subagentDetail(sessionId, id, controller.signal));
+          ? client.workflowAgentDetail(
+              sessionId,
+              id,
+              controller.signal,
+              ...(sessionPath ? ([sessionPath] as const) : []),
+            )
+          : client.subagentDetail(
+              sessionId,
+              id,
+              controller.signal,
+              ...(sessionPath ? ([sessionPath] as const) : []),
+            ));
         if (controller.signal.aborted) return;
         if (
           response.sessionId !== sessionId ||
@@ -151,6 +163,7 @@ export function SubagentDetailView({
     active,
     client,
     sessionId,
+    sessionPath,
     id,
     kind,
     activity?.status,
@@ -161,7 +174,11 @@ export function SubagentDetailView({
   ]);
 
   const state =
-    detail?.outcome === "interrupted" ? "interrupted" : detail?.status;
+    detail?.outcome === "interrupted"
+      ? "interrupted"
+      : detail?.status === "unknown"
+        ? undefined
+        : detail?.status;
   const spend = formatSubagentSpend(detail?.spend);
   const SectionHeading = fullView ? "h2" : "h3";
   return (
@@ -175,15 +192,16 @@ export function SubagentDetailView({
           <span className={`subagent-state ${state ?? "unknown"}`}>
             {state
               ? t(`subagentState_${state}`)
-              : saved?.state
+              : !detail && saved?.state
                 ? `${t("subagentRecordedState")}: ${t(`subagentState_${saved.state}`)}`
                 : t("unknownState")}
           </span>
-          {detail && (
-            <span className="subagent-duration">
-              {formatElapsedMs(detail.createdAt, detail.settledAt)}
-            </span>
-          )}
+          {detail &&
+            (detail.status === "running" || detail.settledAt !== undefined) && (
+              <span className="subagent-duration">
+                {formatElapsedMs(detail.createdAt, detail.settledAt)}
+              </span>
+            )}
         </div>
         <button
           type="button"
@@ -313,6 +331,7 @@ export function SubagentDetailView({
 
 export function SubagentPanel({
   sessionId,
+  sessionPath,
   initialId,
   initialKind = "subagents",
   activity,
@@ -323,6 +342,7 @@ export function SubagentPanel({
   onClose,
 }: {
   sessionId: string;
+  sessionPath?: string;
   initialId?: string;
   initialKind?: "subagents" | "workflows";
   activity?: WebCapabilityProjection<WebSubagentActivity>;
@@ -506,6 +526,7 @@ export function SubagentPanel({
         <SubagentDetailView
           key={`${sessionId}:${detailTarget.kind}:${detailTarget.id}`}
           sessionId={sessionId}
+          sessionPath={sessionPath}
           id={detailTarget.id}
           kind={detailTarget.kind}
           activity={

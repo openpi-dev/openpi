@@ -4,6 +4,19 @@ import { initReactI18next } from "react-i18next";
 const resources = {
   en: {
     translation: {
+      quitOpenPI: "Quit OpenPI",
+      quittingOpenPI: "Quitting…",
+      quitConfirmHelp:
+        "Quit this OpenPI Web application? All running tasks in this Web application will stop. Conversations are saved and will be available when you restart.",
+      quitTabHelp:
+        "Closing this browser tab alone leaves OpenPI and its tasks running in the background.",
+      quitAccepted: "OpenPI is shutting down",
+      quitAcceptedHelp:
+        "The quit request was accepted. Wait for the terminal to confirm that OpenPI has stopped, then you can close this tab.",
+      quitRestartHelp:
+        "To restart, run openpi web in a terminal, or /web in Pi, then open the address it displays. Refreshing this page does not restart OpenPI.",
+      quitFailed:
+        "Could not confirm shutdown. Check the terminal before trying again. You can also stop OpenPI with Ctrl+C in its terminal.",
       promptPending: "Processing your request…",
       commandFeedbackTruncated:
         "This is a limited command preview. Narrow the query or run it in the TUI for the full output.",
@@ -2167,6 +2180,18 @@ const resources = {
   },
   zh: {
     translation: {
+      quitOpenPI: "退出 OpenPI",
+      quittingOpenPI: "正在退出…",
+      quitConfirmHelp:
+        "确定退出此 OpenPI Web 应用吗？此 Web 应用中所有正在运行的任务都会停止，对话会保存，重启后可继续查看。",
+      quitTabHelp: "仅关闭浏览器标签页会让 OpenPI 和任务继续在后台运行。",
+      quitAccepted: "OpenPI 正在关闭",
+      quitAcceptedHelp:
+        "退出请求已接受。请等待终端确认 OpenPI 已停止，然后可以关闭此标签页。",
+      quitRestartHelp:
+        "重新启动：在终端运行 openpi web，或在 Pi 中运行 /web，然后打开显示的地址。刷新此页面不会重启 OpenPI。",
+      quitFailed:
+        "无法确认是否已关闭。请先检查终端，再重试。也可以在 OpenPI 所在终端按 Ctrl+C 停止应用。",
       promptPending: "正在处理请求…",
       commandFeedbackTruncated:
         "这里只显示部分命令结果。请缩小查询范围，或在 TUI 查看完整输出。",

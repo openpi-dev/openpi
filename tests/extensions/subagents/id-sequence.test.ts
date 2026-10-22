@@ -16,7 +16,7 @@ function entry(value: Partial<SessionEntry>) {
   } as SessionEntry;
 }
 
-test("watermarks survive reload and retain independent model and btw sequences", () => {
+test("watermarks and early child catalogs survive reload with independent model and btw sequences", () => {
   const branch = [
     entry({
       type: "custom",
@@ -28,11 +28,21 @@ test("watermarks survive reload and retain independent model and btw sequences",
       customType: SUBAGENT_ID_WATERMARK_ENTRY_TYPE,
       data: subagentIdWatermark("btw-3"),
     }),
+    entry({
+      type: "custom",
+      customType: "subagent-session",
+      data: { id: "sa-8" },
+    }),
+    entry({
+      type: "custom",
+      customType: "subagent-session",
+      data: { id: "btw-4" },
+    }),
   ];
 
   assert.deepEqual(restoreSubagentIdCounters(branch), {
-    modelCounter: 7,
-    btwCounter: 3,
+    modelCounter: 8,
+    btwCounter: 4,
   });
 });
 

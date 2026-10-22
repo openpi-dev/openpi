@@ -18,7 +18,7 @@ export interface WebSubagentActivity {
   readonly id: string;
   readonly title: string;
   readonly origin?: "model" | "btw";
-  readonly status: "running" | "done" | "error";
+  readonly status: "running" | "done" | "error" | "unknown";
   readonly outcome?: "completed" | "failed" | "interrupted";
   readonly createdAt: number;
   readonly settledAt?: number;

@@ -613,24 +613,22 @@ export function App() {
       ),
     [selected?.entries],
   );
-  const liveSubagents = controlled
-    ? state.snapshot?.runtime.capabilities.subagents
-    : undefined;
+  const selectedCapabilities =
+    selected?.capabilities ??
+    (controlled ? state.snapshot?.runtime.capabilities : undefined);
+  const liveSubagents = selectedCapabilities?.subagents;
   const overviewAgents = useMemo(
     () =>
       subagentOverview(
         liveSubagents?.items ?? [],
         savedSubagents,
-        controlled
-          ? state.snapshot?.runtime.capabilities.workflows?.items
-          : undefined,
+        selectedCapabilities?.workflows?.items,
         state.connection === "connected",
       ),
     [
       liveSubagents?.items,
       savedSubagents,
-      controlled,
-      state.snapshot?.runtime.capabilities.workflows?.items,
+      selectedCapabilities?.workflows?.items,
       state.connection,
     ],
   );
@@ -998,15 +996,13 @@ export function App() {
                   agents={overviewAgents}
                   omitted={
                     (liveSubagents?.omitted ?? 0) +
-                    (controlled
-                      ? (
-                          state.snapshot?.runtime.capabilities.workflows
-                            ?.items ?? []
-                        ).reduce(
-                          (sum, item) => sum + (item.children?.omitted ?? 0),
-                          0,
-                        )
-                      : 0)
+                    (selectedCapabilities?.workflows?.items ?? []).reduce(
+                      (sum, item) => sum + (item.children?.omitted ?? 0),
+                      0,
+                    )
+                  }
+                  omittedWorkflows={
+                    selectedCapabilities?.workflows?.omitted ?? 0
                   }
                   review={gitReview.result}
                   reviewLoading={gitReview.loading}
@@ -1389,27 +1385,18 @@ export function App() {
             <SubagentPanel
               key={`${subagentTarget.sessionId}:${subagentTarget.navigation}`}
               sessionId={subagentTarget.sessionId}
+              sessionPath={subagentTarget.sessionPath}
               initialId={subagentTarget.id}
               initialKind={subagentTarget.kind}
               observed={state.connection === "connected"}
-              activity={
-                isControlledSession(state.snapshot, {
-                  id: subagentTarget.sessionId,
-                  path: subagentTarget.sessionPath,
-                })
-                  ? state.snapshot?.runtime.capabilities.subagents
-                  : undefined
-              }
+              activity={liveSubagents}
               records={savedSubagents}
-              workflows={
-                controlled
-                  ? state.snapshot?.runtime.capabilities.workflows
-                  : undefined
+              workflows={selectedCapabilities?.workflows}
+              liveAvailable={
+                state.connection === "connected" &&
+                selected?.id === subagentTarget.sessionId &&
+                selected.path === subagentTarget.sessionPath
               }
-              liveAvailable={isControlledSession(state.snapshot, {
-                id: subagentTarget.sessionId,
-                path: subagentTarget.sessionPath,
-              })}
               onClose={() => setSubagentTarget(null)}
             />
           )}

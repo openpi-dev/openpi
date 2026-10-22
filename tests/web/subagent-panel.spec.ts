@@ -18,6 +18,7 @@ import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
 import { recordedSubagents } from "../../web/ui/src/features/subagents/recorded-subagents.ts";
 import { SubagentPanel } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
+import { SessionOverview } from "../../web/ui/src/features/subagents/SessionOverview.tsx";
 import { subagentOverview } from "../../web/ui/src/features/subagents/subagent-overview.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
@@ -77,6 +78,34 @@ it("downgrades stale running projections in the overview without discarding conf
   );
   expect(items.find((item) => item.id === "running")?.state).toBeUndefined();
   expect(items.find((item) => item.id === "done")?.state).toBe("done");
+});
+
+it("reports omitted Workflow runs separately in the conversation overview", () => {
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(SessionOverview, {
+        sessionId: "parent",
+        workspace: "Fixture",
+        agents: [],
+        omitted: 0,
+        omittedWorkflows: 1,
+        review: null,
+        onSubagents: vi.fn(),
+        onReview: vi.fn(),
+      }),
+    ),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sessionOverview") }),
+  );
+  expect(
+    screen.getByText(i18n.t("subagentWorkflowsTruncated", { count: 1 })),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText(i18n.t("subagentListTruncated", { count: 1 })),
+  ).toBeNull();
 });
 
 it("shows active tasks progressively without mixing omitted workflow counts with child counts", () => {
@@ -668,6 +697,61 @@ it("resolves the same child for pending and returned follow-ups without keeping 
   ).not.toBeNull();
   fireEvent.click(within(returned as HTMLElement).getByRole("button"));
   expect(onInspectSubagent).toHaveBeenLastCalledWith("sa-1");
+});
+
+it("opens exact persisted child history without requiring a live parent manager", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "subagentDetail")
+    .mockResolvedValue(
+      reply(
+        detail({
+          status: "done",
+          outcome: "completed",
+          finalText: "Recovered review",
+          transcript: [
+            {
+              kind: "assistant",
+              parts: [{ type: "text", text: "Recovered review" }],
+            },
+          ],
+        }),
+      ),
+    );
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(SubagentPanel, {
+        sessionId: "session-a",
+        sessionPath: "/saved/parent.jsonl",
+        initialId: "sa-1",
+        activity: {
+          items: [
+            {
+              id: "sa-1",
+              title: "Persisted review",
+              status: "done",
+              outcome: "completed",
+              createdAt: 1,
+            },
+          ],
+          omitted: 0,
+          truncated: false,
+        },
+        liveAvailable: true,
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+  await flush();
+  expect(read).toHaveBeenCalledWith(
+    "session-a",
+    "sa-1",
+    expect.any(AbortSignal),
+    "/saved/parent.jsonl",
+  );
+  expect(screen.getAllByText("Recovered review").length).toBeGreaterThan(0);
+  expect(document.querySelector(".subagent-running-icon")).toBeNull();
 });
 
 it("opens only the selected saved child record without fetching a historical Session", async () => {

@@ -8,7 +8,7 @@ import fsPromises, {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, ServerResponse } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -6770,6 +6770,167 @@ for (const wallShift of [0, 120_000, -120_000]) {
     }
   });
 }
+
+test("shutdown requires authentication, same-origin authority, POST, and an explicit host capability", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-shutdown-auth-"));
+  const runtime = testRuntime(cwd);
+  let calls = 0;
+  const { host, launched, headers } = await startTestHost(runtime, {
+    onShutdown: () => {
+      calls++;
+    },
+  });
+  t.after(async () => {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const route = `${launched.origin}/api/shutdown`;
+  assert.equal((await fetch(route, { method: "POST" })).status, 401);
+  assert.equal(
+    (
+      await fetch(route, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${"0".repeat(64)}` },
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await fetch(route, {
+        method: "POST",
+        headers: { ...headers, Origin: "https://foreign.example" },
+      })
+    ).status,
+    403,
+  );
+  for (const method of ["GET", "HEAD", "PUT", "DELETE"]) {
+    const response = await fetch(route, { method, headers });
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "POST");
+    await response.arrayBuffer();
+  }
+  assert.equal(calls, 0);
+
+  const unsupported = await startTestHost(testRuntime(cwd));
+  try {
+    const response = await fetch(
+      `${unsupported.launched.origin}/api/shutdown`,
+      {
+        method: "POST",
+        headers: unsupported.headers,
+      },
+    );
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, "SHUTDOWN_UNAVAILABLE");
+    assert.equal(
+      (
+        await fetch(`${unsupported.launched.origin}/api/snapshot`, {
+          headers: unsupported.headers,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(calls, 0);
+  } finally {
+    await unsupported.host.stop();
+  }
+});
+
+test("shutdown admissions are idempotent without an active workspace or Session", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-shutdown-once-"));
+  const runtime = {
+    ...testRuntime(cwd, async () => {
+      assert.fail("Shutdown must not call the model");
+    }),
+    workspaceSelected: false,
+  };
+  let calls = 0;
+  const invoked = Promise.withResolvers<void>();
+  const { host, launched, headers } = await startTestHost(runtime, {
+    onShutdown: () => {
+      calls++;
+      invoked.resolve();
+    },
+  });
+  t.after(async () => {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  });
+  // Keep this fixture's listener alive to test retry admissions during shutdown.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(`${launched.origin}/api/shutdown`, {
+      method: "POST",
+      headers,
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { accepted: true });
+  }
+  await invoked.promise;
+  // Flush any erroneously scheduled duplicate callbacks too.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+});
+
+test("shutdown sends acceptance before CLI-owned orderly cleanup settles", {
+  timeout: 3_000,
+}, async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-shutdown-cleanup-"));
+  const runtime = testRuntime(cwd);
+  let receiptSent = false;
+  const emit = ServerResponse.prototype.emit;
+  t.mock.method(
+    ServerResponse.prototype,
+    "emit",
+    function (
+      this: ServerResponse,
+      event: string | symbol,
+      ...args: unknown[]
+    ) {
+      if (event === "finish" && this.req.url === "/api/shutdown")
+        receiptSent = true;
+      return emit.call(this, event, ...args);
+    },
+  );
+  const disposing = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let disposed = 0;
+  runtime.dispose = async () => {
+    disposed++;
+    disposing.resolve();
+    await release.promise;
+  };
+  let cleanup: Promise<void> | undefined;
+  const { host, launched, headers } = await startTestHost(runtime, {
+    onShutdown: () => {
+      assert.equal(
+        receiptSent,
+        true,
+        "CLI shutdown must follow the sent receipt",
+      );
+      cleanup = host.stop();
+    },
+  });
+  t.after(async () => {
+    release.resolve();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const response = await fetch(`${launched.origin}/api/shutdown`, {
+    method: "POST",
+    headers,
+  });
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), { accepted: true });
+  await disposing.promise;
+  assert.equal(disposed, 1);
+  assert.ok(cleanup);
+  release.resolve();
+  await cleanup;
+  await host.stop();
+  assert.equal(disposed, 1);
+  await assert.rejects(fetch(`${launched.origin}/api/snapshot`, { headers }));
+});
 
 test("stop disposes the runtime before waiting for an in-flight prompt request", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-prompt-"));

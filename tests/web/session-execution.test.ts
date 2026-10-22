@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
+import { WebHost } from "../../web/host/web-host.ts";
 import {
   readTurnTiming,
   WEB_TURN_TIMING_ENTRY,
@@ -191,6 +192,49 @@ async function fixture(t: TestContext) {
     },
   };
 }
+
+test("a real Pi execution continues after its Web event connection closes and is visible on reconnect", {
+  timeout: 10000,
+}, async (t) => {
+  const { web, a, gates } = await fixture(t);
+  const host = new WebHost({ runtime: web });
+  await host.start();
+  t.after(() => host.stop());
+  const token = new URLSearchParams(new URL(host.url).hash.slice(1)).get(
+    "token",
+  );
+  const headers = { Authorization: `Bearer ${token}` };
+  const initial = await (
+    await fetch(`${host.origin}/api/snapshot`, { headers })
+  ).json();
+  const events = await fetch(`${host.origin}/events?cursor=${initial.cursor}`, {
+    headers,
+  });
+  assert.equal(events.status, 200);
+  const accepted = await fetch(`${host.origin}/api/prompt`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      commandId: "close-page-fixture",
+      sessionId: web.sessionManager.getSessionId(),
+      sessionPath: web.sessionManager.getSessionFile(),
+      content: "Continue while the page is closed",
+    }),
+  });
+  assert.equal(accepted.status, 202);
+  await gates[0]!.entered;
+  await events.body!.cancel();
+  gates[0]!.release();
+  await gates[1]!.entered;
+  gates[1]!.release();
+  await a.session.waitForIdle();
+  const reopened = await (
+    await fetch(`${host.origin}/api/snapshot`, { headers })
+  ).json();
+  assert.equal(reopened.runtime.status, "idle");
+  assert.equal(reopened.selectedSession.id, a.session.sessionId);
+  assert.match(JSON.stringify(reopened.selectedSession.entries), /A finished/);
+});
 
 test("a real Pi Session continues tool progress and queued follow-ups after another Session becomes current", {
   timeout: 10000,

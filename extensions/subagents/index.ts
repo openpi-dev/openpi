@@ -615,6 +615,40 @@ export default function (
   const persistId = (id: string) =>
     pi.appendEntry(SUBAGENT_ID_WATERMARK_ENTRY_TYPE, subagentIdWatermark(id));
 
+  const recordedSessions = new Map<string, string>();
+  const persistChildSessions = (manager: SubagentManagerShape) => {
+    const parent = sessionContext?.sessionManager;
+    if (!parent) return;
+    for (const snap of manager.view.list()) {
+      if (!snap.meta.sessionId || !snap.meta.sessionFilePath) continue;
+      const identity = `${parent.getSessionId()}:${snap.meta.sessionId}:${snap.runGeneration ?? 0}:${snap.status}:${snap.outcome ?? ""}`;
+      if (recordedSessions.get(snap.id) === identity) continue;
+      try {
+        pi.appendEntry("subagent-session", {
+          id: snap.id,
+          title: snap.title,
+          origin: snap.origin,
+          status: snap.status,
+          outcome: snap.outcome,
+          model: snap.meta.modelLabel,
+          cwd: snap.cwd,
+          prompt: snap.prompt,
+          sessionId: snap.meta.sessionId,
+          sessionPath: snap.meta.sessionFilePath,
+          generation: snap.runGeneration,
+          startEntryId: snap.runStartEntryId,
+          endEntryId: snap.evidence?.endEntryId,
+          createdAt: snap.createdAt,
+          parentSessionId: parent.getSessionId(),
+          parentOriginEntryId: parent.getLeafId(),
+        });
+        recordedSessions.set(snap.id, identity);
+      } catch {
+        // A later native event retries the durable locator; never claim it was saved.
+      }
+    }
+  };
+
   /** Resolve the manager service once per runtime and wire the extension hooks. */
   const getManager = () => {
     const scope = sessionContext?.sessionManager;
@@ -641,7 +675,11 @@ export default function (
             : undefined;
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
-        unsubStatus = manager.view.subscribe(() => updateStatus(manager));
+        unsubStatus = manager.view.subscribe(() => {
+          persistChildSessions(manager);
+          updateStatus(manager);
+        });
+        persistChildSessions(manager);
         updateStatus(manager);
         return manager;
       });
@@ -941,6 +979,7 @@ export default function (
     }
     statusWriter.reset();
     sessionContext = undefined;
+    recordedSessions.clear();
     ui = undefined;
     navigationManager = undefined;
     widgetVisible = false;

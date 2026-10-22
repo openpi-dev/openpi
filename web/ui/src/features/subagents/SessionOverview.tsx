@@ -22,6 +22,7 @@ export function SessionOverview({
   workspace,
   agents,
   omitted,
+  omittedWorkflows = 0,
   review,
   onSubagents,
   onReview,
@@ -35,6 +36,7 @@ export function SessionOverview({
   workspace: string;
   agents: ReturnType<typeof subagentOverview>;
   omitted: number;
+  omittedWorkflows?: number;
   review: WebGitReviewResult | null;
   onSubagents: () => void;
   onReview: () => void;
@@ -181,6 +183,11 @@ export function SessionOverview({
               </button>
               {omitted > 0 && (
                 <small>{t("subagentListTruncated", { count: omitted })}</small>
+              )}
+              {omittedWorkflows > 0 && (
+                <small>
+                  {t("subagentWorkflowsTruncated", { count: omittedWorkflows })}
+                </small>
               )}
             </div>
             {sessionPath && (
