@@ -2225,7 +2225,11 @@ for (const width of [320, 390]) {
       name: "已归档",
       exact: true,
     });
-    const last = sidebar.getByRole("button", { name: "设置", exact: true });
+    const settings = sidebar.getByRole("button", { name: "设置", exact: true });
+    const last = sidebar.getByRole("button", {
+      name: "退出 OpenPI",
+      exact: true,
+    });
     const sessionOptions = sidebar
       .getByRole("button", { name: "会话选项" })
       .last();
@@ -2279,6 +2283,8 @@ for (const width of [320, 390]) {
     ).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(archived).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(settings).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(last).toBeFocused();
     await page.keyboard.press("Tab");

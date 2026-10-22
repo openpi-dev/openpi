@@ -460,6 +460,14 @@ for (const finished of [true, false])
         ],
       ],
     );
+    assert.deepEqual(snapshot.runtime.capabilities?.subagents?.items ?? [], []);
+    const currentSnapshot = await new PiWebAdapter(
+      runtime(cwd, directory, parent),
+    ).getSnapshot(parentFile);
+    assert.deepEqual(
+      currentSnapshot.runtime.capabilities?.subagents,
+      snapshot.selectedSession?.capabilities?.subagents,
+    );
     const host = new WebHost({ runtime: control });
     await host.start();
     t.after(() => host.stop());

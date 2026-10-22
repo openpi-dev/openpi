@@ -1497,7 +1497,9 @@ export class PiWebAdapter {
         ...(this.runtime.getActiveTurn()
           ? { activeTurn: this.runtime.getActiveTurn() }
           : {}),
-        capabilities: webCapabilitySnapshot(this.runtime.sessionManager),
+        capabilities: (selectedSession && this.isCurrentSession(selectedSession)
+          ? selectedSession.capabilities
+          : undefined) ?? webCapabilitySnapshot(this.runtime.sessionManager),
       },
       truncation: {
         truncated:

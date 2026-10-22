@@ -50,7 +50,7 @@ Before integration with the final retry/reading commit, repository `bun run chec
 
 The [validation receipt](../../.github/issue-evidence/issue-891/validation.json) preserves that original result separately from the integrated validation below. The original shared worktree's retry and transcript-reading changes remain preserved; integration uses the final reviewed `47080a05` version instead of those intermediate files.
 
-### Integrated PR #892 validation
+### Integrated PR #892 validation at `dc21c90d`
 
 The lifecycle/history changes were applied on top of the final retry/reading commit `47080a050a9f2a07348ac80840dd99eaac39403e` in `openpi-web-retry-reading`. The final retry, store, transcript and reading-anchor source files were retained. Web assets were rebuilt from the combined source. The earlier shared-worktree failures above do not describe this integrated result.
 
@@ -61,6 +61,16 @@ The lifecycle/history changes were applied on top of the final retry/reading com
 - Integration review found a missing omitted-run count above 32 saved Workflows. The count is now preserved and displayed separately from child omissions, with native and UI regressions. The final full-suite results above include those regressions.
 
 The updated receipt and synthetic screenshots are included with [PR #892](https://github.com/openpi-dev/openpi/pull/892), which addresses Issues #890 and #891. No installed runtime was replaced.
+
+## CI integration follow-up
+
+The first integrated CI run at [`dc21c90d`](https://github.com/openpi-dev/openpi/actions/runs/39717799324) passed source checks, committed-asset verification, native tests and all UI jobs. It exposed a packed-startup failure and seven browser failures that the initial local reading smoke did not cover.
+
+The packed CLI could not resolve `@earendil-works/pi-tui` after child-history recovery began importing Workflow presentation helpers. Standalone aliases now resolve that dependency from the selected Pi Host, preserving the same host identity used for the coding-agent entry and provider catalog. A regression distinguishes that Host's TUI from an unrelated install's TUI. A fresh peerless package successfully started, served all four local assets, accepted `POST /api/shutdown` with HTTP 202 and exited zero, with no model requests.
+
+The active Session now publishes its combined saved/live directory in the runtime projection. The UI uses that runtime projection for the controlled Session and the selected parent's saved projection for a cold Session. SSE reconnection does not hide a scoped directory or prevent read-only HTTP detail requests. The sidebar keyboard test now includes the explicit Quit button after Settings. All seven previously failing browser cases pass on the follow-up source, including narrow-screen keyboard wrapping and Direct/Workflow inspection.
+
+Final follow-up validation passed `bun run check` and the same complete suite: Node **2,377 passed / 8 skipped / 0 failed**; UI **99 files / 1,532 passed / 0 failed**. These results include the Host-TUI identity regression and current/cold parent capability assertions. The original seven reading cases and the seven CI-discovered inspection/focus cases are recorded separately; the latter all passed in the final targeted rerun.
 
 ## Limits and interpretation
 

@@ -613,9 +613,9 @@ export function App() {
       ),
     [selected?.entries],
   );
-  const selectedCapabilities =
-    selected?.capabilities ??
-    (controlled ? state.snapshot?.runtime.capabilities : undefined);
+  const selectedCapabilities = controlled
+    ? (state.snapshot?.runtime.capabilities ?? selected?.capabilities)
+    : selected?.capabilities;
   const liveSubagents = selectedCapabilities?.subagents;
   const overviewAgents = useMemo(
     () =>
@@ -1393,7 +1393,6 @@ export function App() {
               records={savedSubagents}
               workflows={selectedCapabilities?.workflows}
               liveAvailable={
-                state.connection === "connected" &&
                 selected?.id === subagentTarget.sessionId &&
                 selected.path === subagentTarget.sessionPath
               }

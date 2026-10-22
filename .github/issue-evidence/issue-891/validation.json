@@ -36,6 +36,7 @@
     "review": "Independent source review found no remaining critical fallback-authority/cache/merge issues after fixes."
   },
   "integration": {
+    "revision": "dc21c90dd04ce53fc13e106f326b46e62d881af1",
     "pr": "https://github.com/openpi-dev/openpi/pull/892",
     "parentRevision": "47080a050a9f2a07348ac80840dd99eaac39403e",
     "repositoryCheck": "passed",
@@ -51,6 +52,27 @@
     "omissionRegression": "33 saved Workflows retain 32 recent items and report one omitted run; overview and panel distinguish Workflow omissions from child omissions",
     "originalReadingSources": "Preserved from 47080a05",
     "review": "Integration finding resolved; no other concrete correctness, authority or integration regressions found"
+  },
+  "ciFollowup": {
+    "aboveRevision": "dc21c90dd04ce53fc13e106f326b46e62d881af1",
+    "originalCi": "https://github.com/openpi-dev/openpi/actions/runs/39717799324",
+    "repositoryCheck": "passed",
+    "fullSuiteCommand": "(umask 022 && VITEST_MAX_WORKERS=2 bun run test)",
+    "nodePassed": 2377,
+    "nodeSkipped": 8,
+    "nodeFailed": 0,
+    "uiFiles": 99,
+    "uiPassed": 1532,
+    "uiFailed": 0,
+    "previouslyFailingBrowserCasesPassed": 7,
+    "peerlessPackedCli": {
+      "startup": "passed",
+      "localAssets": 4,
+      "shutdownHttpStatus": 202,
+      "processExitCode": 0,
+      "remoteModelRequests": 0
+    },
+    "changes": "Resolve TUI from the selected Pi Host; use combined current-parent runtime capabilities; retain scoped child HTTP inspection during SSE reconnection; include Quit in keyboard traversal"
   },
   "limitations": [
     "No real computer reboot was performed.",
