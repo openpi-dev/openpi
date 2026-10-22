@@ -19,6 +19,7 @@ import type {
   SpawnTask,
   SubagentStatus,
 } from "../../../extensions/subagents/src/domain.ts";
+import { SendError } from "../../../extensions/subagents/src/domain.ts";
 import {
   makeSubagentManagerLayer,
   MAX_RUNNING,
@@ -352,6 +353,356 @@ test("releases local pool reservations when shared admission rejects queued spaw
       { admission },
     );
   }
+});
+
+test("FAIL: a Direct spawn aborted as admission grants its slot releases the permit", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  await withManager(
+    async (manager, runtime) => {
+      const blocker = await admission.acquire("workflow");
+      const abort = new AbortController();
+      const queued = runTool(
+        runtime,
+        manager.spawn("pi", task("granted then aborted")),
+        { signal: abort.signal },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(admission.snapshot().queuedByOrigin.direct, 1);
+      // The Workflow child settles and the user presses Esc in the same turn:
+      // admission grants the queued spawn before its fiber can resume.
+      blocker.release();
+      abort.abort(new Error("Esc"));
+      await assert.rejects(queued);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(manager.view.list().length, 0);
+      assert.equal(admission.snapshot().held, 0);
+    },
+    { admission },
+  );
+});
+
+test("FAIL: one Esc aborting two parallel Direct spawns leaves no held permit", async () => {
+  const base = stubBackend();
+  // Real Pi child startup takes long enough for one turn abort to interrupt
+  // the first spawn mid-startup while the second is still queued.
+  const slow: SubagentBackend = {
+    ...base,
+    spawn: (spawnTask) =>
+      Effect.andThen(Effect.sleep("2 seconds"), base.spawn(spawnTask)),
+  };
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  await withManager(
+    async (manager, runtime) => {
+      const turn = new AbortController();
+      const spawns = ["A", "B"].map((name) =>
+        runTool(runtime, manager.spawn("pi", task(name)), {
+          signal: turn.signal,
+        }).catch((error: unknown) => error),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(admission.snapshot().held, 1);
+      assert.equal(admission.snapshot().queued, 1);
+      turn.abort(new Error("Esc"));
+      await Promise.all(spawns);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(manager.view.list().length, 0);
+      assert.equal(admission.snapshot().held, 0);
+      assert.equal(admission.snapshot().queued, 0);
+    },
+    { admission },
+    [slow],
+  );
+});
+
+test("FAIL: a Direct restart aborted as admission grants its slot releases the permit", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("settle before restart")),
+      );
+      await runTool(runtime, manager.waitFor([snap.id]));
+      assert.equal(admission.snapshot().held, 0);
+
+      const blocker = await admission.acquire("workflow");
+      const abort = new AbortController();
+      const restart = runTool(runtime, manager.send(snap.id, "again"), {
+        signal: abort.signal,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(admission.snapshot().queuedByOrigin.direct, 1);
+      blocker.release();
+      abort.abort(new Error("Esc"));
+      await assert.rejects(restart);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(admission.snapshot().held, 0);
+    },
+    { admission },
+  );
+});
+
+test("FAIL: explicit cancel at a restart grant prevents the backend send", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  const sent: string[] = [];
+  const base = stubBackend();
+  const backend: SubagentBackend = {
+    ...base,
+    spawn: (spawnTask) =>
+      base.spawn(spawnTask).pipe(
+        Effect.map((session) => ({
+          ...session,
+          send: (text) => {
+            sent.push(text);
+            return session.send(text);
+          },
+        })),
+      ),
+  };
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      const firstGeneration = snap.runGeneration;
+      const firstText = snap.finalText;
+      const blocker = await admission.acquire("workflow");
+      const restart = runTool(runtime, manager.send(snap.id, "cancelled"));
+      const rejected = assert.rejects(restart, /aborted/);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(admission.snapshot().queued, 1);
+      let cancelled = false;
+      const unsubscribe = admission.subscribe(() => {
+        if (cancelled || admission.snapshot().heldByOrigin.direct !== 1) return;
+        cancelled = runtime.runSync(manager.cancel([snap.id]))[0]!.cancelled;
+      });
+      try {
+        blocker.release();
+        await rejected;
+        await runTool(runtime, manager.waitFor([snap.id]));
+        assert.equal(cancelled, true);
+        assert.deepEqual(sent, []);
+        assert.equal(snap.runGeneration, firstGeneration);
+        assert.equal(snap.finalText, firstText);
+        assert.equal(admission.snapshot().held, 0);
+        assert.equal(admission.snapshot().queued, 0);
+      } finally {
+        unsubscribe();
+      }
+    },
+    { admission },
+    [backend],
+  );
+});
+
+test("FAIL: cancelled restart cleanup cannot overwrite an immediate replacement", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      const firstGeneration = snap.runGeneration!;
+      const blocker = await admission.acquire("workflow");
+      const restart = runTool(runtime, manager.send(snap.id, "cancelled"));
+      const rejected = assert.rejects(restart, /aborted/);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(admission.snapshot().queued, 1);
+      let cancelled = false;
+      let replacement: Promise<void> | undefined;
+      const unsubscribe = admission.subscribe(() => {
+        if (cancelled || admission.snapshot().heldByOrigin.direct !== 1) return;
+        cancelled = runtime.runSync(manager.cancel([snap.id]))[0]!.cancelled;
+        replacement = runTool(runtime, manager.send(snap.id, "replacement"));
+      });
+      try {
+        blocker.release();
+        await rejected;
+        assert.equal(cancelled, true);
+        assert.ok(replacement);
+        await replacement;
+        await runTool(runtime, manager.waitFor([snap.id]));
+        assert.equal(snap.runGeneration, firstGeneration + 1);
+        assert.match(snap.finalText, /replacement/);
+        assert.doesNotMatch(snap.finalText, /cancelled/);
+        assert.equal(admission.snapshot().held, 0);
+        assert.equal(admission.snapshot().queued, 0);
+      } finally {
+        unsubscribe();
+        await replacement?.catch(() => {});
+      }
+    },
+    { admission },
+  );
+});
+
+test("FAIL: a second send cannot bypass a queued restart's admission", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  const sent: string[] = [];
+  const base = stubBackend();
+  const backend: SubagentBackend = {
+    ...base,
+    spawn: (spawnTask) =>
+      base.spawn(spawnTask).pipe(
+        Effect.map((session) => ({
+          ...session,
+          send: (text) => {
+            sent.push(text);
+            return session.send(text);
+          },
+        })),
+      ),
+  };
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      const firstGeneration = snap.runGeneration;
+      const blocker = await admission.acquire("workflow");
+      const restart = runTool(runtime, manager.send(snap.id, "admitted"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const queued = admission.snapshot();
+      assert.equal(queued.queuedByOrigin.direct, 1);
+      try {
+        await assert.rejects(
+          runTool(runtime, manager.send(snap.id, "bypass")),
+          /restart is waiting for a shared child execution slot/,
+        );
+        assert.deepEqual(sent, []);
+        assert.equal(snap.runGeneration, firstGeneration);
+        assert.deepEqual(admission.snapshot(), queued);
+      } finally {
+        blocker.release();
+        await restart;
+      }
+      await runTool(runtime, manager.waitFor([snap.id]));
+      assert.deepEqual(sent, ["admitted"]);
+      assert.equal(admission.snapshot().held, 0);
+      assert.equal(admission.snapshot().queued, 0);
+    },
+    { admission },
+    [backend],
+  );
+});
+
+test("FAIL: cleanup after lease storage preserves a replacement's cancellation identity", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      const firstGeneration = snap.runGeneration;
+      const firstText = snap.finalText;
+      const blocker = await admission.acquire("workflow");
+      const acquire = admission.acquire.bind(admission);
+      let intercept = true;
+      let firstCancelled = false;
+      let replacementCancelled = false;
+      let replacementGranted = false;
+      let replacement: Promise<void> | undefined;
+      admission.acquire = (origin, signal) => {
+        const pending = acquire(origin, signal);
+        if (origin === "direct" && intercept) {
+          intercept = false;
+          void pending.then(() =>
+            // Let the manager's continuation store the old lease, then
+            // cancel before the Effect fiber resumes and dispatches it.
+            queueMicrotask(() => {
+              firstCancelled = runtime.runSync(manager.cancel([snap.id]))[0]!
+                .cancelled;
+              replacement = runTool(
+                runtime,
+                manager.send(snap.id, "replacement"),
+              );
+              void replacement.catch(() => {});
+            }),
+          );
+        }
+        return pending;
+      };
+      const unsubscribe = admission.subscribe(() => {
+        const state = admission.snapshot();
+        if (
+          !firstCancelled ||
+          replacementGranted ||
+          state.heldByOrigin.direct !== 1 ||
+          state.queued !== 0
+        )
+          return;
+        replacementGranted = true;
+        replacementCancelled = runtime.runSync(manager.cancel([snap.id]))[0]!
+          .cancelled;
+      });
+      const restart = runTool(runtime, manager.send(snap.id, "cancelled"));
+      const rejected = assert.rejects(restart, /aborted/);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(admission.snapshot().queued, 1);
+      try {
+        blocker.release();
+        await rejected;
+        assert.ok(replacement);
+        assert.equal(replacementCancelled, true);
+        await assert.rejects(replacement, /aborted/);
+        await runTool(runtime, manager.waitFor([snap.id]));
+        assert.equal(snap.runGeneration, firstGeneration);
+        assert.equal(snap.finalText, firstText);
+        assert.equal(admission.snapshot().held, 0);
+        assert.equal(admission.snapshot().queued, 0);
+      } finally {
+        unsubscribe();
+        await replacement?.catch(() => {});
+      }
+    },
+    { admission },
+  );
+});
+
+test("FAIL: a backend-rejected restart releases its lease and retry still needs admission", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  const base = stubBackend();
+  let rejectNextSend = true;
+  const backend: SubagentBackend = {
+    ...base,
+    spawn: (spawnTask) =>
+      base.spawn(spawnTask).pipe(
+        Effect.map((session) => ({
+          ...session,
+          send: (text) =>
+            Effect.suspend(() => {
+              if (rejectNextSend) {
+                rejectNextSend = false;
+                return new SendError({ message: "backend rejected restart" });
+              }
+              return session.send(text);
+            }),
+        })),
+      ),
+  };
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      await assert.rejects(
+        runTool(runtime, manager.send(snap.id, "rejected")),
+        /backend rejected restart/,
+      );
+      assert.equal(admission.snapshot().held, 0);
+
+      const blocker = await admission.acquire("workflow");
+      const retry = runTool(runtime, manager.send(snap.id, "retry"));
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        assert.equal(admission.snapshot().queuedByOrigin.direct, 1);
+      } finally {
+        blocker.release();
+        await retry;
+      }
+      await runTool(runtime, manager.waitFor([snap.id]));
+      assert.match(snap.finalText, /retry/);
+      assert.equal(admission.snapshot().held, 0);
+      assert.equal(admission.snapshot().queued, 0);
+    },
+    { admission },
+    [backend],
+  );
 });
 
 test("FAIL: an uncertain Direct stop retains its shared slot and cannot restart", async () => {
