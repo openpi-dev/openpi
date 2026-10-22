@@ -33,7 +33,8 @@ export function captureRuntimeInfo(packageRoot: string): WebRuntimeInfo {
   let source: WebRuntimeInfo["git"] = null;
   try {
     // An npm installation inside another repository is not that repository's source.
-    if (relative(realpathSync(git("rev-parse", "--show-toplevel")), realpathSync(packageRoot)) === "") {
+    // Native realpath also resolves Windows 8.3 aliases used by temporary dirs.
+    if (relative(realpathSync.native(git("rev-parse", "--show-toplevel")), realpathSync.native(packageRoot)) === "") {
       const revision = git("rev-parse", "HEAD");
       if (/^[a-f0-9]{40,64}$/u.test(revision)) {
         let dirty: boolean | null = null;
