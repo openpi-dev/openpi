@@ -11,7 +11,9 @@ import {
 import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
+import { InteractiveTerminal as LoadedTerminal } from "../../web/ui/src/features/workbar/InteractiveTerminal.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import { WebClient as TerminalClient } from "../../web/ui/src/protocol/client.ts";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -68,9 +70,11 @@ function deferred() {
 async function fixture(savedId?: string) {
   vi.resetModules();
   const load = deferred();
-  const loadModule = vi.fn(async (importOriginal: () => Promise<unknown>) => {
+  const started = deferred();
+  const loadModule = vi.fn(async () => {
+    started.resolve();
     await load.promise;
-    return importOriginal();
+    return { InteractiveTerminal: LoadedTerminal };
   });
   vi.doMock(
     "../../web/ui/src/features/workbar/InteractiveTerminal.tsx",
@@ -79,12 +83,13 @@ async function fixture(savedId?: string) {
   const { WorkbarPanel } = await import(
     "../../web/ui/src/features/workbar/WorkbarPanel.tsx"
   );
-  // resetModules gives the dynamically imported terminal its own client module.
+  // Keep the real terminal preloaded; only its delivery is delayed by this fixture.
+  // Workbar close actions still use the freshly imported client module.
   const { WebClient: Client } = await import(
     "../../web/ui/src/protocol/client.ts"
   );
   const create = vi
-    .spyOn(Client.prototype, "createInteractiveTerminal")
+    .spyOn(TerminalClient.prototype, "createInteractiveTerminal")
     .mockResolvedValue({
       id: "terminal-a",
       sessionId: "a",
@@ -92,10 +97,16 @@ async function fixture(savedId?: string) {
       exited: false,
       exitCode: null,
     });
-  vi.spyOn(Client.prototype, "resizeInteractiveTerminal").mockResolvedValue({
+  vi.spyOn(
+    TerminalClient.prototype,
+    "resizeInteractiveTerminal",
+  ).mockResolvedValue({
     resized: true,
   });
-  vi.spyOn(Client.prototype, "streamInteractiveTerminal").mockImplementation(
+  vi.spyOn(
+    TerminalClient.prototype,
+    "streamInteractiveTerminal",
+  ).mockImplementation(
     (_session, _id, _offset, signal) =>
       new Promise((resolve) => {
         signal.addEventListener("abort", () => resolve(), { once: true });
@@ -136,7 +147,10 @@ async function fixture(savedId?: string) {
       createElement(WorkbarPanel, { ...props, visible }),
     );
   const view = render(tree());
-  await waitFor(() => expect(loadModule).toHaveBeenCalledOnce());
+  // Module transformation can outlast DOM polling under concurrent CI load.
+  // Wait for the actual factory event; the enclosing test still bounds failure.
+  await started.promise;
+  expect(loadModule).toHaveBeenCalledOnce();
   return { load, loadModule, create, close, tree, view };
 }
 

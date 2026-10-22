@@ -32,10 +32,15 @@ test("startup identity belongs to the package, stays frozen, and ignores inherit
     );
     const revision = git("rev-parse", "HEAD");
     process.env.GIT_DIR = join(root, "not-a-repo");
-    const startup = captureRuntimeInfo(root);
+    // Windows Git and Node may preserve different drive-letter casing.
+    const packageRoot =
+      process.platform === "win32"
+        ? root[0]!.toLowerCase() + root.slice(1)
+        : root;
+    const startup = captureRuntimeInfo(packageRoot);
     assert.deepEqual(startup.git, { revision, dirty: false });
     assert.equal(startup.version, "1.2.3");
-    assert.equal(startup.packageRoot, root);
+    assert.equal(startup.packageRoot, packageRoot);
     writeFileSync(
       join(root, "package.json"),
       JSON.stringify({ version: "2.0.0" }),

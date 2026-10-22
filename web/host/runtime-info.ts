@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WebBuildInfo, WebRuntimeInfo } from "../protocol/runtime-info.ts";
 
@@ -33,7 +33,7 @@ export function captureRuntimeInfo(packageRoot: string): WebRuntimeInfo {
   let source: WebRuntimeInfo["git"] = null;
   try {
     // An npm installation inside another repository is not that repository's source.
-    if (realpathSync(git("rev-parse", "--show-toplevel")) === realpathSync(packageRoot)) {
+    if (relative(realpathSync(git("rev-parse", "--show-toplevel")), realpathSync(packageRoot)) === "") {
       const revision = git("rev-parse", "HEAD");
       if (/^[a-f0-9]{40,64}$/u.test(revision)) {
         let dirty: boolean | null = null;
