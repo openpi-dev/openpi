@@ -1,5 +1,138 @@
 import { expect, test } from "@playwright/test";
-import type { WebSnapshot } from "../../web/protocol/types.ts";
+import type { WebLiveMessage, WebSnapshot } from "../../web/protocol/types.ts";
+
+for (const width of [1280, 390]) {
+  test(`tool execution identities survive bounded snapshots, event replay and refresh at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const call = {
+      type: "toolCall" as const,
+      id: "build-once",
+      name: "bash",
+      arguments: '{"command":"pnpm run check"}',
+    };
+    const assistant: WebLiveMessage = {
+      role: "assistant",
+      timestamp: 1,
+      content: "",
+      parts: [{ type: "thinking", text: "核对执行结果。" }, call],
+      stopReason: "toolUse",
+    };
+    const result: WebLiveMessage = {
+      role: "toolResult",
+      toolName: "bash",
+      toolCallId: call.id,
+      content: "Check passed.\n".repeat(100),
+      isError: false,
+    };
+    let owner = { id: "", path: "" };
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = (await response.json()) as WebSnapshot;
+      const session = snapshot.selectedSession;
+      if (!session) throw new Error("Missing Session fixture");
+      owner = session;
+      snapshot.cursor = 100;
+      snapshot.preferences = { ...snapshot.preferences, theme: "light" };
+      snapshot.runtime = {
+        ...snapshot.runtime,
+        status: "idle",
+        activeTurn: undefined,
+        liveTools: [],
+      };
+      snapshot.selectedExecution = {
+        sessionId: session.id,
+        sessionPath: session.path,
+        status: "idle",
+        liveTools: [],
+        liveToolsOmitted: 0,
+      };
+      session.history = undefined;
+      const entry = (id: string, message: WebLiveMessage) => ({
+        id,
+        type: "message" as const,
+        timestamp: "2026-10-22T00:00:00Z",
+        message,
+      });
+      session.entries = [
+        entry("prompt", {
+          role: "user",
+          content: "核对工具列表，保留真实的第二次执行。",
+        }),
+        entry("call-1", {
+          ...assistant,
+          parts: [call],
+          truncation: { truncated: true },
+        }),
+        entry("result-1", {
+          ...result,
+          content: "Check passed.…",
+          truncation: { truncated: true, text: true },
+        }),
+        entry("call-2", {
+          ...assistant,
+          parts: [{ ...call, id: "build-again" }],
+        }),
+        entry("result-2", { ...result, toolCallId: "build-again" }),
+      ];
+      await route.fulfill({ response, json: snapshot });
+    });
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: [
+          assistant,
+          result,
+          assistant,
+          result,
+          {
+            role: "assistant",
+            content: "实时回执已同步。",
+            timestamp: 2,
+            stopReason: "stop",
+          },
+        ]
+          .map((message, index) => {
+            const event = {
+              protocolVersion: 1,
+              sequence: 101 + index,
+              timestamp: "2026-10-22T00:00:01Z",
+              type: "message_end",
+              detail: {
+                sessionId: owner.id,
+                sessionPath: owner.path,
+                messageKey: `replay-${index}`,
+                message,
+              },
+            };
+            return `id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`;
+          })
+          .join(""),
+      }),
+    );
+    await page.goto("/");
+    const tools = page.locator('.tool-evidence-card[data-tool="bash"]');
+    await expect(
+      page.getByText("实时回执已同步。", { exact: true }),
+    ).toBeVisible();
+    await expect(tools).toHaveCount(2);
+    await expect(page.locator(".process-sequence.running")).toHaveCount(0);
+    await page.reload();
+    await expect(
+      page.getByText("实时回执已同步。", { exact: true }),
+    ).toBeVisible();
+    await expect(tools).toHaveCount(2);
+    await page.locator(".process-sequence > summary").click();
+    await page.evaluate(() => document.fonts.ready);
+    await expect(tools.first()).toBeVisible();
+    await expect(tools.last()).toBeInViewport({ ratio: 1 });
+    await page
+      .locator(".conversation")
+      .screenshot({ path: testInfo.outputPath(`tool-replay-${width}.png`) });
+  });
+}
 
 for (const width of [1280, 390]) {
   test(`streaming updates preserve the history reader at ${width}px`, async ({
