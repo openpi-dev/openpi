@@ -136,7 +136,13 @@ export function ThinkingPicker({
           disabled={pending !== null}
           onClick={onChooseModel}
         >
-          {model && <ProviderIcon id={model.provider} />}
+          {model && (
+            <ProviderIcon
+              id={model.provider}
+              modelId={model.id}
+              modelName={model.name}
+            />
+          )}
           <span>{model?.name || model?.id || t("selectModel")}</span>
           <ChevronRight aria-hidden="true" />
         </button>
