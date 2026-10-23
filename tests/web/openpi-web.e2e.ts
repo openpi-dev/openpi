@@ -3241,7 +3241,7 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
   );
   await expect(view.getByText(/省略 4 条记录/)).toBeVisible();
   await view.getByRole("button", { name: /显示更早记录/ }).click();
-  await expect(view.locator(".trajectory-record")).toHaveCount(57);
+  await expect(view.locator(".trajectory-record")).toHaveCount(58);
   await view.locator(".trajectory-record").filter({ hasText: "bash" }).click();
   await expect(view.locator(".trajectory-inspector")).toContainText(
     "printf hello",
@@ -3328,6 +3328,9 @@ for (const theme of ["light", "dark"] as const) {
             message: {
               role: "assistant",
               content: "",
+              provider: "fixture",
+              model: "fixture-model",
+              usage: { input: 120, cacheRead: 900, cacheWrite: 0, output: 50 },
               parts: [
                 { type: "thinking", text: "先读取配置，再核对检查结果。" },
                 {
@@ -3363,8 +3366,9 @@ for (const theme of ["light", "dark"] as const) {
                 {
                   type: "toolCall",
                   id: "run-checks",
-                  name: "bash",
-                  arguments: '{"command":"bun run check"}',
+                  name: "codemode",
+                  arguments:
+                    '{"code":"text(await tools.bash({command: \'bun run check\'}));"}',
                 },
               ],
             },
@@ -3376,10 +3380,25 @@ for (const theme of ["light", "dark"] as const) {
             message: {
               role: "toolResult",
               toolCallId: "run-checks",
-              toolName: "bash",
+              toolName: "codemode",
               content: "配置与类型检查通过。",
               isError: false,
               details: { exitCode: 0 },
+              nestedCalls: {
+                complete: true,
+                calls: [
+                  {
+                    call: {
+                      type: "toolCall",
+                      id: "run-checks/1",
+                      name: "bash",
+                      arguments: '{"command":"bun run check"}',
+                    },
+                    status: "ok",
+                    durationMs: 1234,
+                  },
+                ],
+              },
             },
           },
           {
@@ -3409,6 +3428,38 @@ for (const theme of ["light", "dark"] as const) {
       exact: true,
     });
     const changes = view.locator(".trajectory-event-group details");
+    await view.locator('[data-record-key="inspect"]').click();
+    await inspector.getByRole("tab", { name: "用量", exact: true }).click();
+    await expect(inspector.getByRole("tabpanel")).toContainText("900");
+    await expect(inspector.getByRole("tabpanel")).toContainText(
+      "fixture-model",
+    );
+    await view.locator('li[data-nested="true"] .trajectory-record').click();
+    await expect(inspector.getByRole("tabpanel")).toContainText(
+      "未保存其结果正文",
+    );
+    await inspector.getByRole("tab", { name: "时间", exact: true }).click();
+    await expect(inspector.getByRole("tabpanel")).toContainText("1.23 s");
+    await expect(inspector.getByRole("tabpanel")).toContainText("未记录");
+    const overview = view.locator(".trajectory-overview svg");
+    const bounds = (await overview.boundingBox())!;
+    await page.mouse.move(
+      bounds.x + bounds.width * 0.35,
+      bounds.y + bounds.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + bounds.width * 0.7,
+      bounds.y + bounds.height / 2,
+    );
+    await page.mouse.up();
+    await expect(view.getByRole("button", { name: "清除选区" })).toBeVisible();
+    await expect(
+      view.locator('li[data-outside-range="true"] > .trajectory-record.user'),
+    ).toBeVisible();
+    await view.getByRole("searchbox", { name: "搜索已加载记录" }).fill("read");
+    await expect(view.getByRole("button", { name: "清除选区" })).toHaveCount(0);
+    await view.getByRole("searchbox", { name: "搜索已加载记录" }).fill("");
     await expect(changes).toHaveJSProperty("open", false);
     await changes.locator("summary").click();
     await view.getByRole("button", { name: /切换模型/ }).click();
