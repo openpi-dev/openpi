@@ -1901,7 +1901,17 @@ export function createWebStore(
               await actions.refreshSnapshot({ epoch });
               return false;
             }
-            const refreshed = await actions.refreshSnapshot({ epoch });
+            const generation = snapshotGeneration;
+            let refreshed = await actions.refreshSnapshot({ epoch });
+            // Selection may succeed while another refresh supersedes its
+            // confirmation. Re-read once before rejecting the prepared target;
+            // the exact Session/path and epoch checks below still own admission.
+            if (
+              !refreshed &&
+              epoch === sessionEpoch &&
+              snapshotGeneration > generation + 1
+            )
+              refreshed = await actions.refreshSnapshot({ epoch });
             if (epoch !== sessionEpoch) return false;
             if (!refreshed && !sameView) {
               set({ selectedPath: null });

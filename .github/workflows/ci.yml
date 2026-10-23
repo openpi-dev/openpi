@@ -37,8 +37,13 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
         run: bun install --frozen-lockfile
+      # Static contracts, lint, types and reproducible assets are independent of
+      # the runtime compatibility matrix. Run them once on the minimum Node;
+      # every version still runs the complete Node suite and package smokes.
       - run: bun run check
+        if: matrix.node-version == '22.19.0'
       - name: Verify committed Web build
+        if: matrix.node-version == '22.19.0'
         run: |
           changes="$(git status --porcelain=v1 --untracked-files=all -- web/dist)"
           if [[ -n "$changes" ]]; then
@@ -170,11 +175,11 @@ jobs:
           server_pid=""
 
   web-e2e-shards:
-    name: Web E2E shard ${{ matrix.shard }}/2
+    name: Web E2E shard ${{ matrix.shard }}/3
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -217,7 +222,9 @@ jobs:
           bunx playwright install --with-deps chromium
           sudo apt-get install --no-install-recommends -y dbus-daemon
       # Independent runners isolate each shard's server, settings and filesystem.
-      - run: dbus-run-session -- bun run test:web:e2e --shard=${{ matrix.shard }}/2
+      # Exercise the committed release assets. The minimum-Node job rebuilds and
+      # rejects stale assets; all final gates require that job as well as E2E.
+      - run: dbus-run-session -- bunx playwright test --config tests/web/playwright.config.ts --shard=${{ matrix.shard }}/3
         env:
           # The runner's installed Chrome has Ubuntu's native sandbox profile.
           OPENPI_CHROME_PATH: /opt/google/chrome/chrome
@@ -344,10 +351,11 @@ jobs:
   web-e2e:
     name: Web E2E (Node 22.19.0)
     if: always()
-    needs: [web-e2e-shards]
+    needs: [test-node, web-e2e-shards]
     runs-on: ubuntu-latest
     steps:
       - name: Require every E2E shard and provider handoff
         env:
+          NODE_RESULT: ${{ needs.test-node.result }}
           E2E_RESULT: ${{ needs.web-e2e-shards.result }}
-        run: test "$E2E_RESULT" = success
+        run: test "$NODE_RESULT" = success && test "$E2E_RESULT" = success

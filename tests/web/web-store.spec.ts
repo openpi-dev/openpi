@@ -4909,6 +4909,54 @@ describe("draft model selection", () => {
     },
   );
 
+  it.each([false, true])(
+    "confirms observer activation after its snapshot is superseded (copied id: %s)",
+    async (copiedId) => {
+      const client = new FakeClient();
+      const viewed = snapshot();
+      const observer = structuredClone(viewed);
+      observer.currentSessionId = copiedId ? "session-1" : "other";
+      observer.currentSessionPath = "/tmp/ws/other.jsonl";
+      observer.sessions[0]!.controller = "none";
+      const store = createWebStore(client);
+      store.setState({
+        snapshot: observer,
+        selectedPath: viewed.selectedSession!.path,
+        selectedWorkspace: "/tmp/ws",
+      });
+      const first = deferred<WebSnapshot>();
+      client.snapshots.push(
+        first.promise,
+        Promise.resolve(viewed),
+        Promise.resolve(viewed),
+      );
+      const preparing = store.getState().actions.prepareSession();
+      await vi.waitFor(() => expect(client.snapshotPaths).toHaveLength(1));
+      await store.getState().actions.refreshSnapshot();
+      first.resolve(viewed);
+      const target = await preparing;
+      expect(target).toMatchObject({
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+      });
+      expect(client.selections).toEqual(["/tmp/ws/session.jsonl"]);
+      expect(
+        await store
+          .getState()
+          .actions.sendPrompt(
+            "Continue once",
+            [],
+            undefined,
+            undefined,
+            target!,
+          ),
+      ).toBe(true);
+      expect(client.prompts).toEqual([
+        { sessionId: "session-1", content: "Continue once" },
+      ]);
+    },
+  );
+
   it.each(["rejected", "control-lost", "navigated"])(
     "does not prepare a stale target when reactivation is %s",
     async (outcome) => {

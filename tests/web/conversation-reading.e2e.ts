@@ -234,6 +234,17 @@ test("conversation text stays readable and file links retain their exact target"
     }
     await route.fulfill({ response, json: snapshot });
   });
+  // Measure related boxes in the same browser task: following scroll can
+  // advance between separate boundingBox calls without changing their gap.
+  const gap = (before: string, after: string) =>
+    page.evaluate(
+      ({ before, after }) => {
+        const first = document.querySelector(before)!.getBoundingClientRect();
+        const next = document.querySelector(after)!.getBoundingClientRect();
+        return next.top - first.bottom;
+      },
+      { before, after },
+    );
   for (const scenario of [
     { width: 1440, fontSize: 14 },
     { width: 390, fontSize: 14 },
@@ -291,12 +302,10 @@ test("conversation text stays readable and file links retain their exact target"
       "0px",
     );
     const commentary = page.locator(".message-row.response").first();
-    const tool = page.locator(".process-sequence");
-    const commentaryBounds = (await commentary.boundingBox())!;
-    const toolBounds = (await tool.boundingBox())!;
-    expect(
-      toolBounds.y - commentaryBounds.y - commentaryBounds.height,
-    ).toBeCloseTo(16, 0);
+    expect(await gap(".message-row.response", ".process-sequence")).toBeCloseTo(
+      16,
+      0,
+    );
     const paragraph = commentary.locator("p");
     expect((await paragraph.boundingBox())!.height).toBeGreaterThanOrEqual(
       fontSize * 1.625 - 1,
@@ -308,11 +317,10 @@ test("conversation text stays readable and file links retain their exact target"
       expect(turn.width).toBeCloseTo(pane.width - 32, 0);
     }
     if (fontSize === 20) {
-      const process = (await page
-        .locator(".turn-response-body")
-        .boundingBox())!;
-      const final = (await page.locator(".final-response").boundingBox())!;
-      expect(final.y - process.y - process.height).toBeCloseTo(16, 0);
+      expect(await gap(".turn-response-body", ".final-response")).toBeCloseTo(
+        16,
+        0,
+      );
       await page.locator(".turn-duration-toggle").click();
       await expect(page.locator(".turn-response-body")).toBeHidden();
       await expect(response).toBeVisible();
