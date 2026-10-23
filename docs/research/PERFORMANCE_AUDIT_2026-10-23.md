@@ -90,3 +90,5 @@ The current tracked implementation matches the implementation in the validated l
 The measured improvements address concrete repeated work and retention defects. Full transcript serialization, upstream resource-loader reuse, cross-platform behavior and production-wide latency remain explicitly outside any speedup claim; no evidence justifies speculative changes to those boundaries in this audit.
 
 Local audit closure: all nine confirmed defects are repaired, the implementation still matches the tested archive, and the user-reported TUI check closes the last local acceptance gap. At that audit boundary, remote publication, CI, merge and release had not been performed. See PR #895 for subsequent delivery status.
+
+PR validation follow-up: Windows CI at `1061f966` returned timeout code `-1` instead of exit code `7` in the existing Git process output test. That test gave Node startup and execution a one-second budget. Its non-deadline helper now allows ten seconds; the separate explicit 20 ms timeout test and production deadlines are unchanged. Focused local output, missing-command and timeout checks passed; the final PR checks carry Windows verification.
