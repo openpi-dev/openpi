@@ -24,6 +24,15 @@ const gitInfoProcessTest = resolve(
   "git-info",
   "process.test.ts",
 );
+// This real Pi fixture launches PowerShell and Node behind a socket gate.
+// Keep cold Windows startup out of the parallel shards without weakening its
+// ordering assertions or extending its 15-second watchdog.
+const postEditLifecycleTest = resolve(
+  "tests",
+  "extensions",
+  "post-edit",
+  "lifecycle.test.ts",
+);
 
 export function partitionNodeTestsByPlatform(
   files,
@@ -38,7 +47,8 @@ export function partitionNodeTestsByPlatform(
   for (const file of files) {
     (file === setupIntegrationTest ||
     file === workflowExecutionTest ||
-    file === gitInfoProcessTest
+    file === gitInfoProcessTest ||
+    file === postEditLifecycleTest
       ? serial
       : parallel
     ).push(file);

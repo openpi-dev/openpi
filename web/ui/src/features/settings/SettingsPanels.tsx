@@ -4,7 +4,6 @@ import { Button } from "@astryxdesign/core/Button";
 import { Slider } from "@astryxdesign/core/Slider";
 import { Switch } from "@astryxdesign/core/Switch";
 import {
-  Bot,
   Check,
   ChevronDown,
   Clipboard,
@@ -187,7 +186,7 @@ export function GeneralSettingsPanel({
   useEffect(() => setMaxCalls(configuredCalls), [configuredCalls]);
 
   return (
-    <section className="settings-general-panel">
+    <section className="settings-content-page settings-general-panel">
       <div className="settings-page-heading">
         <div>
           <h1>{t("generalSettings")}</h1>
@@ -478,9 +477,7 @@ function ResourceToolbar({
   return (
     <div className="settings-resource-toolbar">
       <div className="settings-resource-toolbar-heading">
-        <strong>
-          {t(kind === "skills" ? "skillsSettings" : "pluginsSettings")}
-        </strong>
+        <strong>{t("resources")}</strong>
         <Button
           label={t(kind === "skills" ? "addSkill" : "addPlugin")}
           variant="secondary"
@@ -533,8 +530,7 @@ function ResourceInstallForm({
     <section className="settings-resource-install">
       <header className="settings-detail-heading">
         <div>
-          <span>{t("resourceManagement")}</span>
-          <h1>{t(kind === "skills" ? "addSkill" : "addPlugin")}</h1>
+          <h2>{t(kind === "skills" ? "addSkill" : "addPlugin")}</h2>
           <p>{t("resourceInstallIntro")}</p>
         </div>
       </header>
@@ -788,7 +784,13 @@ export function SkillsSettingsPanel({
   };
 
   return (
-    <section className="settings-split-panel settings-managed-panel">
+    <section className="settings-content-page settings-managed-panel">
+      <header className="settings-page-heading">
+        <div>
+          <h1>{t("skillsSettings")}</h1>
+          <p>{t("skillsEmptyIntro")}</p>
+        </div>
+      </header>
       <aside className="settings-resource-sidebar">
         <ResourceToolbar
           kind="skills"
@@ -874,10 +876,7 @@ export function SkillsSettingsPanel({
           <>
             <header className="settings-detail-heading">
               <div>
-                <span>
-                  {t(`resourceScope_${selected.scope}`)} · {t("skill")}
-                </span>
-                <h1>{selected.name}</h1>
+                <h2>{selected.name}</h2>
                 <p>{selected.description}</p>
               </div>
               <Button
@@ -985,10 +984,9 @@ export function SkillsSettingsPanel({
         ) : (
           <div className="settings-empty-detail">
             <Sparkles aria-hidden="true" />
-            <h1>
+            <h2>
               {t(skills.length ? "noMatchingResources" : "skillsEmptyTitle")}
-            </h1>
-            <p>{t("skillsEmptyIntro")}</p>
+            </h2>
             <Button
               label={t("addSkill")}
               variant="secondary"
@@ -1084,166 +1082,161 @@ export function SubagentsSettingsPanel({
     activity?.items.filter((item) => item.status !== "running").length ?? 0;
 
   return (
-    <section className="settings-subagents-panel">
-      <header className="settings-subagent-summary">
+    <section className="settings-content-page settings-subagents-panel">
+      <header className="settings-page-heading">
         <div>
-          <strong>{t("subagentConfiguration")}</strong>
-          <span>{t("subagentConfigurationIntro")}</span>
+          <h1>{t("subagentsSettings")}</h1>
+          <p>{t("subagentConfigurationIntro")}</p>
         </div>
-        {catalog && (
-          <div className="settings-subagent-metrics">
-            <span>{t("subagentActiveCount", { count: active })}</span>
-            <span>{t("subagentCompletedCount", { count: completed })}</span>
-            <span>
-              {t("subagentConcurrency", {
-                count: catalog.setup.workflows.concurrency,
-              })}
-            </span>
-          </div>
-        )}
+        <SetupAction
+          isPending={setupPending}
+          isBlocked={setupBlocked}
+          onConfigure={onConfigure}
+          request={t("setupRequestSubagents")}
+          label={t("configureRoles")}
+        />
       </header>
-      <div className="settings-split-panel settings-subagent-split">
-        <aside className="settings-resource-sidebar">
-          <div className="settings-resource-list">
-            <span className="settings-sidebar-label">{t("builtInRoles")}</span>
+      <SettingsLoadState
+        catalog={catalog}
+        error={error}
+        onRefresh={onRefresh}
+      />
+      <div className="settings-control-group">
+        <label className="settings-control-row">
+          <span className="settings-control-copy">
+            <strong>{t("builtInRoles")}</strong>
+            <span>{t(`subagentRoleShort_${selectedRole}`)}</span>
+          </span>
+          <select
+            name="subagentRole"
+            aria-label={t("builtInRoles")}
+            value={selectedRole}
+            onChange={(event) => {
+              const role = roles.find((value) => value === event.target.value);
+              if (role) setSelectedRole(role);
+            }}
+          >
             {roles.map((role) => (
-              <button
-                key={role}
-                type="button"
-                className="settings-resource-item"
-                aria-current={role === selectedRole ? "page" : undefined}
-                onClick={() => setSelectedRole(role)}
-              >
-                <Bot aria-hidden="true" />
-                <span>
-                  <strong>{t(`subagentRole_${role}`)}</strong>
-                  <small>{t(`subagentRoleShort_${role}`)}</small>
-                </span>
-              </button>
+              <option key={role} value={role}>
+                {t(`subagentRole_${role}`)}
+              </option>
             ))}
-          </div>
-          <div className="settings-sidebar-footer settings-sidebar-footer-action">
-            <SetupAction
-              isPending={setupPending}
-              isBlocked={setupBlocked}
-              onConfigure={onConfigure}
-              request={t("setupRequestSubagents")}
-              label={t("configureRoles")}
-            />
-          </div>
-        </aside>
-        <div className="settings-resource-detail">
-          <SettingsLoadState
-            catalog={catalog}
-            error={error}
-            onRefresh={onRefresh}
-          />
-          {catalog && (
-            <>
-              <header className="settings-detail-heading">
-                <div>
-                  <span>{t("builtInRole")}</span>
-                  <h1>{t(`subagentRole_${selectedRole}`)}</h1>
-                  <p>{t(`subagentRoleDescription_${selectedRole}`)}</p>
-                </div>
-                <span className="settings-status-badge">{t("builtIn")}</span>
-              </header>
-              <dl className="settings-detail-metadata settings-detail-metadata-wide">
-                <div>
-                  <dt>{t("modelAssignment")}</dt>
-                  <dd>
-                    {assignment
-                      ? `${assignment.provider}/${assignment.model}`
-                      : t("inheritParentModel")}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t("effectiveModel")}</dt>
-                  <dd>
+          </select>
+        </label>
+      </div>
+      <div className="settings-role-detail">
+        {catalog && (
+          <>
+            <header className="settings-detail-heading">
+              <div>
+                <h2>{t(`subagentRole_${selectedRole}`)}</h2>
+                <p>{t(`subagentRoleDescription_${selectedRole}`)}</p>
+              </div>
+            </header>
+            <form
+              className="settings-edit-form settings-role-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (setupPending || setupBlocked) return;
+                void onConfigure(
+                  t("setupRoleFormRequest", {
+                    role: selectedRole,
+                    model: roleModel || t("inheritParentModel"),
+                    concurrency,
+                  }),
+                );
+              }}
+            >
+              <div className="settings-control-group">
+                <label className="settings-control-row">
+                  <span className="settings-control-copy">
+                    <strong>{t("modelAssignment")}</strong>
+                  </span>
+                  <select
+                    name="roleModel"
+                    value={roleModel}
+                    disabled={setupPending || setupBlocked}
+                    onChange={(event) => setRoleModel(event.target.value)}
+                  >
+                    <option value="">{t("inheritParentModel")}</option>
+                    {roleModel &&
+                      !models.some(
+                        (model) =>
+                          `${model.provider}/${model.id}` === roleModel,
+                      ) && <option value={roleModel}>{roleModel}</option>}
+                    {models.map((model) => (
+                      <option
+                        key={`${model.provider}/${model.id}`}
+                        value={`${model.provider}/${model.id}`}
+                      >
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="settings-control-row">
+                  <span className="settings-control-copy">
+                    <strong>{t("effectiveModel")}</strong>
+                  </span>
+                  <span className="settings-control-value">
                     {assignment
                       ? `${assignment.provider}/${assignment.model}`
                       : (currentModel?.label ?? t("unknownState"))}
-                  </dd>
+                  </span>
                 </div>
-                <div>
-                  <dt>{t("workflowConcurrencyLabel")}</dt>
-                  <dd>{catalog.setup.workflows.concurrency}</dd>
+                <label className="settings-control-row">
+                  <span className="settings-control-copy">
+                    <strong>{t("workflowConcurrencyLabel")}</strong>
+                  </span>
+                  <input
+                    name="concurrency"
+                    type="number"
+                    autoComplete="off"
+                    min={1}
+                    max={64}
+                    required
+                    value={concurrency}
+                    disabled={setupPending || setupBlocked}
+                    onChange={(event) =>
+                      setConcurrency(Number(event.target.value))
+                    }
+                  />
+                </label>
+                <div className="settings-control-row">
+                  <span className="settings-control-copy">
+                    <strong>{t("workflowCallLimit")}</strong>
+                  </span>
+                  <span className="settings-control-value">
+                    {catalog.setup.workflows.maxAgentCalls}
+                  </span>
                 </div>
-                <div>
-                  <dt>{t("workflowCallLimit")}</dt>
-                  <dd>{catalog.setup.workflows.maxAgentCalls}</dd>
-                </div>
-              </dl>
-              <section className="settings-role-principles">
-                <form
-                  className="settings-edit-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (setupPending) return;
-                    void onConfigure(
-                      t("setupRoleFormRequest", {
-                        role: selectedRole,
-                        model: roleModel || t("inheritParentModel"),
-                        concurrency,
-                      }),
-                    );
-                  }}
-                >
-                  <label className="settings-form-field">
-                    {t("modelAssignment")}
-                    <select
-                      value={roleModel}
-                      disabled={setupPending}
-                      onChange={(event) => setRoleModel(event.target.value)}
-                    >
-                      <option value="">{t("inheritParentModel")}</option>
-                      {roleModel &&
-                        !models.some(
-                          (model) =>
-                            `${model.provider}/${model.id}` === roleModel,
-                        ) && <option value={roleModel}>{roleModel}</option>}
-                      {models.map((model) => (
-                        <option
-                          key={`${model.provider}/${model.id}`}
-                          value={`${model.provider}/${model.id}`}
-                        >
-                          {model.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="settings-form-field">
-                    {t("workflowConcurrencyLabel")}
-                    <input
-                      type="number"
-                      min={1}
-                      max={64}
-                      required
-                      value={concurrency}
-                      disabled={setupPending}
-                      onChange={(event) =>
-                        setConcurrency(Number(event.target.value))
-                      }
-                    />
-                  </label>
-                  <button type="submit" disabled={setupPending}>
-                    {t("configureViaSetup")}
-                  </button>
-                  <small>{t("setupFormDetail")}</small>
-                </form>
-                <h2>{t("runtimeBoundaries")}</h2>
-                <div>
+              </div>
+              <button type="submit" disabled={setupPending || setupBlocked}>
+                {t("configureViaSetup")}
+              </button>
+              <small className="settings-resource-caption">
+                {t("setupFormDetail")}
+              </small>
+            </form>
+            <section className="settings-role-principles">
+              <h2>{t("runtimeBoundaries")}</h2>
+              <div className="settings-control-group">
+                <div className="settings-control-row">
                   <KeyRound aria-hidden="true" />
                   <p>{t("subagentAuthorityNote")}</p>
                 </div>
-                <div>
+                <div className="settings-control-row">
                   <Cpu aria-hidden="true" />
                   <p>{t("subagentModelNote")}</p>
                 </div>
-              </section>
-            </>
-          )}
-        </div>
+              </div>
+              <p className="settings-resource-caption">
+                {t("subagentActiveCount", { count: active })} ·{" "}
+                {t("subagentCompletedCount", { count: completed })}
+              </p>
+            </section>
+          </>
+        )}
       </div>
     </section>
   );
@@ -1326,7 +1319,13 @@ export function PluginsSettingsPanel({
   }, [plugins, selectedId]);
 
   return (
-    <section className="settings-split-panel settings-managed-panel">
+    <section className="settings-content-page settings-managed-panel">
+      <header className="settings-page-heading">
+        <div>
+          <h1>{t("pluginsSettings")}</h1>
+          <p>{t("pluginsEmptyIntro")}</p>
+        </div>
+      </header>
       <aside className="settings-resource-sidebar">
         <ResourceToolbar
           kind="plugins"
@@ -1405,8 +1404,7 @@ export function PluginsSettingsPanel({
           <>
             <header className="settings-detail-heading">
               <div>
-                <span>{t(`resourceScope_${selected.scope}`)}</span>
-                <h1>{sourceLabel(selected)}</h1>
+                <h2>{sourceLabel(selected)}</h2>
                 <code>{selected.source}</code>
               </div>
               <span
@@ -1538,10 +1536,9 @@ export function PluginsSettingsPanel({
         ) : (
           <div className="settings-empty-detail">
             <Plug aria-hidden="true" />
-            <h1>
+            <h2>
               {t(plugins.length ? "noMatchingResources" : "pluginsEmptyTitle")}
-            </h1>
-            <p>{t("pluginsEmptyIntro")}</p>
+            </h2>
             <Button
               label={t("addPlugin")}
               variant="secondary"

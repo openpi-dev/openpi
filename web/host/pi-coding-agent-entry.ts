@@ -164,13 +164,18 @@ export function resolveStandaloneJitiAliases(options?: {
   // Pi-managed packages omit peers. Resolve Web's direct Pi import from the
   // selected host, using its ESM exports rather than OpenPI's install tree.
   const host = createJiti(entry);
-  const providers = "@earendil-works/pi-ai/providers/all";
   aliases[PI_CODING_AGENT_PACKAGE] = entry;
-  try {
-    aliases[providers] = fileURLToPath(host.esmResolve(providers));
-  } catch {
-    // Older or unusual hosts may not export this subpath. Leave it unaliased so
-    // normal resolution applies instead of failing Web startup here.
+  for (const dependency of [
+    "@earendil-works/pi-ai/providers/all",
+    "@earendil-works/pi-ai/providers/model-schema",
+    "@earendil-works/pi-tui",
+  ]) {
+    try {
+      aliases[dependency] = fileURLToPath(host.esmResolve(dependency));
+    } catch {
+      // Preserve the Pi entry when older or unusual hosts omit a dependency.
+      // Normal resolution may still provide it from OpenPI's install tree.
+    }
   }
   return aliases;
 }

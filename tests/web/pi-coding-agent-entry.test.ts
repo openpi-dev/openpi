@@ -73,7 +73,12 @@ async function writePiPackage(
     providers,
     `export const marker = ${JSON.stringify(options.marker)};\n`,
   );
-  return { root, entry, providers, cli: join(root, "dist", "cli.js") };
+  const schema = join(aiRoot, "dist", "providers", "model-schema.js");
+  await writeFile(
+    schema,
+    `export const marker = ${JSON.stringify(options.marker)};\n`,
+  );
+  return { root, entry, providers, schema, cli: join(root, "dist", "cli.js") };
 }
 
 async function isolatedLayout() {
@@ -177,10 +182,13 @@ test("standalone uses a validated explicit handoff before its own peer", async (
       fromUrl: layout.fromUrl,
     });
     const jiti = createJiti(layout.fromUrl, { alias: aliases });
-    const providers = await jiti.import<{ marker: string }>(
+    for (const dependency of [
       "@earendil-works/pi-ai/providers/all",
-    );
-    assert.equal(providers.marker, "host-0.85");
+      "@earendil-works/pi-ai/providers/model-schema",
+    ]) {
+      const imported = await jiti.import<{ marker: string }>(dependency);
+      assert.equal(imported.marker, "host-0.85");
+    }
   } finally {
     await rm(layout.root, { recursive: true, force: true });
   }
@@ -240,6 +248,41 @@ test("host source prefers argv over a local OpenPI peer", async () => {
   }
 });
 
+test("standalone binds Workflow presentation to the selected host TUI", async () => {
+  const layout = await isolatedLayout();
+  try {
+    for (const [modules, marker] of [
+      [join(layout.host.root, "node_modules"), "selected-host-tui"],
+      [join(layout.root, "openpi", "node_modules"), "unrelated-install-tui"],
+    ] as const) {
+      const root = join(modules, "@earendil-works", "pi-tui");
+      await mkdir(root, { recursive: true });
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({
+          name: "@earendil-works/pi-tui",
+          type: "module",
+          exports: { ".": { import: "./index.js" } },
+        }),
+      );
+      await writeFile(
+        join(root, "index.js"),
+        `export const marker = ${JSON.stringify(marker)};\n`,
+      );
+    }
+    const aliases = resolveStandaloneJitiAliases({
+      env: { [PI_CODING_AGENT_ENTRY_ENV]: layout.host.entry },
+      fromUrl: layout.fromUrl,
+    });
+    const tui = await createJiti(layout.fromUrl, { alias: aliases }).import<{
+      marker: string;
+    }>("@earendil-works/pi-tui");
+    assert.equal(tui.marker, "selected-host-tui");
+  } finally {
+    await rm(layout.root, { recursive: true, force: true });
+  }
+});
+
 test("standalone source uses the install peer and official 0.84.1 exports", async () => {
   const layout = await isolatedLayout();
   try {
@@ -261,13 +304,16 @@ test("standalone source uses the install peer and official 0.84.1 exports", asyn
       "@earendil-works/pi-ai/providers/all": realpathSync(
         layout.peer.providers,
       ),
+      "@earendil-works/pi-ai/providers/model-schema": realpathSync(
+        layout.peer.schema,
+      ),
     });
   } finally {
     await rm(layout.root, { recursive: true, force: true });
   }
 });
 
-test("standalone keeps the Pi entry alias when the host cannot resolve providers/all", async () => {
+test("standalone keeps Pi and available dependencies when the host omits providers/all", async () => {
   const layout = await isolatedLayout();
   try {
     await rm(layout.peer.providers, { force: true });
@@ -277,6 +323,9 @@ test("standalone keeps the Pi entry alias when the host cannot resolve providers
     });
     assert.deepEqual(aliases, {
       [PI_CODING_AGENT_PACKAGE]: realpathSync(layout.peer.entry),
+      "@earendil-works/pi-ai/providers/model-schema": realpathSync(
+        layout.peer.schema,
+      ),
     });
   } finally {
     await rm(layout.root, { recursive: true, force: true });

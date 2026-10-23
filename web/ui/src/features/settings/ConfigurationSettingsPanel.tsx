@@ -96,7 +96,7 @@ export function ConfigurationSettingsPanel({
   const verbosity = catalog?.setup.response?.verbosity ?? "default";
   const summary = catalog?.setup.response?.reasoningSummary ?? "default";
   return (
-    <section className="settings-configuration-panel">
+    <section className="settings-content-page settings-configuration-panel">
       <header className="settings-page-heading">
         <div>
           <h1>{t("configurationSettings")}</h1>
