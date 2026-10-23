@@ -17,8 +17,10 @@ const WEB_MAX_CAPABILITY_ID = 160;
 export interface WebSubagentActivity {
   readonly id: string;
   readonly title: string;
+  /** Short assigned input for the task list, never a result or reasoning preview. */
+  readonly taskPreview?: string;
   readonly origin?: "model" | "btw";
-  readonly status: "running" | "done" | "error";
+  readonly status: "running" | "done" | "error" | "unknown";
   readonly outcome?: "completed" | "failed" | "interrupted";
   readonly createdAt: number;
   readonly settledAt?: number;
@@ -28,6 +30,7 @@ export interface WebWorkflowAgentActivity {
   readonly id: string;
   readonly runId: string;
   readonly title: string;
+  readonly taskPreview?: string;
   readonly status: WebSubagentActivity["status"] | "unknown";
   readonly outcome?: WebSubagentActivity["outcome"];
   readonly createdAt: number;
@@ -141,15 +144,18 @@ interface BoundedActivityText {
   readonly truncated: boolean;
 }
 
-function boundedActivityText(value: string): BoundedActivityText {
+function boundedActivityText(
+  value: string,
+  limit = WEB_MAX_ACTIVITY_TEXT,
+): BoundedActivityText {
   // Cut on code points: a UTF-16 unit cut can split a surrogate pair and emit a
   // lone surrogate, which the JSON capability snapshot cannot represent.
   const characters = [...value];
-  if (characters.length <= WEB_MAX_ACTIVITY_TEXT) {
+  if (characters.length <= limit) {
     return { value, truncated: false };
   }
   return {
-    value: `${characters.slice(0, WEB_MAX_ACTIVITY_TEXT - 1).join("")}…`,
+    value: `${characters.slice(0, limit - 1).join("")}…`,
     truncated: true,
   };
 }
@@ -235,6 +241,7 @@ export function projectSubagentCapability(
   source: readonly {
     readonly id: string;
     readonly title: string;
+    readonly prompt?: string;
     readonly origin?: WebSubagentActivity["origin"];
     readonly status: WebSubagentActivity["status"];
     readonly outcome?: WebSubagentActivity["outcome"];
@@ -246,10 +253,14 @@ export function projectSubagentCapability(
   const projection = boundedActivityProjection(source, (value) => {
     const id = boundedActivityText(value.id);
     const title = boundedActivityText(value.title);
+    const task = value.prompt
+      ? boundedActivityText(value.prompt.replace(/\s+/gu, " ").trim(), 96)
+      : undefined;
     return {
       item: {
         id: id.value,
         title: title.value,
+        ...(task?.value ? { taskPreview: task.value } : {}),
         ...(value.origin ? { origin: value.origin } : {}),
         status: value.status,
         ...(value.outcome ? { outcome: value.outcome } : {}),
@@ -258,7 +269,7 @@ export function projectSubagentCapability(
           ? { settledAt: value.settledAt }
           : {}),
       },
-      truncated: id.truncated || title.truncated,
+      truncated: id.truncated || title.truncated || Boolean(task?.truncated),
     };
   });
   return {
@@ -435,6 +446,11 @@ interface WorkflowAgentSource {
   readonly executionOutcome?: string;
   readonly completion?: { readonly observed: { readonly outcome: string } };
   readonly replayed?: boolean;
+  readonly transcript?: readonly {
+    readonly role?: string;
+    readonly kind?: string;
+    readonly text?: string;
+  }[];
 }
 
 function workflowAgentStatus(source: WorkflowAgentSource) {
@@ -465,6 +481,10 @@ function workflowAgentActivity(runId: string, source: WorkflowAgentSource) {
   )
     return undefined;
   const title = boundedActivityText(source.label ?? `Agent ${source.index}`);
+  const input = source.transcript?.find((entry) => entry.role === "user")?.text;
+  const task = input
+    ? boundedActivityText(input.replace(/\s+/gu, " ").trim(), 96)
+    : undefined;
   const status = workflowAgentStatus(source);
   const outcome =
     status === "done"
@@ -479,6 +499,7 @@ function workflowAgentActivity(runId: string, source: WorkflowAgentSource) {
     id,
     runId,
     title: title.value,
+    ...(task?.value ? { taskPreview: task.value } : {}),
     status,
     ...(outcome ? { outcome } : {}),
     createdAt: source.startedAt ?? 0,
@@ -487,7 +508,7 @@ function workflowAgentActivity(runId: string, source: WorkflowAgentSource) {
       : {}),
     ...(source.replayed !== undefined ? { replayed: source.replayed } : {}),
   };
-  return { item, truncated: title.truncated };
+  return { item, truncated: title.truncated || Boolean(task?.truncated) };
 }
 
 /** Read-only projection of existing owner evidence, never a preview as a result. */

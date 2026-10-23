@@ -82,6 +82,9 @@ export async function waitForUsage<T>(
   promise: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
+  // The accepted refresh keeps running even when this wait is already cancelled.
+  if (signal.aborted) void promise.catch(() => undefined);
+  signal.throwIfAborted();
   let onAbort: (() => void) | undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
     onAbort = () => reject(signal.reason);

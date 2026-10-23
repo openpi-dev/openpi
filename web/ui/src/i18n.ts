@@ -4,6 +4,19 @@ import { initReactI18next } from "react-i18next";
 const resources = {
   en: {
     translation: {
+      quitOpenPI: "Quit OpenPI",
+      quittingOpenPI: "Quitting…",
+      quitConfirmHelp:
+        "Quit this OpenPI Web application? All running tasks in this Web application will stop. Conversations are saved and will be available when you restart.",
+      quitTabHelp:
+        "Closing this browser tab alone leaves OpenPI and its tasks running in the background.",
+      quitAccepted: "OpenPI is shutting down",
+      quitAcceptedHelp:
+        "The quit request was accepted. Wait for the terminal to confirm that OpenPI has stopped, then you can close this tab.",
+      quitRestartHelp:
+        "To restart, run openpi web in a terminal, or /web in Pi, then open the address it displays. Refreshing this page does not restart OpenPI.",
+      quitFailed:
+        "Could not confirm shutdown. Check the terminal before trying again. You can also stop OpenPI with Ctrl+C in its terminal.",
       promptPending: "Processing your request…",
       commandFeedbackTruncated:
         "This is a limited command preview. Narrow the query or run it in the TUI for the full output.",
@@ -141,6 +154,9 @@ const resources = {
       overviewReviewUnavailable: "Unavailable",
       sessionSources: "Sources",
       sourcesAdd: "Add source",
+      sourcesDescription:
+        "Browse this conversation's attached images and files",
+      sourceAttached: "Attached to this conversation",
       sourcesEmpty: "No sources yet",
       sourcesFailed: "Could not load sources.",
       sourcesViewAll: "View all",
@@ -739,6 +755,7 @@ const resources = {
       subagentTasks: "Subagent tasks",
       inspectSubagent: "Open subagent: {{name}}",
       subagentState_running: "Running",
+      subagentProcessing: "Working…",
       subagentState_done: "Completed",
       subagentState_error: "Failed",
       subagentState_interrupted: "Interrupted",
@@ -2167,6 +2184,18 @@ const resources = {
   },
   zh: {
     translation: {
+      quitOpenPI: "退出 OpenPI",
+      quittingOpenPI: "正在退出…",
+      quitConfirmHelp:
+        "确定退出此 OpenPI Web 应用吗？此 Web 应用中所有正在运行的任务都会停止，对话会保存，重启后可继续查看。",
+      quitTabHelp: "仅关闭浏览器标签页会让 OpenPI 和任务继续在后台运行。",
+      quitAccepted: "OpenPI 正在关闭",
+      quitAcceptedHelp:
+        "退出请求已接受。请等待终端确认 OpenPI 已停止，然后可以关闭此标签页。",
+      quitRestartHelp:
+        "重新启动：在终端运行 openpi web，或在 Pi 中运行 /web，然后打开显示的地址。刷新此页面不会重启 OpenPI。",
+      quitFailed:
+        "无法确认是否已关闭。请先检查终端，再重试。也可以在 OpenPI 所在终端按 Ctrl+C 停止应用。",
       promptPending: "正在处理请求…",
       commandFeedbackTruncated:
         "这里只显示部分命令结果。请缩小查询范围，或在 TUI 查看完整输出。",
@@ -2286,6 +2315,8 @@ const resources = {
       overviewReviewUnavailable: "暂不可用",
       sessionSources: "来源",
       sourcesAdd: "添加来源",
+      sourcesDescription: "查看此对话附加的图片与文件",
+      sourceAttached: "已附加到对话",
       sourcesEmpty: "暂无来源",
       sourcesFailed: "来源加载失败。",
       sourcesViewAll: "查看全部",
@@ -2819,7 +2850,7 @@ const resources = {
       subagentOtherGroup: "失败 / 已中断",
       subagentShowMore: "再显示 {{count}} 个",
       backToSubagents: "返回子代理列表",
-      subagentActiveGroup: "运行中",
+      subagentActiveGroup: "已开启",
       subagentFinishedGroup: "完成",
       subagentNoneRunning: "暂无正在运行的子代理。",
       subagentNoneFinished: "任务结束后会显示在这里。",
@@ -2828,6 +2859,7 @@ const resources = {
       subagentTasks: "子代理任务列表",
       inspectSubagent: "打开子代理：{{name}}",
       subagentState_running: "运行中",
+      subagentProcessing: "处理中",
       subagentState_done: "已完成",
       subagentState_error: "失败",
       subagentState_interrupted: "已中断",

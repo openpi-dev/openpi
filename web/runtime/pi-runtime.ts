@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync, unlinkSync } from "node:fs";
 import { readConfiguredPackages } from "./configured-packages.ts";
+import { getSessionChildExecutionAdmission } from "../../extensions/shared/child-execution-admission.ts";
 import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createTurnChangeRecorder } from "./turn-changes.ts";
@@ -3024,6 +3025,16 @@ export class PiWebRuntime implements WebRuntimeController {
     this.retainedRuntimes.add(runtime);
     const session = runtime.session;
     let progressTimer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribeChildren = getSessionChildExecutionAdmission(session.sessionManager)?.subscribe(() => {
+      // Settlement releases the lease before dispatching the child's result.
+      // Let that callback admit its native parent continuation before cleanup.
+      queueMicrotask(() => {
+        if (!this.retainedRuntimes.has(runtime)) return;
+        clearTimeout(progressTimer);
+        progress();
+        this.releaseRetainedRuntime(runtime);
+      });
+    });
     const progress = () => {
       progressTimer = undefined;
       if (!this.retainedRuntimes.has(runtime)) return;
@@ -3064,7 +3075,11 @@ export class PiWebRuntime implements WebRuntimeController {
         progressTimer.unref();
       }
     });
-    this.retainedSubscriptions.set(runtime, () => { clearTimeout(progressTimer); unsubscribe(); });
+    this.retainedSubscriptions.set(runtime, () => {
+      clearTimeout(progressTimer);
+      unsubscribeChildren?.();
+      unsubscribe();
+    });
     this.releaseRetainedRuntime(runtime);
   }
 
@@ -3084,6 +3099,8 @@ export class PiWebRuntime implements WebRuntimeController {
   private releaseRetainedRuntime(runtime: AgentSessionRuntime) {
     if (!this.retainedRuntimes.has(runtime)) return;
     if (!runtime.session.isIdle || runtime.session.isStreaming || this.inFlightRuntimes.has(runtime)) return;
+    const children = getSessionChildExecutionAdmission(runtime.session.sessionManager)?.snapshot();
+    if (children && (children.held > 0 || children.queued > 0)) return;
     this.retainedSubscriptions.get(runtime)?.();
     this.retainedSubscriptions.delete(runtime);
     this.retainedRuntimes.delete(runtime);

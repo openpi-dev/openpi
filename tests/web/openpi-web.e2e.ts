@@ -1038,7 +1038,7 @@ test("side conversation shows one editor in narrow layouts and preserves both dr
   await expect(mainInput).toHaveValue("Keep the main conversation draft");
 });
 
-test("workbar exposes five tools and completes a side conversation lifecycle", async ({
+test("workbar exposes its tools and completes a side conversation lifecycle", async ({
   page,
 }) => {
   await page.route("**/api/snapshot**", async (route) => {
@@ -1121,8 +1121,8 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
     .locator('button.task-tools-trigger[aria-label="打开工具"]')
     .click();
   const toolsMenu = page.getByRole("menu", { name: "打开工具" });
-  await expect(toolsMenu.getByRole("menuitem")).toHaveCount(5);
-  for (const name of ["侧边对话", "变更", "终端", "浏览器", "文件"]) {
+  await expect(toolsMenu.getByRole("menuitem")).toHaveCount(6);
+  for (const name of ["侧边对话", "变更", "终端", "浏览器", "文件", "来源"]) {
     await expect(
       toolsMenu.getByRole("menuitem", { name: new RegExp(`^${name}`, "u") }),
     ).toBeVisible();
@@ -1197,7 +1197,9 @@ test("terminal launcher creates independent real workspace shells and closes onl
   await workbar.locator(".workbar-add-tab").click();
   const launcher = page.getByRole("menu");
   await expect(launcher).toBeVisible();
-  await expect(launcher.getByRole("menuitem")).toHaveCount(5);
+  await expect(
+    launcher.getByRole("menuitem", { name: /^新建终端/u }),
+  ).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("multi-terminal-launcher.png"),
   });
@@ -2225,7 +2227,11 @@ for (const width of [320, 390]) {
       name: "已归档",
       exact: true,
     });
-    const last = sidebar.getByRole("button", { name: "设置", exact: true });
+    const settings = sidebar.getByRole("button", { name: "设置", exact: true });
+    const last = sidebar.getByRole("button", {
+      name: "退出 OpenPI",
+      exact: true,
+    });
     const sessionOptions = sidebar
       .getByRole("button", { name: "会话选项" })
       .last();
@@ -2279,6 +2285,8 @@ for (const width of [320, 390]) {
     ).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(archived).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(settings).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(last).toBeFocused();
     await page.keyboard.press("Tab");

@@ -31,12 +31,20 @@ function position(
     open: true,
     reading: {
       tabs: {
-        tabs: ["files", "terminal", "terminal:second", "browser", "review"],
+        tabs: [
+          "files",
+          "terminal",
+          "terminal:second",
+          "browser",
+          "review",
+          "sources",
+        ],
         active: "terminal:second",
         launcherOpen: false,
         activationHistory: ["files", "terminal", "terminal:second"],
       },
       requestRevision: 3,
+      sources: { scroll: 420 },
       files: {
         selected: "report.pdf",
         treeVisible: true,
@@ -147,6 +155,7 @@ it("persists exact Session identities and tool bookmarks, not content or live re
   expect(restored?.sessionId).toBe(workspace.sessionId);
   expect(restored?.sessionPath).toBe(workspace.sessionPath);
   expect(restored?.reading.files).toEqual(workspace.reading.files);
+  expect(restored?.reading.sources).toEqual(workspace.reading.sources);
   expect(restored?.reading.artifact).toEqual({
     ...workspace.reading.artifact,
     editing: false,

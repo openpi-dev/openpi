@@ -20,7 +20,8 @@ import {
 import { loadSessionPreviewData } from "../../extensions/sessions/preview-loader.ts";
 import { WEB_COMMAND_INPUT } from "../../extensions/shared/web-command-feedback.ts";
 import { isBoundedReadyPlan } from "../../extensions/plan-mode/persisted-state.ts";
-import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
+import { webCapabilitySnapshot, webCapabilityDetail, type WebCapabilityKind } from "../../extensions/shared/web-observer-registry.ts";
+import { savedSubagentCapability, savedSubagents, savedSubagentDetail, WorkflowHistory, mergeChildHistory } from "./subagent-history.ts";
 import {
   boundedText,
   boundThinkingProjection,
@@ -1496,7 +1497,9 @@ export class PiWebAdapter {
         ...(this.runtime.getActiveTurn()
           ? { activeTurn: this.runtime.getActiveTurn() }
           : {}),
-        capabilities: webCapabilitySnapshot(this.runtime.sessionManager),
+        capabilities: (selectedSession && this.isCurrentSession(selectedSession)
+          ? selectedSession.capabilities
+          : undefined) ?? webCapabilitySnapshot(this.runtime.sessionManager),
       },
       truncation: {
         truncated:
@@ -1703,6 +1706,35 @@ export class PiWebAdapter {
     return resolve(this.sessionFork({ id: this.runtime.sessionManager.getSessionId(), path: this.runtime.sessionManager.getSessionFile() ?? "" })?.workspacePath ?? this.runtime.cwd);
   }
 
+  private readonly workflowHistory = new WorkflowHistory();
+  private async sessionCapabilities(manager: SessionManager) {
+    const live = webCapabilitySnapshot(manager);
+    const subagents = mergeChildHistory(savedSubagentCapability(manager), live.subagents, (item) => item.id);
+    const workflows = mergeChildHistory(await this.workflowHistory.capability(manager), live.workflows, (item) => item.runId);
+    return { ...(subagents ? { subagents } : {}), ...(workflows ? { workflows } : {}) };
+  }
+
+  async capabilityDetail(sessionId: string, sessionPath: string, kind: WebCapabilityKind, id: string) {
+    const session = await this.requireSession(sessionPath);
+    if (session.id !== sessionId) return undefined;
+    const manager = this.runtime.getSessionManagerForRead?.(sessionId, sessionPath) ??
+      (this.isCurrentSession(session) ? this.runtime.sessionManager : await this.readSession(sessionPath));
+    if (!matchesSessionIdentity(manager, { expectedSessionId: sessionId, expectedSessionPath: sessionPath })) return undefined;
+    const live = webCapabilityDetail(manager, kind, id);
+    if (live.status === "found") return live.detail;
+    if (kind === "workflows") return this.workflowHistory.detail(manager, id);
+    const record = savedSubagents(manager).find((item) => item.id === id);
+    if (!record?.sessionPath || !record.sessionId) return undefined;
+    try {
+      const file = await lstat(record.sessionPath);
+      if (!file.isFile() || file.isSymbolicLink() || file.size > 32 * 1024 * 1024) return undefined;
+      const child = await this.sessionLoader.open(record.sessionPath, this.runtime.sessionDirectory);
+      return savedSubagentDetail(record, child);
+    } catch {
+      return undefined;
+    }
+  }
+
   private readSession(path: string) {
     return this.sessionLoader.open(path, this.runtime.sessionDirectory);
   }
@@ -1739,6 +1771,7 @@ export class PiWebAdapter {
       path: summary.path,
       cwd: summary.cwd,
       ...projected,
+      capabilities: await this.sessionCapabilities(manager),
       rerun: readMessageRerun(branch, manager.getHeader()?.parentSession),
       history: {
         leafEntryId: manager.getLeafId(),
@@ -1941,7 +1974,7 @@ export class PiWebAdapter {
     const current = manager.getLeafId() ?? "empty";
     if (revision !== undefined && revision !== current) return { changed: true as const };
     const result = collectSessionSources(manager.getBranch());
-    return { sessionId, path, revision: current, sources: result.sources.slice(offset, offset + 50),
+    return { sessionId, path, revision: current, total: result.sources.length, sources: result.sources.slice(offset, offset + 50),
       ...(offset + 50 < result.sources.length ? { nextOffset: offset + 50 } : {}), truncated: result.truncated };
   }
 

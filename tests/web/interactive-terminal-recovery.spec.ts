@@ -283,7 +283,12 @@ it("the plus keeps the current terminal visible and its menu creates an independ
   const launcher = await screen.findByRole("menu", {
     name: i18n.t("openTools"),
   });
-  expect(within(launcher).getAllByRole("menuitem")).toHaveLength(5);
+  expect(within(launcher).getAllByRole("menuitem")).toHaveLength(6);
+  expect(
+    within(launcher).getByRole("menuitem", {
+      name: new RegExp(`^${i18n.t("sessionSources")}`),
+    }),
+  ).toBeTruthy();
   expect(screen.getByRole("textbox", { name: "Terminal input" })).toBe(
     first.textarea,
   );

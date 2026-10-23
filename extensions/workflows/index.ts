@@ -1640,6 +1640,17 @@ export default function workflows(
           transcript: [],
         };
         details.agents.push(record);
+        try {
+          pi.appendEntry("workflow-child", {
+            runId: details.runId,
+            sessionId: details.sessionId,
+            status: "running",
+            startedAt: details.startedAt,
+            agents: [{ index, label, state: "running", startedAt }],
+          });
+        } catch {
+          // Canonical execution remains in the run journal if catalog persistence fails.
+        }
         refreshWorkflowGraph(details);
         persistence.checkpoint({ immediate: true });
         emit(false);

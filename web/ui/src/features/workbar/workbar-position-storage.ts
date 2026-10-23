@@ -50,9 +50,14 @@ function address(value: unknown) {
 function tabId(value: unknown): value is WorkbarTabId {
   return (
     typeof value === "string" &&
-    (["files", "review", "browser", "terminal", "side-conversation"].includes(
-      value,
-    ) ||
+    ([
+      "files",
+      "review",
+      "browser",
+      "terminal",
+      "side-conversation",
+      "sources",
+    ].includes(value) ||
       /^terminal:[a-zA-Z0-9-]{1,128}$/u.test(value))
   );
 }
@@ -66,6 +71,7 @@ function tool(value: unknown): value is WorkbarTool {
       "browser",
       "terminal",
       "side-conversation",
+      "sources",
     ].includes(value)
   );
 }
@@ -73,6 +79,8 @@ function tool(value: unknown): value is WorkbarTool {
 function reading(value: unknown) {
   const result: WorkbarReadingState = {};
   if (!object(value)) return result;
+  if (object(value.sources))
+    result.sources = { scroll: number(value.sources.scroll) };
   if (object(value.tabs)) {
     const tabs = Array.isArray(value.tabs.tabs)
       ? [...new Set(value.tabs.tabs.filter(tabId))].slice(0, 16)

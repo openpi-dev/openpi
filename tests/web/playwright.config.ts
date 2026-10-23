@@ -51,6 +51,7 @@ export default defineConfig({
     "tests/web/provider-account-login.e2e.ts",
     "tests/web/model-connections.e2e.ts",
     "tests/web/conversation-reading.e2e.ts",
+    "tests/web/streaming-reading.e2e.ts",
     "tests/web/workbench-polish.e2e.ts",
     "tests/web/sidebar-parity.e2e.ts",
     "tests/web/sidebar-menu-flow.e2e.ts",

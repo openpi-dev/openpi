@@ -415,7 +415,7 @@ test("a direct structured subagent fails when it never submits", async () => {
   assert.match(settled.outcome.errorText, /without calling structured_output/);
 });
 
-test("by-the-way spawns use in-memory sessions without persisting to disk", async () => {
+test("by-the-way spawns retain native Session history on disk", async () => {
   let persisted: boolean | undefined;
   const fixtures = harnessFactory();
   const backend = makePiBackend({
@@ -428,7 +428,7 @@ test("by-the-way spawns use in-memory sessions without persisting to disk", asyn
 
   await spawnDirect(
     backend,
-    task("an ephemeral aside", { origin: "btw" }),
+    task("a retained aside", { origin: "btw" }),
     () => {
       const harness = fixtures.harnesses[0];
       assert.ok(harness);
@@ -438,7 +438,7 @@ test("by-the-way spawns use in-memory sessions without persisting to disk", asyn
     },
   );
 
-  assert.equal(persisted, false);
+  assert.equal(persisted, true);
 });
 
 test("prompt rejection wins over an earlier agent_settled event", async () => {

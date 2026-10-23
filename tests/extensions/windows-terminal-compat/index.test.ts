@@ -175,6 +175,9 @@ test("applies the resolved native setting through the session-start bootstrap", 
     Array<(event: unknown, ctx: unknown) => unknown>
   >();
   const busHandlers = new Map<string, Array<(value: unknown) => void>>();
+  let currentEditorFactory:
+    | ((...args: readonly unknown[]) => unknown)
+    | undefined = () => ({});
   let editorFactory: ((...args: readonly unknown[]) => unknown) | undefined;
   const pi = {
     on(event: string, handler: (value: unknown, ctx: unknown) => unknown) {
@@ -193,8 +196,9 @@ test("applies the resolved native setting through the session-start bootstrap", 
     mode: "tui",
     cwd: "/repo",
     ui: {
-      getEditorComponent: () => () => ({}),
+      getEditorComponent: () => currentEditorFactory,
       setEditorComponent(factory: (...args: readonly unknown[]) => unknown) {
+        currentEditorFactory = factory;
         editorFactory = factory;
       },
       onTerminalInput: () => () => {},

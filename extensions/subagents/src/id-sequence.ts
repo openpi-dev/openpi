@@ -34,6 +34,7 @@ function idFromEntry(entry: SessionEntry) {
     }
     if (
       entry.customType === "subagent-finished" ||
+      entry.customType === "subagent-session" ||
       entry.customType === "btw-result"
     ) {
       return idFrom(data);
