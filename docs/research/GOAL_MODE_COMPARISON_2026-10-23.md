@@ -3,8 +3,8 @@
 - Status: draft。竞品事实已按下列源码／官方文档核对；OpenPI 方案、消融与实验协议仍是设计建议，不是已接受 Decision 或运行效果证明。
 - Created / source-verified: 2026-10-23（Asia/Tokyo）。
 - OpenPI baseline: `31b2d045ec7147ac5fc3b2e350bbd55b0a2aa7cd`，调研开始时 `openpi-dev/openpi/main`；单独工作区、分支 `codex/goal-mode-research`。
-- Tracking: [#192](https://github.com/openpi-dev/openpi/issues/192)；关联 [#43](https://github.com/openpi-dev/openpi/issues/43)、[#879](https://github.com/openpi-dev/openpi/issues/879) / [PR #880](https://github.com/openpi-dev/openpi/pull/880)。
-- Related PR: 尚未创建；本次只交付调研和选型建议。
+- Tracking: [#192](https://github.com/openpi-dev/openpi/issues/192)（[本轮调研回链](https://github.com/openpi-dev/openpi/issues/192#issuecomment-6363445491)）；关联 [#43](https://github.com/openpi-dev/openpi/issues/43)、[#879](https://github.com/openpi-dev/openpi/issues/879) / [PR #880](https://github.com/openpi-dev/openpi/pull/880)。
+- Related PR: [#897](https://github.com/openpi-dev/openpi/pull/897)（draft）；本次只交付调研和选型建议。
 - Supersedes: none。补充 #192 的 2026-08-26 历史审查，不改写当时结论。
 - Evidence: 仓库外 `openpi-evidence/goal-mode-research-2026-10-23/`；各 `sources/<name>/identity.json`、`tree.json`、`receipts.json` 保存版本、原始 URL、字节数与 SHA-256。下列固定提交链接支持公开复核；本地归档不构成公共托管承诺。没有运行竞品、真实模型对照或新的 Benchmark。
 
@@ -27,7 +27,7 @@
 | 来源 | 固定身份 | 边界 |
 | --- | --- | --- |
 | OpenPI main | `31b2d045ec7147ac5fc3b2e350bbd55b0a2aa7cd` | 当前源码；与原始 dirty checkout 分开 |
-| Pi | `@earendil-works/pi-coding-agent@1.2.0` | OpenPI frozen lockfile 安装的发布包；检查扩展类型与 AgentSession 实现 |
+| Pi | [`@earendil-works/pi-coding-agent@1.2.0`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.2.0) | OpenPI frozen lockfile 安装的发布包；检查扩展类型与 AgentSession 实现 |
 | OpenCode 发布版 | `v1.19.4` / `148842ef7cb1bc34192b3fff57d0f9721ab9c801` | 普通 loop、processor、agent、todo |
 | OpenCode dev | `2a3e7c0f349ba0e9454fa0529ec041cf57e53cb8` | 补查 V2 session/execution/runner；不把 dev 当发布版 |
 | Kimi Code main | `087db850e02d3e487ac834c4867e90b3334a63d6` | 当前 TypeScript `MoonshotAI/kimi-code`；不冒充已安装版本 |
@@ -35,7 +35,7 @@
 | Codex main | `e6ebdfe00b520e21ed50ac0362656f32dd64d2fc` | 开源 Goal extension、state、app-server；不推断截图对应的桌面构建 |
 | DeepSeek Harness master | `687f282e8625c6b8d11ff58211a90524be2e4317` | Goal 组源码与包文档；未执行 |
 | oh-my-openagent dev | `dfbeeec9bcc06598d72fbe8b65eb44fb7d119a43` | 第三方 OpenCode 插件的 Ralph / ultrawork；与 OpenCode 原生分列 |
-| Claude Code | 官方 `/goal`、hooks、scheduled-tasks 文档，访问日 2026-10-23 | 产品契约；闭源运行时未审计，文档快照已保存 |
+| Claude Code | 官方 `/goal`、scheduled-tasks 文档，访问日 2026-10-23 | 产品契约；闭源运行时未审计，网页检索快照已保存 |
 
 原工作区 `work@dcebb07c788101f9e2eb634b1e6482602b634740` 有大量既存修改，包括旧 Goal。已保留，没有 stash、reset、清理或切换该工作区。`pi list` 报告唯一 OpenPI 来源为 `../../.codex/worktrees/openpi-pr561-safe/openpi`，并非本次新工作区；没有切换安装、reload 或进行实机 smoke。因此以下 OpenPI 判断只针对固定源码，不是对当前安装行为的诊断。
 
@@ -183,6 +183,15 @@ Web 第一版只需目标文本、状态、停止原因、累计使用和暂停�
 - 既有 Web origin 撤销和完成交付在新的 Goal boundary 下能否原样满足；须用真实 Pi deterministic provider fixture 验证，而非由相似代码推断。
 - 独立 evaluator 对误完成、总费用和延迟的净收益；等待对照结果再决定，不预选第二模型。
 - 真实 TUI / Web、远程 provider 和长时间运行的行为；本次均未做 smoke。
+
+## 本次交付验证
+
+- 仅新增本文及研究索引入口；没有修改运行时或测试。使用 Bun 1.3.14、Node 24.20.0 与 frozen lockfile；初次默认 Node 20 无法启动 strip-types 测试，已切到支持版本复测。
+- `bun run check`：通过，含配置／文档／discipline、Web 构建、format、lint、typecheck。
+- `VITEST_MAX_WORKERS=1 bun run test`：Node 阶段 2,429 项，2,415 通过、8 skipped、6 失败；因此整条命令失败，未自动进入 UI 阶段。
+- 6 个失败位于未改动的 `file-mutation-display/index.test.ts`、`shared/agent-tool-renderer-native.test.ts`、`ui-customization/index.test.ts`。从基线 main 的干净 `git archive`、复用相同 frozen 依赖，对这三个文件最小复测：11 项中同样 6 失败、5 通过。这证明失败可在无本文改动的基线复现，不宣称已定位底层原因；没有跳过、放宽断言或修理本任务以外的代码。
+- 单独补跑 `VITEST_MAX_WORKERS=1 bun run test:ui`：107 个文件、1,640 项全部通过。这是测试环境结果，不是真实浏览器／TUI 验收。
+- 15 个固定 GitHub 源码路径均存在于对应 commit tree；Markdown reference 无缺失／未使用项，184 份源码文件 receipt 的 SHA-256 复核通过。`git diff --check` 通过。日志、干净基线复测回执、文档访问记录与 manifest 均在上述仓库外 evidence 目录。
 
 [oc-prompt]: https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/opencode/src/session/prompt.ts
 [oc-processor]: https://github.com/anomalyco/opencode/blob/148842ef7cb1bc34192b3fff57d0f9721ab9c801/packages/opencode/src/session/processor.ts
