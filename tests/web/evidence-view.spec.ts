@@ -239,6 +239,7 @@ it.each(["failed", "cancelled", "unknown", "running"] as const)(
 
 it("expands a file summary without nested controls and opens the resolved file through the active artifact context", () => {
   const open = vi.fn();
+  const identity = "/workspace/a\u200bb.md";
   const { container } = render(
     createElement(
       ArtifactContext.Provider,
@@ -249,8 +250,8 @@ it("expands a file summary without nested controls and opens the resolved file t
           name: "read",
           arguments: JSON.stringify({ path: "report.md" }),
           evidenceArguments: {
-            path: "report.md",
-            resolvedPath: "/workspace/report.md",
+            path: "a\u200bb.md",
+            resolvedPath: identity,
           },
         },
         result: { content: "report", isError: false },
@@ -259,12 +260,12 @@ it("expands a file summary without nested controls and opens the resolved file t
   );
 
   const summary = container.querySelector(".tool-evidence-card > summary")!;
-  expect(summary.textContent).toContain("report.md");
+  expect(summary.textContent).toContain("ab.md");
   expect(summary.querySelector("button, a, input, [tabindex]")).toBeNull();
   fireEvent.click(summary);
   expect(open).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "/workspace/report.md" }));
-  expect(open).toHaveBeenCalledWith("/workspace/report.md");
+  fireEvent.click(screen.getByRole("button", { name: "/workspace/ab.md" }));
+  expect(open).toHaveBeenCalledWith(identity);
 });
 
 it("opens local links using authenticated API and stops preview reads on close", async () => {
@@ -520,4 +521,106 @@ it("polls metadata with backoff, retains changed text until refresh, and stops o
     cleanup();
     vi.useRealTimers();
   }
+});
+
+it("keeps oversized evidence references non-actionable in projected and legacy calls", () => {
+  const huge = "x".repeat(1024 * 1024);
+  const open = vi.fn();
+  for (const evidenceArguments of [
+    undefined,
+    { path: huge, resolvedPath: "small.txt" },
+    { path: "small.txt", resolvedPath: huge },
+  ]) {
+    const { container, unmount } = render(
+      createElement(
+        ArtifactContext.Provider,
+        { value: { open } },
+        createElement(ToolEvidence, {
+          call: {
+            type: "toolCall",
+            name: "read",
+            arguments: JSON.stringify({ path: huge }),
+            evidenceArguments,
+          },
+          defaultOpen: true,
+        }),
+      ),
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(
+      screen.getByText("File reference exceeds the evidence byte limit."),
+    ).toBeTruthy();
+    expect(container.textContent!.length).toBeLessThan(64 * 1024);
+    expect(open).not.toHaveBeenCalled();
+    unmount();
+  }
+});
+
+it("opens admitted exact identities even when their display label is empty", () => {
+  const open = vi.fn();
+  render(
+    createElement(
+      ArtifactContext.Provider,
+      { value: { open } },
+      createElement(ToolEvidence, {
+        call: {
+          type: "toolCall",
+          name: "read",
+          arguments: JSON.stringify({ path: "\u200b" }),
+        },
+        defaultOpen: true,
+      }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "File reference" }));
+  expect(open).toHaveBeenCalledWith("\u200b");
+  expect(document.body.textContent).not.toContain("\u200b");
+});
+
+it("shows only sanitized labels when terminal or bidi characters sanitize away", () => {
+  const open = vi.fn();
+  const hidden = "\x1b]52;c;HIDDEN_PATH_PAYLOAD\x07";
+  const { unmount } = render(
+    createElement(
+      ArtifactContext.Provider,
+      { value: { open } },
+      createElement(ToolEvidence, {
+        call: {
+          type: "toolCall",
+          name: "read",
+          arguments: JSON.stringify({ path: hidden }),
+        },
+        defaultOpen: true,
+      }),
+    ),
+  );
+  const card = document.querySelector(".tool-evidence-card");
+  const summary = card?.querySelector("summary");
+  expect(summary?.textContent).toContain("File reference");
+  expect(summary?.textContent).not.toContain("HIDDEN_PATH_PAYLOAD");
+  expect(card?.querySelector(".evidence-filename")?.textContent).toBe(
+    "File reference",
+  );
+  expect(
+    card?.querySelector<HTMLElement>(".evidence-target")?.title ?? "",
+  ).not.toContain("HIDDEN_PATH_PAYLOAD");
+  fireEvent.click(screen.getByRole("button", { name: "File reference" }));
+  expect(open).toHaveBeenCalledWith(hidden);
+  unmount();
+
+  render(
+    createElement(ToolEvidence, {
+      call: {
+        type: "toolCall",
+        name: "read",
+        arguments: JSON.stringify({ path: "safe\u202eevil.txt" }),
+      },
+      defaultOpen: true,
+    }),
+  );
+  const target = document.querySelector<HTMLElement>(".evidence-target");
+  expect(target?.textContent).toContain("safeevil.txt");
+  expect(target?.title).toBe("safeevil.txt");
+  expect(target?.title).not.toContain("\u202e");
+  expect(document.body.textContent).not.toContain("\u202e");
 });

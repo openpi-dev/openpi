@@ -892,10 +892,10 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
         typeof typed.name === "string" ? typed.name : "tool",
         WEB_MAX_METADATA_TEXT,
       );
-      const evidenceArguments = isEvidenceTool(name.value) ? projectEvidenceArguments(typed.arguments) : undefined;
+      let evidenceArguments = isEvidenceTool(name.value) ? projectEvidenceArguments(typed.arguments) : undefined;
       if (evidenceArguments && typeof evidenceArguments.path === "string" && !evidenceArguments.path.startsWith("~") && !evidenceArguments.path.startsWith("@")) {
         const path = resolvePath?.(evidenceArguments.path);
-        if (path && path.length <= 4096) evidenceArguments.resolvedPath = path;
+        if (path) evidenceArguments = projectEvidenceArguments({ ...evidenceArguments, resolvedPath: path }, true);
       }
       projected = {
         type: "toolCall",

@@ -1,7 +1,9 @@
 import type { WebLiveMessage, WebMessagePart } from "./types.ts";
+import { sanitizeTerminalText } from "../../extensions/shared/terminal-text.ts";
 
 export const EVIDENCE_MAX_BYTES = 12 * 1024;
 export const EVIDENCE_MAX_LINES = 300;
+const EVIDENCE_PATH_MAX_BYTES = 4096;
 export const LIVE_TOOL_LIMIT = 32;
 
 export function evidenceRecord(value: unknown): Record<string, unknown> {
@@ -10,11 +12,29 @@ export function evidenceRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export function projectEvidenceArguments(input: unknown) {
+export function projectEvidenceArguments(input: unknown, projected = false) {
   const source = evidenceRecord(input);
   const result: Record<string, string | number> = {};
-  for (const key of ["path", "command", "offset", "limit", "id"]) {
-    const value = Object.getOwnPropertyDescriptor(source, key)?.value;
+  const own = (key: string) => Object.getOwnPropertyDescriptor(source, key)?.value;
+  let unavailable = projected && typeof own("pathUnavailable") === "string";
+  for (const key of projected ? ["path", "resolvedPath"] : ["path"]) {
+    const value = own(key);
+    const displayKey = key === "path" ? "displayPath" : "displayResolvedPath";
+    const display = typeof value === "string" ? value : projected ? own(displayKey) : undefined;
+    if (typeof display === "string") result[displayKey] = evidenceText(display).text;
+    if (typeof value !== "string") continue;
+    // Cheap rejection bounds the temporary UTF-8 buffer. Identity is admitted
+    // whole or omitted; display sanitization must never rewrite a file target.
+    if (value.length > EVIDENCE_PATH_MAX_BYTES || new TextEncoder().encode(value).length > EVIDENCE_PATH_MAX_BYTES) unavailable = true;
+    else result[key] = value;
+  }
+  if (unavailable) {
+    delete result.path;
+    delete result.resolvedPath;
+    result.pathUnavailable = "File reference exceeds the evidence byte limit.";
+  }
+  for (const key of ["command", "offset", "limit", "id"]) {
+    const value = own(key);
     if (typeof value === "string") result[key] = evidenceText(value).text;
     else if (typeof value === "number" && Number.isSafeInteger(value)) result[key] = value;
   }
@@ -25,10 +45,7 @@ export function projectEvidenceArguments(input: unknown) {
 export function evidenceText(value: string, tail = false) {
   // Bound work before stripping terminal controls, including OSC hyperlinks.
   const candidate = tail ? value.slice(-EVIDENCE_MAX_BYTES * 2) : value.slice(0, EVIDENCE_MAX_BYTES * 2);
-  const clean = candidate
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)/gu, "")
-    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/gu, "");
+  const clean = sanitizeTerminalText(candidate);
   const lines = clean.split("\n");
   const limited = (tail ? lines.slice(-EVIDENCE_MAX_LINES) : lines.slice(0, EVIDENCE_MAX_LINES)).join("\n");
   const bytes = new TextEncoder().encode(limited);
@@ -64,8 +81,8 @@ export function bashReceipt(content: unknown, isError: unknown) {
 }
 
 export function toolArguments(call: Extract<WebMessagePart, { type: "toolCall" }>) {
-  if (call.evidenceArguments) return call.evidenceArguments;
-  try { return evidenceRecord(JSON.parse(call.arguments)); } catch { return {}; }
+  if (call.evidenceArguments) return projectEvidenceArguments(call.evidenceArguments, true);
+  try { return projectEvidenceArguments(JSON.parse(call.arguments)); } catch { return {}; }
 }
 
 export function isEvidenceTool(name: string) {
@@ -129,7 +146,7 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
   const isTerminal = call.name === "bash";
   const output = evidenceText(result?.content ?? "", isTerminal);
   const readFooter = call.name === "read" ? /\n\n(\[(?:\d+ more lines in file\. Use offset=\d+ to continue\.|Showing lines [^\n]+)\])$/u.exec(output.text) : null;
-  const truncated = output.truncated || Boolean(result?.truncation) || evidenceRecord(details.truncation).truncated === true || call.evidenceTruncated === true;
+  const truncated = output.truncated || Boolean(result?.truncation) || evidenceRecord(details.truncation).truncated === true || call.evidenceTruncated === true || typeof args.pathUnavailable === "string";
   const tests = isTerminal && !result?.forkSnapshotToolResult ? testSummary(output.text) : undefined;
   const kind = call.name === "read" ? "file" : ["write", "edit"].includes(call.name) ? "change" : tests ? "test" : "terminal";
   const diff = ["write", "edit"].includes(call.name) && state === "returned" && result?.isError === false && typeof details.diff === "string" ? evidenceText(details.diff) : undefined;
@@ -138,8 +155,11 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
     kind, state, processState: terminal?.state ?? (call.name === "bash" && result?.isError === false ? "returned" : call.name === "bash" && liveState === "running" ? "running" : "unknown"), output: readFooter ? output.text.slice(0, readFooter.index) : output.text, truncated: truncated || diff?.truncated === true,
     readRecovery: readFooter?.[1],
     numberLines: call.name === "read" && result?.isError === false && evidenceRecord(details.truncation).firstLineExceedsLimit !== true && Boolean(output.text),
-    path: typeof args.path === "string" ? evidenceText(args.path).text : undefined,
-    resolvedPath: typeof args.resolvedPath === "string" ? evidenceText(args.resolvedPath).text : undefined,
+    path: typeof args.path === "string" ? args.path : undefined,
+    displayPath: typeof args.displayPath === "string" ? args.displayPath : undefined,
+    resolvedPath: typeof args.resolvedPath === "string" ? args.resolvedPath : undefined,
+    displayResolvedPath: typeof args.displayResolvedPath === "string" ? args.displayResolvedPath : undefined,
+    pathUnavailable: typeof args.pathUnavailable === "string" ? args.pathUnavailable : undefined,
     command: typeof args.command === "string" ? evidenceText(args.command).text : undefined,
     offset, diff: diff?.text, tests,
     change: state === "returned" && result?.isError === false && ["created", "overwritten", "unchanged"].includes(String(details.change)) ? String(details.change) : undefined,
