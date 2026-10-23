@@ -11,6 +11,7 @@ import {
   groupConversationTurns,
   Transcript,
 } from "../../web/ui/src/features/transcript/Transcript.tsx";
+import { displayedThinkingDuration } from "../../web/ui/src/features/transcript/transcript-entries.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import type { LiveEntry } from "../../web/ui/src/store/web-store.ts";
 
@@ -99,7 +100,7 @@ function historicalStringifies(updates: number, count: number) {
             },
           },
         ],
-        new Map(),
+        { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
       );
     }
   } finally {
@@ -120,7 +121,7 @@ describe("persisted transcript signatures", () => {
     const aliased = buildEntries(
       snapshot([messageEntry("e1", complete)]),
       [{ key: "live-1", message: complete }],
-      new Map(),
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
     );
     expect(aliased.entries.map((entry) => entry.key)).toEqual(["live-1"]);
 
@@ -131,7 +132,7 @@ describe("persisted transcript signatures", () => {
     const reconciled = buildEntries(
       snapshot([messageEntry("e1", truncated)]),
       [{ key: "live-1", message: truncated }],
-      new Map(),
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
     );
     expect(reconciled.entries.map((entry) => entry.key)).toEqual(["e1"]);
 
@@ -147,7 +148,7 @@ describe("persisted transcript signatures", () => {
           },
         },
       ],
-      new Map(),
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
     );
     expect(
       distinct.entries.map((entry) => [entry.key, entry.message.content]),
@@ -155,6 +156,213 @@ describe("persisted transcript signatures", () => {
       ["e1", "same"],
       ["live-1", "other"],
     ]);
+  });
+
+  it("aliases reversed live disclosures without changing native history order", () => {
+    const first: WebLiveMessage = {
+      role: "assistant",
+      timestamp: 1,
+      content: "First answer",
+    };
+    const second: WebLiveMessage = {
+      role: "assistant",
+      timestamp: 2,
+      content: "Second answer",
+    };
+    const { entries } = buildEntries(
+      snapshot([
+        messageEntry("native-first", first),
+        messageEntry("native-second", second),
+      ]),
+      [
+        { key: "live-second", message: second },
+        { key: "live-first", message: first },
+      ],
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
+    );
+    expect(entries.map((entry) => [entry.entryId, entry.key])).toEqual([
+      ["native-first", "live-first"],
+      ["native-second", "live-second"],
+    ]);
+  });
+
+  it.each(["distinct", "identical"])(
+    "does not borrow timestamp-only thinking duration across %s native payloads",
+    (payloads) => {
+      const previous: WebLiveMessage = {
+        role: "assistant",
+        timestamp: 42,
+        content: "Previous answer",
+        parts: [{ type: "thinking", text: "Previous reasoning" }],
+      };
+      const current: WebLiveMessage =
+        payloads === "identical"
+          ? previous
+          : {
+              ...previous,
+              content: "Current answer",
+              parts: [{ type: "thinking", text: "Current reasoning" }],
+            };
+      const state = snapshot([
+        messageEntry("previous", previous),
+        messageEntry("current", current),
+      ]);
+      const keys = {
+        nativeRowKeys: new Map<string, string>(),
+        ambiguousTimingIds: new Set<string>(),
+      };
+      const durations = {
+        "message-assistant-42": 5_000,
+        "live-current": 5_000,
+      };
+      const projected = buildEntries(
+        state,
+        [{ key: "live-current", message: current }],
+        keys,
+      );
+      const retained = buildEntries(state, [], keys);
+      for (const { entries } of [projected, retained]) {
+        expect(
+          entries.map((entry) => ({
+            id: entry.entryId,
+            duration: displayedThinkingDuration(entry, durations),
+          })),
+        ).toEqual([
+          { id: "previous", duration: undefined },
+          {
+            id: "current",
+            duration: payloads === "distinct" ? 5_000 : undefined,
+          },
+        ]);
+        expect(
+          displayedThinkingDuration(entries[0]!, {
+            ...durations,
+            previous: 1_000,
+          }),
+        ).toBe(1_000);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "does not overwrite native timing from indistinguishable live messages (known alias: %s)",
+    (knownAlias) => {
+      const message: WebLiveMessage = {
+        role: "assistant",
+        timestamp: 42,
+        content: "Same answer",
+        parts: [{ type: "thinking", text: "Same reasoning" }],
+      };
+      const state = snapshot([messageEntry("native-old", message)]);
+      const oldLive = { key: "live-old", message };
+      const keys = {
+        nativeRowKeys: new Map<string, string>(),
+        ambiguousTimingIds: new Set<string>(),
+      };
+      if (knownAlias) buildEntries(state, [oldLive], keys);
+      const { entries } = buildEntries(
+        state,
+        [oldLive, { key: "live-current", message }],
+        keys,
+      );
+      const native = entries.find((entry) => entry.entryId === "native-old")!;
+      expect(
+        displayedThinkingDuration(native, {
+          "live-old": 1_000,
+          "live-current": 5_000,
+          "message-assistant-42": 5_000,
+        }),
+      ).toBe(knownAlias ? 1_000 : undefined);
+      const refreshed = snapshot([messageEntry("native-old", { ...message })]);
+      for (const liveMessages of [[], [{ key: "live-current", message }]]) {
+        const retained = buildEntries(refreshed, liveMessages, keys)
+          .entries[0]!;
+        expect(
+          displayedThinkingDuration(retained, {
+            "live-old": 1_000,
+            "live-current": 5_000,
+            "message-assistant-42": 5_000,
+          }),
+        ).toBe(knownAlias ? 1_000 : undefined);
+      }
+    },
+  );
+
+  it("keeps an established native alias when only a later indistinguishable live message remains", () => {
+    const message: WebLiveMessage = {
+      role: "assistant",
+      timestamp: 42,
+      content: "Same answer",
+      parts: [{ type: "thinking", text: "Same reasoning" }],
+    };
+    const state = snapshot([messageEntry("native-old", message)]);
+    const keys = {
+      nativeRowKeys: new Map<string, string>(),
+      ambiguousTimingIds: new Set<string>(),
+    };
+    buildEntries(state, [{ key: "live-old", message }], keys);
+    const { entries } = buildEntries(
+      state,
+      [{ key: "live-current", message }],
+      keys,
+    );
+    expect(
+      displayedThinkingDuration(entries[0]!, {
+        "live-old": 1_000,
+        "live-current": 5_000,
+        "message-assistant-42": 5_000,
+      }),
+    ).toBe(1_000);
+  });
+
+  it("prunes presentation ownership when a native row leaves the reading window", () => {
+    const message: WebLiveMessage = {
+      role: "assistant",
+      timestamp: 42,
+      content: "Same answer",
+    };
+    const state = snapshot([messageEntry("native-old", message)]);
+    const presentation = {
+      nativeRowKeys: new Map<string, string>(),
+      ambiguousTimingIds: new Set<string>(),
+    };
+    buildEntries(state, [{ key: "live-old", message }], presentation);
+    buildEntries(state, [{ key: "live-current", message }], presentation);
+    expect(presentation.nativeRowKeys.get("native-old")).toBe("live-old");
+    expect(presentation.ambiguousTimingIds.has("native-old")).toBe(true);
+    buildEntries(snapshot(), [], presentation);
+    expect(presentation.nativeRowKeys.size).toBe(0);
+    expect(presentation.ambiguousTimingIds.size).toBe(0);
+    const { entries } = buildEntries(state, [], presentation);
+    expect(
+      displayedThinkingDuration(entries[0]!, { "message-assistant-42": 5_000 }),
+    ).toBe(5_000);
+  });
+
+  it("does not lend a new live duration to a different same-timestamp native message before persistence", () => {
+    const previous: WebLiveMessage = {
+      role: "assistant",
+      timestamp: 42,
+      content: "Previous answer",
+      parts: [{ type: "thinking", text: "Previous reasoning" }],
+    };
+    const current: WebLiveMessage = {
+      ...previous,
+      content: "Current answer",
+      parts: [{ type: "thinking", text: "Current reasoning" }],
+    };
+    const { entries } = buildEntries(
+      snapshot([messageEntry("previous", previous)]),
+      [{ key: "live-current", message: current }],
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
+    );
+    const durations = {
+      "message-assistant-42": 5_000,
+      "live-current": 5_000,
+    };
+    expect(
+      entries.map((entry) => displayedThinkingDuration(entry, durations)),
+    ).toEqual([undefined, 5_000]);
   });
 
   it("collapses one timestamp-free live copy of a timestamped native prompt", () => {
@@ -193,7 +401,7 @@ describe("persisted transcript signatures", () => {
             message: { role: "user" as const, content },
           })),
         ],
-        new Map(),
+        { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
       );
     const once = shown(1);
     expect(
@@ -222,9 +430,10 @@ describe("persisted transcript signatures", () => {
     ];
     const state = snapshot(entries);
     expect(
-      buildEntries(state, [], new Map()).entries.map(
-        (entry) => entry.message.content,
-      ),
+      buildEntries(state, [], {
+        nativeRowKeys: new Map(),
+        ambiguousTimingIds: new Set(),
+      }).entries.map((entry) => entry.message.content),
     ).toEqual(["One original request"]);
     entries.push(
       messageEntry("recovered", {
@@ -235,9 +444,10 @@ describe("persisted transcript signatures", () => {
       }),
     );
     expect(
-      buildEntries(state, [], new Map()).entries.map(
-        (entry) => entry.message.content,
-      ),
+      buildEntries(state, [], {
+        nativeRowKeys: new Map(),
+        ambiguousTimingIds: new Set(),
+      }).entries.map((entry) => entry.message.content),
     ).toEqual(["One original request", "Recovered answer"]);
   });
 
@@ -257,7 +467,10 @@ describe("persisted transcript signatures", () => {
       messageEntry("u1", { role: "user", content: "hello" }),
       messageEntry("a1", { role: "assistant", content: "ok", timestamp: 2 }),
     ];
-    const pending = buildEntries(snapshot(persisted), [optimistic], new Map());
+    const pending = buildEntries(snapshot(persisted), [optimistic], {
+      nativeRowKeys: new Map(),
+      ambiguousTimingIds: new Set(),
+    });
     const pendingNext = pending.entries.find(
       (entry) => entry.message.content === "next",
     );
@@ -273,7 +486,7 @@ describe("persisted transcript signatures", () => {
         messageEntry("u2", { role: "user", content: "next" }),
       ]),
       [optimistic],
-      new Map(),
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
     );
     const nativeNext = acknowledged.entries.find(
       (entry) => entry.message.content === "next",
@@ -441,6 +654,55 @@ describe("conversation turn attribution", () => {
     expect(large.reads / large.rows).toBeLessThan(12);
     expect(large.reads).toBeLessThan(small.reads * 16);
   });
+});
+
+it("retains timing conflicts through snapshot refresh but resets them for the same Session id at a different path", () => {
+  const previous: WebLiveMessage = {
+    role: "assistant",
+    timestamp: 42,
+    content: "Previous answer",
+    parts: [{ type: "thinking", text: "Previous reasoning" }],
+  };
+  const current: WebLiveMessage = {
+    ...previous,
+    content: "Current answer",
+    parts: [{ type: "thinking", text: "Current reasoning" }],
+  };
+  const state = snapshot([messageEntry("native-old", previous)]);
+  const node = (value: WebSnapshot, liveMessages: LiveEntry[] = []) =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Transcript, {
+        snapshot: value,
+        liveMessages,
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {
+          "message-assistant-42": 5_000,
+          "live-current": 5_000,
+        },
+        scrollToBottom: 0,
+      }),
+    );
+  const view = render(node(state, [{ key: "live-current", message: current }]));
+  const firstLabel = () =>
+    view.container
+      .querySelector(".thinking-line summary")
+      ?.getAttribute("aria-label");
+  expect(firstLabel()).not.toContain("5s");
+  const refreshed = snapshot([messageEntry("native-old", { ...previous })]);
+  view.rerender(node(refreshed));
+  expect(firstLabel()).not.toContain("5s");
+  view.rerender(
+    node({
+      ...refreshed,
+      selectedSession: { ...refreshed.selectedSession!, path: "/copied.jsonl" },
+    }),
+  );
+  expect(firstLabel()).toContain("5s");
 });
 
 it("shows a persisted reasoning duration from the message identity after the live key is gone", () => {

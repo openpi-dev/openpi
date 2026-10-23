@@ -8,6 +8,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const CONFIG_FIELD_CONTRACT = [
   {
+    path: "ui.webFollowUpBehavior",
+    writerTokens: ["params.ui_web_follow_up_behavior"],
+    statusTokens: ["config.ui.webFollowUpBehavior"],
+    readmeTerms: ["ui_web_follow_up_behavior"],
+    setupTerms: ["ui_web_follow_up_behavior"],
+  },
+  {
     path: "codeMode.enabled",
     writerTokens: ["params.code_mode_enabled"],
     statusTokens: ["config.codeMode.enabled"],

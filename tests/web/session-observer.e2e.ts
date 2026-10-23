@@ -293,6 +293,9 @@ test("an observer keeps its editable draft, pending messages and native progress
     }
     const conversation = page.locator(".conversation");
     const queue = page.getByRole("region", { name: "2 条消息正在排队" });
+    await queue
+      .getByRole("button", { name: "2 条消息正在排队", exact: true })
+      .click();
     const ownPending = queue
       .getByRole("listitem")
       .filter({ hasText: pendingText });
@@ -313,10 +316,19 @@ test("an observer keeps its editable draft, pending messages and native progress
     const hint = page.locator(".composer-hint");
     await expect(hint).toHaveAttribute("data-visible", "false");
     await page.reload();
+    await queue
+      .getByRole("button", { name: "2 条消息正在排队", exact: true })
+      .click();
     await expect(ownPending).toHaveCount(2);
     await page.setViewportSize({ width: 390, height: 740 });
-    await expect(queue).toBeInViewport();
-    const queueBounds = await queue.boundingBox();
+    const statusStrip = page.locator(".composer-status-strip");
+    await expect(statusStrip).toBeInViewport();
+    await expect(
+      queue.getByRole("button", { name: "2 条消息正在排队", exact: true }),
+    ).toBeInViewport();
+    await expect(ownPending.first()).toBeInViewport();
+    await expect(ownPending.last()).toBeInViewport();
+    const queueBounds = await statusStrip.boundingBox();
     const dockBounds = await page.locator(".composer-dock").boundingBox();
     const composerBounds = await page.locator(".composer").boundingBox();
     expect(
@@ -484,7 +496,7 @@ test("an observer keeps its editable draft, pending messages and native progress
         .locator(".message-row.user .message-body")
         .filter({ hasText: pendingText }),
     ).toHaveCount(0);
-    await queue.getByRole("button", { name: "清空队列", exact: true }).click();
+    await queue.getByRole("button", { name: "取消排队", exact: true }).click();
     await expect
       .poll(() => fixture.a.session.getFollowUpMessages().length)
       .toBe(0);

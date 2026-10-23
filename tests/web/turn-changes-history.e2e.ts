@@ -119,10 +119,11 @@ test("saved per-turn review and full native message load at desktop and mobile w
       .first()
       .locator(".turn-changes");
     await expect(card).toContainText("已编辑 5 个文件");
-    await expect(
-      card.locator(".turn-changes-list .turn-changes-file"),
-    ).toHaveCount(3);
-    await card.getByRole("button", { name: "再显示 2 个文件" }).click();
+    const summary = card.getByRole("button", { name: "已编辑 5 个文件" });
+    await expect(summary).toHaveAttribute("aria-expanded", "false");
+    await expect(card.locator(".turn-changes-list")).toBeHidden();
+    await summary.click();
+    await expect(summary).toHaveAttribute("aria-expanded", "true");
     await expect(
       card.locator(".turn-changes-list .turn-changes-file"),
     ).toHaveCount(5);

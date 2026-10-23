@@ -1,5 +1,6 @@
-import { Check, CircleStop, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
+import { Activity, Check, ChevronDown, CircleStop, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { formatElapsedMs } from "../../lib/format.ts";
@@ -22,11 +23,13 @@ function Chip({
   kind,
   label,
   status,
+  elapsed,
   onClick,
 }: {
   kind: string;
   label: string;
   status: Status;
+  elapsed?: string;
   onClick?: () => void;
 }) {
   const Tag = onClick ? "button" : "span";
@@ -47,7 +50,14 @@ function Chip({
       ) : (
         <span className="activity-chip-glyph">?</span>
       )}
-      <span className="activity-chip-text">{label}</span>
+      <span
+        key={`${status}:${label}`}
+        className="activity-chip-text"
+        title={label}
+      >
+        {label}
+      </span>
+      {elapsed && <span className="activity-chip-elapsed">{elapsed}</span>}
     </Tag>
   );
 }
@@ -56,12 +66,17 @@ export function ActivityBar({
   snapshot,
   onInspectSubagent,
   observed = true,
+  expanded,
+  onExpandedChange,
 }: {
   snapshot: WebSnapshot | null;
   onInspectSubagent?: (id?: string) => void;
   observed?: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const summary = useRef<HTMLElement>(null);
   const [, tick] = useState(0);
   const capabilities = snapshot?.runtime.capabilities;
   const saved = useMemo(
@@ -144,12 +159,13 @@ export function ActivityBar({
     kind: string;
     label: string;
     status: Status;
+    elapsed?: string;
     onClick?: () => void;
   }> = [];
   for (const workflow of capabilities?.workflows?.items ?? []) {
-    const settled = workflow.agents.total - workflow.agents.running;
+    const settled = workflow.agents.done + workflow.agents.error;
     const progress = workflow.agents.total
-      ? ` · ${settled}/${workflow.agents.total} agents`
+      ? ` · ${t("activityAgentProgress", { completed: settled, total: workflow.agents.total })}`
       : "";
     const phase =
       workflow.status === "running" && workflow.currentPhase
@@ -159,7 +175,8 @@ export function ActivityBar({
     chips.push({
       key: `workflow-${workflow.runId}`,
       kind: "workflow",
-      label: `${workflow.name || workflow.runId}${phase}${progress}${elapsed ? ` · ${elapsed}` : ""}`,
+      label: `${workflow.name || workflow.runId}${phase}${progress}`,
+      elapsed,
       status: canonicalStatus(workflow.status),
     });
   }
@@ -167,36 +184,90 @@ export function ActivityBar({
     (left, right) =>
       Number(right.status === "running") - Number(left.status === "running"),
   );
-  const visible = chips.slice(0, 5);
-  const omitted =
-    chips.length - visible.length + (capabilities?.workflows?.omitted ?? 0);
+  const omitted = capabilities?.workflows?.omitted ?? 0;
   if (
-    !visible.length &&
+    !chips.length &&
     !omitted &&
     !(onInspectSubagent && subagentCount) &&
     !admission?.enabled
   )
     return null;
+  const activeCount =
+    chips.filter((chip) => chip.status === "running").length +
+    activeSubagentCount;
+  const failedCount =
+    chips.filter((chip) => chip.status === "error").length +
+    subagents.filter((item) => item.state === "error").length;
+  const statistics = [
+    observed && activeCount > 0
+      ? t("runtimeActivityRunning", { count: activeCount })
+      : t("runtimeActivityCount", {
+          count: chips.length + subagentCount + omitted,
+        }),
+    failedCount > 0 ? t("processFailureCount", { count: failedCount }) : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <div className="activity-bar" role="status" aria-label="Runtime activity">
-      {onInspectSubagent && subagentCount > 0 && (
-        <button
-          className="activity-chip subagent-list-trigger"
-          type="button"
-          onClick={() => onInspectSubagent()}
+    <>
+      <details
+        className="activity-summary"
+        open={expanded}
+        onToggle={(event) => {
+          if (event.currentTarget.open !== expanded)
+            onExpandedChange?.(event.currentTarget.open);
+        }}
+      >
+        <summary ref={summary}>
+          {observed && activeCount > 0 ? (
+            <i className="activity-chip-dot" aria-hidden="true" />
+          ) : (
+            <Activity aria-hidden="true" />
+          )}
+          <span>{t("runtimeActivities")}</span>
+          <ChevronDown
+            className="activity-summary-chevron"
+            aria-hidden="true"
+          />
+        </summary>
+        <div
+          className="activity-bar composer-status-details"
+          hidden={expanded === false}
+          role="status"
+          aria-label={t("runtimeActivities")}
         >
-          {subagentLabel}
-        </button>
-      )}
-      {admission?.enabled && admission.limit !== undefined && (
-        <span className="activity-chip subagent-list-trigger">
-          {`${admission.held}/${admission.limit} child slots · ${admission.queued} queued · wf ${admission.heldByOrigin.workflow} / direct ${admission.heldByOrigin.direct} / btw ${admission.heldByOrigin.btw}`}
-        </span>
-      )}
-      {visible.map(({ key, ...chip }) => (
-        <Chip key={key} {...chip} />
-      ))}
-      {omitted > 0 && <span className="activity-chip more">+{omitted}</span>}
-    </div>
+          {onInspectSubagent && subagentCount > 0 && (
+            <button
+              className="activity-chip subagent-list-trigger"
+              type="button"
+              onClick={() => onInspectSubagent()}
+            >
+              {subagentLabel}
+            </button>
+          )}
+          {admission?.enabled && admission.limit !== undefined && (
+            <span className="activity-chip subagent-list-trigger">
+              {t("activityCapacity", {
+                running: admission.held,
+                limit: admission.limit,
+                queued: admission.queued,
+              })}
+            </span>
+          )}
+          {chips.map(({ key, ...chip }) => (
+            <Chip key={key} {...chip} />
+          ))}
+          {omitted > 0 && (
+            <span className="activity-chip more">+{omitted}</span>
+          )}
+        </div>
+      </details>
+      <Tooltip
+        anchorRef={summary}
+        focusTrigger="always"
+        content={statistics}
+        placement="above"
+      />
+    </>
   );
 }

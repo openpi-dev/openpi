@@ -901,16 +901,12 @@ describe("OpenPI React transcript", () => {
     expect(
       process?.querySelector("summary")?.getAttribute("aria-label"),
     ).not.toContain(i18n.t("processActivityCount", { count: 1 }));
-    const counts = process?.querySelector(".process-sequence-counts");
-    expect(counts?.textContent).toContain(
-      i18n.t("processThinkingCount", { count: 1 }),
-    );
-    expect(counts?.textContent).toContain(
-      i18n.t("processToolCount", { count: 4 }),
-    );
-    expect(counts?.textContent).not.toContain(
-      i18n.t("processActivityCount", { count: 1 }),
-    );
+    const counts = process
+      ?.querySelector("summary")
+      ?.getAttribute("aria-label");
+    expect(counts).toContain(i18n.t("processThinkingCount", { count: 1 }));
+    expect(counts).toContain(i18n.t("processToolCount", { count: 4 }));
+    expect(counts).not.toContain(i18n.t("processActivityCount", { count: 1 }));
     expect(
       process?.querySelector(".process-step:first-child .thinking-line"),
     ).toBeTruthy();
@@ -1135,7 +1131,7 @@ it("marks only live execution evidence for shimmer styling", () => {
   const sequence = view.container.querySelector<HTMLDetailsElement>(
     ".process-sequence:not(.single-process)",
   );
-  expect(sequence?.open).toBe(true);
+  expect(sequence?.open).toBe(false);
   expect(sequence?.dataset.status).toBe("running");
   const process = view.container.querySelector<HTMLElement>(
     ".process-step.running",
@@ -1281,7 +1277,7 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
     "error",
     "error",
     "error",
-    "running",
+    "done",
     "running",
     "running",
     "running",
@@ -1301,7 +1297,7 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
     "error",
     "error",
     "error",
-    "unknown",
+    "done",
     "unknown",
     "unknown",
     "unknown",
@@ -1323,7 +1319,7 @@ it("freezes unobserved activity without changing terminal receipts and resumes o
 
   view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
   expect(statuses().slice(4)).toEqual([
-    "running",
+    "done",
     "running",
     "running",
     "running",
@@ -1394,7 +1390,7 @@ it("freezes untimed turn and navigation presentation when native activity observ
   const sequence = view.container.querySelector<HTMLDetailsElement>(
     ".process-sequence:not(.single-process)",
   )!;
-  expect(sequence.open).toBe(true);
+  expect(sequence.open).toBe(false);
   view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
   expect(
     view.container.querySelector(".turn-state.unknown")?.textContent,
@@ -1410,7 +1406,7 @@ it("freezes untimed turn and navigation presentation when native activity observ
   expect(
     view.container.querySelector(".process-sequence:not(.single-process)"),
   ).toBe(sequence);
-  expect(sequence.open).toBe(true);
+  expect(sequence.open).toBe(false);
   expect(JSON.stringify(snapshot)).toBe(original);
   view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
   expect(view.container.querySelector(".turn-state.running")).toBeTruthy();
@@ -1481,7 +1477,7 @@ it("keeps live terminal evidence observed by default and freezes only its nonter
   expect(JSON.stringify(result)).toBe(original);
 });
 
-it("freezes orphan native running receipts after observation loss without changing terminal evidence", () => {
+it("keeps returned background queries settled through observation loss without changing terminal evidence", () => {
   const snapshot = activeSnapshot();
   const states = [
     "running",
@@ -1524,7 +1520,7 @@ it("freezes orphan native running receipts after observation loss without changi
       step.getAttribute("data-status"),
     );
   expect(statuses()).toEqual([
-    "running",
+    "done",
     "done",
     "error",
     "error",
@@ -1534,7 +1530,7 @@ it("freezes orphan native running receipts after observation loss without changi
   expect(view.container.querySelector(".tool-evidence-card")).toBeNull();
   view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
   expect(statuses()).toEqual([
-    "unknown",
+    "done",
     "done",
     "error",
     "error",
@@ -1550,7 +1546,7 @@ it("freezes orphan native running receipts after observation loss without changi
   expect(JSON.stringify(snapshot)).toBe(original);
   view.rerender(createElement(I18nextProvider, { i18n }, node(true)));
   expect(statuses()).toEqual([
-    "running",
+    "done",
     "done",
     "error",
     "error",
@@ -1735,7 +1731,7 @@ it("shows an unobserved pending child as unknown while preserving a native faile
   ]);
 });
 
-it("freezes native running workflow cards while preserving their terminal and uncertain receipts", () => {
+it("keeps returned workflow queries settled while preserving their terminal and uncertain receipts", () => {
   const snapshot = activeSnapshot();
   const states = ["running", "completed", "failed", "aborted", "uncertain"];
   snapshot.selectedSession!.entries = [
@@ -1791,9 +1787,9 @@ it("freezes native running workflow cards while preserving their terminal and un
           card.querySelector(".status-mark")?.classList.contains(status),
         ) ?? "unknown",
     );
-  expect(statuses()).toEqual(["running", "done", "error", "error", "warn"]);
+  expect(statuses()).toEqual(["done", "done", "error", "error", "warn"]);
   view.rerender(createElement(I18nextProvider, { i18n }, node(false)));
-  expect(statuses()).toEqual(["unknown", "done", "error", "error", "warn"]);
+  expect(statuses()).toEqual(["done", "done", "error", "error", "warn"]);
   for (const status of states)
     expect(view.container.textContent).toContain(
       `Exact native workflow receipt: ${status}`,
@@ -2550,14 +2546,16 @@ it("renders side conversation messages with transcript role styling", async () =
 
   const user = await screen.findByText("Right aligned question");
   const assistant = await screen.findByText("Natural assistant answer");
+  expect(user.closest(".message-row.user")).toBeTruthy();
+  expect(assistant.closest(".message-row.assistant")).toBeTruthy();
   expect(
-    user.closest<HTMLElement>(".subagent-message.user")?.dataset.role,
-  ).toBe("user");
+    view.container.querySelector(".subagent-conversation .thinking-line.done"),
+  ).toBeTruthy();
   expect(
-    assistant.closest<HTMLElement>(".subagent-message.assistant")?.dataset.role,
-  ).toBe("assistant");
-  expect(view.container.querySelector(".subagent-thinking.done")).toBeTruthy();
-  expect(view.container.querySelector(".subagent-tool.running")).toBeTruthy();
+    view.container.querySelector(
+      '.subagent-conversation [data-tool="read"][data-state="unknown"]',
+    ),
+  ).toBeTruthy();
   expect(detail).toHaveBeenCalledWith(
     "session",
     "btw-1",
@@ -2734,7 +2732,7 @@ it("keeps background Session files, trajectory and activity scoped to the select
     fireEvent.click(screen.getByRole("button", { name: i18n.t("chatView") }));
     fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
     fireEvent.click(
-      screen.getByRole("button", {
+      screen.getByRole("menuitem", {
         name: new RegExp(i18n.t("files"), "u"),
       }),
     );
@@ -2749,6 +2747,20 @@ it("keeps background Session files, trajectory and activity scoped to the select
     );
     expect(files.textContent).toContain("b.txt");
     expect(files.textContent).not.toContain("a.txt");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt)
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("openTools") }),
+        );
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("workbarCollapseTools") }),
+      );
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          screen.getByRole("button", { name: i18n.t("openTools") }),
+        ),
+      );
+    }
   } finally {
     view.unmount();
     start.mockRestore();
@@ -3605,6 +3617,11 @@ it("shows Pi's queued messages above the composer after reload and in a backgrou
   expect(queued.querySelector("ol")).toBeNull();
   expect(queued.textContent).toContain("First follow-up");
   expect(queued.textContent).toContain(i18n.t("queuedImage"));
+  const summary = screen.getByRole("button", {
+    name: i18n.t("pendingFollowUpsHint", { count: 2 }),
+  });
+  expect(summary.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(summary);
   expect(
     screen.getByRole("button", {
       name: `${i18n.t("queuedMessageExpand")}: ${i18n.t("queuedImage")}`,
@@ -3661,7 +3678,14 @@ it("keeps capability activity and omission receipts visible", () => {
           status: "failed",
           startedAt: 1,
           finishedAt: 2,
-          agents: { total: 1, running: 0, done: 0, error: 1, uncertain: 0 },
+          agents: {
+            total: 3,
+            running: 0,
+            done: 0,
+            error: 1,
+            uncertain: 1,
+            omitted: 1,
+          },
         },
       ],
       omitted: 3,
@@ -3670,6 +3694,9 @@ it("keeps capability activity and omission receipts visible", () => {
   };
   render(createElement(ActivityBar, { snapshot }));
   expect(screen.getByText(/Build/)).toBeTruthy();
+  expect(screen.getByText(/Build/).textContent).toContain(
+    i18n.t("activityAgentProgress", { completed: 1, total: 3 }),
+  );
   expect(screen.getByText("+3")).toBeTruthy();
 });
 
@@ -3930,7 +3957,7 @@ it("does not attribute current runtime activity to a historical session", () => 
     actions: store.getState().actions,
   };
   const { rerender } = renderWithI18n(createElement(Composer, props));
-  expect(screen.getByLabelText("Runtime activity")).toBeTruthy();
+  expect(screen.getByLabelText(i18n.t("runtimeActivities"))).toBeTruthy();
   rerender(
     createElement(
       I18nextProvider,
@@ -3941,7 +3968,7 @@ it("does not attribute current runtime activity to a historical session", () => 
       }),
     ),
   );
-  expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+  expect(screen.queryByLabelText(i18n.t("runtimeActivities"))).toBeNull();
   expect(
     screen.queryByText(/Current build|Current agent|Current workflow/),
   ).toBeNull();

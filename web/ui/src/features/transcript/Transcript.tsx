@@ -1,4 +1,5 @@
 import { StatusDot } from "@astryxdesign/core/StatusDot";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   ArrowDown,
   Bot,
@@ -6,6 +7,8 @@ import {
   ChevronRight,
   CircleAlert,
   Clipboard,
+  Clock3,
+  Ellipsis,
   GitBranch,
   Globe,
   Lightbulb,
@@ -37,11 +40,6 @@ import {
   evidenceText,
   isEvidenceTool,
 } from "../../../../protocol/evidence.ts";
-import {
-  isSetupPromptEcho,
-  setupDisplayMessage,
-  setupPromptParent,
-} from "../../../../protocol/prompt-navigation.ts";
 import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
 import type {
@@ -64,6 +62,7 @@ import type { LiveEntry } from "../../store/web-store.ts";
 import {
   type RecordedSubagent,
   recordedSubagents,
+  subagentTitle,
 } from "../subagents/recorded-subagents.ts";
 import { SubagentTaskRow } from "../subagents/SubagentTaskRow.tsx";
 import { CompactionStatus } from "./CompactionStatus.tsx";
@@ -86,6 +85,12 @@ import {
   toolActivityTag,
   toolActivityTarget,
 } from "./tool-activity.ts";
+import {
+  buildEntries,
+  type DisplayEntry,
+  displayedThinkingDuration,
+  type TranscriptPresentationState,
+} from "./transcript-entries.ts";
 import { UserImageAttachments } from "./UserImageAttachments.tsx";
 import { UserMessageContent } from "./UserMessageContent.tsx";
 import { usePromptNavigation } from "./use-prompt-navigation.ts";
@@ -94,22 +99,9 @@ import "./provider-outcomes.css";
 import "./conversation-navigation.css";
 import "./message-branch.css";
 
-type PersistedEntry = NonNullable<
-  WebSnapshot["selectedSession"]
->["entries"][number];
-interface DisplayEntry {
-  compaction?: true;
-  forkSnapshotBoundary?: true;
-  key: string;
-  entryId?: string;
-  timingKey?: string;
-  timestamp?: string;
-  message: WebLiveMessage;
-  timing?: WebTurnTiming;
-  optimistic?: LiveEntry["optimistic"];
-}
-
 interface TranscriptProps {
+  label?: string;
+  notice?: ReactNode;
   activityObserved?: boolean;
   snapshot: WebSnapshot;
   liveMessages: LiveEntry[];
@@ -129,7 +121,7 @@ interface TranscriptProps {
         restorePosition?: ReadingPosition;
       })
     | null;
-  onResend: (content: string, retryEntryId?: string) => Promise<boolean>;
+  onResend?: (content: string, retryEntryId?: string) => Promise<boolean>;
   onEdit?: (anchor: WebHistoryAnchor, content: string) => Promise<boolean>;
   onRegenerate?: (anchor: WebHistoryAnchor) => Promise<boolean>;
   onOpenOriginal?: (anchor: WebHistoryAnchor) => Promise<boolean>;
@@ -163,7 +155,6 @@ interface RenderRow {
   processPreview?: string;
   processToolName?: string;
   processStatus?: Status;
-  processMessageKey?: string;
   error?: boolean;
   outcome?: "completed" | "failed" | "interrupted";
   pendingPrompt?: boolean;
@@ -213,11 +204,18 @@ function resultStatus(
   if (message?.forkSnapshotToolResult) return "unknown";
   if (liveState === "running") return "running";
   if (liveState === "unknown") return "unknown";
-  if (!message) return "unknown";
-  if (message.isError) return "error";
-  const status = canonicalStatus(record(message.details).status);
-  if (status !== "unknown") return status;
-  return message.isError === false ? "done" : "unknown";
+  if (liveState === "failed" || message?.isError) return "error";
+  if (liveState === "cancelled" || liveState === "timed_out") return "warn";
+  // Returned snapshots can describe a still-running background task. Only
+  // execution events keep the call busy; the task owns its separate indicator.
+  // Preserve explicit process failures/uncertainty in ordinary tool evidence.
+  if (!message?.toolName?.startsWith("subagent")) {
+    const status = canonicalStatus(record(message?.details).status);
+    if (status !== "unknown" && status !== "running") return status;
+  }
+  return liveState === "returned" || message?.isError === false
+    ? "done"
+    : "unknown";
 }
 
 function StatusMark({ status }: { status: Status }) {
@@ -287,7 +285,7 @@ function ProviderOutcome({
   retryPrompt?: string;
   retryEntryId?: string;
   canRetry: boolean;
-  onRetry: (content: string, retryEntryId?: string) => Promise<boolean>;
+  onRetry?: (content: string, retryEntryId?: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [retrying, setRetrying] = useState(false);
@@ -302,7 +300,7 @@ function ProviderOutcome({
       label={t("modelRequestFailed")}
       message={error || t("modelFailureUnknown")}
     >
-      {retryPrompt !== undefined && retryEntryId && (
+      {retryPrompt !== undefined && retryEntryId && onRetry && (
         <div className="provider-outcome-actions">
           <button
             type="button"
@@ -503,6 +501,7 @@ function EvidenceDetails({
   evidenceState,
   note,
   rawDetails,
+  children,
   snapshotMissingResult = false,
   defaultOpen = false,
 }: {
@@ -515,6 +514,7 @@ function EvidenceDetails({
   evidenceState?: EvidenceState;
   note?: string;
   rawDetails?: unknown;
+  children?: ReactNode;
   snapshotMissingResult?: boolean;
   defaultOpen?: boolean;
 }) {
@@ -541,13 +541,11 @@ function EvidenceDetails({
         <span className="tool-icon" aria-hidden="true">
           {icon}
         </span>
-        <span
-          className="tool-kind"
-          aria-hidden={toolActivity(name).action !== "call"}
-          title={name}
-        >
-          {toolActivityTag(name)}
-        </span>
+        {toolActivity(name).action === "call" && (
+          <span className="tool-kind" title={name}>
+            {toolActivityTag(name)}
+          </span>
+        )}
         <span className="details-title">
           <span className="tool-action">
             {toolActivityLabel(t, name, state)}
@@ -587,6 +585,7 @@ function EvidenceDetails({
           <pre>{evidenceText(JSON.stringify(rawDetails, null, 2)).text}</pre>
         </details>
       )}
+      {children}
     </details>
   );
 }
@@ -624,6 +623,87 @@ function ActivityCard({
       </summary>
       <pre className="details-body tool-evidence">{body}</pre>
     </details>
+  );
+}
+
+function subagentTargets(
+  args: Record<string, unknown>,
+  details: Record<string, unknown>,
+) {
+  const ids =
+    typeof args.id === "string"
+      ? [args.id]
+      : Array.isArray(args.ids)
+        ? args.ids
+        : typeof details.id === "string"
+          ? [details.id]
+          : Array.isArray(details.results)
+            ? details.results.map((item) => record(item).id)
+            : [];
+  return [
+    ...new Set(
+      ids.filter((id): id is string => typeof id === "string" && Boolean(id)),
+    ),
+  ];
+}
+
+function SubagentToolCall({
+  call,
+  result,
+  status,
+  sessionId,
+  subagents,
+  records,
+  onInspect,
+  defaultOpen,
+}: {
+  call: Extract<WebMessagePart, { type: "toolCall" }>;
+  result?: WebLiveMessage;
+  status: Status;
+  sessionId: string;
+  subagents: readonly WebSubagentActivity[];
+  records: readonly RecordedSubagent[];
+  onInspect?: (id: string) => void;
+  defaultOpen: boolean;
+}) {
+  const { t } = useTranslation();
+  const targets = subagentTargets(
+    parseArguments(call.arguments),
+    record(result?.details),
+  );
+  const action = toolActivityLabel(
+    t,
+    call.name,
+    status === "done" ? "returned" : status === "error" ? "failed" : status,
+  );
+  return (
+    <section className="subagent-operation">
+      {(targets.length ? targets : [undefined]).map((id) => (
+        <SubagentTaskRow
+          key={id ?? call.id}
+          identity={`${sessionId}:${id ?? call.id}`}
+          title={id ? subagentTitle(id, subagents, records) : ""}
+          action={action}
+          state={status === "warn" ? "unknown" : status}
+          label={t(
+            `toolState_${status === "done" ? "returned" : status === "error" ? "failed" : status === "warn" ? "unknown" : status}`,
+          )}
+          onInspect={id && onInspect ? () => onInspect(id) : undefined}
+        />
+      ))}
+      <details
+        className="subagent-operation-receipt"
+        open={defaultOpen || undefined}
+      >
+        <summary aria-label={t("toolRawEvidence")} title={t("toolRawEvidence")}>
+          <Ellipsis aria-hidden="true" />
+        </summary>
+        {call.arguments !== "{}" && (
+          <pre>{evidenceText(call.arguments).text}</pre>
+        )}
+        <pre>{evidenceText(result?.content ?? "").text || t("noOutput")}</pre>
+      </details>
+    </section>
   );
 }
 
@@ -675,16 +755,15 @@ function familyCard(
     );
   }
   if (name.startsWith("subagent")) {
-    const action = name.replaceAll("_", " ").replace(/^subagent /u, "");
-    const child =
-      subagents.find((item) => item.id === args.id) ??
-      records.find((item) => item.id === args.id);
     return (
-      <ActivityCard
-        family="subagent"
+      <SubagentToolCall
+        call={part}
+        result={result}
+        sessionId={sessionId}
+        subagents={subagents}
+        records={records}
+        onInspect={onInspectSubagent}
         defaultOpen={defaultOpen}
-        title={`${action[0]?.toUpperCase() || ""}${action.slice(1)} · ${child?.title || args.id || "Subagent"}`}
-        body={result?.content || part.arguments}
         status={status}
       />
     );
@@ -946,7 +1025,7 @@ function MessageActions({
   editable: boolean;
   copyRequiresFull?: boolean;
   timestamp?: string;
-  onResend: (value: string) => Promise<boolean>;
+  onResend?: (value: string) => Promise<boolean>;
   onRegenerate?: () => Promise<boolean>;
   onFork?: () => Promise<boolean>;
   canFork?: boolean;
@@ -974,7 +1053,7 @@ function MessageActions({
     if (editing) editInput.current?.focus();
   }, [editing]);
   const submitEdit = async () => {
-    if (submitting || !draft.trim() || !editable) return;
+    if (submitting || !draft.trim() || !editable || !onResend) return;
     setSubmitting(true);
     try {
       if (await onResend(draft.trim())) setEditing(false);
@@ -1029,78 +1108,89 @@ function MessageActions({
     <div className={`message-actions${copyFailed ? " copy-failed" : ""}`}>
       {time && <time dateTime={timestamp}>{time}</time>}
       {onFork && (
-        <button
-          type="button"
-          aria-label={t("forkMessage")}
-          title={t(
+        <Tooltip
+          content={t(
             forkPending
               ? "forkSessionPending"
               : canFork
                 ? "forkMessageHint"
                 : "forkSessionUnavailable",
           )}
-          disabled={!canFork || forkPending}
-          onClick={() => void onFork()}
+          placement="above"
         >
-          <GitBranch aria-hidden="true" />
-        </button>
+          <button
+            type="button"
+            aria-label={t("forkMessage")}
+            disabled={!canFork || forkPending}
+            onClick={() => void onFork()}
+          >
+            <GitBranch aria-hidden="true" />
+          </button>
+        </Tooltip>
       )}
       {editable && (
-        <button
-          type="button"
-          aria-label={t("editMessage")}
-          title={t("editMessage")}
-          onClick={() => {
-            setDraft(content);
-            setEditing(true);
-          }}
-        >
-          <Pencil />
-        </button>
+        <Tooltip content={t("editMessage")} placement="above">
+          <button
+            type="button"
+            aria-label={t("editMessage")}
+            onClick={() => {
+              setDraft(content);
+              setEditing(true);
+            }}
+          >
+            <Pencil />
+          </button>
+        </Tooltip>
       )}
       {onRegenerate && (
-        <button
-          type="button"
-          aria-label={t("regenerateMessage")}
-          title={t("regenerateMessageHint")}
-          disabled={!canFork || forkPending}
-          onClick={() => void onRegenerate()}
-        >
-          <RotateCcw aria-hidden="true" />
-        </button>
+        <Tooltip content={t("regenerateMessageHint")} placement="above">
+          <button
+            type="button"
+            aria-label={t("regenerateMessage")}
+            disabled={!canFork || forkPending}
+            onClick={() => void onRegenerate()}
+          >
+            <RotateCcw aria-hidden="true" />
+          </button>
+        </Tooltip>
       )}
-      <button
-        type="button"
-        aria-label={copied ? t("copiedMessage") : t("copyMessage")}
-        title={
+      <Tooltip
+        content={
           copyRequiresFull
             ? t("messageCopyRequiresFull")
             : copied
               ? t("copiedMessage")
               : t("copyMessage")
         }
-        disabled={copying || copyRequiresFull}
-        onClick={() => {
-          const generation = ++copyGeneration.current;
-          window.clearTimeout(copyTimer.current);
-          setCopying(true);
-          setCopied(false);
-          setCopyFailed(false);
-          void copyText(content).then((success) => {
-            if (generation !== copyGeneration.current) return;
-            setCopying(false);
-            setCopied(success);
-            setCopyFailed(!success);
-            if (success)
-              copyTimer.current = window.setTimeout(
-                () => setCopied(false),
-                1_200,
-              );
-          });
-        }}
+        placement="above"
       >
-        {copied ? <Check /> : <Clipboard />}
-      </button>
+        <button
+          type="button"
+          aria-label={copied ? t("copiedMessage") : t("copyMessage")}
+          data-copied={copied || undefined}
+          disabled={copying || copyRequiresFull}
+          onClick={() => {
+            const generation = ++copyGeneration.current;
+            window.clearTimeout(copyTimer.current);
+            setCopying(true);
+            setCopied(false);
+            setCopyFailed(false);
+            void copyText(content).then((success) => {
+              if (generation !== copyGeneration.current) return;
+              setCopying(false);
+              setCopied(success);
+              setCopyFailed(!success);
+              if (success)
+                copyTimer.current = window.setTimeout(
+                  () => setCopied(false),
+                  1_200,
+                );
+            });
+          }}
+        >
+          {copied ? <Check /> : <Clipboard />}
+        </button>
+      </Tooltip>
       {copyFailed && (
         <span className="copy-error" role="status">
           {t("copyFailed")}
@@ -1244,530 +1334,6 @@ function isEmptyToolOutput(content: string) {
   return ["", "[]", "{}", "null"].includes(content.trim());
 }
 
-function messageIdentity(message: WebLiveMessage) {
-  if (message.role === "toolResult" && message.toolCallId)
-    return `tool-result-${message.toolCallId}`;
-  if (message.timestamp !== undefined)
-    return `message-${message.role}-${message.timestamp}`;
-  return undefined;
-}
-
-function disclosureSignature(message: WebLiveMessage) {
-  return ["assistant", "toolResult"].includes(message.role ?? "") &&
-    !message.truncation?.truncated
-    ? JSON.stringify(message)
-    : null;
-}
-
-function contentSignature(message: WebLiveMessage) {
-  return JSON.stringify([
-    message.role,
-    message.content,
-    (message.parts ?? [])
-      .filter((part) => message.role !== "user" || part.type !== "text")
-      .map((part) =>
-        part.type === "image"
-          ? [
-              part.type,
-              part.mimeType,
-              // Pi persists user image data and MIME type without its filename.
-              message.role === "user" ? undefined : part.name,
-            ]
-          : part.type,
-      ),
-    message.stopReason,
-    message.errorMessage,
-    message.toolCallId,
-  ]);
-}
-
-function legacySignature(message: WebLiveMessage) {
-  return message.role === "user"
-    ? contentSignature(message)
-    : JSON.stringify({ ...message, timestamp: undefined });
-}
-
-interface PersistedProjection {
-  nativeById: Map<string, PersistedEntry>;
-  exactNative: Map<string, PersistedEntry[]>;
-  baseEntries: DisplayEntry[];
-  indexById: Map<string, number>;
-  lookupIndexes: Map<string, number[]>;
-  customIndexes: Map<string, number[]>;
-  nativeByIdentity: Map<string, number[]>;
-  nativeByLegacySignature: Map<string, number[]>;
-  nativeMessages: { identity: string | undefined; signature: string }[];
-  promptCandidates: {
-    key: string;
-    position: number | undefined;
-    parentId: string | null | undefined;
-    signature: string;
-  }[];
-  promptsBySignature: Map<string, PersistedProjection["promptCandidates"]>;
-  commandInputs: Map<string, string>;
-  persistedPositions: Map<string, number>;
-}
-
-interface PersistedProjectionCache {
-  projection: PersistedProjection;
-  length: number;
-  head: PersistedEntry | undefined;
-  tail: PersistedEntry | undefined;
-}
-
-const persistedProjectionCache = new WeakMap<
-  readonly PersistedEntry[],
-  Map<string | undefined, PersistedProjectionCache>
->();
-
-function persistedTranscriptProjection(
-  persisted: readonly PersistedEntry[],
-  sessionId: string | undefined,
-) {
-  let bySession = persistedProjectionCache.get(persisted);
-  const cached = bySession?.get(sessionId);
-  // Callers sometimes append to the same entries array between renders. The
-  // unchanged streaming path keeps that array, so a hit stays independent of
-  // history length; a different length or endpoint entry rebuilds.
-  if (
-    cached &&
-    cached.length === persisted.length &&
-    cached.head === persisted[0] &&
-    cached.tail === persisted[persisted.length - 1]
-  )
-    return cached.projection;
-  const nativeById = new Map(persisted.map((entry) => [entry.id, entry]));
-  const exactNative = new Map<string, PersistedEntry[]>();
-  for (const entry of persisted) {
-    const signature = entry.message && disclosureSignature(entry.message);
-    if (!signature) continue;
-    const group = exactNative.get(signature) ?? [];
-    group.push(entry);
-    exactNative.set(signature, group);
-  }
-  const baseEntries = persisted.flatMap(
-    (entry: PersistedEntry): DisplayEntry[] => {
-      if (entry.forkSnapshotBoundary)
-        return [
-          {
-            key: entry.id,
-            entryId: entry.id,
-            timestamp: entry.timestamp,
-            forkSnapshotBoundary: true,
-            message: { role: "custom", content: "" },
-          },
-        ];
-      if (entry.type === "compaction")
-        return [
-          {
-            key: entry.id,
-            entryId: entry.id,
-            timestamp: entry.timestamp,
-            compaction: true,
-            message: { role: "custom", content: "" },
-          },
-        ];
-      if (
-        "turnTiming" in entry &&
-        entry.turnTiming &&
-        entry.turnTiming.sessionId === sessionId
-      )
-        return [
-          {
-            key: entry.id,
-            timestamp: entry.timestamp,
-            timing: entry.turnTiming,
-            message: { role: "custom", content: "" },
-          },
-        ];
-      if (entry.type !== "message" || !entry.message) return [];
-      const message = setupDisplayMessage(entry.message);
-      const parent = setupPromptParent(entry, (id) => nativeById.get(id));
-      // The exact command ancestry identifies this episode. Do not collapse
-      // separate setup requests merely because their text is the same.
-      if (isSetupPromptEcho(entry.message, parent)) return [];
-      return [
-        {
-          // Provider timestamps can repeat across distinct native messages. Live
-          // reconciliation and timing remain separate from persisted row identity.
-          key: entry.id,
-          entryId: entry.id,
-          timestamp: entry.timestamp,
-          message,
-        },
-      ];
-    },
-  );
-  const indexById = new Map<string, number>();
-  const lookupIndexes = new Map<string, number[]>();
-  baseEntries.forEach((entry, index) => {
-    if (entry.entryId) indexById.set(entry.entryId, index);
-    if (entry.timing || entry.compaction || entry.forkSnapshotBoundary) return;
-    const lookup = messageIdentity(entry.message) ?? entry.entryId ?? entry.key;
-    const indexes = lookupIndexes.get(lookup) ?? [];
-    indexes.push(index);
-    lookupIndexes.set(lookup, indexes);
-  });
-  const customIndexes = new Map<string, number[]>();
-  let customIndex = 0;
-  for (const entry of persisted) {
-    if (entry.message?.role !== "custom" || entry.message.truncation?.truncated)
-      continue;
-    const signature = legacySignature(entry.message);
-    const indexes = customIndexes.get(signature) ?? [];
-    indexes.push(customIndex);
-    customIndexes.set(signature, indexes);
-    customIndex++;
-  }
-  const nativeMessages = baseEntries.map((entry) => ({
-    identity: messageIdentity(entry.message),
-    signature: legacySignature(entry.message),
-  }));
-  const nativeByIdentity = new Map<string, number[]>();
-  const nativeByLegacySignature = new Map<string, number[]>();
-  nativeMessages.forEach((candidate, index) => {
-    // A live message with no timestamp still matches one native payload by
-    // legacy signature, including a native message that does have an identity.
-    const legacyIndexes =
-      nativeByLegacySignature.get(candidate.signature) ?? [];
-    legacyIndexes.push(index);
-    nativeByLegacySignature.set(candidate.signature, legacyIndexes);
-    if (candidate.identity === undefined) return;
-    const indexes = nativeByIdentity.get(candidate.identity) ?? [];
-    indexes.push(index);
-    nativeByIdentity.set(candidate.identity, indexes);
-  });
-  const persistedPositions = new Map(
-    persisted.map((entry, index) => [entry.id, index]),
-  );
-  const promptCandidates = baseEntries
-    .filter((entry) => entry.message.role === "user")
-    .map((entry) => ({
-      key: entry.entryId ?? entry.key,
-      position: persistedPositions.get(entry.entryId ?? entry.key),
-      parentId: nativeById.get(entry.entryId ?? entry.key)?.parentId,
-      signature: contentSignature(entry.message),
-    }));
-  const promptsBySignature = new Map<
-    string,
-    PersistedProjection["promptCandidates"]
-  >();
-  for (const candidate of promptCandidates) {
-    const group = promptsBySignature.get(candidate.signature) ?? [];
-    group.push(candidate);
-    promptsBySignature.set(candidate.signature, group);
-  }
-  const commandInputs = new Map(
-    baseEntries.flatMap((entry) =>
-      entry.message.role === "user" &&
-      entry.message.customType === "openpi-web-command-input" &&
-      entry.message.commandId
-        ? [[entry.message.commandId, entry.entryId ?? entry.key] as const]
-        : [],
-    ),
-  );
-  const projection: PersistedProjection = {
-    nativeById,
-    exactNative,
-    baseEntries,
-    indexById,
-    lookupIndexes,
-    customIndexes,
-    nativeByIdentity,
-    nativeByLegacySignature,
-    nativeMessages,
-    promptCandidates,
-    promptsBySignature,
-    commandInputs,
-    persistedPositions,
-  };
-  if (!bySession) {
-    bySession = new Map();
-    persistedProjectionCache.set(persisted, bySession);
-  }
-  bySession.set(sessionId, {
-    projection,
-    length: persisted.length,
-    head: persisted[0],
-    tail: persisted[persisted.length - 1],
-  });
-  return projection;
-}
-
-function firstUnmatched(indexes: number[] | undefined, matched: Set<number>) {
-  if (!indexes) return -1;
-  for (const index of indexes) if (!matched.has(index)) return index;
-  return -1;
-}
-
-function displayedThinkingDuration(
-  entry: DisplayEntry,
-  durations: Record<string, number>,
-) {
-  const keys = [
-    entry.timingKey,
-    entry.key,
-    entry.entryId,
-    messageIdentity(entry.message),
-  ];
-  for (const key of keys) {
-    if (!key) continue;
-    const duration = durations[key];
-    if (duration !== undefined) return duration;
-  }
-  return undefined;
-}
-
-function buildEntries(
-  snapshot: WebSnapshot,
-  liveMessages: LiveEntry[],
-  nativeRowKeys: Map<string, string>,
-) {
-  const selected = snapshot.selectedSession;
-  const persisted = selected?.entries ?? [];
-  const projection = persistedTranscriptProjection(persisted, selected?.id);
-  for (const id of nativeRowKeys.keys())
-    if (!projection.nativeById.has(id)) nativeRowKeys.delete(id);
-  // Native IDs own historic rows. A live disclosure can keep its existing DOM
-  // only when both sides contain exactly one complete, equal projected payload.
-  const exactLive = new Map<string, LiveEntry[]>();
-  for (const live of liveMessages) {
-    if (live.optimistic) continue;
-    const signature = disclosureSignature(live.message);
-    if (!signature) continue;
-    const group = exactLive.get(signature) ?? [];
-    group.push(live);
-    exactLive.set(signature, group);
-  }
-  const aliasedKeys = new Set(nativeRowKeys.values());
-  for (const [signature, native] of projection.exactNative) {
-    const live = exactLive.get(signature);
-    if (native.length !== 1 || live?.length !== 1) continue;
-    const id = native[0]!.id;
-    const key = live[0]!.key;
-    if (
-      nativeRowKeys.has(id) ||
-      aliasedKeys.has(key) ||
-      projection.nativeById.has(key)
-    )
-      continue;
-    nativeRowKeys.set(id, key);
-    aliasedKeys.add(key);
-  }
-  const timingAt = new Map<number, string>();
-  for (const live of liveMessages) {
-    const lookup = messageIdentity(live.message) ?? live.key;
-    const indexes = projection.lookupIndexes.get(lookup);
-    if (!indexes) continue;
-    for (const index of indexes) timingAt.set(index, live.key);
-  }
-  const acknowledgedPrompts = new Set(
-    liveMessages.flatMap((entry) =>
-      entry.optimistic?.projectedEntryId
-        ? [entry.optimistic.projectedEntryId]
-        : [],
-    ),
-  );
-  const projectedPrompts: { key: string; entryId: string }[] = [];
-  const pendingPrompts: DisplayEntry[] = [];
-  const execution =
-    snapshot.selectedExecution?.sessionId === selected?.id &&
-    snapshot.selectedExecution?.sessionPath === selected?.path
-      ? snapshot.selectedExecution
-      : undefined;
-  const queued = execution?.pendingFollowUps ?? 0;
-  const mergeLimit = Math.max(
-    0,
-    liveMessages.filter(
-      (entry) =>
-        entry.optimistic?.admitted &&
-        !entry.optimistic.projectedEntryId &&
-        !projection.commandInputs.has(entry.optimistic.commandId),
-    ).length - queued,
-  );
-  let mergedRegularPrompts = 0;
-  const suppressedLiveUsers = new Set<string>();
-  const matchedCustomMessages = new Set<number>();
-  const matchedMessages = new Set<number>();
-  const appended: DisplayEntry[] = [];
-  for (const live of liveMessages) {
-    if (live.optimistic?.projectedEntryId) continue;
-    if (live.message.role === "custom" && !live.message.truncation?.truncated) {
-      const signature = legacySignature(live.message);
-      const match = firstUnmatched(
-        projection.customIndexes.get(signature),
-        matchedCustomMessages,
-      );
-      if (match >= 0) {
-        matchedCustomMessages.add(match);
-        continue;
-      }
-    }
-    const commandId =
-      live.optimistic?.commandId ??
-      (live.key.startsWith("optimistic-")
-        ? live.key.slice("optimistic-".length)
-        : undefined);
-    const commandEntry = commandId
-      ? projection.commandInputs.get(commandId)
-      : undefined;
-    if (commandEntry) {
-      if (live.optimistic)
-        projectedPrompts.push({ key: live.key, entryId: commandEntry });
-      continue;
-    }
-    const message = setupDisplayMessage(live.message);
-    if (message.role === "user" && live.optimistic) {
-      // This only merges duplicate presentation; it is not a delivery receipt.
-      const after =
-        live.optimistic.afterEntryId === null
-          ? -1
-          : projection.persistedPositions.get(live.optimistic.afterEntryId);
-      const acknowledgement =
-        !live.optimistic.admitted || mergedRegularPrompts >= mergeLimit
-          ? undefined
-          : projection.promptsBySignature
-              .get(contentSignature(message))
-              ?.find(
-                (entry) =>
-                  entry.position !== undefined &&
-                  (after !== undefined
-                    ? entry.position > after
-                    : entry.parentId === live.optimistic?.afterEntryId) &&
-                  !acknowledgedPrompts.has(entry.key),
-              );
-      if (acknowledgement) {
-        acknowledgedPrompts.add(acknowledgement.key);
-        projectedPrompts.push({ key: live.key, entryId: acknowledgement.key });
-        mergedRegularPrompts++;
-        continue;
-      }
-    } else {
-      const admission =
-        message.role === "user"
-          ? liveMessages.find(
-              (pending) =>
-                pending.optimistic?.admitted &&
-                !pending.optimistic.projectedEntryId &&
-                !suppressedLiveUsers.has(pending.key) &&
-                !projectedPrompts.some((pair) => pair.key === pending.key) &&
-                pending.optimistic.sessionId === selected?.id &&
-                pending.optimistic.sessionPath === selected?.path &&
-                contentSignature(setupDisplayMessage(pending.message)) ===
-                  contentSignature(message),
-            )
-          : undefined;
-      if (admission) {
-        suppressedLiveUsers.add(admission.key);
-        continue;
-      }
-      const identity = messageIdentity(message);
-      const legacy = legacySignature(message);
-      const match =
-        identity === undefined
-          ? firstUnmatched(
-              projection.nativeByLegacySignature.get(legacy),
-              matchedMessages,
-            )
-          : ((projection.nativeByIdentity.get(identity) ?? []).find(
-              (index) =>
-                !matchedMessages.has(index) &&
-                projection.nativeMessages[index]?.signature === legacy,
-            ) ?? -1);
-      if (match >= 0) {
-        matchedMessages.add(match);
-        continue;
-      }
-    }
-    const next: DisplayEntry = {
-      key: live.key,
-      timingKey: live.key,
-      timestamp: live.timestamp ?? new Date().toISOString(),
-      message,
-      optimistic: live.optimistic,
-    };
-    if (message.role === "user" && live.optimistic) pendingPrompts.push(next);
-    else appended.push(next);
-  }
-  const queueCounts = new Map<string, number>();
-  for (const message of execution?.queuedMessages ?? [])
-    queueCounts.set(message, (queueCounts.get(message) ?? 0) + 1);
-  const visiblePending = pendingPrompts.filter((entry) => {
-    if (
-      !entry.optimistic?.admitted ||
-      entry.optimistic.commandId === execution?.activeTurn?.commandId
-    )
-      return true;
-    const count = queueCounts.get(entry.message.content) ?? 0;
-    if (!count) return true;
-    queueCounts.set(entry.message.content, count - 1);
-    return false;
-  });
-  // The existing projection receipt also keeps the user row's presentation
-  // identity stable while its optimistic input becomes a native Session entry.
-  // Native entry IDs, order and action targets remain canonical.
-  const promptKeys = new Map(
-    liveMessages.flatMap((live) =>
-      live.optimistic?.projectedEntryId
-        ? [[live.optimistic.projectedEntryId, live.key] as const]
-        : [],
-    ),
-  );
-  for (const pair of projectedPrompts) promptKeys.set(pair.entryId, pair.key);
-  let persistedRows = projection.baseEntries;
-  const rewrite = (index: number, entry: DisplayEntry) => {
-    if (persistedRows === projection.baseEntries)
-      persistedRows = projection.baseEntries.slice();
-    persistedRows[index] = entry;
-  };
-  for (const [index, timingKey] of timingAt) {
-    const current = persistedRows[index];
-    if (!current || current.timingKey === timingKey) continue;
-    rewrite(index, { ...current, timingKey });
-  }
-  for (const [id, key] of nativeRowKeys) {
-    const index = projection.indexById.get(id);
-    if (index === undefined) continue;
-    const current = persistedRows[index];
-    if (!current || current.key === key) continue;
-    rewrite(index, { ...current, key });
-  }
-  for (const [entryId, key] of promptKeys) {
-    const index = projection.indexById.get(entryId);
-    if (index === undefined) continue;
-    const current = persistedRows[index];
-    if (!current || current.key === key) continue;
-    rewrite(index, { ...current, key });
-  }
-  return {
-    entries: persistedRows.concat(appended, visiblePending),
-    projectedPrompts,
-  };
-}
-
-// Hold only presentation; terminal evidence and disclosure state never wait.
-function useProcessHeadline(current: RenderRow | undefined) {
-  const [held, setHeld] = useState(() => ({
-    row: current,
-    since: Date.now(),
-  }));
-  useEffect(() => {
-    if (current?.key === held.row?.key) return;
-    if (!current || !held.row) {
-      setHeld({ row: current, since: Date.now() });
-      return;
-    }
-    const timer = window.setTimeout(
-      () => setHeld({ row: current, since: Date.now() }),
-      Math.max(0, 1000 - (Date.now() - held.since)),
-    );
-    return () => window.clearTimeout(timer);
-  }, [current, held]);
-  return !current || current.key === held.row?.key
-    ? current
-    : (held.row ?? current);
-}
-
 function ProcessSequence({
   rows,
   active,
@@ -1776,10 +1342,10 @@ function ProcessSequence({
   active: boolean;
 }) {
   const { t } = useTranslation();
-  let thinkingMessageKey: string | undefined;
-  const [open, setOpen] = useState(active);
+  const [open, setOpen] = useState(false);
   const single = rows.length === 1;
   const previousSingle = useRef(single);
+  const summary = useRef<HTMLElement>(null);
   const viewport = useRef<HTMLElement>(null);
   const following = useRef(true);
   const lastScrollTop = useRef(0);
@@ -1797,10 +1363,14 @@ function ProcessSequence({
         : { above, below },
     );
   }, []);
-  useEffect(() => setOpen(active), [active]);
   useLayoutEffect(() => {
     const element = viewport.current;
     const promoted = previousSingle.current && !single;
+    // Adding the first tool must not fold reasoning the user is already reading.
+    if (promoted && !open && element?.querySelector(".thinking-line[open]")) {
+      setOpen(true);
+      return;
+    }
     previousSingle.current = single;
     if (!element || single || !open || rows.length === 0) return;
     // A native bookmark can move this scrollport before its scroll event arrives.
@@ -1847,19 +1417,21 @@ function ProcessSequence({
   const current = [...rows]
     .reverse()
     .find((row) => row.processStatus === "running");
-  const headline = useProcessHeadline(current);
   const preview =
-    headline?.processPreview ??
+    current?.processPreview ??
     (active ? [...rows].reverse() : rows).find((row) => row.processPreview)
       ?.processPreview;
   const previewText =
-    headline?.processToolName &&
-    ["read", "write", "edit"].includes(headline.processToolName)
+    current?.processToolName &&
+    ["read", "write", "edit"].includes(current.processToolName)
       ? preview?.slice(
           Math.max(preview.lastIndexOf("/"), preview.lastIndexOf("\\")) + 1,
         )
       : preview;
-  const failed = rows.some((row) => row.error || row.processStatus === "error");
+  const failures = rows.filter(
+    (row) => row.error || row.processStatus === "error",
+  ).length;
+  const failed = failures > 0;
   const status: Status = current
     ? "running"
     : failed
@@ -1884,172 +1456,177 @@ function ProcessSequence({
         },
       )
     : t(status === "running" ? "processRunning" : "processDetails");
-  const title = headline?.processToolName
-    ? toolActivityLabel(t, headline.processToolName, "running")
-    : headline?.processType === "thinking"
+  const title = current?.processToolName
+    ? toolActivityLabel(t, current.processToolName, "running")
+    : current?.processType === "thinking"
       ? t("thinkingActive")
-      : groupTitle;
-  const representative = headline?.processToolName ?? toolNames[0];
+      : open
+        ? t("processDetails")
+        : groupTitle;
+  const representative = current?.processToolName ?? toolNames[0];
   const Icon =
-    headline?.processType === "thinking"
+    current?.processType === "thinking"
       ? Lightbulb
       : representative
         ? toolActivity(representative).Icon
         : Wrench;
   return (
-    <details
-      className={`process-sequence ${single ? "single-process " : ""}${status}`}
-      open={single || open}
-      data-status={status}
-      data-running={status === "running" ? "true" : undefined}
-      data-history-entry={rows[0]?.key}
-      onToggle={(event) => {
-        if (!single) setOpen(event.currentTarget.open);
-      }}
-    >
-      <summary
-        hidden={single}
-        aria-label={[title, current ? preview : "", ...counts]
-          .filter(Boolean)
-          .join(" · ")}
+    <>
+      <details
+        className={`process-sequence ${single ? "single-process " : ""}${status}`}
+        open={single || open}
+        data-status={status}
+        data-running={status === "running" ? "true" : undefined}
+        data-history-entry={rows[0]?.key}
+        onToggle={(event) => {
+          if (!single) setOpen(event.currentTarget.open);
+        }}
       >
-        <span className="tool-icon" aria-hidden="true">
-          <Icon />
-        </span>
-        <span
-          className="process-sequence-title"
-          title={[actionLabels.join(t("toolGroupSeparator")), ...counts]
+        <summary
+          ref={summary}
+          hidden={single}
+          aria-label={[
+            title,
+            current ? preview : "",
+            ...counts,
+            failed ? t("processFailureCount", { count: failures }) : "",
+          ]
             .filter(Boolean)
             .join(" · ")}
         >
-          <strong>{title}</strong>
-        </span>
-        {preview && (current || !actions.length) && (
-          <span className="process-sequence-preview" title={preview}>
-            {previewText}
+          <span className="tool-icon" aria-hidden="true">
+            <Icon />
           </span>
-        )}
-        <span className="process-sequence-counts">{counts.join(" · ")}</span>
-        <ChevronRight className="tool-disclosure" aria-hidden="true" />
-        <StatusMark status={status} />
-      </summary>
-      <section
-        ref={viewport}
-        className="process-sequence-scroll"
-        aria-label={
-          single ? undefined : [t("processDetails"), ...counts].join(" · ")
-        }
-        tabIndex={single ? undefined : 0}
-        data-scroll-above={edges.above || undefined}
-        data-scroll-below={edges.below || undefined}
-        onScrollCapture={(event) => {
-          const target = event.target;
-          if (
-            single &&
-            target instanceof HTMLElement &&
-            target.classList.contains("thinking-evidence")
-          ) {
-            const top =
-              target.getBoundingClientRect().top -
-              event.currentTarget.getBoundingClientRect().top +
-              target.scrollTop;
-            const downward = top > lastScrollTop.current;
-            lastScrollTop.current = top;
+          <span className="process-sequence-title">
+            <strong>{title}</strong>
+          </span>
+          {preview && (current || (!active && !actions.length)) && (
+            <span className="process-sequence-preview" title={preview}>
+              {previewText}
+            </span>
+          )}
+          <ChevronRight className="tool-disclosure" aria-hidden="true" />
+          {!failed && <StatusMark status={status} />}
+        </summary>
+        <section
+          ref={viewport}
+          className="process-sequence-scroll"
+          aria-label={
+            single ? undefined : [t("processDetails"), ...counts].join(" · ")
+          }
+          tabIndex={single ? undefined : 0}
+          data-scroll-above={edges.above || undefined}
+          data-scroll-below={edges.below || undefined}
+          onScrollCapture={(event) => {
+            const target = event.target;
+            if (
+              single &&
+              target instanceof HTMLElement &&
+              target.classList.contains("thinking-evidence")
+            ) {
+              const top =
+                target.getBoundingClientRect().top -
+                event.currentTarget.getBoundingClientRect().top +
+                target.scrollTop;
+              const downward = top > lastScrollTop.current;
+              lastScrollTop.current = top;
+              following.current =
+                (following.current || downward) &&
+                target.scrollHeight - target.clientHeight - target.scrollTop <=
+                  24;
+            }
+          }}
+          onScroll={(event) => {
+            if (single) return;
+            const element = event.currentTarget;
+            const downward = element.scrollTop > lastScrollTop.current;
+            lastScrollTop.current = element.scrollTop;
             following.current =
               (following.current || downward) &&
-              target.scrollHeight - target.clientHeight - target.scrollTop <=
+              element.scrollHeight - element.clientHeight - element.scrollTop <=
                 24;
-          }
-        }}
-        onScroll={(event) => {
-          if (single) return;
-          const element = event.currentTarget;
-          const downward = element.scrollTop > lastScrollTop.current;
-          lastScrollTop.current = element.scrollTop;
-          following.current =
-            (following.current || downward) &&
-            element.scrollHeight - element.clientHeight - element.scrollTop <=
-              24;
-          updateEdges();
-        }}
-        onWheel={(event) => {
-          if (
-            !event.defaultPrevented &&
-            !event.ctrlKey &&
-            !event.metaKey &&
-            event.deltaY < 0 &&
-            (single ||
-              upwardInputReachesConversation(
-                event.nativeEvent,
-                event.currentTarget,
-              ))
-          )
-            following.current = false;
-        }}
-        onKeyDown={(event) => {
-          const target = event.target;
-          if (
-            !event.defaultPrevented &&
-            !event.altKey &&
-            !event.metaKey &&
-            (!event.ctrlKey || event.key === "Home") &&
-            (["ArrowUp", "PageUp", "Home"].includes(event.key) ||
-              (event.key === " " && event.shiftKey)) &&
-            target instanceof HTMLElement &&
-            !target.isContentEditable &&
-            !target.closest("input, textarea, select") &&
-            !(event.key === " " && target.closest("button, summary")) &&
-            (single ||
-              upwardInputReachesConversation(
-                event.nativeEvent,
-                event.currentTarget,
-              ))
-          )
-            following.current = false;
-        }}
-        onTouchStart={(event) => {
-          touchY.current = event.touches[0]?.clientY;
-        }}
-        onTouchMove={(event) => {
-          const next = event.touches[0]?.clientY;
-          if (
-            next !== undefined &&
-            touchY.current !== undefined &&
-            next > touchY.current &&
-            (single ||
-              upwardInputReachesConversation(
-                event.nativeEvent,
-                event.currentTarget,
-              ))
-          )
-            following.current = false;
-          touchY.current = next;
-        }}
-      >
-        <div className="process-sequence-body">
-          {rows.map((row) => {
-            // Native message order establishes this visual association;
-            // chronological proximity across messages does not.
-            if (row.processType === "thinking")
-              thinkingMessageKey = row.processMessageKey;
-            else if (row.processMessageKey !== thinkingMessageKey)
-              thinkingMessageKey = undefined;
-            const followsThinking =
-              thinkingMessageKey !== undefined &&
-              row.processType !== "thinking";
-            return (
+            updateEdges();
+          }}
+          onWheel={(event) => {
+            if (
+              !event.defaultPrevented &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              event.deltaY < 0 &&
+              (single ||
+                upwardInputReachesConversation(
+                  event.nativeEvent,
+                  event.currentTarget,
+                ))
+            )
+              following.current = false;
+          }}
+          onKeyDown={(event) => {
+            const target = event.target;
+            if (
+              !event.defaultPrevented &&
+              !event.altKey &&
+              !event.metaKey &&
+              (!event.ctrlKey || event.key === "Home") &&
+              (["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+                (event.key === " " && event.shiftKey)) &&
+              target instanceof HTMLElement &&
+              !target.isContentEditable &&
+              !target.closest("input, textarea, select") &&
+              !(event.key === " " && target.closest("button, summary")) &&
+              (single ||
+                upwardInputReachesConversation(
+                  event.nativeEvent,
+                  event.currentTarget,
+                ))
+            )
+              following.current = false;
+          }}
+          onTouchStart={(event) => {
+            touchY.current = event.touches[0]?.clientY;
+          }}
+          onTouchMove={(event) => {
+            const next = event.touches[0]?.clientY;
+            if (
+              next !== undefined &&
+              touchY.current !== undefined &&
+              next > touchY.current &&
+              (single ||
+                upwardInputReachesConversation(
+                  event.nativeEvent,
+                  event.currentTarget,
+                ))
+            )
+              following.current = false;
+            touchY.current = next;
+          }}
+        >
+          <div className="process-sequence-body">
+            {rows.map((row) => (
               <div
-                className={`process-step ${single ? "single-tool-step " : ""}${followsThinking ? "thought-tool-step " : ""}${row.processStatus ?? "unknown"}`}
+                className={`process-step ${single ? "single-tool-step " : ""}${row.processStatus ?? "unknown"}`}
                 data-status={row.processStatus ?? "unknown"}
                 key={row.key}
               >
                 {row.content}
               </div>
-            );
-          })}
-        </div>
-      </section>
-    </details>
+            ))}
+          </div>
+        </section>
+      </details>
+      <Tooltip
+        anchorRef={summary}
+        focusTrigger="always"
+        content={[
+          ...counts,
+          failed ? t("processFailureCount", { count: failures }) : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        placement="above"
+        isEnabled={!single}
+      />
+    </>
   );
 }
 
@@ -2093,6 +1670,7 @@ function TurnRun({
   const { t } = useTranslation();
   const id = useId();
   const [open, setOpen] = useState(timing?.outcome !== "completed");
+  const userOpened = useRef(false);
   const previousOutcome = useRef(timing?.outcome);
   useEffect(() => {
     if (
@@ -2141,10 +1719,17 @@ function TurnRun({
               className="turn-duration-toggle"
               aria-expanded={open}
               aria-controls={bodies.map((_, index) => bodyId(index)).join(" ")}
-              onClick={() => setOpen((value) => !value)}
+              onClick={(event) => {
+                userOpened.current = event.nativeEvent.isTrusted;
+                setOpen((value) => !value);
+              }}
             >
+              <Clock3 className="turn-duration-icon" aria-hidden="true" />
               {elapsed}
-              <ChevronRight aria-hidden="true" />
+              <ChevronRight
+                className="turn-duration-chevron"
+                aria-hidden="true"
+              />
             </button>
           ) : (
             elapsed
@@ -2164,6 +1749,8 @@ function TurnRun({
                 key={block.rows[0]!.key}
                 id={bodyId(bodies.indexOf(block))}
                 hidden={!open}
+                inert={!open}
+                data-user-toggle={userOpened.current || undefined}
               >
                 {groupRows(block.rows, active && block === bodies.at(-1))}
               </div>
@@ -2269,6 +1856,13 @@ function ConversationTurn({
     } else if (row.timing) appendRun(row.timing);
     else runRows.push(row);
   }
+  const awaitingContent =
+    active &&
+    observed &&
+    (runRows.length > 0 ||
+      Boolean(currentTimedTurn) ||
+      !rows.some((row) => row.timing)) &&
+    !runRows.some((row) => row.kind !== "prompt" && row.content !== null);
   if (runRows.length || currentTimedTurn) appendRun(undefined, true);
   const hasTiming = Boolean(timedTurn || rows.some((row) => row.timing));
   return (
@@ -2299,6 +1893,16 @@ function ConversationTurn({
           </header>
         )}
       {content}
+      {awaitingContent && (
+        <div className="conversation-waiting" aria-hidden="true">
+          <span className="conversation-waiting-dots">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span>{t("modelRunning")}</span>
+        </div>
+      )}
       {changes && session && (
         <TurnChangesCard
           key={`${session.id}:${session.path}:${changes.promptEntryId}`}
@@ -2388,10 +1992,11 @@ function renderTurns(
   timedTurn?: ActiveTurn,
   onReviewTurn?: OpenTurnReview,
   observed = true,
+  executionRunning = running,
 ) {
   const { turns, activeTurn } = groupConversationTurns(
     rows,
-    running,
+    executionRunning,
     activeCommandId,
     timedTurn,
   );
@@ -2405,10 +2010,15 @@ function renderTurns(
         !turn.rows.some((row) => row.forkSnapshotBoundary)
       }
       observed={observed}
-      changes={changesByPrompt?.get(
-        turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
-          ?.promptEntryId ?? "",
-      )}
+      changes={
+        executionRunning && turn.id === activeTurn
+          ? undefined
+          : changesByPrompt?.get(
+              turn.rows.find(
+                (row) => row.kind === "prompt" && !row.pendingPrompt,
+              )?.promptEntryId ?? "",
+            )
+      }
       session={session}
       timedTurn={
         running &&
@@ -2573,6 +2183,66 @@ export function Transcript(props: TranscriptProps) {
   const conversationContent = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastScrollTop = useRef(0);
+  const followFrame = useRef<number | null>(null);
+  const cancelFollowing = useCallback(() => {
+    if (followFrame.current !== null) cancelAnimationFrame(followFrame.current);
+    followFrame.current = null;
+  }, []);
+  const followLatest = useCallback(
+    (smooth: boolean) => {
+      const element = viewport.current;
+      if (!element) return;
+      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+      const immediate = (top = element.scrollHeight) => {
+        cancelFollowing();
+        if (typeof element.scrollTo === "function")
+          element.scrollTo({ top, behavior: "instant" });
+        else element.scrollTop = top;
+        lastScrollTop.current = element.scrollTop;
+      };
+      if (
+        !smooth ||
+        reduced?.matches ||
+        document.visibilityState === "hidden" ||
+        !element.clientHeight
+      ) {
+        immediate();
+        return;
+      }
+      if (followFrame.current !== null) return;
+      const gap =
+        element.scrollHeight - element.clientHeight - element.scrollTop;
+      if (gap <= 1 || gap > element.clientHeight) {
+        immediate();
+        return;
+      }
+      let previous = performance.now();
+      const advance = (now: number) => {
+        followFrame.current = null;
+        if (!pinned.current || viewport.current !== element) return;
+        if (reduced?.matches || document.visibilityState === "hidden") {
+          immediate();
+          return;
+        }
+        const target = Math.max(0, element.scrollHeight - element.clientHeight);
+        const gap = target - element.scrollTop;
+        if (gap <= 1) {
+          immediate(target);
+          return;
+        }
+        const elapsed = Math.min(64, Math.max(1, now - previous));
+        previous = now;
+        // This loop supplies easing; CSS smooth scrolling must not queue
+        // another animation that survives cancellation of the next frame.
+        immediate(
+          element.scrollTop + Math.max(1, gap * (1 - Math.exp(-elapsed / 48))),
+        );
+        followFrame.current = requestAnimationFrame(advance);
+      };
+      followFrame.current = requestAnimationFrame(advance);
+    },
+    [cancelFollowing],
+  );
   const touchY = useRef<number | undefined>(undefined);
   const savePositionTimer = useRef(0);
   const restorePending = useRef(props.readingRestorePending);
@@ -2643,6 +2313,10 @@ export function Transcript(props: TranscriptProps) {
       ? highlightedNavigation.entryId
       : undefined;
   const hydrationScope = JSON.stringify([selectedId, selectedPath]);
+  useLayoutEffect(() => {
+    void hydrationScope;
+    return cancelFollowing;
+  }, [hydrationScope, cancelFollowing]);
   const promptScope = JSON.stringify([
     props.snapshot.selectedSession?.id,
     props.snapshot.selectedSession?.path,
@@ -2723,12 +2397,17 @@ export function Transcript(props: TranscriptProps) {
           ? (props.liveRetry ?? undefined)
           : undefined
       : undefined;
-  const nativeRowKeys = useRef({
+  const presentation = useRef<TranscriptPresentationState & { scope: string }>({
     scope: hydrationScope,
-    keys: new Map<string, string>(),
+    nativeRowKeys: new Map(),
+    ambiguousTimingIds: new Set(),
   });
-  if (nativeRowKeys.current.scope !== hydrationScope)
-    nativeRowKeys.current = { scope: hydrationScope, keys: new Map() };
+  if (presentation.current.scope !== hydrationScope)
+    presentation.current = {
+      scope: hydrationScope,
+      nativeRowKeys: new Map(),
+      ambiguousTimingIds: new Set(),
+    };
   const { entries, projectedPrompts } = useMemo(
     () =>
       buildEntries(
@@ -2741,7 +2420,7 @@ export function Transcript(props: TranscriptProps) {
                   entry.optimistic.sessionPath === selected?.path
                 : active,
             ),
-        nativeRowKeys.current.keys,
+        presentation.current,
       ),
     [props.snapshot, selected, active, historyPaused, props.liveMessages],
   );
@@ -2757,18 +2436,13 @@ export function Transcript(props: TranscriptProps) {
       // Composer growth and window resizing must preserve bottom following.
       // Reading older messages still owns the scroll position.
       if (!pinned.current) return;
-      if (typeof element.scrollTo === "function") {
-        element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
-      } else {
-        element.scrollTop = element.scrollHeight;
-      }
-      lastScrollTop.current = element.scrollTop;
+      followLatest(running);
     });
     observer.observe(element);
     if (conversationContent.current)
       observer.observe(conversationContent.current);
     return () => observer.disconnect();
-  }, []);
+  }, [followLatest, running]);
 
   const { rows, turns } = useMemo(() => {
     const records = recordedSubagents(entries.map((entry) => entry.message));
@@ -3095,7 +2769,6 @@ export function Transcript(props: TranscriptProps) {
               turn,
               kind: "process",
               processType: "tool",
-              processMessageKey: entry.key,
               processToolName: "web_search",
               processPreview: search.query,
               processStatus: status,
@@ -3150,6 +2823,26 @@ export function Transcript(props: TranscriptProps) {
         const appendText = (text: string, key: string, actions: boolean) => {
           if (recoverable && !actions) return;
           if (!recoverable && !text.trim()) return;
+          const streaming =
+            actions &&
+            !historyPaused &&
+            !retry &&
+            props.activityObserved !== false &&
+            running &&
+            selectedExecution?.compaction?.state !== "running" &&
+            !message.stopReason &&
+            index === entries.length - 1 &&
+            lastVisiblePart === lastTextIndex;
+          const finalResponse =
+            actions &&
+            lastAssistantByTurn.has(index) &&
+            !streaming &&
+            (message.stopReason === "stop" ||
+              message.stopReason === "length" ||
+              message.stopReason === "error" ||
+              message.stopReason === "aborted" ||
+              (!running &&
+                !message.parts?.some((part) => part.type === "toolCall")));
           detailRows.push({
             key,
             turn,
@@ -3161,7 +2854,8 @@ export function Transcript(props: TranscriptProps) {
                 message.stopReason === "length"),
             content: (
               <article
-                className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
+                className={`message-row assistant response${finalResponse ? " final-response" : ""}`}
+                data-streaming={streaming || undefined}
                 data-history-message={entry.entryId ?? entry.key}
                 data-history-highlighted={
                   (highlightedEntry && entry.entryId === highlightedEntry) ||
@@ -3195,10 +2889,12 @@ export function Transcript(props: TranscriptProps) {
                       }
                     />
                   ) : (
-                    <Markdown>{text}</Markdown>
+                    <Markdown key={hydrationScope} streaming={streaming}>
+                      {text}
+                    </Markdown>
                   )}
                 </div>
-                {actions && lastAssistantByTurn.has(index) && (
+                {finalResponse && (
                   <MessageActions
                     content={hydrated ?? message.content}
                     editable={false}
@@ -3287,7 +2983,6 @@ export function Transcript(props: TranscriptProps) {
               turn,
               kind: "process",
               processType: "thinking",
-              processMessageKey: entry.key,
               processPreview: thinkingPreview(part.text),
               processStatus: status,
               content: (
@@ -3413,6 +3108,16 @@ export function Transcript(props: TranscriptProps) {
                 props.activityObserved === false && nativeStatus === "running"
                   ? "unknown"
                   : nativeStatus;
+              const rawEvidence =
+                projection &&
+                projectedIndex === projectedTools.length - 1 &&
+                !projection.showWrapper ? (
+                  <details className="evidence-raw">
+                    <summary>{t("toolCodemodeDetails")}</summary>
+                    <pre>{evidenceText(outer.arguments).text}</pre>
+                    <pre>{evidenceText(outerResult?.content ?? "").text}</pre>
+                  </details>
+                ) : null;
               const card =
                 part.name === "plan_ready" &&
                 result &&
@@ -3433,7 +3138,9 @@ export function Transcript(props: TranscriptProps) {
                     observed={props.activityObserved}
                     cwd={selectedCwd}
                     defaultOpen={defaultOpen}
-                  />
+                  >
+                    {rawEvidence}
+                  </ToolEvidence>
                 ) : child?.outputMissing ? null : (
                   familyCard(part, result, {
                     sessionId: selectedId ?? "",
@@ -3452,6 +3159,21 @@ export function Transcript(props: TranscriptProps) {
                 );
               const args = parseArguments(part.arguments);
               const { Icon, action } = toolActivity(part.name);
+              const target =
+                action === "agent"
+                  ? subagentTargets(args, record(result?.details))
+                      .map((id) =>
+                        subagentTitle(
+                          id,
+                          active
+                            ? props.snapshot.runtime.capabilities.subagents
+                                ?.items
+                            : undefined,
+                          records,
+                        ),
+                      )
+                      .join(t("toolGroupSeparator"))
+                  : toolActivityTarget(part.name, args);
               const toolIcon = (
                 <Icon key={`${entry.key}-${part.id || partIndex}-icon`} />
               );
@@ -3471,11 +3193,8 @@ export function Transcript(props: TranscriptProps) {
                 processType: /^(subagent|workflow)/u.test(part.name)
                   ? "activity"
                   : "tool",
-                processMessageKey: entry.key,
                 processToolName: part.name,
-                processPreview: toolActivityTarget(part.name, args)
-                  .split("\n")
-                  .find(Boolean),
+                processPreview: target.split("\n").find(Boolean),
                 processStatus: status,
                 error: status === "error",
                 content: (
@@ -3541,7 +3260,9 @@ export function Transcript(props: TranscriptProps) {
                           }
                           snapshotMissingResult={result?.forkSnapshotToolResult}
                           defaultOpen={defaultOpen}
-                        />
+                        >
+                          {rawEvidence}
+                        </EvidenceDetails>
                       )}
                       {projection?.incomplete &&
                         projectedIndex === projectedTools.length - 1 && (
@@ -3549,17 +3270,7 @@ export function Transcript(props: TranscriptProps) {
                             {t("toolNestedIncomplete")}
                           </p>
                         )}
-                      {projection &&
-                        projectedIndex === projectedTools.length - 1 &&
-                        !projection.showWrapper && (
-                          <details className="evidence-raw">
-                            <summary>{t("toolCodemodeDetails")}</summary>
-                            <pre>{evidenceText(outer.arguments).text}</pre>
-                            <pre>
-                              {evidenceText(outerResult?.content ?? "").text}
-                            </pre>
-                          </details>
-                        )}
+                      {card && !isEvidenceTool(part.name) && rawEvidence}
                     </div>
                   </article>
                 ),
@@ -3702,7 +3413,27 @@ export function Transcript(props: TranscriptProps) {
         const { Icon } = toolActivity(toolName);
         const icon = <Icon key={`${entry.key}-icon`} />;
         const content =
-          family && !message.forkSnapshotToolResult ? (
+          family === "subagent" && !message.forkSnapshotToolResult ? (
+            familyCard(
+              {
+                type: "toolCall",
+                id: message.toolCallId,
+                name: toolName,
+                arguments: "{}",
+              },
+              message,
+              {
+                sessionId: selectedId ?? "",
+                subagents: active
+                  ? props.snapshot.runtime.capabilities.subagents?.items
+                  : undefined,
+                records,
+                onInspectSubagent: props.onInspectSubagent,
+                defaultOpen,
+                observed: props.activityObserved !== false,
+              },
+            )
+          ) : family && !message.forkSnapshotToolResult ? (
             <ActivityCard
               key={`${entry.key}-card`}
               family={family}
@@ -3856,6 +3587,7 @@ export function Transcript(props: TranscriptProps) {
     selectedPath,
     selectedCwd,
     hydratedMessages,
+    hydrationScope,
     highlightedEntry,
     t,
   ]);
@@ -4018,12 +3750,7 @@ export function Transcript(props: TranscriptProps) {
     if (changed || requested || pinned.current) {
       pinned.current = true;
       setReadingHistory(false);
-      if (typeof element.scrollTo === "function") {
-        element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
-      } else {
-        element.scrollTop = element.scrollHeight;
-      }
-      lastScrollTop.current = element.scrollTop;
+      followLatest(running && !changed && !requested);
     }
     lastPath.current = identity;
   }, [
@@ -4036,6 +3763,8 @@ export function Transcript(props: TranscriptProps) {
     readingCache,
     navigation,
     navigationKey,
+    followLatest,
+    running,
   ]);
 
   useLayoutEffect(() => {
@@ -4181,6 +3910,7 @@ export function Transcript(props: TranscriptProps) {
       void history.loadOlder();
   };
   const pauseFollowing = () => {
+    cancelFollowing();
     pinned.current = false;
     setReadingHistory(true);
     history.retainReading();
@@ -4192,7 +3922,7 @@ export function Transcript(props: TranscriptProps) {
         ref={viewport}
         className="conversation"
         role="log"
-        aria-label="Conversation"
+        aria-label={props.label ?? "Conversation"}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: The scrollport needs keyboard reading with automatic pagination.
         tabIndex={0}
         onPointerDownCapture={() => {
@@ -4307,6 +4037,7 @@ export function Transcript(props: TranscriptProps) {
         }}
       >
         <div ref={conversationContent} className="conversation-content">
+          {props.notice}
           {selected?.rerun && props.onOpenOriginal && (
             <div className="message-branch-origin">
               <button
@@ -4357,6 +4088,8 @@ export function Transcript(props: TranscriptProps) {
             props.activityObserved !== false ? visibleTimedTurn : undefined,
             props.onReviewTurn,
             props.activityObserved !== false,
+            // Compaction hides activity animation, but does not finish a turn.
+            running && (!historyPaused || Boolean(visibleTimedTurn)),
           )}
           {running &&
             props.activityObserved !== false &&
@@ -4384,43 +4117,52 @@ export function Transcript(props: TranscriptProps) {
         </div>
       </div>
       {(readingHistory || history.hasNewer) && rows.length > 0 && (
-        <button
-          className="jump-to-latest"
-          type="button"
-          aria-label={t("jumpToLatest")}
-          title={t("jumpToLatest")}
-          onClick={() => {
-            const element = viewport.current;
-            if (!element) return;
-            pinned.current = true;
-            setReadingHistory(false);
-            setHighlightedNavigation(null);
-            history.resetToLatest();
-            element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-            // Returning from a reading window can replace its rows in this commit.
-            queueMicrotask(() => {
-              if (viewport.current !== element) return;
-              const latest = Array.from(
-                element.querySelectorAll<HTMLElement>(
-                  '.message-row[tabindex="-1"]',
-                ),
-              )
-                .reverse()
-                .find((row) => !row.closest("[hidden], details:not([open])"));
-              (latest ?? element).focus({ preventScroll: true });
-            });
-          }}
-        >
-          {running && props.activityObserved !== false ? (
-            <span className="latest-activity-dots" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-            </span>
-          ) : (
-            <ArrowDown aria-hidden="true" />
-          )}
-        </button>
+        <Tooltip content={t("jumpToLatest")} placement="above">
+          <button
+            className="jump-to-latest"
+            type="button"
+            aria-label={t("jumpToLatest")}
+            onClick={() => {
+              const element = viewport.current;
+              if (!element) return;
+              cancelFollowing();
+              pinned.current = true;
+              setReadingHistory(false);
+              setHighlightedNavigation(null);
+              history.resetToLatest();
+              element.scrollTo({
+                top: element.scrollHeight,
+                behavior: window.matchMedia?.(
+                  "(prefers-reduced-motion: reduce)",
+                ).matches
+                  ? "instant"
+                  : "smooth",
+              });
+              // Returning from a reading window can replace its rows in this commit.
+              queueMicrotask(() => {
+                if (viewport.current !== element) return;
+                const latest = Array.from(
+                  element.querySelectorAll<HTMLElement>(
+                    '.message-row[tabindex="-1"]',
+                  ),
+                )
+                  .reverse()
+                  .find((row) => !row.closest("[hidden], details:not([open])"));
+                (latest ?? element).focus({ preventScroll: true });
+              });
+            }}
+          >
+            {running && props.activityObserved !== false ? (
+              <span className="latest-activity-dots" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+            ) : (
+              <ArrowDown aria-hidden="true" />
+            )}
+          </button>
+        </Tooltip>
       )}
       <TurnNavigation
         key={promptScope}

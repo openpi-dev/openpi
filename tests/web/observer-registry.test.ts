@@ -5,7 +5,6 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { SubagentSnapshot } from "../../extensions/subagents/src/domain.ts";
 import {
   notifyWebCapabilities,
   projectSubagentCapability,
@@ -20,6 +19,7 @@ import {
   webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
+import type { SubagentSnapshot } from "../../extensions/subagents/src/domain.ts";
 
 const sessionScope = () => ({}) as unknown as SessionManager;
 
@@ -56,6 +56,7 @@ test("subagent detail clones display data, redacts private thinking, and preserv
     status: "error",
     outcome: "interrupted",
     settledAt: 2,
+    transcriptVersion: 3,
     transcript: [
       { kind: "user", text: "inspect" },
       {
@@ -107,6 +108,17 @@ test("subagent detail clones display data, redacts private thinking, and preserv
     redacted: true,
   });
   assert.deepEqual(source.transcript[0], { kind: "user", text: "inspect" });
+  // Advancing the retained window must not rename the entries already on screen.
+  const advanced = projectSubagentDetail({
+    ...source,
+    transcriptVersion: 4,
+    transcript: [
+      ...source.transcript.slice(1),
+      { kind: "assistant", parts: [{ type: "text", text: "Partial" }] },
+    ],
+  });
+  assert.equal(advanced.transcript[0]?.id, detail.transcript[1]?.id);
+  assert.equal(advanced.transcript.at(-1)?.id, detail.nextEntryId);
 });
 
 test("subagent detail projects cumulative spend verbatim", () => {
@@ -190,7 +202,9 @@ test("subagent byte limits omit identities instead of corrupting tool pairing", 
     }),
   );
   assert.deepEqual(projected.liveTools, []);
-  assert.deepEqual(projected.transcript, [{ kind: "assistant", parts: [] }]);
+  assert.deepEqual(projected.transcript, [
+    { id: "entry-0", kind: "assistant", parts: [] },
+  ]);
   assert.equal(projected.omittedEntries, 2);
   assert.equal(projected.truncated, true);
 
@@ -217,7 +231,9 @@ test("subagent byte limits omit identities instead of corrupting tool pairing", 
     }),
   );
   assert.equal(exhausted.omittedEntries, 1);
-  assert.deepEqual(exhausted.transcript, [{ kind: "assistant", parts: [] }]);
+  assert.deepEqual(exhausted.transcript, [
+    { id: "entry-0", kind: "assistant", parts: [] },
+  ]);
   assert.ok(
     exhausted.liveTools.every((tool) => /^live-\d+$/u.test(tool.toolId)),
   );

@@ -94,12 +94,24 @@ function snapshot(
 
 function transcript(
   entries: NonNullable<WebSnapshot["selectedSession"]>["entries"],
+  running = false,
+  compacting = false,
 ) {
+  const value = snapshot(entries);
+  if (compacting)
+    value.selectedExecution = {
+      sessionId: "session",
+      sessionPath: "/tmp/session",
+      status: "running",
+      liveTools: [],
+      liveToolsOmitted: 0,
+      compaction: { state: "running" },
+    };
   return withI18n(
     createElement(Transcript, {
-      snapshot: snapshot(entries),
+      snapshot: value,
       liveMessages: [],
-      liveRunning: false,
+      liveRunning: running,
       livePhase: "idle" as const,
       liveRetry: null,
       thinkingStarts: {},
@@ -160,18 +172,31 @@ it("attaches a saved change receipt to its native prompt, not an adjacent turn",
   expect(container.querySelector(".turn-changes")).toBeNull();
   rerender(transcript(entries));
   expect(container.querySelectorAll(".turn-changes")).toHaveLength(1);
+
+  // A receipt may be saved while tools or an automatic continuation still run.
+  rerender(transcript(entries.slice(0, 3), true));
+  expect(container.querySelector(".turn-changes")).toBeNull();
+  rerender(transcript(entries.slice(0, 3), true, true));
+  expect(container.querySelector(".turn-changes")).toBeNull();
+  rerender(transcript(entries.slice(0, 3)));
+  expect(container.querySelectorAll(".turn-changes")).toHaveLength(1);
+  // Starting the next user turn must not hide the previous turn's receipt.
+  rerender(transcript(entries, true));
+  expect(container.querySelectorAll(".turn-changes")).toHaveLength(1);
 });
 
-it("shows three file names and line counts, expands locally, and opens the exact saved turn in the workbar", () => {
+it("starts with a summary, reveals files locally, and opens the exact saved turn in the workbar", () => {
   const onReview = vi.fn();
   const read = vi.spyOn(WebClient.prototype, "turnChanges");
   const { container } = render(
     withI18n(createElement(TurnChangesCard, { changes, onReview })),
   );
-  expect(container.querySelectorAll(".turn-changes-file")).toHaveLength(3);
+  expect(screen.queryByRole("button", { name: /file-1.ts/u })).toBeNull();
   expect(screen.queryByText("Modified")).toBeNull();
   expect(screen.getByText("+15")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /Show 2 more files/u }));
+  const disclosure = screen.getByRole("button", { expanded: false });
+  fireEvent.click(disclosure);
+  expect(disclosure.getAttribute("aria-expanded")).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: /file-5.ts/u }));
   expect(onReview).toHaveBeenLastCalledWith(
     "prompt-1",
@@ -183,6 +208,8 @@ it("shows three file names and line counts, expands locally, and opens the exact
     "src/feature/file-1.ts",
   );
   expect(read).not.toHaveBeenCalled();
+  fireEvent.click(disclosure);
+  expect(screen.queryByRole("button", { name: /file-5.ts/u })).toBeNull();
   expect(container.querySelector(".turn-changes-review")).toBeNull();
 });
 

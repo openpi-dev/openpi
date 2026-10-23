@@ -247,7 +247,7 @@ it("chooses native current-turn steering explicitly and clears only an accepted 
   await waitFor(() => expect(view.input.value).toBe(""));
 });
 
-it("keeps a steering draft when its selected turn ends, and requires choosing the next turn", async () => {
+it("keeps a steering draft when its turn ends and sends normally only on the next explicit submit", async () => {
   const current = snapshot();
   current.runtime = { ...current.runtime, status: "running" };
   const view = setup({
@@ -265,22 +265,49 @@ it("keeps a steering draft when its selected turn ends, and requires choosing th
     screen.getByRole("menuitem", { name: i18n.t("steerCurrentTurn") }),
   );
   view.update({ activeTurn: null, snapshot: snapshot(), liveRunning: false });
-  fireEvent.keyDown(view.input, { key: "Enter" });
   expect(view.sendPrompt).not.toHaveBeenCalled();
   expect(view.input.value).toBe("keep this instruction");
-  expect(screen.getByRole("alert").textContent).toContain(
-    i18n.t("steerStaleTurn"),
-  );
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("steerCurrentTurn") }),
-  );
-  fireEvent.click(
-    screen.getByRole("menuitem", { name: i18n.t("sendNextTurn") }),
-  );
+  expect(
+    screen.queryByRole("button", { name: i18n.t("steerCurrentTurn") }),
+  ).toBeNull();
   fireEvent.keyDown(view.input, { key: "Enter" });
   await waitFor(() =>
     expect(view.sendPrompt).toHaveBeenCalledExactlyOnceWith(
       "keep this instruction",
+    ),
+  );
+});
+
+it("uses the saved follow-up preference and inverts it for one keyboard submission", async () => {
+  const current = snapshot();
+  current.preferences.followUpBehavior = "steer";
+  current.runtime.status = "running";
+  const view = setup({
+    snapshot: current,
+    activeTurn: {
+      sessionId: current.currentSessionId!,
+      commandId: "active-turn",
+      epoch: 3,
+    },
+    liveRunning: true,
+  });
+  expect(
+    screen.getByRole("button", { name: i18n.t("steerCurrentTurn") }),
+  ).toBeTruthy();
+  fireEvent.change(view.input, { target: { value: "do this next" } });
+  fireEvent.keyDown(view.input, { key: "Enter", metaKey: true });
+  await waitFor(() =>
+    expect(view.sendPrompt).toHaveBeenLastCalledWith("do this next"),
+  );
+  await waitFor(() => expect(view.input.value).toBe(""));
+  fireEvent.change(view.input, { target: { value: "change this step" } });
+  fireEvent.keyDown(view.input, { key: "Enter" });
+  await waitFor(() =>
+    expect(view.sendPrompt).toHaveBeenLastCalledWith(
+      "change this step",
+      [],
+      undefined,
+      { streamingBehavior: "steer", expectedTurnCommandId: "active-turn" },
     ),
   );
 });
@@ -305,9 +332,18 @@ it("shows steering and next-turn queues from exact Session execution facts", () 
     pendingFollowUpsReceipt: 8,
   });
   expect(
-    screen.getByRole("region", { name: i18n.t("steeringMessagesTitle") })
-      .textContent,
-  ).toContain(i18n.t("pendingSteeringHint", { count: 2 }));
+    screen.getByRole("region", {
+      name: i18n.t("pendingFollowUpsHint", { count: 1 }),
+    }).textContent,
+  ).toContain(i18n.t("composerSteeringCount", { count: 2 }));
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("pendingFollowUpsHint", { count: 1 }),
+    }),
+  );
+  expect(
+    screen.getByText(i18n.t("pendingSteeringHint", { count: 2 })),
+  ).toBeTruthy();
   expect(
     screen.getByRole("button", {
       name: `${i18n.t("queuedMessageExpand")}: use this tool`,

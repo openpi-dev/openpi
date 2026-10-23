@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, afterEach } from "node:test";
 import type { QuestionOwner } from "../../web/host/questions.ts";
+import type {
+  WebActiveTurn,
+  WebRuntimeController,
+  WebRuntimeEvent,
+} from "../../web/runtime/types.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "openpi-browser-broker-"));
 process.env.PI_CODING_AGENT_DIR = directory;
@@ -48,6 +53,91 @@ const identity = (
   browser: "chrome" | "edge" = "chrome",
   profileId = "795239cc-8ff9-49cb-9894-e16b3ba86afa",
 ) => ({ browser, profileId, extensionId: "a".repeat(32), version: "0.3.0" });
+
+test("Host browser control follows an exact native continuation, never an unrelated run or another Session", async (t) => {
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const { WebHost } = await import("../../web/host/web-host.ts");
+  const { controlWebBrowser } = await import(
+    "../../extensions/browser/web-bridge.ts"
+  );
+  const { projectWebModelSearch } = await import(
+    "../../web/runtime/model-discovery.ts"
+  );
+  const manager = SessionManager.inMemory(directory);
+  const sessionId = manager.getSessionId();
+  let active: WebActiveTurn | undefined;
+  const listeners = new Set<(event: WebRuntimeEvent) => void>();
+  const runtime: WebRuntimeController = {
+    workspaceSelected: true,
+    cwd: directory,
+    sessionDirectory: directory,
+    sessionManager: manager,
+    isIdle: () => !active,
+    getActiveTurn: () => active,
+    sendPrompt: async (_content, options) => {
+      active = { sessionId, commandId: options!.commandId!, epoch: 1 };
+      for (const listener of listeners) listener({ type: "agent_start" });
+      return { pendingFollowUps: 0 };
+    },
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
+    newSession: async () => ({ cancelled: false, sessionId }),
+    switchSession: async () => ({ cancelled: false }),
+    listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
+    setModel: async () => {
+      throw new Error("unused");
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    dispose: async () => {},
+  };
+  const token = "a".repeat(64);
+  const host = new WebHost({ runtime, token });
+  t.after(() => host.stop());
+  await host.start();
+  const sessionPath = `current:${sessionId}`;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+  const response = await fetch(`${host.origin}/api/prompt`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      sessionId,
+      sessionPath,
+      content: "Use the browser",
+      commandId: "web-origin",
+      controllerId: owner.controllerId,
+    }),
+  });
+  assert.equal(response.status, 202);
+  const discover = () => controlWebBrowser(manager, { operation: "browsers" });
+  assert.ok((await discover()).details);
+  active = { sessionId, commandId: "native-continuation", epoch: 2 };
+  await assert.rejects(discover(), /no originating Web tab/u);
+  active.originCommandId = "web-origin";
+  assert.ok((await discover()).details);
+  active.originCommandId = "not-admitted";
+  await assert.rejects(discover(), /no originating Web tab/u);
+  active.originCommandId = "web-origin";
+  active.sessionId = "another-session";
+  await assert.rejects(discover(), /no originating Web tab/u);
+  active.sessionId = sessionId;
+  const originalPath = manager.getSessionFile;
+  manager.getSessionFile = () => "/different-session.jsonl";
+  await assert.rejects(discover(), /no originating Web tab/u);
+  manager.getSessionFile = originalPath;
+  configure({ control: false });
+  await assert.rejects(discover(), /Browser control is off/u);
+  configure({ control: true });
+  active = undefined;
+  await assert.rejects(discover(), /no originating Web tab/u);
+});
 
 test("portable browser identities bind credentials to the exact extension origin", () => {
   for (const browser of ["safari", "firefox"] as const) {
@@ -313,7 +403,10 @@ test("invalid persisted permissions fail closed instead of selecting a different
     { externalBrowsers: ["chrome", "chrome"] },
   ]) {
     configure(value);
-    await assert.rejects(broker.execute({ operation: "browsers" }), /enabled/);
+    await assert.rejects(
+      broker.execute({ operation: "browsers" }),
+      /Browser control is off/u,
+    );
   }
   broker.dispose();
 });

@@ -249,7 +249,10 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
       .click();
     const workbar = page.locator(".workbar-panel");
-    await workbar.getByRole("button", { name: /^(文件|Files)/u }).click();
+    await page
+      .getByRole("menu", { name: /打开工具|Open tools/u })
+      .getByRole("menuitem", { name: /^(文件|Files)/u })
+      .click();
     const generatedReport = workbar.locator(
       '[data-file-row="report space.md"]',
     );

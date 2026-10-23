@@ -507,6 +507,97 @@ test("Pi 1.2 custom-message runs pass capability hooks without a user prompt", {
   );
 });
 
+test("a background completion keeps its exact Web origin without reusing the settled turn", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  const wake = Promise.withResolvers<void>();
+  const continued = Promise.withResolvers<void>();
+  const cancelWake = Promise.withResolvers<void>();
+  const cancelEntered = Promise.withResolvers<void>();
+  const lateWake = Promise.withResolvers<void>();
+  const lateEntered = Promise.withResolvers<void>();
+  const seen: Array<ReturnType<PiWebRuntime["getActiveTurn"]>> = [];
+  let externalWake = () => {};
+  const { runtime, session } = await nativeRuntime(
+    t,
+    (pi) => {
+      const sendResult = () =>
+        pi.sendMessage(
+          {
+            customType: "background-result",
+            content: "Background work finished",
+            display: false,
+          },
+          { triggerTurn: true },
+        );
+      externalWake = sendResult;
+      let started = false;
+      pi.on("agent_start", () => {
+        if (started) return;
+        started = true;
+        // Like a child completion, this callback originates in the admitted run.
+        void wake.promise.then(sendResult);
+        void cancelWake.promise.then(sendResult);
+        void lateWake.promise.then(sendResult);
+      });
+    },
+    [
+      fauxAssistantMessage("Background work started."),
+      () => {
+        seen.push(runtime.getActiveTurn());
+        continued.resolve();
+        return fauxAssistantMessage("Background result handled.");
+      },
+      () => {
+        seen.push(runtime.getActiveTurn());
+        return fauxAssistantMessage("Unrelated native result handled.");
+      },
+      async (_context, options) => {
+        seen.push(runtime.getActiveTurn());
+        cancelEntered.resolve();
+        await new Promise<void>((resolve) => {
+          if (options?.signal?.aborted) resolve();
+          else
+            options?.signal?.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+        });
+        return fauxAssistantMessage([], { stopReason: "aborted" });
+      },
+      () => {
+        seen.push(runtime.getActiveTurn());
+        lateEntered.resolve();
+        return fauxAssistantMessage("Late background result handled.");
+      },
+    ],
+  );
+  await runtime.sendPrompt("start background work", {
+    commandId: "browser-origin",
+  });
+  await session.waitForIdle();
+  wake.resolve();
+  await continued.promise;
+  await session.waitForIdle();
+  assert.match(seen[0]!.commandId, /^native-/u);
+  assert.equal(seen[0]!.originCommandId, "browser-origin");
+  externalWake();
+  await session.waitForIdle();
+  assert.equal(seen[1]!.originCommandId, undefined);
+  cancelWake.resolve();
+  await cancelEntered.promise;
+  assert.equal(seen[2]!.originCommandId, "browser-origin");
+  await runtime.cancelTurn(runtime.getActiveTurn()!);
+  await session.waitForIdle();
+  lateWake.resolve();
+  await lateEntered.promise;
+  await session.waitForIdle();
+  assert.equal(
+    seen[3]!.originCommandId,
+    undefined,
+    "Stop revokes even sibling completions from the same Web origin",
+  );
+});
+
 test("Web preserves Pi 1.2 cancellation during before_agent_start", {
   skip: skipBeforePi12,
 }, async (t) => {

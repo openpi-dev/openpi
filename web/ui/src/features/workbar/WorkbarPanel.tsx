@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { Dialog } from "@astryxdesign/core/Dialog";
 import { ComplexSelector } from "@astryxdesign/core/ComplexSelector";
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
@@ -17,6 +18,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   Plus,
+  RefreshCw,
   SquareTerminal,
   Square,
   X,
@@ -50,7 +52,7 @@ import {
 import { useTurnReview } from "../review/use-turn-review.ts";
 import { SubagentDetailView } from "../subagents/SubagentPanel.tsx";
 import { BrowserPanel } from "./BrowserPanel.tsx";
-import { InteractiveTerminal } from "./InteractiveTerminal.tsx";
+import type { InteractiveTerminal } from "./InteractiveTerminal.tsx";
 import type { WorkbarTool } from "./types.ts";
 import {
   useWorkbarReadingState,
@@ -67,7 +69,7 @@ import {
   workbarTabTool,
 } from "./workbar-tabs.ts";
 
-const launcherTools = [
+export const launcherTools = [
   {
     kind: "side-conversation" as const,
     icon: MessageCirclePlus,
@@ -392,21 +394,22 @@ function SideConversationPanel({
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-context">
-              <button
-                type="button"
-                className="composer-context-trigger icon-button"
-                aria-label={t("addContext")}
-                title={t("fileReference")}
-                disabled={busy}
-                onClick={() =>
-                  setFileReferenceOwner({
-                    key: selectedId ?? "",
-                    generation: navigation.current,
-                  })
-                }
-              >
-                <Plus aria-hidden="true" />
-              </button>
+              <Tooltip content={t("fileReference")} placement="below">
+                <button
+                  type="button"
+                  className="composer-context-trigger icon-button"
+                  aria-label={t("addContext")}
+                  disabled={busy}
+                  onClick={() =>
+                    setFileReferenceOwner({
+                      key: selectedId ?? "",
+                      generation: navigation.current,
+                    })
+                  }
+                >
+                  <Plus aria-hidden="true" />
+                </button>
+              </Tooltip>
               <span className="composer-workspace-label" title={workspace}>
                 <Folder aria-hidden="true" /> {workspaceLabel}
               </span>
@@ -455,29 +458,31 @@ function SideConversationPanel({
                 </ComplexSelector>
               </div>
               {selectedId && status === "running" && (
-                <button
-                  type="button"
-                  className="send-button"
-                  aria-label={t("stop")}
-                  title={t("stop")}
-                  disabled={busy}
-                  onClick={() => void stop()}
-                >
-                  <Square aria-hidden="true" />
-                </button>
+                <Tooltip content={t("stop")}>
+                  <button
+                    type="button"
+                    className="send-button"
+                    aria-label={t("stop")}
+                    disabled={busy}
+                    onClick={() => void stop()}
+                  >
+                    <Square aria-hidden="true" />
+                  </button>
+                </Tooltip>
               )}
               {(!selectedId ||
                 status !== "running" ||
                 Boolean(draft.trim())) && (
-                <button
-                  type="submit"
-                  className="send-button"
-                  disabled={busy || !draft.trim()}
-                  aria-label={submitLabel}
-                  title={submitLabel}
-                >
-                  <ArrowUp aria-hidden="true" />
-                </button>
+                <Tooltip content={submitLabel}>
+                  <button
+                    type="submit"
+                    className="send-button"
+                    disabled={busy || !draft.trim()}
+                    aria-label={submitLabel}
+                  >
+                    <ArrowUp aria-hidden="true" />
+                  </button>
+                </Tooltip>
               )}
             </div>
           </div>
@@ -519,15 +524,78 @@ function TerminalPanel({
   active: boolean;
   onConnectionChange: (state: { id: string | null; pending: boolean }) => void;
 }) {
+  const { t } = useTranslation();
+  const reading = useWorkbarReadingState();
+  const host = useRef<HTMLDivElement>(null);
+  const connectionChange = useRef(onConnectionChange);
+  connectionChange.current = onConnectionChange;
+  const focusIntent = useRef(true);
+  const [Terminal, setTerminal] = useState<typeof InteractiveTerminal | null>(
+    null,
+  );
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    focusIntent.current = true;
+    const preserveFocus = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      // The workbar may transfer focus to its selected tab after menu dismissal.
+      // Any later move into chat, another tool, or an action cancels autofocus.
+      if (
+        !host.current?.contains(target) &&
+        !target.matches(".workbar-tab[data-active] > button:first-child")
+      )
+        focusIntent.current = false;
+    };
+    document.addEventListener("focusin", preserveFocus);
+    const id = reading?.terminals?.[tabId]?.id ?? null;
+    connectionChange.current({ id, pending: true });
+    void import("./InteractiveTerminal.tsx").then(
+      (module) => {
+        if (!disposed) setTerminal(() => module.InteractiveTerminal);
+      },
+      () => {
+        if (disposed) return;
+        setFailed(true);
+        connectionChange.current({ id, pending: false });
+      },
+    );
+    return () => {
+      disposed = true;
+      document.removeEventListener("focusin", preserveFocus);
+    };
+  }, [reading, tabId]);
   return (
-    <div className="terminal-workspace">
-      <InteractiveTerminal
-        sessionId={sessionId}
-        cwd={cwd}
-        tabId={tabId}
-        active={active}
-        onConnectionChange={onConnectionChange}
-      />
+    <div className="terminal-workspace" ref={host}>
+      {Terminal ? (
+        <Terminal
+          sessionId={sessionId}
+          cwd={cwd}
+          tabId={tabId}
+          active={active}
+          canFocusOnMount={() => focusIntent.current}
+          onConnectionChange={onConnectionChange}
+        />
+      ) : (
+        <section className="interactive-terminal" aria-label={t("terminal")}>
+          <div className="interactive-terminal-notice" aria-live="polite">
+            <span className={failed ? "error" : undefined}>
+              {t(failed ? "terminalLoadError" : "terminalConnecting")}
+            </span>
+            {failed && (
+              <button
+                type="button"
+                className="terminal-reconnect-action"
+                onClick={() => window.location.reload()}
+              >
+                <RefreshCw aria-hidden="true" />
+                <span>{t("reloadPage")}</span>
+              </button>
+            )}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -876,31 +944,35 @@ export function WorkbarPanel({
                       <Icon aria-hidden="true" />
                       <span>{label}</span>
                     </button>
-                    <button
-                      type="button"
-                      className="workbar-tab-close"
-                      aria-label={
+                    <Tooltip
+                      content={
                         kind === "terminal" && canControl
                           ? t("workbarEndTerminal", { name: label })
                           : `${t("close")} ${label}`
                       }
-                      title={
-                        kind === "terminal" && canControl
-                          ? t("workbarEndTerminal", { name: label })
-                          : `${t("close")} ${label}`
-                      }
-                      disabled={
-                        kind === "terminal" &&
-                        canControl &&
-                        (closingTerminals.includes(tool) ||
-                          terminalConnections[tool]?.pending !== false)
-                      }
-                      onClick={(event) =>
-                        void closeTab(tool, event.currentTarget)
-                      }
+                      placement="below"
                     >
-                      <X aria-hidden="true" />
-                    </button>
+                      <button
+                        type="button"
+                        className="workbar-tab-close"
+                        aria-label={
+                          kind === "terminal" && canControl
+                            ? t("workbarEndTerminal", { name: label })
+                            : `${t("close")} ${label}`
+                        }
+                        disabled={
+                          kind === "terminal" &&
+                          canControl &&
+                          (closingTerminals.includes(tool) ||
+                            terminalConnections[tool]?.pending !== false)
+                        }
+                        onClick={(event) =>
+                          void closeTab(tool, event.currentTarget)
+                        }
+                      >
+                        <X aria-hidden="true" />
+                      </button>
+                    </Tooltip>
                   </div>
                 );
               })}
@@ -925,18 +997,19 @@ export function WorkbarPanel({
               {!conversationCollapsed &&
                 tabs.active === "review" &&
                 onExpandReview && (
-                  <button
-                    type="button"
-                    className="icon-button review-expand"
-                    aria-label={t("gitReviewExpand")}
-                    title={t("gitReviewExpand")}
-                    onClick={onExpandReview}
-                  >
-                    <PanelLeftOpen
-                      aria-hidden="true"
-                      style={{ transform: "rotate(180deg)" }}
-                    />
-                  </button>
+                  <Tooltip content={t("gitReviewExpand")} placement="below">
+                    <button
+                      type="button"
+                      className="icon-button review-expand"
+                      aria-label={t("gitReviewExpand")}
+                      onClick={onExpandReview}
+                    >
+                      <PanelLeftOpen
+                        aria-hidden="true"
+                        style={{ transform: "rotate(180deg)" }}
+                      />
+                    </button>
+                  </Tooltip>
                 )}
               {tabs.active ? (
                 <DropdownMenu
@@ -975,29 +1048,31 @@ export function WorkbarPanel({
                   hasChevron={false}
                 />
               ) : (
+                <Tooltip content={t("openTools")} placement="below">
+                  <button
+                    type="button"
+                    ref={openToolsButton}
+                    className="icon-button workbar-add-tab"
+                    aria-label={t("openTools")}
+                    aria-pressed={tabs.launcherOpen}
+                    onClick={() =>
+                      setTabs((current) => openWorkbarTool(current, "launcher"))
+                    }
+                  >
+                    <Plus aria-hidden="true" />
+                  </button>
+                </Tooltip>
+              )}
+              <Tooltip content={t("workbarCollapseTools")} placement="below">
                 <button
                   type="button"
-                  ref={openToolsButton}
-                  className="icon-button workbar-add-tab"
-                  aria-label={t("openTools")}
-                  title={t("openTools")}
-                  aria-pressed={tabs.launcherOpen}
-                  onClick={() =>
-                    setTabs((current) => openWorkbarTool(current, "launcher"))
-                  }
+                  className="icon-button"
+                  aria-label={t("workbarCollapseTools")}
+                  onClick={onClose}
                 >
-                  <Plus aria-hidden="true" />
+                  <PanelRightClose aria-hidden="true" />
                 </button>
-              )}
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={t("workbarCollapseTools")}
-                title={t("workbarCollapseTools")}
-                onClick={onClose}
-              >
-                <PanelRightClose aria-hidden="true" />
-              </button>
+              </Tooltip>
             </div>
           </header>
           {terminalError && (

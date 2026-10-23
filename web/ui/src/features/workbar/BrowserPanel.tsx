@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   ArrowLeft,
   ArrowRight,
@@ -108,53 +109,56 @@ function DirectBrowserPage({
         }}
       >
         <div className="browser-navigation">
-          <button
-            type="button"
-            aria-label={t("browserBack")}
-            title={t("browserBack")}
-            disabled={
-              bridge.page
-                ? !bridge.page.canGoBack
-                : page.unknown || page.index <= 0
-            }
-            onClick={() =>
-              bridge.page
-                ? bridge.command("back")
-                : navigate(page.history, page.index - 1)
-            }
-          >
-            <ArrowLeft aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label={t("browserForward")}
-            title={t("browserForward")}
-            disabled={
-              bridge.page
-                ? !bridge.page.canGoForward
-                : page.unknown || page.index >= page.history.length - 1
-            }
-            onClick={() =>
-              bridge.page
-                ? bridge.command("forward")
-                : navigate(page.history, page.index + 1)
-            }
-          >
-            <ArrowRight aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label={t("browserReload")}
-            title={t("browserReload")}
-            disabled={!url}
-            onClick={() =>
-              bridge.page
-                ? bridge.command("reload")
-                : navigate(page.history, page.index)
-            }
-          >
-            <RefreshCw aria-hidden="true" />
-          </button>
+          <Tooltip content={t("browserBack")} placement="below">
+            <button
+              type="button"
+              aria-label={t("browserBack")}
+              disabled={
+                bridge.page
+                  ? !bridge.page.canGoBack
+                  : page.unknown || page.index <= 0
+              }
+              onClick={() =>
+                bridge.page
+                  ? bridge.command("back")
+                  : navigate(page.history, page.index - 1)
+              }
+            >
+              <ArrowLeft aria-hidden="true" />
+            </button>
+          </Tooltip>
+          <Tooltip content={t("browserForward")} placement="below">
+            <button
+              type="button"
+              aria-label={t("browserForward")}
+              disabled={
+                bridge.page
+                  ? !bridge.page.canGoForward
+                  : page.unknown || page.index >= page.history.length - 1
+              }
+              onClick={() =>
+                bridge.page
+                  ? bridge.command("forward")
+                  : navigate(page.history, page.index + 1)
+              }
+            >
+              <ArrowRight aria-hidden="true" />
+            </button>
+          </Tooltip>
+          <Tooltip content={t("browserReload")} placement="below">
+            <button
+              type="button"
+              aria-label={t("browserReload")}
+              disabled={!url}
+              onClick={() =>
+                bridge.page
+                  ? bridge.command("reload")
+                  : navigate(page.history, page.index)
+              }
+            >
+              <RefreshCw aria-hidden="true" />
+            </button>
+          </Tooltip>
         </div>
         <input
           ref={addressInput}
@@ -168,26 +172,28 @@ function DirectBrowserPage({
             setError(null);
           }}
         />
-        <button
-          type="submit"
-          aria-label={t("browserGo")}
-          title={t("browserGo")}
-          disabled={!draft.trim()}
-        >
-          <ArrowRight aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          aria-label={t("openExternalBrowser")}
-          title={t("openExternalBrowser")}
-          disabled={!currentUrl || (!bridge.page && page.unknown)}
-          onClick={() =>
-            currentUrl &&
-            window.open(currentUrl, "_blank", "noopener,noreferrer")
-          }
-        >
-          <ExternalLink aria-hidden="true" />
-        </button>
+        <Tooltip content={t("browserGo")} placement="below">
+          <button
+            type="submit"
+            aria-label={t("browserGo")}
+            disabled={!draft.trim()}
+          >
+            <ArrowRight aria-hidden="true" />
+          </button>
+        </Tooltip>
+        <Tooltip content={t("openExternalBrowser")} placement="below">
+          <button
+            type="button"
+            aria-label={t("openExternalBrowser")}
+            disabled={!currentUrl || (!bridge.page && page.unknown)}
+            onClick={() =>
+              currentUrl &&
+              window.open(currentUrl, "_blank", "noopener,noreferrer")
+            }
+          >
+            <ExternalLink aria-hidden="true" />
+          </button>
+        </Tooltip>
       </form>
       <div className="browser-feedback">
         {error && (
@@ -361,33 +367,38 @@ export function BrowserPanel({
                 <Globe2 aria-hidden="true" />
                 <span>{tab.title || t("browserNewTab")}</span>
               </button>
-              <button
-                type="button"
-                aria-label={t("browserCloseTab", {
-                  title: tab.title || t("browserNewTab"),
-                })}
-                title={t("close")}
-                onClick={() => close(tab.id)}
-              >
-                <X aria-hidden="true" />
-              </button>
+              <Tooltip content={t("close")} placement="below">
+                <button
+                  type="button"
+                  aria-label={t("browserCloseTab", {
+                    title: tab.title || t("browserNewTab"),
+                  })}
+                  onClick={() => close(tab.id)}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </Tooltip>
             </div>
           ))}
         </div>
-        <button
-          type="button"
-          className="browser-add-tab"
-          aria-label={t("browserAddTab")}
-          title={
+        <Tooltip
+          content={
             tabs.length >= MAX_PAGES
               ? t("browserTabLimit", { count: MAX_PAGES })
               : t("browserAddTab")
           }
-          disabled={tabs.length >= MAX_PAGES}
-          onClick={() => add()}
+          placement="below"
         >
-          <Plus aria-hidden="true" />
-        </button>
+          <button
+            type="button"
+            className="browser-add-tab"
+            aria-label={t("browserAddTab")}
+            disabled={tabs.length >= MAX_PAGES}
+            onClick={() => add()}
+          >
+            <Plus aria-hidden="true" />
+          </button>
+        </Tooltip>
       </div>
       {blockedUrl && (
         <p className="browser-notice" role="status">

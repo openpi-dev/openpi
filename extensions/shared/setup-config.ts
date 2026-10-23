@@ -148,7 +148,7 @@ export const DEFAULT_WEB_APPEARANCE: WebAppearancePreference = {
 export const DEFAULT_WEB_CHAT_WIDTH = 820;
 export const MIN_WEB_CHAT_WIDTH = 820;
 export const MAX_WEB_CHAT_WIDTH = 2_000;
-export const DEFAULT_WEB_SIDEBAR_WIDTH = 340;
+export const DEFAULT_WEB_SIDEBAR_WIDTH = 260;
 export const MIN_WEB_SIDEBAR_WIDTH = 220;
 export const MAX_WEB_SIDEBAR_WIDTH = 520;
 export const DEFAULT_WEB_AUXILIARY_WIDTH = 520;
@@ -259,6 +259,7 @@ export interface MyPiSetupConfig {
     readonly webAuxiliaryWidth: number;
     readonly webChatFontSize: number;
     readonly webExpandThinking: boolean;
+    readonly webFollowUpBehavior: "followUp" | "steer";
     readonly webHiddenThinkingLevels: readonly ReasoningLevel[];
     readonly webPinnedSort: "manual" | "updated";
     readonly webSidebarGrouping: "project" | "list";
@@ -310,6 +311,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     webAuxiliaryWidth: DEFAULT_WEB_AUXILIARY_WIDTH,
     webChatFontSize: DEFAULT_WEB_CHAT_FONT_SIZE,
     webExpandThinking: false,
+    webFollowUpBehavior: "followUp",
     webHiddenThinkingLevels: [],
     webPinnedSort: "manual",
     webSidebarGrouping: "project",
@@ -795,6 +797,8 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         typeof ui.webExpandThinking === "boolean"
           ? ui.webExpandThinking
           : false,
+      webFollowUpBehavior:
+        ui.webFollowUpBehavior === "steer" ? "steer" : "followUp",
       webHiddenThinkingLevels: isHiddenThinkingLevels(
         ui.webHiddenThinkingLevels,
       )
@@ -911,6 +915,7 @@ const setupShape: ConfigShape = {
       MAX_WEB_CHAT_FONT_SIZE,
     ),
     webExpandThinking: booleanValue,
+    webFollowUpBehavior: oneOf(["followUp", "steer"]),
     webHiddenThinkingLevels: isHiddenThinkingLevels,
     webPinnedSort: (value) => value === "manual" || value === "updated",
     webSidebarGrouping: (value) => value === "project" || value === "list",
@@ -1700,6 +1705,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
       ? "Session child executions: unbounded (disabled)"
       : `Session child executions: ${config.childExecutions.maxActive} active slots shared by Workflow, Direct Subagent, and BTW`,
     `UI: Web theme ${config.ui.webTheme} · palette ${config.ui.webAppearance.palette} · accent ${config.ui.webAppearance.accent || "theme default"} / background ${config.ui.webAppearance.background || "theme default"} / foreground ${config.ui.webAppearance.foreground || "theme default"} · font ${config.ui.webAppearance.font} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · panes ${config.ui.webSidebarWidth}px / ${config.ui.webAuxiliaryWidth}px · sidebar ${config.ui.webSidebarGrouping} / chats ${config.ui.webChatsSort} / pinned ${config.ui.webPinnedSort} / projects in recents ${config.ui.webProjectsInRecents ? "on" : "off"} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
+    `Web follow-up behavior: ${config.ui.webFollowUpBehavior === "steer" ? "steer the active turn" : "queue for the next turn (default)"}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,

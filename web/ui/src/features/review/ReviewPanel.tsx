@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
@@ -532,19 +533,20 @@ export function ReviewPanel({
               {t("sessionFileRecords")}
             </button>
           )}
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t("gitReviewRefresh")}
-            title={t("gitReviewRefresh")}
-            disabled={review.loading}
-            aria-busy={review.loading || undefined}
-            onClick={() => {
-              if (!review.loading) void review.refresh();
-            }}
-          >
-            <RefreshCw aria-hidden="true" />
-          </button>
+          <Tooltip content={t("gitReviewRefresh")} placement="below">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={t("gitReviewRefresh")}
+              disabled={review.loading}
+              aria-busy={review.loading || undefined}
+              onClick={() => {
+                if (!review.loading) void review.refresh();
+              }}
+            >
+              <RefreshCw aria-hidden="true" />
+            </button>
+          </Tooltip>
         </div>
       </div>
       {updated && (
@@ -765,26 +767,28 @@ export function ReviewPanel({
                 </div>
                 <div className="review-heading-actions">
                   {onOpenTools && (
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={t("openTools")}
-                      title={t("openTools")}
-                      onClick={onOpenTools}
-                    >
-                      <Plus aria-hidden="true" />
-                    </button>
+                    <Tooltip content={t("openTools")} placement="below">
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={t("openTools")}
+                        onClick={onOpenTools}
+                      >
+                        <Plus aria-hidden="true" />
+                      </button>
+                    </Tooltip>
                   )}
-                  <button
-                    ref={listCloseButton}
-                    type="button"
-                    className="icon-button review-close"
-                    aria-label={t("close")}
-                    title={t("close")}
-                    onClick={onClose}
-                  >
-                    <X aria-hidden="true" />
-                  </button>
+                  <Tooltip content={t("close")} placement="below">
+                    <button
+                      ref={listCloseButton}
+                      type="button"
+                      className="icon-button review-close"
+                      aria-label={t("close")}
+                      onClick={onClose}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </Tooltip>
                 </div>
               </header>
             )}

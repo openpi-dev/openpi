@@ -3,9 +3,23 @@ import type { WebLiveMessage } from "../../../../protocol/types.ts";
 export interface RecordedSubagent {
   id: string;
   title: string;
+  model?: string;
   receipt?: string;
   result?: string;
   state?: "running" | "done" | "error" | "interrupted";
+}
+
+/** Resolve a presentation name from the exact child ID, shared by rows and process summaries. */
+export function subagentTitle(
+  id: string,
+  activity: readonly Pick<RecordedSubagent, "id" | "title">[] = [],
+  records: readonly RecordedSubagent[] = [],
+) {
+  return (
+    activity.find((item) => item.id === id)?.title ||
+    records.find((item) => item.id === id)?.title ||
+    id
+  );
 }
 
 function object(value: unknown) {
@@ -50,6 +64,7 @@ export function recordedSubagents(messages: readonly WebLiveMessage[]) {
             ? item.title
             : (previous?.title ?? item.id),
       };
+      if (typeof item.model === "string") record.model = item.model;
       if (spawn) record.receipt = message.content;
       else if (send) {
         // A successful steer/restart supersedes terminal evidence from an older turn.

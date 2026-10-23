@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { webBuildInfoPlugin } from "../scripts/web-build-info.ts";
 import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
@@ -24,7 +26,7 @@ function backendProxy() {
 export default defineConfig({
   root: fileURLToPath(new URL("./ui/", import.meta.url)),
   publicDir: fileURLToPath(new URL("./ui/public/", import.meta.url)),
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), webBuildInfoPlugin(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version)],
   worker: {
     format: "es",
     rollupOptions: {

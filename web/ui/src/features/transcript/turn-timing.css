@@ -7,35 +7,57 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  min-height: 32px;
+  min-height: 30px;
   gap: 8px;
-  margin: 12px 0 16px;
+  margin: 0 0 14px;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline) solid var(--border);
   color: var(--muted);
-  font-size: var(--conversation-font-size);
+  font-size: max(12px, calc(var(--conversation-font-size) - 1px));
   font-variant-numeric: tabular-nums;
 }
 
 .turn-duration-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   min-height: 32px;
-  padding: 4px 0;
+  margin-left: -8px;
+  padding: 5px 8px;
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
+  border-radius: 8px;
   cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
 }
 
-.turn-duration-toggle:hover { color: var(--text); }
+.turn-duration-toggle:hover { background: var(--sidebar-hover); color: var(--text); }
 .turn-duration-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
 .turn-duration-toggle svg { width: 14px; height: 14px; }
-.turn-duration-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.turn-duration-chevron { transition: transform var(--motion-reveal) var(--motion-ease); }
+.turn-duration-toggle[aria-expanded="true"] .turn-duration-chevron { transform: rotate(90deg); }
 .turn-duration-outcome { font-size: 12px; }
 .turn-response-body[hidden] { display: none; }
+@supports (interpolate-size: allow-keywords) {
+  .turn-response-body[data-user-toggle] {
+    interpolate-size: allow-keywords;
+    height:auto;
+    opacity:1;
+    overflow:clip;
+    transition:height var(--motion-layout) var(--motion-ease), opacity var(--motion-reveal) ease, display var(--motion-layout) allow-discrete;
+  }
+  .turn-response-body[data-user-toggle][hidden] { height:0; opacity:0; }
+  @starting-style {
+    .turn-response-body[data-user-toggle]:not([hidden]) { height:0; opacity:0; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-duration-toggle, .turn-duration-chevron { transition: none; }
+  .turn-response-body[data-user-toggle] { transition: none; }
+}
 
 @media (max-width: 560px) {
   .turn-duration-toggle { min-height: 44px; }

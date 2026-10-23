@@ -29,6 +29,8 @@ export interface AgentToolRenderer {
   ): string[] | undefined;
   readonly messagePresentation?: AgentMessagePresentation;
   invalidate?(): void;
+  /** Release completed payloads explicitly evicted by the transcript owner. */
+  releaseTools?(toolIds: ReadonlySet<string>): void;
 }
 
 export interface AgentMessagePresentation {
@@ -284,6 +286,21 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
   invalidate() {
     for (const execution of this.executions.values()) {
       execution.component?.invalidate();
+    }
+  }
+
+  retainTools(toolIds: ReadonlySet<string>) {
+    this.releaseTools(
+      new Set([...this.executions.keys()].filter((id) => !toolIds.has(id))),
+    );
+  }
+
+  releaseTools(toolIds: ReadonlySet<string>) {
+    for (const id of toolIds) {
+      const execution = this.executions.get(id);
+      // A result may arrive after its call has left the bounded transcript.
+      // Keep in-flight state until the tool has actually completed.
+      if (execution && !execution.isPartial) this.executions.delete(id);
     }
   }
 }

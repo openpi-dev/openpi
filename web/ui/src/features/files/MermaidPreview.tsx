@@ -28,8 +28,14 @@ let rendering = Promise.resolve();
 export default function MermaidPreview({ source }: { source: string }) {
   const { t } = useTranslation();
   const id = `diagram-${useId().replace(/[^a-z0-9]/giu, "")}`;
-  const [image, setImage] = useState("");
-  const [error, setError] = useState("");
+  const [result, setResult] = useState<{
+    source: string;
+    image?: string;
+    error?: string;
+  } | null>(null);
+  const current = result?.source === source ? result : null;
+  const image = current?.image;
+  const error = current?.error;
   const [zoom, setZoom] = useState(1);
   const dialog = useRef<HTMLDialogElement>(null);
   const viewport = useRef<HTMLElement>(null);
@@ -45,20 +51,25 @@ export default function MermaidPreview({ source }: { source: string }) {
       if (stopped) return;
       try {
         if (source.length > 50_000) throw new Error(t("filesDocumentLimit"));
-        const result = await mermaid.render(id, source);
-        const svg = DOMPurify.sanitize(result.svg, {
+        const rendered = await mermaid.render(id, source);
+        const svg = DOMPurify.sanitize(rendered.svg, {
           USE_PROFILES: { svg: true, svgFilters: true },
           FORBID_TAGS: ["foreignObject", "a", "image", "use"],
         });
         if (!stopped)
-          setImage(
-            `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
-          );
+          setResult({
+            source,
+            image: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+          });
       } catch (reason) {
         if (!stopped)
-          setError(
-            reason instanceof Error ? reason.message : t("filesPreviewFailed"),
-          );
+          setResult({
+            source,
+            error:
+              reason instanceof Error
+                ? reason.message
+                : t("filesPreviewFailed"),
+          });
       }
     });
     return () => {

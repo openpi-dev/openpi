@@ -180,7 +180,7 @@ it("does not invent actionable line numbers for malformed hunk tails, binary fil
     { id: 2, kind: "added", newLine: 5, marker: "+", code: "new" },
   ]);
   const reference = vi.fn();
-  const { rerender } = render(
+  const { rerender, container } = render(
     createElement(
       I18nextProvider,
       { i18n },
@@ -190,7 +190,9 @@ it("does not invent actionable line numbers for malformed hunk tails, binary fil
       }),
     ),
   );
-  expect(screen.queryByRole("button")).toBeNull();
+  expect(container.querySelectorAll(".review-diff-line-select")).toHaveLength(
+    0,
+  );
   rerender(
     createElement(
       I18nextProvider,
@@ -201,5 +203,8 @@ it("does not invent actionable line numbers for malformed hunk tails, binary fil
       }),
     ),
   );
-  expect(screen.queryByRole("button")).toBeNull();
+  expect(container.querySelectorAll(".review-diff-line-select")).toHaveLength(
+    0,
+  );
+  expect(reference).not.toHaveBeenCalled();
 });

@@ -14,8 +14,8 @@
 }
 
 .conversation .message-row.response .markdown {
-  line-height: 1.625;
-  letter-spacing: 0;
+  line-height: var(--reading-leading);
+  letter-spacing: var(--reading-tracking);
 }
 
 .conversation .message-row.response .markdown :is(p, ul, ol, li, table) {
@@ -39,14 +39,14 @@
 .conversation .message-row.response .markdown ul { list-style: disc outside; }
 .conversation .message-row.response .markdown ol { list-style: decimal outside; }
 .conversation .message-row.response .markdown .contains-task-list { list-style: none; }
-.conversation .message-row.response .markdown li + li { margin-top: 0; }
+.conversation .message-row.response .markdown li + li { margin-top: .25em; }
 .conversation .message-row.response .markdown li > :is(p, ul, ol) { margin-block: 0; }
 .conversation .message-row.response .markdown li > p + p { margin-top: 1em; }
-.conversation .message-row.response .markdown :is(h1, h2, h3, h4) { margin-top: 1.6em; margin-bottom: .65em; font-weight: 600; line-height: calc(var(--conversation-font-size) * 1.75); }
+.conversation .message-row.response .markdown :is(h1, h2, h3, h4) { margin-top: 1.6em; margin-bottom: .65em; font-weight: var(--weight-heading); line-height: 1.45; }
 .conversation .message-row.response .markdown h1 { font-size: 1.5em; line-height: calc(var(--conversation-font-size) * 2); }
 .conversation .message-row.response .markdown h2 { font-size: 1.25em; }
 .conversation .message-row.response .markdown h3 { font-size: 1.125em; }
-.conversation .message-row.response .markdown strong { font-weight: 600; }
+.conversation .message-row.response .markdown strong { font-weight: var(--weight-heading); }
 .conversation .message-row.response .markdown > :first-child { margin-top: 0; }
 .conversation .message-row.response .markdown > :last-child { margin-bottom: 0; }
 
@@ -61,17 +61,138 @@
   -webkit-box-decoration-break: clone;
 }
 
-.conversation .message-row.response .markdown pre code { font-size: .9em; line-height: 1.65; }
-.conversation .message-row.response .markdown :is(a, .artifact-link) { text-decoration: none; text-align: start; }
+.conversation .message-row.response .markdown pre code { font-size: .9em; line-height: 1.65; letter-spacing: 0; }
+.conversation .message-row.response .markdown :is(a, .artifact-link) { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-underline-offset: .2em; text-align: start; }
 .conversation .message-row.response .markdown :is(a, .artifact-link):hover { text-decoration: underline; text-underline-offset: .18em; }
 .conversation .message-row.response .markdown .artifact-link-path { display: none; }
 .conversation .message-row.response .markdown .artifact-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
 
-.conversation .message-row.user { padding-block: 12px 24px; }
+.conversation .conversation-turn { padding-block: 16px 24px; }
+.conversation .conversation-turn + .conversation-turn { padding-top: 24px; }
+.conversation .message-row.user { padding-block: 6px 18px; }
+.conversation .message-row.user .message-content { max-width: min(80%, 640px); }
 .conversation .message-row.user .message-body {
-  padding: 12px 18px;
-  border-radius: 22px;
+  padding: 12px 16px;
+  border: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
+  border-radius: 14px 14px 4px 14px;
   background: color-mix(in srgb, var(--text) 5%, var(--page));
   box-shadow: none;
   line-height: 1.625;
+}
+
+.conversation .markdown :is(h1, h2, h3, h4) { text-wrap: balance; }
+.conversation .markdown blockquote { margin-block: 0 1em; padding: 10px 16px; border: 0; border-left: 1px solid var(--border-strong); border-radius: 0 8px 8px 0; background: var(--sidebar); color: var(--muted); }
+.conversation .markdown blockquote > :last-child { margin-bottom: 0; }
+.conversation .markdown .contains-task-list { padding-left: 0; }
+.conversation .markdown input[type="checkbox"] { width: 14px; height: 14px; margin: 0 .65em 0 0; vertical-align: -.1em; opacity: 1; }
+.conversation .markdown-code-block { border-radius: 10px; background: var(--surface-panel); }
+.conversation .markdown-code-toolbar { min-height: 38px; padding: 5px 10px 5px 14px; background: color-mix(in srgb, var(--text) 2%, var(--page)); font-size: 12px; }
+.markdown-code-language { margin-right: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.conversation .markdown-code-toolbar button { width: var(--control-compact); height: var(--control-compact); border-radius: var(--radius-compact); }
+.conversation .markdown-code-toolbar button[aria-pressed="true"] { color: var(--text); background: var(--sidebar-active); }
+.conversation .markdown-code-toolbar button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.conversation .markdown-code-scroll { max-height: min(480px, 60dvh); overflow: auto; overscroll-behavior: auto; }
+.conversation .markdown-code-block[data-wrap="true"] pre { width: 100%; }
+.conversation .markdown-code-block[data-wrap="true"] pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation .markdown-code-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.conversation .markdown-table-scroll { border: 1px solid var(--border); border-radius: var(--radius-panel); }
+.conversation .markdown-table-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.conversation .markdown table { font-variant-numeric: tabular-nums; }
+.conversation .markdown :is(th, td) { padding: 10px 12px; border: 0; border-bottom: var(--hairline) solid var(--border); }
+.conversation .markdown th { background: var(--sidebar); }
+.conversation .markdown tbody tr:hover { background: color-mix(in srgb, var(--text) 2%, var(--page)); }
+.conversation .markdown tr:last-child td { border-bottom: 0; }
+
+.conversation .message-row.response > .message-actions { justify-content: flex-start; gap: 4px; height: 32px; margin-top: 12px; color: var(--muted); opacity: 1; }
+.conversation .message-row.response > .message-actions.copy-failed { height: auto; min-height: 32px; }
+@media (hover: hover) and (pointer: fine) {
+  .conversation .conversation-turn:not(:last-child) .message-row.response > .message-actions { opacity: 0; transition: opacity var(--motion-feedback) ease; }
+  .conversation .conversation-turn:not(:last-child) .message-row.response:is(:hover, :focus-within) > .message-actions,
+  .conversation .conversation-turn:not(:last-child) .message-row.response > .message-actions.copy-failed { opacity: 1; }
+}
+.conversation .message-row.response > .message-actions time { order: 1; margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+.conversation .message-actions button { width: var(--control-compact); height: var(--control-compact); border-radius: var(--radius-compact); color: inherit; }
+.conversation .message-actions button:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text); }
+.conversation .message-actions button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.conversation .message-actions button:disabled { opacity: .4; cursor: not-allowed; }
+.conversation .message-actions svg { width: 14px; height: 14px; }
+.conversation :is(.message-actions, .markdown-code-toolbar, .evidence-shell figcaption, .evidence-diff) button { transition: background-color var(--motion-feedback) ease, color var(--motion-feedback) ease, transform var(--motion-feedback) var(--motion-ease); }
+.conversation :is(.message-actions, .markdown-code-toolbar, .evidence-shell figcaption, .evidence-diff) button:active:not(:disabled) { transform: scale(.94); }
+.conversation :is(.message-actions, .markdown-code-toolbar, .evidence-shell figcaption, .evidence-diff) button[data-copied="true"] { color: var(--healthy); }
+.conversation button[data-copied="true"] svg { animation: copy-confirm 220ms var(--motion-ease); }
+@keyframes copy-confirm { from { opacity: .5; transform: scale(.65) rotate(-12deg); } to { opacity: 1; transform: none; } }
+@supports (interpolate-size: allow-keywords) {
+  .conversation :is(.tool-evidence-card, .thinking-line, .tool-line) { interpolate-size: allow-keywords; }
+  .conversation :is(.tool-evidence-card, .thinking-line, .tool-line)::details-content {
+    height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: height var(--motion-layout) var(--motion-ease), opacity var(--motion-reveal) ease, content-visibility var(--motion-layout) allow-discrete;
+  }
+  .conversation :is(.tool-evidence-card, .thinking-line, .tool-line)[open]::details-content { height:auto; opacity:1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conversation :is(.message-actions, .markdown-code-toolbar, .evidence-shell figcaption, .evidence-diff) button { transition: none; }
+  .conversation button[data-copied="true"] svg { animation: none; }
+  .conversation :is(.tool-evidence-card, .thinking-line, .tool-line)::details-content { transition:none; }
+}
+
+.conversation-waiting { display: flex; align-items: center; gap: 10px; min-height: 32px; margin-block: 6px; color: var(--muted); font-size: 13px; }
+.conversation-waiting-dots { display: inline-flex; align-items: center; gap: 4px; padding-inline: 2px; }
+.conversation-waiting-dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: waiting-pulse 1900ms var(--motion-ease) infinite; }
+.conversation-waiting-dots i:nth-child(2) { animation-delay: 180ms; }
+.conversation-waiting-dots i:nth-child(3) { animation-delay: 360ms; }
+.conversation .message-row.response[data-streaming="true"] .markdown { animation: response-arrive 160ms cubic-bezier(.16, 1, .3, 1); }
+@keyframes waiting-pulse { 0%, 8%, 80%, 100% { opacity: .3; transform:translateY(1px); } 25%, 40% { opacity: 1; transform:translateY(-2px); } 60% { opacity:.7; transform:translateY(0); } }
+@keyframes response-arrive { from { opacity: .6; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .conversation-waiting-dots i, .conversation .message-row.response[data-streaming="true"] .markdown { animation: none; }
+}
+
+.conversation .process-sequence:not(.single-process) > summary { min-height: 32px; padding: 4px 8px; margin-left: -8px; font-size: max(12px, calc(var(--conversation-font-size) - 1px)); }
+.conversation .process-sequence[open]:not(.single-process) > summary { background: var(--sidebar); }
+.conversation .process-sequence > summary .tool-disclosure { opacity: 1; }
+.conversation .process-sequence-title strong { color: var(--text); }
+.conversation .process-sequence.running .process-sequence-title { flex-shrink: 0; }
+.conversation .process-sequence-preview { flex: 1; }
+.conversation .process-sequence > summary > .tool-disclosure { margin-left: auto; }
+.conversation .process-sequence-body { margin-top: 8px; }
+.conversation .process-sequence-scroll { overscroll-behavior-y: auto; }
+.conversation .process-sequence:not(.running) > .process-sequence-scroll { max-height: none; overflow: visible; overscroll-behavior: auto; mask-image: none; }
+.conversation .process-sequence:not(.running):not(.single-process) .thinking-evidence { max-height: 280px; overflow: auto; }
+.conversation .process-sequence.running > .process-sequence-scroll[data-scroll-below] { border-bottom: 1px solid var(--border); }
+.conversation .process-sequence.running > .process-sequence-scroll[data-scroll-above] { border-top: 1px solid var(--border); }
+.conversation .process-step :is(.tool-line, .tool-evidence-card) > summary { padding-inline: 8px; }
+.conversation .single-tool-step :is(.tool-line, .tool-evidence-card) > summary { padding-inline: 0; }
+.conversation .process-step :is(.details-title, .evidence-target) { flex: 1 1 auto; }
+.conversation .process-step > .message-row :is(.tool-disclosure, .evidence-chevron) { order: 1; }
+
+.conversation .tool-evidence-card[open] > summary { color: var(--text); }
+.conversation .tool-evidence-card[open] > summary .evidence-chevron { opacity: 1; }
+.conversation .tool-evidence-card:is(.evidence-terminal, .evidence-test)[open] .evidence-command { display: none; }
+.conversation .evidence-content { margin: 8px 0 12px 26px; }
+.conversation .evidence-shell { border-radius: 12px; background: color-mix(in srgb, var(--text) 3%, var(--page)); }
+.conversation .evidence-shell figcaption { min-height: 38px; padding: 5px 10px 5px 14px; border-bottom: 1px solid var(--border); }
+.evidence-shell-label { display: inline-flex; align-items: center; gap: 7px; margin-right: auto; }
+.conversation .evidence-shell-label svg { width: 14px; height: 14px; }
+.conversation .evidence-shell figcaption button { width: 28px; height: 28px; }
+.conversation .evidence-shell figcaption button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.conversation .evidence-shell .evidence-shell-command { padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation .evidence-shell .evidence-shell-output { max-height: 280px; padding: 12px 14px; white-space: pre; overflow-wrap: normal; color: var(--text); }
+.conversation .evidence-shell-output:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.conversation .evidence-process-meta { flex: none; padding: 2px 6px; border-radius: 4px; background: var(--sidebar-hover); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.conversation .tool-evidence-card[data-state="returned"] .evidence-process-meta { color: color-mix(in srgb, var(--healthy) 70%, var(--text)); }
+.conversation .tool-evidence-card[data-state="failed"] .evidence-process-meta { color: var(--error); }
+.conversation .tool-evidence-card:is([data-state="timed_out"], [data-state="cancelled"]) .evidence-process-meta { color: var(--warning); }
+.conversation .evidence-content :is(.evidence-lines, .evidence-log) { border: 1px solid var(--border); border-radius: 10px; background: var(--sidebar); color: var(--text); font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.conversation .evidence-content pre:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.conversation .evidence-test-summary { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--border); }
+.conversation .evidence-test-summary figcaption { color: var(--text); }
+.conversation .evidence-test-summary p { margin: 4px 0; }
+.conversation .evidence-test-summary p:last-child { color: var(--muted); }
+
+@container conversation-shell (max-width: 560px) {
+  .conversation .message-row.user .message-content { max-width: 94%; }
+  .conversation .message-row.user .message-body { padding: 10px 14px; border-radius: 16px; }
+  .conversation .evidence-content { margin-left: 0; }
 }

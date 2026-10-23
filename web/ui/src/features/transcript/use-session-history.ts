@@ -139,7 +139,7 @@ export function useSessionHistory(
   );
   const request = useRef<PageRequest | null>(null);
   const prefetchAttempt = useRef<string | null>(null);
-  const refreshAttempt = useRef<string | null>(null);
+  const refreshAttempt = useRef<{ key: string } | null>(null);
   const [window, setWindow] = useState(cache.current);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -215,11 +215,13 @@ export function useSessionHistory(
       current.anchor,
       session.history?.leafEntryId,
     ]);
-    if (!force && refreshAttempt.current === key) return;
-    refreshAttempt.current = key;
+    if (!force && refreshAttempt.current?.key === key) return;
+    const attempt = { key };
+    refreshAttempt.current = attempt;
     setError(null);
     const failed = () => {
-      if (refreshAttempt.current !== key || cache.current !== current) return;
+      if (refreshAttempt.current !== attempt || cache.current !== current)
+        return;
       request.current?.controller.abort();
       request.current = null;
       setLoading(false);

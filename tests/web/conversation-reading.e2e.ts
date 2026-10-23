@@ -304,8 +304,8 @@ test("conversation text stays readable and file links retain their exact target"
     if (paneWidth || width === 390) {
       const pane = (await page.locator(".conversation-shell").boundingBox())!;
       const turn = (await page.locator(".conversation-turn").boundingBox())!;
-      expect(turn.x - pane.x).toBeCloseTo(12, 0);
-      expect(turn.width).toBeCloseTo(pane.width - 24, 0);
+      expect(turn.x - pane.x).toBeCloseTo(16, 0);
+      expect(turn.width).toBeCloseTo(pane.width - 32, 0);
     }
     if (fontSize === 20) {
       const process = (await page
@@ -433,14 +433,16 @@ for (const touch of [false, true]) {
       await page.goto("/");
       const group = page.locator(".process-sequence:not(.single-process)");
       const summary = group.locator(":scope > summary");
-      const counts = summary.locator(".process-sequence-counts");
+      const counts = page
+        .getByRole("tooltip")
+        .filter({ hasText: /2.*工具调用/ });
       const arrow = summary.locator(".tool-disclosure");
       await expect(group).toHaveJSProperty("open", false);
       await expect(summary).toHaveAccessibleName(/2.*工具调用/);
       if (!touch) {
         await page.mouse.move(0, 0);
-        await expect(counts).toHaveCSS("opacity", "0");
-        await expect(arrow).toHaveCSS("opacity", "0");
+        await expect(counts).toBeHidden();
+        await expect(arrow).toHaveCSS("opacity", "1");
         await page.evaluate(() => document.fonts.ready);
         const shell = page.locator(".app-shell");
         // Observe the saved width before waiting, so a not-yet-started startup
@@ -453,17 +455,17 @@ for (const touch of [false, true]) {
         });
         const before = await summary.boundingBox();
         await summary.hover();
-        await expect(counts).toHaveCSS("opacity", "1");
+        await expect(counts).toBeVisible();
         await expect(arrow).toHaveCSS("opacity", "1");
         expect(await summary.boundingBox()).toEqual(before);
         await page.mouse.move(0, 0);
-        await expect(counts).toHaveCSS("opacity", "0");
+        await expect(counts).toBeHidden();
         await page.keyboard.press("Tab");
         await summary.focus();
-        await expect(counts).toHaveCSS("opacity", "1");
+        await expect(counts).toBeVisible();
         await page.keyboard.press("Enter");
       } else {
-        await expect(counts).toHaveCSS("opacity", "1");
+        await expect(counts).toBeHidden();
         await expect(arrow).toHaveCSS("opacity", "1");
         await summary.tap();
       }
@@ -483,11 +485,7 @@ for (const touch of [false, true]) {
       await expect(thinking).toHaveJSProperty("open", false);
       await expect(thinkingSummary).toHaveText("Inspecting implementation");
       await expect(thinkingSummary.locator(".lucide-lightbulb")).toBeVisible();
-      await expect(group.locator(".thought-tool-step")).toHaveCount(2);
-      await expect(group.locator(".thought-tool-step").first()).toHaveCSS(
-        "border-left-width",
-        "1px",
-      );
+      expect(firstTool.x).toBeCloseTo(nextTool.x, 0);
       if (!touch) {
         await expect(thinkingArrow).toHaveCSS("opacity", "0");
         await thinkingSummary.hover();

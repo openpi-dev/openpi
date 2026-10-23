@@ -42,6 +42,7 @@ async function preview(
       .slice(0, 20)
       .map((sheet) => {
         const rows: string[][] = [];
+        let truncated = false;
         for (
           let r = 1;
           r <= Math.min(sheet.rowCount, 500) && cells < 20_000;
@@ -53,15 +54,19 @@ async function preview(
             c <= Math.min(sheet.columnCount, 50) && cells < 20_000;
             c++
           ) {
-            row.push(sheet.getCell(r, c).text.slice(0, 10_000));
+            const text = sheet.getCell(r, c).text;
+            truncated ||= text.length > 10_000;
+            row.push(text.slice(0, 10_000));
             cells++;
           }
+          truncated ||= row.length < Math.min(sheet.columnCount, 50);
           rows.push(row);
         }
         return {
           name: sheet.name,
           rows,
-          truncated: rows.length < sheet.rowCount || sheet.columnCount > 50,
+          truncated:
+            truncated || rows.length < sheet.rowCount || sheet.columnCount > 50,
         };
       });
     return {

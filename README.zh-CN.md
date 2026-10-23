@@ -232,8 +232,9 @@ openpi web /path/to/repo      # 指定初始工作区
 | Web 主题 | `system`；另有 `light` / `dark`，兼容旧 `mist` / `rose` / `pine` 预设 |
 | Web 外观（`ui.webAppearance`） | 配色 `default`，强调色/背景/前景 `""`（主题默认色），字体 `codex` |
 | Web 聊天宽度 / 聊天字号 | 820px / 14px；范围 820-2000px / 12-24px |
-| Web 侧栏宽度 / 工具面板宽度 | 340px（范围 220–520px）/ 520px（范围 360–720px） |
+| Web 侧栏宽度 / 工具面板宽度 | 260px（范围 220–520px）/ 520px（范围 360–720px） |
 | Web 思考块 | 默认折叠 |
+| Web 跟进处理方式（`ui_web_follow_up_behavior`） | `followUp` 排队到下一轮；可选 `steer` 引导当前轮次 |
 | 隐藏推理强度（`web_hidden_thinking_levels`） | `[]`；显示全部原生支持的级别，不改当前选择 |
 | Web 置顶排序 | `manual` 手动排序；可选 `updated` 最近更新 |
 | Web 侧栏分组 | `project` 按项目；可选 `list` 统一最近列表 |
@@ -244,6 +245,8 @@ openpi web /path/to/repo      # 指定初始工作区
 | Subagent / Bash / Write/Edit | `compact` / `compact` / `compact` |
 | Post-edit 命令 | 关闭；单条命令最多 500 字符 |
 | 内置角色模型 | 全部继承父模型 |
+
+Web「设置 → 常规」保存跟进默认方式 `ui.webFollowUpBehavior`。输入框切换和 ⌘/Ctrl+Enter 只影响单次消息；轮次结束后，下次主动发送恢复普通消息，草稿不会自动发出。也可通过 `/openpi-setup` 修改同一偏好。
 
 完整字段说明与生命周期见 [SETUP.md](SETUP.md)。
 

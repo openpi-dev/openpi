@@ -4,7 +4,6 @@ import {
 } from "@astryxdesign/core/DropdownMenu";
 import { ArrowUpRight, Check, RefreshCw, UserRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { ReasoningLevel } from "../../../../../extensions/shared/setup-config.ts";
 import type {
   WebSettingsCatalog,
   WebSettingsPreferencesPatch,
@@ -84,12 +83,16 @@ export function ConfigurationSettingsPanel({
     Boolean(error) ||
     Boolean(catalog?.resources.diagnostics.settingsErrors);
   const hidden = catalog?.setup.ui.webHiddenThinkingLevels ?? [];
-  const levels = (catalog?.thinking?.available ?? []).filter(
-    (level): level is ReasoningLevel =>
-      ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-        level,
-      ),
-  );
+  // Visibility is a global preference, independent of the currently selected model.
+  const levels = [
+    "off",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ] as const;
   const verbosity = catalog?.setup.response?.verbosity ?? "default";
   const summary = catalog?.setup.response?.reasoningSummary ?? "default";
   return (
@@ -281,7 +284,7 @@ export function ConfigurationSettingsPanel({
                       variant: "secondary",
                       size: "sm",
                       className: "configuration-menu-trigger",
-                      isDisabled: blocked || levels.length === 0,
+                      isDisabled: blocked,
                     }}
                     className="configuration-level-menu"
                     menuWidth="min(240px, calc(100vw - 32px))"

@@ -58,7 +58,9 @@ export interface WebSubagentDetail extends WebSubagentActivity {
   readonly cwd: string;
   readonly model?: string;
   readonly prompt: string;
-  readonly transcript: readonly TranscriptItem[];
+  readonly transcript: readonly (TranscriptItem & { readonly id?: string })[];
+  /** Presentation identity for the streaming message that will be appended next. */
+  readonly nextEntryId?: string;
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };
   readonly liveTools: readonly LiveToolState[];
   readonly finalText: string;
@@ -271,7 +273,10 @@ export function projectSubagentDetail(
 ): WebSubagentDetail {
   return {
     kind: "subagents",
-    ...boundedAgentDetail({ ...source, model: source.meta.modelLabel }),
+    ...boundedAgentDetail(
+      { ...source, model: source.meta.modelLabel },
+      Math.max(0, source.transcriptVersion - source.transcript.length),
+    ),
   };
 }
 
@@ -280,6 +285,7 @@ function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
     WebSubagentDetail,
     "kind" | "status" | "truncated" | "omittedEntries"
   > & { readonly status: Status },
+  transcriptOffset = 0,
 ) {
   let remainingBytes = 64 * 1024;
   let truncated = false;
@@ -340,16 +346,18 @@ function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
   });
   // Spend the remaining budget on recent activity first, then restore chronology.
   const selected = source.transcript.slice(-64);
-  const transcript: TranscriptItem[] = selected
+  const transcript = selected
     .reverse()
-    .flatMap((item): TranscriptItem[] => {
+    .flatMap((item, index): WebSubagentDetail["transcript"][number][] => {
+      const id = `entry-${transcriptOffset + source.transcript.length - 1 - index}`;
       if (item.kind === "user")
-        return [{ kind: "user", text: text(item.text) }];
+        return [{ id, kind: "user", text: text(item.text) }];
       if (item.kind === "toolResult") {
         const toolId = toolIdentity(item.toolId);
         if (toolId === undefined) return [];
         return [
           {
+            id,
             kind: "toolResult",
             toolId,
             name: text(item.name, 640),
@@ -388,7 +396,7 @@ function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
           ];
         return [{ type: "text", text: text(part.text) }];
       });
-      return [{ kind: "assistant", parts }];
+      return [{ id, kind: "assistant", parts }];
     })
     .reverse();
   const omittedEntries = source.transcript.length - transcript.length;
@@ -404,6 +412,7 @@ function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
     ...(model !== undefined ? { model } : {}),
     prompt,
     transcript,
+    nextEntryId: `entry-${transcriptOffset + source.transcript.length}`,
     ...(liveAssistant ? { liveAssistant } : {}),
     liveTools,
     finalText,

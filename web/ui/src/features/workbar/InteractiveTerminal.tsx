@@ -1,4 +1,5 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { ArrowDown, RefreshCw, RotateCcw } from "lucide-react";
@@ -52,12 +53,14 @@ export function InteractiveTerminal({
   cwd,
   tabId,
   active = true,
+  canFocusOnMount,
   onConnectionChange,
 }: {
   sessionId: string;
   cwd: string;
   tabId?: string;
   active?: boolean;
+  canFocusOnMount?: () => boolean;
   onConnectionChange?: (state: { id: string | null; pending: boolean }) => void;
 }) {
   const { t } = useTranslation();
@@ -71,6 +74,7 @@ export function InteractiveTerminal({
       .pop() || cwd;
   const activeRef = useRef(active);
   activeRef.current = active;
+  const mountFocus = useRef(canFocusOnMount);
   const container = useRef<HTMLDivElement>(null);
   const restartFocusIntent = useRef<{
     sessionId: string;
@@ -144,7 +148,7 @@ export function InteractiveTerminal({
     // steal focus back after the user has moved to another input or panel.
     if (
       !host.closest("[hidden], [inert]") &&
-      (generation === 0 ||
+      ((generation === 0 && (mountFocus.current?.() ?? true)) ||
         host
           .closest(".interactive-terminal")
           ?.contains(document.activeElement) ||
@@ -453,22 +457,23 @@ export function InteractiveTerminal({
               <span>{t("reconnectTerminal")}</span>
             </button>
           )}
-          <button
-            type="button"
-            aria-label={t("restartTerminal")}
-            title={t("restartTerminal")}
-            disabled={
-              restartPending ||
-              status === "connecting" ||
-              status === "reconnecting"
-            }
-            onClick={() => {
-              setRestartError(null);
-              setRestartOpen(true);
-            }}
-          >
-            <RotateCcw aria-hidden="true" />
-          </button>
+          <Tooltip content={t("restartTerminal")} placement="below">
+            <button
+              type="button"
+              aria-label={t("restartTerminal")}
+              disabled={
+                restartPending ||
+                status === "connecting" ||
+                status === "reconnecting"
+              }
+              onClick={() => {
+                setRestartError(null);
+                setRestartOpen(true);
+              }}
+            >
+              <RotateCcw aria-hidden="true" />
+            </button>
+          </Tooltip>
         </div>
       </header>
       <div className="interactive-terminal-notice" aria-live="polite">

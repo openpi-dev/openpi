@@ -70,8 +70,8 @@ test("explicit review bases recover missing/deleted refs and lazy detail drift u
     await page.goto(host.origin);
     await page.getByRole("button", { name: "打开工具", exact: true }).click();
     await page
-      .locator(".workbar-launcher")
-      .getByRole("button", { name: /^变更/u })
+      .getByRole("menu", { name: /打开工具|Open tools/u })
+      .getByRole("menuitem", { name: /^变更/u })
       .click();
     const review = page.locator(".review-panel");
     await review

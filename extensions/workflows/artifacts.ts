@@ -587,6 +587,15 @@ export function persistWorkflowJson(
   details: WorkflowDetails,
   journal?: WorkflowJournalSource,
 ) {
+  persistWorkflowArtifacts(runDir, details, journal, writeRunFile);
+}
+
+function persistWorkflowArtifacts(
+  runDir: string,
+  details: WorkflowDetails,
+  journal: WorkflowJournalSource | undefined,
+  writeArtifact: typeof writeRunFile,
+) {
   refreshWorkflowGraph(details);
   const boundedTranscripts = boundedTranscriptsArtifact(details.agents, {
     maxBytes: WORKFLOW_TRANSCRIPTS_MAX_BYTES,
@@ -672,7 +681,13 @@ export function persistWorkflowJson(
     );
   }
   for (const artifact of artifactWrites) {
-    writeRunFile(runDir, artifact.name, artifact.content);
+    // Terminal commits always publish their complete artifact set.
+    // Only live checkpoints may reuse an unchanged file owned by this writer.
+    (terminal ? writeRunFile : writeArtifact)(
+      runDir,
+      artifact.name,
+      artifact.content,
+    );
   }
   writeRunFile(runDir, "workflow.json", manifest);
   if (terminal) removeWorkflowCommit(runDir);
@@ -717,7 +732,41 @@ export function createWorkflowPersistence(
     0,
     options.intervalMs ?? WORKFLOW_CHECKPOINT_INTERVAL_MS,
   );
-  const persist = options.persist ?? persistWorkflowJson;
+  const written = new Map<string, { digest: string; identity: string }>();
+  const identity = (file: string) => {
+    try {
+      const stat = fs.lstatSync(file, { bigint: true });
+      if (!stat.isFile()) return undefined;
+      return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    } catch {
+      return undefined;
+    }
+  };
+  const writeChangedArtifact: typeof writeRunFile = (
+    directory,
+    name,
+    content,
+  ) => {
+    const file = path.join(directory, name);
+    const digest = sha256(content);
+    const previous = written.get(file);
+    if (previous?.digest === digest && identity(file) === previous.identity)
+      return;
+    // Do not retain a successful identity across a failed replacement.
+    written.delete(file);
+    writeRunFile(directory, name, content);
+    const current = identity(file);
+    if (current !== undefined) written.set(file, { digest, identity: current });
+  };
+  const persist =
+    options.persist ??
+    ((directory, current, journal) =>
+      persistWorkflowArtifacts(
+        directory,
+        current,
+        journal,
+        writeChangedArtifact,
+      ));
   const readJournal = options.journal;
   let lastPersistedAt = Date.now();
   let dirty = false;

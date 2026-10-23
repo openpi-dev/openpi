@@ -234,8 +234,9 @@ Safety here is a runtime constraint, not a prompt.
 | Web theme | `system`; also `light` / `dark`; legacy `mist` / `rose` / `pine` palettes still honored |
 | Web appearance (`ui.webAppearance`) | palette `default`; accent/background/foreground `""` (theme colors); font `codex` |
 | Web chat width / chat font size | 820px / 14px; ranges 820–2000px / 12–24px |
-| Web sidebar width / auxiliary pane width | 340px (range 220–520px) / 520px (range 360–720px) |
+| Web sidebar width / auxiliary pane width | 260px (range 220–520px) / 520px (range 360–720px) |
 | Web thinking blocks | Collapsed by default |
+| Web follow-up behavior (`ui_web_follow_up_behavior`) | `followUp` (queue); `steer` (guide the active turn) also available |
 | Hidden thinking levels (`web_hidden_thinking_levels`) | `[]` — every natively supported level shown, current selection unchanged |
 | Web pinned sort | `manual`; `updated` (recently updated) also available |
 | Web sidebar grouping | `project`; `list` (single recent list) also available |
@@ -247,7 +248,9 @@ Safety here is a runtime constraint, not a prompt.
 | Post-edit command | Off; a single command of at most 500 characters |
 | Built-in role models | All inherit the parent model |
 
-<!-- config-contract: codeMode.enabled webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webHiddenThinkingLevels ui.webPinnedSort ui.webSidebarGrouping ui.webChatsSort ui.webProjectsInRecents ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: codeMode.enabled webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webFollowUpBehavior ui.webHiddenThinkingLevels ui.webPinnedSort ui.webSidebarGrouping ui.webChatsSort ui.webProjectsInRecents ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+
+Settings → General saves the follow-up default in `ui.webFollowUpBehavior`. The composer override and Command/Ctrl+Enter change only one message. After the active turn ends, the next explicit submit starts a normal turn; the draft is never sent automatically. `/openpi-setup` edits the same preference.
 
 See [SETUP.md](SETUP.md) for the full field reference and lifecycle details.
 

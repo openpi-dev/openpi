@@ -275,7 +275,7 @@ test("Plan switch changes only owner state; first message gets planning context 
     ).toBeEnabled();
     await settings.getByRole("radio", { name: "深色", exact: true }).click();
     await expect(
-      settings.getByText("显示设置已保存。", { exact: true }),
+      settings.getByText("偏好设置已保存。", { exact: true }),
     ).toBeVisible();
     await expect(
       settings.getByRole("radio", { name: "深色", exact: true }),
@@ -527,10 +527,12 @@ for (const theme of ["light", "dark"] as const) {
       // Inspect the earlier answer while later tool arguments stream. Upward
       // reading intent pauses the transcript's normal following of the bottom.
       const conversation = page.getByRole("log", { name: "Conversation" });
+      // Hover can scroll the evidence into view and waits for layout motion.
+      // Measure the wheel's effect only after that positioning has completed.
+      await evidence.hover();
       const previousScroll = await conversation.evaluate(
         (element) => element.scrollTop,
       );
-      await evidence.hover();
       await page.mouse.wheel(0, -80);
       await expect
         .poll(() => conversation.evaluate((element) => element.scrollTop))
