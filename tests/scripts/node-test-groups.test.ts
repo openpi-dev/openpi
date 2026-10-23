@@ -108,3 +108,29 @@ test("CI's Windows shards are disjoint and cover all discovered Node files", () 
   assert.equal(new Set(selected).size, selected.length);
   assert.deepEqual([...selected].sort(), [...files].sort());
 });
+
+test("Windows shards start expensive files first and spread their measured cost", () => {
+  const worktree = resolve("tests/web/session-worktree.test.ts");
+  const fork = resolve("tests/web/session-fork.test.ts");
+  const setup = resolve("tests/extensions/shared/setup-config.test.ts");
+  const expensive = [worktree, fork, setup];
+  // These files used to move together whenever discovery gained another file.
+  // Unknown/new tests must still run once without displacing the cost split.
+  for (const ordinary of [
+    [unrelatedTest],
+    [resolve("tests/new.test.ts"), unrelatedTest],
+  ]) {
+    const files = [...ordinary, setup, worktree, fork];
+    const groups = ["1/2", "2/2"].map((shard) =>
+      selectNodeTestShard(files, shard),
+    );
+    assert.deepEqual(
+      groups.map((group) => group.filter((file) => expensive.includes(file))),
+      [[worktree], [fork, setup]],
+    );
+    for (const group of groups) {
+      assert.ok(expensive.includes(group[0]!));
+    }
+    assert.deepEqual(groups.flat().sort(), [...files].sort());
+  }
+});
