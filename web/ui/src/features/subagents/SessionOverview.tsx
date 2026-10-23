@@ -1,3 +1,4 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Popover,
   type PopoverTriggerRenderProps,
@@ -187,14 +188,15 @@ export function SessionOverview({
                 <div className="session-overview-section-heading">
                   <span>{t("sessionSources")}</span>
                   {onAddSources && (
-                    <button
-                      type="button"
-                      aria-label={t("sourcesAdd")}
-                      title={t("sourcesAdd")}
-                      onClick={() => activate(onAddSources)}
-                    >
-                      <Plus />
-                    </button>
+                    <Tooltip content={t("sourcesAdd")} placement="below">
+                      <button
+                        type="button"
+                        aria-label={t("sourcesAdd")}
+                        onClick={() => activate(onAddSources)}
+                      >
+                        <Plus />
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
                 {sources.page?.sources.slice(0, 3).map((item) => (
@@ -239,30 +241,31 @@ export function SessionOverview({
         }
       >
         {(props: PopoverTriggerRenderProps) => (
-          <button
-            {...props}
-            ref={(element) => {
-              props.ref(element);
-              trigger.current = element;
-            }}
-            type="button"
-            className="task-tools-trigger"
-            title={t("sessionOverview")}
-            aria-label={t("sessionOverview")}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              aria-hidden="true"
+          <Tooltip content={t("sessionOverview")} placement="below">
+            <button
+              {...props}
+              ref={(element) => {
+                props.ref(element);
+                trigger.current = element;
+              }}
+              type="button"
+              className="task-tools-trigger"
+              aria-label={t("sessionOverview")}
             >
-              <circle cx="5.5" cy="7" r="2.8" />
-              <circle cx="5.5" cy="17" r="2.8" />
-              <path d="M12 7h8M12 17h8" />
-            </svg>
-          </button>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <circle cx="5.5" cy="7" r="2.8" />
+                <circle cx="5.5" cy="17" r="2.8" />
+                <path d="M12 7h8M12 17h8" />
+              </svg>
+            </button>
+          </Tooltip>
         )}
       </Popover>
       {sessionPath && (

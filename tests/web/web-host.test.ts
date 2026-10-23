@@ -307,6 +307,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
       { auxiliaryWidth: 520.5 },
       { chatFontSize: 12.5 },
       { expandThinking: "true" },
+      { followUpBehavior: "unknown" },
       { pinnedSort: "unknown" },
       { sidebarGrouping: "connection" },
       { chatsSort: "updated_at" },
@@ -335,6 +336,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
       auxiliaryWidth: 600,
       chatFontSize: 16,
       expandThinking: true,
+      followUpBehavior: "steer",
       pinnedSort: "updated",
       sidebarGrouping: "list",
       chatsSort: "manual",
@@ -361,6 +363,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
         webAuxiliaryWidth: 600,
         webChatFontSize: 16,
         webExpandThinking: true,
+        webFollowUpBehavior: "steer",
         webPinnedSort: "updated",
         webSidebarGrouping: "list",
         webChatsSort: "manual",
@@ -374,6 +377,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
     });
     const status = formatSetupConfig(loadSetupConfig());
     assert.match(status, /Subagent results: full by default/u);
+    assert.match(status, /Web follow-up behavior: steer the active turn/u);
     assert.match(status, /Bash operations: expanded by default/u);
     assert.match(status, /Write\/Edit operations: expanded by default/u);
     assert.match(status, /custom footer off/u);
@@ -400,6 +404,7 @@ test("appearance writes preserve package config, reject extra authority, and nev
     assert.equal(preferences.chatWidth, 1200);
     assert.equal(preferences.sidebarWidth, 320);
     assert.equal(preferences.auxiliaryWidth, 600);
+    assert.equal(preferences.followUpBehavior, "steer");
     assert.equal(preferences.subagentResultDisplay, "full");
     assert.equal(preferences.bashToolDisplay, "full");
     assert.equal(preferences.fileMutationDisplay, "full");
@@ -872,10 +877,28 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(pageHtml, /href="\/favicon\.svg"/);
     assert.doesNotMatch(pageHtml, /marked\.js|https?:\/\//u);
 
-    const app = await fetch(`${launched.origin}/app.js`);
-    assert.equal(app.status, 200);
-    assert.match(app.headers.get("content-type") || "", /javascript/);
-    const appSource = await app.text();
+    const preloadScripts = [...pageHtml.matchAll(/<link\b[^>]*>/gu)]
+      .map(([tag]) => tag)
+      .filter((tag) => /\brel="modulepreload"/u.test(tag))
+      .map((tag) => {
+        const href = tag.match(/\bhref="([^"]+)"/u)?.[1];
+        assert.ok(href, "Module preload must name its script");
+        return href;
+      });
+    const appSource = (
+      await Promise.all(
+        ["/app.js", ...preloadScripts].map(async (path) => {
+          const script = await fetch(new URL(path, launched.origin));
+          assert.equal(script.status, 200, path);
+          assert.match(
+            script.headers.get("content-type") || "",
+            /javascript/,
+            path,
+          );
+          return script.text();
+        }),
+      )
+    ).join("\n");
     assert.ok(!appSource.includes(token));
     assert.match(appSource, /OpenPI Web root is missing/);
     assert.match(appSource, /openpi\.web\.token/);
@@ -1326,6 +1349,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(diagnosticsResponse.status, 200);
     const diagnosticsBody = await diagnosticsResponse.json();
     assert.deepEqual(diagnosticsBody, {
+      openpi: (await import("../../web/host/runtime-info.ts"))
+        .webRuntimeStartup,
       node: process.version,
       cwd,
       sessionId: sessionManager.getSessionId(),

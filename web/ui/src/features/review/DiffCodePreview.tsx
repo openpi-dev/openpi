@@ -121,14 +121,17 @@ export function DiffCodePreview({
   const rows = useMemo(() => parseDiffRows(file.diff), [file.diff]);
   const visibleRows = rows.slice(0, DIFF_LINE_CAP);
   const figure = useRef<HTMLElement>(null);
+  const [viewMode, setViewMode] = useState<"unified" | "split">("unified");
+  const split = viewMode === "split" && !file.binary;
   const [selection, setSelection] = useState<{
     file: WebGitReviewFile;
     id: number;
+    side?: "old" | "new";
   } | null>(null);
   const selected = selection?.file === file ? selection.id : undefined;
-  const referenceFor = (row: DiffRow) => {
-    const side = row.newLine !== undefined ? "new" : "old";
-    const line = row.newLine ?? row.oldLine;
+  const referenceFor = (row: DiffRow, pane?: "old" | "new") => {
+    const side = pane ?? (row.newLine !== undefined ? "new" : "old");
+    const line = side === "new" ? row.newLine : row.oldLine;
     if (
       !onReferenceLine ||
       file.binary ||
@@ -148,6 +151,10 @@ export function DiffCodePreview({
     } satisfies DiffLineReference;
   };
   const selectableRows = visibleRows.filter((row) => referenceFor(row));
+  const paneRows = {
+    old: selectableRows.filter((row) => referenceFor(row, "old")),
+    new: selectableRows.filter((row) => referenceFor(row, "new")),
+  };
   const hidden = Math.max(0, rows.length - visibleRows.length);
   const digits = String(
     visibleRows.reduce(
@@ -156,121 +163,194 @@ export function DiffCodePreview({
     ),
   ).length;
 
+  const pairs: { old?: DiffRow; new?: DiffRow }[] = [];
+  for (let index = 0; index < visibleRows.length; ) {
+    const row = visibleRows[index]!;
+    if (row.kind === "meta" || row.kind === "context") {
+      pairs.push({ old: row, new: row });
+      index += 1;
+      continue;
+    }
+    const removed: DiffRow[] = [],
+      added: DiffRow[] = [];
+    while (
+      visibleRows[index]?.kind === "removed" ||
+      visibleRows[index]?.kind === "added"
+    ) {
+      const changed = visibleRows[index++]!;
+      (changed.kind === "removed" ? removed : added).push(changed);
+    }
+    for (let at = 0; at < Math.max(removed.length, added.length); at += 1)
+      pairs.push({ old: removed[at], new: added[at] });
+  }
+  const renderRow = (row: DiffRow | undefined, pane?: "old" | "new") => {
+    if (!row)
+      return (
+        <span className="review-diff-line" data-kind="empty" aria-hidden="true">
+          {"\u00a0"}
+        </span>
+      );
+    const reference = referenceFor(row, pane);
+    const navigable = pane ? paneRows[pane] : selectableRows;
+    const focusedRow = !pane || selection?.side === pane ? selected : undefined;
+    const isSelected =
+      selected === row.id && (!pane || selection?.side === pane);
+    const gutters = (
+      <>
+        {pane !== "new" && (
+          <span
+            className="review-diff-gutter"
+            style={{ width: `${digits + 1}ch` }}
+            aria-hidden="true"
+          >
+            {row.oldLine ?? ""}
+          </span>
+        )}
+        {pane !== "old" && (
+          <span
+            className="review-diff-gutter"
+            style={{ width: `${digits + 1}ch` }}
+            aria-hidden="true"
+          >
+            {row.newLine ?? ""}
+          </span>
+        )}
+      </>
+    );
+    return (
+      <span
+        className="review-diff-line"
+        data-kind={row.kind}
+        data-selected={isSelected || undefined}
+        key={row.id}
+      >
+        {reference ? (
+          <button
+            type="button"
+            className="review-diff-line-select"
+            data-diff-row={row.id}
+            data-diff-side={pane ?? "unified"}
+            aria-label={t(
+              reference.side === "new"
+                ? "reviewSelectNewLine"
+                : "reviewSelectOldLine",
+              { line: reference.line },
+            )}
+            aria-pressed={isSelected}
+            tabIndex={(focusedRow ?? navigable[0]?.id) === row.id ? 0 : -1}
+            onClick={() => setSelection({ file, id: row.id, side: pane })}
+            onKeyDown={(event) => {
+              if (
+                event.nativeEvent.isComposing ||
+                event.nativeEvent.keyCode === 229
+              )
+                return;
+              const index = navigable.indexOf(row);
+              let target: DiffRow | undefined;
+              if (event.key === "ArrowDown")
+                target = navigable[Math.min(index + 1, navigable.length - 1)];
+              else if (event.key === "ArrowUp")
+                target = navigable[Math.max(index - 1, 0)];
+              else if (event.key === "Home") target = navigable[0];
+              else if (event.key === "End") target = navigable.at(-1);
+              else return;
+              event.preventDefault();
+              event.stopPropagation();
+              if (!target) return;
+              setSelection({ file, id: target.id, side: pane });
+              figure.current
+                ?.querySelector<HTMLButtonElement>(
+                  `[data-diff-row="${target.id}"][data-diff-side="${pane ?? "unified"}"]`,
+                )
+                ?.focus({ preventScroll: true });
+            }}
+          >
+            {gutters}
+          </button>
+        ) : (
+          gutters
+        )}
+        <span className="review-diff-marker" aria-hidden="true">
+          {row.marker}
+        </span>
+        <span className="review-diff-code">{row.code}</span>
+        {reference && isSelected && (
+          <button
+            type="button"
+            className="review-diff-reference"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              const code = event.currentTarget
+                .closest(".review-diff-line")
+                ?.querySelector(".review-diff-code");
+              const textSelection = window.getSelection();
+              const selectedCode =
+                code?.contains(textSelection?.anchorNode ?? null) &&
+                code.contains(textSelection?.focusNode ?? null)
+                  ? textSelection?.toString()
+                  : undefined;
+              onReferenceLine?.({
+                ...reference,
+                code: selectedCode || reference.code,
+              });
+            }}
+          >
+            <MessageSquarePlus aria-hidden="true" />
+            {t("reviewQuoteLine")}
+          </button>
+        )}
+        {"\n"}
+      </span>
+    );
+  };
+
   return (
     <>
       <figure
         ref={figure}
         className="review-file-diff"
+        data-view={split ? "split" : "unified"}
         aria-label={t("changeDiff")}
       >
-        <pre>
-          {visibleRows.map((row) => {
-            const reference = referenceFor(row);
-            const gutters = (
-              <>
-                <span
-                  className="review-diff-gutter"
-                  style={{ width: `${digits + 1}ch` }}
-                  aria-hidden="true"
+        <figcaption className="review-diff-toolbar">
+          <span>{t("changeDiff")}</span>
+          {!file.binary && (
+            <fieldset aria-label={t("diffViewMode")}>
+              {(["unified", "split"] as const).map((mode) => (
+                <button
+                  type="button"
+                  key={mode}
+                  aria-pressed={viewMode === mode}
+                  onClick={() => {
+                    setSelection(null);
+                    setViewMode(mode);
+                  }}
                 >
-                  {row.oldLine ?? ""}
-                </span>
-                <span
-                  className="review-diff-gutter"
-                  style={{ width: `${digits + 1}ch` }}
-                  aria-hidden="true"
-                >
-                  {row.newLine ?? ""}
-                </span>
-              </>
-            );
-            return (
-              <span
-                className="review-diff-line"
-                data-kind={row.kind}
-                data-selected={selected === row.id || undefined}
-                key={row.id}
+                  {t(mode === "unified" ? "diffUnified" : "diffSplit")}
+                </button>
+              ))}
+            </fieldset>
+          )}
+        </figcaption>
+        {!split ? (
+          <pre>{visibleRows.map((row) => renderRow(row))}</pre>
+        ) : (
+          <div className="review-diff-split">
+            <div className="review-diff-pair review-diff-column-headings">
+              <span>{t("diffBefore")}</span>
+              <span>{t("diffAfter")}</span>
+            </div>
+            {pairs.map((pair, index) => (
+              <div
+                className="review-diff-pair"
+                key={pair.old?.id ?? pair.new?.id ?? index}
               >
-                {reference ? (
-                  <button
-                    type="button"
-                    className="review-diff-line-select"
-                    data-diff-row={row.id}
-                    aria-label={t(
-                      reference.side === "new"
-                        ? "reviewSelectNewLine"
-                        : "reviewSelectOldLine",
-                      { line: reference.line },
-                    )}
-                    aria-pressed={selected === row.id}
-                    tabIndex={
-                      (selected ?? selectableRows[0]?.id) === row.id ? 0 : -1
-                    }
-                    onClick={() => setSelection({ file, id: row.id })}
-                    onKeyDown={(event) => {
-                      const index = selectableRows.indexOf(row);
-                      let target: DiffRow | undefined;
-                      if (event.key === "ArrowDown")
-                        target =
-                          selectableRows[
-                            Math.min(index + 1, selectableRows.length - 1)
-                          ];
-                      else if (event.key === "ArrowUp")
-                        target = selectableRows[Math.max(index - 1, 0)];
-                      else if (event.key === "Home") target = selectableRows[0];
-                      else if (event.key === "End")
-                        target = selectableRows.at(-1);
-                      else return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      if (!target) return;
-                      setSelection({ file, id: target.id });
-                      figure.current
-                        ?.querySelector<HTMLButtonElement>(
-                          `[data-diff-row="${target.id}"]`,
-                        )
-                        ?.focus({ preventScroll: true });
-                    }}
-                  >
-                    {gutters}
-                  </button>
-                ) : (
-                  gutters
-                )}
-                <span className="review-diff-marker" aria-hidden="true">
-                  {row.marker}
-                </span>
-                <span className="review-diff-code">{row.code}</span>
-                {reference && selected === row.id && (
-                  <button
-                    type="button"
-                    className="review-diff-reference"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={(event) => {
-                      const code = event.currentTarget
-                        .closest(".review-diff-line")
-                        ?.querySelector(".review-diff-code");
-                      const textSelection = window.getSelection();
-                      const selectedCode =
-                        code?.contains(textSelection?.anchorNode ?? null) &&
-                        code.contains(textSelection?.focusNode ?? null)
-                          ? textSelection?.toString()
-                          : undefined;
-                      onReferenceLine?.({
-                        ...reference,
-                        code: selectedCode || reference.code,
-                      });
-                    }}
-                  >
-                    <MessageSquarePlus aria-hidden="true" />
-                    {t("reviewQuoteLine")}
-                  </button>
-                )}
-                {"\n"}
-              </span>
-            );
-          })}
-        </pre>
+                {renderRow(pair.old, "old")}
+                {renderRow(pair.new, "new")}
+              </div>
+            ))}
+          </div>
+        )}
       </figure>
       {hidden > 0 && (
         <p className="review-hidden-lines">

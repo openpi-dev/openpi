@@ -13,6 +13,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { workflowToolRenderer } from "../../../extensions/workflows/tool-renderer.ts";
 import {
   agentFailureMessage,
   guardWorkflowChildTools,
@@ -459,7 +460,7 @@ test("runAgent projects a long tool loop without rescanning canonical history", 
     prompt: async () => respond(),
   });
   respond = () => {
-    for (let index = 0; index < 50; index++) {
+    for (let index = 0; index < 100; index++) {
       const toolCallId = `call-${index}`;
       const assistant = {
         ...assistantTextMessage(`cycle ${index}`),
@@ -509,10 +510,10 @@ test("runAgent projects a long tool loop without rescanning canonical history", 
 
   assert.equal(outcome.ok, true);
   assert.equal(outcome.output, "unannounced final state");
-  assert.equal(outcome.usage.turns, 51);
+  assert.equal(outcome.usage.turns, 101);
   assert.equal(
     outcome.transcript.some(
-      (entry) => entry.role === "toolResult" && entry.text === "result 49",
+      (entry) => entry.role === "toolResult" && entry.text === "result 99",
     ),
     true,
   );
@@ -529,6 +530,20 @@ test("runAgent projects a long tool loop without rescanning canonical history", 
     2,
     "context occupancy should be sampled only at hydrate and final reconcile",
   );
+  const renderer = workflowToolRenderer(outcome.transcript);
+  assert.ok(renderer);
+  const retained = new Set(
+    outcome.transcript.flatMap((entry) =>
+      entry.toolCallId ? [entry.toolCallId] : [],
+    ),
+  );
+  const executions = Reflect.get(renderer, "executions") as Map<
+    string,
+    unknown
+  >;
+  assert.deepEqual(new Set(executions.keys()), retained);
+  assert.ok(retained.has("call-99"));
+  assert.equal(retained.has("call-0"), false);
 });
 
 test("compaction rebuilds progress after Pi finishes mutating active messages", async () => {

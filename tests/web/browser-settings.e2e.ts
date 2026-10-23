@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
 import { AxeBuilder } from "@axe-core/playwright";
+import { expect, test } from "@playwright/test";
 import type { BrowserSettingsStatus } from "../../web/protocol/browser.ts";
 import { installThinkingFixture } from "./thinking-e2e-support.ts";
 
@@ -126,9 +126,12 @@ test("separate guide shares live connection state, native family steps and opene
   await dialog
     .getByRole("button", { name: "设置 Safari", exact: true })
     .click();
-  const popupReady = page.waitForEvent("popup");
   await dialog
     .getByRole("button", { name: "打开 Safari 扩展页", exact: true })
+    .click();
+  const popupReady = page.waitForEvent("popup");
+  await dialog
+    .getByRole("button", { name: "在独立窗口中跟随操作", exact: true })
     .click();
   const popup = await popupReady;
   const guide = popup.getByRole("region", { name: "连接 Safari", exact: true });
@@ -144,9 +147,13 @@ test("separate guide shares live connection state, native family steps and opene
     .getByRole("button", { name: "已开启，下一步", exact: true })
     .click();
   await expect(
-    guide.getByText(status.portableExtensionPath!, { exact: true }),
+    guide.getByText("browser-extension-portable", { exact: true }),
   ).toBeVisible();
   await popup.screenshot({ path: info.outputPath("safari-guide-step-3.png") });
+  await guide.getByText("找不到？使用路径选择", { exact: true }).click();
+  await expect(
+    guide.getByText(status.portableExtensionPath!, { exact: true }),
+  ).toBeVisible();
   expect(
     (
       await new AxeBuilder({ page: popup })
@@ -194,9 +201,7 @@ test("separate guide shares live connection state, native family steps and opene
     .getByRole("button", { name: "已选中，下一步", exact: true })
     .click();
   await expect(
-    dialog.getByText("/OpenPI/browser-extension-portable/manifest.json", {
-      exact: true,
-    }),
+    dialog.getByText("manifest.json", { exact: true }),
   ).toBeVisible();
   const secondReady = page.waitForEvent("popup");
   await dialog
@@ -219,7 +224,7 @@ test("separate guide shares live connection state, native family steps and opene
 test("browser setup preserves the settings shell, works during a turn and explains installation before granting access", async ({
   page,
 }, info) => {
-  // The separate window is covered below; this case checks the blocked-popup fallback.
+  // A separate window is optional; the main install flow must stay in this page.
   await page.addInitScript(() => {
     Object.defineProperty(window, "documentPictureInPicture", {
       value: undefined,
@@ -306,22 +311,32 @@ test("browser setup preserves the settings shell, works during a turn and explai
       exact: true,
     }),
   ).toBeVisible();
-  await expect(guide.getByText(status.extensionPath)).toBeVisible();
+  await expect(
+    guide.getByText("把文件夹拖到 Chrome 扩展页", { exact: true }),
+  ).toBeVisible();
   await guide.scrollIntoViewIfNeeded();
   await dialog.screenshot({
     path: info.outputPath("browser-settings-step-3.png"),
   });
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await guide
-    .getByRole("button", { name: "复制扩展文件夹路径", exact: true })
+    .getByRole("button", { name: "定位扩展文件夹", exact: true })
     .click();
+  expect(actions.at(-1)).toEqual({ browser: "chrome", action: "folder" });
+  await expect(
+    guide.getByRole("button", { name: "复制路径", exact: true }),
+  ).toBeHidden();
+  await guide.getByText("无法拖入？使用路径选择", { exact: true }).click();
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await guide.getByRole("button", { name: "复制路径", exact: true }).click();
   await expect(
     guide.getByRole("button", { name: "已复制路径", exact: true }),
   ).toBeVisible();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     status.extensionPath,
   );
-  await guide.getByRole("button", { name: "打开文件夹", exact: true }).click();
+  await expect(
+    guide.getByText("在 Chrome 点击「加载未打包的扩展程序」", { exact: true }),
+  ).toBeVisible();
   await expect(
     guide.getByRole("button", { name: "已添加，连接 OpenPI", exact: true }),
   ).toBeEnabled();

@@ -275,6 +275,89 @@ test("native subagent display receipts survive projection while model follow-ups
   assert.equal(transport.message?.display, false);
 });
 
+test("subagent receipt identities and terminal states survive clipped completion evidence", () => {
+  // Real completion evidence nests a process exit below the generic depth cap.
+  const completion = {
+    observed: {
+      tools: { items: [{ processExit: { status: "unknown" } }] },
+    },
+  };
+  const results = [
+    {
+      id: "sa-1",
+      title: "sleep child",
+      status: "done",
+      outcome: "completed",
+      completion,
+    },
+    {
+      id: "sa-2",
+      title: "cancelled child",
+      status: "error",
+      outcome: "interrupted",
+      completion,
+    },
+  ];
+  for (const details of [results[0], { results }]) {
+    const entry = projectEntry({
+      type: "custom",
+      id: "receipt",
+      parentId: null,
+      timestamp: "2026-10-22T00:00:00Z",
+      customType: "subagent-result",
+      data: { content: "Native result", details },
+    });
+    const expected = results.map(
+      ({ completion: _completion, ...display }) => display,
+    );
+    assert.deepEqual(
+      entry.message?.details,
+      details === results[0] ? expected[0] : { results: expected },
+    );
+    assert.equal(entry.message?.truncation?.details, true);
+  }
+});
+
+test("clipped subagent display facts remain bounded and do not infer identities or invoke getters", () => {
+  const getter = Object.defineProperty(
+    { completion: "x".repeat(30_000) },
+    "id",
+    {
+      get() {
+        throw new Error("must not invoke getter");
+      },
+    },
+  );
+  const projected = projectMessage({
+    role: "custom",
+    customType: "subagent-result",
+    content: "sa-1 succeeded",
+    details: {
+      results: [
+        getter,
+        { id: "bad\nID", status: "done" },
+        ...Array.from({ length: 200 }, (_, index) => ({
+          id: `sa-${index}`,
+          title: "x".repeat(20_000),
+          status: "unrecognized",
+        })),
+      ],
+    },
+  });
+  const details = projected.details as {
+    results: { id: string; title: string; status?: string }[];
+  };
+  assert.ok(details.results.length > 0 && details.results.length < 128);
+  assert.ok(Buffer.byteLength(JSON.stringify(details)) <= 24 * 1024);
+  assert.equal(details.results[0]?.id, "sa-0");
+  assert.ok(
+    details.results.every(
+      (row) => row.status === undefined && row.title.length <= 1024,
+    ),
+  );
+  assert.equal(projected.truncation?.details, true);
+});
+
 test("native subagent display receipts use bounded content and do not invoke getters", () => {
   const entry = {
     type: "custom" as const,

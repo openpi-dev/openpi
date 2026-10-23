@@ -308,6 +308,10 @@ test("sidebar grouping and sort menus preserve default project Recent entries an
     name: "会话侧栏选项",
     exact: true,
   });
+  const recentMenu = page.getByRole("menu", {
+    name: "会话侧栏选项",
+    exact: true,
+  });
   await recent.locator(".sidebar-section-heading").hover();
   await recentOptions.click();
   await page.getByRole("menuitem", { name: "会话排序", exact: true }).click();
@@ -319,6 +323,7 @@ test("sidebar grouping and sort menus preserve default project Recent entries an
   await page
     .getByRole("menuitem", { name: "在最近列表显示项目会话", exact: true })
     .click();
+  await expect(recentMenu).toBeHidden();
   await expect(recent.locator(".session-row")).toHaveCount(0);
   await sidebar
     .getByRole("button", { name: "项目侧栏选项", exact: true })

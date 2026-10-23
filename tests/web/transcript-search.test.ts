@@ -107,9 +107,11 @@ test("searches a Session file written by Pi", async () => {
       ],
       allowedSessionRoots: [sessionDirectory],
       allowedWorkspaces: [root],
+      // This verifies Pi persistence compatibility; deadline behavior has its own test.
+      now: () => 0,
     });
 
-    assert.equal(result.partial, false);
+    assert.equal(result.partial, false, result.partialReasons.join(", "));
     assert.deepEqual(
       result.matches.map((match) => [match.source, match.sessionSource]),
       [

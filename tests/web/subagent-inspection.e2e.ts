@@ -202,6 +202,7 @@ for (const [width, touch] of [
         .getByRole("button", { name: "关闭", exact: true })
         .click();
       await expect(overviewTrigger).toBeFocused();
+      await page.locator(".activity-summary > summary").click();
       await page
         .getByRole("button", {
           name: "子代理：1 运行中 · 4 已完成 · 1 其他记录",
@@ -231,10 +232,15 @@ for (const [width, touch] of [
       await expect(
         dialog.getByText("Read-only verification complete."),
       ).toBeVisible();
-      await dialog.getByText("read", { exact: true }).click();
-      await expect(
-        dialog.getByText('{"name":"example-app"}', { exact: true }),
-      ).toBeVisible();
+      const readEvidence = dialog.locator(
+        '.tool-evidence-card[data-tool="read"]',
+      );
+      await readEvidence.locator(":scope > summary").click();
+      const fileContent = readEvidence.getByRole("figure", {
+        name: "File content",
+      });
+      await expect(fileContent).toBeVisible();
+      await expect(fileContent).toContainText('{"name":"example-app"}');
       await dialog.getByRole("button", { name: "返回子代理列表" }).click();
       await expect(list.getByRole("button")).toHaveCount(6);
       if (width > 1100) {
@@ -537,10 +543,12 @@ test("workflow tasks share child navigation while retaining uncertainty and exac
   await expect(panel.getByRole("heading", { name: /未确认/ })).toBeVisible();
   const listTitle = panel.getByTitle(children[0]!.title);
   await expect(listTitle).toBeVisible();
-  expect(
-    await listTitle.evaluate((el) => el.scrollWidth > el.clientWidth),
-  ).toBe(true);
-  expect((await listTitle.boundingBox())!.height).toBeLessThanOrEqual(24);
+  const titleBounds = (await listTitle.boundingBox())!;
+  const titleLineHeight = await listTitle.evaluate((el) =>
+    Number.parseFloat(getComputedStyle(el).lineHeight),
+  );
+  expect(titleBounds.height).toBeLessThanOrEqual(titleLineHeight * 2 + 1);
+  expect(titleBounds.x + titleBounds.width).toBeLessThanOrEqual(390);
   await page.screenshot({
     path: testInfo.outputPath("workflow-overview-390.png"),
   });

@@ -36,3 +36,22 @@
 @media (hover: none), (pointer: coarse) {
   .configuration-menu-trigger { min-height: 44px !important; }
 }
+
+@media (min-width: 761px) {
+  .settings-configuration-panel > .settings-page-heading { margin-bottom: 32px; }
+  .configuration-scope { gap: 20px; margin-bottom: 18px; line-height: 1.6; }
+  .configuration-scope-label { padding: 6px 9px; border: 0; border-radius: 6px; background: var(--surface-panel); font-size: 12px; }
+  .configuration-group { border-radius: 10px; }
+  .configuration-row { min-height: 80px; padding: 18px 20px; }
+  .configuration-row + .configuration-row::before { right: 20px; left: 20px; }
+  .configuration-copy { flex: 1; }
+  .configuration-copy strong { font-size: 13px; font-weight: 600; line-height: 1.5; }
+  .configuration-copy p { margin-top: 5px; font-size: 12px; line-height: 1.65; }
+  .configuration-readonly { max-width: 180px; font-size: 12px; line-height: 1.6; }
+  .configuration-control { min-width: 136px; max-width: 46%; }
+  .configuration-section { margin-top: 32px; }
+  .configuration-section > h2 { margin-bottom: 14px; font-size: 13px; font-weight: 600; }
+  .configuration-menu-trigger { min-height: 32px !important; max-width: 100%; padding: 5px 10px !important; border-radius: 7px !important; background: var(--page) !important; }
+  .configuration-runtime-button { min-height: 32px; padding: 6px 10px; border-radius: 7px; font-family: inherit; }
+  .configuration-runtime-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+}

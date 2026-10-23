@@ -226,6 +226,52 @@ it("keeps a provider together when the current model is prepended to the catalog
   expect(screen.getAllByText("alpha")).toHaveLength(1);
 });
 
+it("shows model brand icons for custom providers in the trigger and catalog", async () => {
+  const catalog = snapshot();
+  catalog.models = [
+    {
+      provider: "magpie",
+      id: "workbuddy/deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      label: "DeepSeek V4 Pro",
+      current: true,
+    },
+    {
+      provider: "magpie",
+      id: "workbuddy/mimo-v2.6-pro",
+      name: "Xiaomi MiMo V2.6 Pro",
+      label: "Xiaomi MiMo V2.6 Pro",
+      current: false,
+    },
+    {
+      provider: "kimi-code",
+      id: "k3",
+      name: "Kimi K3",
+      label: "Kimi K3",
+      current: false,
+    },
+  ];
+  setup({ snapshot: catalog, currentModel: catalog.models[0] });
+  const triggerIcon = document.querySelector(
+    ".model-thinking-label .models-provider-icon",
+  );
+  expect(triggerIcon?.classList.contains("models-provider-connection")).toBe(
+    false,
+  );
+  expect(triggerIcon?.getAttribute("style")).toContain("mask-image");
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "DeepSeek V4 Pro (magpie/workbuddy/deepseek-v4-pro)",
+    }),
+  );
+  await screen.findByRole("textbox", { name: i18n.t("searchModels") });
+  for (const option of screen.getAllByRole("option")) {
+    const icon = option.querySelector(".models-provider-icon");
+    expect(icon?.classList.contains("models-provider-connection")).toBe(false);
+    expect(icon?.getAttribute("style")).toContain("mask-image");
+  }
+});
+
 it("does not treat an unreceived catalog as an empty one", () => {
   const openSettings = vi.fn();
   setup({

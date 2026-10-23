@@ -336,3 +336,155 @@ it("lets a slow Git result settle and coalesces repeated refreshes into one foll
   expect(read).toHaveBeenCalledTimes(2);
   expect(signal?.aborted).toBe(false);
 });
+
+for (const trigger of ["focus", "refreshKey"] as const) {
+  it(`refreshes the summary after ${trigger} queues behind ${trigger === "focus" ? "successful" : "failed"} pagination`, async () => {
+    vi.useFakeTimers();
+    const first = {
+      ...oldResult,
+      snapshot: { ...oldResult.snapshot, nextOffset: 1 },
+    };
+    const latest = {
+      ...oldResult,
+      snapshot: { ...oldResult.snapshot, revision: "latest" },
+    };
+    let finish!: (value: WebGitReviewResult) => void;
+    const read = vi
+      .spyOn(WebClient.prototype, "gitReview")
+      .mockResolvedValueOnce(first)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue(latest);
+    const { result, rerender } = renderHook(
+      ({ key }) => useGitReview(session("a"), key),
+      { initialProps: { key: 1 } },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    let page!: Promise<void>;
+    act(() => {
+      page = result.current.loadMore();
+    });
+    if (trigger === "focus") fireEvent(window, new Event("focus"));
+    else {
+      rerender({ key: 2 });
+      await act(() => vi.advanceTimersByTimeAsync(200));
+    }
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      finish(
+        trigger === "focus"
+          ? oldResult
+          : { ok: false, reason: "revision_changed" },
+      );
+      await page;
+    });
+    await act(() => vi.advanceTimersByTimeAsync(199));
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(read.mock.calls[2]?.[3]).toEqual({
+      source: "unstaged",
+      offset: "0",
+    });
+    expect(result.current.result).toEqual(latest);
+    expect(result.current.error).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+}
+
+it("does not let an aborted page consume the next Session's queued refresh", async () => {
+  vi.useFakeTimers();
+  const first = {
+    ...oldResult,
+    snapshot: { ...oldResult.snapshot, nextOffset: 1 },
+  };
+  let finishPage!: (value: WebGitReviewResult) => void;
+  let finishCurrent!: (value: WebGitReviewResult) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "gitReview")
+    .mockResolvedValueOnce(first)
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishPage = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishCurrent = resolve;
+        }),
+    )
+    .mockResolvedValue(oldResult);
+  const { result, rerender } = renderHook(
+    ({ selected, key }) => useGitReview(selected, key),
+    { initialProps: { selected: session("a"), key: 1 } },
+  );
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  let page!: Promise<void>;
+  act(() => {
+    page = result.current.loadMore();
+  });
+  const pageSignal = read.mock.calls[1]?.[2];
+  rerender({ selected: session("b"), key: 1 });
+  expect(pageSignal?.aborted).toBe(true);
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  rerender({ selected: session("b"), key: 2 });
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  await act(async () => {
+    finishPage(oldResult);
+    await page;
+  });
+  expect(result.current.loading).toBe(true);
+  expect(result.current.result).toBeNull();
+  expect(read).toHaveBeenCalledTimes(3);
+  await act(async () => finishCurrent(oldResult));
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  expect(read).toHaveBeenCalledTimes(4);
+  expect(read.mock.calls[3]?.[1]).toBe("/sessions/b.jsonl");
+});
+
+it("drops a queued page refresh while the panel is hidden during a running turn", async () => {
+  vi.useFakeTimers();
+  const first = {
+    ...oldResult,
+    snapshot: { ...oldResult.snapshot, nextOffset: 1 },
+  };
+  let finish!: (value: WebGitReviewResult) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "gitReview")
+    .mockResolvedValueOnce(first)
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValue(oldResult);
+  const { result, rerender } = renderHook(
+    ({ active }) => useGitReview(session("a"), 1, { active, running: true }),
+    { initialProps: { active: true } },
+  );
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  let page!: Promise<void>;
+  act(() => {
+    page = result.current.loadMore();
+  });
+  fireEvent(window, new Event("focus"));
+  rerender({ active: false });
+  await act(async () => {
+    finish(oldResult);
+    await page;
+  });
+  fireEvent(window, new Event("focus"));
+  await act(() => vi.advanceTimersByTimeAsync(5000));
+  expect(read).toHaveBeenCalledTimes(2);
+  rerender({ active: true });
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  expect(read).toHaveBeenCalledTimes(3);
+});

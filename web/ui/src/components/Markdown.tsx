@@ -1,13 +1,17 @@
+import { Tooltip } from "@astryxdesign/core/Tooltip";
 import type { Element, Root, RootContent } from "hast";
-import { Check, Clipboard } from "lucide-react";
+import { Check, ChevronDown, Clipboard, WrapText } from "lucide-react";
 import type { ComponentPropsWithoutRef } from "react";
 import {
+  createContext,
   isValidElement,
   lazy,
   memo,
   Suspense,
   useContext,
+  useDeferredValue,
   useEffect,
+  useId,
   useRef,
   useState,
 } from "react";
@@ -21,9 +25,14 @@ import { isLocalArtifactLink } from "../../../protocol/artifacts.ts";
 import { ArtifactContext } from "../features/artifacts/context.ts";
 import { InlineFileImage } from "../features/files/InlineFileImage.tsx";
 import { copyText } from "../lib/clipboard.ts";
+import { highlightCode } from "../lib/highlight-code.ts";
 
-const MermaidPreview = lazy(
-  () => import("../features/files/MermaidPreview.tsx"),
+const StreamingContext = createContext(false);
+
+const MermaidPreview = lazy(() =>
+  import("../features/files/MermaidPreview.tsx").catch(() => ({
+    default: MermaidLoadFallback,
+  })),
 );
 
 function labelTaskCheckboxes() {
@@ -60,6 +69,7 @@ function labelTaskCheckboxes() {
 declare module "hast" {
   interface ElementData {
     openpiWindowsPath?: string;
+    openpiInlineImage?: boolean;
   }
 }
 
@@ -118,6 +128,16 @@ function CodeBlock({
   ...props
 }: ComponentPropsWithoutRef<"pre"> & { node?: Element }) {
   const { t } = useTranslation();
+  const [wrapped, setWrapped] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const streaming = useContext(StreamingContext);
+  const regionId = useId();
+  const scroll = useRef<HTMLElement>(null);
+  const [highlighted, setHighlighted] = useState({
+    source: "",
+    language: "",
+    html: "",
+  });
   const [copyStatus, setCopyStatus] = useState<
     "idle" | "copying" | "copied" | "failed"
   >("idle");
@@ -132,56 +152,151 @@ function CodeBlock({
     [],
   );
   const copied = copyStatus === "copied";
+  const language = isValidElement<{ className?: string }>(children)
+    ? /(?:^|\s)language-([\w+-]+)/u.exec(children.props.className ?? "")?.[1]
+    : undefined;
+  const source =
+    isValidElement<{ children?: unknown }>(children) &&
+    typeof children.props.children === "string"
+      ? children.props.children
+      : "";
+  const lineCount = source.replace(/\n$/u, "").split("\n").length;
+  const collapsible = lineCount > 10;
+  const html =
+    !streaming &&
+    highlighted.source === source &&
+    highlighted.language === language
+      ? highlighted.html
+      : "";
+  useEffect(() => {
+    if (streaming || !language || !source) return;
+    let cancelled = false;
+    void highlightCode(source, language)
+      .then((html) => {
+        if (!cancelled) setHighlighted({ source, language, html });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [source, language, streaming]);
   return (
-    <div className="markdown-code-block">
+    <div
+      className="markdown-code-block"
+      data-wrap={wrapped || undefined}
+      data-collapsible={collapsible || undefined}
+      data-expanded={expanded || undefined}
+    >
       <div className="markdown-code-toolbar">
+        <span className="markdown-code-language">
+          {language ?? t("codeBlock")}
+        </span>
         {copyStatus === "failed" && (
           <span role="status">{t("copyCodeFailed")}</span>
         )}
-        <button
-          type="button"
-          aria-label={copied ? t("copiedCode") : t("copyCode")}
-          title={copied ? t("copiedCode") : t("copyCode")}
-          disabled={copyStatus === "copying"}
-          onClick={() => {
-            const generation = ++copyGeneration.current;
-            window.clearTimeout(copyTimer.current);
-            setCopyStatus("copying");
-            void copyText(code.current?.textContent ?? "").then((success) => {
-              if (generation !== copyGeneration.current) return;
-              setCopyStatus(success ? "copied" : "failed");
-              if (success)
-                copyTimer.current = window.setTimeout(
-                  () => setCopyStatus("idle"),
-                  1_200,
-                );
-            });
+        <Tooltip content={t("wrapCode")} placement="above">
+          <button
+            type="button"
+            aria-label={t("wrapCode")}
+            aria-pressed={wrapped}
+            onClick={() => setWrapped((value) => !value)}
+          >
+            <WrapText aria-hidden="true" />
+          </button>
+        </Tooltip>
+        <Tooltip
+          content={copied ? t("copiedCode") : t("copyCode")}
+          placement="above"
+        >
+          <button
+            type="button"
+            aria-label={copied ? t("copiedCode") : t("copyCode")}
+            data-copied={copied || undefined}
+            disabled={copyStatus === "copying"}
+            onClick={() => {
+              const generation = ++copyGeneration.current;
+              window.clearTimeout(copyTimer.current);
+              setCopyStatus("copying");
+              void copyText(code.current?.textContent ?? "").then((success) => {
+                if (generation !== copyGeneration.current) return;
+                setCopyStatus(success ? "copied" : "failed");
+                if (success)
+                  copyTimer.current = window.setTimeout(
+                    () => setCopyStatus("idle"),
+                    1_200,
+                  );
+              });
+            }}
+          >
+            {copied ? (
+              <Check aria-hidden="true" />
+            ) : (
+              <Clipboard aria-hidden="true" />
+            )}
+          </button>
+        </Tooltip>
+      </div>
+      <div className="markdown-code-body">
+        <section
+          ref={scroll}
+          id={regionId}
+          className="markdown-code-scroll"
+          aria-label={t("codeBlock")}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: Long code needs a keyboard-focusable horizontal scroll region.
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            const target = event.currentTarget;
+            if (target.scrollWidth <= target.clientWidth) return;
+            event.preventDefault();
+            target.scrollLeft += event.key === "ArrowRight" ? 40 : -40;
           }}
         >
-          {copied ? (
-            <Check aria-hidden="true" />
-          ) : (
-            <Clipboard aria-hidden="true" />
-          )}
+          <pre ref={code} {...props}>
+            {html ? (
+              <code
+                className={`language-${language}`}
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: highlightCode admits only sanitized spans/classes; source text is escaped by highlight.js.
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
+            ) : (
+              children
+            )}
+          </pre>
+        </section>
+      </div>
+      {collapsible && (
+        <button
+          className="markdown-code-expand"
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={regionId}
+          onClick={() => {
+            if (expanded && scroll.current) scroll.current.scrollTop = 0;
+            setExpanded((value) => !value);
+          }}
+        >
+          {expanded ? t("collapseCode") : t("expandCode", { count: lineCount })}
+          <ChevronDown aria-hidden="true" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MermaidLoadFallback({ source }: { source: string }) {
+  const { t } = useTranslation();
+  return (
+    <div>
+      <div className="evidence-warning" role="alert">
+        <p>{t("filesDiagramLoadError")}</p>
+        <button type="button" onClick={() => window.location.reload()}>
+          {t("reloadPage")}
         </button>
       </div>
-      <section
-        className="markdown-code-scroll"
-        aria-label={t("codeBlock")}
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: Long code needs a keyboard-focusable horizontal scroll region.
-        tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-          const target = event.currentTarget;
-          if (target.scrollWidth <= target.clientWidth) return;
-          event.preventDefault();
-          target.scrollLeft += event.key === "ArrowRight" ? 40 : -40;
-        }}
-      >
-        <pre ref={code} {...props}>
-          {children}
-        </pre>
-      </section>
+      <CodeBlock>
+        <code className="language-mermaid">{source}</code>
+      </CodeBlock>
     </div>
   );
 }
@@ -202,16 +317,144 @@ function FileCodeBlock(
   return <CodeBlock {...props} />;
 }
 
-export const Markdown = memo(function Markdown({
+// Keep scroll regions and links mounted while later Markdown chunks arrive.
+function MarkdownTable({
+  children,
+  node: _node,
+  ...props
+}: ComponentPropsWithoutRef<"table"> & { node?: Element }) {
+  return (
+    <section
+      className="markdown-table-scroll"
+      aria-label="Table"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: Wide tables need a keyboard-focusable horizontal scroll region.
+      tabIndex={0}
+    >
+      <table {...props}>{children}</table>
+    </section>
+  );
+}
+
+function MarkdownLink({
+  href,
+  node,
+  children: label,
+  ...props
+}: ComponentPropsWithoutRef<"a"> & { node?: Element }) {
+  const { t } = useTranslation();
+  const artifacts = useContext(ArtifactContext);
+  href = windowsLink(node) ?? href;
+  if (isLocalArtifactLink(href ?? ""))
+    return artifacts && !artifacts.disabled ? (
+      <button
+        type="button"
+        className="artifact-link"
+        title={`Open read-only file: ${href}`}
+        onClick={() => artifacts.open(href ?? "", artifacts.parent)}
+      >
+        {label}
+        <small className="artifact-link-path" aria-hidden="true">
+          {" "}
+          ({href})
+        </small>
+      </button>
+    ) : (
+      <span title={t("artifactReferenceUnavailable", { path: href })}>
+        {label}
+        <small className="artifact-link-path"> ({href})</small>
+      </span>
+    );
+  const safeHref = safeUrl(href ?? "");
+  return safeHref ? (
+    <a {...props} href={safeHref} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  ) : (
+    label
+  );
+}
+
+// Mark the first sixteen local images once per parsed document, independent of
+// React render attempts or context updates. Node data cannot come from raw HTML.
+function limitInlineImages() {
+  return (tree: Root) => {
+    let count = 0;
+    const walk = (node: Root | Element) => {
+      if (node.type === "element" && node.tagName === "img") {
+        const src = windowsLink(node) ?? node.properties.src;
+        if (typeof src === "string" && isLocalArtifactLink(src))
+          node.data = { ...node.data, openpiInlineImage: count++ < 16 };
+      }
+      for (const child of node.children)
+        if (child.type === "element") walk(child);
+    };
+    walk(tree);
+  };
+}
+
+function MarkdownImage({
+  src,
+  node,
+  alt,
+  title,
+}: Omit<ComponentPropsWithoutRef<"img">, "src"> & {
+  src?: string;
+  node?: Element;
+}) {
+  const { t } = useTranslation();
+  const artifacts = useContext(ArtifactContext);
+  src = windowsLink(node) ?? src;
+  if (
+    node?.data?.openpiInlineImage &&
+    src &&
+    artifacts?.parent &&
+    !artifacts.disabled
+  )
+    return (
+      <InlineFileImage
+        key={JSON.stringify([artifacts.sessionId, artifacts.parent, src])}
+        src={src}
+        alt={alt || ""}
+      />
+    );
+  if (isLocalArtifactLink(src ?? ""))
+    return artifacts && !artifacts.disabled ? (
+      <button
+        type="button"
+        className="artifact-link"
+        title={`Open read-only file: ${src}`}
+        onClick={() => artifacts.open(src ?? "", artifacts.parent)}
+      >
+        [image: {alt || "image"}]
+        <small className="artifact-link-path" aria-hidden="true">
+          {" "}
+          ({src})
+        </small>
+      </button>
+    ) : (
+      <span title={t("artifactReferenceUnavailable", { path: src })}>
+        [image: {alt || "image"}]
+        <small className="artifact-link-path"> ({src})</small>
+      </span>
+    );
+  const safeHref = safeUrl(src ?? "");
+  const label = alt || "image";
+  return safeHref ? (
+    <a href={safeHref} title={title} target="_blank" rel="noreferrer">
+      [image: {label}]
+    </a>
+  ) : (
+    <span>{label}</span>
+  );
+}
+
+const MarkdownContent = memo(function MarkdownContent({
   children,
   filePreview = false,
 }: {
   children: string;
   filePreview?: boolean;
 }) {
-  const { t } = useTranslation();
-  const artifacts = useContext(ArtifactContext);
-  let imageCount = 0;
   return (
     <div className="markdown">
       <ReactMarkdown
@@ -221,100 +464,39 @@ export const Markdown = memo(function Markdown({
           preserveWindowsLinks,
           rehypeSanitize,
           labelTaskCheckboxes,
+          ...(filePreview ? [limitInlineImages] : []),
         ]}
         urlTransform={(value) =>
           isLocalArtifactLink(value) ? value : safeUrl(value)
         }
         components={{
           pre: filePreview ? FileCodeBlock : CodeBlock,
-          table({ children, ...props }) {
-            return (
-              <section
-                className="markdown-table-scroll"
-                aria-label="Table"
-                // biome-ignore lint/a11y/noNoninteractiveTabindex: Wide tables need a keyboard-focusable horizontal scroll region.
-                tabIndex={0}
-              >
-                <table {...props}>{children}</table>
-              </section>
-            );
-          },
-          a({ href, node, children: label, ...props }) {
-            href = windowsLink(node) ?? href;
-            if (isLocalArtifactLink(href ?? ""))
-              return artifacts && !artifacts.disabled ? (
-                <button
-                  type="button"
-                  className="artifact-link"
-                  title={`Open read-only file: ${href}`}
-                  onClick={() => artifacts.open(href ?? "", artifacts.parent)}
-                >
-                  {label}
-                  <small className="artifact-link-path" aria-hidden="true">
-                    {" "}
-                    ({href})
-                  </small>
-                </button>
-              ) : (
-                <span title={t("artifactReferenceUnavailable", { path: href })}>
-                  {label}
-                  <small className="artifact-link-path"> ({href})</small>
-                </span>
-              );
-            const safeHref = safeUrl(href ?? "");
-            return safeHref ? (
-              <a {...props} href={safeHref} target="_blank" rel="noreferrer">
-                {label}
-              </a>
-            ) : (
-              label
-            );
-          },
-          img({ src, node, alt, title }) {
-            src = windowsLink(node) ?? src;
-            if (
-              filePreview &&
-              src &&
-              isLocalArtifactLink(src) &&
-              artifacts?.parent &&
-              !artifacts.disabled &&
-              imageCount++ < 16
-            )
-              return <InlineFileImage src={src} alt={alt || ""} />;
-            if (isLocalArtifactLink(src ?? ""))
-              return artifacts && !artifacts.disabled ? (
-                <button
-                  type="button"
-                  className="artifact-link"
-                  title={`Open read-only file: ${src}`}
-                  onClick={() => artifacts.open(src ?? "", artifacts.parent)}
-                >
-                  [image: {alt || "image"}]
-                  <small className="artifact-link-path" aria-hidden="true">
-                    {" "}
-                    ({src})
-                  </small>
-                </button>
-              ) : (
-                <span title={t("artifactReferenceUnavailable", { path: src })}>
-                  [image: {alt || "image"}]
-                  <small className="artifact-link-path"> ({src})</small>
-                </span>
-              );
-            const safeHref = safeUrl(src ?? "");
-            const label = alt || "image";
-            return safeHref ? (
-              <a href={safeHref} title={title} target="_blank" rel="noreferrer">
-                [image: {label}]
-              </a>
-            ) : (
-              <span>{label}</span>
-            );
-          },
+          table: MarkdownTable,
+          a: MarkdownLink,
+          img: MarkdownImage,
         }}
       >
         {children}
       </ReactMarkdown>
     </div>
+  );
+});
+
+export const Markdown = memo(function Markdown({
+  children,
+  filePreview = false,
+  streaming = false,
+}: {
+  children: string;
+  filePreview?: boolean;
+  streaming?: boolean;
+}) {
+  const deferred = useDeferredValue(children);
+  return (
+    <StreamingContext.Provider value={streaming}>
+      <MarkdownContent filePreview={filePreview}>
+        {streaming ? deferred : children}
+      </MarkdownContent>
+    </StreamingContext.Provider>
   );
 });

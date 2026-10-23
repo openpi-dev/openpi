@@ -252,6 +252,7 @@ export function projectWebSetupConfig(
       webAuxiliaryWidth: config.ui.webAuxiliaryWidth,
       webChatFontSize: config.ui.webChatFontSize,
       webExpandThinking: config.ui.webExpandThinking,
+      webFollowUpBehavior: config.ui.webFollowUpBehavior,
       webHiddenThinkingLevels: [...config.ui.webHiddenThinkingLevels],
       webPinnedSort: config.ui.webPinnedSort,
       webSidebarGrouping: config.ui.webSidebarGrouping,

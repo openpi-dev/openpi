@@ -9,7 +9,9 @@ test.after(async () => {
   await runtime.dispose();
 });
 
-const runNode = (source: string, timeout = 1_000) =>
+// Output/exit-code checks must allow Windows CI to start Node. Deadline
+// enforcement has its own test below with an explicit 20 ms budget.
+const runNode = (source: string, timeout = 10_000) =>
   runtime.runPromise(
     runCommand(
       process.execPath,

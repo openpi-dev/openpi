@@ -33,6 +33,7 @@ export function WebSearchSettingsPanel({
         </div>
         <button
           type="button"
+          className="icon-button settings-heading-refresh"
           aria-label={t("refreshStatus")}
           onClick={onRefresh}
         >
@@ -77,7 +78,7 @@ export function WebSearchSettingsPanel({
           {t(available ? "webSearchSupported" : "webSearchUnsupported")}
         </p>
       </section>
-      <section className="settings-section-block settings-chat-controls">
+      <section className="settings-section-block settings-web-search-actions">
         <Button
           label={t(enabled ? "webSearchDisable" : "webSearchEnable")}
           variant="secondary"

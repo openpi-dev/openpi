@@ -1,3 +1,4 @@
+import { webRuntimeStartup } from "./runtime-info.ts";
 import { execFile } from "node:child_process";
 import { registerWebBrowserBridge } from "../../extensions/browser/web-bridge.ts";
 import { WebBrowserBroker, validBrowserPages, validBrowserIdentity } from "./browser-control.ts";
@@ -358,7 +359,7 @@ export class WebHost {
     const turnOwner = () => {
       if (this.stopping || !this.runtime.workspaceSelected) return undefined;
       const turn = this.runtime.getActiveTurn();
-      const admission = turn && this.promptAdmissions.get(turn.commandId);
+      const admission = turn && this.promptAdmissions.get(turn.originCommandId ?? turn.commandId);
       if (!turn || !admission?.controllerId || admission.sessionId !== turn.sessionId ||
           !this.adapter.isCurrentSession({ id: admission.sessionId, path: admission.sessionPath })) return undefined;
       return { ...turn, workspace: this.runtime.cwd, controllerId: admission.controllerId };
@@ -1421,10 +1422,11 @@ export class WebHost {
     if (url.pathname === "/api/settings/preferences" && request.method === "POST") {
       const body = await this.readJson(request);
       const keys = Object.keys(body);
-      const { theme, appearance, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, hiddenThinkingLevels, thinkingLevelVisibility, pinnedSort, sidebarGrouping, chatsSort, projectsInRecents, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
-      // Browser appearance is package-wide and independent of agent execution.
-      // Keep this surface restricted to presentation fields, including on Plan turns.
-      if (!keys.length || keys.some((key) => !["theme", "appearance", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "hiddenThinkingLevels", "thinkingLevelVisibility", "pinnedSort", "sidebarGrouping", "chatsSort", "projectsInRecents", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
+      const { theme, appearance, chatWidth, sidebarWidth, auxiliaryWidth, chatFontSize, expandThinking, followUpBehavior, hiddenThinkingLevels, thinkingLevelVisibility, pinnedSort, sidebarGrouping, chatsSort, projectsInRecents, subagentResultDisplay, bashToolDisplay, fileMutationDisplay, customFooter, footerStyle } = body;
+      // Web preferences only change presentation and composer defaults. Saving
+      // them never admits a prompt or changes execution, including on Plan turns.
+      if (!keys.length || keys.some((key) => !["theme", "appearance", "chatWidth", "sidebarWidth", "auxiliaryWidth", "chatFontSize", "expandThinking", "followUpBehavior", "hiddenThinkingLevels", "thinkingLevelVisibility", "pinnedSort", "sidebarGrouping", "chatsSort", "projectsInRecents", "subagentResultDisplay", "bashToolDisplay", "fileMutationDisplay", "customFooter", "footerStyle"].includes(key)) ||
+        (followUpBehavior !== undefined && followUpBehavior !== "followUp" && followUpBehavior !== "steer") ||
         (hiddenThinkingLevels !== undefined && !isHiddenThinkingLevels(hiddenThinkingLevels)) ||
         (thinkingLevelVisibility !== undefined && (!isThinkingLevelVisibility(thinkingLevelVisibility) || hiddenThinkingLevels !== undefined)) ||
         (subagentResultDisplay !== undefined && !isDetailDisplay(subagentResultDisplay)) ||
@@ -1462,6 +1464,7 @@ export class WebHost {
               ...(auxiliaryWidth !== undefined ? { webAuxiliaryWidth: auxiliaryWidth } : {}),
               ...(chatFontSize !== undefined ? { webChatFontSize: chatFontSize } : {}),
               ...(expandThinking !== undefined ? { webExpandThinking: expandThinking } : {}),
+              ...(followUpBehavior !== undefined ? { webFollowUpBehavior: followUpBehavior } : {}),
               ...(isHiddenThinkingLevels(hiddenThinkingLevels) ? { webHiddenThinkingLevels: hiddenThinkingLevels } : {}),
               ...(visibility ? { webHiddenThinkingLevels: visibility.visible
                 ? current.ui.webHiddenThinkingLevels.filter((level) => level !== visibility.level)
@@ -2430,6 +2433,7 @@ export class WebHost {
     if (url.pathname === "/api/diagnostics")
       return this.json(response, 200, {
         node: process.version,
+        openpi: webRuntimeStartup,
         cwd: this.runtime.cwd,
         sessionId: this.runtime.sessionManager.getSessionId(),
         workspaceSelected: this.runtime.workspaceSelected,
@@ -2531,6 +2535,7 @@ export class WebHost {
           auxiliaryWidth: setup.ui.webAuxiliaryWidth,
           chatFontSize: setup.ui.webChatFontSize,
           expandThinking: setup.ui.webExpandThinking,
+          followUpBehavior: setup.ui.webFollowUpBehavior,
           hiddenThinkingLevels: setup.ui.webHiddenThinkingLevels,
           pinnedSort: setup.ui.webPinnedSort,
           sidebarGrouping: setup.ui.webSidebarGrouping,
@@ -2722,10 +2727,11 @@ export class WebHost {
   }
 
   private makePromptAdmissionSpace() {
+    const activeTurn = this.runtime.getActiveTurn();
     while (this.promptAdmissions.size >= MAX_PROMPT_ADMISSIONS) {
       const settled = [...this.promptAdmissions.entries()].find(
         ([commandId, admission]) => admission.result !== undefined &&
-          commandId !== this.runtime.getActiveTurn()?.commandId,
+          commandId !== activeTurn?.commandId && commandId !== activeTurn?.originCommandId,
       );
       if (!settled) return false;
       this.promptAdmissions.delete(settled[0]);

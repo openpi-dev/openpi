@@ -85,6 +85,28 @@ export function useGitReview(
     setLoading(Boolean(sessionId));
   }, [sessionId, sessionPath, source, baseRef]);
 
+  const finishRequest = useCallback(
+    (controller: AbortController, refreshSummary: () => Promise<void>) => {
+      if (controller.signal.aborted || request.current !== controller) return;
+      request.current = null;
+      setLoading(false);
+      if (queued.current) {
+        queued.current = false;
+        const current = visibility.current;
+        if ((current.active || !current.running) && timer.current === null) {
+          timer.current = window.setTimeout(
+            () => {
+              timer.current = null;
+              void refreshSummary();
+            },
+            current.active ? 200 : 2000,
+          );
+        }
+      }
+    },
+    [],
+  );
+
   const refresh = useCallback(async () => {
     if (!sessionId || !sessionPath) return;
     if (document.visibilityState === "hidden") return;
@@ -147,25 +169,9 @@ export function useGitReview(
             : "Git review unavailable",
         );
     } finally {
-      if (!controller.signal.aborted) {
-        request.current = null;
-        setLoading(false);
-        if (queued.current) {
-          queued.current = false;
-          const current = visibility.current;
-          if ((current.active || !current.running) && timer.current === null) {
-            timer.current = window.setTimeout(
-              () => {
-                timer.current = null;
-                void refresh();
-              },
-              current.active ? 200 : 2000,
-            );
-          }
-        }
-      }
+      finishRequest(controller, refresh);
     }
-  }, [client, sessionId, sessionPath, source, baseRef, t]);
+  }, [client, sessionId, sessionPath, source, baseRef, t, finishRequest]);
 
   const loadMore = useCallback(async () => {
     if (
@@ -215,12 +221,19 @@ export function useGitReview(
       if (!controller.signal.aborted)
         setError(error instanceof Error ? error.message : t("gitReviewFailed"));
     } finally {
-      if (!controller.signal.aborted) {
-        request.current = null;
-        setLoading(false);
-      }
+      finishRequest(controller, refresh);
     }
-  }, [client, sessionId, sessionPath, source, baseRef, result, t]);
+  }, [
+    client,
+    sessionId,
+    sessionPath,
+    source,
+    baseRef,
+    result,
+    t,
+    finishRequest,
+    refresh,
+  ]);
 
   const readFile = useCallback(
     async (file: string, signal: AbortSignal, expectedRevision: string) => {

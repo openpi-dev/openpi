@@ -126,6 +126,8 @@ type ConversationForkControl = {
 
 type PromptTrace = {
   commandId: string;
+  webOrigin?: PromptTrace;
+  controlRevoked?: boolean;
   sessionId: string;
   startedAt: number;
   executionStartedAt?: number;
@@ -2828,9 +2830,10 @@ export class PiWebRuntime implements WebRuntimeController {
     const belongs = (candidate?: PromptTrace) => candidate && matchesSessionIdentity(manager, {
       expectedSessionId: candidate.sessionId, expectedSessionPath: candidate.sessionPath,
     });
-    // A delayed command may still own an unused exact Web origin. A genuinely
-    // native run gets only a control handle, never an HTTP/controller admission.
+    // Keep a new native run identity. Only its actual async Web origin may
+    // supply controller authority; an unrelated background start has none.
     const origin = this.promptOrigins?.getStore();
+    const webOrigin = origin?.webOrigin ?? origin;
     const current = belongs(trace) ? trace!
       : origin && !origin.started && belongs(origin) ? origin
         : {
@@ -2841,6 +2844,9 @@ export class PiWebRuntime implements WebRuntimeController {
             started: false,
             queued: false,
             userMessageObserved: false,
+            ...(webOrigin && belongs(origin) && belongs(webOrigin) && !webOrigin.controlRevoked && webOrigin.outcome !== "cancelled"
+              ? { webOrigin }
+              : {}),
           };
     this.startPromptTrace(current, manager, publish);
     return current;
@@ -2855,6 +2861,9 @@ export class PiWebRuntime implements WebRuntimeController {
       sessionId: trace.sessionId,
       commandId: trace.commandId,
       epoch: trace.epoch,
+      ...(trace.webOrigin && !trace.webOrigin.controlRevoked && trace.webOrigin.outcome !== "cancelled"
+        ? { originCommandId: trace.webOrigin.commandId }
+        : {}),
       ...(prompt ? { promptEntryId: prompt.id } : {}),
       ...(trace.executionStartedAt !== undefined && trace.executionClock !== undefined
         ? {
@@ -2886,6 +2895,7 @@ export class PiWebRuntime implements WebRuntimeController {
       outcome:
         trace.outcome ?? "uncertain",
     };
+    if (settlement.outcome === "cancelled") (trace.webOrigin ?? trace).controlRevoked = true;
     const key = this.turnKey(activeTurn);
     if (this.terminalTurnKeys.has(key)) return;
     this.terminalTurnKeys.add(key);

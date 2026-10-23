@@ -274,7 +274,7 @@ for (const portable of [false, true])
       broker.reconcile();
       await expect(
         broker.execute({ operation: "tabs", browser: profile.browser }),
-      ).rejects.toThrow(/enabled/);
+      ).rejects.toThrow(/Browser control is off/);
       await workbench.close();
       await expect.poll(() => broker.profiles().length).toBe(0);
       const native = context.pages().find((page) => page.url() === target)!;

@@ -652,10 +652,20 @@ async function dragPane(page: Page, side: "left" | "right", deltaX: number) {
 }
 
 async function openWorkbarTool(page: Page, name: string) {
-  await page
-    .locator('button.task-tools-trigger[aria-label="打开工具"]')
-    .click();
+  const trigger = page.locator(
+    'button.task-tools-trigger[aria-label="打开工具"]',
+  );
+  const opensMenu = (await trigger.getAttribute("aria-haspopup")) === "menu";
+  await trigger.click();
   const workbar = page.locator(".workbar-panel");
+  if (opensMenu) {
+    await page
+      .getByRole("menu", { name: "打开工具" })
+      .getByRole("menuitem", { name: new RegExp(`^${name}`, "u") })
+      .click();
+    await expect(workbar).toBeVisible();
+    return workbar;
+  }
   await expect(workbar).toBeVisible();
   const existingTab = workbar
     .locator(".workbar-tab > button:first-child")
@@ -664,7 +674,11 @@ async function openWorkbarTool(page: Page, name: string) {
     await existingTab.click();
   } else {
     await workbar
-      .getByRole("button", { name: new RegExp(`^${name}`, "u") })
+      .getByRole("button", { name: "打开工具", exact: true })
+      .click();
+    await page
+      .getByRole("menu", { name: "打开工具" })
+      .getByRole("menuitem", { name: new RegExp(`^${name}`, "u") })
       .click();
   }
   return workbar;
@@ -679,24 +693,24 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   const conversation = page.locator(".conversation-shell");
   const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
   await sidebarHandle.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
   await expect(sidebarHandle).toHaveAttribute("aria-valuemin", "220");
   await expect(sidebarHandle).toHaveAttribute("aria-valuemax", "520");
   await sidebarHandle.press("Home");
   await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "220");
   await expect(sidebar).toHaveCSS("width", "220px");
   await sidebarHandle.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
   const initialSidebar = await sidebar.boundingBox();
   const initialConversation = await conversation.boundingBox();
   expect(initialSidebar).not.toBeNull();
   expect(initialConversation).not.toBeNull();
 
   await sidebarHandle.press("ArrowRight");
-  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "356");
-  await expect(sidebar).toHaveCSS("width", "356px");
+  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "276");
+  await expect(sidebar).toHaveCSS("width", "276px");
   await sidebarHandle.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
 
   await dragPane(page, "left", 80);
   await expect
@@ -751,11 +765,11 @@ test("left divider follows visible sidebar between desktop breakpoints", async (
   await expect(sidebar).toBeVisible();
   await expect(left).toBeVisible();
   await left.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
   await dragPane(page, "left", 80);
-  await expect(sidebar).toHaveCSS("width", "420px");
+  await expect(sidebar).toHaveCSS("width", "340px");
   await dragPane(page, "left", -60);
-  await expect(sidebar).toHaveCSS("width", "360px");
+  await expect(sidebar).toHaveCSS("width", "280px");
   await page.setViewportSize({ width: 760, height: 900 });
   await expect(sidebar).toBeHidden();
   await expect(left).toHaveCount(0);
@@ -774,13 +788,13 @@ test("left divider still expands after the workbar takes the main view", async (
   const sidebar = page.locator(".session-sidebar");
   const left = page.locator('[data-pane-resizer="left"]');
   await left.press("Enter");
-  await expect(sidebar).toHaveCSS("width", "340px");
+  await expect(sidebar).toHaveCSS("width", "260px");
   const workbar = await openWorkbarTool(page, "文件");
   const right = page.locator('[data-pane-resizer="right"]');
   await right.press("Enter");
   await expect(right).toHaveAttribute("aria-valuenow", "520");
   await right.press("End");
-  await expect(right).toHaveAttribute("aria-valuenow", "660");
+  await expect(right).toHaveAttribute("aria-valuenow", "720");
   await dragPane(page, "right", -100);
   await expect(right).toHaveCount(0);
   await expect(page.locator(".app-shell")).toHaveClass(/center-collapsed/);
@@ -799,7 +813,7 @@ test("left divider still expands after the workbar takes the main view", async (
     ),
   ).toBe("left");
   await dragPane(page, "left", 80);
-  await expect(sidebar).toHaveCSS("width", "420px");
+  await expect(sidebar).toHaveCSS("width", "340px");
   await expect(composer).toHaveValue("keep drafting while resizing");
   expect(
     await composer.evaluate(
@@ -811,19 +825,19 @@ test("left divider still expands after the workbar takes the main view", async (
     (response) =>
       response.url().endsWith("/api/settings/preferences") &&
       response.request().method() === "POST" &&
-      response.request().postDataJSON().sidebarWidth === 360,
+      response.request().postDataJSON().sidebarWidth === 280,
   );
   await dragPane(page, "left", -60);
-  await expect(sidebar).toHaveCSS("width", "360px");
+  await expect(sidebar).toHaveCSS("width", "280px");
   await save;
   await workbar.getByRole("button", { name: "返回聊天", exact: true }).click();
   await expect(right).toHaveCount(1);
   await workbar
     .getByRole("button", { name: "收起工具栏", exact: true })
     .click();
-  await expect(sidebar).toHaveCSS("width", "360px");
+  await expect(sidebar).toHaveCSS("width", "280px");
   await page.reload();
-  await expect(sidebar).toHaveCSS("width", "360px");
+  await expect(sidebar).toHaveCSS("width", "280px");
   await expect(composer).toHaveValue("keep drafting while resizing");
 });
 
@@ -933,7 +947,7 @@ test("side conversation shows one editor in narrow layouts and preserves both dr
   const workbar = await openWorkbarTool(page, "侧边对话");
   const sideInput = workbar.getByPlaceholder("提出一个侧边问题…");
   await sideInput.fill("Keep the side conversation draft");
-  const mainForm = mainInput.locator("..");
+  const mainForm = page.locator("form").filter({ has: mainInput });
   const sideForm = workbar.locator(".side-conversation-composer");
   await page.addStyleTag({
     content: ".composer { transition: none !important; }",
@@ -1106,17 +1120,15 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
   await page
     .locator('button.task-tools-trigger[aria-label="打开工具"]')
     .click();
+  const toolsMenu = page.getByRole("menu", { name: "打开工具" });
+  await expect(toolsMenu.getByRole("menuitem")).toHaveCount(5);
+  for (const name of ["侧边对话", "变更", "终端", "浏览器", "文件"]) {
+    await expect(
+      toolsMenu.getByRole("menuitem", { name: new RegExp(`^${name}`, "u") }),
+    ).toBeVisible();
+  }
+  await toolsMenu.getByRole("menuitem", { name: /^变更/u }).click();
   const launcher = page.locator(".workbar-panel");
-  const launcherButtons = launcher.locator(".workbar-launcher-list > button");
-  await expect(launcherButtons).toHaveCount(5);
-  expect(await launcherButtons.locator("strong").allTextContents()).toEqual([
-    "侧边对话",
-    "变更",
-    "终端",
-    "浏览器",
-    "文件",
-  ]);
-  await launcher.getByRole("button", { name: /^变更/u }).click();
   const review = launcher.locator(".review-panel");
   await expect(review).toBeVisible();
   await launcher
@@ -1878,7 +1890,7 @@ for (const theme of ["light", "dark"]) {
     const expand = page.getByRole("button", { name: "展开侧边栏" });
     await expect(expand).toBeVisible();
     await expect(create).toBeVisible();
-    await expect(create).toHaveAttribute("title", "新建会话");
+    await expect(create).toHaveAccessibleDescription("新建会话");
     await expect(current).toBeHidden();
     await expect(archived).toBeVisible();
     await expect(
@@ -2047,6 +2059,19 @@ test("discovers and completes Pi commands without submitting unsupported command
   await expect(unavailableOption).toBeDisabled();
   await expect(unavailableOption).toContainText("此扩展命令尚未接入 Web");
   const menu = page.locator(".slash-command-menu");
+  // The entry transition moves the menu; measure its settled placement.
+  await expect
+    .poll(() =>
+      menu.evaluate((element) =>
+        element
+          .getAnimations()
+          .some(
+            (animation) =>
+              animation.pending || animation.playState === "running",
+          ),
+      ),
+    )
+    .toBe(false);
   const menuBox = await menu.boundingBox();
   const composerBox = await page.locator(".composer").boundingBox();
   expect(menuBox).not.toBeNull();
@@ -2156,6 +2181,8 @@ test.describe("touch viewport", () => {
     expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
     expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(390);
     await page.getByRole("button", { name: "取消" }).click();
+    // Native close removes [open] before the discrete exit transition ends.
+    await expect(page.locator("dialog:visible")).toHaveCount(0);
 
     const accessibility = await new AxeBuilder({ page }).analyze();
     expect(accessibility.violations).toEqual([]);
@@ -2287,7 +2314,8 @@ for (const width of [320, 390]) {
     expect(dialogBox?.x).toBeGreaterThanOrEqual(0);
     expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(width);
     await page.keyboard.press("Escape");
-    await expect(dialog).not.toBeVisible();
+    // Closing resets the dialog label before its discrete exit finishes.
+    await expect(page.locator("dialog:visible")).toHaveCount(0);
     await expect(menu).toBeFocused();
     await expect(sidebar).toBeVisible();
     await expect(menu).toHaveCSS("outline-style", "solid");
@@ -2865,6 +2893,13 @@ test("inspects session-scoped runtime and subagent details on desktop and mobile
     });
     await page.keyboard.press("Escape");
     await expect(providerSettings).not.toBeVisible();
+    const activities = page.locator(".activity-summary");
+    if (
+      !(await activities.evaluate(
+        (element) => (element as HTMLDetailsElement).open,
+      ))
+    )
+      await activities.locator(":scope > summary").click();
     await page.getByRole("button", { name: /子代理/ }).click();
     const subagentPanel = page.getByRole(
       width <= 640 ? "main" : "complementary",
@@ -4054,7 +4089,7 @@ test.describe("thinking picker", () => {
     await page.keyboard.press("Escape");
     await expect(
       page.locator('[role="dialog"]:has(.thinking-controls)'),
-    ).toHaveCount(0);
+    ).toBeHidden();
     await expect(picker).toBeFocused();
     expect(fixture.posts).toHaveLength(1);
   });
@@ -4233,7 +4268,7 @@ test.describe("thinking picker", () => {
     await page.mouse.up();
     await expect(
       page.locator('[role="dialog"]:has(.thinking-controls)'),
-    ).toHaveCount(0);
+    ).toBeHidden();
     expect(fixture.posts).toEqual([]);
     await page.locator(".model-picker > button").click();
     await page.mouse.move(bounds.x + 14, y);
@@ -4274,12 +4309,12 @@ test.describe("thinking picker", () => {
     await trigger.click();
     await expect(popup).toBeVisible();
     await trigger.click();
-    await expect(popup).toHaveCount(0);
+    await expect(popup).toBeHidden();
     await trigger.click();
     await expect(popup).toBeVisible();
     const composer = page.getByRole("textbox", { name: "描述任务" });
     await composer.click();
-    await expect(popup).toHaveCount(0);
+    await expect(popup).toBeHidden();
     await expect(composer).toBeFocused();
     await page.keyboard.type("Keep composing");
     await expect(composer).toHaveValue("Keep composing");

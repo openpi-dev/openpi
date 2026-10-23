@@ -364,6 +364,14 @@ export function ProviderModelsSection({
         {saved && (
           <p className="models-saved" role="status">
             {t("providerSaved", { provider: saved })}
+            {currentModel && (
+              <span>
+                {" "}
+                {t("providerCurrentSessionModel", {
+                  model: `${currentModel.provider} / ${currentModel.id}`,
+                })}
+              </span>
+            )}
           </p>
         )}
         {loadError && (
@@ -412,7 +420,10 @@ export function ProviderModelsSection({
                 </span>
               ) : defaults?.model ? (
                 <span className="models-default-value">
-                  <ProviderIcon id={defaults.model.provider} />
+                  <ProviderIcon
+                    id={defaults.model.provider}
+                    modelId={defaults.model.id}
+                  />
                   <span>
                     {modelName(defaults.model)}
                     <small>{providerName(defaults.model.provider)}</small>

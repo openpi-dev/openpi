@@ -16,7 +16,10 @@ import type {
   WebGitReviewSource,
 } from "../../web/protocol/types.ts";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
-import { parseDiffRows } from "../../web/ui/src/features/review/DiffCodePreview.tsx";
+import {
+  DiffCodePreview,
+  parseDiffRows,
+} from "../../web/ui/src/features/review/DiffCodePreview.tsx";
 import { ReviewPanel } from "../../web/ui/src/features/review/ReviewPanel.tsx";
 import { WorkbarPanel } from "../../web/ui/src/features/workbar/WorkbarPanel.tsx";
 import {
@@ -595,6 +598,64 @@ it("does not invent a numbered context row from a trailing diff newline", () => 
   ]);
 });
 
+it("pairs changed lines and quotes the exact old or new side of a renamed file", () => {
+  const quote = vi.fn();
+  const { container } = render(
+    withI18n(
+      createElement(DiffCodePreview, {
+        file: {
+          ...snapshot.files[0]!,
+          path: "src/new.ts",
+          previousPath: "src/old.ts",
+          diff: "@@ -8,3 +12,3 @@\n same\n-old\n+new\n tail\n",
+        },
+        onReferenceLine: quote,
+      }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("diffSplit") }));
+  expect(
+    container.querySelectorAll(
+      ".review-diff-pair:not(.review-diff-column-headings)",
+    ),
+  ).toHaveLength(4);
+  const old = screen.getByRole("button", {
+    name: i18n.t("reviewSelectOldLine", { line: 8 }),
+  });
+  const next = screen.getByRole("button", {
+    name: i18n.t("reviewSelectNewLine", { line: 12 }),
+  });
+  fireEvent.click(old);
+  expect(next.tabIndex).toBe(0);
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("reviewQuoteLine"),
+    }),
+  );
+  expect(quote).toHaveBeenLastCalledWith({
+    filePath: "src/old.ts",
+    side: "old",
+    line: 8,
+    code: "same",
+  });
+  fireEvent.click(next);
+  fireEvent.keyDown(next, { key: "ArrowDown" });
+  expect(document.activeElement?.getAttribute("aria-label")).toBe(
+    i18n.t("reviewSelectNewLine", { line: 13 }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("reviewQuoteLine"),
+    }),
+  );
+  expect(quote).toHaveBeenLastCalledWith({
+    filePath: "src/new.ts",
+    side: "new",
+    line: 13,
+    code: "new",
+  });
+});
+
 it("switches from the changed-file list to a separate full-height diff view", async () => {
   const onClose = vi.fn();
   const refresh = vi.fn(async () => {});
@@ -930,7 +991,10 @@ it("refreshes the list and preview, retains its diff on failure, and disables du
   const refreshButton = screen.getByRole<HTMLButtonElement>("button", {
     name: i18n.t("gitReviewRefresh"),
   });
-  expect(refreshButton.title).toBe(i18n.t("gitReviewRefresh"));
+  expect(
+    document.getElementById(refreshButton.getAttribute("aria-describedby")!)
+      ?.textContent,
+  ).toBe(i18n.t("gitReviewRefresh"));
   fireEvent.click(refreshButton);
   expect(refresh).toHaveBeenCalledOnce();
   fireEvent.click(

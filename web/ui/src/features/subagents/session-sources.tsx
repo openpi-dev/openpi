@@ -11,6 +11,7 @@ import {
   WEB_PROMPT_IMAGE_MAX_BYTES,
 } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
+import { ImageViewport } from "../../components/ImageViewport.tsx";
 import "./session-sources.css";
 
 export function useSessionSources(
@@ -200,6 +201,7 @@ export function SourceImage({
       {current?.url && !current.failed ? (
         <img
           src={current.url}
+          draggable={false}
           alt={thumbnail ? "" : source.name || t("attachedImage")}
           onError={() => setImage({ identity, failed: true })}
         />
@@ -324,11 +326,9 @@ export function SourcesDialog({
           </button>
         </header>
         {source ? (
-          <section
-            className="draft-image-preview-body"
-            data-mode={original ? "original" : "fit"}
-            aria-label={t("imageViewMode")}
-            tabIndex={original ? 0 : undefined}
+          <ImageViewport
+            key={JSON.stringify([sessionId, path, source.id])}
+            original={original}
           >
             <SourceImage
               key={JSON.stringify([sessionId, path, source.id])}
@@ -337,7 +337,7 @@ export function SourcesDialog({
               source={source}
               active={open}
             />
-          </section>
+          </ImageViewport>
         ) : (
           <div className="session-sources-list">
             {!data?.loading && !data?.error && !data?.page?.sources.length && (

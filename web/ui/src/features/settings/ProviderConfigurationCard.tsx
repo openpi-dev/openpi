@@ -301,8 +301,19 @@ export function ProviderConfigurationCard({
         </p>
       )}
       <div className="models-entry-list">
+        {currentModel && (
+          <p className="models-hint">
+            {t("providerCurrentSessionModel", {
+              model: `${currentModel.provider} / ${currentModel.id}`,
+            })}
+          </p>
+        )}
         {draft.models.map((model, index) => (
           <div className="models-entry" key={model.rowKey}>
+            {currentModel?.provider === draft.provider &&
+              currentModel.id === model.id && (
+                <p className="models-current-label">{t("currentModel")}</p>
+              )}
             <div className="models-entry-row">
               <input
                 aria-label={t("providerModelId", { number: index + 1 })}

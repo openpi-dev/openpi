@@ -1,3 +1,4 @@
+import { RuntimeInfoPanel } from "./RuntimeInfoPanel.tsx";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Slider } from "@astryxdesign/core/Slider";
@@ -5,6 +6,7 @@ import { Switch } from "@astryxdesign/core/Switch";
 import {
   Bot,
   Check,
+  ChevronDown,
   Clipboard,
   Code2,
   Cpu,
@@ -20,7 +22,7 @@ import {
   Sparkles,
   Wrench,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type SelectHTMLAttributes, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type {
@@ -61,6 +63,18 @@ function SettingsLoadState({
         {t("retryAdmissionCheck")}
       </button>
     </div>
+  );
+}
+
+function SettingsSelect({
+  children,
+  ...props
+}: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <span className="settings-select-control">
+      <select {...props}>{children}</select>
+      <ChevronDown aria-hidden="true" strokeWidth={1.75} />
+    </span>
   );
 }
 
@@ -201,6 +215,38 @@ export function GeneralSettingsPanel({
       {setup && (
         <>
           <section className="settings-section-block">
+            <div className="settings-follow-up-control">
+              <div>
+                <h2>{t("followUpBehavior")}</h2>
+                <p>{t("followUpBehaviorDetail")}</p>
+              </div>
+              <fieldset
+                className="settings-follow-up-choices"
+                disabled={preferencePending}
+              >
+                <legend className="sr-only">{t("followUpBehavior")}</legend>
+                {(["followUp", "steer"] as const).map((mode) => (
+                  <label key={mode}>
+                    <input
+                      type="radio"
+                      name="follow-up-behavior"
+                      value={mode}
+                      checked={
+                        (setup.ui.webFollowUpBehavior ?? "followUp") === mode
+                      }
+                      onChange={() =>
+                        void onUpdatePreferences({ followUpBehavior: mode })
+                      }
+                    />
+                    <span>
+                      {t(mode === "steer" ? "followUpSteer" : "followUpQueue")}
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            </div>
+          </section>
+          <section className="settings-section-block">
             <h2>{t("agentBehavior")}</h2>
             <div className="settings-chat-controls">
               <form
@@ -311,9 +357,14 @@ export function GeneralSettingsPanel({
                   ["fileMutationDisplay", "fileMutations"],
                 ] as const
               ).map(([key, label]) => (
-                <label key={key} className="settings-inline-control">
+                <label
+                  key={key}
+                  className="settings-inline-control"
+                  htmlFor={`settings-${key}`}
+                >
                   <span>{t(label)}</span>
-                  <select
+                  <SettingsSelect
+                    id={`settings-${key}`}
                     value={setup.ui[key]}
                     disabled={preferencePending}
                     onChange={(event) => {
@@ -326,7 +377,7 @@ export function GeneralSettingsPanel({
                       {t("detailDisplay_compact")}
                     </option>
                     <option value="full">{t("detailDisplay_full")}</option>
-                  </select>
+                  </SettingsSelect>
                 </label>
               ))}
               <Switch
@@ -342,9 +393,13 @@ export function GeneralSettingsPanel({
                   void onUpdatePreferences({ customFooter: checked })
                 }
               />
-              <label className="settings-inline-control">
+              <label
+                className="settings-inline-control"
+                htmlFor="settings-footer-style"
+              >
                 <span>{t("terminalFooterStyle")}</span>
-                <select
+                <SettingsSelect
+                  id="settings-footer-style"
                   value={setup.ui.footerStyle}
                   disabled={preferencePending || !setup.ui.customFooter}
                   onChange={(event) => {
@@ -360,13 +415,15 @@ export function GeneralSettingsPanel({
                   <option value="plain">Plain</option>
                   <option value="powerline">Powerline</option>
                   <option value="powerline-mono">Powerline Mono</option>
-                </select>
+                </SettingsSelect>
               </label>
               <small>{t("terminalFooterHint")}</small>
             </div>
           </section>
         </>
       )}
+
+      <RuntimeInfoPanel />
 
       <section className="settings-section-block">
         <h2>{t("sessionSettings")}</h2>

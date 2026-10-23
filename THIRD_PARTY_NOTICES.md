@@ -25,6 +25,18 @@ a monochrome mask that follows OpenPI's theme. These are presentation assets,
 not a provider registry. The MIT notice is reproduced in
 [`web/ui/src/features/settings/provider-icons/LICENSE.opencode`](web/ui/src/features/settings/provider-icons/LICENSE.opencode).
 
+Additional provider brand SVGs were vendored from the provider-brand collection in
+[`apache/maka`](https://github.com/apache/maka) revision
+`59f61cf7de665837630518aa204732107dcc2349` and from
+[`@lobehub/icons-static-svg`](https://github.com/lobehub/lobe-icons) version
+`1.91.0` (MIT). The LocalAI mark comes from
+[`mudler/LocalAI`](https://github.com/mudler/LocalAI) revision
+`b10e330590766ea621c0b03401e77a0589558e76` (MIT). Their notices are included in
+[`LICENSE.lobe-icons`](web/ui/src/features/settings/provider-icons/LICENSE.lobe-icons)
+and [`LICENSE.localai`](web/ui/src/features/settings/provider-icons/LICENSE.localai).
+Brand names and logos remain trademarks of their respective owners and are used
+only to identify providers and models.
+
 The workspace Files explorer and preview interactions were informed by
 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar), revision
 `9b5834f74ad197534c821c35b8357edac1ad3919`. OpenPI uses its own Session-bound

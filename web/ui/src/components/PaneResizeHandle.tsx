@@ -35,6 +35,7 @@ export function PaneResizeHandle({
     pointerId: number;
     startX: number;
     startValue: number;
+    started: boolean;
   } | null>(null);
 
   const finishDrag = (element: HTMLElement, pointerId: number) => {
@@ -58,6 +59,14 @@ export function PaneResizeHandle({
       aria-valuemax={max}
       data-pane-resizer={side}
       onKeyDown={(event) => {
+        if (event.key === "Escape" && drag.current) {
+          event.preventDefault();
+          event.stopPropagation();
+          const current = drag.current;
+          if (current.started) update(current.startValue);
+          finishDrag(event.currentTarget, current.pointerId);
+          return;
+        }
         let next: number;
         switch (event.key) {
           case "ArrowLeft":
@@ -83,20 +92,26 @@ export function PaneResizeHandle({
       }}
       onDoubleClick={() => update(defaultValue)}
       onPointerDown={(event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0 || drag.current) return;
         event.preventDefault();
+        event.currentTarget.focus({ preventScroll: true });
         drag.current = {
           pointerId: event.pointerId,
           startX: event.clientX,
           startValue: value,
+          started: false,
         };
         event.currentTarget.setPointerCapture(event.pointerId);
-        onDraggingChange(true);
       }}
       onPointerMove={(event) => {
         const current = drag.current;
         if (!current || current.pointerId !== event.pointerId) return;
         const delta = event.clientX - current.startX;
+        if (!current.started) {
+          if (Math.abs(delta) < 4) return;
+          current.started = true;
+          onDraggingChange(true);
+        }
         const next = current.startValue + (side === "left" ? delta : -delta);
         if (onExpandPastMax && next >= max + 48) {
           finishDrag(event.currentTarget, event.pointerId);
@@ -115,9 +130,11 @@ export function PaneResizeHandle({
         update(next);
       }}
       onPointerUp={(event) => finishDrag(event.currentTarget, event.pointerId)}
-      onPointerCancel={(event) =>
-        finishDrag(event.currentTarget, event.pointerId)
-      }
+      onPointerCancel={(event) => {
+        if (drag.current?.pointerId !== event.pointerId) return;
+        if (drag.current.started) update(drag.current.startValue);
+        finishDrag(event.currentTarget, event.pointerId);
+      }}
       onLostPointerCapture={() => {
         if (!drag.current) return;
         drag.current = null;

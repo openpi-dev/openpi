@@ -229,8 +229,11 @@ test("C02-C05 configuration menus keep hover, keyboard focus, escape and outside
   await levels.click();
   await expect(page.getByRole("menuitemcheckbox")).toHaveText([
     "off",
+    "minimal",
     "low",
+    "medium",
     "high",
+    "xhigh",
     "max",
   ]);
   await expect(
@@ -375,7 +378,7 @@ test("C08-C09 failed display saves retain canonical checks; retry and refresh pr
   await page.keyboard.press("Escape");
   await expect(
     dialog.getByRole("button", { name: "可用推理强度", exact: true }),
-  ).toContainText("已选择 2 个");
+  ).toContainText("已选择 5 个");
   expect(thinking.posts).toEqual([]);
   await page.reload();
   dialog = page.getByRole("dialog", { name: "设置", exact: true });

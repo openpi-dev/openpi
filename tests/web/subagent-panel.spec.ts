@@ -232,7 +232,7 @@ async function flush() {
 it("opens a nonmodal grouped overview, then supports detail/back and Escape navigation", async () => {
   const read = vi
     .spyOn(WebClient.prototype, "subagentDetail")
-    .mockResolvedValue(reply());
+    .mockResolvedValue(reply(detail({ model: "local-codex/gpt-6.1-sol" })));
   const onClose = vi.fn();
   render(
     createElement(
@@ -271,6 +271,9 @@ it("opens a nonmodal grouped overview, then supports detail/back and Escape navi
   fireEvent.click(screen.getByRole("button", { name: /Package review/ }));
   await flush();
   expect(read).toHaveBeenCalledTimes(1);
+  expect(panel.querySelector(".subagent-panel-heading")?.textContent).toContain(
+    "gpt-6.1-sol",
+  );
   expect(
     screen.queryByRole("navigation", { name: i18n.t("subagentTasks") }),
   ).toBeNull();
@@ -282,6 +285,14 @@ it("opens a nonmodal grouped overview, then supports detail/back and Escape navi
     screen.getByRole("navigation", { name: i18n.t("subagentTasks") }),
   ).toBeTruthy();
   expect(onClose).not.toHaveBeenCalled();
+  read.mockResolvedValue(reply(detail({ id: "sa-2", title: "Readme review" })));
+  fireEvent.click(screen.getByRole("button", { name: /Readme review/ }));
+  expect(
+    panel.querySelector(".subagent-panel-heading")?.textContent,
+  ).not.toContain("gpt-6.1-sol");
+  await flush();
+  expect(panel.querySelector(".subagent-panel-model")).toBeNull();
+  fireEvent.keyDown(panel, { key: "Escape" });
   fireEvent.keyDown(panel, { key: "Escape" });
   expect(onClose).toHaveBeenCalledTimes(1);
 });
@@ -465,7 +476,7 @@ it("renders real transcript, paired tool errors and redacted thinking without ex
                 type: "toolCall",
                 toolId: "call-1",
                 name: "read",
-                argsPreview: "missing.txt",
+                argsPreview: JSON.stringify({ path: "missing.txt" }),
               },
             ],
           },
@@ -493,12 +504,20 @@ it("renders real transcript, paired tool errors and redacted thinking without ex
   const log = screen.getByRole("log");
   expect(within(log).getByText("Child task")).toBeTruthy();
   expect(within(log).getByText("Read attempt")).toBeTruthy();
+  expect(
+    log.querySelector('.tool-evidence-card[data-tool="read"] summary')
+      ?.textContent,
+  ).toContain("missing.txt");
+  // A stopped child cannot leave its last pending tool looking as if it is still running.
+  expect(
+    log.querySelector('[data-running="true"], [data-state="running"]'),
+  ).toBeNull();
   expect(within(log).queryByText("Hidden sensitive thought")).toBeNull();
   expect(
     within(log).getByText(i18n.t("subagentThinkingRedacted")),
   ).toBeTruthy();
   expect(within(log).getAllByText("File unavailable")).toHaveLength(1);
-  expect(within(log).getByText(i18n.t("subagentTool_error"))).toBeTruthy();
+  expect(within(log).getByText(i18n.t("toolState_failed"))).toBeTruthy();
   expect(within(log).getByText("Searching")).toBeTruthy();
   expect(screen.getByRole("alert").textContent).toBe("Stopped by parent");
   expect(screen.getByText(i18n.t("subagentState_interrupted"))).toBeTruthy();
@@ -569,6 +588,87 @@ function snapshot(): WebSnapshot {
     },
   };
 }
+
+it("resolves the same child for pending and returned follow-ups without keeping the call running", () => {
+  const value = snapshot();
+  const call = {
+    type: "toolCall" as const,
+    id: "send-call",
+    name: "subagent_send",
+    arguments: JSON.stringify({ id: "sa-1", message: "Check the workspace" }),
+  };
+  value.selectedSession!.entries.push({
+    type: "message",
+    id: "send",
+    timestamp: "",
+    message: { role: "assistant", content: "", parts: [call] },
+  });
+  value.runtime.liveTools = [{ call, state: "running" }];
+  const onInspectSubagent = vi.fn();
+  const view = (current: WebSnapshot) =>
+    createElement(
+      Providers,
+      null,
+      createElement(Transcript, {
+        snapshot: current,
+        liveMessages: [],
+        liveRunning: true,
+        livePhase: "running",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onInspectSubagent,
+      }),
+    );
+  const { container, rerender } = render(view(value));
+  expect(
+    container.querySelector(
+      ".process-sequence.running > summary .process-sequence-preview",
+    )?.textContent,
+  ).toBe("Package review");
+  expect(
+    container.querySelector(".subagent-card-open .subagent-activity-title")
+      ?.textContent,
+  ).toBe("Package review");
+  const operation = container.querySelector(".subagent-operation")!;
+  fireEvent.click(within(operation as HTMLElement).getByRole("button"));
+  expect(onInspectSubagent).toHaveBeenLastCalledWith("sa-1");
+  rerender(
+    view({
+      ...value,
+      runtime: { ...value.runtime, liveTools: [] },
+      selectedSession: {
+        ...value.selectedSession!,
+        entries: [
+          ...value.selectedSession!.entries,
+          {
+            type: "message",
+            id: "sent",
+            timestamp: "",
+            message: {
+              role: "toolResult",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: "Steered sa-1. It is queued into the active run.",
+              isError: false,
+              details: { id: "sa-1", status: "running" },
+            },
+          },
+        ],
+      },
+    }),
+  );
+  expect(container.querySelector(".process-sequence.running")).toBeNull();
+  const returned = container.querySelector(".subagent-operation")!;
+  expect(returned.textContent).toContain(i18n.t("subagentActionDone_send"));
+  expect(returned.querySelector(".subagent-running-icon")).toBeNull();
+  expect(
+    container.querySelector(".subagent-card-open .subagent-running-icon"),
+  ).not.toBeNull();
+  fireEvent.click(within(returned as HTMLElement).getByRole("button"));
+  expect(onInspectSubagent).toHaveBeenLastCalledWith("sa-1");
+});
 
 it("opens only the selected saved child record without fetching a historical Session", async () => {
   const read = vi.spyOn(WebClient.prototype, "subagentDetail");

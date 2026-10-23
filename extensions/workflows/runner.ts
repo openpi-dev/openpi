@@ -487,6 +487,13 @@ export async function runAgent(
 
   const snapshotProjection = () => {
     const snapshot = projection.snapshot(toolTimings);
+    toolRenderer.retainTools(
+      new Set(
+        snapshot.transcript.flatMap((entry) =>
+          entry.toolCallId ? [entry.toolCallId] : [],
+        ),
+      ),
+    );
     usage = snapshot.usage;
     refreshModel(snapshot.latestAssistant);
     lastProjection = snapshot;

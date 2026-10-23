@@ -6,6 +6,8 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -636,4 +638,53 @@ test("workflow checkpoints throttle updates and support immediate/final flushes"
 
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(snapshots.length, 3);
+});
+
+test("live checkpoints reuse unchanged artifacts but repair changed or missing files", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "workflow-checkpoint-reuse-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const details = workflowDetails();
+  const journal = createJournalAccumulator();
+  journal.append({ key: "first", output: "saved" });
+  const persistence = createWorkflowPersistence(directory, details, {
+    journal: () => journal,
+  });
+  persistence.checkpoint({ immediate: true });
+  const transcriptPath = join(directory, "transcripts.json");
+  const journalPath = join(directory, "journal.json");
+  const identity = (file: string) => {
+    const stat = statSync(file, { bigint: true });
+    return [stat.ino, stat.mtimeNs, stat.ctimeNs];
+  };
+  const transcriptIdentity = identity(transcriptPath);
+  const journalIdentity = identity(journalPath);
+  details.currentPhase = "Review";
+  persistence.checkpoint({ immediate: true });
+  assert.deepEqual(identity(transcriptPath), transcriptIdentity);
+  assert.deepEqual(identity(journalPath), journalIdentity);
+  assert.equal(
+    JSON.parse(readFileSync(join(directory, "workflow.json"), "utf8"))
+      .currentPhase,
+    "Review",
+  );
+
+  journal.append({ key: "second", output: "new" });
+  persistence.checkpoint({ immediate: true });
+  assert.equal(loadJournal(directory)?.entries.length, 2);
+  assert.deepEqual(identity(transcriptPath), transcriptIdentity);
+
+  writeFileSync(journalPath, "corrupt");
+  unlinkSync(transcriptPath);
+  persistence.checkpoint({ immediate: true });
+  assert.equal(loadJournal(directory)?.entries.length, 2);
+  assert.deepEqual(JSON.parse(readFileSync(transcriptPath, "utf8")), {});
+
+  details.status = "completed";
+  details.result = { answer: "final" };
+  persistence.flush();
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(directory, "result.json"), "utf8")),
+    details.result,
+  );
+  assert.equal(existsSync(join(directory, WORKFLOW_COMMIT_FILE)), false);
 });

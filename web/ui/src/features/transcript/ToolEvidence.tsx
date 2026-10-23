@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Clipboard } from "lucide-react";
+import { Check, ChevronRight, Clipboard, Terminal } from "lucide-react";
 import { type ReactNode, useContext, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -17,7 +17,6 @@ import { parseDiffRows } from "../review/DiffCodePreview.tsx";
 import {
   toolActivity,
   toolActivityLabel,
-  toolActivityTag,
   toolActivityTarget,
 } from "./tool-activity.ts";
 
@@ -55,7 +54,10 @@ function EvidenceBlock({
 }) {
   return (
     <figure aria-label={label}>
-      <pre className={className}>{children}</pre>
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: File and log evidence need keyboard scrolling without changing their formatting. */}
+      <pre className={className} tabIndex={0}>
+        {children}
+      </pre>
     </figure>
   );
 }
@@ -66,6 +68,7 @@ export function ToolEvidence({
   observed = true,
   cwd,
   defaultOpen = false,
+  children,
 }: {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
   result?: WebLiveMessage;
@@ -73,6 +76,7 @@ export function ToolEvidence({
   observed?: boolean;
   cwd?: string;
   defaultOpen?: boolean;
+  children?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState<{
@@ -131,9 +135,6 @@ export function ToolEvidence({
         <span className="evidence-icon" aria-hidden="true">
           <Icon />
         </span>
-        <span className="tool-kind" aria-hidden="true" title={call.name}>
-          {toolActivityTag(call.name)}
-        </span>
         <span className="evidence-target" title={view.path || target}>
           <span className="tool-action">
             {state === "returned" && view.change === "created"
@@ -178,9 +179,21 @@ export function ToolEvidence({
         {shell && (
           <figure className="evidence-shell" aria-label={t("toolCallOutput")}>
             <figcaption>
-              <span>Shell</span>
+              <span className="evidence-shell-label">
+                <Terminal aria-hidden="true" />
+                {call.name === "bash" ? "Bash" : "Shell"}
+              </span>
+              <span className="evidence-process-meta">
+                {statusLabel}
+                {view.exitCode !== undefined
+                  ? ` · exit ${view.exitCode}`
+                  : view.signal
+                    ? ` · ${view.signal}`
+                    : ""}
+              </span>
               <button
                 type="button"
+                data-copied={copyFeedback === "copiedCode" || undefined}
                 aria-label={t(
                   copyFeedback === "copiedCode" ? "copiedCode" : "copyCode",
                 )}
@@ -198,15 +211,15 @@ export function ToolEvidence({
                 {copyFeedback === "copiedCode" ? <Check /> : <Clipboard />}
               </button>
             </figcaption>
-            <pre>{shellText || t("noOutput")}</pre>
-            <div className="evidence-process-meta">
-              {statusLabel}
-              {view.exitCode !== undefined
-                ? ` · exit ${view.exitCode}`
-                : view.signal
-                  ? ` · ${view.signal}`
-                  : ""}
-            </div>
+            {view.command && (
+              <pre className="evidence-shell-command">$ {view.command}</pre>
+            )}
+            {(view.output || !view.command) && (
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: Terminal output must support keyboard scrolling without changing its formatting.
+              <pre className="evidence-shell-output" tabIndex={0}>
+                {view.output || t("noOutput")}
+              </pre>
+            )}
             {copyFeedback === "copyCodeFailed" && (
               <p role="status" className="evidence-warning">
                 {t(copyFeedback)}
@@ -224,7 +237,7 @@ export function ToolEvidence({
           <p>{view.evidenceUnavailable ?? t("toolChangeUnavailable")}</p>
         )}
         {view.tests && (
-          <figure aria-label="Test evidence">
+          <figure className="evidence-test-summary" aria-label="Test evidence">
             <figcaption>
               <strong>
                 {t("toolTestResults", { format: view.tests.format })}
@@ -264,6 +277,7 @@ export function ToolEvidence({
               <button
                 className="evidence-copy"
                 type="button"
+                data-copied={diffCopyFeedback === "copiedCode" || undefined}
                 aria-label={t(
                   diffCopyFeedback === "copiedCode" ? "copiedCode" : "copyCode",
                 )}
@@ -342,6 +356,7 @@ export function ToolEvidence({
           </p>
           <pre>{view.rawResult}</pre>
         </details>
+        {children}
       </div>
     </details>
   );

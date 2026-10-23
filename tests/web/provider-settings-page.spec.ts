@@ -286,6 +286,9 @@ function settingsFetcher(payload = settingsPayload()) {
         ...(patch.expandThinking !== undefined
           ? { webExpandThinking: patch.expandThinking }
           : {}),
+        ...(patch.followUpBehavior !== undefined
+          ? { webFollowUpBehavior: patch.followUpBehavior }
+          : {}),
         ...Object.fromEntries(
           [
             "subagentResultDisplay",
@@ -732,6 +735,37 @@ it("filters settings by translated setting names and preserves the active page u
 });
 
 it.each([
+  { language: "en", queries: ["runtime", "version", "build"] },
+  { language: "zh", queries: ["运行信息", "版本", "构建"] },
+])(
+  "finds runtime information from settings search in $language",
+  async ({ language, queries }) => {
+    const previousLanguage = i18n.language;
+    await i18n.changeLanguage(language);
+    try {
+      vi.stubGlobal("fetch", settingsFetcher());
+      renderSettings({ entry: "appearance" });
+      const search = screen.getByRole("searchbox", {
+        name: i18n.t("settingsSearch"),
+      });
+      for (const query of queries) {
+        fireEvent.change(search, { target: { value: query } });
+        fireEvent.click(
+          screen.getByRole("tab", { name: i18n.t("generalSettings") }),
+        );
+        expect(
+          screen.getByRole("region", { name: i18n.t("runtimeIdentity") }),
+        ).toBeTruthy();
+        expect((search as HTMLInputElement).value).toBe("");
+      }
+    } finally {
+      cleanup();
+      await i18n.changeLanguage(previousLanguage);
+    }
+  },
+);
+
+it.each([
   { setupWritable: false, settingsErrors: 0 },
   { setupWritable: true, settingsErrors: 1 },
 ])(
@@ -770,8 +804,8 @@ it.each([
     for (const radio of screen.getAllByRole<HTMLInputElement>("radio"))
       expect(radio.disabled).toBe(true);
     expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: i18n.t("appearanceTheme"),
+      screen.getByRole<HTMLInputElement>("radio", {
+        name: i18n.t("themeMist"),
       }).disabled,
     ).toBe(true);
     expect(
@@ -796,7 +830,6 @@ it.each([
 );
 
 it.each([
-  { menu: "appearanceTheme", option: "themeMist", readonly: false },
   { menu: "appearanceAccent", option: "appearanceAccent1", readonly: false },
   { menu: "appearanceFont", option: "appearanceFont_serif", readonly: false },
   { menu: "appearanceFont", option: "appearanceFont_serif", readonly: true },
@@ -870,17 +903,73 @@ it("sends only the edited appearance field or mode, including legacy themes", as
   expect(onUpdatePreferences).toHaveBeenLastCalledWith({
     appearance: { background: "#112233" },
   });
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("appearanceTheme") }),
-  );
-  fireEvent.click(
-    await screen.findByRole("menuitem", { name: i18n.t("themeMist") }),
-  );
+  fireEvent.click(screen.getByRole("radio", { name: i18n.t("themeMist") }));
   expect(onUpdatePreferences).toHaveBeenLastCalledWith({
     appearance: { palette: "mist" },
   });
   fireEvent.click(screen.getByRole("radio", { name: i18n.t("themeLight") }));
   expect(onUpdatePreferences).toHaveBeenLastCalledWith({ theme: "light" });
+});
+
+it("saves palette cards through the existing writer and keeps the saved palette after a failed write", async () => {
+  const fallback = settingsFetcher();
+  let fail = false;
+  let finishWrite: (() => void) | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/settings/preferences")) {
+        await new Promise<void>((resolve) => {
+          finishWrite = resolve;
+        });
+        if (fail)
+          return new Response(JSON.stringify({ error: "failed" }), {
+            status: 422,
+          });
+      }
+      return fallback(input, init);
+    }),
+  );
+  const view = renderSettings();
+  await screen.findByText(i18n.t("agentBehavior"));
+  openAppearance();
+  const group = () =>
+    within(screen.getByRole("radiogroup", { name: i18n.t("appearanceTheme") }));
+  expect(group().getAllByRole("radio")).toHaveLength(4);
+  fireEvent.click(group().getByRole("radio", { name: i18n.t("themeMist") }));
+  await waitFor(() => expect(finishWrite).toBeTypeOf("function"));
+  for (const radio of group().getAllByRole<HTMLInputElement>("radio"))
+    expect(radio.disabled).toBe(true);
+  await act(async () => finishWrite?.());
+  await waitFor(() =>
+    expect(
+      group().getByRole<HTMLInputElement>("radio", {
+        name: i18n.t("themeMist"),
+      }).checked,
+    ).toBe(true),
+  );
+  view.unmount();
+  renderSettings();
+  await screen.findByText(i18n.t("agentBehavior"));
+  openAppearance();
+  expect(
+    group().getByRole<HTMLInputElement>("radio", { name: i18n.t("themeMist") })
+      .checked,
+  ).toBe(true);
+  fail = true;
+  finishWrite = undefined;
+  fireEvent.click(group().getByRole("radio", { name: i18n.t("themeRose") }));
+  await waitFor(() => expect(finishWrite).toBeTypeOf("function"));
+  await act(async () => finishWrite?.());
+  await screen.findByText(i18n.t("settingsPreferencesSaveFailed"));
+  expect(
+    group().getByRole<HTMLInputElement>("radio", { name: i18n.t("themeMist") })
+      .checked,
+  ).toBe(true);
+  expect(
+    group().getByRole<HTMLInputElement>("radio", { name: i18n.t("themeRose") })
+      .checked,
+  ).toBe(false);
 });
 
 it("validates and cancels theme imports without writes; a failed valid import keeps its draft and saved mode", async () => {
@@ -985,6 +1074,69 @@ it("commits only complete color values and rolls a failed change back to canonic
   expect(save).toHaveBeenCalledOnce();
   await waitFor(() => expect(color.value).toBe("#FFFFFF"));
 });
+
+it.each(["color", "width", "fontSize"])(
+  "preserves a newer canonical %s when an earlier appearance save fails",
+  async (field) => {
+    const catalog = settingsPayload() as WebSettingsCatalog;
+    catalog.setup.ui.webChatWidth = 1200;
+    catalog.setup.ui.webChatFontSize = 18;
+    const save = Promise.withResolvers<boolean>();
+    const onUpdatePreferences = vi.fn(() => save.promise);
+    const element = (current: WebSettingsCatalog, pending: boolean) =>
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(AppearanceSettingsPanel, {
+          catalog: current,
+          theme: "system",
+          pending,
+          error: null,
+          onRefresh: vi.fn(),
+          onUpdatePreferences,
+        }),
+      );
+    const view = render(element(catalog, false));
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("appearanceAdvanced") }),
+    );
+    const color = screen.getByRole<HTMLInputElement>("textbox", {
+      name: i18n.t("appearanceBackground"),
+    });
+    if (field === "color")
+      fireEvent.change(color, { target: { value: "#AABBCC" } });
+    else
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: i18n.t(
+            field === "width" ? "resetChatContentWidth" : "resetChatFontSize",
+          ),
+        }),
+      );
+    expect(onUpdatePreferences).toHaveBeenCalledOnce();
+    const newer = structuredClone(catalog);
+    newer.setup.ui.webAppearance = {
+      ...newer.setup.ui.webAppearance!,
+      background: "#112233",
+    };
+    newer.setup.ui.webChatWidth = 1500;
+    newer.setup.ui.webChatFontSize = 20;
+    view.rerender(element(newer, true));
+    expect(color.value).toBe("#112233");
+    await act(async () => save.resolve(false));
+    expect(color.value).toBe("#112233");
+    expect(
+      screen
+        .getByRole("slider", { name: i18n.t("chatContentWidth") })
+        .getAttribute("aria-valuenow"),
+    ).toBe("1500");
+    expect(
+      screen
+        .getByRole("slider", { name: i18n.t("chatFontSize") })
+        .getAttribute("aria-valuenow"),
+    ).toBe("20");
+  },
+);
 
 it("reviews an exact plugin source and scope without claiming installation or reusing an old setup failure", async () => {
   vi.stubGlobal("fetch", settingsFetcher());
@@ -1162,6 +1314,30 @@ it("filters skill bulk requests by scope and search while preserving the native 
   ).toBeNull();
 });
 
+it("saves the follow-up behavior in General without starting a setup or model request", async () => {
+  const fetcher = settingsFetcher();
+  vi.stubGlobal("fetch", fetcher);
+  const onConfigureOpenPi = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi });
+  const queue = await screen.findByRole<HTMLInputElement>("radio", {
+    name: i18n.t("followUpQueue"),
+  });
+  expect(queue.checked).toBe(true);
+  const steer = screen.getByRole<HTMLInputElement>("radio", {
+    name: i18n.t("followUpSteer"),
+  });
+  fireEvent.click(steer);
+  await waitFor(() => expect(steer.checked).toBe(true));
+  expect(
+    fetcher.mock.calls.some(
+      ([input, init]) =>
+        String(input).includes("/api/settings/preferences") &&
+        JSON.parse(String(init?.body)).followUpBehavior === "steer",
+    ),
+  ).toBe(true);
+  expect(onConfigureOpenPi).not.toHaveBeenCalled();
+});
+
 it("shows canonical General state and routes real setup/runtime actions", async () => {
   const fetcher = settingsFetcher();
   vi.stubGlobal("fetch", fetcher);
@@ -1196,7 +1372,13 @@ it("shows canonical General state and routes real setup/runtime actions", async 
   expect(within(generalPanel).getByText(/6 concurrent/u)).toBeTruthy();
   openAppearance();
   const appearancePanel = screen.getByRole("tabpanel");
-  expect(within(appearancePanel).getAllByRole("radio")).toHaveLength(3);
+  expect(
+    within(
+      within(appearancePanel).getByRole("radiogroup", {
+        name: i18n.t("appearanceMode"),
+      }),
+    ).getAllByRole("radio"),
+  ).toHaveLength(3);
   expect(within(appearancePanel).queryByRole("slider")).toBeNull();
   fireEvent.click(
     within(appearancePanel).getByRole("radio", { name: i18n.t("themeDark") }),
@@ -1423,7 +1605,9 @@ it("routes agent controls through canonical setup and waits for a save receipt",
   const concurrency = screen.getByRole<HTMLInputElement>("spinbutton", {
     name: i18n.t("workflowConcurrency"),
   });
+  await waitFor(() => expect(concurrency.value).toBe("6"));
   fireEvent.change(concurrency, { target: { value: "9" } });
+  expect(concurrency.value).toBe("9");
   fireEvent.change(
     screen.getByRole("combobox", { name: i18n.t("bashOperations") }),
     { target: { value: "full" } },

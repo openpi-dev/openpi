@@ -279,6 +279,12 @@ it("manual compaction and queue recovery use exact native Session endpoints with
     "/tmp/workspace/one.jsonl",
     "retry",
   );
+  data.selectedExecution = {
+    ...data.selectedExecution,
+    status: "running",
+    promptQueueBlocked: false,
+  };
+  rerender(node({ ...props, snapshot: data }));
   await act(async () =>
     fireEvent.click(
       screen.getByRole("button", { name: i18n.t("clearPromptQueue") }),
@@ -289,6 +295,9 @@ it("manual compaction and queue recovery use exact native Session endpoints with
     "/tmp/workspace/one.jsonl",
     "clear",
   );
+  expect(input.value).toBe("Keep during compact");
+  expect(sendPrompt).not.toHaveBeenCalled();
+  expect(refreshSnapshot).toHaveBeenCalledTimes(3);
 });
 
 it("lets a user click Send for a follow-up while Stop remains available", async () => {

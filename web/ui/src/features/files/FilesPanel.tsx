@@ -22,6 +22,7 @@ import {
   Search,
   Sheet,
   Trash2,
+  TriangleAlert,
   Upload,
 } from "lucide-react";
 import {
@@ -30,6 +31,7 @@ import {
   type ReactNode,
   type RefObject,
   useContext,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -76,6 +78,11 @@ function fileBase64(file: File, signal: AbortSignal) {
     if (signal.aborted) abort();
     else reader.readAsDataURL(file);
   });
+}
+
+interface FileReadFailure {
+  message: string;
+  detail?: string;
 }
 
 interface ImportedFile {
@@ -148,6 +155,8 @@ function FileTree({
   dropTarget,
   onShowTree,
   onRemoved,
+  onReadStateChange,
+  refreshRequest,
 }: {
   sessionId: string;
   sessionPath: string;
@@ -159,6 +168,11 @@ function FileTree({
   dropTarget: RefObject<HTMLDivElement | null>;
   onShowTree: (visible: boolean) => void;
   onRemoved: (paths: string[]) => void;
+  onReadStateChange: (state: {
+    error: FileReadFailure | null;
+    loading: boolean;
+  }) => void;
+  refreshRequest: number;
 }) {
   const { t } = useTranslation();
   const artifacts = useContext(ArtifactContext);
@@ -172,9 +186,23 @@ function FileTree({
     Record<string, WorkspaceFileListing>
   >({});
   const [results, setResults] = useState<WorkspaceFileListing | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<FileReadFailure | null>(null);
   const [loading, setLoading] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    onReadStateChange({ error, loading });
+  }, [error, loading, onReadStateChange]);
+  const readFailure = useCallback(
+    (reason: unknown) => ({
+      message: t(
+        reason instanceof WebApiError && reason.code === "ARTIFACT_DENIED"
+          ? "filesReadDenied"
+          : "filesReadFailedDetail",
+      ),
+      detail: reason instanceof Error ? reason.message : undefined,
+    }),
+    [t],
+  );
   const [directory, setDirectory] = useState(
     selected.includes("/") ? selected.slice(0, selected.lastIndexOf("/")) : ".",
   );
@@ -256,16 +284,14 @@ function FileTree({
       .catch((reason) => {
         if (!controller.signal.aborted) {
           setOperationError(true);
-          setOperationMessage(
-            reason instanceof Error ? reason.message : t("filesReadFailed"),
-          );
+          setOperationMessage(readFailure(reason).message);
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setTrashLoading(false);
       });
     return () => controller.abort();
-  }, [client, sessionId, sessionPath, active, trashOpen, refresh, t]);
+  }, [client, sessionId, sessionPath, active, trashOpen, refresh, readFailure]);
   useEffect(() => {
     if (moving) {
       moveInput.current?.focus();
@@ -897,6 +923,7 @@ function FileTree({
   useEffect(() => {
     void refresh;
     if (!active) return;
+    void refreshRequest;
     const controller = new AbortController();
     listRequest.current = controller;
     let timer: ReturnType<typeof setTimeout>;
@@ -970,10 +997,7 @@ function FileTree({
         }
         if (!controller.signal.aborted) setError(null);
       } catch (reason) {
-        if (!controller.signal.aborted)
-          setError(
-            reason instanceof Error ? reason.message : t("filesReadFailed"),
-          );
+        if (!controller.signal.aborted) setError(readFailure(reason));
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -1010,7 +1034,8 @@ function FileTree({
     sessionId,
     sessionPath,
     refresh,
-    t,
+    refreshRequest,
+    readFailure,
   ]);
 
   const toggle = (path: string) =>
@@ -1060,10 +1085,7 @@ function FileTree({
       if (searching) setResults(updated);
       else setListings((value) => ({ ...value, [path]: updated }));
     } catch (reason) {
-      if (!controller.signal.aborted)
-        setError(
-          reason instanceof Error ? reason.message : t("filesReadFailed"),
-        );
+      if (!controller.signal.aborted) setError(readFailure(reason));
     } finally {
       if (!controller.signal.aborted) {
         loadingMore.current = false;
@@ -1079,7 +1101,7 @@ function FileTree({
           disabled={loading || moreBusy}
           onClick={() => void more(path)}
         >
-          {t(moreBusy ? "loading" : "filesLoadMore")}
+          {t(moreBusy ? "readingFile" : "filesLoadMore")}
         </button>
         <small>{t("filesLoaded", { count: listing.entries.length })}</small>
       </li>
@@ -1246,7 +1268,7 @@ function FileTree({
               {listings[entry.path] ? (
                 rows(listings[entry.path].entries, depth + 1)
               ) : (
-                <li className="file-tree-note">{t("loading")}</li>
+                <li className="file-tree-note">{t("readingFile")}</li>
               )}
               {moreButton(entry.path, listings[entry.path])}
             </ul>
@@ -1275,16 +1297,17 @@ function FileTree({
           aria-hidden="true"
           data-loading={loading || undefined}
         />
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={t("refreshFiles")}
-          title={t("refreshFiles")}
-          onClick={() => setRefresh((value) => value + 1)}
-          disabled={loading}
-        >
-          <RefreshCw aria-hidden="true" />
-        </button>
+        <Tooltip content={t("refreshFiles")} placement="below">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("refreshFiles")}
+            onClick={() => setRefresh((value) => value + 1)}
+            disabled={loading}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
+        </Tooltip>
       </div>
       <div className="file-create-toolbar">
         <fieldset
@@ -1500,7 +1523,7 @@ function FileTree({
             </p>
           )}
           {trashLoading && trashEntries.length === 0 ? (
-            <p>{t("loading")}</p>
+            <p>{t("readingFile")}</p>
           ) : trashEntries.length === 0 ? (
             <p>{t("filesTrashEmpty")}</p>
           ) : (
@@ -1622,10 +1645,23 @@ function FileTree({
       <span className="sr-only" role="status">
         {copyMessage}
       </span>
-      {error && (
-        <p className="file-tree-note evidence-warning" role="alert">
-          {error}
-        </p>
+      {error && selected && (
+        <div className="file-tree-note file-tree-error" role="alert">
+          <p>{error.message}</p>
+          {error.detail && (
+            <details>
+              <summary>{t("filesErrorDetails")}</summary>
+              <p>{error.detail}</p>
+            </details>
+          )}
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => setRefresh((value) => value + 1)}
+          >
+            {t(loading ? "readingFile" : "filesRetryRead")}
+          </button>
+        </div>
       )}
       <section
         className="file-tree"
@@ -1682,6 +1718,11 @@ export function FilesPanel({
   const [treeVisible, setTreeVisible] = useState(
     reading?.files?.treeVisible ?? true,
   );
+  const [readState, setReadState] = useState<{
+    error: FileReadFailure | null;
+    loading: boolean;
+  }>({ error: null, loading: true });
+  const [refreshRequest, setRefreshRequest] = useState(0);
   const dropTarget = useRef<HTMLDivElement>(null);
   const provider = useRef<ArtifactProviderHandle>(null);
   useLayoutEffect(() => {
@@ -1739,9 +1780,46 @@ export function FilesPanel({
         )}
         {!selected && (
           <div className="files-preview-empty">
-            <FileText aria-hidden="true" />
-            <h3>{t("filesChoose")}</h3>
-            <p>{t("filesChooseDetail")}</p>
+            {readState.error ? (
+              <TriangleAlert aria-hidden="true" />
+            ) : (
+              <FileText aria-hidden="true" />
+            )}
+            <h3>
+              {t(
+                readState.error
+                  ? "filesReadFailed"
+                  : readState.loading
+                    ? "readingFile"
+                    : "filesChoose",
+              )}
+            </h3>
+            {readState.error ? (
+              <div className="files-read-failure" role="alert">
+                <p>{readState.error.message}</p>
+                {readState.error.detail && (
+                  <details>
+                    <summary>{t("filesErrorDetails")}</summary>
+                    <p>{readState.error.detail}</p>
+                  </details>
+                )}
+              </div>
+            ) : !readState.loading ? (
+              <p role="status">{t("filesChooseDetail")}</p>
+            ) : null}
+            {readState.error && (
+              <button
+                type="button"
+                disabled={readState.loading}
+                onClick={() => {
+                  setTreeVisible(true);
+                  setRefreshRequest((value) => value + 1);
+                }}
+              >
+                <RefreshCw aria-hidden="true" />
+                {t(readState.loading ? "readingFile" : "filesRetryRead")}
+              </button>
+            )}
           </div>
         )}
         <div className="files-tree-container" hidden={!treeVisible}>
@@ -1756,6 +1834,8 @@ export function FilesPanel({
             onSelect={setSelected}
             dropTarget={dropTarget}
             onShowTree={setTreeVisible}
+            onReadStateChange={setReadState}
+            refreshRequest={refreshRequest}
             onRemoved={(paths) => {
               if (
                 paths.some(
