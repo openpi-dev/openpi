@@ -8,6 +8,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Draft investigations
 
+
 - [`WEB_TOOL_GROUP_DETAILS_2026-10-13.md`](WEB_TOOL_GROUP_DETAILS_2026-10-13.md) — 工具组摘要、图标、对齐和动态的 Codex 安装包 / PR #711 状态对照；保留 OpenPI 分组的可选精修，原生 Codex 动态仍未验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #711](https://github.com/openpi-dev/openpi/pull/711)）。
 
 - [`WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md`](WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md) — Codex 侧栏多轮返工的原因、REA 证据边界、视觉验收遗漏与追加差距审计（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #711](https://github.com/openpi-dev/openpi/pull/711)）。
@@ -21,6 +22,8 @@ Research records preserve sourced investigation and distinguish observations, in
 - [`WEB_INTERACTION_COMPARISON_2026-09-30.md`](WEB_INTERACTION_COMPARISON_2026-09-30.md) — PR #598 竞品截图对照与后续 Web 迭代：基础交互、普通附件、原始子代理结果、第三栏、真实 Luna 文件读取；追加现场演示、工具菜单焦点、Codex / Maka 历史分页与导航、两小时阅读连续性、发布整合及浏览器输入/滚动边界/Windows 定位，保留独立冻结、失败、消融和未验证边界（[#639](https://github.com/openpi-dev/openpi/issues/639)、[PR #640](https://github.com/openpi-dev/openpi/pull/640)、[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 ## Validated investigations
+
+- [`PERFORMANCE_AUDIT_2026-10-23.md`](PERFORMANCE_AUDIT_2026-10-23.md) — 九类性能修复及本地验证：子代理结果保留、Workflow checkpoint、目录扫描与大 Markdown；原生 TUI 视觉验收由用户确认（[#841](https://github.com/openpi-dev/openpi/issues/841)）。
 
 - [`WEB_NATIVE_CONTINUATION_CONTROL_2026-10-21.md`](WEB_NATIVE_CONTINUATION_CONTROL_2026-10-21.md) — exact Web origin for native continuations, cancellation revocation and file-summary settlement, with local Pi/Host/UI evidence and deployment limits ([#867](https://github.com/openpi-dev/openpi/issues/867), [PR #865](https://github.com/openpi-dev/openpi/pull/865)).
 

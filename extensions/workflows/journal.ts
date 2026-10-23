@@ -120,6 +120,7 @@ export function createJournalAccumulator(
   let head = 0;
   let entryBytes = 0;
   let dropped = 0;
+  let cachedJson: string | undefined;
 
   const activeLength = () => queue.length - head;
   const activeBytes = () => journalBytes(activeLength(), entryBytes);
@@ -150,6 +151,7 @@ export function createJournalAccumulator(
     },
     append(entry) {
       const encoded = encodeJournalEntry(entry);
+      cachedJson = undefined;
       queue.push(encoded);
       entryBytes += encoded.bytes;
 
@@ -175,13 +177,16 @@ export function createJournalAccumulator(
       };
     },
     toJson() {
+      if (cachedJson !== undefined) return cachedJson;
       if (activeLength() === 0) return JOURNAL_EMPTY;
       const entries: string[] = [];
       for (let index = head; index < queue.length; index++) {
         const encoded = queue[index];
         if (encoded) entries.push(encoded.json);
       }
-      return JOURNAL_PREFIX + entries.join(JOURNAL_SEPARATOR) + JOURNAL_SUFFIX;
+      cachedJson =
+        JOURNAL_PREFIX + entries.join(JOURNAL_SEPARATOR) + JOURNAL_SUFFIX;
+      return cachedJson;
     },
   };
 }

@@ -13,12 +13,50 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ArtifactPreview } from "../../web/protocol/artifacts.ts";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
 import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.tsx";
+import { FileContent } from "../../web/ui/src/features/files/FileContent.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
 
 const createUrl = vi.fn((_blob: Blob) => "blob:artifact-image");
 const revokeUrl = vi.fn((_url: string) => {});
 const png = () => new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])]);
+
+it("large Markdown keeps its full source without a rich DOM and recovers for smaller files", () => {
+  const text =
+    "# Heading\n\n" + "large content\n".repeat(8_000) + "END-SENTINEL";
+  const preview: ArtifactPreview = {
+    artifact: {
+      handle: "large",
+      sessionId: "s",
+      name: "large.md",
+      path: "/workspace/large.md",
+      revision: "a".repeat(64),
+      bytes: text.length,
+      preview: "text",
+    },
+    identity: "large",
+    text,
+    truncated: false,
+  };
+  const client = new WebClient();
+  const view = render(createElement(FileContent, { preview, client }));
+  expect(view.container.querySelector("code")?.textContent).toBe(text);
+  expect(view.container.querySelector(".markdown")).toBeNull();
+  expect(screen.getByRole("status").textContent).toBe(
+    i18n.t("filesLargeMarkdownSource"),
+  );
+  view.rerender(createElement(FileContent, { preview, client, source: true }));
+  expect(screen.queryByRole("status")).toBeNull();
+  view.rerender(
+    createElement(FileContent, {
+      preview: { ...preview, text: "# Small\n\n**Readable**" },
+      client,
+    }),
+  );
+  expect(screen.getByRole("heading", { name: "Small" })).toBeTruthy();
+  expect(view.container.querySelector("strong")?.textContent).toBe("Readable");
+  expect(screen.queryByRole("status")).toBeNull();
+});
 
 beforeEach(() => {
   createUrl.mockClear();

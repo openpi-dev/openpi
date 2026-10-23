@@ -69,6 +69,7 @@ type CachedFile = {
 type SharedScan = {
   controller: AbortController;
   signals: AbortSignal[];
+  cleanups: (() => void)[];
   detached: boolean;
   promise: Promise<CatalogPage>;
 };
@@ -203,20 +204,20 @@ export class SessionCatalog {
     const scan: SharedScan = {
       controller: new AbortController(),
       signals: [],
+      cleanups: [],
       detached: false,
       promise: undefined as never,
     };
     this.watch(scan, options.signal);
     this.shared.set(canonical, scan);
     scan.promise = this.scan(canonical, { ...options, signal: scan.controller.signal });
-    void scan.promise.then(
-      () => {
-        if (this.shared.get(canonical) === scan) this.shared.delete(canonical);
-      },
-      () => {
-        if (this.shared.get(canonical) === scan) this.shared.delete(canonical);
-      },
-    );
+    const release = () => {
+      for (const cleanup of scan.cleanups) cleanup();
+      scan.cleanups.length = 0;
+      scan.signals.length = 0;
+      if (this.shared.get(canonical) === scan) this.shared.delete(canonical);
+    };
+    void scan.promise.then(release, release);
     return follow(scan.promise, options.signal);
   }
 
@@ -261,7 +262,10 @@ export class SessionCatalog {
       if (scan.signals.every((item) => item.aborted)) scan.controller.abort(signal.reason);
     };
     if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
+    else {
+      signal.addEventListener("abort", onAbort, { once: true });
+      scan.cleanups.push(() => signal.removeEventListener("abort", onAbort));
+    }
   }
 
   private remember(path: string, cached: CachedFile) {
@@ -411,7 +415,7 @@ export class SessionCatalog {
     }
     const decoder = new StringDecoder("utf8");
     const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-    let pending = "";
+    let pending: string[] = [];
     let header: Record<string, unknown> | undefined;
     let name: string | undefined;
     let messageCount = 0;
@@ -449,9 +453,8 @@ export class SessionCatalog {
         if (message) {
           const activity = activityTime(entry, message);
           if (typeof activity === "number") lastActivity = Math.max(lastActivity ?? 0, activity);
-          const text = textOf(message);
-          if (!firstMessage && message.role === "user" && text) {
-            firstMessage = text.slice(0, CATALOG_FIRST_MESSAGE_CHARS);
+          if (!firstMessage && message.role === "user") {
+            firstMessage = textOf(message).slice(0, CATALOG_FIRST_MESSAGE_CHARS);
           }
           if (id) {
             const node: CompactNode = {
@@ -485,18 +488,25 @@ export class SessionCatalog {
         signal?.throwIfAborted();
         const { bytesRead } = await withSignal(handle.read(buffer, 0, buffer.length, null), signal);
         if (bytesRead === 0) break;
-        pending += decoder.write(buffer.subarray(0, bytesRead));
+        const chunk = decoder.write(buffer.subarray(0, bytesRead));
         let start = 0;
-        let newline = pending.indexOf("\n", start);
+        let newline = chunk.indexOf("\n", start);
         while (newline !== -1) {
-          consume(pending.slice(start, newline));
+          const part = chunk.slice(start, newline);
+          if (pending.length) {
+            pending.push(part);
+            consume(pending.join(""));
+            pending = [];
+          } else consume(part);
           start = newline + 1;
-          newline = pending.indexOf("\n", start);
+          newline = chunk.indexOf("\n", start);
         }
-        pending = pending.slice(start);
+        // Scan each decoded chunk once; a large JSONL record must not rescan
+        // or flatten its growing prefix on every read. Join only at its end.
+        if (start < chunk.length) pending.push(chunk.slice(start));
       }
-      pending += decoder.end();
-      if (pending) consume(pending);
+      pending.push(decoder.end());
+      consume(pending.join(""));
     } catch (error) {
       if (isAbort(error, signal)) throw error;
       return null;

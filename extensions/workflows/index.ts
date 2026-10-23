@@ -1207,6 +1207,7 @@ export default function workflows(
     for (const runId of listPersistedRunIds()) {
       const details = readPersistedWorkflowDetails(runId, {
         hydrateArtifacts: true,
+        sessionId,
       });
       if (!details || details.sessionId !== sessionId) {
         continue;
@@ -1486,9 +1487,9 @@ export default function workflows(
           details: compactWorkflowToolDetails(details),
         });
       };
-      const emit = (checkpoint = true) => {
+      const emit = (checkpoint = true, graphChanged = true) => {
         if (runSettled) return;
-        refreshWorkflowGraph(details);
+        if (graphChanged) refreshWorkflowGraph(details);
         if (checkpoint) persistence.checkpoint();
         if (emitTimer) return;
         emitTimer = setTimeout(
@@ -2215,7 +2216,10 @@ export default function workflows(
                     record.contextWindow =
                       progress.contextWindow ?? record.contextWindow;
                     record.transcript = progress.transcript;
-                    emit();
+                    // Preview/usage/transcript updates do not change graph
+                    // identity, edges or execution state. Lifecycle emissions
+                    // and durable checkpoints still refresh the projection.
+                    emit(true, false);
                   },
                 });
               const outcome = operatorKey

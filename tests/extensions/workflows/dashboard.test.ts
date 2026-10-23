@@ -47,6 +47,52 @@ const {
 
 const SESSION = "session-1";
 
+test("session-scoped recovery does not hydrate foreign run artifacts", (t) => {
+  const runId = "wf_foreign_hydration";
+  const dir = join(agentDir, "workflows", runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "workflow.json"),
+    JSON.stringify({
+      runId,
+      sessionId: "foreign",
+      status: "completed",
+      startedAt: 1,
+      phases: [],
+      agents: [],
+      resultArtifact: "result.json",
+      transcriptArtifact: "transcripts.json",
+    }),
+  );
+  writeFileSync(join(dir, "result.json"), JSON.stringify({ answer: "saved" }));
+  writeFileSync(join(dir, "transcripts.json"), "{}");
+  const original = fs.readFileSync;
+  const reads: string[] = [];
+  t.mock.method(fs, "readFileSync", (...args: Parameters<typeof original>) => {
+    reads.push(String(args[0]));
+    return original(...args);
+  });
+  assert.equal(
+    readPersistedWorkflowDetails(runId, {
+      hydrateArtifacts: true,
+      sessionId: SESSION,
+    }),
+    undefined,
+  );
+  assert.equal(
+    reads.some(
+      (file) =>
+        file.endsWith("result.json") || file.endsWith("transcripts.json"),
+    ),
+    false,
+  );
+  const restored = readPersistedWorkflowDetails(runId, {
+    hydrateArtifacts: true,
+    sessionId: "foreign",
+  });
+  assert.deepEqual(restored?.result, { answer: "saved" });
+});
+
 test("persisted reads recover a fully prepared terminal artifact commit", () => {
   const runId = "wf_commit_read";
   const dir = join(agentDir, "workflows", runId);
