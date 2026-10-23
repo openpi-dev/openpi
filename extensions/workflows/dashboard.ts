@@ -161,6 +161,8 @@ function hydrateRunArtifacts(runId: string, details: WorkflowDetails) {
 export interface ReadPersistedRunOptions {
   /** Hydrate result and transcript side artifacts referenced by workflow.json. */
   hydrateArtifacts?: boolean;
+  /** Ignore other sessions before reading their result/transcript artifacts. */
+  sessionId?: string;
 }
 
 /**
@@ -179,6 +181,11 @@ export function readPersistedWorkflowDetails(
     readPersistedWorkflowRecord(runId),
   );
   if (!details) return undefined;
+  if (
+    options.sessionId !== undefined &&
+    details.sessionId !== options.sessionId
+  )
+    return undefined;
   if (options.hydrateArtifacts) hydrateRunArtifacts(runId, details);
   return details;
 }

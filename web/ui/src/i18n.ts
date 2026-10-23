@@ -243,6 +243,8 @@ const resources = {
       artifactPreviewTruncated:
         "Preview truncated. Download the file for the complete content.",
       artifactUnsupported: "This file type cannot be previewed. Use Download.",
+      filesLargeMarkdownSource:
+        "This Markdown preview is large, so it is shown as source to keep scrolling responsive. All loaded text is included.",
       chatView: "Chat",
       trajectory: "Trajectory",
       trajectoryScope:
@@ -2322,6 +2324,8 @@ const resources = {
       artifactBytes: "{{count}} 字节",
       artifactPreviewTruncated: "预览已截断；下载文件可获取完整内容。",
       artifactUnsupported: "此类型无法预览，请下载文件。",
+      filesLargeMarkdownSource:
+        "Markdown 预览较大，已显示为源码以保持滚动流畅。已加载的文字全部保留。",
       chatView: "对话",
       trajectory: "执行轨迹",
       trajectoryScope:

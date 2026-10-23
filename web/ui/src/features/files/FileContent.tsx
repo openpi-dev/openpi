@@ -8,6 +8,10 @@ import DocumentPreview, { DataTable, HtmlFrame } from "./DocumentPreview.tsx";
 import { parseDelimited } from "./preview-data.ts";
 import { MarkdownOutline } from "./MarkdownOutline.tsx";
 
+// Rich Markdown creates several DOM nodes per source line. Match the source
+// highlighter's existing work budget while keeping all loaded text readable.
+const RICH_MARKDOWN_MAX_CHARS = 100_000;
+
 function SourcePreview({ text, name }: { text: string; name: string }) {
   const [html, setHtml] = useState("");
   useEffect(() => {
@@ -86,6 +90,9 @@ export function FileContent({
   const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
   const text = preview.text;
   const visualText = hasVisualFilePreview(name);
+  const markdown = ["md", "markdown"].includes(extension);
+  const largeMarkdown =
+    markdown && (text?.length ?? 0) > RICH_MARKDOWN_MAX_CHARS;
   const table = useMemo(
     () =>
       ["csv", "tsv"].includes(extension)
@@ -98,9 +105,12 @@ export function FileContent({
   if (text === undefined) return <p>{t("artifactUnsupported")}</p>;
   return (
     <>
-      {source || !visualText ? (
+      {largeMarkdown && !source && (
+        <p role="status">{t("filesLargeMarkdownSource")}</p>
+      )}
+      {source || !visualText || largeMarkdown ? (
         <SourcePreview text={text} name={name} />
-      ) : ["md", "markdown"].includes(extension) ? (
+      ) : markdown ? (
         <MarkdownOutline text={text}>
           <Markdown filePreview>{text}</Markdown>
         </MarkdownOutline>

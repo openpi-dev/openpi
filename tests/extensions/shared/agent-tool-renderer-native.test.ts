@@ -24,7 +24,10 @@ import {
   activityEnabled,
   activityRenderers,
 } from "../../../extensions/file-mutation-display/render.ts";
-import { createAgentToolRenderLedger } from "../../../extensions/shared/agent-tool-renderer.ts";
+import {
+  AgentToolRenderLedger,
+  createAgentToolRenderLedger,
+} from "../../../extensions/shared/agent-tool-renderer.ts";
 import { AgentTranscriptRenderer } from "../../../extensions/shared/agent-transcript.ts";
 import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -39,6 +42,54 @@ setKeybindings(
     },
   }),
 );
+
+test("tool rendering releases evicted results and preserves retained and pending cards", () => {
+  const ledger = new AgentToolRenderLedger();
+  ledger.start("pending", "fixture", {});
+  ledger.update(
+    "pending",
+    "fixture",
+    {},
+    { content: [{ type: "text", text: "still running" }] },
+  );
+  for (let index = 0; index < 600; index++) {
+    const id = `call-${index}`;
+    ledger.start(id, "fixture", {});
+    ledger.end(
+      id,
+      "fixture",
+      { content: [{ type: "text", text: `result-${index}` }] },
+      false,
+    );
+    ledger.retainTools(new Set([id, `call-${index - 1}`]));
+  }
+  assert.equal(
+    ledger.renderTool({ toolId: "call-0", name: "fixture" }, 80),
+    undefined,
+  );
+  assert.match(
+    ledger
+      .renderTool({ toolId: "call-599", name: "fixture", expanded: true }, 80)
+      ?.join("\n") ?? "",
+    /result-599/,
+  );
+  assert.ok(ledger.renderTool({ toolId: "pending", name: "fixture" }, 80));
+  ledger.end(
+    "pending",
+    "fixture",
+    { content: [{ type: "text", text: "finished" }] },
+    false,
+  );
+  ledger.retainTools(new Set(["call-599"]));
+  assert.equal(
+    ledger.renderTool({ toolId: "pending", name: "fixture" }, 80),
+    undefined,
+  );
+  assert.equal(
+    ledger.renderTool({ toolId: "call-598", name: "fixture" }, 80),
+    undefined,
+  );
+});
 
 test("child tool cards equal the main public renderer chain, without changing execution", async (t) => {
   t.mock.method(Date, "now", () => 1000);
