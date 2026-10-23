@@ -5,7 +5,7 @@
 - Verified: 2026-10-23；验证范围是选定源码、官方文档与下述静态消融。
 - Source boundary: OpenPI `31b2d045ec7147ac5fc3b2e350bbd55b0a2aa7cd`；同行版本见下表。没有运行同行 harness、模型 Benchmark 或用户现场复现。
 - Related Issues: [#196][issue-lifecycle]、[#512][issue-print]、[#652][issue-receipt]、[#891][issue-history]。
-- Related PRs: 无本次实现 PR；[#515][pr-print] 是 #512 的历史候选，不能当作当前实现。
+- Related PRs: [draft 文档 PR #898](https://github.com/openpi-dev/openpi/pull/898)；无本次实现 PR。[#515][pr-print] 是 #512 的历史候选，不能当作当前实现。
 - Related records: [Completion Inbox](../design/COMPLETION_INBOX.md)、[Session child-execution admission](../design/SESSION_CHILD_EXECUTION_ADMISSION.md)；本文沿用其所有权边界。
 - Supersedes: 无。不改写既有研究，也不把旧 Issue 的源码结论自动升级到当前 main。
 
