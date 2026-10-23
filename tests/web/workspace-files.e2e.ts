@@ -395,7 +395,7 @@ test("workspace files stay beside previews, support rich documents and remain us
     await expect
       .poll(
         async () =>
-          (await page.locator(".file-pdf canvas").boundingBox())!.width,
+          (await page.locator(".file-pdf canvas").boundingBox())?.width ?? 0,
       )
       .toBeGreaterThan(originalWidth);
     await page
