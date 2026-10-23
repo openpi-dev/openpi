@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Validate CI changes before opening a PR; ordinary feature branches retain
+    # PR-only execution to avoid spending another full matrix on every push.
+    branches: [main, 'codex/ci-*']
   pull_request:
 
 concurrency:
