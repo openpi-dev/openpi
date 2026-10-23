@@ -125,6 +125,12 @@ The source catalog remains the native conversation's saved images and explicit l
 
 Final source validation passed `bun run check`; the complete `bun run test` passed **2,382 Node tests / 8 skipped / 0 failed**. Its only UI failure was the existing terminal test's old five-item launcher count. After updating that assertion to six and checking the Sources entry, the complete `bun run test:ui` rerun passed **99 files / 1,534 tests / 0 failed**. The combined final Chrome run passed all **seven** child/source navigation cases. Validation logs, including the initial assertion failure and final UI rerun, are archived outside Git alongside the earlier evidence.
 
+## Follow-up: CI integration, 2026-10-23
+
+At `fd9624676f6213881b6f184c836920f29681a42c`, CI failed two browser cases because their launcher assertions still expected five tools after Sources became the sixth. The menu contract now checks all six named entries; the independent-terminal case checks its required terminal entry instead of duplicating the entire catalog count. Both Chrome cases pass. The same CI run timed out the first real post-edit lifecycle test on Windows at 15 seconds, while later cases passed. This is consistent with cold process contention, rather than evidence that formatter ordering failed. The fixture now uses the existing Windows isolated-process group; its socket-gated ordering checks and deadline remain intact. Removing this grouping in a temporary copy fails the existing partition regression. Native Windows acceptance remains a CI boundary, not a claim from the macOS run.
+
+The complete isolated `bun run test` passed **2,382 Node tests / 8 skipped / 0 failed** and **99 UI files / 1,534 tests / 0 failed**; `bun run check` also passed. The PR already contains main `ea4dfb993793ccdb093229588b6ccd3467afd90a`; local merge computation and GitHub report no conflict at that boundary. No child wake policy or installed runtime changed.
+
 ## Limits and interpretation
 
 This evidence demonstrates source behavior, native fixtures and an isolated browser. It does not claim a real computer reboot test, deployment to the user's installed runtime, automatic execution recovery, or a comparative performance improvement. The installed OpenPI source remains separate from this checkout. Lists and transcript previews retain explicit bounds; deleted files, missing private bindings and historical in-memory data remain unavailable rather than reconstructed by title or working-directory guesses.
