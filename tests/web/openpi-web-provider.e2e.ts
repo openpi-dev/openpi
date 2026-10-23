@@ -512,7 +512,10 @@ test("thinking level reaches the provider request end to end", async ({
     await page.getByRole("button", { name: "保存", exact: true }).click();
     expect((await capabilityWrite).status()).toBe(200);
     await expect(
-      page.getByText(`已保存 ${PROVIDER_ID}。`, { exact: true }),
+      page
+        .getByRole("dialog", { name: "设置" })
+        .getByRole("status")
+        .filter({ hasText: `已保存 ${PROVIDER_ID}。` }),
     ).toBeVisible();
     const updated = await page.request.get("/api/snapshot", {
       headers: authHeaders,
