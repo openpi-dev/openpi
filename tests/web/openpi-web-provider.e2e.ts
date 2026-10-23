@@ -302,7 +302,7 @@ test("uploaded screenshots reach the real Host and provider without preview meta
 
 test("thinking level reaches the provider request end to end", async ({
   page,
-}) => {
+}, testInfo) => {
   const provider = await startFakeProvider();
   const workspace = await mkdtemp(join(tmpdir(), "openpi-thinking-provider-"));
   try {
@@ -444,6 +444,125 @@ test("thinking level reaches the provider request end to end", async ({
       .toBe(2);
     const offBody = provider.requests[1].body as Record<string, unknown>;
     expect("reasoning_effort" in offBody).toBe(false);
+    await expect(thinkingPicker).toBeEnabled();
+
+    // Edit the model's native capabilities through the actual Settings form.
+    await page.goto("/?settings=models", { waitUntil: "domcontentloaded" });
+    await page
+      .getByRole("button", { name: `编辑 ${PROVIDER_ID}`, exact: true })
+      .click();
+    await page.getByText("自定义设置", { exact: true }).click();
+    await page
+      .getByRole("button", { name: "模型参数：Fake Reasoner", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "支持的思考等级 1", exact: true })
+      .click();
+    await page
+      .getByRole("menuitemcheckbox", { name: "off", exact: true })
+      .click();
+    await page
+      .getByRole("menuitemcheckbox", { name: "max", exact: true })
+      .click();
+    await expect(
+      page.getByRole("menuitemcheckbox", { name: "max", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.addStyleTag({
+      content:
+        "*, *::before, *::after { animation: none !important; transition: none !important; }",
+    });
+    await page.screenshot({
+      path: testInfo.outputPath("thinking-model-desktop.png"),
+      fullPage: true,
+    });
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 890, height: 792 });
+    await page
+      .getByRole("button", { name: "支持的思考等级 1", exact: true })
+      .scrollIntoViewIfNeeded();
+    await page
+      .getByRole("button", { name: "支持的思考等级 1", exact: true })
+      .click();
+    await page.screenshot({
+      path: testInfo.outputPath("thinking-model-user-890.png"),
+      fullPage: true,
+    });
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page
+      .getByRole("button", { name: "支持的思考等级 1", exact: true })
+      .scrollIntoViewIfNeeded();
+    await page
+      .getByRole("button", { name: "支持的思考等级 1", exact: true })
+      .click();
+    await page.screenshot({
+      path: testInfo.outputPath("thinking-model-mobile.png"),
+      fullPage: true,
+    });
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const capabilityWrite = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/providers/configuration" &&
+        response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    expect((await capabilityWrite).status()).toBe(200);
+    await expect(
+      page
+        .getByRole("dialog", { name: "设置" })
+        .getByRole("status")
+        .filter({ hasText: `已保存 ${PROVIDER_ID}。` }),
+    ).toBeVisible();
+    const updated = await page.request.get("/api/snapshot", {
+      headers: authHeaders,
+    });
+    const updatedSnapshot = await updated.json();
+    expect(updatedSnapshot.thinking.available).toEqual(["low", "high", "max"]);
+    expect(updatedSnapshot.thinking.level).toBe("low");
+    const nativeModels = JSON.parse(
+      await readFile(
+        join(process.env.OPENPI_WEB_PROVIDER_AGENT_DIR!, "models.json"),
+        "utf8",
+      ),
+    );
+    expect(
+      nativeModels.providers[PROVIDER_ID].models[0].thinkingLevelMap,
+    ).toEqual({
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: "max",
+    });
+    await page.getByRole("button", { name: "关闭", exact: true }).click();
+    await thinkingPicker.click();
+    const supportedSlider = page.getByRole("slider", { name: "思考等级" });
+    await expect(supportedSlider).toHaveAttribute("max", "2");
+    await expect(
+      page.getByText("可选等级：Low · High · Max", { exact: true }),
+    ).toBeVisible();
+    await supportedSlider.press("End");
+    await expect(thinkingWrap).toHaveAttribute("data-level", "max");
+    await page.screenshot({
+      path: testInfo.outputPath("thinking-picker-desktop.png"),
+      fullPage: true,
+    });
+    await page
+      .getByRole("textbox", { name: "描述任务" })
+      .fill("Confirm the configured maximum thinking level");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await expect
+      .poll(() => provider.requests.length, { timeout: 15_000 })
+      .toBe(3);
+    expect(
+      (provider.requests[2].body as Record<string, unknown>).reasoning_effort,
+    ).toBe("max");
     await expect(thinkingPicker).toBeEnabled();
   } finally {
     await provider.close();

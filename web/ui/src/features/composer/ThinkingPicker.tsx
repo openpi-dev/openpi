@@ -1,6 +1,6 @@
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import { ChevronRight, RotateCcw } from "lucide-react";
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebModelSummary,
@@ -43,6 +43,7 @@ export function ThinkingPicker({
   const [preview, setPreview] = useState<number | null>(null);
   const previewRef = useRef<number | null>(null);
   const slider = useRef<HTMLInputElement>(null);
+  const levelsDescription = useId();
   const label = (level: string) =>
     level ? level[0]!.toUpperCase() + level.slice(1) : t("unknownState");
   const clearPreview = () => {
@@ -89,6 +90,7 @@ export function ThinkingPicker({
           type="range"
           aria-label={t("thinkingLevel")}
           aria-valuetext={label(displayed)}
+          aria-describedby={levelsDescription}
           min={0}
           max={Math.max(0, levels.length - 1)}
           step={1}
@@ -126,6 +128,11 @@ export function ThinkingPicker({
           }}
         />
       </div>
+      <p className="thinking-available-levels" id={levelsDescription}>
+        {t("thinkingAvailableLevels", {
+          levels: levels.map(label).join(" · "),
+        })}
+      </p>
       <Tooltip
         content={`${model ? modelIdentity(model) : t("selectModel")} · ${t("selectModel")}`}
         placement="above"

@@ -316,6 +316,8 @@ form.composer-m02[data-editor-expanded] textarea { max-height: min(420px, 50dvh)
 .thinking-strength { grid-row: 1; }
 .thinking-model-link { grid-row: 2; }
 .thinking-slider { grid-row: 3; }
+.thinking-available-levels { grid-row: 4; margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 16px; overflow-wrap: anywhere; text-align: center; }
+.thinking-control-notice { grid-row: 5; }
 .model-thinking-label { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .model-picker-thinking { flex: none; color: var(--muted); font-weight: 400; }
 .model-thinking-back { display: flex; align-items: center; gap: 6px; border: 0; border-radius: 6px; background: none; color: var(--muted); padding: 6px 8px; margin-bottom: 4px; font: inherit; cursor: pointer; }

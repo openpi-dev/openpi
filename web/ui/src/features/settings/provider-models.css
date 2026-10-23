@@ -1,12 +1,11 @@
 .models-page, .models-picker-dialog { --models-border: var(--border); --models-surface: color-mix(in srgb, var(--text) 4%, var(--page)); --models-track: color-mix(in srgb, var(--text) 7%, var(--page)); }
 /* Adapted from DSH ui-settings-models 0.1.7-rc.2 (MIT, © 2026 DeepSeek).
    See THIRD_PARTY_NOTICES.md. Scoped to model content; the settings shell stays unchanged. */
-.models-page { width: 100%; min-width: 0; overflow-y: auto; padding: 56px 32px 64px; }
-.models-section { display: flex; flex-direction: column; gap: 12px; max-width: 720px; margin: 0 auto; color: var(--text); }
-.models-section > h2 { margin: 0; font-size: 28px; line-height: 1.3; font-weight: 600; letter-spacing: -.7px; }
-.models-intro { margin: 0; font-size: 14px; line-height: 22px; color: var(--muted); }
-.models-provider-list { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 20px 0 0; padding: 0; }
-.models-provider-card { display: flex; flex-direction: column; gap: 12px; padding: 18px; border: 1px solid var(--models-border); border-radius: 12px; background: var(--page); box-shadow: 0 2px 4px color-mix(in srgb, var(--text) 2%, transparent); }
+.models-page { min-width: 0; overflow-y: auto; }
+.models-section { display: flex; flex-direction: column; gap: 12px; color: var(--text); }
+.models-section > .settings-page-heading { margin-bottom: 16px; }
+.models-provider-list { display: flex; flex-direction: column; gap: 16px; list-style: none; margin: 12px 0 0; padding: 0; }
+.models-provider-card { display: flex; flex-direction: column; gap: 12px; padding: 20px 22px; border: 1px solid var(--models-border); border-radius: 14px; }
 .models-provider-head { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 .models-provider-identity { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
 .models-provider-avatar { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 12px; background: var(--models-surface); color: var(--text); }
@@ -18,7 +17,7 @@
 .models-provider-status { display: flex; align-items: center; gap: 6px; flex-basis: 100%; color: var(--muted); font-size: 12px; line-height: 18px; }
 .models-provider-name { font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
 .models-provider-tag { flex: none; padding: 1px 6px; border: 1px solid var(--models-border); border-radius: 4px; color: var(--muted); font-size: 11px; line-height: 16px; }
-.models-default-card { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; padding: 14px 16px; border-radius: 16px; background: var(--models-surface); }
+.models-default-card { display: flex; flex-direction: column; gap: 12px; padding: 20px 22px; border: 1px solid var(--models-border); border-radius: 14px; background: var(--page); }
 .models-default-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .models-default-copy { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .models-default-title { font-size: 12px; color: var(--muted); }
@@ -39,7 +38,8 @@
 .models-button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 86%, var(--page)); }
 .models-section button:disabled, .models-picker button:disabled { cursor: default; opacity: .4; }
 .models-section button:focus-visible, .models-picker button:focus-visible, .models-customized summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.models-editor, .models-add-card { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; border-radius: 12px; background: var(--models-surface); }
+.models-editor, .models-add-card { display: flex; flex-direction: column; gap: 16px; padding: 20px 0 0; border-top: 1px solid var(--models-border); background: transparent; }
+.models-add-card { padding: 20px 22px; border: 1px solid var(--models-border); border-radius: 14px; }
 .models-editor-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; font-size: 14px; line-height: 22px; font-weight: 500; }
 .models-editor-heading small { color: var(--muted); font-size: 12px; line-height: 18px; font-weight: 400; overflow-wrap: anywhere; }
 .models-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; line-height: 18px; color: var(--muted); }
@@ -74,8 +74,9 @@
 .models-link { display: inline-flex; align-items: center; min-height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .models-empty { margin: 0; padding: 12px; border: 1px dashed var(--models-border); border-radius: 12px; color: var(--muted); font-size: 12px; line-height: 18px; text-align: center; }
 .models-entry-list { display: flex; flex-direction: column; gap: 8px; }
-.models-entry { border: 1px solid var(--models-border); border-radius: 10px; padding: 6px; }
 .models-current-label { margin: 0 4px 6px; color: var(--muted); font-size: 12px; line-height: 18px; }
+.models-entry { padding: 8px 0; }
+.models-entry + .models-entry { border-top: 1px solid var(--models-border); }
 .models-entry-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto auto; align-items: center; gap: 6px; }
 .models-icon { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .models-icon svg { width: 14px; height: 14px; }
@@ -135,13 +136,13 @@
 .models-spinner { width: 16px; height: 16px; animation: session-spin 1.1s linear infinite; }
 .models-section [hidden] { display: none !important; }
 @media (max-width: 640px) {
-  .models-page { padding: 22px 16px 32px; }
-  .models-provider-card { padding: 10px 12px; }
+  .models-provider-card { padding: 16px 18px; }
   .models-provider-head { flex-wrap: wrap; }
   .models-provider-actions { flex-wrap: wrap; margin-left: 0; }
   .models-default-row { align-items: flex-start; flex-wrap: wrap; }
   .models-provider-identity { flex-wrap: wrap; gap: 5px; }
-  .models-editor, .models-add-card { padding: 14px 12px; }
+  .models-editor { padding-top: 16px; }
+  .models-add-card { padding: 16px 18px; }
   .models-add-modes { width: 100%; }
   .models-add-modes button { flex: 1; padding: 4px 8px; min-height: 36px; }
   .models-entry-row { grid-template-columns: minmax(0, 1fr) auto auto; }
@@ -157,3 +158,13 @@
 }
 .models-capability-hint, .models-reasoning { grid-column: 1 / -1; }
 .models-entry-details .models-capability-hint { margin: 0; }
+.models-thinking-levels { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 16px; grid-column: 1 / -1; min-width: 0; padding-top: 10px; border-top: 1px solid var(--models-border); }
+.models-thinking-copy { min-width: 0; }
+.models-thinking-copy strong { display: block; margin-bottom: 4px; font-size: 12px; line-height: 18px; font-weight: 500; }
+.models-section .models-thinking-trigger { min-height: 34px; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--text); font-size: 13px; white-space: nowrap; }
+.models-thinking-reset { grid-column: 2; justify-self: end; padding: 0 4px; }
+@media (max-width: 640px) {
+  .models-thinking-levels { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .models-thinking-trigger { width: 100%; min-height: 40px; }
+  .models-thinking-reset { grid-column: 1; min-height: 36px; }
+}

@@ -4493,6 +4493,48 @@ describe("thinking level picker", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("discards a slider preview when the model's supported levels change", () => {
+    const snapshot = idleThinkingSnapshot();
+    const props = thinkingProps(snapshot);
+    const selectThinking = vi.fn();
+    props.actions = { ...props.actions, selectThinking };
+    const view = renderWithI18n(createElement(Composer, props));
+    fireEvent.click(
+      screen.getByRole("button", { name: thinkingPickerName("medium") }),
+    );
+    const stale = screen.getByRole("slider", { name: i18n.t("thinkingLevel") });
+    fireEvent.change(stale, { target: { value: "4" } });
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...props,
+          snapshot: {
+            ...snapshot,
+            thinking: {
+              revision: snapshot.thinking!.revision + 1,
+              supported: true,
+              level: "low",
+              available: ["low", "high", "max"],
+            },
+          },
+        }),
+      ),
+    );
+    fireEvent.pointerUp(stale);
+    expect(selectThinking).not.toHaveBeenCalled();
+    const current = screen.getByRole<HTMLInputElement>("slider", {
+      name: i18n.t("thinkingLevel"),
+    });
+    expect(current.max).toBe("2");
+    expect(current.value).toBe("0");
+    expect(current.getAttribute("aria-valuetext")).toBe("Low");
+    fireEvent.change(current, { target: { value: "2" } });
+    fireEvent.pointerUp(current);
+    expect(selectThinking).toHaveBeenCalledExactlyOnceWith("max");
+  });
+
   it("keeps a pending picker interactive while the send button is disabled", () => {
     const snapshot = idleThinkingSnapshot();
     const props = thinkingProps(snapshot);

@@ -148,7 +148,12 @@ it("offers current-model native search with no external provider installation", 
   );
   await screen.findByText(i18n.t("webSearchDefaultOff"));
   expect(configure).not.toHaveBeenCalled();
-  expect(screen.getAllByText(i18n.t("webSearchCurrentModel")).length).toBe(2);
+  expect(
+    screen.getByRole("heading", {
+      name: i18n.t("webSearchCurrentModel"),
+      level: 2,
+    }),
+  ).toBeTruthy();
   expect(screen.getByText(i18n.t("webSearchSupported"))).toBeTruthy();
   expect(screen.queryByText("npm:pi-web-access@0.38.0")).toBeNull();
   const enable = screen.getByRole("button", {
@@ -679,6 +684,18 @@ it("submits role and skill changes through the canonical setup entry", async () 
   fireEvent.click(
     screen.getByRole("tab", { name: i18n.t("subagentsSettings") }),
   );
+  fireEvent.change(
+    screen.getByRole("combobox", { name: i18n.t("builtInRoles") }),
+    {
+      target: { value: "reviewer" },
+    },
+  );
+  expect(
+    screen.getByRole("heading", {
+      name: i18n.t("subagentRole_reviewer"),
+      level: 2,
+    }),
+  ).toBeTruthy();
   fireEvent.change(screen.getByLabelText(i18n.t("workflowConcurrencyLabel")), {
     target: { value: "3" },
   });
@@ -686,7 +703,9 @@ it("submits role and skill changes through the canonical setup entry", async () 
     screen.getByRole("button", { name: i18n.t("configureViaSetup") }),
   );
   await waitFor(() =>
-    expect(configure).toHaveBeenCalledWith(expect.stringContaining("3")),
+    expect(configure).toHaveBeenCalledWith(
+      expect.stringMatching(/reviewer.*3/u),
+    ),
   );
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
   fireEvent.click(
