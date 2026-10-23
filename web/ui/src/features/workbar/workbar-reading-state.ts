@@ -20,6 +20,7 @@ export interface TerminalReadingState {
 export interface WorkbarReadingState {
   tabs?: WorkbarTabsState;
   requestRevision?: number;
+  sources?: { scroll: number };
   files?: {
     selected: string;
     treeVisible: boolean;

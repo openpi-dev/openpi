@@ -242,10 +242,7 @@ const makePiSession = (
             options.sessionFactory ?? createAgentSession
           )({
             cwd: task.cwd,
-            sessionManager:
-              task.origin === "btw"
-                ? SessionManager.inMemory(task.cwd)
-                : SessionManager.create(task.cwd),
+            sessionManager: SessionManager.create(task.cwd),
             settingsManager,
             resourceLoader: loader,
             model,
@@ -354,6 +351,7 @@ const makePiSession = (
         backend: "pi",
         modelLabel: m ? `${m.provider}/${m.id}` : undefined,
         contextWindow: m?.contextWindow,
+        sessionId: session.sessionManager.getSessionId?.(),
         sessionFilePath: session.sessionFile,
       };
     };
@@ -758,7 +756,11 @@ const makePiSession = (
       state.activePrompt = activePrompt;
       capturedStructured = undefined;
       state.settled = false;
-      emit({ _tag: "RunStarted", generation: activePrompt.generation });
+      emit({
+        _tag: "RunStarted",
+        generation: activePrompt.generation,
+        startEntryId: activePrompt.startEntryId,
+      });
       let prompt: Promise<void>;
       try {
         prompt = session.prompt(text, {

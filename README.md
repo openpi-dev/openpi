@@ -162,6 +162,8 @@ openpi web /path/to/repo      # start with a specific workspace
 
 Keep the Pi package and the global CLI on the same OpenPI version.
 
+Closing a tab leaves accepted work running in the local Host. Use **Quit OpenPI** in the sidebar and confirm to stop the application and its tasks; the terminal confirms when cleanup finishes. Restart with `openpi web` or `/web`. Saved parent conversations retain read-only child history across Host restarts, including Direct, BTW and Workflow children; inspecting history does not restart execution. Empty conversations keep Pi’s lazy-save behavior.
+
 Details — sessions, host and forks, credentials, models, files, preview, changes, attachments, embedded browser, cards, commands: [USAGE.md](USAGE.md#web-工作台细节)
 
 ### Plan mode & human input

@@ -17,6 +17,7 @@ import {
 } from "../../../protocol/types.ts";
 import type {
   WebSessionForkRequest,
+  WebSessionExecution,
   WebWorktreeReleaseResult,
   WebWorktreeReleaseTarget,
 } from "../../../runtime/types.ts";
@@ -313,7 +314,7 @@ export interface WebStoreState {
   liveMessages: LiveEntry[];
   liveRunning: boolean;
   livePhase: "idle" | "preparing" | "running";
-  liveRetry: { attempt: number; maxAttempts: number } | null;
+  liveRetry: NonNullable<WebSessionExecution["retry"]> | null;
   thinkingStarts: Record<string, number>;
   thinkingDurations: Record<string, number>;
   promptAdmissionPending: boolean;
@@ -519,6 +520,7 @@ export function createWebStore(
   >();
   let snapshotGeneration = 0;
   let liveTurnSequence = 0;
+  let liveRetrySequence = 0;
   let snapshotFailureNotice: string | null = null;
   let promptAdmissionSequence = 0;
   let promptAdmissionToken: number | null = null;
@@ -588,6 +590,7 @@ export function createWebStore(
     turnCancellation = null;
     planSelectionGeneration++;
     pendingTimingKeys = [];
+    liveRetrySequence = 0;
     return {
       planSelectionPending: false,
       activeTurn: null,
@@ -602,6 +605,14 @@ export function createWebStore(
       thinkingStarts: {},
       thinkingDurations: {},
     };
+  };
+
+  const retryLivePatch = (
+    sequence: number,
+    retry: WebStoreState["liveRetry"] = null,
+  ) => {
+    liveRetrySequence = sequence;
+    return { liveRetry: retry };
   };
 
   const rememberPendingTiming = (key: string) => {
@@ -1038,7 +1049,9 @@ export function createWebStore(
         const settled = terminalPromptIds.has(String(detail.commandId ?? ""));
         set({
           ...promptAcceptedLivePatch(settled, current.livePhase),
-          liveRetry: null,
+          ...(current.livePhase !== "running"
+            ? retryLivePatch(event.sequence)
+            : {}),
           pendingFollowUpsReceipt: Number.isInteger(detail.pendingFollowUps)
             ? Number(detail.pendingFollowUps)
             : current.pendingFollowUpsReceipt,
@@ -1070,7 +1083,7 @@ export function createWebStore(
           activeTurn,
           liveRunning: true,
           livePhase: "running",
-          liveRetry: null,
+          ...retryLivePatch(event.sequence),
           turnTerminalStatus: null,
         });
       } else if (event.type === "agent_start") {
@@ -1082,7 +1095,7 @@ export function createWebStore(
             : {}),
           liveRunning: true,
           livePhase: "running",
-          liveRetry: null,
+          ...retryLivePatch(event.sequence),
         });
       } else if (event.type === "turn_settled") {
         rememberBounded(terminalPromptIds, detail.commandId);
@@ -1098,7 +1111,7 @@ export function createWebStore(
             activeTurn: null,
             liveRunning: false,
             livePhase: "idle",
-            liveRetry: null,
+            ...retryLivePatch(event.sequence),
             turnTerminalStatus:
               typeof detail.outcome === "string" ? detail.outcome : null,
           });
@@ -1108,18 +1121,22 @@ export function createWebStore(
         set({
           pendingFollowUpsReceipt: null,
           pendingSteeringReceipt: null,
+          ...retryLivePatch(event.sequence),
           ...(!current.activeTurn
             ? {
                 liveRunning: false,
                 livePhase: "idle" as const,
-                liveRetry: null,
               }
             : {}),
         });
       } else if (event.type === "prompt_settled") {
         rememberBounded(terminalPromptIds, detail.commandId);
         if (current.livePhase !== "running")
-          set({ liveRunning: false, livePhase: "idle", liveRetry: null });
+          set({
+            liveRunning: false,
+            livePhase: "idle",
+            ...retryLivePatch(event.sequence),
+          });
       } else if (detail.message && typeof detail.message === "object") {
         const message = detail.message as WebLiveMessage;
         let liveMessages = current.liveMessages;
@@ -1201,7 +1218,7 @@ export function createWebStore(
             ? {
                 liveRunning: false,
                 livePhase: "idle" as const,
-                liveRetry: null,
+                ...retryLivePatch(event.sequence),
               }
             : {}),
           notice:
@@ -1209,19 +1226,27 @@ export function createWebStore(
         });
       }
       if (event.type === "auto_retry_start") {
+        liveTurnSequence = event.sequence;
         set({
           liveRunning: true,
           livePhase: "running",
-          liveRetry: {
-            attempt: Number(detail.attempt) || 0,
-            maxAttempts: Number(detail.maxAttempts) || 0,
-          },
+          ...retryLivePatch(event.sequence, {
+            ...(typeof detail.attempt === "number"
+              ? { attempt: detail.attempt }
+              : {}),
+            ...(typeof detail.maxAttempts === "number"
+              ? { maxAttempts: detail.maxAttempts }
+              : {}),
+            ...(typeof detail.errorMessage === "string"
+              ? { errorMessage: detail.errorMessage }
+              : {}),
+          }),
         });
       }
       if (event.type === "auto_retry_end") {
         // A recovered request can continue into tools or another model step.
         // Only Pi's settled event ends the run.
-        set({ liveRetry: null });
+        set(retryLivePatch(event.sequence));
       }
       if (event.type === "thinking_level_changed") {
         const projection = get().snapshot?.thinking;
@@ -1527,6 +1552,24 @@ export function createWebStore(
           const activeTurn = preserveLiveTurn
             ? get().activeTurn
             : (snapshot.runtime.activeTurn ?? null);
+          // Retry events can arrive while an older snapshot is in flight.
+          // Preserve both live retry facts and explicit settlement until that
+          // snapshot catches up; a new stream or Session starts a new scope.
+          const preserveLiveRetry =
+            !shouldReset &&
+            !controllerChanged &&
+            !selectionChanged &&
+            liveRetrySequence > snapshot.cursor;
+          const execution = snapshot.selectedExecution;
+          const snapshotRetry =
+            selectedIsCurrent &&
+            snapshot.runtime.status === "running" &&
+            execution?.sessionId === snapshot.selectedSession?.id &&
+            execution?.sessionPath === snapshot.selectedSession?.path &&
+            execution?.status === "running"
+              ? (execution.retry ?? null)
+              : null;
+          const liveRetry = preserveLiveRetry ? get().liveRetry : snapshotRetry;
           set({
             ...(recoveredSnapshotNotice ? { notice: null } : {}),
             ...(shouldReset || controllerChanged || selectionChanged
@@ -1555,13 +1598,7 @@ export function createWebStore(
                 : !get().promptAdmissionPending && !promptAdmission
                   ? "idle"
                   : get().livePhase,
-            liveRetry:
-              !preserveLiveTurn &&
-              snapshot.runtime.status !== "running" &&
-              !get().promptAdmissionPending &&
-              !promptAdmission
-                ? null
-                : get().liveRetry,
+            liveRetry,
             liveRunning: preserveLiveTurn
               ? get().liveRunning
               : snapshot.runtime.status === "running"
@@ -1575,6 +1612,7 @@ export function createWebStore(
             snapshot,
             ...(modelSearchChanged ? resetModelSearch() : {}),
           });
+          if (!preserveLiveRetry) liveRetrySequence = snapshot.cursor;
           if (!(shouldReset || controllerChanged || selectionChanged)) {
             const retained = retainThinkingTiming(
               get().liveMessages,

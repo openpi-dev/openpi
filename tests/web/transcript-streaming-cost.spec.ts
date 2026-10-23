@@ -117,6 +117,68 @@ describe("persisted transcript signatures", () => {
     parts: [{ type: "text" as const, text: "same" }],
   };
 
+  it("reconciles exact tool executions when snapshot bounds change their payload", () => {
+    const tool = {
+      type: "toolCall" as const,
+      id: "build-1",
+      name: "bash",
+      arguments: '{"command":"build"}',
+    };
+    const assistant: WebLiveMessage = {
+      role: "assistant",
+      timestamp: 5,
+      content: "",
+      parts: [{ type: "thinking", text: "Inspecting the build" }, tool],
+      stopReason: "toolUse",
+    };
+    const result: WebLiveMessage = {
+      role: "toolResult",
+      toolName: "bash",
+      toolCallId: tool.id,
+      content: "Build output".repeat(100),
+      isError: false,
+    };
+    const entries = [
+      messageEntry("a1", {
+        ...assistant,
+        parts: [tool],
+        truncation: { truncated: true },
+      }),
+      messageEntry("r1", {
+        ...result,
+        content: "Build output…",
+        truncation: { truncated: true, text: true },
+      }),
+    ];
+    const reconciled = buildEntries(
+      snapshot(entries),
+      [
+        { key: "live-assistant", message: assistant },
+        { key: "live-result", message: result },
+        { key: "replayed-assistant", message: assistant },
+        { key: "replayed-result", message: result },
+      ],
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
+    );
+    expect(reconciled.entries.map((entry) => entry.entryId)).toEqual([
+      "a1",
+      "r1",
+    ]);
+    // Running the same command again is a separate execution, even when the
+    // provider reuses its timestamp. Never deduplicate command text.
+    const repeated = buildEntries(
+      snapshot(entries),
+      [
+        {
+          key: "next",
+          message: { ...assistant, parts: [{ ...tool, id: "build-2" }] },
+        },
+      ],
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
+    );
+    expect(repeated.entries).toHaveLength(3);
+  });
+
   it("reuses one exact assistant row and keeps a truncated duplicate on the native id", () => {
     const aliased = buildEntries(
       snapshot([messageEntry("e1", complete)]),

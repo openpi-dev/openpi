@@ -4625,6 +4625,137 @@ describe("OpenPI Web store", () => {
     },
   );
 
+  it("reconciles provider retry snapshots without resurrecting an ended retry or erasing a newer one", async () => {
+    const client = new FakeClient();
+    const initial = snapshot();
+    initial.runtime.status = "running";
+    initial.selectedExecution = {
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+      status: "running",
+      liveTools: [],
+      liveToolsOmitted: 0,
+      retry: { attempt: 2, maxAttempts: 3, errorMessage: "stream closed" },
+    };
+    client.snapshots.push(Promise.resolve(initial));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    expect(store.getState().liveRetry).toEqual(initial.selectedExecution.retry);
+    const stale = deferred<WebSnapshot>();
+    client.snapshots.push(stale.promise);
+    const refreshing = store.getState().actions.refreshSnapshot();
+    stream.emit(runtimeEvent(5, "auto_retry_end", { success: true }));
+    expect(store.getState().liveRetry).toBeNull();
+    expect(store.getState().connection).toBe("connected");
+    stale.resolve(initial);
+    await refreshing;
+    expect(store.getState().liveRetry).toBeNull();
+    expect(store.getState().liveRunning).toBe(true);
+
+    stream.emit(
+      runtimeEvent(6, "auto_retry_start", {
+        attempt: 3,
+        maxAttempts: 3,
+        errorMessage: "another failure",
+      }),
+    );
+    const recovered = {
+      ...initial,
+      cursor: 5,
+      selectedExecution: { ...initial.selectedExecution, retry: undefined },
+    };
+    client.snapshots.push(
+      Promise.resolve({
+        ...recovered,
+        runtime: { ...recovered.runtime, status: "idle" },
+      }),
+    );
+    await store.getState().actions.refreshSnapshot();
+    expect(store.getState().liveRunning).toBe(true);
+    expect(store.getState().liveRetry).toEqual({
+      attempt: 3,
+      maxAttempts: 3,
+      errorMessage: "another failure",
+    });
+    client.snapshots.push(Promise.resolve({ ...recovered, cursor: 6 }));
+    await store.getState().actions.refreshSnapshot();
+    expect(store.getState().liveRetry).toBeNull();
+    expect(store.getState().liveRunning).toBe(true);
+    store.getState().actions.stop();
+  });
+
+  it.each(["turn_settled", "agent_settled", "prompt_failed"])(
+    "clears provider retry on %s while ignoring unrelated follow-up receipts",
+    async (terminal) => {
+      const client = new FakeClient();
+      client.snapshots.push(Promise.resolve(snapshot()));
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      store.getState().actions.start();
+      const turn = { sessionId: "session-1", commandId: "running", epoch: 1 };
+      stream.emit(runtimeEvent(5, "turn_started", turn));
+      stream.emit(
+        runtimeEvent(6, "auto_retry_start", { attempt: 2, maxAttempts: 3 }),
+      );
+      stream.emit(
+        runtimeEvent(7, "prompt_accepted", {
+          sessionId: "session-1",
+          commandId: "queued-follow-up",
+        }),
+      );
+      stream.emit(
+        runtimeEvent(8, "turn_settled", {
+          ...turn,
+          epoch: 0,
+          outcome: "cancelled",
+        }),
+      );
+      expect(store.getState().liveRetry).toEqual({
+        attempt: 2,
+        maxAttempts: 3,
+      });
+      stream.emit(runtimeEvent(9, terminal, { ...turn, outcome: "cancelled" }));
+      expect(store.getState().liveRetry).toBeNull();
+      store.getState().actions.stop();
+    },
+  );
+
+  it.each(["idle", "copied-session", "cursor-reset"])(
+    "clears provider retry after %s snapshot recovery",
+    async (recovery) => {
+      const client = new FakeClient();
+      client.snapshots.push(Promise.resolve(snapshot()));
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      store.getState().actions.start();
+      stream.emit(
+        runtimeEvent(5, "auto_retry_start", { attempt: 2, maxAttempts: 3 }),
+      );
+      const next =
+        recovery === "copied-session"
+          ? activeSnapshot("session-1", "/tmp/ws/copied.jsonl", { cursor: 6 })
+          : { ...snapshot(), cursor: recovery === "cursor-reset" ? 1 : 6 };
+      next.runtime.status = recovery === "idle" ? "idle" : "running";
+      if (recovery === "copied-session") store.setState({ selectedPath: null });
+      client.snapshots.push(Promise.resolve(next));
+      await store
+        .getState()
+        .actions.refreshSnapshot({ resetCursor: recovery === "cursor-reset" });
+      expect(store.getState().liveRetry).toBeNull();
+      store.getState().actions.stop();
+    },
+  );
+
   it("does not let retry events from a copied Session path change the current run", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));

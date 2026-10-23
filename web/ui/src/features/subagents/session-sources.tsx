@@ -1,6 +1,13 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
 import { ArrowLeft, FileText, Image as ImageIcon, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebSessionSource,
@@ -12,6 +19,8 @@ import {
 } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
 import { ImageViewport } from "../../components/ImageViewport.tsx";
+import { ArtifactContext } from "../artifacts/context.ts";
+import { useWorkbarReadingState } from "../workbar/workbar-reading-state.ts";
 import "./session-sources.css";
 
 export function useSessionSources(
@@ -222,18 +231,20 @@ export function SourceRow({
   path,
   onOpen,
   thumbnail = true,
+  detailed = false,
 }: {
   source: WebSessionSource;
   sessionId: string;
   path: string;
   onOpen: () => void;
   thumbnail?: boolean;
+  detailed?: boolean;
 }) {
   const { t } = useTranslation();
   return (
     <button
       type="button"
-      className="session-overview-row session-source-row"
+      className={`session-overview-row session-source-row${detailed ? " source-detail-row" : ""}`}
       title={source.reference || source.name || t("attachedImage")}
       onClick={onOpen}
     >
@@ -253,8 +264,141 @@ export function SourceRow({
           <FileText aria-hidden="true" />
         )}
       </span>
-      <span>{source.name || t("attachedImage")}</span>
+      {detailed ? (
+        <span className="session-source-copy">
+          <strong>{source.name || t("attachedImage")}</strong>
+          {source.reference && (
+            <span className="source-detail-reference">{source.reference}</span>
+          )}
+          <span className="source-detail-status">{t("sourceAttached")}</span>
+        </span>
+      ) : (
+        <span>{source.name || t("attachedImage")}</span>
+      )}
     </button>
+  );
+}
+
+function SourcesList({
+  sessionId,
+  path,
+  data,
+  onSelect,
+}: {
+  sessionId: string;
+  path: string;
+  data: ReturnType<typeof useSessionSources>;
+  onSelect: (source: WebSessionSource) => void;
+}) {
+  const { t } = useTranslation();
+  const reading = useWorkbarReadingState();
+  const list = useRef<HTMLDivElement>(null);
+  const scroll = useRef(reading?.sources?.scroll ?? 0);
+  useLayoutEffect(() => {
+    if (data.page?.sources.length && list.current)
+      list.current.scrollTop = scroll.current;
+  }, [data.page?.sources.length]);
+  return (
+    <div
+      className="session-sources-list"
+      ref={list}
+      onScroll={(event) => {
+        scroll.current = event.currentTarget.scrollTop;
+        if (reading) reading.sources = { scroll: scroll.current };
+      }}
+    >
+      {!data.loading && !data.error && !data.page?.sources.length && (
+        <p>{t("sourcesEmpty")}</p>
+      )}
+      {data.page?.sources.map((item) => (
+        <SourceRow
+          key={item.id}
+          source={item}
+          sessionId={sessionId}
+          path={path}
+          onOpen={() => onSelect(item)}
+          detailed
+        />
+      ))}
+      {data.error && (
+        <p role="alert">
+          {t("sourcesFailed")}{" "}
+          <button type="button" onClick={data.refresh}>
+            {t("gitReviewRetry")}
+          </button>
+        </p>
+      )}
+      {data.loading && <p role="status">{t("readingFile")}</p>}
+      {data.page?.nextOffset !== undefined && (
+        <button
+          className="sources-load-more"
+          type="button"
+          disabled={data.loading}
+          onClick={() => void data.loadMore()}
+        >
+          {t("sourcesLoadMore")}
+        </button>
+      )}
+      {data.page?.truncated && <p>{t("sourcesPartial")}</p>}
+    </div>
+  );
+}
+
+export function SourcesPanel({
+  sessionId,
+  path,
+  revision,
+}: {
+  sessionId: string;
+  path: string;
+  revision?: string;
+}) {
+  const { t } = useTranslation();
+  const data = useSessionSources(sessionId, path, true, revision);
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    // Opening the nonmodal list transfers keyboard navigation out of the popover.
+    const frame = requestAnimationFrame(() =>
+      panel.current?.focus({ preventScroll: true }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const artifacts = useContext(ArtifactContext);
+  const [source, setSource] = useState<WebSessionSource | null>(null);
+  const open = (item: WebSessionSource | null) => {
+    if (item?.kind === "file" && item.reference) {
+      artifacts?.open(
+        item.reference,
+        undefined,
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : undefined,
+      );
+    } else setSource(item);
+  };
+  return (
+    <section
+      className="session-sources-panel"
+      ref={panel}
+      tabIndex={-1}
+      aria-label={t("sessionSources")}
+    >
+      <SourcesList
+        sessionId={sessionId}
+        path={path}
+        data={data}
+        onSelect={open}
+      />
+      <SourcesDialog
+        sessionId={sessionId}
+        path={path}
+        open={Boolean(source)}
+        source={source}
+        data={data}
+        onSelect={open}
+        onClose={() => setSource(null)}
+      />
+    </section>
   );
 }
 
@@ -293,89 +437,62 @@ export function SourcesDialog({
       padding={0}
       aria-label={t("sessionSources")}
     >
-      <div className="session-sources-dialog draft-image-preview">
-        <header>
-          {source && data && (
-            <button
-              type="button"
-              aria-label={t("sourcesBack")}
-              onClick={() => onSelect(null)}
-            >
-              <ArrowLeft />
-            </button>
-          )}
-          <strong title={source?.name}>
-            {source ? source.name || t("attachedImage") : t("sessionSources")}
-          </strong>
-          {source && (
-            <button
-              type="button"
-              aria-pressed={original}
-              onClick={() => setOriginal((value) => !value)}
-            >
-              {t(original ? "fitImage" : "originalImageSize")}
-            </button>
-          )}
-          <button
-            type="button"
-            data-autofocus
-            aria-label={t("close")}
-            onClick={onClose}
-          >
-            <X />
-          </button>
-        </header>
-        {source ? (
-          <ImageViewport
-            key={JSON.stringify([sessionId, path, source.id])}
-            original={original}
-          >
-            <SourceImage
-              key={JSON.stringify([sessionId, path, source.id])}
-              sessionId={sessionId}
-              path={path}
-              source={source}
-              active={open}
-            />
-          </ImageViewport>
-        ) : (
-          <div className="session-sources-list">
-            {!data?.loading && !data?.error && !data?.page?.sources.length && (
-              <p>{t("sourcesEmpty")}</p>
-            )}
-            {data?.page?.sources.map((item) => (
-              <SourceRow
-                key={item.id}
-                source={item}
-                sessionId={sessionId}
-                path={path}
-                onOpen={() => onSelect(item)}
-                thumbnail={false}
-              />
-            ))}
-            {data?.error && (
-              <p role="alert">
-                {t("sourcesFailed")}{" "}
-                <button type="button" onClick={data.refresh}>
-                  {t("gitReviewRetry")}
-                </button>
-              </p>
-            )}
-            {data?.loading && <p role="status">{t("readingFile")}</p>}
-            {data?.page?.nextOffset !== undefined && (
+      {open && (
+        <div className="session-sources-dialog draft-image-preview">
+          <header>
+            {source && data && (
               <button
-                className="sources-load-more"
                 type="button"
-                disabled={data.loading}
-                onClick={() => void data.loadMore()}
+                aria-label={t("sourcesBack")}
+                onClick={() => onSelect(null)}
               >
-                {t("sourcesLoadMore")}
+                <ArrowLeft />
               </button>
             )}
-            {data?.page?.truncated && <p>{t("sourcesPartial")}</p>}
-          </div>
-        )}
-      </div>
+            <strong title={source?.name}>
+              {source ? source.name || t("attachedImage") : t("sessionSources")}
+            </strong>
+            {source && (
+              <button
+                type="button"
+                aria-pressed={original}
+                onClick={() => setOriginal((value) => !value)}
+              >
+                {t(original ? "fitImage" : "originalImageSize")}
+              </button>
+            )}
+            <button
+              type="button"
+              data-autofocus
+              aria-label={t("close")}
+              onClick={onClose}
+            >
+              <X />
+            </button>
+          </header>
+          {source ? (
+            <ImageViewport
+              key={JSON.stringify([sessionId, path, source.id])}
+              original={original}
+            >
+              <SourceImage
+                key={JSON.stringify([sessionId, path, source.id])}
+                sessionId={sessionId}
+                path={path}
+                source={source}
+                active={open}
+              />
+            </ImageViewport>
+          ) : data ? (
+            <SourcesList
+              sessionId={sessionId}
+              path={path}
+              data={data}
+              onSelect={onSelect}
+            />
+          ) : null}
+        </div>
+      )}
     </Dialog>
   );
 }

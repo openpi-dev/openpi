@@ -299,6 +299,8 @@ class WebRequestError extends Error {
 export interface WebHostOptions {
   runtime: WebRuntimeController;
   onEvent?: (type: string, detail?: Record<string, unknown>) => void;
+  /** CLI-owned shutdown, invoked once after an acceptance response is sent. */
+  onShutdown?: () => void;
   port?: number;
   token?: string;
   allowedOrigins?: readonly string[];
@@ -327,6 +329,8 @@ export class WebHost {
   private readonly runtime: WebRuntimeController;
   private readonly requestedPort: number;
   private readonly onEvent?: WebHostOptions["onEvent"];
+  private readonly onShutdown?: WebHostOptions["onShutdown"];
+  private shutdownRequested = false;
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly directoryChooser: NonNullable<
     WebHostOptions["directoryChooser"]
@@ -399,6 +403,7 @@ export class WebHost {
     }
     this.adapter = new PiWebAdapter(options.runtime);
     this.onEvent = options.onEvent;
+    this.onShutdown = options.onShutdown;
     this.unsubscribeCapabilities = subscribeWebCapabilities((scope) => {
       if (scope === this.runtime.sessionManager) this.publish("runtime_changed");
     });
@@ -749,6 +754,28 @@ export class WebHost {
     }
     if (!this.authorized(request))
       return this.json(response, 401, { error: "invalid or missing token" });
+    if (url.pathname === "/api/shutdown") {
+      request.resume();
+      if (request.method !== "POST") {
+        response.setHeader("Allow", "POST");
+        return this.json(response, 405, { error: "Shutdown requires POST" });
+      }
+      const shutdown = this.onShutdown;
+      if (!shutdown)
+        return this.json(response, 503, {
+          code: "SHUTDOWN_UNAVAILABLE",
+          error: "This host does not provide application shutdown",
+        });
+      // Do not await cleanup inside this request: the CLI stops the server and
+      // drains requests. Finish the receipt first, then hand lifecycle ownership
+      // back to the CLI. A disconnected receipt can be retried safely.
+      response.once("finish", () => {
+        if (this.shutdownRequested) return;
+        this.shutdownRequested = true;
+        setImmediate(shutdown);
+      });
+      return this.json(response, 202, { accepted: true });
+    }
     if (url.pathname === "/api/browser/connections" && request.method === "POST") {
       const body = await this.readJson(request);
       const controller = request.headers["x-openpi-web-controller"];
@@ -2037,7 +2064,7 @@ export class WebHost {
     const diagnosticSession = url.searchParams.get("sessionId");
     if (
       diagnosticSession !== null &&
-      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/models/configuration", "/api/models/default", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
+      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/models/configuration", "/api/models/default", "/api/settings/catalog"].includes(url.pathname) &&
       diagnosticSession !== this.runtime.sessionManager.getSessionId()
     ) {
       return this.json(response, 409, {
@@ -2397,6 +2424,19 @@ export class WebHost {
           error: "a supported capability kind and exact id are required",
         });
       }
+      const sessionPath = url.searchParams.get("sessionPath");
+      if (sessionPath !== null) {
+        if (!diagnosticSession || !validSessionPath(sessionPath) || !id || id.length > 160 || /[\u0000-\u001f\u007f]/u.test(id) ||
+          ["kind", "id", "sessionId", "sessionPath"].some((key) => url.searchParams.getAll(key).length !== 1) ||
+          [...url.searchParams.keys()].some((key) => !["kind", "id", "sessionId", "sessionPath"].includes(key)))
+          return this.json(response, 400, { code: "INVALID_CAPABILITY_DETAIL_TARGET", error: "An exact Session and child identity are required" });
+        let detail;
+        try { detail = await this.adapter.capabilityDetail(diagnosticSession, sessionPath, kind, id); } catch {}
+        return detail ? this.json(response, 200, { sessionId: diagnosticSession, sessionPath, detail })
+          : this.json(response, 404, { code: "CAPABILITY_NOT_FOUND", error: "Saved child history is unavailable for this Session" });
+      }
+      if (diagnosticSession !== null && diagnosticSession !== this.runtime.sessionManager.getSessionId())
+        return this.json(response, 409, { code: "SESSION_CHANGED", error: "The active Session changed" });
       const receipt = webCapabilityDetail(
         this.runtime.sessionManager,
         kind,

@@ -13,6 +13,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
+import { sessionChildExecutionAdmission } from "../../extensions/shared/child-execution-admission.ts";
 import { jsonByteLength } from "../../web/protocol/types.ts";
 import {
   createCommandDiscoveryBridge,
@@ -3602,6 +3603,70 @@ test("a retained native preparing Session is not disposed before public agent_st
     runtime as unknown as { retainRuntime(candidate: typeof owner): void }
   ).retainRuntime(owner);
   assert.ok(runtime.retainedRuntimes.has(owner));
+});
+
+test("switching away from an idle parent retains active and queued children until delivery can wake it", async () => {
+  const session = promptSession("parent-with-children");
+  const admission = sessionChildExecutionAdmission(session.sessionManager, {
+    maxActive: 1,
+  });
+  const first = await admission.acquire("direct");
+  const queued = admission.acquire("btw");
+  const runtime = promptHarness(promptSession("other-session"));
+  let disposals = 0;
+  const owner = {
+    session,
+    dispose: async () => {
+      disposals++;
+    },
+  };
+  const lifecycle = runtime as unknown as {
+    retainRuntime(candidate: typeof owner): void;
+  };
+  lifecycle.retainRuntime(owner);
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  assert.equal(disposals, 0);
+  assert.ok(runtime.retainedRuntimes.has(owner));
+  first.release();
+  const second = await queued;
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  assert.equal(disposals, 0);
+  // The child releases its permit before its completion callback starts the
+  // parent's native continuation. That callback must retain the same owner.
+  second.release();
+  session.isStreaming = true;
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  assert.equal(disposals, 0);
+  session.isStreaming = false;
+  const release = runtime as unknown as {
+    releaseRetainedRuntime(candidate: typeof owner): void;
+  };
+  release.releaseRetainedRuntime(owner);
+  await Promise.resolve();
+  assert.equal(disposals, 1);
+});
+
+test("a child-only retained parent is released after its last child settles without waking the parent", async () => {
+  const session = promptSession("parent-with-btw");
+  const admission = sessionChildExecutionAdmission(session.sessionManager, {});
+  const child = await admission.acquire("btw");
+  const runtime = promptHarness(promptSession("other-session"));
+  let disposals = 0;
+  const owner = {
+    session,
+    dispose: async () => {
+      disposals++;
+    },
+  };
+  (
+    runtime as unknown as { retainRuntime(candidate: typeof owner): void }
+  ).retainRuntime(owner);
+  await Promise.resolve();
+  assert.equal(disposals, 0);
+  child.release();
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  assert.equal(disposals, 1);
+  assert.equal(runtime.retainedRuntimes.has(owner), false);
 });
 
 test("a native handle cannot follow the same Session id into a different file", () => {

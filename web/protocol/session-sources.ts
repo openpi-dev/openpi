@@ -14,6 +14,8 @@ export interface WebSessionSources {
   path: string;
   revision: string;
   sources: WebSessionSource[];
+  /** Total retained sources, independent of pagination; absent on older Hosts. */
+  total?: number;
   nextOffset?: number;
   truncated: boolean;
 }

@@ -26,9 +26,26 @@ export interface DisplayEntry {
   optimistic?: LiveEntry["optimistic"];
 }
 
-function messageIdentity(message: WebLiveMessage) {
-  if (message.role === "toolResult" && message.toolCallId)
+function toolMessageIdentity(message: WebLiveMessage) {
+  if (
+    message.role === "toolResult" &&
+    message.toolCallId &&
+    !message.toolCallId.includes("[truncated]")
+  )
     return `tool-result-${message.toolCallId}`;
+  if (message.role !== "assistant" || message.truncation?.partsOmitted) return;
+  const calls = message.parts?.filter((part) => part.type === "toolCall");
+  if (
+    !calls?.length ||
+    calls.some((call) => !call.id || call.id.includes("[truncated]"))
+  )
+    return;
+  return `tool-calls-${JSON.stringify(calls.map((call) => call.id))}`;
+}
+
+function messageIdentity(message: WebLiveMessage) {
+  const toolIdentity = toolMessageIdentity(message);
+  if (toolIdentity) return toolIdentity;
   if (message.timestamp !== undefined)
     return `message-${message.role}-${message.timestamp}`;
   return undefined;
@@ -497,6 +514,7 @@ export function buildEntries(
         continue;
       }
       const identity = messageIdentity(message);
+      const toolIdentity = toolMessageIdentity(message);
       const legacy = legacySignature(message);
       const match =
         identity === undefined
@@ -506,8 +524,9 @@ export function buildEntries(
             )
           : ((projection.nativeByIdentity.get(identity) ?? []).find(
               (index) =>
-                !matchedMessages.has(index) &&
-                projection.nativeMessages[index]?.signature === legacy,
+                (toolIdentity !== undefined || !matchedMessages.has(index)) &&
+                (toolIdentity !== undefined ||
+                  projection.nativeMessages[index]?.signature === legacy),
             ) ?? -1);
       if (match >= 0) {
         matchedMessages.add(match);

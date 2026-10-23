@@ -101,7 +101,8 @@ export interface SubagentMeta {
   readonly modelLabel?: string;
   /** Context window capacity for utilization display, when known. */
   readonly contextWindow?: number;
-  /** Child session file on disk. */
+  /** Native child identity and file, retained for read-only history. */
+  readonly sessionId?: string;
   readonly sessionFilePath?: string;
 }
 
@@ -171,7 +172,11 @@ export type RunOutcome =
  */
 export type SubagentEvent =
   // lifecycle (a session can run multiple turns via send())
-  | { readonly _tag: "RunStarted"; readonly generation?: number }
+  | {
+      readonly _tag: "RunStarted";
+      readonly generation?: number;
+      readonly startEntryId?: string | null;
+    }
   | {
       readonly _tag: "RunSettled";
       readonly outcome: RunOutcome;
@@ -256,6 +261,8 @@ export interface SubagentSnapshot {
   readonly requestedCwd?: string;
   /** Session-local execution generation; absent on legacy snapshots. */
   readonly runGeneration?: number;
+  /** Native boundary before this run; earlier answers remain history, not its result. */
+  readonly runStartEntryId?: string | null;
   /** Generation that supplied the settled output/evidence; legacy data is unknown. */
   readonly completionGeneration?: number;
   readonly evidence?: DirectEvidenceBinding;

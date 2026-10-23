@@ -54,6 +54,7 @@ import {
 import type { WebStoreActions } from "../../store/web-store.ts";
 import { ConversationMenu, captureSidebarFocus } from "./ConversationMenu.tsx";
 import { TranscriptSearchDialog } from "./TranscriptSearchDialog.tsx";
+import { ShutdownButton } from "./ShutdownButton.tsx";
 import { ManagedWorktreesDialog } from "./ManagedWorktreesDialog.tsx";
 import {
   dropIsAfter,
@@ -2525,6 +2526,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             <span>{t("settings")}</span>
           </button>
         </Tooltip>
+        <ShutdownButton client={client} />
       </div>
 
       <Dialog
