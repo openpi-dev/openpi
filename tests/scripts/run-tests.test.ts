@@ -4,6 +4,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -59,6 +60,7 @@ function fixture() {
     assert.equal(process.argv[2], "run");
     assert.ok(process.argv[3].endsWith("sample.spec.ts"));
     console.log("ui suite marker");
+    console.log(JSON.stringify(process.argv.slice(3)));
     process.exit(process.env.FAIL_SUITE === "ui" ? 7 : 0);
   `,
   );
@@ -115,6 +117,37 @@ test("test failures propagate and default execution stops after Node failure", (
   }
 });
 
+test("UI sharding passes the complete inventory to Vitest and propagates failures", () => {
+  const runner = fixture();
+  try {
+    const root = realpathSync(runner.root);
+    writeFileSync(
+      join(runner.root, "tests", "second.spec.ts"),
+      "// UI fixture\n",
+    );
+    for (const shard of ["1/2", "2/2"]) {
+      const result = runner.run(["ui", `--shard=${shard}`]);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      const args = JSON.parse(result.stdout.trim().split("\n").at(-1)!);
+      assert.deepEqual(args, [
+        join(root, "tests/sample.spec.ts"),
+        join(root, "tests/second.spec.ts"),
+        `--shard=${shard}`,
+      ]);
+      assert.equal(result.stdout.includes("node suite marker"), false);
+      assert.equal(runner.run(["ui", `--shard=${shard}`], "ui").status, 7);
+    }
+    for (const shard of ["0/2", "3/2", "1/0", "1/3", "1/2junk"]) {
+      const result = runner.run(["ui", `--shard=${shard}`]);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Invalid test shard/);
+      assert.equal(result.stdout.includes("ui suite marker"), false);
+    }
+  } finally {
+    runner.dispose();
+  }
+});
+
 test("isolated shards cover every Node file exactly once and propagate failures", () => {
   const runner = fixture();
   try {
@@ -162,7 +195,7 @@ test("invalid and empty shards fail before executing any tests", () => {
     ]) {
       const result = runner.run(["node-parallel", `--shard=${shard}`]);
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /Invalid Node test shard/);
+      assert.match(result.stderr, /Invalid test shard/);
       assert.equal(result.stdout.includes("marker"), false);
     }
     for (const args of [

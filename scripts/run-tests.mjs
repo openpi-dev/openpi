@@ -4,6 +4,7 @@ import { availableParallelism } from "node:os";
 import { discoverTestFiles } from "./discover-tests.mjs";
 import {
   partitionNodeTestsByPlatform,
+  parseTestShard,
   selectNodeTestShard,
 } from "./node-test-groups.mjs";
 
@@ -13,16 +14,21 @@ if (
   process.argv.length > 4 ||
   !["all", "node", "ui", "node-parallel", "node-serial"].includes(suite) ||
   (shardArgument !== undefined &&
-    (suite !== "node-parallel" || !shardArgument.startsWith("--shard=")))
+    (!["node-parallel", "ui"].includes(suite) ||
+      !shardArgument.startsWith("--shard=")))
 ) {
   throw new Error(
-    "Usage: node scripts/run-tests.mjs [all|node|ui|node-parallel [--shard=index/total]|node-serial]",
+    "Usage: node scripts/run-tests.mjs [all|node|ui [--shard=index/total]|node-parallel [--shard=index/total]|node-serial]",
   );
 }
 
 const files = discoverTestFiles(resolve("tests"));
 const nodeTests = files.filter((file) => file.endsWith(".test.ts"));
 const vitestTests = files.filter((file) => file.endsWith(".spec.ts"));
+
+if (suite === "ui" && shardArgument !== undefined) {
+  parseTestShard(shardArgument.slice("--shard=".length), vitestTests.length);
+}
 
 if (nodeTests.length === 0 || vitestTests.length === 0) {
   throw new Error(
@@ -94,7 +100,7 @@ if (suite.startsWith("node")) process.exit(0);
 const vitestCli = resolve("node_modules/vitest/vitest.mjs");
 const vitestResult = spawnSync(
   process.execPath,
-  [vitestCli, "run", ...vitestTests],
+  [vitestCli, "run", ...vitestTests, ...(shardArgument ? [shardArgument] : [])],
   {
     stdio: "inherit",
   },

@@ -78,7 +78,7 @@ export function partitionNodeTestsByPlatform(
   return { parallel, serial };
 }
 
-export function selectNodeTestShard(files, shard) {
+export function parseTestShard(shard, fileCount) {
   const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(shard);
   const index = Number(match?.[1]);
   const total = Number(match?.[2]);
@@ -86,12 +86,17 @@ export function selectNodeTestShard(files, shard) {
     !Number.isSafeInteger(index) ||
     !Number.isSafeInteger(total) ||
     index > total ||
-    total > files.length
+    total > fileCount
   ) {
     throw new Error(
-      "Invalid Node test shard: expected index/total with no empty shards.",
+      "Invalid test shard: expected index/total with no empty shards.",
     );
   }
+  return { index, total };
+}
+
+export function selectNodeTestShard(files, shard) {
+  const { index, total } = parseTestShard(shard, files.length);
   const weighted = files
     .map((file) => ({ file, cost: windowsTestCosts.get(file) ?? 1 }))
     .sort((a, b) => b.cost - a.cost);

@@ -177,11 +177,11 @@ jobs:
           server_pid=""
 
   web-e2e-shards:
-    name: Web E2E shard ${{ matrix.shard }}/3
+    name: Web E2E shard ${{ matrix.shard }}/4
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -226,7 +226,7 @@ jobs:
       # Independent runners isolate each shard's server, settings and filesystem.
       # Exercise the committed release assets. The minimum-Node job rebuilds and
       # rejects stale assets; all final gates require that job as well as E2E.
-      - run: dbus-run-session -- bunx playwright test --config tests/web/playwright.config.ts --shard=${{ matrix.shard }}/3
+      - run: dbus-run-session -- bunx playwright test --config tests/web/playwright.config.ts --shard=${{ matrix.shard }}/4
         env:
           # The runner's installed Chrome has Ubuntu's native sandbox profile.
           OPENPI_CHROME_PATH: /opt/google/chrome/chrome
@@ -252,10 +252,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: parallel 1/2
-            arguments: node-parallel --shard=1/2
-          - group: parallel 2/2
-            arguments: node-parallel --shard=2/2
+          - group: parallel 1/3
+            arguments: node-parallel --shard=1/3
+          - group: parallel 2/3
+            arguments: node-parallel --shard=2/3
+          - group: parallel 3/3
+            arguments: node-parallel --shard=3/3
           - group: isolated processes
             arguments: node-serial
     steps:
@@ -283,7 +285,7 @@ jobs:
         run: bun run test ${{ matrix.arguments }}
 
   test-ui:
-    name: UI ${{ matrix.os }} Node ${{ matrix.node-version }}
+    name: UI ${{ matrix.os }} Node ${{ matrix.node-version }} (${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -291,9 +293,14 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         node-version: [22.19.0, 24, 26]
+        shard: ['1/1']
         include:
           - os: windows-latest
             node-version: 22.19.0
+            shard: '1/2'
+          - os: windows-latest
+            node-version: 22.19.0
+            shard: '2/2'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -313,7 +320,9 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
         run: bun install --frozen-lockfile
-      - run: bun run test ui
+      # Vitest owns file sharding; each Windows shard gets its own VM and keeps
+      # the existing per-runner worker budget. Linux keeps every runtime lane.
+      - run: bun run test ui --shard=${{ matrix.shard }}
 
   # Keep existing check names for branch protection. always() makes skipped,
   # cancelled and failed dependencies fail the gates rather than bypass them.

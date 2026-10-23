@@ -11,6 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
+import { discoverTestFiles } from "../../scripts/discover-tests.mjs";
+import {
+  partitionNodeTestsByPlatform,
+  selectNodeTestShard,
+} from "../../scripts/node-test-groups.mjs";
 
 interface Job {
   if?: string;
@@ -28,6 +33,28 @@ const { jobs } = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
   jobs: Record<string, Job>;
 };
 const versions = ["22.19.0", 24, 26];
+
+test("the actual Windows matrix executes every Node file exactly once", () => {
+  const files = discoverTestFiles().filter((file) => file.endsWith(".test.ts"));
+  const { parallel, serial } = partitionNodeTestsByPlatform(files, "win32");
+  const job = jobs["windows-node"]!;
+  const lanes = job.strategy?.matrix.include as { arguments: string }[];
+  const selected = lanes.flatMap((lane) => {
+    if (lane.arguments === "node-serial") return serial;
+    const match = /^node-parallel --shard=(\d+\/\d+)$/u.exec(lane.arguments);
+    assert.ok(match, "unknown Windows suite must not silently skip files");
+    return selectNodeTestShard(parallel, match[1]!);
+  });
+  assert.equal(new Set(selected).size, selected.length);
+  assert.deepEqual([...selected].sort(), [...files].sort());
+  assert.ok(
+    job.steps.some(
+      (step) =>
+        step.run === "bun run test ${{ matrix.arguments }}" &&
+        step.if === undefined,
+    ),
+  );
+});
 
 test("one canonical check retains every Node runtime and UI compatibility lane", () => {
   const runtime = jobs["test-node"]!;
@@ -49,7 +76,9 @@ test("one canonical check retains every Node runtime and UI compatibility lane",
   );
   assert.ok(
     ui.steps.some(
-      (step) => step.run === "bun run test ui" && step.if === undefined,
+      (step) =>
+        step.run === "bun run test ui --shard=${{ matrix.shard }}" &&
+        step.if === undefined,
     ),
   );
   const check = runtime.steps.find((step) => step.run === "bun run check");
@@ -58,6 +87,11 @@ test("one canonical check retains every Node runtime and UI compatibility lane",
   );
   assert.equal(check?.if, "matrix.node-version == '22.19.0'");
   assert.equal(assets?.if, check?.if);
+  assert.deepEqual(ui.strategy?.matrix.shard, ["1/1"]);
+  const windows = ui.strategy?.matrix.include?.filter(
+    (entry) => (entry as { os?: string }).os === "windows-latest",
+  ) as { shard?: string }[];
+  assert.deepEqual(windows.map((lane) => lane.shard).sort(), ["1/2", "2/2"]);
 });
 
 test("the canonical asset check rejects stale, missing and untracked release files", {
