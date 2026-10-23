@@ -84,8 +84,8 @@
 .settings-role-principles .settings-control-row p { font-size: 12px; line-height: 20px; }
 .settings-role-principles .settings-control-row svg { width: 18px; height: 18px; flex: none; }
 .settings-general-panel .settings-chat-controls { overflow: hidden; border: 1px solid var(--border); border-radius: 14px; }
-.settings-general-panel .settings-chat-controls > :is(.settings-inline-control, .settings-limits-control, .astryx-switch) { min-height: 72px; padding: 18px 22px; font-size: 14px; }
-.settings-general-panel .settings-chat-controls > :is(.settings-inline-control, .settings-limits-control, .astryx-switch) + :is(.settings-inline-control, .settings-limits-control, .astryx-switch) { border-top: 1px solid var(--border); }
+.settings-general-panel .settings-chat-controls > :is(.settings-inline-control, .settings-limits-control, .astryx-switch-field) { min-height: 72px; padding: 18px 22px; font-size: 14px; }
+.settings-general-panel .settings-chat-controls > :is(.settings-inline-control, .settings-limits-control, .astryx-switch-field) + :is(.settings-inline-control, .settings-limits-control, .astryx-switch-field) { border-top: 1px solid var(--border); }
 .settings-general-panel .settings-chat-controls > small { display: block; padding: 0 22px 16px; color: var(--muted); font-size: 12px; line-height: 20px; }
 .settings-general-panel .settings-inline-control select { border-radius: 8px; font-size: 13px; }
 .settings-general-panel .settings-summary-list { max-width: none; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
@@ -253,7 +253,7 @@
   .settings-managed-panel .settings-resource-detail { padding: 0; }
   .settings-managed-panel .settings-detail-metadata > div { flex-direction: column; gap: 6px; }
   .settings-managed-panel .settings-detail-metadata dd { max-width: 100%; text-align: left; }
-  .settings-general-panel .settings-chat-controls > :is(.settings-inline-control, .settings-limits-control, .astryx-switch) { padding: 16px 18px; }
+  .settings-general-panel .settings-chat-controls > :is(.settings-inline-control, .settings-limits-control, .astryx-switch-field) { padding: 16px 18px; }
   .settings-general-panel .settings-inline-control { flex-wrap: wrap; }
   .settings-general-panel .settings-inline-control select { max-width: 100%; flex-basis: 100%; font-size: 16px; }
 }

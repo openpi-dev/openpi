@@ -132,6 +132,25 @@ test("settings pages align with the Browser layout across desktop, window and mo
         const content = element.querySelector(".settings-content-page");
         if (content) content.scrollTop = 0;
       });
+      if (section === "general") {
+        const inset = await panel
+          .getByRole("switch", { name: "下一步建议", exact: true })
+          .evaluate((element) => {
+            const group = element.closest(".settings-chat-controls")!;
+            const row = Array.from(group.children).find((child) =>
+              child.contains(element),
+            )!;
+            const rowStyle = getComputedStyle(row);
+            return Math.min(
+              parseFloat(rowStyle.paddingLeft),
+              parseFloat(rowStyle.paddingRight),
+            );
+          });
+        expect(
+          inset,
+          `suggestion control inset at ${width}`,
+        ).toBeGreaterThanOrEqual(16);
+      }
       const heading = panel.getByRole("heading", {
         name: label,
         exact: true,
