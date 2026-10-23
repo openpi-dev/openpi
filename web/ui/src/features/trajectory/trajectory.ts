@@ -1,7 +1,12 @@
 import type {
+  EvidenceState,
+  LiveToolEvidence,
+} from "../../../../protocol/evidence.ts";
+import type {
   WebLiveMessage,
   WebSnapshot,
 } from "../../../../protocol/types.ts";
+import { codemodeChildren } from "../transcript/codemode-tools.ts";
 
 type Entry = NonNullable<WebSnapshot["selectedSession"]>["entries"][number];
 export interface TrajectoryNode {
@@ -14,6 +19,11 @@ export interface TrajectoryNode {
   message?: WebLiveMessage;
   result?: WebLiveMessage;
   outcome?: "returned" | "error" | "unknown";
+  state?: EvidenceState;
+  parentKey?: string;
+  durationMs?: number;
+  missingOutput?: boolean;
+  error?: string;
 }
 
 export function defaultTrajectoryNode(nodes: readonly TrajectoryNode[]) {
@@ -167,4 +177,89 @@ export function buildTrajectory(entries: readonly Entry[]) {
     (a, b) => (nodeOrder.get(a.key) ?? 0) - (nodeOrder.get(b.key) ?? 0),
   );
   return nodes;
+}
+
+/** Browser projection of native response and nested-call facts; no script parsing. */
+export function trajectoryRecords(
+  entries: readonly Entry[],
+  liveTools: readonly LiveToolEvidence[] = [],
+) {
+  const base = buildTrajectory(entries);
+  const retained = new Set(base.map((node) => node.key));
+  const responses = entries.flatMap((entry) =>
+    entry.message?.role === "assistant" && !retained.has(entry.id)
+      ? [
+          {
+            key: entry.id,
+            kind: "assistant" as const,
+            title: "assistant",
+            timestamp: entry.timestamp,
+            message: entry.message,
+          },
+        ]
+      : [],
+  );
+  const positions = new Map(entries.map((entry, index) => [entry.id, index]));
+  const owners = new Map<string, string>();
+  const callCounts = new Map<string, number>();
+  for (const entry of entries)
+    for (const [index, part] of (entry.message?.parts ?? []).entries()) {
+      if (part.type === "toolCall") {
+        owners.set(`${entry.id}:call:${index}`, entry.id);
+        if (part.id)
+          callCounts.set(part.id, (callCounts.get(part.id) ?? 0) + 1);
+      }
+    }
+  const records = [...base, ...responses].sort((left, right) => {
+    const owner = (node: TrajectoryNode) =>
+      positions.get(owners.get(node.key) ?? node.key) ?? -1;
+    return (
+      owner(left) - owner(right) ||
+      Number(left.kind === "call") - Number(right.kind === "call")
+    );
+  });
+  return records.flatMap((node): TrajectoryNode[] => {
+    if (node.kind !== "call" || node.title !== "codemode") return [node];
+    const part = node.message?.parts?.find(
+      (part) => part.type === "toolCall" && part.id === node.callId,
+    );
+    if (part?.type !== "toolCall" || !part.id || callCounts.get(part.id) !== 1)
+      return [node];
+    const children = codemodeChildren(part, node.result, liveTools);
+    return [
+      node,
+      ...(children?.children ?? []).map((child) => {
+        const duration = node.result?.nestedCalls?.calls.find(
+          (record) => record.call.id === child.call.id,
+        )?.durationMs;
+        return {
+          key: `${node.key}:nested:${child.call.id}`,
+          kind: "call" as const,
+          title: child.call.name,
+          parentKey: node.key,
+          callId: child.call.id,
+          input: child.call.arguments,
+          result: child.result,
+          missingOutput: child.outputMissing,
+          error: child.error,
+          state: child.state,
+          outcome:
+            child.state === "returned"
+              ? ("returned" as const)
+              : ["failed", "cancelled", "timed_out"].includes(child.state)
+                ? ("error" as const)
+                : ("unknown" as const),
+          ...(duration !== undefined ? { durationMs: duration } : {}),
+        };
+      }),
+    ];
+  });
+}
+
+/** Format only measured durations; unknown timing stays absent. */
+export function trajectoryDuration(milliseconds?: number) {
+  if (milliseconds === undefined || !Number.isFinite(milliseconds)) return "—";
+  return milliseconds < 1000
+    ? `${Math.round(milliseconds)} ms`
+    : `${(milliseconds / 1000).toFixed(2)} s`;
 }
