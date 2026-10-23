@@ -91,8 +91,7 @@ export function ToolEvidence({
     : t(`toolState_${state}`);
   const fileReference = view.resolvedPath ?? view.path;
   const displayPath = view.displayPath ?? "";
-  const fileLabel =
-    view.displayResolvedPath || displayPath || "File reference";
+  const fileLabel = view.displayResolvedPath || displayPath || "File reference";
   const separator = Math.max(
     displayPath.lastIndexOf("/"),
     displayPath.lastIndexOf("\\"),
