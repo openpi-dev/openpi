@@ -158,7 +158,7 @@ describe("persisted transcript signatures", () => {
         { key: "replayed-assistant", message: assistant },
         { key: "replayed-result", message: result },
       ],
-      new Map(),
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
     );
     expect(reconciled.entries.map((entry) => entry.entryId)).toEqual([
       "a1",
@@ -174,7 +174,7 @@ describe("persisted transcript signatures", () => {
           message: { ...assistant, parts: [{ ...tool, id: "build-2" }] },
         },
       ],
-      new Map(),
+      { nativeRowKeys: new Map(), ambiguousTimingIds: new Set() },
     );
     expect(repeated.entries).toHaveLength(3);
   });

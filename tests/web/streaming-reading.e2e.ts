@@ -28,13 +28,20 @@ for (const width of [1280, 390]) {
       isError: false,
     };
     let owner = { id: "", path: "" };
+    let delivered = false;
+    const finalMessage: WebLiveMessage = {
+      role: "assistant",
+      content: "实时回执已同步。",
+      timestamp: 2,
+      stopReason: "stop",
+    };
     await page.route("**/api/snapshot**", async (route) => {
       const response = await route.fetch();
       const snapshot = (await response.json()) as WebSnapshot;
       const session = snapshot.selectedSession;
       if (!session) throw new Error("Missing Session fixture");
       owner = session;
-      snapshot.cursor = 100;
+      snapshot.cursor = delivered ? 105 : 100;
       snapshot.preferences = { ...snapshot.preferences, theme: "light" };
       snapshot.runtime = {
         ...snapshot.runtime,
@@ -77,23 +84,17 @@ for (const width of [1280, 390]) {
         }),
         entry("result-2", { ...result, toolCallId: "build-again" }),
       ];
+      // A completed event must survive the canonical snapshot used after EOF
+      // and reload; an indefinitely stale snapshot makes reconnect timing the
+      // subject of this tool-identity test instead of native persistence.
+      if (delivered) session.entries.push(entry("final", finalMessage));
       await route.fulfill({ response, json: snapshot });
     });
-    await page.route("**/events?**", (route) =>
-      route.fulfill({
+    await page.route("**/events?**", (route) => {
+      delivered = true;
+      return route.fulfill({
         contentType: "text/event-stream",
-        body: [
-          assistant,
-          result,
-          assistant,
-          result,
-          {
-            role: "assistant",
-            content: "实时回执已同步。",
-            timestamp: 2,
-            stopReason: "stop",
-          },
-        ]
+        body: [assistant, result, assistant, result, finalMessage]
           .map((message, index) => {
             const event = {
               protocolVersion: 1,
@@ -110,8 +111,8 @@ for (const width of [1280, 390]) {
             return `id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`;
           })
           .join(""),
-      }),
-    );
+      });
+    });
     await page.goto("/");
     const tools = page.locator('.tool-evidence-card[data-tool="bash"]');
     await expect(
