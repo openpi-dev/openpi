@@ -6,3 +6,13 @@
 button.message-attachment { cursor: pointer; text-align: left; }
 button.message-attachment:hover { border-color: var(--focus); }
 button.message-attachment:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.session-overview-section-heading .session-sources-toggle { display:flex; gap:6px; width:auto; padding:0; font:inherit; }
+.session-sources-toggle[aria-expanded="true"] > svg { transform:rotate(90deg); }
+.session-overview-section-heading .session-sources-toggle > svg { width:14px; height:14px; }
+.session-sources-panel { display:flex; flex-direction:column; min-height:0; height:100%; }
+.session-sources-panel > .session-sources-list { flex:1; min-height:0; max-height:none; padding:12px 20px; }
+.session-source-row.source-detail-row { align-items:flex-start; padding:20px 4px; border-radius:0; border-bottom:1px solid var(--border); }
+.session-source-row.source-detail-row > .session-source-copy { display:flex; flex-direction:column; min-width:0; overflow:visible; white-space:normal; gap:4px; }
+.session-source-copy > strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:500; }
+.source-detail-reference { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+.source-detail-status { margin-top:8px; color:var(--muted); font-size:13px; }

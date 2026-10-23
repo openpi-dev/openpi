@@ -94,6 +94,7 @@ import {
 import { UserImageAttachments } from "./UserImageAttachments.tsx";
 import { UserMessageContent } from "./UserMessageContent.tsx";
 import { usePromptNavigation } from "./use-prompt-navigation.ts";
+import { useReadingAnchor } from "./use-reading-anchor.ts";
 import { useSessionHistory } from "./use-session-history.ts";
 import "./provider-outcomes.css";
 import "./conversation-navigation.css";
@@ -108,7 +109,7 @@ interface TranscriptProps {
   liveRunning: boolean;
   liveActiveTurn?: ActiveTurn | null;
   livePhase: "idle" | "preparing" | "running";
-  liveRetry: { attempt: number; maxAttempts: number } | null;
+  liveRetry: NonNullable<WebSessionExecution["retry"]> | null;
   thinkingStarts: Record<string, number>;
   thinkingDurations: Record<string, number>;
   scrollToBottom: number;
@@ -361,7 +362,7 @@ function ProviderAttempts({
                 ? "modelRequestRecovered"
                 : state === "retrying"
                   ? retry
-                    ? "modelReconnecting"
+                    ? "modelRetrying"
                     : "modelEarlierAttempts"
                   : state === "interrupted"
                     ? "modelRequestStopped"
@@ -402,7 +403,11 @@ function ProviderAttempts({
 }
 
 /** A Pi run keeps failed attempts in history even after a later response. */
-function providerFailures(entries: DisplayEntry[], running: boolean) {
+function providerFailures(
+  entries: DisplayEntry[],
+  running: boolean,
+  retrying: boolean,
+) {
   const finalErrors = new Set<number>();
   const groups = new Map<
     number,
@@ -439,7 +444,7 @@ function providerFailures(entries: DisplayEntry[], running: boolean) {
                 terminal === "length" ||
                 terminal === "toolUse"
               ? "recovered"
-              : live && running
+              : live && running && retrying
                 ? "retrying"
                 : "earlier",
         });
@@ -2163,13 +2168,23 @@ function readingAnchorTop(
 }
 
 function upwardInputReachesConversation(event: Event, root: HTMLElement) {
+  return verticalInputReachesConversation(event, root, "up");
+}
+
+function verticalInputReachesConversation(
+  event: Event,
+  root: HTMLElement,
+  direction: "up" | "down",
+) {
   for (const node of event.composedPath()) {
     if (node === root) return true;
     if (!(node instanceof HTMLElement)) continue;
     const style = getComputedStyle(node);
     if (!/^(auto|scroll|overlay)$/.test(style.overflowY)) continue;
     if (
-      node.scrollTop > 0 ||
+      (direction === "up"
+        ? node.scrollTop
+        : node.scrollHeight - node.clientHeight - node.scrollTop) > 0 ||
       /^(contain|none)$/.test(style.overscrollBehaviorY)
     )
       return false;
@@ -2183,6 +2198,15 @@ export function Transcript(props: TranscriptProps) {
   const conversationContent = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastScrollTop = useRef(0);
+  const scrollInput = useRef<"up" | "down" | "pointer" | null>(null);
+  useEffect(() => {
+    const element = viewport.current;
+    const end = () => {
+      scrollInput.current = null;
+    };
+    element?.addEventListener("scrollend", end);
+    return () => element?.removeEventListener("scrollend", end);
+  }, []);
   const followFrame = useRef<number | null>(null);
   const cancelFollowing = useCallback(() => {
     if (followFrame.current !== null) cancelAnimationFrame(followFrame.current);
@@ -2313,6 +2337,11 @@ export function Transcript(props: TranscriptProps) {
       ? highlightedNavigation.entryId
       : undefined;
   const hydrationScope = JSON.stringify([selectedId, selectedPath]);
+  const {
+    capture: captureAnchor,
+    restore: restoreAnchor,
+    clear: clearAnchor,
+  } = useReadingAnchor(viewport, pinned, hydrationScope, lastScrollTop);
   useLayoutEffect(() => {
     void hydrationScope;
     return cancelFollowing;
@@ -2389,13 +2418,17 @@ export function Transcript(props: TranscriptProps) {
         (selectedExecution
           ? selectedExecution.status === "running"
           : active && props.snapshot.runtime.status === "running");
+  // The controlled view receives reconciled store state, including an explicit
+  // null after retry end. Its last snapshot can still describe the prior retry.
   const retry =
     !historyPaused && running
-      ? selectedExecution
-        ? selectedExecution.retry
-        : active
-          ? (props.liveRetry ?? undefined)
-          : undefined
+      ? active && props.liveActiveTurn !== undefined
+        ? (props.liveRetry ?? undefined)
+        : selectedExecution
+          ? selectedExecution.retry
+          : active
+            ? (props.liveRetry ?? undefined)
+            : undefined
       : undefined;
   const presentation = useRef<TranscriptPresentationState & { scope: string }>({
     scope: hydrationScope,
@@ -2435,18 +2468,26 @@ export function Transcript(props: TranscriptProps) {
     const observer = new ResizeObserver(() => {
       // Composer growth and window resizing must preserve bottom following.
       // Reading older messages still owns the scroll position.
-      if (!pinned.current) return;
+      if (!pinned.current) {
+        restoreAnchor();
+        captureAnchor();
+        return;
+      }
       followLatest(running);
     });
     observer.observe(element);
     if (conversationContent.current)
       observer.observe(conversationContent.current);
     return () => observer.disconnect();
-  }, [followLatest, running]);
+  }, [followLatest, running, restoreAnchor, captureAnchor]);
 
   const { rows, turns } = useMemo(() => {
     const records = recordedSubagents(entries.map((entry) => entry.message));
-    const failures = providerFailures(entries, running && !historyPaused);
+    const failures = providerFailures(
+      entries,
+      running && !historyPaused,
+      Boolean(retry),
+    );
     const lastFinalError = [...failures.finalErrors].at(-1);
     let lastAssistantIndex = -1;
     for (let index = entries.length - 1; index >= 0; index--) {
@@ -3606,6 +3647,8 @@ export function Transcript(props: TranscriptProps) {
         element?.querySelectorAll<HTMLElement>("[data-history-entry]") ?? [],
       ).find((item) => item.dataset.historyEntry === entryId);
       if (element && target) {
+        scrollInput.current = null;
+        clearAnchor();
         pinned.current = false;
         setReadingHistory(true);
         setHighlightedNavigation({
@@ -3629,6 +3672,7 @@ export function Transcript(props: TranscriptProps) {
         });
         if (typeof element.scrollTo !== "function") element.scrollTop = top;
         lastScrollTop.current = element.scrollTop;
+        captureAnchor();
         target.focus({ preventScroll: true });
         return true;
       }
@@ -3646,6 +3690,8 @@ export function Transcript(props: TranscriptProps) {
     },
     [
       cancelReveal,
+      captureAnchor,
+      clearAnchor,
       navigationObserved,
       selectedId,
       selectedPath,
@@ -3725,6 +3771,8 @@ export function Transcript(props: TranscriptProps) {
                   item.dataset.historyResult === saved.key,
               ));
       pinned.current = false;
+      scrollInput.current = null;
+      clearAnchor();
       setReadingHistory(true);
       lastPath.current = identity;
       const locate = () => {
@@ -3737,6 +3785,7 @@ export function Transcript(props: TranscriptProps) {
           element.scrollTo({ top, behavior: "instant" });
         else element.scrollTop = top;
         lastScrollTop.current = element.scrollTop;
+        captureAnchor();
       };
       if (anchor && revealReadingAncestors(anchor, element)) {
         // The elapsed disclosure is React-owned; measure after its native toggle.
@@ -3764,6 +3813,8 @@ export function Transcript(props: TranscriptProps) {
     navigation,
     navigationKey,
     followLatest,
+    captureAnchor,
+    clearAnchor,
     running,
   ]);
 
@@ -3812,6 +3863,8 @@ export function Transcript(props: TranscriptProps) {
       ) ??
       matches[0];
     if (!target) return;
+    scrollInput.current = null;
+    clearAnchor();
     // Native details retain their disclosure state; reveal only the ancestors
     // needed to make this particular message reachable.
     revealReadingAncestors(target, element);
@@ -3831,6 +3884,7 @@ export function Transcript(props: TranscriptProps) {
       lastScrollTop.current = element.scrollTop;
       if (!navigation.restorePosition) target.focus({ preventScroll: true });
       pinned.current = false;
+      captureAnchor();
       setReadingHistory(true);
       if (!navigation.restorePosition) setHighlightedNavigation(navigation);
       lastNavigation.current = navigationKey;
@@ -3852,12 +3906,19 @@ export function Transcript(props: TranscriptProps) {
       dialog?.removeEventListener("close", schedule);
       if (frame !== undefined) cancelAnimationFrame(frame);
     };
-  }, [selected, navigation, navigationKey, readingCache]);
+  }, [
+    selected,
+    navigation,
+    navigationKey,
+    readingCache,
+    clearAnchor,
+    captureAnchor,
+  ]);
 
   const runningLabel = !active
     ? t("backgroundSessionRunning")
-    : props.liveRetry
-      ? `${t("modelRetrying")} (${props.liveRetry.attempt}/${props.liveRetry.maxAttempts})`
+    : retry
+      ? `${t("modelRetrying")}${retry.attempt && retry.maxAttempts ? ` (${retry.attempt}/${retry.maxAttempts})` : ""}`
       : props.livePhase === "preparing"
         ? t("modelPreparing")
         : t("modelRunning");
@@ -3910,6 +3971,7 @@ export function Transcript(props: TranscriptProps) {
       void history.loadOlder();
   };
   const pauseFollowing = () => {
+    scrollInput.current = "up";
     cancelFollowing();
     pinned.current = false;
     setReadingHistory(true);
@@ -3925,12 +3987,15 @@ export function Transcript(props: TranscriptProps) {
         aria-label={props.label ?? "Conversation"}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: The scrollport needs keyboard reading with automatic pagination.
         tabIndex={0}
-        onPointerDownCapture={() => {
+        onPointerDownCapture={(event) => {
+          if (event.target === event.currentTarget)
+            scrollInput.current = "pointer";
           if (navigation?.restorePosition)
             lastNavigation.current = navigationKey;
         }}
         onTouchStartCapture={(event) => {
           touchY.current = event.touches[0]?.clientY;
+          scrollInput.current = null;
           if (navigation?.restorePosition)
             lastNavigation.current = navigationKey;
         }}
@@ -3946,6 +4011,17 @@ export function Transcript(props: TranscriptProps) {
             )
           )
             pauseFollowing();
+          else if (
+            next !== undefined &&
+            touchY.current !== undefined &&
+            next < touchY.current &&
+            verticalInputReachesConversation(
+              event.nativeEvent,
+              event.currentTarget,
+              "down",
+            )
+          )
+            scrollInput.current = "down";
           touchY.current = next;
         }}
         onScroll={(event) => {
@@ -3962,9 +4038,13 @@ export function Transcript(props: TranscriptProps) {
           // Only upward movement should interrupt an existing bottom follow.
           pinned.current = pinned.current
             ? !upward || nearBottom
-            : downward && nearBottom;
+            : downward &&
+              nearBottom &&
+              (scrollInput.current === "down" ||
+                scrollInput.current === "pointer");
           if (!pinned.current) history.retainReading();
           setReadingHistory(!pinned.current);
+          captureAnchor();
           window.clearTimeout(savePositionTimer.current);
           savePositionTimer.current = window.setTimeout(() => {
             if (
@@ -3984,6 +4064,18 @@ export function Transcript(props: TranscriptProps) {
           if (upward) readEarlierNearTop(element);
         }}
         onWheel={(event) => {
+          if (
+            !event.defaultPrevented &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            event.deltaY > 0 &&
+            verticalInputReachesConversation(
+              event.nativeEvent,
+              event.currentTarget,
+              "down",
+            )
+          )
+            scrollInput.current = "down";
           if (navigation?.restorePosition)
             lastNavigation.current = navigationKey;
           if (
@@ -4015,6 +4107,24 @@ export function Transcript(props: TranscriptProps) {
           )
             lastNavigation.current = navigationKey;
           const target = event.target;
+          if (
+            !event.defaultPrevented &&
+            !event.altKey &&
+            !event.metaKey &&
+            (!event.ctrlKey || event.key === "End") &&
+            (["ArrowDown", "PageDown", "End"].includes(event.key) ||
+              (event.key === " " && !event.shiftKey)) &&
+            target instanceof HTMLElement &&
+            !target.isContentEditable &&
+            !target.closest("input, textarea, select") &&
+            !(event.key === " " && target.closest("button, summary")) &&
+            verticalInputReachesConversation(
+              event.nativeEvent,
+              event.currentTarget,
+              "down",
+            )
+          )
+            scrollInput.current = "down";
           if (
             !event.defaultPrevented &&
             !event.altKey &&

@@ -246,6 +246,7 @@ test("source HTTP reads authenticate, bind exact session/branch, and freeze pagi
       await fetch(`${endpoint}?${query}`, { headers })
     ).json()) as WebSessionSources;
     assert.equal(page.sources.length, 50);
+    assert.equal(page.total, 52);
     assert.equal(page.nextOffset, 50);
     const second = (await (
       await fetch(`${endpoint}?${query}&offset=50&revision=${page.revision}`, {
@@ -253,6 +254,7 @@ test("source HTTP reads authenticate, bind exact session/branch, and freeze pagi
       })
     ).json()) as WebSessionSources;
     assert.equal(second.sources.length, 2);
+    assert.equal(second.total, 52);
     assert.equal(second.sources[1]?.name, "diagram.png");
     assert.equal(
       (

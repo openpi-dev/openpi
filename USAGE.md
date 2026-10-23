@@ -306,6 +306,12 @@ Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的
 
 同一 Pi agent 目录一次只允许一个 Web Host 持有该 Session/元数据目录。第二个 `openpi web` 会明确拒绝启动；正常关停会先排空共享目录变更再释放租约，进程崩溃后仅在确认原 owner 的 PID 与进程启动身份不再匹配时恢复。一个 Host 可在侧栏管理多个工作区，因此不需要为每个仓库启动一个进程。
 
+关闭浏览器标签页只会关闭页面，Web 后端和任务继续运行。要停止整个 Web 应用，点击侧栏底部的“退出 OpenPI”（Quit OpenPI），并在确认框中确认；即使尚未选择工作区或会话也可使用。退出会停止此 Web 应用中所有正在运行的任务，保存的对话会保留；此操作不调用模型。页面收到接受回执后显示关闭说明，终端在有序清理完成后显示 stopped；未能确认时请检查终端，也可在运行 Web 的终端按 `Ctrl+C`。通过 `/web` 启动时，退出会返回原来的 Pi 终端会话。重新启动请再次运行 `openpi web [workspace]` 或在 Pi 中运行 `/web`，再打开显示的地址；刷新旧页面不会重启后端。
+
+Web 的子代理列表从当前父会话的完整原生分支读取目录，不依赖当前聊天分页或内存中的子代理管理器。重开已保存的父会话后，可以只读查看 Direct、BTW 侧边对话和 Workflow 子代理的保存记录；读取历史不会激活子代理或调用模型。Direct/BTW 继续使用 Pi 原生子会话文件，Workflow 使用已有的运行记录与 transcript 产物。明确的完成、失败和取消状态会保留；运行进程丢失而没有终态证据时显示未知，不把旧的 running 回执当作仍在执行，也不把上一轮答案当作新一轮的结果。界面仍保留有界列表和 transcript 预览，省略项会标明；文件被删除、未保存或旧记录没有可靠关联时，详情会明确不可用。
+
+空主会话继续遵循 Pi 的惰性保存规则：没有真实聊天消息时不强制落盘，也不要求先发主会话消息才能打开侧边对话。仅有空父会话私有元数据时，父子关联可能尚未保存；既有纯内存 BTW 历史无法事后补回。后端重启会恢复保存的历史，不会自动重新执行中断任务。
+
 Host 仅监听 loopback。本机任意浏览器直接输入终端显示的 `http://127.0.0.1:端口` 即可使用，无需配对或复制 token。正式页面在本地导航时自动取得当前 Host 的高熵凭据，API 仍校验 Bearer token；跨站、其他本地端口和嵌入页面不能取得入口凭据。凭据只属于本次进程，不是远程身份或长期登录机制；Host 重启后刷新页面即可取得新凭据。旧的 fragment 登录链接仍兼容，读取后清除地址栏 fragment。Vite 开发页面保持开发启动器提供的 fragment 入口。
 
 发布包提供 `openpi` 可执行文件。需要同时使用终端扩展和 Web 时，安装同一版本的 Pi package 与 CLI：
@@ -319,7 +325,7 @@ openpi web /path/to/repo      # 指定初始工作区
 
 两处应保持同一 OpenPI 版本。Pi 的 managed package 与全局 CLI 即使位于不同物理路径，同一 Web 进程内也通过带版本的共享 registry 按 Pi `SessionManager` 身份连接 capability 投影；它不保存第二份状态，也不兼容任意混装版本。
 
-已经在 Pi 中安装 OpenPI 时，也可以直接执行 `/web`。它通过 Pi 官方的交互式终端 seam 暂停当前 TUI，运行当前 package 内完全相同的 `openpi web` 子进程，并在 `Ctrl+C` 停止 Web 后恢复原来的终端 Session。运行期间终端只归 Web 子进程使用；父 Pi 不读取按键，也不会把当前 Session id、消息、上下文或工作目录传给浏览器。Web 会恢复它自己的已有 Session 和工作区；没有可用项时，由用户在浏览器中添加或选择，不会把启动 `/web` 时的终端目录自动注册为 Web 工作区。选择前的内部引导态不暴露 Session、不绑定 extension 生命周期，也不接受 Prompt 或模型变更。选择工作区后发送第一条消息会先创建真实 Web Session，再向它投递。
+已经在 Pi 中安装 OpenPI 时，也可以直接执行 `/web`。它通过 Pi 官方的交互式终端 seam 暂停当前 TUI，运行当前 package 内完全相同的 `openpi web` 子进程，并在退出 Web（侧栏“退出 OpenPI”或终端 `Ctrl+C`）后恢复原来的终端 Session。运行期间终端只归 Web 子进程使用；父 Pi 不读取按键，也不会把当前 Session id、消息、上下文或工作目录传给浏览器。Web 会恢复它自己的已有 Session 和工作区；没有可用项时，由用户在浏览器中添加或选择，不会把启动 `/web` 时的终端目录自动注册为 Web 工作区。选择前的内部引导态不暴露 Session、不绑定 extension 生命周期，也不接受 Prompt 或模型变更。选择工作区后发送第一条消息会先创建真实 Web Session，再向它投递。
 
 Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和 `auth` 等固定子命令，package 不能注册新的顶层子命令。因此 Web 入口是独立 CLI 的 `openpi web`，不是会被 Pi 当成初始 Prompt 的 `pi open`。Web 进程仍沿用 Pi 的 Provider、模型、凭据、Settings、Trust、Session 格式和 extension 资源加载，不引入第二套 Provider 或 Session 存储。
 

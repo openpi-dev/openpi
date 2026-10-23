@@ -90,11 +90,18 @@ export function ToolEvidence({
     ? t("toolSnapshotMissingResult")
     : t(`toolState_${state}`);
   const fileReference = view.resolvedPath ?? view.path;
+  const displayPath = view.displayPath ?? "";
   const fileLabel =
-    view.displayResolvedPath || view.displayPath || "File reference";
-  const path = view.displayPath || view.path || "";
-  const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  const filename = path.slice(separator + 1) || path;
+    view.displayResolvedPath || displayPath || "File reference";
+  const separator = Math.max(
+    displayPath.lastIndexOf("/"),
+    displayPath.lastIndexOf("\\"),
+  );
+  const filename = displayPath
+    ? displayPath.slice(separator + 1) || displayPath
+    : fileReference
+      ? "File reference"
+      : "";
   const { Icon } = toolActivity(call.name);
   const target = evidenceText(
     view.command ?? toolActivityTarget(call.name, toolArguments(call)),
@@ -137,13 +144,13 @@ export function ToolEvidence({
         <span className="evidence-icon" aria-hidden="true">
           <Icon />
         </span>
-        <span className="evidence-target" title={view.path || target}>
+        <span className="evidence-target" title={displayPath || target}>
           <span className="tool-action">
             {state === "returned" && view.change === "created"
               ? t("toolFileChange_created")
               : toolActivityLabel(t, call.name, state)}
           </span>
-          {path ? (
+          {filename ? (
             <span className="evidence-filename">{filename}</span>
           ) : target ? (
             <span className="evidence-command">{target}</span>
@@ -268,14 +275,14 @@ export function ToolEvidence({
                 <button
                   className="evidence-diff-file"
                   type="button"
-                  title={fileReference}
-                  aria-label={fileReference}
+                  title={fileLabel}
+                  aria-label={fileLabel}
                   onClick={() => artifacts.open(fileReference)}
                 >
                   {filename}
                 </button>
               ) : (
-                <span className="evidence-diff-file" title={fileReference}>
+                <span className="evidence-diff-file" title={fileLabel}>
                   {filename}
                 </span>
               )}

@@ -23,14 +23,17 @@ test("overview totals and native sources survive reload, preview and mobile navi
     type: "image" as const,
     data: png,
     mimeType: "image/png",
-    name: `Design ${index + 1}.png`,
+    name:
+      index === 3
+        ? "Design 4 - task source comparison and acceptance notes.png"
+        : `Design ${index + 1}.png`,
   }));
   manager.appendMessage({
     role: "user",
     timestamp: Date.now(),
     content: [
       ...images,
-      { type: "text", text: "Review [notes.txt](<notes.txt>)" },
+      { type: "text", text: `Review [notes.txt](<${join(cwd, "notes.txt")}>)` },
     ],
   });
   const runtime: WebRuntimeController = {
@@ -84,6 +87,17 @@ test("overview totals and native sources survive reload, preview and mobile navi
     await expect(overview.locator(".session-source-row")).toHaveCount(3);
     await expect(overview.locator(".session-overview-diff")).toHaveText("+2−0");
     await expect(overview.locator(".session-source-icon img")).toHaveCount(3);
+    const sourceToggle = overview.getByRole("button", { name: /^来源.*5/ });
+    await sourceToggle.click();
+    await expect(sourceToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(
+      overview.getByRole("button", { name: "Design 1.png", exact: true }),
+    ).toBeHidden();
+    await page.screenshot({
+      path: testInfo.outputPath("sources-collapsed-desktop.png"),
+    });
+    await sourceToggle.click();
+    await expect(sourceToggle).toHaveAttribute("aria-expanded", "true");
     await page.screenshot({
       path: testInfo.outputPath("overview-light-desktop.png"),
     });
@@ -95,10 +109,22 @@ test("overview totals and native sources survive reload, preview and mobile navi
       dialog.getByRole("img", { name: "Design 1.png" }),
     ).toBeVisible();
     await dialog.getByRole("button", { name: "返回来源列表" }).click();
-    await expect(dialog.locator(".session-source-row")).toHaveCount(5);
-    await dialog
-      .getByRole("button", { name: "notes.txt", exact: true })
-      .click();
+    const sourcePanel = page.locator(
+      '.workbar-tool-panel[data-tool="sources"]',
+    );
+    await expect(dialog).toBeHidden();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(sourcePanel.locator(".session-source-row")).toHaveCount(5);
+    await expect(
+      sourcePanel.getByText("已附加到对话", { exact: true }),
+    ).toHaveCount(5);
+    await expect(sourcePanel.locator(".source-detail-reference")).toHaveText(
+      join(cwd, "notes.txt"),
+    );
+    await page.screenshot({
+      path: testInfo.outputPath("sources-panel-light-desktop.png"),
+    });
+    await sourcePanel.getByRole("button", { name: /^notes.txt/ }).click();
     await expect(page.locator(".artifact-panel")).toContainText(
       "source fixture",
     );
@@ -108,8 +134,11 @@ test("overview totals and native sources survive reload, preview and mobile navi
     await overview
       .getByRole("button", { name: "查看全部", exact: true })
       .click();
-    await expect(dialog.locator(".session-source-row")).toHaveCount(5);
+    await expect(sourcePanel.locator(".session-source-row")).toHaveCount(5);
+    await expect(page.locator("dialog:modal")).toHaveCount(0);
+    await expect(sourcePanel.locator(".session-sources-panel")).toBeFocused();
     await page.keyboard.press("Escape");
+    await expect(sourcePanel).toBeHidden();
     const input = page.locator(".composer textarea");
     await input.fill("Preserve my draft");
     await page.getByRole("button", { name: "会话概览", exact: true }).click();
@@ -134,6 +163,26 @@ test("overview totals and native sources survive reload, preview and mobile navi
     await page.screenshot({
       path: testInfo.outputPath("overview-dark-mobile.png"),
     });
+    await overview
+      .getByRole("button", { name: "查看全部", exact: true })
+      .click();
+    await expect(sourcePanel).toBeVisible();
+    expect(
+      await sourcePanel
+        .locator(".source-detail-reference")
+        .evaluate((node) => node.scrollWidth <= node.clientWidth),
+    ).toBe(true);
+    expect(
+      await sourcePanel.evaluate(
+        (node) => node.scrollWidth <= node.clientWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath("sources-panel-dark-mobile.png"),
+    });
+    await page.keyboard.press("Escape");
+    await expect(sourcePanel).toBeHidden();
+    await page.getByRole("button", { name: "会话概览", exact: true }).click();
     await overview
       .getByRole("button", { name: "Design 2.png", exact: true })
       .click();

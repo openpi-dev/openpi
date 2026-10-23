@@ -20,7 +20,9 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { sessionChildExecutionAdmission } from "../../extensions/shared/child-execution-admission.ts";
 import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
+import { WebHost } from "../../web/host/web-host.ts";
 import {
   readTurnTiming,
   WEB_TURN_TIMING_ENTRY,
@@ -191,6 +193,88 @@ async function fixture(t: TestContext) {
     },
   };
 }
+
+test("a real Pi execution continues after its Web event connection closes and is visible on reconnect", {
+  timeout: 10000,
+}, async (t) => {
+  const { web, a, gates } = await fixture(t);
+  const host = new WebHost({ runtime: web });
+  await host.start();
+  t.after(() => host.stop());
+  const token = new URLSearchParams(new URL(host.url).hash.slice(1)).get(
+    "token",
+  );
+  const headers = { Authorization: `Bearer ${token}` };
+  const initial = await (
+    await fetch(`${host.origin}/api/snapshot`, { headers })
+  ).json();
+  const events = await fetch(`${host.origin}/events?cursor=${initial.cursor}`, {
+    headers,
+  });
+  assert.equal(events.status, 200);
+  const accepted = await fetch(`${host.origin}/api/prompt`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      commandId: "close-page-fixture",
+      sessionId: web.sessionManager.getSessionId(),
+      sessionPath: web.sessionManager.getSessionFile(),
+      content: "Continue while the page is closed",
+    }),
+  });
+  assert.equal(accepted.status, 202);
+  await gates[0]!.entered;
+  await events.body!.cancel();
+  gates[0]!.release();
+  await gates[1]!.entered;
+  gates[1]!.release();
+  await a.session.waitForIdle();
+  const reopened = await (
+    await fetch(`${host.origin}/api/snapshot`, { headers })
+  ).json();
+  assert.equal(reopened.runtime.status, "idle");
+  assert.equal(reopened.selectedSession.id, a.session.sessionId);
+  assert.match(JSON.stringify(reopened.selectedSession.entries), /A finished/);
+});
+
+test("a background child can wake its real Pi parent after another chat becomes current", {
+  timeout: 10000,
+}, async (t) => {
+  const { web, a, b, gates, switchToB } = await fixture(t);
+  const admission = sessionChildExecutionAdmission(
+    a.session.sessionManager,
+    {},
+  );
+  const child = await admission.acquire("direct");
+  t.after(() => child.release());
+  for (const gate of gates) gate.release();
+  await web.sendPrompt("Start background work", { commandId: "child-parent" });
+  await a.session.waitForIdle();
+  const parentId = a.session.sessionManager.getSessionId();
+  const parentPath = a.session.sessionManager.getSessionFile()!;
+  await switchToB();
+  assert.equal(web.getSessionExecution(parentId, parentPath).status, "idle");
+
+  // Match the subagent manager's ordering: release admission, then dispatch a
+  // native follow-up through the same parent Session that owns the child.
+  child.release();
+  await a.session.sendCustomMessage(
+    {
+      customType: "subagent-result",
+      content: "The background child finished",
+      display: true,
+    },
+    { triggerTurn: true, deliverAs: "followUp" },
+  );
+  await a.session.waitForIdle();
+  const saved = SessionManager.open(parentPath);
+  assert.match(JSON.stringify(saved.getBranch()), /A follow-up finished/);
+  assert.doesNotMatch(
+    JSON.stringify(b.session.sessionManager.getBranch()),
+    /background child finished|A follow-up finished/,
+  );
+  assert.equal(web.sessionManager, b.session.sessionManager);
+});
 
 test("a real Pi Session continues tool progress and queued follow-ups after another Session becomes current", {
   timeout: 10000,

@@ -334,6 +334,8 @@ export interface WebSessionProjection {
   entries: ReturnType<typeof projectEntry>[];
   bytes: number;
   truncation: WebProjectionTruncation;
+  /** Exact selected Session's live and persisted child history, independent of transcript pagination. */
+  capabilities?: WebCapabilitySnapshot;
   rerun?: { source: WebHistoryAnchor; mode: "edit" | "regenerate" };
   history?: {
     leafEntryId: string | null;

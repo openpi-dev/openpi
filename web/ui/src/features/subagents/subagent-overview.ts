@@ -17,13 +17,16 @@ export function subagentOverview(
       kind: "subagents" as const,
       id: item.id,
       title: item.title,
+      taskPreview: item.taskPreview,
       state:
         item.outcome === "interrupted"
           ? ("interrupted" as const)
-          : !observed && item.status === "running"
+          : item.status === "unknown" ||
+              (!observed && item.status === "running")
             ? undefined
             : item.status,
       timestamp: item.settledAt ?? item.createdAt,
+      createdAt: item.createdAt,
       saved: false,
     })),
     ...workflows.flatMap((workflow) =>
@@ -31,6 +34,7 @@ export function subagentOverview(
         kind: "workflows" as const,
         id: item.id,
         title: item.title,
+        taskPreview: item.taskPreview,
         state:
           item.outcome === "interrupted"
             ? ("interrupted" as const)
@@ -39,6 +43,7 @@ export function subagentOverview(
               ? undefined
               : item.status,
         timestamp: item.settledAt ?? item.createdAt,
+        createdAt: item.createdAt,
         saved: false,
       })),
     ),
@@ -48,8 +53,10 @@ export function subagentOverview(
         kind: "subagents" as const,
         id: record.id,
         title: record.title,
+        taskPreview: undefined,
         state: record.state === "running" ? undefined : record.state,
         timestamp: undefined,
+        createdAt: undefined,
         saved: true,
       })),
   ].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));

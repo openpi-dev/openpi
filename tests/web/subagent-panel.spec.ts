@@ -18,6 +18,7 @@ import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
 import { recordedSubagents } from "../../web/ui/src/features/subagents/recorded-subagents.ts";
 import { SubagentPanel } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
+import { SessionOverview } from "../../web/ui/src/features/subagents/SessionOverview.tsx";
 import { subagentOverview } from "../../web/ui/src/features/subagents/subagent-overview.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
@@ -77,6 +78,99 @@ it("downgrades stale running projections in the overview without discarding conf
   );
   expect(items.find((item) => item.id === "running")?.state).toBeUndefined();
   expect(items.find((item) => item.id === "done")?.state).toBe("done");
+});
+
+it("reports omitted Workflow runs separately in the conversation overview", () => {
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(SessionOverview, {
+        sessionId: "parent",
+        workspace: "Fixture",
+        agents: [],
+        omitted: 0,
+        omittedWorkflows: 1,
+        review: null,
+        onSubagents: vi.fn(),
+        onReview: vi.fn(),
+      }),
+    ),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("sessionOverview") }),
+  );
+  expect(
+    screen.getByText(i18n.t("subagentWorkflowsTruncated", { count: 1 })),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText(i18n.t("subagentListTruncated", { count: 1 })),
+  ).toBeNull();
+});
+
+it("shows assigned tasks and elapsed time while completed rows remain compact", async () => {
+  vi.useFakeTimers();
+  const now = new Date("2026-10-22T07:00:00Z").getTime();
+  vi.setSystemTime(now);
+  const read = vi.spyOn(WebClient.prototype, "subagentDetail");
+  const { container } = render(
+    createElement(
+      Providers,
+      null,
+      createElement(SubagentPanel, {
+        sessionId: "parent",
+        activity: {
+          items: [
+            {
+              id: "assigned",
+              title: "Master chain audit",
+              status: "running",
+              createdAt: now - 7_000,
+              taskPreview:
+                "Check the task master against the assigned acceptance criteria.",
+            },
+            {
+              id: "starting",
+              title: "Input review",
+              status: "running",
+              createdAt: now - 382_000,
+            },
+            {
+              id: "finished",
+              title: "React185 review",
+              status: "done",
+              createdAt: now - 900_000,
+              settledAt: now - 840_000,
+            },
+          ],
+          omitted: 0,
+          truncated: false,
+        },
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+  const assigned = screen.getByRole("button", { name: /Master chain audit/ });
+  expect(
+    assigned.querySelector(".subagent-task-description")?.textContent,
+  ).toBe("Check the task master against the assigned acceptance criteria.");
+  expect(assigned.querySelector(".subagent-task-end")?.textContent).toBe("7s");
+  expect(
+    screen.getByRole("button", { name: /Input review/ }).textContent,
+  ).toContain(i18n.t("subagentProcessing"));
+  const finished = screen.getByRole("button", { name: /React185 review/ });
+  expect(finished.querySelector(".subagent-task-description")).toBeNull();
+  expect(finished.querySelector("time")?.dateTime).toBe(
+    new Date(now - 840_000).toISOString(),
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(assigned.querySelector(".subagent-task-end")?.textContent).toBe("8s");
+  expect(
+    container.querySelector(".subagent-task-row .subagent-running-icon"),
+  ).toBeNull();
+  expect(read).not.toHaveBeenCalled();
 });
 
 it("shows active tasks progressively without mixing omitted workflow counts with child counts", () => {
@@ -668,6 +762,61 @@ it("resolves the same child for pending and returned follow-ups without keeping 
   ).not.toBeNull();
   fireEvent.click(within(returned as HTMLElement).getByRole("button"));
   expect(onInspectSubagent).toHaveBeenLastCalledWith("sa-1");
+});
+
+it("opens exact persisted child history without requiring a live parent manager", async () => {
+  const read = vi
+    .spyOn(WebClient.prototype, "subagentDetail")
+    .mockResolvedValue(
+      reply(
+        detail({
+          status: "done",
+          outcome: "completed",
+          finalText: "Recovered review",
+          transcript: [
+            {
+              kind: "assistant",
+              parts: [{ type: "text", text: "Recovered review" }],
+            },
+          ],
+        }),
+      ),
+    );
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(SubagentPanel, {
+        sessionId: "session-a",
+        sessionPath: "/saved/parent.jsonl",
+        initialId: "sa-1",
+        activity: {
+          items: [
+            {
+              id: "sa-1",
+              title: "Persisted review",
+              status: "done",
+              outcome: "completed",
+              createdAt: 1,
+            },
+          ],
+          omitted: 0,
+          truncated: false,
+        },
+        liveAvailable: true,
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+  await flush();
+  expect(read).toHaveBeenCalledWith(
+    "session-a",
+    "sa-1",
+    expect.any(AbortSignal),
+    "/saved/parent.jsonl",
+  );
+  expect(screen.getAllByText("Recovered review").length).toBeGreaterThan(0);
+  expect(document.querySelector(".subagent-running-icon")).toBeNull();
 });
 
 it("opens only the selected saved child record without fetching a historical Session", async () => {

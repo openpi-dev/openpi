@@ -202,6 +202,12 @@ export class WebClient {
     }
   }
 
+  shutdown() {
+    return this.request<{ accepted: boolean }>("/api/shutdown", {
+      method: "POST",
+    });
+  }
+
   snapshot(
     path?: string | null,
     historyAnchor?: WebHistoryAnchor,
@@ -1074,16 +1080,26 @@ export class WebClient {
     });
   }
 
-  subagentDetail(sessionId: string, id: string, signal: AbortSignal) {
+  subagentDetail(
+    sessionId: string,
+    id: string,
+    signal: AbortSignal,
+    sessionPath?: string,
+  ) {
     return this.request<{ sessionId: string; detail: WebSubagentDetail }>(
-      `/api/capabilities/detail?kind=subagents&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      `/api/capabilities/detail?kind=subagents&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}${sessionPath ? `&sessionPath=${encodeURIComponent(sessionPath)}` : ""}`,
       { signal },
     );
   }
 
-  workflowAgentDetail(sessionId: string, id: string, signal: AbortSignal) {
+  workflowAgentDetail(
+    sessionId: string,
+    id: string,
+    signal: AbortSignal,
+    sessionPath?: string,
+  ) {
     return this.request<{ sessionId: string; detail: WebWorkflowAgentDetail }>(
-      `/api/capabilities/detail?kind=workflows&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      `/api/capabilities/detail?kind=workflows&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}${sessionPath ? `&sessionPath=${encodeURIComponent(sessionPath)}` : ""}`,
       { signal },
     );
   }

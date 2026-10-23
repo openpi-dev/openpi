@@ -108,6 +108,7 @@ interface MutableSnapshot {
   worktreeBaseSha?: string;
   requestedCwd?: string;
   runGeneration?: number;
+  runStartEntryId?: string | null;
   completionGeneration?: number;
   evidence?: SubagentSnapshot["evidence"];
   runTranscriptStart: number;
@@ -441,6 +442,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             s.runTranscriptStart = s.transcriptVersion;
           }
           s.evidence = undefined;
+          s.runStartEntryId = event.startEntryId;
           entry.restarting = false;
           s.status = "running";
           s.outcome = undefined;

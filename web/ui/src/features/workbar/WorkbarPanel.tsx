@@ -14,6 +14,7 @@ import {
   Folder,
   FolderOpen,
   Globe2,
+  Link as LinkIcon,
   MessageCirclePlus,
   PanelLeftOpen,
   PanelRightClose,
@@ -51,6 +52,7 @@ import {
 } from "../review/ReviewPanel.tsx";
 import { useTurnReview } from "../review/use-turn-review.ts";
 import { SubagentDetailView } from "../subagents/SubagentPanel.tsx";
+import { SourcesPanel } from "../subagents/session-sources.tsx";
 import { BrowserPanel } from "./BrowserPanel.tsx";
 import type { InteractiveTerminal } from "./InteractiveTerminal.tsx";
 import type { WorkbarTool } from "./types.ts";
@@ -99,6 +101,12 @@ export const launcherTools = [
     icon: FolderOpen,
     title: "files",
     description: "workbarFilesDescription",
+  },
+  {
+    kind: "sources" as const,
+    icon: LinkIcon,
+    title: "sessionSources",
+    description: "sourcesDescription",
   },
 ] as const;
 
@@ -1136,6 +1144,15 @@ export function WorkbarPanel({
                         cwd={cwd}
                         snapshot={snapshot}
                         activity={capabilities.subagents}
+                      />
+                    ) : kind === "sources" ? (
+                      <SourcesPanel
+                        sessionId={sessionId}
+                        path={sessionPath}
+                        revision={
+                          snapshot?.selectedSession?.history?.leafEntryId ??
+                          undefined
+                        }
                       />
                     ) : kind === "review" ? (
                       <ReviewPanel

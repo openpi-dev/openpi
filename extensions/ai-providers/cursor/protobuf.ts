@@ -933,6 +933,9 @@ class Reader {
     let shift = 0;
     while (this.pos < this.len) {
       const byte = this.buf[this.pos++];
+      if (shift === 28 && byte > 0x0f) {
+        throw new Error("Varint exceeds 32 bits");
+      }
       result |= (byte & 0x7f) << shift;
       if ((byte & 0x80) === 0) return result >>> 0;
       shift += 7;

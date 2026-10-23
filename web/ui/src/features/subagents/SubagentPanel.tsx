@@ -1,5 +1,4 @@
-import { List, ListItem } from "@astryxdesign/core/List";
-import { ArrowLeft, Bot, LoaderCircle, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, Bot, RefreshCw, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
@@ -25,6 +24,7 @@ import { subagentTranscriptSnapshot } from "./subagent-transcript.ts";
 
 export function SubagentDetailView({
   sessionId,
+  sessionPath,
   id,
   kind = "subagents",
   activity,
@@ -39,6 +39,7 @@ export function SubagentDetailView({
   showModel = true,
 }: {
   sessionId: string;
+  sessionPath?: string;
   id: string;
   kind?: "subagents" | "workflows";
   activity?: WebSubagentActivity | WebWorkflowAgentActivity;
@@ -101,8 +102,18 @@ export function SubagentDetailView({
       let running = activity?.status === "running";
       try {
         const response = await (kind === "workflows"
-          ? client.workflowAgentDetail(sessionId, id, controller.signal)
-          : client.subagentDetail(sessionId, id, controller.signal));
+          ? client.workflowAgentDetail(
+              sessionId,
+              id,
+              controller.signal,
+              ...(sessionPath ? ([sessionPath] as const) : []),
+            )
+          : client.subagentDetail(
+              sessionId,
+              id,
+              controller.signal,
+              ...(sessionPath ? ([sessionPath] as const) : []),
+            ));
         if (controller.signal.aborted) return;
         if (
           response.sessionId !== sessionId ||
@@ -151,6 +162,7 @@ export function SubagentDetailView({
     active,
     client,
     sessionId,
+    sessionPath,
     id,
     kind,
     activity?.status,
@@ -161,7 +173,11 @@ export function SubagentDetailView({
   ]);
 
   const state =
-    detail?.outcome === "interrupted" ? "interrupted" : detail?.status;
+    detail?.outcome === "interrupted"
+      ? "interrupted"
+      : detail?.status === "unknown"
+        ? undefined
+        : detail?.status;
   const spend = formatSubagentSpend(detail?.spend);
   const SectionHeading = fullView ? "h2" : "h3";
   return (
@@ -175,15 +191,16 @@ export function SubagentDetailView({
           <span className={`subagent-state ${state ?? "unknown"}`}>
             {state
               ? t(`subagentState_${state}`)
-              : saved?.state
+              : !detail && saved?.state
                 ? `${t("subagentRecordedState")}: ${t(`subagentState_${saved.state}`)}`
                 : t("unknownState")}
           </span>
-          {detail && (
-            <span className="subagent-duration">
-              {formatElapsedMs(detail.createdAt, detail.settledAt)}
-            </span>
-          )}
+          {detail &&
+            (detail.status === "running" || detail.settledAt !== undefined) && (
+              <span className="subagent-duration">
+                {formatElapsedMs(detail.createdAt, detail.settledAt)}
+              </span>
+            )}
         </div>
         <button
           type="button"
@@ -313,6 +330,7 @@ export function SubagentDetailView({
 
 export function SubagentPanel({
   sessionId,
+  sessionPath,
   initialId,
   initialKind = "subagents",
   activity,
@@ -323,6 +341,7 @@ export function SubagentPanel({
   onClose,
 }: {
   sessionId: string;
+  sessionPath?: string;
   initialId?: string;
   initialKind?: "subagents" | "workflows";
   activity?: WebCapabilityProjection<WebSubagentActivity>;
@@ -374,6 +393,14 @@ export function SubagentPanel({
   const items = liveAvailable ? (activity?.items ?? []) : [];
   const workflowItems = liveAvailable ? (workflows?.items ?? []) : [];
   const allTasks = subagentOverview(items, records, workflowItems, observed);
+  const [now, setNow] = useState(Date.now);
+  const hasRunningTasks = allTasks.some((item) => item.state === "running");
+  useEffect(() => {
+    if (!hasRunningTasks || selectedId) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [hasRunningTasks, selectedId]);
   const omittedTasks =
     (activity?.omitted ?? 0) +
     workflowItems.reduce((sum, item) => sum + (item.children?.omitted ?? 0), 0);
@@ -506,6 +533,7 @@ export function SubagentPanel({
         <SubagentDetailView
           key={`${sessionId}:${detailTarget.kind}:${detailTarget.id}`}
           sessionId={sessionId}
+          sessionPath={sessionPath}
           id={detailTarget.id}
           kind={detailTarget.kind}
           activity={
@@ -558,44 +586,45 @@ export function SubagentPanel({
                   <span>{group.items.length}</span>
                 </GroupHeading>
                 {!group.items.length && group.empty && <p>{t(group.empty)}</p>}
-                <List density="compact">
-                  {visible.map((item) => (
-                    <ListItem
-                      key={`${item.kind}:${item.id}`}
-                      className={`subagent-task-row ${item.state ?? "unknown"}`}
-                      onClick={() => select(item.id, item.kind)}
-                      label={
-                        <span
-                          className="subagent-task-title"
-                          title={item.title || item.id}
+                <ul className="subagent-task-list">
+                  {visible.map((item) => {
+                    const state = item.state ?? "unknown";
+                    const status = t(`subagentState_${state}`);
+                    const description =
+                      item.state === "running"
+                        ? item.taskPreview || t("subagentProcessing")
+                        : item.state === "done"
+                          ? undefined
+                          : status;
+                    return (
+                      <li key={`${item.kind}:${item.id}`}>
+                        <button
+                          type="button"
+                          className={`subagent-task-row ${state}`}
+                          aria-label={`${item.title || item.id} · ${status}${item.taskPreview && description ? ` · ${description}` : ""}`}
+                          onClick={() => select(item.id, item.kind)}
                         >
-                          {item.title || item.id}
-                          {item.state === "running" && (
+                          <SubagentAvatar
+                            identity={`${sessionId}:${item.id}`}
+                          />
+                          {(state === "running" || state === "done") && (
                             <span className="subagent-task-status">
-                              {` · ${t("subagentState_running")}`}
+                              {status}
                             </span>
                           )}
-                        </span>
-                      }
-                      description={
-                        item.state === "running"
-                          ? undefined
-                          : item.saved
-                            ? `${t("subagentSaved")} · ${t(`subagentState_${item.state ?? "unknown"}`)}`
-                            : t(`subagentState_${item.state ?? "unknown"}`)
-                      }
-                      startContent={
-                        <SubagentAvatar identity={`${sessionId}:${item.id}`} />
-                      }
-                      endContent={
-                        <span className="subagent-task-end">
+                          <span
+                            className="subagent-task-title"
+                            title={item.title || item.id}
+                          >
+                            {item.title || item.id}
+                          </span>
                           {item.state === "running" ? (
-                            <LoaderCircle
-                              className="subagent-running-icon"
-                              aria-hidden="true"
-                            />
+                            <span className="subagent-task-end">
+                              {formatElapsedMs(item.createdAt, now)}
+                            </span>
                           ) : item.timestamp ? (
                             <time
+                              className="subagent-task-end"
                               dateTime={new Date(item.timestamp).toISOString()}
                               title={new Date(item.timestamp).toLocaleString(
                                 i18n.language,
@@ -604,11 +633,16 @@ export function SubagentPanel({
                               {relativeTime(item.timestamp)}
                             </time>
                           ) : null}
-                        </span>
-                      }
-                    />
-                  ))}
-                </List>
+                          {description && (
+                            <span className="subagent-task-description">
+                              {description}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
                 {visible.length < group.items.length && (
                   <button
                     type="button"

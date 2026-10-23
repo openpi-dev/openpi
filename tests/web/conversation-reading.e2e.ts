@@ -63,7 +63,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.goto("/");
     const conversation = page.locator(".conversation");
     const compaction = conversation.getByText("压缩已中断", { exact: true });
-    const reconnect = conversation.getByText("正在重新连接 2/2", {
+    const reconnect = conversation.getByText("模型请求重试中... 2/2", {
       exact: true,
     });
     const notice = conversation.getByRole("alert", { name: "上下文压缩失败" });

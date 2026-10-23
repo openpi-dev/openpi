@@ -232,7 +232,21 @@ export class ChildExecutionAdmission {
   }
 }
 
-const sessionAdmissions = new WeakMap<object, ChildExecutionAdmission>();
+// Pi's extension loader and the native Web runtime can import separate copies
+// of this module. They must inspect the same execution leases for a Session.
+const registryKey = Symbol.for("@tt-a1i/openpi/child-execution-admission/v1");
+const existing: unknown = Reflect.get(globalThis, registryKey);
+if (existing !== undefined && !(existing instanceof WeakMap))
+  throw new Error("Incompatible OpenPI child execution admission registry");
+const sessionAdmissions: WeakMap<object, ChildExecutionAdmission> =
+  existing ?? new WeakMap();
+if (existing === undefined)
+  Object.defineProperty(globalThis, registryKey, { value: sessionAdmissions });
+
+/** Inspect existing execution ownership without creating or reconfiguring it. */
+export function getSessionChildExecutionAdmission(sessionOwner: object) {
+  return sessionAdmissions.get(sessionOwner);
+}
 
 /** Return the one admission owner for this top-level Pi Session. */
 export function sessionChildExecutionAdmission(

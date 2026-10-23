@@ -97,8 +97,25 @@ try {
   runtime = noWorkspace
     ? await PiWebRuntime.createWithoutWorkspace()
     : await PiWebRuntime.create(resolve(workspaceArgs[0] ?? process.cwd()));
+  const onStopSignal = () => {
+    void stop().then(
+      () => {
+        console.log(
+          "OpenPI Web Workbench stopped. Conversations are saved. Restart with openpi web, or /web in Pi.",
+        );
+        process.exit(0);
+      },
+      (error) => {
+        console.error(
+          `Failed to stop OpenPI Web Workbench: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        process.exit(1);
+      },
+    );
+  };
   host = new WebHost({
     runtime,
+    onShutdown: onStopSignal,
     ...(port === undefined ? {} : { port }),
     ...(process.env.OPENPI_WEB_TOKEN
       ? { token: process.env.OPENPI_WEB_TOKEN }
@@ -108,17 +125,6 @@ try {
       : {}),
   });
   await host.start();
-  const onStopSignal = () => {
-    void stop().then(
-      () => process.exit(0),
-      (error) => {
-        console.error(
-          `Failed to stop OpenPI Web Workbench: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        process.exit(1);
-      },
-    );
-  };
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, onStopSignal);
   }

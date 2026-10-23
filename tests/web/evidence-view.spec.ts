@@ -574,4 +574,53 @@ it("opens admitted exact identities even when their display label is empty", () 
   );
   fireEvent.click(screen.getByRole("button", { name: "File reference" }));
   expect(open).toHaveBeenCalledWith("\u200b");
+  expect(document.body.textContent).not.toContain("\u200b");
+});
+
+it("shows only sanitized labels when terminal or bidi characters sanitize away", () => {
+  const open = vi.fn();
+  const hidden = "\x1b]52;c;HIDDEN_PATH_PAYLOAD\x07";
+  const { unmount } = render(
+    createElement(
+      ArtifactContext.Provider,
+      { value: { open } },
+      createElement(ToolEvidence, {
+        call: {
+          type: "toolCall",
+          name: "read",
+          arguments: JSON.stringify({ path: hidden }),
+        },
+        defaultOpen: true,
+      }),
+    ),
+  );
+  const card = document.querySelector(".tool-evidence-card");
+  const summary = card?.querySelector("summary");
+  expect(summary?.textContent).toContain("File reference");
+  expect(summary?.textContent).not.toContain("HIDDEN_PATH_PAYLOAD");
+  expect(card?.querySelector(".evidence-filename")?.textContent).toBe(
+    "File reference",
+  );
+  expect(
+    card?.querySelector<HTMLElement>(".evidence-target")?.title ?? "",
+  ).not.toContain("HIDDEN_PATH_PAYLOAD");
+  fireEvent.click(screen.getByRole("button", { name: "File reference" }));
+  expect(open).toHaveBeenCalledWith(hidden);
+  unmount();
+
+  render(
+    createElement(ToolEvidence, {
+      call: {
+        type: "toolCall",
+        name: "read",
+        arguments: JSON.stringify({ path: "safe\u202eevil.txt" }),
+      },
+      defaultOpen: true,
+    }),
+  );
+  const target = document.querySelector<HTMLElement>(".evidence-target");
+  expect(target?.textContent).toContain("safeevil.txt");
+  expect(target?.title).toBe("safeevil.txt");
+  expect(target?.title).not.toContain("\u202e");
+  expect(document.body.textContent).not.toContain("\u202e");
 });
