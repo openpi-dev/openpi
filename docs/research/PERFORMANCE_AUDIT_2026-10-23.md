@@ -4,7 +4,7 @@
 - Created / verified: 2026-10-23
 - Source boundary: baseline `ea4dfb993793ccdb093229588b6ccd3467afd90a`, local changes on `codex/performance-audit`
 - Related Issue: [#841](https://github.com/openpi-dev/openpi/issues/841), including checkpoint follow-up [#839](https://github.com/openpi-dev/openpi/issues/839)
-- PR: none; changes have not been published
+- PR: [#895](https://github.com/openpi-dev/openpi/pull/895); opened after the local audit below
 - Supersedes: none; this continues rather than rewrites the earlier audit
 
 ## Confirmed mechanisms and repairs
@@ -52,7 +52,7 @@ Validation completed in this batch:
 - Direct manager tests: 23 passed after retention coverage; workflow dashboard tests: 43 passed.
 - `node scripts/web-performance.mjs`: all 11 browser cases passed again after the Markdown change and entered the measurement scenarios. Final production bundle SHA-256: `fe8787f8da0174eedaf2c6729bbdb99df51e5e67db35afeaf052e3478a179686`.
 
-Browser fixtures validate synthetic transcript and reconnect behavior, not provider latency or real model quality. Cross-platform results, remote CI and publication remain unverified.
+Browser fixtures validate synthetic transcript and reconnect behavior, not provider latency or real model quality. Cross-platform and remote CI results were unverified at the local audit boundary; the linked PR carries subsequent check results.
 
 ## Real provider runtime checks
 
@@ -70,7 +70,7 @@ Fresh Pi processes loaded the single installed local checkout, with provenance r
 - Child package discovery resolves resources more than once. The first pass identifies blocked packages, and the second loads filtered settings; they are not interchangeable results. The installed Pi loader has no public pre-resolved-package injection option. Preserve this trust boundary while measuring whether a safe upstream primitive or narrower optimization is worthwhile.
 - Completed tool-result retention and large Markdown preview costs are repaired locally. Pending tools and canonical Pi history remain outside the completed-result retention claim. Several historical concerns already changed on main: session catalog/history bounds, streaming projection and sustained terminal layout. Final review must distinguish those retained protections from this branch's changes.
 - Current source inspection found bounded child output, cancellation cleanup, incremental model statistics, asynchronous/coalesced Git refresh and cron polling only when jobs exist. These are preserved protections, not proof that every path is optimal.
-- Final implementation and coverage review is complete at the boundary below. The user completed native TUI visual acceptance after Terminal access was refused to the agent. Publish the record and Issue backlink only with an authorized publication; no Issue status has been changed by this local draft.
+- Final implementation and coverage review is complete at the boundary below. The user completed native TUI visual acceptance after Terminal access was refused to the agent. Publication was subsequently authorized through PR #895, whose Issue references provide the backlink. No Issue is closed by this record; #839 retains the full-serialization follow-up.
 
 ## Final local completion audit
 
@@ -85,8 +85,8 @@ The current tracked implementation matches the implementation in the validated l
 | Required repository checks | Full check and test receipts inspected; current implementation matches the tested archive. Documentation contract and whitespace checks rerun after the final record edit. |
 | Runtime source | Rechecked single local source with `pi list` and provenance at baseline HEAD; changes remain in the working tree. Existing running sessions require reload/restart. |
 | Native visual acceptance | **User-confirmed on 2026-10-23.** In response to the request to restart Pi, inspect the narrow footer, and expand recent completed child/workflow tool results, the user answered “没问题”. This satisfies the manual inspection gate as user-reported evidence; the agent did not observe Terminal or capture a screenshot. |
-| Delivery | Local branch and reviewable diff only; no commit, remote CI, merge or release claimed. Raw evidence remains in the local archive. |
+| Delivery at local audit boundary | Local branch and reviewable diff; later published in PR #895. The PR carries current commit, CI and merge status. Raw evidence remains in the local archive. |
 
 The measured improvements address concrete repeated work and retention defects. Full transcript serialization, upstream resource-loader reuse, cross-platform behavior and production-wide latency remain explicitly outside any speedup claim; no evidence justifies speculative changes to those boundaries in this audit.
 
-Local audit closure: all nine confirmed defects are repaired, the implementation still matches the tested archive, and the user-reported TUI check closes the last local acceptance gap. Remote publication, CI, merge and release have not been performed.
+Local audit closure: all nine confirmed defects are repaired, the implementation still matches the tested archive, and the user-reported TUI check closes the last local acceptance gap. At that audit boundary, remote publication, CI, merge and release had not been performed. See PR #895 for subsequent delivery status.
