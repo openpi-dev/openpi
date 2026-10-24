@@ -12,7 +12,12 @@ test("Plan Mode rejects future and malformed sidecar records without opening wri
     undefined,
   );
   assert.equal(
-    decodePlanModeState({ version: 1, status: "ready", plan: "Implement", future: true }),
+    decodePlanModeState({
+      version: 1,
+      status: "ready",
+      plan: "Implement",
+      future: true,
+    }),
     undefined,
   );
 
