@@ -148,12 +148,19 @@ function sanitizeSchemaForCcaValue(
   if (value === null || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};
   const spill: Array<[string, unknown]> = [];
+  let constEntry: unknown;
+  let hasConst = false;
   for (const [key, entry] of Object.entries(value)) {
     // Keys below `properties` are user-defined parameter names, not JSON
     // Schema keywords. A tool parameter named `pattern`, for example, must be
     // preserved while its schema value is sanitized normally.
     if (insidePropertiesMap) {
       out[key] = sanitizeSchemaForCcaValue(entry, false);
+      continue;
+    }
+    if (key === "const") {
+      hasConst = true;
+      constEntry = entry;
       continue;
     }
     if (Object.hasOwn(CCA_UNSUPPORTED_SCHEMA_FIELDS, key)) {
@@ -166,6 +173,19 @@ function sanitizeSchemaForCcaValue(
       continue;
     }
     out[key] = sanitizeSchemaForCcaValue(entry, key === "properties");
+  }
+  if (hasConst) {
+    // OpenAPI 3.0 — the schema dialect CCA validates against — has no
+    // "const"; TypeBox literal unions (`anyOf` of `{type, const}`) 400 the
+    // whole request. Rewrite the literal as a single-value enum, which CCA
+    // accepts (enum-carrying parameters in the same request pass).
+    const enumValues = Array.isArray(out.enum)
+      ? [...(out.enum as unknown[])]
+      : [];
+    if (!enumValues.includes(constEntry)) {
+      enumValues.push(constEntry);
+    }
+    out.enum = enumValues;
   }
   if (spill.length > 0) {
     const formatted = `{${spill.map(([key, entry]) => `${key}: ${JSON.stringify(entry)}`).join(", ")}}`;
