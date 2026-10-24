@@ -78,6 +78,7 @@ If those answers are unclear, investigate before adding surface area.
 - Formal Benchmark records must retain frozen source, model, task, and verifier identities; usage accounting; failure classification; limitations; and a verifiable evidence reference.
 - Before publishing or materially revising a governed record, read [`docs/README.md`](docs/README.md) and the relevant category index. Existing legacy documents are not silently reclassified or rewritten.
 - Preserve large or sensitive raw evidence outside the repository under a stable identity. Never bulk-add, move, overwrite, clean, or publish ignored Benchmark assets, credentials, or private Session data.
+- Exception: agent work logs the repository owner explicitly asks to publish go under `worklogs/<date>_<topic>/`, after removing system prompts and injected context, redacting home paths, and scanning for credentials. Work logs are raw history, not governed records; reusable conclusions still belong in `docs/`.
 
 ## Package configuration contract
 
