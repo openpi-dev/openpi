@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import * as http from "node:http";
 import { after, before, test } from "node:test";
+import { Type } from "typebox";
 import type {
   Api,
   AssistantMessageEventStream,
@@ -21,6 +22,7 @@ import {
 import { fetchAntigravityModels } from "../../../extensions/ai-providers/antigravity/discovery.ts";
 import {
   convertMessages,
+  convertTools,
   isThinkingPart,
   mapStopReasonString,
   retainThoughtSignature,
@@ -36,6 +38,7 @@ import {
   streamAntigravity,
 } from "../../../extensions/ai-providers/antigravity/provider.ts";
 import { collapseAntigravityModels } from "../../../extensions/ai-providers/antigravity/routing.ts";
+import { createStructuredOutputTool } from "../../../extensions/shared/structured-output.ts";
 import { resolveTranscript } from "../../../extensions/ai-providers/transcript.ts";
 
 const GEMINI_MODEL: Model<Api> = {
@@ -552,6 +555,583 @@ test("sanitizeSchemaForCca preserves property names that match schema keywords",
       },
       required: ["pattern"],
     },
+  );
+});
+
+test("convertTools expands bounded local refs before CCA sanitization", () => {
+  const declarations = convertTools(
+    [
+      {
+        name: "structured_output",
+        description: "Return the result",
+        parameters: {
+          type: "object",
+          properties: { answer: { $ref: "#/$defs/Answer" } },
+          required: ["answer"],
+          $defs: {
+            Answer: {
+              type: "object",
+              properties: {
+                verdict: { type: "string", enum: ["pass", "fail"] },
+              },
+              required: ["verdict"],
+            },
+          },
+        },
+      } as never,
+    ],
+    true,
+  );
+  assert.deepEqual(declarations?.[0]?.functionDeclarations[0]?.parameters, {
+    type: "object",
+    properties: {
+      answer: {
+        type: "object",
+        properties: { verdict: { type: "string", enum: ["pass", "fail"] } },
+        required: ["verdict"],
+      },
+    },
+    required: ["answer"],
+  });
+});
+
+test("convertTools counts each expanded ref subtree once", () => {
+  const fields = Object.fromEntries(
+    Array.from({ length: 60 }, (_, index) => [
+      `field${index}`,
+      { type: "string" },
+    ]),
+  );
+  const declarations = convertTools(
+    [
+      {
+        name: "structured_output",
+        description: "Return the result",
+        parameters: {
+          type: "object",
+          properties: {
+            first: { $ref: "#/$defs/Result" },
+            second: { $ref: "#/$defs/Result" },
+          },
+          $defs: {
+            Result: { type: "object", properties: fields },
+          },
+        },
+      } as never,
+    ],
+    true,
+  );
+  const parameters = declarations?.[0]?.functionDeclarations[0]?.parameters as {
+    properties?: Record<string, { properties?: Record<string, unknown> }>;
+  };
+  assert.deepEqual(parameters.properties?.first, parameters.properties?.second);
+  assert.equal(
+    parameters.properties?.first?.properties?.field59 !== undefined,
+    true,
+  );
+});
+
+test("convertTools bounds the serialized expanded schema size", () => {
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "oversized",
+            description: "oversized",
+            parameters: {
+              type: "object",
+              properties: { value: { $ref: "#/$defs/Value" } },
+              $defs: {
+                Value: { type: "string", description: "x".repeat(256 * 1024) },
+              },
+            },
+          } as never,
+        ],
+        true,
+      ),
+    /expansion byte limit/,
+  );
+});
+
+test("convertTools preserves ref sibling conjunctions and boolean schemas", () => {
+  const declarations = convertTools(
+    [
+      {
+        name: "conjunction",
+        description: "conjunction",
+        parameters: {
+          type: "object",
+          properties: {
+            value: {
+              $ref: "#/$defs/Value",
+              properties: { extra: { type: "string" } },
+            },
+            denied: { $ref: "#/$defs/Never" },
+          },
+          $defs: {
+            Value: {
+              type: "object",
+              properties: { required: { type: "string" } },
+            },
+            Never: false,
+          },
+        },
+      } as never,
+    ],
+    true,
+  );
+  const parameters = declarations?.[0]?.functionDeclarations[0]?.parameters as {
+    properties?: Record<string, unknown>;
+  };
+  assert.deepEqual(parameters.properties?.value, {
+    allOf: [
+      { type: "object", properties: { required: { type: "string" } } },
+      { properties: { extra: { type: "string" } } },
+    ],
+  });
+  assert.equal(parameters.properties?.denied, false);
+});
+
+test("convertTools keeps ordinary no-ref schemas outside ref expansion limits", () => {
+  const properties = Object.fromEntries(
+    Array.from({ length: 600 }, (_, index) => [
+      `field${index}`,
+      { type: "string" },
+    ]),
+  );
+  assert.doesNotThrow(() =>
+    convertTools(
+      [
+        {
+          name: "ordinary",
+          description: "ordinary",
+          parameters: { type: "object", properties },
+        } as never,
+      ],
+      true,
+    ),
+  );
+});
+
+for (const keyword of ["default", "examples", "const", "enum"]) {
+  for (const ref of ["#/$defs/Missing", "https://example.test/literal"]) {
+    test(`buildRequestBody keeps ${keyword} literal data opaque (${ref})`, () => {
+      const literal = { $ref: ref };
+      const value = ["examples", "enum"].includes(keyword)
+        ? [literal]
+        : literal;
+      const tools = [
+        {
+          name: "literal_data",
+          description: "Literal data",
+          parameters: Type.Object({
+            payload: Type.Object({}, { [keyword]: value }),
+          }),
+        },
+      ];
+      assert.doesNotThrow(() =>
+        buildRequestBody(
+          GEMINI_MODEL,
+          { ...SIMPLE_CONTEXT, tools },
+          undefined,
+          "p",
+        ),
+      );
+      assert.deepEqual(
+        convertTools(tools, true)?.[0]?.functionDeclarations[0]?.parameters,
+        {
+          type: "object",
+          properties: {
+            payload: { type: "object", properties: {}, [keyword]: value },
+          },
+          required: ["payload"],
+        },
+      );
+    });
+  }
+}
+
+test("buildRequestBody expands schema refs while preserving literal ref data", () => {
+  for (const keyword of ["default", "examples", "const", "enum"]) {
+    const literal = { $ref: "https://example.test/literal" };
+    const value = ["examples", "enum"].includes(keyword) ? [literal] : literal;
+    const tools = [
+      {
+        name: "mixed_refs",
+        description: "Mixed refs",
+        parameters: Type.Object(
+          {
+            answer: Type.Ref("#/$defs/Answer"),
+            payload: Type.Object({}, { [keyword]: value }),
+          },
+          { $defs: { Answer: Type.String({ enum: ["pass", "fail"] }) } },
+        ),
+      },
+    ];
+    const body = buildRequestBody(
+      GEMINI_MODEL,
+      { ...SIMPLE_CONTEXT, tools },
+      undefined,
+      "p",
+    );
+    assert.match(JSON.stringify(body), /"enum":\["pass","fail"\]/);
+    assert.deepEqual(
+      convertTools(tools, true)?.[0]?.functionDeclarations[0]?.parameters,
+      {
+        type: "object",
+        properties: {
+          answer: { type: "string", enum: ["pass", "fail"] },
+          payload: { type: "object", properties: {}, [keyword]: value },
+        },
+        required: ["answer", "payload"],
+      },
+    );
+  }
+});
+
+test("buildRequestBody budgets opaque data only when a schema ref expands", () => {
+  const payload = Type.Object(
+    {},
+    {
+      default: { $ref: "literal-instance-data", value: "x".repeat(256 * 1024) },
+    },
+  );
+  assert.doesNotThrow(() =>
+    buildRequestBody(
+      GEMINI_MODEL,
+      {
+        ...SIMPLE_CONTEXT,
+        tools: [
+          {
+            name: "ordinary",
+            description: "ordinary",
+            parameters: Type.Object({ payload }),
+          },
+        ],
+      },
+      undefined,
+      "p",
+    ),
+  );
+  assert.throws(
+    () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            {
+              name: "expanded",
+              description: "expanded",
+              parameters: Type.Object(
+                { payload, answer: Type.Ref("#/$defs/Answer") },
+                {
+                  $defs: { Answer: Type.String() },
+                },
+              ),
+            },
+          ],
+        },
+        undefined,
+        "p",
+      ),
+    /expansion byte limit/,
+  );
+});
+
+test("convertTools rejects inherited local ref targets", () => {
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "inherited",
+            description: "inherited",
+            parameters: { $defs: {}, $ref: "#/$defs/toString" },
+          } as never,
+        ],
+        true,
+      ),
+    /unresolved \$ref/,
+  );
+});
+
+test("buildRequestBody treats property names and applicator arrays as schema positions", () => {
+  const tools = [
+    {
+      name: "schema_positions",
+      description: "schema positions",
+      parameters: Type.Object(
+        {
+          default: Type.Ref("#/$defs/Text"),
+          examples: Type.Array(Type.Ref("#/$defs/Text")),
+          $ref: Type.Intersect([Type.Ref("#/$defs/Text"), Type.String()]),
+        },
+        { $defs: { Text: Type.String({ enum: ["retained"] }) } },
+      ),
+    },
+  ];
+  const serialized = JSON.stringify(
+    buildRequestBody(
+      GEMINI_MODEL,
+      { ...SIMPLE_CONTEXT, tools },
+      undefined,
+      "p",
+    ),
+  );
+  assert.match(
+    serialized,
+    /"default":\{"type":"string","enum":\["retained"\]\}/,
+  );
+  assert.match(serialized, /"items":\{"type":"string","enum":\["retained"\]\}/);
+  assert.match(
+    serialized,
+    /"allOf":\[\{"type":"string","enum":\["retained"\]\}/,
+  );
+});
+
+test("buildRequestBody resolves escaped own pointers", () => {
+  const tools = [
+    {
+      name: "escaped_pointer",
+      description: "escaped pointer",
+      parameters: Type.Object(
+        {
+          answer: Type.Ref("#/$defs/a~1b~0c"),
+        },
+        { $defs: { "a/b~c": Type.String({ enum: ["retained"] }) } },
+      ),
+    },
+  ];
+  const serialized = JSON.stringify(
+    buildRequestBody(
+      GEMINI_MODEL,
+      { ...SIMPLE_CONTEXT, tools },
+      undefined,
+      "p",
+    ),
+  );
+  assert.match(
+    serialized,
+    /"answer":\{"type":"string","enum":\["retained"\]\}/,
+  );
+  assert.doesNotMatch(serialized, /"\$defs"/);
+});
+
+test("buildRequestBody enforces the expansion depth boundary", () => {
+  const requestAtDepth = (depth: number) => {
+    let value: Record<string, unknown> = { type: "string" };
+    for (let index = 0; index < depth; index++) value = { items: value };
+    return () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            {
+              name: "depth",
+              description: "depth",
+              parameters: Type.Object(
+                { answer: Type.Ref("#/$defs/Value") },
+                {
+                  $defs: { Value: value },
+                },
+              ),
+            },
+          ],
+        },
+        undefined,
+        "p",
+      );
+  };
+  assert.doesNotThrow(requestAtDepth(20));
+  assert.throws(requestAtDepth(21), /expansion limits/);
+});
+
+test("buildRequestBody budgets opaque nodes when schema expansion is active", () => {
+  const payload = Type.Object({}, { default: Array(10_001).fill(0) });
+  assert.doesNotThrow(() =>
+    buildRequestBody(
+      GEMINI_MODEL,
+      {
+        ...SIMPLE_CONTEXT,
+        tools: [
+          {
+            name: "ordinary",
+            description: "ordinary",
+            parameters: Type.Object({ payload }),
+          },
+        ],
+      },
+      undefined,
+      "p",
+    ),
+  );
+  assert.throws(
+    () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            {
+              name: "nodes",
+              description: "nodes",
+              parameters: Type.Object(
+                { payload, answer: Type.Ref("#/$defs/Answer") },
+                {
+                  $defs: { Answer: Type.String() },
+                },
+              ),
+            },
+          ],
+        },
+        undefined,
+        "p",
+      ),
+    /expansion limits/,
+  );
+});
+
+test("buildRequestBody budgets sparse literal array slots before expansion", () => {
+  const payload = Type.Object({}, { default: Array(60_000) });
+  assert.doesNotThrow(() =>
+    buildRequestBody(
+      GEMINI_MODEL,
+      {
+        ...SIMPLE_CONTEXT,
+        tools: [
+          {
+            name: "ordinary",
+            description: "ordinary",
+            parameters: Type.Object({ payload }),
+          },
+        ],
+      },
+      undefined,
+      "p",
+    ),
+  );
+  assert.throws(
+    () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            {
+              name: "sparse",
+              description: "sparse",
+              parameters: Type.Object(
+                { payload, answer: Type.Ref("#/$defs/Answer") },
+                {
+                  $defs: { Answer: Type.String() },
+                },
+              ),
+            },
+          ],
+        },
+        undefined,
+        "p",
+      ),
+    /expansion limits/,
+  );
+});
+
+test("buildRequestBody counts synthetic conjunction nodes before cloning", () => {
+  const requestWithProperties = (count: number) => () =>
+    buildRequestBody(
+      GEMINI_MODEL,
+      {
+        ...SIMPLE_CONTEXT,
+        tools: [
+          createStructuredOutputTool(
+            {
+              type: "object",
+              properties: Object.fromEntries(
+                Array.from({ length: count }, (_, index) => [
+                  `p${index}`,
+                  { $ref: "#/$defs/X", description: "x" },
+                ]),
+              ),
+              $defs: { X: { type: "string" } },
+            },
+            () => {},
+          ),
+        ],
+      },
+      undefined,
+      "p",
+    );
+  assert.doesNotThrow(requestWithProperties(1_500));
+  assert.throws(requestWithProperties(2_000), /expansion limits/);
+});
+
+test("buildRequestBody counts synthetic conjunction output depth", () => {
+  const requestAtDepth = (depth: number) => {
+    const definitions: Record<string, unknown> = { X0: { type: "string" } };
+    for (let index = 1; index <= depth; index++) {
+      definitions[`X${index}`] = {
+        $ref: `#/$defs/X${index - 1}`,
+        description: "x",
+      };
+    }
+    return () =>
+      buildRequestBody(
+        GEMINI_MODEL,
+        {
+          ...SIMPLE_CONTEXT,
+          tools: [
+            createStructuredOutputTool(
+              {
+                type: "object",
+                properties: { answer: { $ref: `#/$defs/X${depth}` } },
+                $defs: definitions,
+              },
+              () => {},
+            ),
+          ],
+        },
+        undefined,
+        "p",
+      );
+  };
+  assert.doesNotThrow(requestAtDepth(10));
+  assert.throws(requestAtDepth(12), /expansion limits/);
+});
+
+test("convertTools rejects unsafe local refs before the request", () => {
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "bad",
+            description: "bad",
+            parameters: { $ref: "https://example.test/schema" },
+          } as never,
+        ],
+        true,
+      ),
+    /unsupported external \$ref/,
+  );
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "loop",
+            description: "loop",
+            parameters: {
+              $defs: { Node: { $ref: "#/$defs/Node" } },
+              $ref: "#/$defs/Node",
+            },
+          } as never,
+        ],
+        true,
+      ),
+    /recursive \$ref/,
   );
 });
 
