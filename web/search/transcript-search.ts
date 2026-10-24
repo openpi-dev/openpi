@@ -534,7 +534,7 @@ async function scanSessionFile(
 
 /**
  * Search a caller-authorized Session catalog without discovering additional
- * paths. The catalog, content reads, retained matches, and wall time are all
+ * paths. The catalog, content reads, retained matches, and elapsed time are all
  * bounded independently; Session files remain the source of truth.
  */
 export async function searchWebTranscripts(
@@ -542,7 +542,7 @@ export async function searchWebTranscripts(
 ): Promise<WebTranscriptSearchResponse> {
   const tokens = queryTokens(options.query);
   const limits = searchLimits(options.limits);
-  const now = options.now ?? Date.now;
+  const now = options.now ?? (() => performance.now());
   const startedAt = now();
   const expired = () => now() - startedAt >= limits.maxDurationMs;
   const reasons = new Set<WebTranscriptSearchPartialReason>();
