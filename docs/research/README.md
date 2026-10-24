@@ -23,6 +23,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`PERSISTED_SIDECAR_COMPATIBILITY_2026-10-24.md`](PERSISTED_SIDECAR_COMPATIBILITY_2026-10-24.md) — P0 source-pinned inventory and synthetic decoder evidence for versioned OpenPI-owned sidecars; preserves Pi Session ownership and introduces no migration framework ([#901](https://github.com/openpi-dev/openpi/issues/901)).
 - [`PERFORMANCE_AUDIT_2026-10-23.md`](PERFORMANCE_AUDIT_2026-10-23.md) — 九类性能修复及本地验证：子代理结果保留、Workflow checkpoint、目录扫描与大 Markdown；原生 TUI 视觉验收由用户确认（[#841](https://github.com/openpi-dev/openpi/issues/841)）。
 - [`WEB_LIFECYCLE_AND_CHILD_HISTORY_2026-10-22.md`](WEB_LIFECYCLE_AND_CHILD_HISTORY_2026-10-22.md) — Web page/Host ownership, explicit application exit, Kimi/DeepSeek child-history catalogs, and native saved-child recovery with isolated browser evidence ([#891](https://github.com/openpi-dev/openpi/issues/891)).
 
