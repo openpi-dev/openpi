@@ -445,7 +445,7 @@ function boundPreviewValue(value: unknown, budget: ProjectionBudget): unknown {
         }
         break;
       }
-      bounded.push(projected);
+      if (projected !== undefined) bounded.push(projected);
     }
     return bounded;
   }
@@ -459,23 +459,31 @@ function boundPreviewValue(value: unknown, budget: ProjectionBudget): unknown {
     return value;
   }
 
-  if (budget.remaining < 8) {
+  const entries = Object.entries(value);
+  // Keep field names and discriminators intact: a partial text block without
+  // its text field (or a truncated role/type) is not a renderable projection.
+  const isDiscriminator = (key: string) => key === "role" || key === "type";
+  const structuralBytes =
+    8 +
+    entries.reduce(
+      (bytes, [key, nested]) =>
+        bytes +
+        Buffer.byteLength(key, "utf8") +
+        (isDiscriminator(key) ? measurePreviewPayload(nested) : 0),
+      0,
+    );
+  if (budget.remaining < structuralBytes) {
     budget.omitted += measurePreviewPayload(value);
-    return {};
+    return undefined;
   }
-  budget.remaining -= 8;
-  budget.retained += 8;
+  budget.remaining -= structuralBytes;
+  budget.retained += structuralBytes;
 
   const bounded: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value)) {
-    const keyBytes = Buffer.byteLength(key, "utf8");
-    if (keyBytes > budget.remaining) {
-      budget.omitted += keyBytes + measurePreviewPayload(nested);
-      continue;
-    }
-    budget.remaining -= keyBytes;
-    budget.retained += keyBytes;
-    bounded[key] = boundPreviewValue(nested, budget);
+  for (const [key, nested] of entries) {
+    bounded[key] = isDiscriminator(key)
+      ? nested
+      : boundPreviewValue(nested, budget);
   }
   return bounded;
 }
@@ -486,7 +494,9 @@ function boundPreviewMessage(message: PreviewContextMessage, maxBytes: number) {
     retained: 0,
     omitted: 0,
   };
-  const bounded = boundPreviewValue(message, budget) as PreviewContextMessage;
+  const bounded = boundPreviewValue(message, budget) as
+    | PreviewContextMessage
+    | undefined;
   return {
     message: bounded,
     retainedBytes: budget.retained,
@@ -511,6 +521,10 @@ function appendProjectedNewestFirst(
       message,
       PREVIEW_MAX_RETAINED_BYTES - segment.retainedBytes,
     );
+    if (bounded.message === undefined) {
+      segment.retentionClosed = true;
+      continue;
+    }
     segment.messagesNewestFirst.push({
       message: bounded.message,
       originalBytes,
@@ -529,6 +543,7 @@ function appendProjectedForward(
   for (const message of projected) {
     const originalBytes = measurePreviewPayload(message);
     const bounded = boundPreviewMessage(message, PREVIEW_MAX_RETAINED_BYTES);
+    if (bounded.message === undefined) continue;
     segment.messagesNewestFirst.unshift({
       message: bounded.message,
       originalBytes,
@@ -557,7 +572,8 @@ function retainNewestMessages(messages: MessageEnvelope[]) {
       envelope.message,
       PREVIEW_MAX_RETAINED_BYTES - retainedBytes,
     );
-    retainedNewestFirst.push(bounded.message);
+    if (bounded.message !== undefined)
+      retainedNewestFirst.push(bounded.message);
     retainedBytes += bounded.retainedBytes;
     truncatedBytes += Math.max(
       0,
