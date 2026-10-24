@@ -171,9 +171,13 @@ test("C12 editing the same model's API refreshes capabilities before returning t
   await dialog.getByRole("tab", { name: "模型", exact: true }).click();
   await dialog.getByRole("button", { name: "编辑 Mock", exact: true }).click();
   await dialog.getByText("自定义设置", { exact: true }).click();
-  await dialog
-    .getByRole("combobox", { name: "API 格式", exact: true })
-    .selectOption("openai-completions");
+  await dialog.getByRole("button", { name: "API 格式", exact: true }).click();
+  await page
+    .getByRole("menuitemradio", {
+      name: "OpenAI Chat Completions",
+      exact: true,
+    })
+    .click();
   await dialog.getByRole("button", { name: "保存", exact: true }).click();
   await expect.poll(() => state.catalogReads).toBeGreaterThan(initialReads);
   expect(written).toMatchObject({

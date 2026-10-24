@@ -38,6 +38,7 @@ form.composer-m02[data-editor-expanded] textarea { max-height: min(420px, 50dvh)
 .composer-m02 .send-button { transition: background-color var(--motion-feedback) ease, color var(--motion-feedback) ease, transform var(--motion-feedback) var(--motion-ease), opacity var(--motion-feedback) ease; }
 .composer-m02 .send-button:active:not(:disabled) { transform: scale(.96); }
 .composer-m02 .send-button svg { transform-origin: center; }
+.composer-m02 .send-button .send-spinner { animation: session-spin 1.1s linear infinite; }
 .composer-m02 .send-button:not(:disabled) svg { animation: control-icon-arrive 180ms var(--motion-ease); }
 .composer-m02 .composer-context-trigger,
 .composer-m02 .model-selector { transition: background-color var(--motion-feedback) ease, color var(--motion-feedback) ease, transform var(--motion-feedback) var(--motion-ease); }
@@ -494,4 +495,93 @@ form.composer-m02[data-editor-expanded] textarea { max-height: min(420px, 50dvh)
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-panel);
+}
+
+.landing .composer.composer-m02 {
+  border-color: color-mix(in srgb, var(--accent) 10%, var(--border));
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 2%, transparent),
+    0 18px 54px color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.landing .composer.composer-m02:focus-within {
+  border-color: color-mix(in srgb, var(--focus) 48%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--focus) 8%, transparent),
+    0 18px 54px color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.landing .composer-m02 .composer-toolbar {
+  min-height: 34px;
+  margin-top: 4px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.landing .composer-m02 .composer-toolbar-context {
+  gap: 4px;
+}
+
+.landing .composer-m02 .composer-context-trigger {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 3%, var(--page));
+}
+
+.landing .composer-m02 .composer-context-trigger:hover {
+  background: var(--sidebar-hover);
+}
+
+.landing .composer-m02 .model-picker-wrap {
+  max-width: 300px;
+}
+
+.landing .composer-m02 .model-picker-label {
+  font-size: 13px;
+}
+
+.landing .composer-m02 .send-button {
+  width: 34px;
+  height: 34px;
+}
+
+.landing .composer-m02 .send-button:disabled {
+  cursor: default;
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 72%, var(--page));
+  color: var(--page);
+}
+
+@container conversation-shell (max-width: 520px) {
+  .landing .workspace-picker {
+    max-width: 104px !important;
+  }
+
+  .landing .composer-m02 .model-picker-wrap {
+    max-width: 100%;
+  }
+}
+
+@media (any-pointer: coarse) {
+  .landing .workspace-picker {
+    height: 44px !important;
+  }
+
+  .landing .composer-m02 .composer-context-trigger {
+    width: 44px;
+    height: 44px;
+  }
+
+  .landing .composer-m02 .send-button {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing .composer.composer-m02 {
+    transition: none;
+  }
 }

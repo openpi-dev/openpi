@@ -51,6 +51,7 @@ function AppearanceMenu({
   const selected = options.find((option) => option.id === value);
   return (
     <DropdownMenu
+      className="settings-select-menu"
       button={{
         label: selected?.label ?? value,
         "aria-label": label,
@@ -86,7 +87,11 @@ function AppearanceMenu({
             }
           : {}),
         endContent:
-          value === option.id ? <Check aria-hidden="true" /> : undefined,
+          value === option.id ? (
+            <span className="settings-select-check" aria-hidden="true">
+              <Check />
+            </span>
+          ) : undefined,
         onClick: () => onSelect(option.id),
       }))}
     />
@@ -296,6 +301,15 @@ export function AppearanceSettingsPanel({
                       </span>
                     )}
                   </span>
+                  <span className="appearance-mode-label">
+                    {t(
+                      id === "system"
+                        ? "themeSystem"
+                        : id === "light"
+                          ? "themeLight"
+                          : "themeDark",
+                    )}
+                  </span>
                 </label>
               </Tooltip>
             ))}
@@ -370,7 +384,10 @@ export function AppearanceSettingsPanel({
                       color: colors.foreground,
                     }}
                   >
-                    <span className="appearance-palette-shell">
+                    <span
+                      className="appearance-palette-shell"
+                      style={{ background: colors.sidebar }}
+                    >
                       <span className="appearance-palette-sidebar">
                         <b />
                         <i />
@@ -384,7 +401,12 @@ export function AppearanceSettingsPanel({
                         <b />
                         <i />
                         <i />
-                        <em />
+                        <em style={{ borderColor: colors.accent }}>
+                          <span
+                            className="appearance-palette-send"
+                            style={{ background: colors.accent }}
+                          />
+                        </em>
                       </span>
                     </span>
                     <span className="appearance-palette-check">

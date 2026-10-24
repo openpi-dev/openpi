@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, expect, test } from "@playwright/test";
+import { installConversationEntry } from "./workbench-chrome-e2e-support.ts";
 
 test("embedded computer-use targets exact same-process and cross-process documents", async ({
   baseURL,
@@ -37,6 +38,7 @@ test("embedded computer-use targets exact same-process and cross-process documen
       path: join(process.cwd(), "web/browser-extension"),
     });
     const page = context.pages()[0]!;
+    await installConversationEntry(page);
     await page.goto("/");
     await page.getByRole("button", { name: "打开工具", exact: true }).click();
     await page

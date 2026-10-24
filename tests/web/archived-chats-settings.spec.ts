@@ -85,17 +85,17 @@ it("uses the independent archive query, scopes sort/project on the server, and i
     );
   show();
   await screen.findByText("First chat");
-  fireEvent.change(
-    screen.getByRole("combobox", { name: i18n.t("archiveSort") }),
-    { target: { value: "created" } },
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("archiveSort") }));
+  fireEvent.click(
+    screen.getByRole("menuitemradio", { name: i18n.t("archiveSortCreated") }),
   );
   await waitFor(() =>
     expect(list.mock.lastCall?.[0]).toMatchObject({ sort: "created" }),
   );
-  fireEvent.change(
-    screen.getByRole("combobox", { name: i18n.t("archiveProjectFilter") }),
-    { target: { value: "/projects/two" } },
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("archiveProjectFilter") }),
   );
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "Two" }));
   await waitFor(() =>
     expect(list.mock.lastCall?.[0]).toMatchObject({
       cwd: "/projects/two",
@@ -137,12 +137,10 @@ it("groups archived worktree forks under their source project and filters by tha
   expect(
     screen.queryByRole("option", { name: "fork-working-directory" }),
   ).toBeNull();
-  fireEvent.change(
-    screen.getByRole("combobox", { name: i18n.t("archiveProjectFilter") }),
-    {
-      target: { value: first.cwd },
-    },
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("archiveProjectFilter") }),
   );
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "One" }));
   await waitFor(() => expect(list.mock.lastCall?.[0]?.cwd).toBe(first.cwd));
 });
 

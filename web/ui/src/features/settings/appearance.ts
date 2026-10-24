@@ -38,20 +38,60 @@ export function appearanceColors(
   switch (palette) {
     case "mist":
       return dark
-        ? { background: "#182126", foreground: "#EDF3F5" }
-        : { background: "#F8FBFC", foreground: "#253239" };
+        ? {
+            background: "#182126",
+            foreground: "#EDF3F5",
+            sidebar: "#1D292F",
+            accent: "#7BB5CA",
+          }
+        : {
+            background: "#F8FBFC",
+            foreground: "#253239",
+            sidebar: "#EEF3F5",
+            accent: "#347991",
+          };
     case "rose":
       return dark
-        ? { background: "#251C20", foreground: "#F5EDF0" }
-        : { background: "#FFFAFB", foreground: "#392B2F" };
+        ? {
+            background: "#211A1C",
+            foreground: "#F4ECEC",
+            sidebar: "#2A2123",
+            accent: "#E09AA5",
+          }
+        : {
+            background: "#FFF9F7",
+            foreground: "#342729",
+            sidebar: "#F6EDEA",
+            accent: "#B45562",
+          };
     case "pine":
       return dark
-        ? { background: "#16201C", foreground: "#EDF3EF" }
-        : { background: "#F5FAF7", foreground: "#24382D" };
+        ? {
+            background: "#101A17",
+            foreground: "#EAF2EC",
+            sidebar: "#16241F",
+            accent: "#86C89E",
+          }
+        : {
+            background: "#F4F8F5",
+            foreground: "#20352A",
+            sidebar: "#E9F1EB",
+            accent: "#32704A",
+          };
     default:
       return dark
-        ? { background: "#17191C", foreground: "#EDF0F2" }
-        : { background: "#FFFFFF", foreground: "#1A1C1F" };
+        ? {
+            background: "#17191C",
+            foreground: "#EDF0F2",
+            sidebar: "#1D2024",
+            accent: "#74A9E6",
+          }
+        : {
+            background: "#FFFFFF",
+            foreground: "#1A1C1F",
+            sidebar: "#F6F7F9",
+            accent: "#2563EB",
+          };
   }
 }
 

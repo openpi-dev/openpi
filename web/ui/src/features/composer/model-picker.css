@@ -11,7 +11,7 @@
   color: var(--text);
   box-shadow: 0 12px 36px #00000014, 0 32px 90px #00000012 !important;
 }
-.astryx-complex-selector-popup.astryx-complex-selector-popup:has(.model-search-panel) { width: min(380px, calc(100vw - 24px)); }
+.astryx-complex-selector-popup.astryx-complex-selector-popup:has(.model-search-panel) { width: min(360px, calc(100vw - 24px)); }
 .astryx-complex-selector-popup.astryx-complex-selector-popup:has(.model-search-panel)::before {
   content: "";
   position: absolute;
@@ -25,15 +25,15 @@
 }
 .astryx-complex-selector-popup.astryx-complex-selector-popup:has(.model-search-panel, .thinking-controls) > div { padding: 0; }
 .astryx-complex-selector-popup .model-search-panel {
-  max-height: min(480px, 68dvh);
+  max-height: min(440px, 68dvh);
   overflow: hidden;
   padding: 12px 12px 0;
 }
 .astryx-complex-selector-popup .model-thinking-back { width: 100%; min-height: 34px; gap: 8px; margin: 0 0 8px; padding: 6px 8px 12px; border-bottom: 1px solid var(--border); border-radius: 0; color: var(--text); font-size: 12px; font-weight: 550; }
 .astryx-complex-selector-popup .model-thinking-back:hover { background: transparent; color: var(--accent); }
 .astryx-complex-selector-popup .model-search-input {
-  min-height: 40px;
-  gap: 9px;
+  min-height: 38px;
+  gap: 8px;
   padding-inline: 12px;
   border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 10px;
@@ -53,9 +53,9 @@
 .astryx-complex-selector-popup .model-search-input:focus-within > svg { color: var(--accent); }
 .astryx-complex-selector-popup .model-search-options {
   flex: 1 1 auto;
-  gap: 3px;
+  gap: 2px;
   min-height: 0;
-  margin: 8px -3px 0;
+  margin: 7px -3px 0;
   padding: 0 3px 5px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -66,7 +66,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 11px 10px 6px;
+  padding: 8px 9px 5px;
   background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
   backdrop-filter: blur(12px);
   color: var(--muted);
@@ -83,9 +83,9 @@
 }
 .astryx-complex-selector-popup .model-search-option {
   position: relative;
-  min-height: 56px;
-  gap: 11px;
-  padding: 8px 10px;
+  min-height: 48px;
+  gap: 10px;
+  padding: 6px 9px;
   border: 1px solid transparent;
   border-radius: 10px;
   transition: background-color var(--motion-feedback) ease, border-color var(--motion-feedback) ease;
@@ -102,12 +102,12 @@
 .astryx-complex-selector-popup .model-search-option:disabled { opacity: .5; cursor: default; }
 .astryx-complex-selector-popup .model-option-icon {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   flex: none;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
-  border-radius: 9px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--text) 2%, var(--surface-raised));
   box-shadow: 0 1px 2px #00000005;
 }
@@ -129,14 +129,14 @@
   color: var(--surface-raised);
   stroke-width: 2.5;
 }
-.astryx-complex-selector-popup .model-search-truncation, .astryx-complex-selector-popup .model-search-status { margin: 8px 4px; font-size: 12px; line-height: 1.6; }
+.astryx-complex-selector-popup .model-search-truncation, .astryx-complex-selector-popup .model-search-status { margin: 6px 4px; font-size: 11px; line-height: 1.5; }
 .astryx-complex-selector-popup .model-search-error { color: var(--error); }
 .astryx-complex-selector-popup .model-settings-command {
-  min-height: 46px;
-  gap: 9px;
+  min-height: 42px;
+  gap: 8px;
   width: calc(100% + 24px);
   margin: 5px -12px 0;
-  padding: 12px 18px;
+  padding: 10px 16px;
   border-top: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
   border-radius: 0;
   background: color-mix(in srgb, var(--text) 1.5%, var(--surface-raised));
@@ -167,11 +167,12 @@
     right: auto !important;
     width: calc(100vw - 32px);
   }
+  .astryx-complex-selector-popup .model-search-panel { max-height: min(420px, 64dvh); }
 }
 @media (any-pointer: coarse) {
   .astryx-complex-selector-popup .model-search-input { min-height: 44px; }
   .astryx-complex-selector-popup .model-search-input input { font-size: 16px; }
-  .astryx-complex-selector-popup .model-search-option { min-height: 60px; }
+  .astryx-complex-selector-popup .model-search-option { min-height: 52px; }
   .astryx-complex-selector-popup :is(.model-thinking-back, .model-settings-command, .thinking-model-link) { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {

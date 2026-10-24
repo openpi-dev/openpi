@@ -33,6 +33,7 @@ import type { BrowserSettingsStatus } from "../../../../protocol/browser.ts";
 import { copyText } from "../../lib/clipboard.ts";
 import { WebClient } from "../../protocol/client.ts";
 import { useBrowserGuideWindow } from "./use-browser-guide-window.ts";
+import { SettingsSelect } from "./SettingsSelect.tsx";
 
 const names = {
   chrome: "Chrome",
@@ -360,21 +361,21 @@ export function BrowserSettingsPanel({
             <label htmlFor="browser-default">{t("browserDefault")}</label>
             <p>{t("browserDefaultHint")}</p>
           </div>
-          <select
+          <SettingsSelect
             id="browser-default"
+            label={t("browserDefault")}
             value={config.defaultBrowser}
             disabled={configurationPending}
-            onChange={(event) =>
-              void save({ defaultBrowser: event.target.value as BrowserId })
-            }
-          >
-            {BROWSER_IDS.map((id) => (
-              <option value={id} key={id} disabled={!allowed(id)}>
-                {name(id)}
-                {!allowed(id) ? ` · ${t("browserBlocked")}` : ""}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => {
+              const defaultBrowser = BROWSER_IDS.find((id) => id === value);
+              if (defaultBrowser) void save({ defaultBrowser });
+            }}
+            options={BROWSER_IDS.map((id) => ({
+              value: id,
+              label: `${name(id)}${!allowed(id) ? ` · ${t("browserBlocked")}` : ""}`,
+              disabled: !allowed(id),
+            }))}
+          />
         </div>
       </div>
       {!allowed(config.defaultBrowser) && (
@@ -514,26 +515,31 @@ export function BrowserSettingsPanel({
             ) : (
               <>
                 {guide === "embedded" && (
-                  <label className="browser-settings-install-browser">
+                  <label
+                    className="browser-settings-install-browser"
+                    htmlFor="browser-install-target"
+                  >
                     {t("browserInstallIn")}
-                    <select
+                    <SettingsSelect
+                      id="browser-install-target"
+                      label={t("browserInstallIn")}
                       value={installer}
                       disabled={pending}
-                      onChange={(event) => {
-                        setInstaller(event.target.value as ExternalBrowser);
-                        setStep(1);
-                        setCopied(false);
-                        setNotice(undefined);
+                      onChange={(value) => {
+                        const browser = EXTERNAL_BROWSERS.find(
+                          (id) => id === value,
+                        );
+                        if (browser) {
+                          setInstaller(browser);
+                          setStep(1);
+                          setCopied(false);
+                          setNotice(undefined);
+                        }
                       }}
-                    >
-                      {EXTERNAL_BROWSERS.filter(
+                      options={EXTERNAL_BROWSERS.filter(
                         (id) => !["safari", "firefox"].includes(id),
-                      ).map((id) => (
-                        <option key={id} value={id}>
-                          {names[id]}
-                        </option>
-                      ))}
-                    </select>
+                      ).map((id) => ({ value: id, label: names[id] }))}
+                    />
                   </label>
                 )}
                 <ol

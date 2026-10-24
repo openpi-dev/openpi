@@ -409,7 +409,7 @@ test("browser setup preserves the settings shell, works during a turn and explai
     panel.getByRole("switch", { name: "允许使用 Chrome", exact: true }),
   ).toBeDisabled();
   await expect(
-    panel.getByRole("combobox", { name: "默认浏览器" }),
+    panel.getByRole("button", { name: "默认浏览器" }),
   ).toBeDisabled();
   await expect(
     panel.getByRole("switch", { name: "浏览器控制", exact: true }),
@@ -443,9 +443,7 @@ test("browser setup preserves the settings shell, works during a turn and explai
     path: info.outputPath("browser-settings-dark.png"),
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(
-    panel.getByRole("combobox", { name: "默认浏览器" }),
-  ).toBeVisible();
+  await expect(panel.getByRole("button", { name: "默认浏览器" })).toBeVisible();
   await dialog.screenshot({
     path: info.outputPath("browser-settings-mobile.png"),
   });

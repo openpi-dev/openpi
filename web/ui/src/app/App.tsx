@@ -817,15 +817,16 @@ export function App() {
         (session) => session.path === state.selectedPath,
       )
     : undefined;
-  const taskTitle = state.sessionSwitching
-    ? switchingTo
-      ? sessionTitle(switchingTo, t("untitledSession"))
-      : t("switchingSession")
-    : selected
-      ? sessionTitle(currentSession ?? {}, t("untitledSession"))
-      : state.selectedWorkspace
-        ? t("newSession")
-        : "OpenPI";
+  const taskTitle =
+    state.sessionSwitching && !state.workspaceDraft
+      ? switchingTo
+        ? sessionTitle(switchingTo, t("untitledSession"))
+        : t("switchingSession")
+      : selected
+        ? sessionTitle(currentSession ?? {}, t("untitledSession"))
+        : state.selectedWorkspace
+          ? t("newSession")
+          : "OpenPI";
   const hasMessages =
     Boolean(selected?.rerun) ||
     selected?.entries.some(
@@ -837,7 +838,7 @@ export function App() {
     state.liveMessages.length > 0;
   const landing =
     !loading &&
-    !state.sessionSwitching &&
+    (!state.sessionSwitching || state.workspaceDraft) &&
     (!selected ||
       (!hasMessages &&
         !(
@@ -1131,7 +1132,7 @@ export function App() {
                   </button>
                 )}
               </section>
-            ) : state.sessionSwitching ? (
+            ) : state.sessionSwitching && !landing ? (
               <div className="conversation switching" role="status">
                 <div className="conversation-running">
                   <span className="conversation-running-dot" />
@@ -1150,8 +1151,13 @@ export function App() {
                 aria-label="Conversation"
               >
                 <div className="landing-welcome">
+                  <h1 className="sr-only">{taskTitle}</h1>
                   <OpenPiLogo animated />
-                  <p className="landing-tagline">{t("landingTagline")}</p>
+                  {state.sessionSwitching && (
+                    <span className="sr-only" role="status">
+                      {t("switchingSession")}
+                    </span>
+                  )}
                 </div>
               </section>
             ) : state.snapshot ? (

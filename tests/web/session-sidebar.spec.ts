@@ -26,11 +26,7 @@ import type {
 } from "../../web/protocol/types.ts";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
-import {
-  type ArchivedSessionPage,
-  WebApiError,
-  WebClient,
-} from "../../web/ui/src/protocol/client.ts";
+import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore } from "../../web/ui/src/store/web-store.ts";
 
 afterEach(() => {
@@ -115,19 +111,6 @@ function mount(
   data: WebSnapshot,
   overrides: Partial<Parameters<typeof SessionSidebar>[0]> = {},
 ) {
-  if (!vi.isMockFunction(WebClient.prototype.listArchivedSessions))
-    vi.spyOn(WebClient.prototype, "listArchivedSessions").mockImplementation(
-      async ({ query = "" } = {}) =>
-        archivePage(
-          data.sessions.filter(
-            (item) =>
-              item.archived &&
-              `${item.name} ${item.cwd} ${item.id}`
-                .toLowerCase()
-                .includes(query.toLowerCase()),
-          ),
-        ),
-    );
   const actions = createWebStore().getState().actions;
   const props = {
     snapshot: data,
@@ -161,23 +144,6 @@ function mount(
           createElement(SessionSidebar, props),
         ),
       );
-    },
-  };
-}
-
-function archivePage(
-  sessions: ArchivedSessionPage["sessions"],
-  nextCursor?: string,
-): ArchivedSessionPage {
-  return {
-    sessions,
-    ...(nextCursor ? { nextCursor } : {}),
-    truncation: {
-      truncated: Boolean(nextCursor),
-      matchesOmitted: nextCursor ? 1 : 0,
-      recordsUnscanned: 0,
-      maxPageSize: 50,
-      maxScanned: 5_000,
     },
   };
 }
@@ -1561,7 +1527,7 @@ it("clears sidebar execution markers when the runtime releases the Session", () 
   ).toBeNull();
 });
 
-it("searches the current loaded list and the separate archived query without changing collapse", async () => {
+it("searches the current loaded list without changing collapse", () => {
   const data = snapshot([
     session("/repos/long-example/one.jsonl", "/repos/long-example", "First"),
     session(
@@ -1589,12 +1555,6 @@ it("searches the current loaded list and the separate archived query without cha
       .getByRole("button", { name: /Shared.*long-example/ })
       .getAttribute("aria-expanded"),
   ).toBe("true");
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  expect(await screen.findByText("Old")).toBeTruthy();
-  expect(
-    screen.queryByText("First", { selector: ".session-title" }),
-  ).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Current" }));
   rerender({ query: "" });
   expect(
     screen.queryByText("First", { selector: ".session-title" }),
@@ -1708,34 +1668,6 @@ it("keeps a failed rename draft editable and saves it on retry", async () => {
   );
 });
 
-it("keeps an archived row available after an unconfirmed restore", async () => {
-  const data = snapshot([
-    session(
-      "/repos/long-example/old.jsonl",
-      "/repos/long-example",
-      "Old",
-      true,
-    ),
-  ]);
-  const { actions } = mount(data);
-  const restore = vi
-    .spyOn(actions, "unarchiveSession")
-    .mockResolvedValueOnce(false)
-    .mockResolvedValueOnce(true);
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  await screen.findByText("Old");
-  fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Restore" }));
-  await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
-  expect(screen.getByText("Old")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  await act(async () =>
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Restore" })),
-  );
-  expect(restore).toHaveBeenCalledTimes(2);
-  expect(screen.queryByRole("alert")).toBeNull();
-});
-
 it.each([false, true])(
   "marks the confirmed reader independently of the controller (copied id: %s)",
   (copiedId) => {
@@ -1782,214 +1714,6 @@ it.each([false, true])(
   },
 );
 
-it("loads and appends archived records outside the bounded snapshot without duplicating paths", async () => {
-  const first = session("/old/one.jsonl", "/old", "Unloaded first", true);
-  const second = session("/old/two.jsonl", "/old", "Unloaded second", true);
-  const list = vi
-    .spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockResolvedValueOnce(archivePage([first], "next"))
-    .mockResolvedValueOnce(archivePage([first, second]));
-  mount(snapshot([]));
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  await screen.findByText("Unloaded first");
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("moreArchives") }));
-  await screen.findByText("Unloaded second");
-  expect(screen.getAllByText("Unloaded first")).toHaveLength(1);
-  expect(list).toHaveBeenLastCalledWith(
-    { query: "", cursor: "next", limit: 25 },
-    expect.any(AbortSignal),
-  );
-  expect(
-    screen.queryByRole("button", { name: i18n.t("moreArchives") }),
-  ).toBeNull();
-});
-
-it("shows archive loading without an empty result and disables duplicate reads", async () => {
-  let finish!: (page: ArchivedSessionPage) => void;
-  const list = vi
-    .spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-  mount(snapshot([]));
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  expect(screen.getByText(i18n.t("loadingArchives")).getAttribute("role")).toBe(
-    "status",
-  );
-  expect(
-    screen.queryByText(i18n.t("noArchivedSessions"))?.closest("[hidden]"),
-  ).toBeTruthy();
-  const refresh = screen.getByRole<HTMLButtonElement>("button", {
-    name: i18n.t("refreshArchives"),
-  });
-  expect(refresh.disabled).toBe(true);
-  fireEvent.click(refresh);
-  expect(list).toHaveBeenCalledOnce();
-  await act(async () => finish(archivePage([])));
-  expect(screen.getByText(i18n.t("noArchivedSessions"))).toBeTruthy();
-  expect(refresh.disabled).toBe(false);
-});
-
-it("isolates archive queries and ignores an aborted late page", async () => {
-  let finish!: (page: ArchivedSessionPage) => void;
-  let firstSignal!: AbortSignal;
-  const beta = session("/old/b.jsonl", "/old", "Beta", true);
-  const list = vi
-    .spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockImplementationOnce((_options, signal) => {
-      firstSignal = signal!;
-      return new Promise((resolve) => {
-        finish = resolve;
-      });
-    })
-    .mockResolvedValueOnce(archivePage([beta]));
-  const view = mount(snapshot([]), { query: "alpha", searchOpen: true });
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  view.rerender({ query: "beta" });
-  expect(firstSignal.aborted).toBe(true);
-  await screen.findByText("Beta");
-  await act(async () =>
-    finish(archivePage([session("/old/a.jsonl", "/old", "Alpha", true)])),
-  );
-  expect(screen.queryByText("Alpha")).toBeNull();
-  expect(list).toHaveBeenLastCalledWith(
-    { query: "beta", limit: 25 },
-    expect.any(AbortSignal),
-  );
-});
-
-it("retains archive rows on a stale cursor and refreshes the first page", async () => {
-  const old = session("/old/a.jsonl", "/old", "Retained", true);
-  const list = vi
-    .spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockResolvedValueOnce(archivePage([old], "stale"))
-    .mockRejectedValueOnce(
-      new WebApiError("stale", 409, "ARCHIVED_SESSION_CURSOR_STALE"),
-    )
-    .mockResolvedValueOnce(archivePage([]));
-  mount(snapshot([]));
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  await screen.findByText("Retained");
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("moreArchives") }));
-  const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain(i18n.t("archiveCursorStale"));
-  expect(screen.getByText("Retained")).toBeTruthy();
-  expect(
-    screen.queryByRole("button", { name: i18n.t("moreArchives") }),
-  ).toBeNull();
-  fireEvent.click(
-    within(alert).getByRole("button", { name: i18n.t("refreshArchives") }),
-  );
-  await screen.findByText(i18n.t("noArchivedSessions"));
-  expect(list).toHaveBeenLastCalledWith(
-    { query: "", limit: 25 },
-    expect.any(AbortSignal),
-  );
-});
-
-it("retries the failed archive page without falsely treating a generic 409 as a stale cursor", async () => {
-  const old = session("/old/a.jsonl", "/old", "Retained", true);
-  const list = vi
-    .spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockResolvedValueOnce(archivePage([old], "next"))
-    .mockRejectedValueOnce(new WebApiError("busy", 409, "SESSION_BUSY"))
-    .mockResolvedValueOnce(archivePage([]));
-  mount(snapshot([]));
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  await screen.findByText("Retained");
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("moreArchives") }));
-  const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain(i18n.t("archiveLoadFailed"));
-  expect(alert.textContent).not.toContain(i18n.t("archiveCursorStale"));
-  fireEvent.click(
-    within(alert).getByRole("button", { name: i18n.t("retryArchives") }),
-  );
-  await waitFor(() => expect(list).toHaveBeenCalledTimes(3));
-  expect(list).toHaveBeenLastCalledWith(
-    { query: "", cursor: "next", limit: 25 },
-    expect.any(AbortSignal),
-  );
-  expect(screen.getByText("Retained")).toBeTruthy();
-});
-
-it.each(["view", "unmount"] as const)(
-  "aborts archive reads at the %s lifecycle boundary",
-  async (boundary) => {
-    let finish!: (page: ArchivedSessionPage) => void;
-    let signal!: AbortSignal;
-    vi.spyOn(WebClient.prototype, "listArchivedSessions").mockImplementation(
-      (_options, nextSignal) => {
-        signal = nextSignal!;
-        return new Promise((resolve) => {
-          finish = resolve;
-        });
-      },
-    );
-    const view = mount(snapshot([]));
-    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-    if (boundary === "unmount") view.unmount();
-    else fireEvent.click(screen.getByRole("button", { name: "Current" }));
-    expect(signal.aborted).toBe(true);
-    await act(async () =>
-      finish(archivePage([session("/old/a.jsonl", "/old", "Late", true)])),
-    );
-    expect(screen.queryByText("Late")).toBeNull();
-  },
-);
-
-it("refreshes archives after restoration without selecting the restored Session", async () => {
-  const old = session("/old/a.jsonl", "/old", "Restore me", true);
-  vi.spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockResolvedValueOnce(archivePage([old]))
-    .mockResolvedValueOnce(archivePage([]));
-  const { actions } = mount(snapshot([]));
-  const restore = vi.spyOn(actions, "unarchiveSession").mockResolvedValue(true);
-  const select = vi.spyOn(actions, "selectSession").mockResolvedValue();
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  await screen.findByText("Restore me");
-  fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(
-    await screen.findByRole("menuitem", {
-      name: i18n.t("sidebarRestore"),
-    }),
-  );
-  await screen.findByText(i18n.t("noArchivedSessions"));
-  expect(restore).toHaveBeenCalledExactlyOnceWith(old.path);
-  expect(select).not.toHaveBeenCalled();
-});
-
-it("does not expose a restore failure from a previous archive query", async () => {
-  const old = session("/old/a.jsonl", "/old", "Alpha", true);
-  const next = session("/old/b.jsonl", "/old", "Beta", true);
-  vi.spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockResolvedValueOnce(archivePage([old]))
-    .mockResolvedValueOnce(archivePage([next]));
-  const view = mount(snapshot([]), { query: "alpha" });
-  let finish!: (restored: boolean) => void;
-  vi.spyOn(view.actions, "unarchiveSession").mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  await screen.findByText("Alpha");
-  fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(
-    await screen.findByRole("menuitem", {
-      name: i18n.t("sidebarRestore"),
-    }),
-  );
-  view.rerender({ query: "beta" });
-  await screen.findByText("Beta");
-  await act(async () => finish(false));
-  expect(screen.queryByRole("alert")).toBeNull();
-  expect(screen.getByText("Beta")).toBeTruthy();
-});
-
 it("keeps a confirmed workspace marked when its selected Session is outside the catalog", () => {
   const data = snapshot([]);
   data.selectedSession = {
@@ -2019,48 +1743,4 @@ it("does not mark a stale catalog id at the confirmed selected path", () => {
       .getByRole("button", { name: `Stale row · ${row.path}` })
       .getAttribute("aria-current"),
   ).toBeNull();
-});
-
-it("does not start another archive read after a restore settles beyond unmount", async () => {
-  const old = session("/old/a.jsonl", "/old", "Old", true);
-  const list = vi
-    .spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockResolvedValue(archivePage([old]));
-  const view = mount(snapshot([]));
-  let finish!: (restored: boolean) => void;
-  vi.spyOn(view.actions, "unarchiveSession").mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  await screen.findByText("Old");
-  fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(
-    await screen.findByRole("menuitem", {
-      name: i18n.t("sidebarRestore"),
-    }),
-  );
-  view.unmount();
-  await act(async () => finish(true));
-  expect(list).toHaveBeenCalledOnce();
-});
-
-it("reports an empty archived query as bounded when older records remain unscanned", async () => {
-  vi.spyOn(WebClient.prototype, "listArchivedSessions").mockResolvedValue({
-    ...archivePage([]),
-    truncation: {
-      ...archivePage([]).truncation,
-      truncated: true,
-      recordsUnscanned: 12,
-    },
-  });
-  mount(snapshot([]), { query: "missing" });
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  await screen.findByText(i18n.t("noMatchingScannedArchives"));
-  expect(
-    screen.getByText(i18n.t("archiveScanBounded", { count: 12 })),
-  ).toBeTruthy();
-  expect(screen.queryByText(i18n.t("noMatching"))).toBeNull();
 });
