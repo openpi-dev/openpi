@@ -555,6 +555,190 @@ test("sanitizeSchemaForCca preserves property names that match schema keywords",
   );
 });
 
+test("sanitizeSchemaForCca collapses all-literal combinators into a flat enum", () => {
+  // TypeBox serializes Type.Union([Type.Literal(...)]) this way; CCA 400s the
+  // whole request on "const" while accepting enum in the same payload. The
+  // combinator collapses (omp normalize.ts "allHaveConst") so the model sees
+  // one enum instead of anyOf-of-singleton-enums.
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      properties: {
+        evidence: {
+          description: 'Evidence to read: "transcript", "final", "structured".',
+          anyOf: [
+            { type: "string", const: "transcript" },
+            { type: "string", const: "final" },
+            { type: "string", const: "structured" },
+          ],
+        },
+      },
+    }),
+    {
+      type: "object",
+      properties: {
+        evidence: {
+          description: 'Evidence to read: "transcript", "final", "structured".',
+          type: "string",
+          enum: ["transcript", "final", "structured"],
+        },
+      },
+    },
+  );
+  // Literals without an explicit type still collapse, inferring "string".
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      oneOf: [{ const: "a" }, { const: "b" }],
+    }),
+    { type: "string", enum: ["a", "b"] },
+  );
+  // allOf of literals is degenerate as an intersection; widening it to a
+  // union (flat enum) only broadens what the model may pick.
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      allOf: [
+        { type: "string", const: "a" },
+        { type: "string", const: "b" },
+      ],
+    }),
+    { type: "string", enum: ["a", "b"] },
+  );
+});
+
+test("sanitizeSchemaForCca keeps mixed-type combinators as anyOf", () => {
+  // Not every variant carries `const` — the union must stay a union.
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      properties: {
+        exclude: {
+          anyOf: [
+            { type: "string" },
+            { type: "array", items: { type: "string" } },
+          ],
+        },
+      },
+    }),
+    {
+      type: "object",
+      properties: {
+        exclude: {
+          anyOf: [
+            { type: "string" },
+            { type: "array", items: { type: "string" } },
+          ],
+        },
+      },
+    },
+  );
+});
+
+test("sanitizeSchemaForCca merges a bare const into enum without duplicates", () => {
+  assert.deepEqual(
+    sanitizeSchemaForCca({ type: "string", const: "chromium" }),
+    {
+      type: "string",
+      enum: ["chromium"],
+    },
+  );
+  // A bare const infers its type when the node has none.
+  assert.deepEqual(sanitizeSchemaForCca({ const: "chromium" }), {
+    type: "string",
+    enum: ["chromium"],
+  });
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "string",
+      const: "chrome",
+      enum: ["chrome", "edge"],
+    }),
+    { type: "string", enum: ["chrome", "edge"] },
+  );
+});
+
+test("sanitizeSchemaForCca preserves a property named const", () => {
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      properties: {
+        const: { type: "string", description: "Value to pin" },
+      },
+    }),
+    {
+      type: "object",
+      properties: {
+        const: { type: "string", description: "Value to pin" },
+      },
+    },
+  );
+});
+
+test("sanitizeSchemaForCca strips omp-synced keywords (contains, additionalItems, $id)", () => {
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "array",
+      items: { type: "string" },
+      contains: { type: "string" },
+      minContains: 1,
+      additionalItems: { type: "string" },
+      contentEncoding: "base64",
+      $id: "https://example.com/schema",
+    }),
+    { type: "array", items: { type: "string" } },
+  );
+});
+
+test("sanitizeSchemaForCca drops unknown keywords as a fail-soft final gate", () => {
+  // `title` rides omp's Google/CCA dialect through the same endpoint daily,
+  // so the allowlist keeps it. `if`/`then`/`nullable` have no such evidence:
+  // the gate drops them instead of letting an unknown keyword 400 the
+  // session. Structure survives.
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      title: "Files to write",
+      if: { type: "object" },
+      // biome-ignore lint/suspicious/noThenProperty: JSON Schema keyword under test
+      then: { type: "object" },
+      properties: {
+        path: { type: "string", title: "Path", nullable: true },
+      },
+      required: ["path"],
+    }),
+    {
+      type: "object",
+      title: "Files to write",
+      properties: {
+        path: { type: "string", title: "Path" },
+      },
+      required: ["path"],
+    },
+  );
+});
+
+test("sanitizeSchemaForCca scalarizes type arrays", () => {
+  assert.deepEqual(sanitizeSchemaForCca({ type: ["string", "null"] }), {
+    type: "string",
+  });
+});
+
+test("sanitizeSchemaForCca preserves a property named anyOf", () => {
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      properties: {
+        anyOf: { type: "string", description: "Coin flip" },
+      },
+    }),
+    {
+      type: "object",
+      properties: {
+        anyOf: { type: "string", description: "Coin flip" },
+      },
+    },
+  );
+});
+
 test("buildRequestBody strips CCA-rejected keywords and spills constraints into description", () => {
   const contextWithTools = {
     ...SIMPLE_CONTEXT,
@@ -574,6 +758,15 @@ test("buildRequestBody strips CCA-rejected keywords and spills constraints into 
             mode: { type: "string", readOnly: false },
             pattern: { type: "string", description: "Search pattern" },
             $id: { type: "string", description: "User-defined property" },
+            // TypeBox Type.Union([Type.Literal(...)]) shape: must reach the
+            // wire as a flat enum, never as anyOf branches carrying const.
+            evidence: {
+              description: 'Evidence to read: "transcript", "final".',
+              anyOf: [
+                { type: "string", const: "transcript" },
+                { type: "string", const: "final" },
+              ],
+            },
           },
         },
       },
@@ -608,6 +801,11 @@ test("buildRequestBody strips CCA-rejected keywords and spills constraints into 
   assert.deepEqual(parameters.properties.$id, {
     type: "string",
     description: "User-defined property",
+  });
+  assert.deepEqual(parameters.properties.evidence, {
+    type: "string",
+    description: 'Evidence to read: "transcript", "final".',
+    enum: ["transcript", "final"],
   });
 });
 

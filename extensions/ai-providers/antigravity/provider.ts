@@ -82,6 +82,8 @@ const MAX_SESSION_STATES = 64;
 // model are serialized into the sibling description before being removed.
 const CCA_UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
   $schema: true,
+  $id: true,
+  $anchor: true,
   $ref: true,
   $defs: true,
   $dynamicRef: true,
@@ -96,6 +98,11 @@ const CCA_UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
   propertyNames: true,
   minItems: true,
   maxItems: true,
+  uniqueItems: true,
+  contains: true,
+  minContains: true,
+  maxContains: true,
+  additionalItems: true,
   minLength: true,
   maxLength: true,
   minProperties: true,
@@ -105,9 +112,11 @@ const CCA_UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
   exclusiveMinimum: true,
   exclusiveMaximum: true,
   multipleOf: true,
-  uniqueItems: true,
   pattern: true,
   format: true,
+  contentEncoding: true,
+  contentMediaType: true,
+  contentSchema: true,
   default: true,
   deprecated: true,
   readOnly: true,
@@ -138,6 +147,39 @@ const CCA_LIFTABLE_TO_DESCRIPTION: Record<string, true> = {
   examples: true,
 };
 
+function isJsonObjectWithConst(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "const" in value
+  );
+}
+
+function inferSchemaTypeFromValue(value: unknown): string | undefined {
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
+  return undefined;
+}
+
+function mergeEnumValues(
+  out: Record<string, unknown>,
+  values: unknown[],
+): void {
+  const enumValues = Array.isArray(out.enum)
+    ? [...(out.enum as unknown[])]
+    : [];
+  for (const value of values) {
+    if (!enumValues.includes(value)) {
+      enumValues.push(value);
+    }
+  }
+  out.enum = enumValues;
+}
+
 function sanitizeSchemaForCcaValue(
   value: unknown,
   insidePropertiesMap: boolean,
@@ -146,14 +188,57 @@ function sanitizeSchemaForCcaValue(
     return value.map((entry) => sanitizeSchemaForCcaValue(entry, false));
   }
   if (value === null || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+
+  // All-literal combinators — every variant carries `const`, e.g. TypeBox's
+  // Type.Union([Type.Literal(...)]) — collapse into a flat enum before the
+  // keyword pass (omp normalize.ts "allHaveConst"). Collapsing an allOf union
+  // widens acceptance (union instead of intersection), which is sound for an
+  // advertised tool schema: the model may only pick from a superset.
+  let collapsedCombiner: "anyOf" | "oneOf" | "allOf" | undefined;
+  let collapsedEnum: unknown[] | undefined;
+  let collapsedType: string | undefined;
+  for (const combiner of ["anyOf", "oneOf", "allOf"] as const) {
+    const variants = source[combiner];
+    if (!Array.isArray(variants) || variants.length === 0) continue;
+    if (!variants.every(isJsonObjectWithConst)) continue;
+    const enumValues: unknown[] = [];
+    const variantTypes = new Set<string>();
+    for (const variant of variants) {
+      if (!enumValues.includes(variant.const)) {
+        enumValues.push(variant.const);
+      }
+      if (typeof variant.type === "string") {
+        variantTypes.add(variant.type);
+      }
+    }
+    collapsedCombiner = combiner;
+    collapsedEnum = enumValues;
+    if (variantTypes.size === 1) {
+      collapsedType = [...variantTypes][0];
+    } else if (variantTypes.size === 0) {
+      const inferred = new Set(enumValues.map(inferSchemaTypeFromValue));
+      if (inferred.size === 1) collapsedType = [...inferred][0];
+    }
+    break;
+  }
+
   const out: Record<string, unknown> = {};
   const spill: Array<[string, unknown]> = [];
-  for (const [key, entry] of Object.entries(value)) {
+  let constEntry: unknown;
+  let hasConst = false;
+  for (const [key, entry] of Object.entries(source)) {
     // Keys below `properties` are user-defined parameter names, not JSON
     // Schema keywords. A tool parameter named `pattern`, for example, must be
     // preserved while its schema value is sanitized normally.
     if (insidePropertiesMap) {
       out[key] = sanitizeSchemaForCcaValue(entry, false);
+      continue;
+    }
+    if (collapsedCombiner === key) continue;
+    if (key === "const") {
+      hasConst = true;
+      constEntry = entry;
       continue;
     }
     if (Object.hasOwn(CCA_UNSUPPORTED_SCHEMA_FIELDS, key)) {
@@ -167,6 +252,22 @@ function sanitizeSchemaForCcaValue(
     }
     out[key] = sanitizeSchemaForCcaValue(entry, key === "properties");
   }
+  if (hasConst) {
+    // OpenAPI 3.0 — the schema dialect CCA validates against — has no
+    // "const"; TypeBox literal unions (`anyOf` of `{type, const}`) 400 the
+    // whole request. Rewrite the literal as a single-value enum, which CCA
+    // accepts (enum-carrying parameters in the same request pass).
+    mergeEnumValues(out, [constEntry]);
+    if (out.type === undefined) {
+      out.type = inferSchemaTypeFromValue(constEntry);
+    }
+  }
+  if (collapsedEnum) {
+    mergeEnumValues(out, collapsedEnum);
+    if (out.type === undefined && collapsedType !== undefined) {
+      out.type = collapsedType;
+    }
+  }
   if (spill.length > 0) {
     const formatted = `{${spill.map(([key, entry]) => `${key}: ${JSON.stringify(entry)}`).join(", ")}}`;
     const existing = typeof out.description === "string" ? out.description : "";
@@ -175,9 +276,58 @@ function sanitizeSchemaForCcaValue(
   return out;
 }
 
-/** Recursively drop schema keywords Cloud Code Assist rejects. */
+// The keys CCA's `parameters` dialect has accepted in practice — omp's
+// Google/CCA dialect ships all of these through the same endpoint. Anything
+// unknown that survives the denylist pass above is dropped by this final
+// allowlist pass, so a novel schema keyword degrades the advertised schema
+// instead of 400ing every request (fail-soft, like omp's validateAndFallback).
+const CCA_WIRE_ALLOWED_KEYS: Record<string, true> = {
+  type: true,
+  title: true,
+  description: true,
+  enum: true,
+  items: true,
+  properties: true,
+  required: true,
+  anyOf: true,
+  oneOf: true,
+  allOf: true,
+};
+
+function stripNonWireKeys(
+  value: unknown,
+  insidePropertiesMap: boolean,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripNonWireKeys(entry, false));
+  }
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (insidePropertiesMap) {
+      out[key] = stripNonWireKeys(entry, false);
+      continue;
+    }
+    if (!Object.hasOwn(CCA_WIRE_ALLOWED_KEYS, key)) continue;
+    if (key === "type" && Array.isArray(entry)) {
+      // OpenAPI type is single-valued; keep the first non-null member. A
+      // null-only type array carries no OpenAPI type at all.
+      const scalar = entry.find((t) => t !== "null");
+      if (typeof scalar === "string") out.type = scalar;
+      continue;
+    }
+    out[key] = stripNonWireKeys(entry, key === "properties");
+  }
+  return out;
+}
+
+/**
+ * Project a tool schema onto the dialect CCA's `parameters` field accepts:
+ * rewrite `const` literals as enum, collapse all-literal combinators into a
+ * flat enum, strip/lift known-rejected keywords, then keep only wire keys.
+ */
 export function sanitizeSchemaForCca(value: unknown): unknown {
-  return sanitizeSchemaForCcaValue(value, false);
+  return stripNonWireKeys(sanitizeSchemaForCcaValue(value, false), false);
 }
 
 // ---------------------------------------------------------------------------
