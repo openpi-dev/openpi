@@ -11,6 +11,7 @@ import {
   Plus,
   ArrowUp,
   ListChecks,
+  LoaderCircle,
   Minimize2,
   Maximize2,
   Cpu,
@@ -1322,7 +1323,9 @@ export function Composer(props: ComposerProps) {
         ? sessionTitle(sessionSummary ?? {}, selected.id)
         : t("newSession");
   const placeholder = props.sessionSwitching
-    ? t("switchingSession")
+    ? props.workspaceDraft
+      ? t("promptTask")
+      : t("switchingSession")
     : !props.selectedWorkspace
       ? t("promptStart")
       : active &&
@@ -1662,27 +1665,6 @@ export function Composer(props: ComposerProps) {
           </div>
         )}
       {props.accessory}
-      {props.landing && (
-        <div className="workspace-picker-row">
-          <DropdownMenu
-            className="workspace-picker-menu"
-            button={{
-              label: props.selectedWorkspace
-                ? workspaceName(props.selectedWorkspace)
-                : t("selectWorkspace"),
-              icon: <Folder />,
-              size: "md",
-              variant: "ghost",
-              className: "workspace-picker",
-            }}
-            items={workspaceItems}
-            menuWidth={240}
-            placement="above"
-            alignment="start"
-            hasChevron
-          />
-        </div>
-      )}
       {props.promptAdmissionRecovery && (
         <section className="prompt-recovery" role="alert">
           <div>
@@ -1975,7 +1957,7 @@ export function Composer(props: ComposerProps) {
             <span>{placeholder}</span>
           </div>
         )}
-        {!props.selectedWorkspace && (
+        {!props.selectedWorkspace && !props.landing && (
           <button
             className="dormant-overlay"
             type="button"
@@ -2266,7 +2248,25 @@ export function Composer(props: ComposerProps) {
                 </button>
               </Tooltip>
             )}
-            {!props.landing && (
+            {props.landing ? (
+              <DropdownMenu
+                className="workspace-picker-menu"
+                button={{
+                  label: props.selectedWorkspace
+                    ? workspaceName(props.selectedWorkspace)
+                    : t("selectWorkspace"),
+                  icon: <Folder />,
+                  size: "sm",
+                  variant: "ghost",
+                  className: "workspace-picker",
+                }}
+                items={workspaceItems}
+                menuWidth={240}
+                placement="above"
+                alignment="start"
+                hasChevron
+              />
+            ) : (
               <span
                 className="composer-workspace-label"
                 title={`${workspaceLabel} / ${targetLabel}`}
@@ -2419,7 +2419,11 @@ export function Composer(props: ComposerProps) {
                       files.length === 0)
                   }
                 >
-                  <ArrowUp />
+                  {props.sessionSwitching && props.workspaceDraft ? (
+                    <LoaderCircle className="send-spinner" />
+                  ) : (
+                    <ArrowUp />
+                  )}
                 </button>
               </Tooltip>
             )}

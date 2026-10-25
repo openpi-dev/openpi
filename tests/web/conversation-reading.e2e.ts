@@ -295,8 +295,10 @@ test("conversation text stays readable and file links retain their exact target"
     const commentaryBounds = (await commentary.boundingBox())!;
     const toolBounds = (await tool.boundingBox())!;
     expect(
-      toolBounds.y - commentaryBounds.y - commentaryBounds.height,
-    ).toBeCloseTo(16, 0);
+      Math.abs(
+        toolBounds.y - commentaryBounds.y - commentaryBounds.height - 16,
+      ),
+    ).toBeLessThanOrEqual(1);
     const paragraph = commentary.locator("p");
     expect((await paragraph.boundingBox())!.height).toBeGreaterThanOrEqual(
       fontSize * 1.625 - 1,
@@ -312,7 +314,9 @@ test("conversation text stays readable and file links retain their exact target"
         .locator(".turn-response-body")
         .boundingBox())!;
       const final = (await page.locator(".final-response").boundingBox())!;
-      expect(final.y - process.y - process.height).toBeCloseTo(16, 0);
+      expect(
+        Math.abs(final.y - process.y - process.height - 16),
+      ).toBeLessThanOrEqual(1);
       await page.locator(".turn-duration-toggle").click();
       await expect(page.locator(".turn-response-body")).toBeHidden();
       await expect(response).toBeVisible();

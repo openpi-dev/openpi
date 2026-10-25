@@ -9,6 +9,7 @@ import { GitReviewBaselineStore } from "../../web/host/git-review.ts";
 import { WebHost } from "../../web/host/web-host.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
+import { installConversationEntry } from "./workbench-chrome-e2e-support.ts";
 
 const exec = promisify(execFile);
 
@@ -67,6 +68,7 @@ test("explicit review bases recover missing/deleted refs and lazy detail drift u
   let releaseDetail = () => {};
   try {
     await host.start();
+    await installConversationEntry(page);
     await page.goto(host.origin);
     await page.getByRole("button", { name: "打开工具", exact: true }).click();
     await page
@@ -284,6 +286,7 @@ test("real Git rename details and index-only edits refresh the open browser diff
   const page = await context.newPage();
   try {
     await host.start();
+    await installConversationEntry(page);
     await page.goto(host.origin);
     await page.getByRole("button", { name: "会话概览", exact: true }).click();
     await page.getByRole("button", { name: /^变更/u }).click();

@@ -367,7 +367,9 @@ it("keeps recovered failed attempts folded after refreshing a successful run", (
   fireEvent.click(attempts.querySelector("summary")!);
   expect(attempts.open).toBe(true);
   expect(
-    [...attempts.querySelectorAll("li")].map((item) => item.textContent),
+    [...attempts.querySelectorAll("li")].map(
+      (item) => item.querySelector(".provider-attempt-body")?.textContent,
+    ),
   ).toEqual(["first 502", "second 502", "third 502"]);
 });
 
@@ -535,7 +537,7 @@ it("restores an inline native reconnect row after refresh, reveals its reason, a
   expect(row.classList.contains("provider-outcome")).toBe(false);
   fireEvent.click(row.querySelector("summary")!);
   expect(row.open).toBe(true);
-  expect(row.querySelector("li")?.textContent).toBe(reason);
+  expect(row.querySelector(".provider-attempt-body")?.textContent).toBe(reason);
   rerender(transcriptNode(state, { activityObserved: false }));
   expect(row.querySelector("summary")?.textContent).toBe(
     "Reconnection status unconfirmed 1/5",
@@ -827,9 +829,10 @@ it("offers one final retry after exhaustion while folding the earlier attempts",
     1,
   );
   expect(container.querySelector(".turn-state.failed")).toBeTruthy();
-  expect(container.querySelector(".provider-attempts li")?.textContent).toBe(
-    "first 502",
-  );
+  expect(
+    container.querySelector(".provider-attempts .provider-attempt-body")
+      ?.textContent,
+  ).toBe("first 502");
   expect(container.querySelectorAll(".provider-attempts li")).toHaveLength(2);
 });
 

@@ -11,6 +11,7 @@ import {
   Ellipsis,
   GitBranch,
   Globe,
+  History,
   Lightbulb,
   Pencil,
   RotateCcw,
@@ -353,7 +354,11 @@ function ProviderAttempts({
   const hasDetails = attempts.length > 0 || Boolean(retry?.errorMessage);
   const heading = (
     <>
-      <Wifi aria-hidden="true" />
+      {state === "retrying" ? (
+        <Wifi aria-hidden="true" />
+      ) : (
+        <History aria-hidden="true" />
+      )}
       <span role={state === "retrying" ? "status" : undefined}>
         {unavailable
           ? t("modelReconnectUnknown")
@@ -371,7 +376,9 @@ function ProviderAttempts({
         {state === "retrying" && hasCounts && ` ${attempt}/${maxAttempts}`}
       </span>
       {state !== "retrying" && (
-        <span>{t("modelFailedAttempts", { count: attempts.length })}</span>
+        <span className="provider-attempts-count">
+          {t("modelFailedAttempts", { count: attempts.length })}
+        </span>
       )}
       {hasDetails && (
         <ChevronRight className="reconnect-chevron" aria-hidden="true" />
@@ -389,12 +396,17 @@ function ProviderAttempts({
             <p>{retry?.errorMessage}</p>
           </li>
         )}
-        {attempts.map(({ entry, content }) => (
+        {attempts.map(({ entry, content }, index) => (
           <li key={entry.key} data-history-entry={entry.entryId ?? entry.key}>
-            <p>{entry.message.errorMessage || t("modelFailureUnknown")}</p>
-            {content?.map((row) => (
-              <Fragment key={row.key}>{row.content}</Fragment>
-            ))}
+            <span className="provider-attempt-index" aria-hidden="true">
+              {String(index + 1).padStart(2, "0")}
+            </span>
+            <div className="provider-attempt-body">
+              <p>{entry.message.errorMessage || t("modelFailureUnknown")}</p>
+              {content?.map((row) => (
+                <Fragment key={row.key}>{row.content}</Fragment>
+              ))}
+            </div>
           </li>
         ))}
       </ol>

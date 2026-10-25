@@ -1,4 +1,5 @@
 import { RuntimeInfoPanel } from "./RuntimeInfoPanel.tsx";
+import { SettingsSelect } from "./SettingsSelect.tsx";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Slider } from "@astryxdesign/core/Slider";
@@ -8,20 +9,25 @@ import {
   ChevronDown,
   Clipboard,
   Code2,
+  CornerDownRight,
   Cpu,
   ExternalLink,
   FileText,
   FolderCog,
   Gauge,
   KeyRound,
+  ListPlus,
+  PanelBottom,
   Plug,
   Plus,
   RefreshCw,
   Search,
   Sparkles,
+  Terminal,
   Wrench,
+  type LucideIcon,
 } from "lucide-react";
-import { type SelectHTMLAttributes, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type {
@@ -65,15 +71,40 @@ function SettingsLoadState({
   );
 }
 
-function SettingsSelect({
-  children,
-  ...props
-}: SelectHTMLAttributes<HTMLSelectElement>) {
+function SettingsToggleRow({
+  icon: Icon,
+  title,
+  description,
+  value,
+  disabled,
+  loading,
+  onChange,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description?: string;
+  value: boolean;
+  disabled: boolean;
+  loading: boolean;
+  onChange: (checked: boolean) => void;
+}) {
   return (
-    <span className="settings-select-control">
-      <select {...props}>{children}</select>
-      <ChevronDown aria-hidden="true" strokeWidth={1.75} />
-    </span>
+    <div className="settings-inline-control settings-toggle-row">
+      <Icon aria-hidden="true" />
+      <span className="settings-inline-copy">
+        <strong>{title}</strong>
+        {description && <small>{description}</small>}
+      </span>
+      <Switch
+        label={title}
+        isLabelHidden
+        value={value}
+        size="sm"
+        isDisabled={disabled}
+        isLoading={loading}
+        onChange={onChange}
+      />
+    </div>
   );
 }
 
@@ -230,6 +261,9 @@ export function GeneralSettingsPanel({
                       type="radio"
                       name="follow-up-behavior"
                       value={mode}
+                      aria-label={t(
+                        mode === "steer" ? "followUpSteer" : "followUpQueue",
+                      )}
                       checked={
                         (setup.ui.webFollowUpBehavior ?? "followUp") === mode
                       }
@@ -237,8 +271,28 @@ export function GeneralSettingsPanel({
                         void onUpdatePreferences({ followUpBehavior: mode })
                       }
                     />
-                    <span>
-                      {t(mode === "steer" ? "followUpSteer" : "followUpQueue")}
+                    <span className="settings-follow-up-option">
+                      {mode === "steer" ? (
+                        <CornerDownRight aria-hidden="true" />
+                      ) : (
+                        <ListPlus aria-hidden="true" />
+                      )}
+                      <span className="settings-follow-up-option-copy">
+                        <strong>
+                          {t(
+                            mode === "steer"
+                              ? "followUpSteer"
+                              : "followUpQueue",
+                          )}
+                        </strong>
+                        <small>
+                          {t(
+                            mode === "steer"
+                              ? "followUpSteerDetail"
+                              : "followUpQueueDetail",
+                          )}
+                        </small>
+                      </span>
                     </span>
                   </label>
                 ))}
@@ -306,15 +360,13 @@ export function GeneralSettingsPanel({
                   {t("configureViaSetup")}
                 </button>
               </form>
-              <Switch
-                label={t("nextActionSuggestions")}
+              <SettingsToggleRow
+                icon={Sparkles}
+                title={t("nextActionSuggestions")}
+                description={t("nextActionSuggestionsDetail")}
                 value={setup.suggestions.enabled}
-                size="sm"
-                width="100%"
-                labelPosition="start"
-                labelSpacing="spread"
-                isDisabled={setupPending || setupBlocked}
-                isLoading={setupPending}
+                disabled={setupPending || setupBlocked}
+                loading={setupPending}
                 onChange={(checked: boolean) =>
                   void onConfigure(
                     t(
@@ -330,9 +382,14 @@ export function GeneralSettingsPanel({
               )}
               <div className="settings-inline-control">
                 <Code2 aria-hidden="true" />
-                <span>
-                  {t("postEditCommand")} ·{" "}
-                  {t(setup.postEditConfigured ? "configured" : "disabled")}
+                <span className="settings-inline-copy">
+                  <strong>
+                    {t("postEditCommand")}
+                    <span className="settings-inline-status">
+                      {t(setup.postEditConfigured ? "configured" : "disabled")}
+                    </span>
+                  </strong>
+                  <small>{t("postEditCommandDetail")}</small>
                 </span>
                 <SetupAction
                   isPending={setupPending}
@@ -351,43 +408,46 @@ export function GeneralSettingsPanel({
             <div className="settings-chat-controls">
               {(
                 [
-                  ["subagentResultDisplay", "subagentResults"],
-                  ["bashToolDisplay", "bashOperations"],
-                  ["fileMutationDisplay", "fileMutations"],
+                  ["subagentResultDisplay", "subagentResults", Cpu],
+                  ["bashToolDisplay", "bashOperations", Terminal],
+                  ["fileMutationDisplay", "fileMutations", FileText],
                 ] as const
-              ).map(([key, label]) => (
+              ).map(([key, label, Icon]) => (
                 <label
                   key={key}
                   className="settings-inline-control"
                   htmlFor={`settings-${key}`}
                 >
-                  <span>{t(label)}</span>
+                  <Icon aria-hidden="true" />
+                  <span className="settings-inline-copy">
+                    <strong>{t(label)}</strong>
+                  </span>
                   <SettingsSelect
                     id={`settings-${key}`}
+                    className="settings-select-control"
+                    label={t(label)}
                     value={setup.ui[key]}
                     disabled={preferencePending}
-                    onChange={(event) => {
-                      const value = event.target.value;
+                    onChange={(value) => {
                       if (value === "full" || value === "compact")
                         void onUpdatePreferences({ [key]: value });
                     }}
-                  >
-                    <option value="compact">
-                      {t("detailDisplay_compact")}
-                    </option>
-                    <option value="full">{t("detailDisplay_full")}</option>
-                  </SettingsSelect>
+                    options={[
+                      {
+                        value: "compact",
+                        label: t("detailDisplay_compact"),
+                      },
+                      { value: "full", label: t("detailDisplay_full") },
+                    ]}
+                  />
                 </label>
               ))}
-              <Switch
-                label={t("terminalFooter")}
+              <SettingsToggleRow
+                icon={PanelBottom}
+                title={t("terminalFooter")}
                 value={setup.ui.customFooter}
-                size="sm"
-                width="100%"
-                labelPosition="start"
-                labelSpacing="spread"
-                isDisabled={preferencePending}
-                isLoading={preferencePending}
+                disabled={preferencePending}
+                loading={preferencePending}
                 onChange={(checked: boolean) =>
                   void onUpdatePreferences({ customFooter: checked })
                 }
@@ -399,10 +459,11 @@ export function GeneralSettingsPanel({
                 <span>{t("terminalFooterStyle")}</span>
                 <SettingsSelect
                   id="settings-footer-style"
+                  className="settings-select-control"
+                  label={t("terminalFooterStyle")}
                   value={setup.ui.footerStyle}
                   disabled={preferencePending || !setup.ui.customFooter}
-                  onChange={(event) => {
-                    const value = event.target.value;
+                  onChange={(value) => {
                     if (
                       value === "plain" ||
                       value === "powerline" ||
@@ -410,11 +471,12 @@ export function GeneralSettingsPanel({
                     )
                       void onUpdatePreferences({ footerStyle: value });
                   }}
-                >
-                  <option value="plain">Plain</option>
-                  <option value="powerline">Powerline</option>
-                  <option value="powerline-mono">Powerline Mono</option>
-                </SettingsSelect>
+                  options={[
+                    { value: "plain", label: "Plain" },
+                    { value: "powerline", label: "Powerline" },
+                    { value: "powerline-mono", label: "Powerline Mono" },
+                  ]}
+                />
               </label>
               <small>{t("terminalFooterHint")}</small>
             </div>
@@ -496,18 +558,18 @@ function ResourceToolbar({
           onChange={(event) => onQuery(event.target.value)}
         />
       </label>
-      <select
-        aria-label={t("filterResourceScope")}
+      <SettingsSelect
+        label={t("filterResourceScope")}
         value={scope}
-        onChange={(event) => onScope(event.target.value)}
-      >
-        <option value="all">{t("allResourceScopes")}</option>
-        {(["project", "user", "temporary"] as const).map((value) => (
-          <option key={value} value={value}>
-            {t(`resourceScope_${value}`)}
-          </option>
-        ))}
-      </select>
+        onChange={onScope}
+        options={[
+          { value: "all", label: t("allResourceScopes") },
+          ...(["project", "user", "temporary"] as const).map((value) => ({
+            value,
+            label: t(`resourceScope_${value}`),
+          })),
+        ]}
+      />
     </div>
   );
 }
@@ -563,18 +625,19 @@ function ResourceInstallForm({
             }}
           />
         </label>
-        <label className="settings-form-field">
+        <label className="settings-form-field" htmlFor="resource-install-scope">
           {t("scope")}
-          <select
+          <SettingsSelect
+            id="resource-install-scope"
+            label={t("scope")}
             value={scope}
             disabled={pending}
-            onChange={(event) => {
-              setScope(event.target.value);
-            }}
-          >
-            <option value="user">{t("resourceScope_user")}</option>
-            <option value="project">{t("resourceScope_project")}</option>
-          </select>
+            onChange={setScope}
+            options={[
+              { value: "user", label: t("resourceScope_user") },
+              { value: "project", label: t("resourceScope_project") },
+            ]}
+          />
         </label>
         <div className="settings-resource-actions">
           <Button
@@ -1102,26 +1165,25 @@ export function SubagentsSettingsPanel({
         onRefresh={onRefresh}
       />
       <div className="settings-control-group">
-        <label className="settings-control-row">
+        <label className="settings-control-row" htmlFor="subagent-role">
           <span className="settings-control-copy">
             <strong>{t("builtInRoles")}</strong>
             <span>{t(`subagentRoleShort_${selectedRole}`)}</span>
           </span>
-          <select
+          <SettingsSelect
+            id="subagent-role"
             name="subagentRole"
-            aria-label={t("builtInRoles")}
+            label={t("builtInRoles")}
             value={selectedRole}
-            onChange={(event) => {
-              const role = roles.find((value) => value === event.target.value);
+            onChange={(value) => {
+              const role = roles.find((item) => item === value);
               if (role) setSelectedRole(role);
             }}
-          >
-            {roles.map((role) => (
-              <option key={role} value={role}>
-                {t(`subagentRole_${role}`)}
-              </option>
-            ))}
-          </select>
+            options={roles.map((role) => ({
+              value: role,
+              label: t(`subagentRole_${role}`),
+            }))}
+          />
         </label>
       </div>
       <div className="settings-role-detail">
@@ -1148,31 +1210,33 @@ export function SubagentsSettingsPanel({
               }}
             >
               <div className="settings-control-group">
-                <label className="settings-control-row">
+                <label className="settings-control-row" htmlFor="role-model">
                   <span className="settings-control-copy">
                     <strong>{t("modelAssignment")}</strong>
                   </span>
-                  <select
+                  <SettingsSelect
+                    id="role-model"
                     name="roleModel"
+                    label={t("modelAssignment")}
                     value={roleModel}
                     disabled={setupPending || setupBlocked}
-                    onChange={(event) => setRoleModel(event.target.value)}
-                  >
-                    <option value="">{t("inheritParentModel")}</option>
-                    {roleModel &&
+                    onChange={setRoleModel}
+                    menuWidth="min(380px, calc(100vw - 32px))"
+                    options={[
+                      { value: "", label: t("inheritParentModel") },
+                      ...(roleModel &&
                       !models.some(
                         (model) =>
                           `${model.provider}/${model.id}` === roleModel,
-                      ) && <option value={roleModel}>{roleModel}</option>}
-                    {models.map((model) => (
-                      <option
-                        key={`${model.provider}/${model.id}`}
-                        value={`${model.provider}/${model.id}`}
-                      >
-                        {model.label}
-                      </option>
-                    ))}
-                  </select>
+                      )
+                        ? [{ value: roleModel, label: roleModel }]
+                        : []),
+                      ...models.map((model) => ({
+                        value: `${model.provider}/${model.id}`,
+                        label: model.label,
+                      })),
+                    ]}
+                  />
                 </label>
                 <div className="settings-control-row">
                   <span className="settings-control-copy">

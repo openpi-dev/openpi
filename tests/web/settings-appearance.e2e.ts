@@ -458,11 +458,15 @@ test("archived chats query project/sort before paging and restore without activa
     dialog.getByText("Archived design", { exact: true }),
   ).toBeVisible();
   await dialog
-    .getByRole("combobox", { name: "归档聊天排序", exact: true })
-    .selectOption("created");
-  await dialog
-    .getByRole("combobox", { name: "按项目筛选", exact: true })
-    .selectOption("/fixture");
+    .getByRole("button", { name: "归档聊天排序", exact: true })
+    .click();
+  await page
+    .getByRole("menuitemradio", { name: "创建时间", exact: true })
+    .click();
+  await dialog.getByRole("button", { name: "按项目筛选", exact: true }).click();
+  await page
+    .getByRole("menuitemradio", { name: "OpenPI", exact: true })
+    .click();
   await expect.poll(() => fixture.queries.at(-1)?.get("cwd")).toBe("/fixture");
   expect(fixture.queries.at(-1)?.get("sort")).toBe("created");
   const group = dialog.getByRole("button", {

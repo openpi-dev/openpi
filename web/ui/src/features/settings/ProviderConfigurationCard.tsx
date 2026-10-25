@@ -16,6 +16,7 @@ import { WebApiError, WebClient } from "../../protocol/client.ts";
 import { ProviderModelPicker } from "./ProviderModelPicker.tsx";
 import { ProviderAccountLogin } from "./ProviderAccountLogin.tsx";
 import { formatModelCapacity, parseModelCapacity } from "./model-capacity.ts";
+import { SettingsSelect } from "./SettingsSelect.tsx";
 
 export function ProviderConfigurationCard({
   sessionId,
@@ -272,13 +273,17 @@ export function ProviderConfigurationCard({
     </label>
   );
   const apiField = (
-    <label className="models-field">
+    <label
+      className="models-field"
+      htmlFor={`provider-api-${providerId || "custom"}`}
+    >
       {t("modelConfig_api")}
-      <select
+      <SettingsSelect
+        id={`provider-api-${providerId || "custom"}`}
+        label={t("modelConfig_api")}
         value={draft.api}
         disabled={profileDisabled}
-        onChange={(event) => {
-          const api = event.target.value;
+        onChange={(api) => {
           if (
             api === "openai-responses" ||
             api === "openai-completions" ||
@@ -286,11 +291,15 @@ export function ProviderConfigurationCard({
           )
             update({ api });
         }}
-      >
-        <option value="openai-completions">OpenAI Chat Completions</option>
-        <option value="openai-responses">OpenAI Responses</option>
-        <option value="anthropic-messages">Anthropic Messages</option>
-      </select>
+        options={[
+          {
+            value: "openai-completions",
+            label: "OpenAI Chat Completions",
+          },
+          { value: "openai-responses", label: "OpenAI Responses" },
+          { value: "anthropic-messages", label: "Anthropic Messages" },
+        ]}
+      />
     </label>
   );
   const modelList = (

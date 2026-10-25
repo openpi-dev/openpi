@@ -178,3 +178,8 @@
   .browser-settings :is(button, select, summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
   .browser-settings-detached .browser-settings-guide { padding-top: 0; border-top: 0; }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-settings-detached .settings-spin { animation: none; }
+  .browser-settings-detached :is(.browser-settings-progress button, .browser-settings-more > summary svg) { transition: none; }
+}

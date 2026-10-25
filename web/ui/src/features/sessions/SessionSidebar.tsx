@@ -3,7 +3,6 @@ import type { DropdownMenuOption } from "@astryxdesign/core/DropdownMenu";
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
-  Archive,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
@@ -54,7 +53,6 @@ import {
 import type { WebStoreActions } from "../../store/web-store.ts";
 import { ConversationMenu, captureSidebarFocus } from "./ConversationMenu.tsx";
 import { TranscriptSearchDialog } from "./TranscriptSearchDialog.tsx";
-import { ShutdownButton } from "./ShutdownButton.tsx";
 import { ManagedWorktreesDialog } from "./ManagedWorktreesDialog.tsx";
 import {
   dropIsAfter,
@@ -1971,7 +1969,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
           aria-busy={creating || undefined}
           onClick={() => void startSession(props.selectedWorkspace)}
         >
-          <SquarePen />
+          {creating ? (
+            <LoaderCircle className="new-session-spinner" />
+          ) : (
+            <Plus />
+          )}
           <span>{t("newSession")}</span>
         </button>
       </Tooltip>
@@ -2498,21 +2500,6 @@ export function SessionSidebar(props: SessionSidebarProps) {
         )}
       </div>
       <div className="sidebar-footer">
-        <Tooltip content={t("archivedConversations")} placement="above">
-          <button
-            className="sidebar-settings-button sidebar-archive-toggle"
-            type="button"
-            aria-label={t("archivedConversations")}
-            aria-pressed={archived}
-            onClick={() => {
-              setActivityOpen(false);
-              setArchived((value) => !value);
-            }}
-          >
-            <Archive aria-hidden="true" />
-            <span>{t("archivedConversations")}</span>
-          </button>
-        </Tooltip>
         <Tooltip content={t("settings")} placement="above">
           <button
             className="sidebar-settings-button"
@@ -2526,7 +2513,6 @@ export function SessionSidebar(props: SessionSidebarProps) {
             <span>{t("settings")}</span>
           </button>
         </Tooltip>
-        <ShutdownButton client={client} />
       </div>
 
       <Dialog

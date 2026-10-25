@@ -3,6 +3,7 @@ import type {
   WebCommandDiscoveryResult,
   WebSnapshot,
 } from "../../web/protocol/types.ts";
+import { includeConversationEntry } from "./workbench-chrome-e2e-support.ts";
 
 async function installSidebarActionsFixture(page: Page) {
   let selected = "first";
@@ -283,6 +284,7 @@ test("pinned section supports drag, keyboard ordering and light dark narrow mous
       { ...real, name: "下一轮界面细节" },
     ];
     value.workspaces[0]!.name = "openpi";
+    includeConversationEntry(value);
     await route.fulfill({ response, json: value });
   });
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -409,7 +411,7 @@ test("session rail separates live, waiting and terminal states without covering 
   });
 });
 
-test("workspace rail keeps names readable and archive navigation reachable across wide and narrow mouse layouts", async ({
+test("workspace rail keeps names readable and settings navigation reachable across wide and narrow mouse layouts", async ({
   page,
 }, testInfo) => {
   let theme: "light" | "dark" = "light";
@@ -438,6 +440,7 @@ test("workspace rail keeps names readable and archive navigation reachable acros
       ...session,
       name: "工作区导航与交互细节",
     }));
+    includeConversationEntry(value);
     await route.fulfill({ response, json: value });
   });
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -474,11 +477,17 @@ test("workspace rail keeps names readable and archive navigation reachable acros
     "box-shadow",
     "none",
   );
-  const archive = sidebar.getByRole("button", { name: "已归档", exact: true });
-  await archive.focus();
+  const settings = sidebar.getByRole("button", { name: "设置", exact: true });
+  await settings.focus();
   await page.keyboard.press("Enter");
-  await expect(archive).toHaveAttribute("aria-pressed", "true");
-  await sidebar.getByRole("button", { name: "当前", exact: true }).click();
+  const settingsDialog = page.getByRole("dialog", {
+    name: "设置",
+    exact: true,
+  });
+  await expect(settingsDialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(settingsDialog).toBeHidden();
+  await expect(settings).toBeFocused();
   await expect(workspace).toBeVisible();
   await workspace.focus();
   await expect(workspace.locator(".workspace-folder")).toHaveCSS(
@@ -508,7 +517,7 @@ test("workspace rail keeps names readable and archive navigation reachable acros
     true,
   );
   for (const control of [
-    archive,
+    settings,
     workspace,
     sidebar.locator(".session").first(),
   ]) {

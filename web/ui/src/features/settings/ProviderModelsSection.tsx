@@ -1,6 +1,6 @@
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Selector } from "@astryxdesign/core/Selector";
-import { Plus } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebModelSummary } from "../../../../protocol/types.ts";
@@ -424,10 +424,12 @@ export function ProviderModelsSection({
                 </span>
               ) : defaults?.model ? (
                 <span className="models-default-value">
-                  <ProviderIcon
-                    id={defaults.model.provider}
-                    modelId={defaults.model.id}
-                  />
+                  <span className="models-default-avatar" aria-hidden="true">
+                    <ProviderIcon
+                      id={defaults.model.provider}
+                      modelId={defaults.model.id}
+                    />
+                  </span>
                   <span>
                     {modelName(defaults.model)}
                     <small>{providerName(defaults.model.provider)}</small>
@@ -441,7 +443,7 @@ export function ProviderModelsSection({
             </div>
             <button
               type="button"
-              className="models-button"
+              className="models-button primary models-default-choose"
               disabled={
                 saving ||
                 busy ||
@@ -457,7 +459,10 @@ export function ProviderModelsSection({
                     : choose("default", event.currentTarget)
               }
             >
-              {t(defaultError ? "refreshStatus" : "modelDefaultChoose")}
+              <span>
+                {t(defaultError ? "refreshStatus" : "modelDefaultChoose")}
+              </span>
+              {!defaultError && <ChevronRight aria-hidden="true" />}
             </button>
           </div>
           {defaults?.projectOverride && (
@@ -468,6 +473,13 @@ export function ProviderModelsSection({
             </p>
           )}
           {choice?.purpose === "default" && chooser("default")}
+        </div>
+        <div className="models-connections-heading">
+          <div>
+            <h2>{t("modelConnectionsTitle")}</h2>
+            <p>{t("modelConnectionsIntro")}</p>
+          </div>
+          <span aria-hidden="true">{providers.length}</span>
         </div>
         <ul className="models-provider-list">
           {providers.map((provider) => {
@@ -491,12 +503,12 @@ export function ProviderModelsSection({
                         </span>
                       )}
                       {defaults?.model?.provider === provider.id && (
-                        <span className="models-provider-tag">
+                        <span className="models-provider-tag is-default">
                           {t("modelDefaultBadge")}
                         </span>
                       )}
                       {currentModel?.provider === provider.id && (
-                        <span className="models-provider-tag">
+                        <span className="models-provider-tag is-current">
                           {t("modelCurrentBadge")}
                         </span>
                       )}
@@ -531,7 +543,7 @@ export function ProviderModelsSection({
                     {provider.auth?.configured && (
                       <button
                         type="button"
-                        className="models-button"
+                        className="models-button models-select-connection"
                         disabled={
                           saving ||
                           busy ||

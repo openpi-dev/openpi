@@ -36,15 +36,6 @@ export function TrajectoryTimeline({
       className="trajectory-overview"
       aria-label={t("trajectoryOverview")}
     >
-      <header>
-        <strong>{t("trajectoryOverview")}</strong>
-        <span>{t("trajectorySequenceHint")}</span>
-        {range && (
-          <button type="button" onClick={() => onRange(null)}>
-            {t("trajectoryClearRange")}
-          </button>
-        )}
-      </header>
       <div className="trajectory-overview-track">
         <div className="trajectory-lane-labels">
           <span>{t("trajectoryContextLane")}</span>
@@ -94,11 +85,13 @@ export function TrajectoryTimeline({
             <rect
               key={span.key}
               x={span.start + 0.08}
-              y={span.lane + 0.18}
+              y={span.lane + 0.39}
               width={0.84}
-              height={0.64}
+              height={0.22}
+              rx={0.04}
               className={`${span.error ? "error" : ""} ${selectedKey === span.key ? "selected" : ""}`}
               data-lane={span.lane}
+              data-kind={nodes[index]!.kind}
               data-record-key={span.key}
               role="button"
               tabIndex={0}
@@ -126,6 +119,15 @@ export function TrajectoryTimeline({
             />
           )}
         </svg>
+        {range && (
+          <button
+            type="button"
+            className="trajectory-clear-range"
+            onClick={() => onRange(null)}
+          >
+            {t("trajectoryClearRange")}
+          </button>
+        )}
       </div>
     </section>
   );

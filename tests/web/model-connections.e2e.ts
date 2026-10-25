@@ -75,9 +75,7 @@ async function connectionsFixture(page: Page) {
     return route.fulfill({ json: models.find((model) => model.current) });
   });
   await page.goto(`/#token=${process.env.OPENPI_WEB_E2E_TOKEN}`);
-  await expect(
-    page.getByRole("heading", { name: "Mock session", exact: true }),
-  ).toBeVisible();
+  await expect(page.locator(".model-picker")).toBeVisible();
   if (
     !(await page.getByRole("button", { name: "设置", exact: true }).isVisible())
   )

@@ -547,12 +547,18 @@ it.each([
             name: i18n.t("openModelSettings"),
           }),
         );
-      } else
+      } else {
+        expect(
+          screen.queryByRole("button", {
+            name: i18n.t("archivedConversations"),
+          }),
+        ).toBeNull();
         await act(async () =>
           fireEvent.click(
             screen.getByRole("button", { name: i18n.t(trigger) }),
           ),
         );
+      }
       const dialog = await screen.findByRole("dialog", {
         name: i18n.t("settings"),
       });
@@ -4036,88 +4042,6 @@ it("reports failed copy honestly, supports retry, and cleans up feedback on unmo
     vi.useRealTimers();
     vi.unstubAllGlobals();
   }
-});
-
-it("loads archived history even when its workspace summary was omitted", async () => {
-  const store = createWebStore();
-  const restore = vi
-    .spyOn(store.getState().actions, "unarchiveSession")
-    .mockResolvedValue(false);
-  const snapshot: WebSnapshot = {
-    protocolVersion: 1,
-    preferences: { theme: "system" },
-    generatedAt: "2026-09-01T10:00:00Z",
-    cursor: 1,
-    workspaces: [],
-    sessions: [
-      {
-        id: "archived",
-        path: "/omitted/a.jsonl",
-        cwd: "/omitted",
-        name: "Archived work",
-        archived: true,
-        modified: "2026-09-01T10:00:00Z",
-        created: "2026-09-01T10:00:00Z",
-        source: "web-session",
-        origin: "web",
-        controller: "none",
-        readOnly: false,
-        messageCount: 1,
-        firstMessage: "saved",
-      },
-    ],
-    models: [],
-    runtime: { status: "idle", capabilities: {} },
-    truncation: {
-      ...truncation,
-      sessionsOmitted: 20,
-      workspacesOmitted: 1,
-      truncated: true,
-    },
-  };
-  const read = vi
-    .spyOn(WebClient.prototype, "listArchivedSessions")
-    .mockResolvedValue({
-      sessions: snapshot.sessions,
-      truncation: {
-        truncated: false,
-        matchesOmitted: 0,
-        recordsUnscanned: 0,
-        maxPageSize: 100,
-        maxScanned: 2000,
-      },
-    });
-  renderWithI18n(
-    createElement(SessionSidebar, {
-      snapshot,
-      selectedPath: null,
-      selectedWorkspace: null,
-      collapsed: new Set<string>(),
-      query: "",
-      searchOpen: false,
-      mobileOpen: false,
-      settingsDisabled: false,
-      onOpenSettings: vi.fn(),
-      actions: store.getState().actions,
-    }),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  expect(await screen.findByText("Archived work")).toBeTruthy();
-  expect(screen.getAllByText("/omitted").length).toBeGreaterThan(0);
-  expect(read).toHaveBeenCalledWith(
-    { query: "", limit: 25 },
-    expect.any(AbortSignal),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Restore" }));
-  expect(
-    await screen.findByText(
-      "Could not confirm restoration. Refresh and try again.",
-    ),
-  ).toBeTruthy();
-  expect(restore).toHaveBeenCalledWith("/omitted/a.jsonl");
-  expect(screen.getByText("Archived work")).toBeTruthy();
-  read.mockRestore();
 });
 
 it("shows complete model identities before workspace selection", () => {

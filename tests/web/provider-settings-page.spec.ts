@@ -604,7 +604,7 @@ it("C10 disables unsupported response controls and never offers editable permiss
     screen.getByText(i18n.t("configurationSandboxUnavailable")),
   ).toBeTruthy();
   expect(
-    screen.queryByRole("combobox", { name: i18n.t("configurationApproval") }),
+    screen.queryByRole("button", { name: i18n.t("configurationApproval") }),
   ).toBeNull();
   expect(
     screen.queryByRole("switch", { name: i18n.t("configurationDependencies") }),
@@ -684,11 +684,11 @@ it("submits role and skill changes through the canonical setup entry", async () 
   fireEvent.click(
     screen.getByRole("tab", { name: i18n.t("subagentsSettings") }),
   );
-  fireEvent.change(
-    screen.getByRole("combobox", { name: i18n.t("builtInRoles") }),
-    {
-      target: { value: "reviewer" },
-    },
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("builtInRoles") }));
+  fireEvent.click(
+    screen.getByRole("menuitemradio", {
+      name: i18n.t("subagentRole_reviewer"),
+    }),
   );
   expect(
     screen.getByRole("heading", {
@@ -1177,9 +1177,12 @@ it("reviews an exact plugin source and scope without claiming installation or re
   fireEvent.change(panel.getByLabelText(i18n.t("resourcePackageSource")), {
     target: { value: source },
   });
-  fireEvent.change(panel.getByLabelText(i18n.t("scope")), {
-    target: { value: "project" },
-  });
+  fireEvent.click(panel.getByRole("button", { name: i18n.t("scope") }));
+  fireEvent.click(
+    panel.getByRole("menuitemradio", {
+      name: i18n.t("resourceScope_project"),
+    }),
+  );
   fireEvent.click(
     panel.getByRole("button", {
       name: i18n.t("configureViaSetup"),
@@ -1290,9 +1293,14 @@ it("filters skill bulk requests by scope and search while preserving the native 
   await screen.findByText(i18n.t("agentBehavior"));
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
   const panel = within(screen.getByRole("tabpanel"));
-  fireEvent.change(panel.getByLabelText(i18n.t("filterResourceScope")), {
-    target: { value: "project" },
-  });
+  fireEvent.click(
+    panel.getByRole("button", { name: i18n.t("filterResourceScope") }),
+  );
+  fireEvent.click(
+    panel.getByRole("menuitemradio", {
+      name: i18n.t("resourceScope_project"),
+    }),
+  );
   fireEvent.change(panel.getByRole("searchbox"), {
     target: { value: "review" },
   });
@@ -1560,30 +1568,36 @@ it("saves every result display and footer control through presentation preferenc
   renderSettings({ onConfigureOpenPi: configure });
   await screen.findByText(i18n.t("agentBehavior"));
   for (const label of ["subagentResults", "bashOperations", "fileMutations"]) {
-    const select = screen.getByRole<HTMLSelectElement>("combobox", {
+    const select = screen.getByRole<HTMLButtonElement>("button", {
       name: i18n.t(label),
     });
-    fireEvent.change(select, { target: { value: "full" } });
-    await waitFor(() => expect(select.value).toBe("full"));
+    fireEvent.click(select);
+    fireEvent.click(
+      screen.getByRole("menuitemradio", {
+        name: i18n.t("detailDisplay_full"),
+      }),
+    );
+    await waitFor(() =>
+      expect(select.textContent).toBe(i18n.t("detailDisplay_full")),
+    );
     await waitFor(() => expect(select.disabled).toBe(false));
   }
-  fireEvent.change(
-    screen.getByRole("combobox", { name: i18n.t("terminalFooterStyle") }),
-    { target: { value: "powerline-mono" } },
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("terminalFooterStyle") }),
   );
-  await waitFor(() =>
-    expect(
-      screen.getByRole<HTMLSelectElement>("combobox", {
-        name: i18n.t("terminalFooterStyle"),
-      }).value,
-    ).toBe("powerline-mono"),
+  fireEvent.click(
+    screen.getByRole("menuitemradio", { name: "Powerline Mono" }),
   );
+  const footerStyle = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("terminalFooterStyle"),
+  });
+  await waitFor(() => expect(footerStyle.textContent).toBe("Powerline Mono"));
   fireEvent.click(
     screen.getByRole("switch", { name: i18n.t("terminalFooter") }),
   );
   await waitFor(() =>
     expect(
-      screen.getByRole<HTMLSelectElement>("combobox", {
+      screen.getByRole<HTMLButtonElement>("button", {
         name: i18n.t("terminalFooterStyle"),
       }).disabled,
     ).toBe(true),
@@ -1603,16 +1617,20 @@ it("saves every result display and footer control through presentation preferenc
         }),
     ),
   );
-  fireEvent.change(
-    screen.getByRole("combobox", { name: i18n.t("bashOperations") }),
-    { target: { value: "compact" } },
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("bashOperations") }),
+  );
+  fireEvent.click(
+    screen.getByRole("menuitemradio", {
+      name: i18n.t("detailDisplay_compact"),
+    }),
   );
   await screen.findByText(i18n.t("settingsPreferencesSaveFailed"));
   expect(
-    screen.getByRole<HTMLSelectElement>("combobox", {
+    screen.getByRole<HTMLButtonElement>("button", {
       name: i18n.t("bashOperations"),
-    }).value,
-  ).toBe("full");
+    }).textContent,
+  ).toBe(i18n.t("detailDisplay_full"));
 });
 
 it("routes agent controls through canonical setup and waits for a save receipt", async () => {
@@ -1627,16 +1645,20 @@ it("routes agent controls through canonical setup and waits for a save receipt",
   await waitFor(() => expect(concurrency.value).toBe("6"));
   fireEvent.change(concurrency, { target: { value: "9" } });
   expect(concurrency.value).toBe("9");
-  fireEvent.change(
-    screen.getByRole("combobox", { name: i18n.t("bashOperations") }),
-    { target: { value: "full" } },
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("bashOperations") }),
+  );
+  fireEvent.click(
+    screen.getByRole("menuitemradio", {
+      name: i18n.t("detailDisplay_full"),
+    }),
   );
   await waitFor(() =>
     expect(
-      screen.getByRole<HTMLSelectElement>("combobox", {
+      screen.getByRole<HTMLButtonElement>("button", {
         name: i18n.t("bashOperations"),
-      }).value,
-    ).toBe("full"),
+      }).textContent,
+    ).toBe(i18n.t("detailDisplay_full")),
   );
   expect(concurrency.value).toBe("9");
   fireEvent.submit(concurrency.closest("form")!);
