@@ -260,15 +260,14 @@ it("requests grants and default selection through setup without optimistic autho
   await waitFor(() =>
     expect(
       (
-        screen.getByRole("combobox", {
+        screen.getByRole("button", {
           name: "Default browser",
-        }) as HTMLSelectElement
+        }) as HTMLButtonElement
       ).disabled,
     ).toBe(false),
   );
-  fireEvent.change(screen.getByRole("combobox", { name: "Default browser" }), {
-    target: { value: "chrome" },
-  });
+  fireEvent.click(screen.getByRole("button", { name: "Default browser" }));
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "Chrome" }));
   await waitFor(() =>
     expect(requests[1]).toBe(
       'Configure browser access: browser_default="chrome". Preserve all other settings.',

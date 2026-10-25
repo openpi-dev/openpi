@@ -529,7 +529,7 @@ test.describe("touch project controls", () => {
       menu,
       project.locator(".workspace-label"),
       project.getByRole("button", { name: "新建会话 设计项目", exact: true }),
-      sidebar.getByRole("button", { name: "已归档", exact: true }),
+      sidebar.getByRole("button", { name: "设置", exact: true }),
     ]) {
       expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     }

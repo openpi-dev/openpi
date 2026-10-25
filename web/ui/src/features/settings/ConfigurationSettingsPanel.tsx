@@ -45,7 +45,11 @@ function ConfigurationMenu({
           </span>
         ) : undefined,
         endContent:
-          value === option.value ? <Check aria-hidden="true" /> : undefined,
+          value === option.value ? (
+            <span className="settings-select-check" aria-hidden="true">
+              <Check />
+            </span>
+          ) : undefined,
         onClick: () => {
           if (option.value !== value) onChange(option.value);
         },

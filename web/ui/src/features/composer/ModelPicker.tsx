@@ -3,7 +3,14 @@ import {
   type ComplexSelectorHandle,
 } from "@astryxdesign/core/ComplexSelector";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
-import { ArrowLeft, Check, RotateCcw, Search, Settings2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  ChevronRight,
+  RotateCcw,
+  Search,
+  Settings2,
+} from "lucide-react";
 import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -473,7 +480,12 @@ export function ModelPicker(props: ModelPickerProps) {
                             </span>
                           )}
                         </span>
-                        {isSelected && <Check aria-hidden="true" />}
+                        {isSelected && (
+                          <Check
+                            className="model-option-check"
+                            aria-hidden="true"
+                          />
+                        )}
                       </button>
                     </Fragment>
                   );
@@ -497,6 +509,10 @@ export function ModelPicker(props: ModelPickerProps) {
                 >
                   <Settings2 aria-hidden="true" />
                   <span>{t("openModelSettings")}</span>
+                  <ChevronRight
+                    className="model-settings-chevron"
+                    aria-hidden="true"
+                  />
                 </button>
               </>
             )}

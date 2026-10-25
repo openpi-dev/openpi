@@ -149,9 +149,7 @@ async function accountFixture(page: Page) {
     return route.fulfill({ json: {} });
   });
   await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "Mock session", exact: true }),
-  ).toBeVisible();
+  await expect(page.locator(".model-picker")).toBeVisible();
   if (
     !(await page.getByRole("button", { name: "设置", exact: true }).isVisible())
   )

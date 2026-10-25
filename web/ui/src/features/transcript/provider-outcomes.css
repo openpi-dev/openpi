@@ -1,7 +1,7 @@
 .provider-attempts {
   color: var(--muted);
-  font-size: var(--conversation-font-size);
-  line-height: 1.6;
+  font-size: calc(var(--conversation-font-size) - 1px);
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
@@ -46,10 +46,41 @@ div.provider-attempts,
   transform: rotate(90deg);
 }
 
+.provider-attempts-count {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--sidebar-hover);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
 .provider-attempts ol {
-  margin: 7px 0 0;
-  padding: 0;
+  display: grid;
+  gap: 3px;
+  margin: 5px 0 4px 26px;
+  padding: 0 0 0 12px;
+  border-left: 1px solid var(--border);
   list-style: none;
+}
+
+.provider-attempts li:has(.provider-attempt-index) {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 7px;
+  padding: 3px 0;
+}
+
+.provider-attempt-index {
+  padding-top: 2px;
+  color: var(--subtle);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-attempt-body {
+  min-width: 0;
 }
 
 .provider-attempts p { margin: 0; white-space: pre-wrap; font: inherit; color: inherit; }
@@ -58,18 +89,48 @@ div.provider-attempts,
 .execution-error {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 18px 20px;
-  border: 1px solid var(--border-strong);
-  border-radius: 20px;
-  background: var(--page);
+  gap: 10px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--error) 18%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--error) 3%, var(--page));
   color: var(--text);
   font-size: var(--conversation-font-size);
-  line-height: 1.6;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
-.execution-error > svg { width: 18px; height: 18px; flex: none; stroke-width: 1.8; }
+.execution-error-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.execution-error-content > p {
+  flex: 1;
+  min-width: 0;
+}
+
+.execution-error .provider-outcome-actions {
+  flex: none;
+  margin-top: 0;
+}
+
+.execution-error .provider-outcome-actions button {
+  border-color: color-mix(in srgb, var(--error) 16%, var(--border));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.execution-error .provider-outcome-actions button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 5%, var(--page));
+  color: var(--text);
+}
+
+.execution-error > svg { width: 16px; height: 16px; flex: none; color: var(--error); stroke-width: 1.8; }
 .execution-error-content { flex: 1; min-width: 0; }
 .conversation .execution-error p { margin: 0; white-space: pre-wrap; font: inherit; color: inherit; }
 
@@ -78,7 +139,9 @@ div.provider-attempts,
 }
 
 @media (max-width: 720px) {
-  .execution-error { gap: 12px; padding: 14px 16px; border-radius: 16px; }
+  .execution-error { align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 12px; }
+  .execution-error > svg { margin-top: 3px; }
+  .execution-error-content { flex-direction: column; align-items: flex-start; gap: 8px; }
 }
 
 .provider-attempts li + li {

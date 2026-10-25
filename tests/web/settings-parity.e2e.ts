@@ -378,17 +378,22 @@ test("resource settings preserve drafts, distinguish disabled and loaded state, 
   await dialog
     .getByLabel("软件包、仓库或本地路径", { exact: true })
     .fill("git:fixture/review");
-  await dialog
-    .getByRole("combobox", { name: "范围", exact: true })
-    .selectOption("project");
+  const scopeMenu = await dialog
+    .getByRole("button", { name: "范围", exact: true })
+    .getAttribute("aria-controls");
+  await dialog.getByRole("button", { name: "范围", exact: true }).click();
+  await page
+    .locator(`#${scopeMenu}`)
+    .getByRole("menuitemradio", { name: "项目", exact: true })
+    .click();
   await dialog.getByRole("tab", { name: "插件", exact: true }).click();
   await dialog.getByRole("tab", { name: "技能", exact: true }).click();
   await expect(
     dialog.getByLabel("软件包、仓库或本地路径", { exact: true }),
   ).toHaveValue("git:fixture/review");
   await expect(
-    dialog.getByRole("combobox", { name: "范围", exact: true }),
-  ).toHaveValue("project");
+    dialog.getByRole("button", { name: "范围", exact: true }),
+  ).toHaveText("项目");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     dialog.getByRole("combobox", { name: "设置导航", exact: true }),
@@ -444,42 +449,61 @@ test("General result and footer controls save, restore after reload, and preserv
   await page.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "设置", exact: true });
   for (const label of ["子代理结果", "Bash 操作", "Write / Edit 操作"]) {
-    const control = dialog.getByRole("combobox", { name: label, exact: true });
-    await control.selectOption("full");
+    const control = dialog.getByRole("button", { name: label, exact: true });
+    const menuId = await control.getAttribute("aria-controls");
+    await control.click();
+    await page
+      .locator(`#${menuId}`)
+      .getByRole("menuitemradio", { name: "完整", exact: true })
+      .click();
     await expect(control).toBeEnabled();
-    await expect(control).toHaveValue("full");
+    await expect(control).toHaveText("完整");
   }
-  await dialog
-    .getByRole("combobox", { name: "终端页脚样式", exact: true })
-    .selectOption("powerline-mono");
+  const footerStyle = dialog.getByRole("button", {
+    name: "终端页脚样式",
+    exact: true,
+  });
+  const footerMenu = await footerStyle.getAttribute("aria-controls");
+  await footerStyle.click();
+  await page
+    .locator(`#${footerMenu}`)
+    .getByRole("menuitemradio", { name: "Powerline Mono", exact: true })
+    .click();
   await expect(
-    dialog.getByRole("combobox", { name: "终端页脚样式", exact: true }),
+    dialog.getByRole("button", { name: "终端页脚样式", exact: true }),
   ).toBeEnabled();
   await dialog
     .getByRole("switch", { name: "Pi 终端页脚", exact: true })
     .click();
   await expect(
-    dialog.getByRole("combobox", { name: "终端页脚样式", exact: true }),
+    dialog.getByRole("button", { name: "终端页脚样式", exact: true }),
   ).toBeDisabled();
   await dialog
     .locator(".settings-general-panel")
     .screenshot({ path: testInfo.outputPath("settings-editable-desktop.png") });
   await page.reload();
   await expect(
-    dialog.getByRole("combobox", { name: "Bash 操作", exact: true }),
-  ).toHaveValue("full");
+    dialog.getByRole("button", { name: "Bash 操作", exact: true }),
+  ).toHaveText("完整");
   reject = true;
-  await dialog
-    .getByRole("combobox", { name: "Bash 操作", exact: true })
-    .selectOption("compact");
+  const bash = dialog.getByRole("button", {
+    name: "Bash 操作",
+    exact: true,
+  });
+  const bashMenu = await bash.getAttribute("aria-controls");
+  await bash.click();
+  await page
+    .locator(`#${bashMenu}`)
+    .getByRole("menuitemradio", { name: "紧凑", exact: true })
+    .click();
   await expect(
     dialog.getByText("无法保存显示设置，请检查配置诊断后重试。", {
       exact: true,
     }),
   ).toBeVisible();
   await expect(
-    dialog.getByRole("combobox", { name: "Bash 操作", exact: true }),
-  ).toHaveValue("full");
+    dialog.getByRole("button", { name: "Bash 操作", exact: true }),
+  ).toHaveText("完整");
   expect(patches).toEqual([
     { subagentResultDisplay: "full" },
     { bashToolDisplay: "full" },

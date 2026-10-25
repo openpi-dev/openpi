@@ -55,9 +55,7 @@ afterAll(() => {
   Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
 });
 
-it("offers Quit without a Session or workspace, explains scope, and cancels without a request", () => {
-  const fetcher = vi.fn();
-  vi.stubGlobal("fetch", fetcher);
+it("keeps Quit out of the sidebar without a Session or workspace", () => {
   render(
     createElement(SessionSidebar, {
       snapshot: null,
@@ -73,16 +71,8 @@ it("offers Quit without a Session or workspace, explains scope, and cancels with
       actions: createWebStore().getState().actions,
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Quit OpenPI" }));
-  const dialog = screen.getByRole("dialog", { name: "Quit OpenPI" });
-  expect(within(dialog).getByText(/All running tasks.*will stop/)).toBeTruthy();
-  expect(within(dialog).getByText(/Conversations are saved/)).toBeTruthy();
-  expect(
-    within(dialog).getByText(/Closing this browser tab alone leaves OpenPI/),
-  ).toBeTruthy();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  expect(screen.queryByRole("dialog", { name: "Quit OpenPI" })).toBeNull();
-  expect(fetcher).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Quit OpenPI" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Settings" })).toBeTruthy();
 });
 
 it("confirms with one authenticated POST, locks pending actions, and shows terminal/restart instructions", async () => {

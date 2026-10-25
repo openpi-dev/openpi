@@ -1,7 +1,7 @@
 import { Server } from "lucide-react";
 import alibaba from "./provider-icons/alibaba.svg?inline";
 import bedrock from "./provider-icons/amazon-bedrock.svg?inline";
-import anthropic from "./provider-icons/anthropic.svg?inline";
+import anthropic from "./provider-icons/claude-code.png?inline";
 import antigravity from "./provider-icons/antigravity.svg?inline";
 import azure from "./provider-icons/azure.svg?inline";
 import cerebras from "./provider-icons/cerebras.svg?inline";
@@ -148,7 +148,7 @@ const modelBrandPatterns: [RegExp, string][] = [
 
 // Small brand accents only. Text, controls and connection status keep the theme.
 const colors: Record<string, string> = {
-  anthropic: "#c8795a",
+  anthropic: "#d8765b",
   deepseek: "#4d6bfe",
   google: "#4285f4",
   "google-gemini-cli": "#4285f4",

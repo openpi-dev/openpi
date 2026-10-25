@@ -1,8 +1,8 @@
 .appearance-palette-options {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
-  padding: 8px 0 22px;
+  gap: 16px;
+  padding: 10px 0 24px;
 }
 
 .appearance-palette-option {
@@ -26,7 +26,7 @@
   overflow: hidden;
   aspect-ratio: 1.5;
   border: 1px solid color-mix(in srgb, var(--text) 13%, var(--page));
-  border-radius: 9px;
+  border-radius: 10px;
   box-shadow: 0 1px 2px #00000005;
   transition: border-color var(--motion-feedback), box-shadow var(--motion-feedback);
 }
@@ -86,11 +86,16 @@
   right: 8px;
   bottom: 8px;
   left: 8px;
+  display: flex;
   height: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 2px 3px;
   border: 1px solid currentColor;
   border-radius: 4px;
-  opacity: .12;
+  opacity: .72;
 }
+.appearance-palette-send { display: block; width: 4px; height: 4px; border-radius: 1px; }
 
 .appearance-palette-check {
   position: absolute;
@@ -111,7 +116,7 @@
 .appearance-palette-label { color: var(--muted); font-size: 12px; line-height: 1.5; text-align: center; }
 .appearance-palette-option:hover > input:not(:disabled) + .appearance-palette-preview { border-color: var(--border-strong); box-shadow: 0 2px 5px #0000000a; }
 .appearance-palette-option > input:checked + .appearance-palette-preview,
-.appearance-palette-option:hover > input:checked + .appearance-palette-preview { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.appearance-palette-option:hover > input:checked + .appearance-palette-preview { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 16px color-mix(in srgb, var(--accent) 10%, transparent); }
 .appearance-palette-option > input:checked + .appearance-palette-preview .appearance-palette-check { opacity: 1; }
 .appearance-palette-option > input:checked ~ .appearance-palette-label { color: var(--text); font-weight: 600; }
 .appearance-palette-option > input:focus-visible + .appearance-palette-preview { outline: 2px solid var(--focus); outline-offset: 4px; }
