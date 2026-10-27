@@ -93,6 +93,15 @@ function fixture(t: TestContext) {
   return { root, repo };
 }
 
+async function createWithUmask(cwd: string, commandId: string, umask: number) {
+  const originalUmask = process.umask(umask);
+  try {
+    return await createSessionWorktree(cwd, commandId);
+  } finally {
+    process.umask(originalUmask);
+  }
+}
+
 // The wrapper still executes real Git. It introduces a competing change at a
 // precise process boundary, without adding production-only test hooks.
 function gitBoundary(
@@ -134,10 +143,22 @@ test("forks source HEAD detached and copies final tracked, untracked, binary, ex
   const beforeStage = stagedIndex(repo);
   const beforeStatus = git(repo, "status", "--porcelain=v1", "-z");
   const head = git(repo, "rev-parse", "HEAD").trim();
-  const result = await createSessionWorktree(
+  const result = await createWithUmask(
     path.join(repo, "packages", "app"),
     "fork-dirty",
+    0o022,
   );
+  if (process.platform !== "win32") {
+    const restrictive = await createWithUmask(
+      repo,
+      "fork-restrictive-umask",
+      0o077,
+    );
+    assert.equal(
+      fs.statSync(path.join(restrictive.worktree.path, "run.sh")).mode & 0o111,
+      0o111,
+    );
+  }
   assert.equal(result.cwd, path.join(result.worktree.path, "packages", "app"));
   // Native realpath expands Windows 8.3 aliases such as RUNNER~1.
   assert.equal(result.worktree.sourceRoot, fs.realpathSync.native(repo));
