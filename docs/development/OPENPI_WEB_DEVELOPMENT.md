@@ -101,6 +101,10 @@ OPENPI_WEB_DEBUG=1 bun run dev:web:backend -- /absolute/path/to/workspace
 
 验证时覆盖执行中、执行结束和重新打开历史三个阶段，并确认每个调用只显示一行，输出仍位于可展开的结果详情中。
 
+后台通知与流式消息标识还见 [Issue #910](https://github.com/openpi-dev/openpi/issues/910)：工具参数仍在生成时，非 assistant 消息的开始和结束不能覆盖或清空 assistant 回复的标识，否则一次调用的后续片段会变成多条“未确认”记录。按消息对象保留非 assistant 生命周期标识，assistant 更新继续使用本次回复的标识；不能通过相同标题合并不同调用。
+
+`gateway_concurrency_limit` 是另一类独立故障。Pi 1.2.0 对不带 HTTP 429 或 rate-limit 文案的这个网关错误码不会自动重试；`provider-retry` 在原生 `message_end` 替换边界保留原始错误码和正文，并补充瞬时限流语义，后续次数、退避和取消仍由 Pi 的原生配置决定。Web 只在原生重试证据存在时显示等待重试；同一用户任务继续执行后，先前失败收起为历史，不把另一个用户任务的失败改成恢复成功。
+
 ## 热更新边界
 
 | 改动 | 是否需要手动重启 | 说明 |

@@ -1561,7 +1561,7 @@ it("restores sliders to persisted values when a direct save fails", async () => 
   );
 });
 
-it("saves every result display and footer control through presentation preferences, with failed saves preserving the canonical value", async () => {
+it("saves result display controls through presentation preferences, with failed saves preserving the canonical value", async () => {
   const fetcher = settingsFetcher();
   vi.stubGlobal("fetch", fetcher);
   const configure = vi.fn(async () => true);
@@ -1582,32 +1582,12 @@ it("saves every result display and footer control through presentation preferenc
     );
     await waitFor(() => expect(select.disabled).toBe(false));
   }
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("terminalFooterStyle") }),
-  );
-  fireEvent.click(
-    screen.getByRole("menuitemradio", { name: "Powerline Mono" }),
-  );
-  const footerStyle = screen.getByRole<HTMLButtonElement>("button", {
-    name: i18n.t("terminalFooterStyle"),
-  });
-  await waitFor(() => expect(footerStyle.textContent).toBe("Powerline Mono"));
-  fireEvent.click(
-    screen.getByRole("switch", { name: i18n.t("terminalFooter") }),
-  );
-  await waitFor(() =>
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: i18n.t("terminalFooterStyle"),
-      }).disabled,
-    ).toBe(true),
-  );
   expect(configure).not.toHaveBeenCalled();
   expect(
     fetcher.mock.calls.filter(([input]) =>
       String(input).includes("/api/settings/preferences"),
     ),
-  ).toHaveLength(5);
+  ).toHaveLength(3);
   vi.stubGlobal(
     "fetch",
     vi.fn(
@@ -1631,6 +1611,32 @@ it("saves every result display and footer control through presentation preferenc
       name: i18n.t("bashOperations"),
     }).textContent,
   ).toBe(i18n.t("detailDisplay_full"));
+});
+
+it("saves footer controls through presentation preferences and disables the style selector after hiding the footer", async () => {
+  const fetcher = settingsFetcher();
+  vi.stubGlobal("fetch", fetcher);
+  const configure = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi: configure });
+  await screen.findByText(i18n.t("agentBehavior"));
+  const footerStyle = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("terminalFooterStyle"),
+  });
+  fireEvent.click(footerStyle);
+  fireEvent.click(
+    screen.getByRole("menuitemradio", { name: "Powerline Mono" }),
+  );
+  await waitFor(() => expect(footerStyle.textContent).toBe("Powerline Mono"));
+  fireEvent.click(
+    screen.getByRole("switch", { name: i18n.t("terminalFooter") }),
+  );
+  await waitFor(() => expect(footerStyle.disabled).toBe(true));
+  expect(configure).not.toHaveBeenCalled();
+  expect(
+    fetcher.mock.calls.filter(([input]) =>
+      String(input).includes("/api/settings/preferences"),
+    ),
+  ).toHaveLength(2);
 });
 
 it("routes agent controls through canonical setup and waits for a save receipt", async () => {

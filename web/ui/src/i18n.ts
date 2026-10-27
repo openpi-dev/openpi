@@ -2002,6 +2002,11 @@ const resources = {
       modelRetrying: "Retrying model request...",
       modelRunning: "Working…",
       modelRequestFailed: "Model request failed",
+      modelConcurrencyLimit:
+        "The model service's concurrent request limit was reached. Wait for running requests to finish, then retry.",
+      modelConcurrencyRetrying:
+        "Concurrent request limit reached; waiting to retry...",
+      modelErrorDetails: "Error details",
       modelRequestStopped: "Model request stopped",
       modelFailureUnknown: "The provider did not return an error reason.",
       retryPrompt: "Retry prompt",
@@ -4000,6 +4005,10 @@ const resources = {
       modelRetrying: "模型请求重试中...",
       modelRunning: "正在运行…",
       modelRequestFailed: "模型请求失败",
+      modelConcurrencyLimit:
+        "模型服务的并发请求已达上限，请等待正在进行的请求结束后重试。",
+      modelConcurrencyRetrying: "并发请求已达上限，正在等待重试...",
+      modelErrorDetails: "错误详情",
       modelRequestStopped: "模型请求已停止",
       modelFailureUnknown: "服务商没有返回具体失败原因。",
       retryPrompt: "重试消息",

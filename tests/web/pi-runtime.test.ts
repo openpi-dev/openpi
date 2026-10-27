@@ -2960,6 +2960,79 @@ for (const aborted of [false, true]) {
   });
 }
 
+test("background messages do not split a streaming write into repeated unconfirmed calls", () => {
+  const session = promptSession("interleaved-messages");
+  const harness = promptHarness(session);
+  Object.defineProperty(harness, "cwd", { value: process.cwd() });
+  const runtimeState = harness as unknown as RuntimeHarness;
+  runtimeState.liveMessageSequence = 0;
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(this: RuntimeHarness, session: object, event: object): void;
+    }
+  ).projectEvent;
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  const assistant = { role: "assistant", timestamp: 1000, content: [] };
+  projectEvent.call(runtimeState, session, {
+    type: "message_start",
+    message: assistant,
+  });
+  const assistantKey = events.at(-1)?.detail?.messageKey;
+  const notice = {
+    role: "custom",
+    customType: "subagent-progress",
+    timestamp: 1001,
+    content: "Child running",
+    display: true,
+  };
+  projectEvent.call(runtimeState, session, {
+    type: "message_start",
+    message: notice,
+  });
+  const noticeKey = events.at(-1)?.detail?.messageKey;
+  projectEvent.call(runtimeState, session, {
+    type: "message_end",
+    message: notice,
+  });
+  assert.equal(events.at(-1)?.detail?.messageKey, noticeKey);
+  assert.notEqual(noticeKey, assistantKey);
+  for (let index = 0; index < 8; index++) {
+    projectEvent.call(runtimeState, session, {
+      type: "message_update",
+      message: {
+        ...assistant,
+        content: [
+          {
+            type: "toolCall",
+            id: "one-write",
+            name: "write",
+            arguments: { content: "part".repeat(index + 1) },
+          },
+        ],
+      },
+    });
+    assert.equal(events.at(-1)?.detail?.messageKey, assistantKey);
+  }
+  projectEvent.call(runtimeState, session, {
+    type: "message_end",
+    message: {
+      ...assistant,
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "toolCall",
+          id: "one-write",
+          name: "write",
+          arguments: { path: "one-file.md", content: "complete" },
+        },
+      ],
+    },
+  });
+  assert.equal(events.at(-1)?.detail?.messageKey, assistantKey);
+  assert.equal(runtimeState.liveMessageKey, undefined);
+});
+
 test("native retry completion preserves success, exhaustion and backoff cancellation at settlement", () => {
   const projectEvent = (
     PiWebRuntime.prototype as unknown as {

@@ -319,6 +319,7 @@ export class PiWebRuntime implements WebRuntimeController {
   private readonly turnAbortOperations = new Map<string, Promise<unknown>>();
   private liveMessageKey?: string;
   private liveMessageSequence = 0;
+  private liveMessageKeys?: WeakMap<object, string>;
   private readonly webSessionDirectory: string;
   private readonly dispatcherLease: HttpDispatcherLease;
   private readonly webHostLease: WebHostLease;
@@ -2789,21 +2790,32 @@ export class PiWebRuntime implements WebRuntimeController {
           ...(event.finalError ? { finalError: projectAssistantError(event.finalError).value } : {}),
         });
         break;
-      case "message_start":
-        this.liveMessageKey = `live-${++this.liveMessageSequence}`;
+      case "message_start": {
+        const messageKey = `live-${++this.liveMessageSequence}`;
+        (this.liveMessageKeys ??= new WeakMap()).set(event.message, messageKey);
+        // Background notifications can start and finish while the assistant
+        // streams. They must not take ownership of its subsequent updates.
+        if (event.message.role === "assistant") this.liveMessageKey = messageKey;
         this.emit(event.type, {
           message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
-          messageKey: this.liveMessageKey,
+          messageKey,
         });
         break;
+      }
       case "message_update":
-      case "message_end":
+      case "message_end": {
+        const messageKey = this.liveMessageKeys?.get(event.message) ??
+          (event.message.role === "assistant" ? this.liveMessageKey : undefined);
         this.emit(event.type, {
           message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
-          ...(this.liveMessageKey ? { messageKey: this.liveMessageKey } : {}),
+          ...(messageKey ? { messageKey } : {}),
         });
-        if (event.type === "message_end") this.liveMessageKey = undefined;
+        if (event.type === "message_end") {
+          this.liveMessageKeys?.delete(event.message);
+          if (event.message.role === "assistant") this.liveMessageKey = undefined;
+        }
         break;
+      }
       case "tool_execution_start":
       case "tool_execution_update":
       case "tool_execution_end":

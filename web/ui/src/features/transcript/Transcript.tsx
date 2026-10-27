@@ -32,6 +32,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { isGatewayConcurrencyLimit } from "../../../../../extensions/shared/provider-errors.ts";
 import type {
   WebSubagentActivity,
   WebWorkflowActivity,
@@ -301,8 +302,18 @@ function ProviderOutcome({
   return (
     <ErrorNotice
       label={t("modelRequestFailed")}
-      message={error || t("modelFailureUnknown")}
+      message={
+        isGatewayConcurrencyLimit(error)
+          ? t("modelConcurrencyLimit")
+          : error || t("modelFailureUnknown")
+      }
     >
+      {isGatewayConcurrencyLimit(error) && error && (
+        <details className="provider-error-details">
+          <summary>{t("modelErrorDetails")}</summary>
+          <pre>{error}</pre>
+        </details>
+      )}
       {retryPrompt !== undefined && retryEntryId && onRetry && (
         <div className="provider-outcome-actions">
           <button
@@ -352,6 +363,9 @@ function ProviderAttempts({
     typeof maxAttempts === "number" &&
     Number.isSafeInteger(maxAttempts) &&
     maxAttempts >= attempt;
+  const concurrencyLimited = isGatewayConcurrencyLimit(
+    retry?.errorMessage ?? attempts.at(-1)?.entry.message.errorMessage,
+  );
   const hasDetails = attempts.length > 0 || Boolean(retry?.errorMessage);
   const heading = (
     <>
@@ -368,7 +382,9 @@ function ProviderAttempts({
                 ? "modelRequestRecovered"
                 : state === "retrying"
                   ? retry
-                    ? "modelRetrying"
+                    ? concurrencyLimited
+                      ? "modelConcurrencyRetrying"
+                      : "modelRetrying"
                     : "modelEarlierAttempts"
                   : state === "interrupted"
                     ? "modelRequestStopped"
@@ -420,7 +436,28 @@ function providerFailures(
   entries: DisplayEntry[],
   running: boolean,
   retrying: boolean,
+  activeTurn?: WebSessionExecution["activeTurn"] | null,
 ) {
+  const supersededInPrompt = new Set<number>();
+  const currentPromptAssistants = new Set<number>();
+  let laterAssistant = false;
+  let laterPrompt = false;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.optimistic) continue;
+    if (
+      entry.message.role === "user" ||
+      (entry.message.role === "custom" &&
+        entry.message.customType === "openpi-setup-request")
+    ) {
+      laterAssistant = false;
+      laterPrompt = true;
+    } else if (entry.message.role === "assistant") {
+      if (laterAssistant) supersededInPrompt.add(index);
+      if (!laterPrompt) currentPromptAssistants.add(index);
+      laterAssistant = true;
+    }
+  }
   const finalErrors = new Set<number>();
   const groups = new Map<
     number,
@@ -442,6 +479,14 @@ function providerFailures(
         timing?.outcome === "cancelled" || terminal === "aborted";
       const finalError =
         terminal === "error" &&
+        !supersededInPrompt.has(lastAssistant) &&
+        !(
+          currentPromptAssistants.has(lastAssistant) &&
+          running &&
+          activeTurn &&
+          timing &&
+          activeTurn.commandId !== timing.commandId
+        ) &&
         !interrupted &&
         !(live && running) &&
         !forkSnapshot;
@@ -2447,6 +2492,14 @@ export function Transcript(props: TranscriptProps) {
             ? (props.liveRetry ?? undefined)
             : undefined
       : undefined;
+  const activeTurn =
+    active && props.liveActiveTurn !== undefined
+      ? props.liveActiveTurn
+      : selectedExecution
+        ? selectedExecution.activeTurn
+        : active
+          ? props.snapshot.runtime.activeTurn
+          : undefined;
   const presentation = useRef<TranscriptPresentationState & { scope: string }>({
     scope: hydrationScope,
     nativeRowKeys: new Map(),
@@ -2504,6 +2557,11 @@ export function Transcript(props: TranscriptProps) {
       entries,
       running && !historyPaused,
       Boolean(retry),
+      activeTurn &&
+        activeTurn.sessionId === selectedId &&
+        activeTurn.sessionPath === selectedPath
+        ? activeTurn
+        : undefined,
     );
     const lastFinalError = [...failures.finalErrors].at(-1);
     let lastAssistantIndex = -1;
@@ -3630,6 +3688,7 @@ export function Transcript(props: TranscriptProps) {
     return { rows: rendered, turns: turnItems };
   }, [
     active,
+    activeTurn,
     running,
     selectedExecution,
     retry,
@@ -3946,7 +4005,7 @@ export function Transcript(props: TranscriptProps) {
   const runningLabel = !active
     ? t("backgroundSessionRunning")
     : retry
-      ? `${t("modelRetrying")}${retry.attempt && retry.maxAttempts ? ` (${retry.attempt}/${retry.maxAttempts})` : ""}`
+      ? `${t(isGatewayConcurrencyLimit(retry.errorMessage) ? "modelConcurrencyRetrying" : "modelRetrying")}${retry.attempt && retry.maxAttempts ? ` (${retry.attempt}/${retry.maxAttempts})` : ""}`
       : props.livePhase === "preparing"
         ? t("modelPreparing")
         : t("modelRunning");
@@ -3954,14 +4013,6 @@ export function Transcript(props: TranscriptProps) {
     ? (selectedExecution?.liveTools.filter((tool) => tool.state === "running")
         .length ?? 0)
     : 0;
-  const activeTurn =
-    active && props.liveActiveTurn !== undefined
-      ? props.liveActiveTurn
-      : selectedExecution
-        ? selectedExecution.activeTurn
-        : active
-          ? props.snapshot.runtime.activeTurn
-          : undefined;
   const timedTurn =
     running &&
     activeTurn &&
