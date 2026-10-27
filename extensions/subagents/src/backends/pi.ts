@@ -40,6 +40,7 @@ import {
   encodeStructuredResult,
   STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
 } from "../../../shared/structured-output.ts";
+import { projectToolArguments } from "../../../shared/tool-arguments.ts";
 import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
 import {
   formatWorktreeCleanupWarning,
@@ -112,15 +113,6 @@ function assistantText(message: AssistantMessage) {
     .trim();
 }
 
-function safeJson(value: unknown): string | undefined {
-  try {
-    const text = JSON.stringify(value);
-    return text === "{}" ? undefined : text.slice(0, 4_096);
-  } catch {
-    return undefined;
-  }
-}
-
 function assistantParts(msg: AssistantMessage): TranscriptPart[] {
   const parts: TranscriptPart[] = [];
   for (const part of msg.content) {
@@ -137,7 +129,7 @@ function assistantParts(msg: AssistantMessage): TranscriptPart[] {
         type: "toolCall",
         toolId: part.id,
         name: part.name,
-        argsPreview: safeJson(part.arguments),
+        ...projectToolArguments(part.arguments),
       });
     }
   }
@@ -607,7 +599,10 @@ const makePiSession = (
             _tag: "ToolStart",
             toolId: event.toolCallId,
             name: event.toolName,
-            argsPreview: safeJson(event.args),
+            ...projectToolArguments(event.args),
+            ...(event.parentToolCallId !== undefined
+              ? { parentToolCallId: event.parentToolCallId }
+              : {}),
           });
           break;
         case "tool_execution_update":
@@ -634,6 +629,9 @@ const makePiSession = (
             _tag: "ToolEnd",
             toolId: event.toolCallId,
             name: event.toolName,
+            ...(event.parentToolCallId !== undefined
+              ? { parentToolCallId: event.parentToolCallId }
+              : {}),
             isError: event.isError,
             outputPreview: toolPreview(event.result),
           });

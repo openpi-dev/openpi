@@ -4,6 +4,15 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
+import {
+  createAgentSession,
+  ModelRuntime,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import type {
   AgentSession,
   CreateAgentSessionOptions,
@@ -255,6 +264,133 @@ test("the production Pi adapter bridges startup, first response, tools, usage, a
   assert.equal(harness.calls.clearQueues, 1);
   assert.equal(harness.calls.aborts, 1);
   assert.equal(harness.calls.disposals, 1);
+});
+
+test("real Pi codemode nested events retain arguments through the backend and manager", async (t) => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "openpi-nested-backend-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await writeFile(path.join(cwd, "known.txt"), "# file content\n");
+  const modelRuntime = await ModelRuntime.create({
+    authPath: path.join(cwd, "auth.json"),
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerProvider("fixture", {
+    apiKey: "fixture",
+    api: "openai-completions",
+    baseUrl: FIXTURE_MODEL.baseUrl,
+  });
+  let nativeSession: AgentSession | undefined;
+  const backend = makePiBackend({
+    sessionFactory: async (options) => {
+      const created = await createAgentSession({
+        ...options,
+        modelRuntime,
+        sessionManager: SessionManager.inMemory(cwd),
+      });
+      nativeSession = created.session;
+      let requested = false;
+      created.session.agent.streamFunction = () => {
+        const stream = createAssistantMessageEventStream();
+        const message: AssistantMessage = {
+          role: "assistant",
+          api: "openai-completions",
+          provider: "fixture",
+          model: FIXTURE_MODEL.id,
+          content: requested
+            ? [{ type: "text", text: "done" }]
+            : [
+                {
+                  type: "toolCall",
+                  id: "native-wrapper",
+                  name: "codemode",
+                  arguments: {
+                    code: "text(await Promise.allSettled([tools.read({path:'known.txt'}), tools.bash({command:'printf \\\"200 7867\\\"'}), tools.read({path:'missing.txt'})]));",
+                  },
+                },
+              ],
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: requested ? "stop" : "toolUse",
+          timestamp: Date.now(),
+        };
+        requested = true;
+        stream.push({
+          type: "done",
+          reason: message.stopReason as "stop" | "toolUse",
+          message,
+        });
+        stream.end();
+        return stream;
+      };
+      return created;
+    },
+  });
+  const runtime = createManagerRuntime(backend);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runtime.runPromise(
+      manager.spawn(
+        "pi",
+        task("inspect using codemode", {
+          cwd,
+          tools: ["read", "bash", "codemode"],
+        }),
+      ),
+    );
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    const snapshot = manager.view.get(spawned.id)!;
+    assert.equal(
+      snapshot.outcome,
+      "completed",
+      snapshot.errorText ?? "Child did not complete",
+    );
+    const nested = snapshot.transcript.flatMap((item) =>
+      item.kind === "toolResult" && item.parentToolCallId === "native-wrapper"
+        ? [item]
+        : [],
+    );
+    assert.equal(nested.length, 3);
+    assert.deepEqual(nested.map((item) => item.name).sort(), [
+      "bash",
+      "read",
+      "read",
+    ]);
+    const nativeResult = nativeSession?.messages.find(
+      (message) =>
+        message.role === "toolResult" &&
+        message.toolCallId === "native-wrapper",
+    );
+    assert.ok(nativeResult?.role === "toolResult");
+    assert.deepEqual(
+      nested.map((item) => item.toolId).sort(),
+      nativeResult.nestedCalls?.calls.map((call) => call.id).sort(),
+    );
+    for (const item of nested) {
+      assert.ok(item.kind === "toolResult");
+      assert.equal(item.argsTruncated, false);
+      const args = JSON.parse(item.argsPreview!);
+      assert.deepEqual(item.evidenceArguments, args);
+      if (args.path === "known.txt")
+        assert.match(item.outputPreview!, /# file content/);
+      if (args.path === "missing.txt") assert.equal(item.isError, true);
+      if (args.command) assert.equal(item.outputPreview, "200 7867");
+    }
+  } finally {
+    await runtime.dispose();
+  }
 });
 
 test("native aborted settlement interrupts a child without an aborted assistant message", async () => {

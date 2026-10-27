@@ -21,7 +21,10 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { projectToolEvidence } from "../../../../protocol/evidence.ts";
+import {
+  projectToolEvidence,
+  toolArguments,
+} from "../../../../protocol/evidence.ts";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { compactSummary, formatTurnTime } from "../../lib/format.ts";
 import { toolActivityTarget } from "../transcript/tool-activity.ts";
@@ -58,20 +61,19 @@ function title(node: TrajectoryNode, t: TFunction) {
 }
 
 function recordPreview(node: TrajectoryNode) {
-  if (node.input) {
-    try {
-      const args: unknown = JSON.parse(node.input);
-      if (args && typeof args === "object" && !Array.isArray(args)) {
-        const target = toolActivityTarget(
-          node.title,
-          args as Record<string, unknown>,
-        );
-        if (target) return target;
-      }
-    } catch {
-      // Bounded or non-JSON arguments keep their original preview.
-    }
+  if (node.input !== undefined || node.evidenceArguments) {
+    const target = toolActivityTarget(
+      node.title,
+      toolArguments({
+        type: "toolCall",
+        name: node.title,
+        arguments: node.input ?? "",
+        evidenceArguments: node.evidenceArguments,
+      }),
+    );
+    if (target) return target;
   }
+  if (node.argumentsOmitted && node.input === "{}") return "";
   return (
     node.input ||
     node.message?.content ||
@@ -403,10 +405,15 @@ function TrajectoryInput({ node }: { node: TrajectoryNode }) {
           </button>
         )}
       </h3>
-      <TrajectoryPayload
-        text={code && !raw ? code : (node.input ?? "")}
-        code={Boolean(code && !raw)}
-      />
+      {node.argumentsOmitted && (
+        <p className="trajectory-missing">{t("toolNestedArgumentsMissing")}</p>
+      )}
+      {(!node.argumentsOmitted || node.input !== "{}") && (
+        <TrajectoryPayload
+          text={code && !raw ? code : (node.input ?? "")}
+          code={Boolean(code && !raw)}
+        />
+      )}
     </section>
   );
 }

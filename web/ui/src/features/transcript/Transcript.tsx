@@ -40,6 +40,7 @@ import {
   type EvidenceState,
   evidenceText,
   isEvidenceTool,
+  toolArguments,
 } from "../../../../protocol/evidence.ts";
 import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
@@ -3103,7 +3104,11 @@ export function Transcript(props: TranscriptProps) {
             const projection = codemodeChildren(
               outer,
               outerResult,
-              liveTools,
+              // Child inspection can retain a nested start as its own row.
+              // Project only calls without an independent transcript row.
+              liveTools.filter(
+                (item) => !pairedToolIds.has(item.call.id ?? ""),
+              ),
               outerResultEntry ? undefined : outerLive?.state,
             );
             const projectedTools: {
@@ -3210,7 +3215,7 @@ export function Transcript(props: TranscriptProps) {
                     observed: props.activityObserved !== false,
                   })
                 );
-              const args = parseArguments(part.arguments);
+              const args = toolArguments(part);
               const { Icon, action } = toolActivity(part.name);
               const target =
                 action === "agent"
@@ -3509,7 +3514,11 @@ export function Transcript(props: TranscriptProps) {
               body={message.content}
               icon={icon}
               name={toolName}
-              summary={compactSummary(message.content)}
+              summary={
+                isEvidenceTool(toolName)
+                  ? t("toolArgumentsUnavailable")
+                  : compactSummary(message.content)
+              }
               status={status}
               snapshotMissingResult={message.forkSnapshotToolResult}
               defaultOpen={defaultOpen}

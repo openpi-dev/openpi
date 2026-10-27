@@ -9,7 +9,7 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
-import type { WebSnapshot } from "../../web/protocol/types.ts";
+import type { WebMessagePart, WebSnapshot } from "../../web/protocol/types.ts";
 import { Trajectory } from "../../web/ui/src/features/trajectory/Trajectory.tsx";
 import { TrajectoryPayload } from "../../web/ui/src/features/trajectory/TrajectoryPayload.tsx";
 import {
@@ -154,6 +154,89 @@ it("retains tool-only responses and native child durations without inventing chi
     new Set(["a:call:0", "a:call:0:nested:code/1"]),
   );
 });
+
+it.each([
+  ["top-level", "bash"],
+  ["top-level", "read"],
+  ["nested", "bash"],
+  ["nested", "read"],
+] as const)(
+  "uses retained arguments for %s %s previews and keeps clipped raw input inspectable",
+  (scope, name) => {
+    const value = structuredClone(snapshot());
+    const target = name === "bash" ? "git status --short" : "src/target.ts";
+    const raw = '{"payload":"clipped';
+    const call: Extract<WebMessagePart, { type: "toolCall" }> = {
+      type: "toolCall",
+      id: "code/1",
+      name,
+      arguments: raw,
+      evidenceArguments:
+        name === "bash" ? { command: target } : { path: target },
+      evidenceTruncated: true,
+    };
+    if (scope === "nested") {
+      const child =
+        value.selectedSession!.entries[2]!.message!.nestedCalls!.calls[0]!;
+      child.call = call;
+      child.argumentsOmitted = true;
+    } else {
+      value.selectedSession!.entries[1]!.message!.parts = [call];
+      value.selectedSession!.entries[2]!.message = {
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName: name,
+        content: "unrelated tool output",
+        isError: false,
+      };
+    }
+    const rendered = render(view(value));
+    const row = rendered.container.querySelector(
+      scope === "nested"
+        ? 'li[data-nested="true"] .trajectory-record'
+        : ".trajectory-record.call",
+    )!;
+    expect(row.querySelector(".trajectory-preview")?.textContent).toBe(target);
+    fireEvent.click(row);
+    fireEvent.click(
+      screen.getByRole("tab", { name: i18n.t("trajectoryInputTab") }),
+    );
+    expect(screen.getByRole("tabpanel").querySelector("pre")?.textContent).toBe(
+      raw,
+    );
+    if (scope === "nested")
+      expect(screen.getByRole("tabpanel").textContent).toContain(
+        i18n.t("toolNestedArgumentsMissing"),
+      );
+  },
+);
+
+it.each([true, false])(
+  "distinguishes omitted nested arguments from recorded empty arguments (omitted: %s)",
+  (omitted) => {
+    const value = structuredClone(snapshot());
+    const child =
+      value.selectedSession!.entries[2]!.message!.nestedCalls!.calls[0]!;
+    child.call.arguments = "{}";
+    if (omitted) child.argumentsOmitted = true;
+    const rendered = render(view(value));
+    const row = rendered.container.querySelector(
+      'li[data-nested="true"] .trajectory-record',
+    )!;
+    if (omitted) expect(row.textContent).not.toContain("{}");
+    fireEvent.click(row);
+    for (const tab of ["trajectorySummary", "trajectoryInputTab"]) {
+      fireEvent.click(screen.getByRole("tab", { name: i18n.t(tab) }));
+      const panel = screen.getByRole("tabpanel");
+      expect(
+        panel.textContent?.includes(i18n.t("toolNestedArgumentsMissing")),
+      ).toBe(omitted);
+      expect(panel.querySelector("pre")?.textContent).toBe(
+        omitted ? undefined : "{}",
+      );
+    }
+  },
+);
 
 it("keeps a successful tool outcome separate from its response's error status", () => {
   const failed = entries.map((entry) =>

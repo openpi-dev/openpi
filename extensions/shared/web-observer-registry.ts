@@ -4,7 +4,12 @@ import type {
   SubagentSpend,
   TranscriptItem,
   TranscriptPart,
+  ToolCallMetadata,
 } from "../subagents/src/domain.ts";
+import {
+  boundedToolArgumentText,
+  TOOL_EVIDENCE_ARGUMENT_KEYS,
+} from "./tool-arguments.ts";
 import type { ChildExecutionAdmissionSnapshot } from "./child-execution-admission.ts";
 
 export type WebCapabilityKind = "subagents" | "workflows";
@@ -337,16 +342,58 @@ function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
     remainingBytes -= bytes;
     return id;
   };
+  const toolMetadata = (source: ToolCallMetadata) => {
+    const parentToolCallId =
+      source.parentToolCallId === undefined
+        ? undefined
+        : toolIdentity(source.parentToolCallId);
+    // Dropping a native parent would turn a nested fact into a root call.
+    if (source.parentToolCallId !== undefined && parentToolCallId === undefined)
+      return undefined;
+    let argsTruncated = source.argsTruncated === true;
+    const argumentText = (value: string) => {
+      const bounded = boundedToolArgumentText(
+        value,
+        Math.min(4096, remainingBytes),
+      );
+      remainingBytes -= new TextEncoder().encode(bounded.text).byteLength;
+      argsTruncated ||= bounded.truncated;
+      return bounded.text;
+    };
+    // Preserve structured evidence before the optional preview consumes budget.
+    const evidenceArguments: Record<string, string | number> = {};
+    for (const key of TOOL_EVIDENCE_ARGUMENT_KEYS) {
+      const value = source.evidenceArguments?.[key];
+      if (typeof value === "string")
+        evidenceArguments[key] = argumentText(value);
+      else if (typeof value === "number" && Number.isSafeInteger(value))
+        evidenceArguments[key] = value;
+    }
+    const argsPreview =
+      source.argsPreview === undefined
+        ? undefined
+        : argumentText(source.argsPreview);
+    truncated ||= argsTruncated;
+    return {
+      ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
+      ...(source.evidenceArguments !== undefined ? { evidenceArguments } : {}),
+      ...(argsPreview !== undefined ? { argsPreview } : {}),
+      ...(source.argsTruncated !== undefined ||
+      source.argsPreview !== undefined ||
+      source.evidenceArguments !== undefined
+        ? { argsTruncated }
+        : {}),
+    };
+  };
   const liveTools = source.liveTools.slice(-16).flatMap((tool) => {
     const toolId = toolIdentity(tool.toolId);
-    if (toolId === undefined) return [];
+    const metadata = toolMetadata(tool);
+    if (toolId === undefined || metadata === undefined) return [];
     return [
       {
         toolId,
         name: text(tool.name, 640),
-        ...(tool.argsPreview !== undefined
-          ? { argsPreview: text(tool.argsPreview) }
-          : {}),
+        ...metadata,
         ...(tool.outputPreview !== undefined
           ? { outputPreview: text(tool.outputPreview) }
           : {}),
@@ -365,13 +412,19 @@ function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
         return [{ id, kind: "user", text: text(item.text) }];
       if (item.kind === "toolResult") {
         const toolId = toolIdentity(item.toolId);
-        if (toolId === undefined) return [];
+        const metadata = toolMetadata(item);
+        if (toolId === undefined || metadata === undefined) return [];
         return [
           {
             id,
             kind: "toolResult",
             toolId,
             name: text(item.name, 640),
+            ...metadata,
+            ...(item.status !== undefined ? { status: item.status } : {}),
+            ...(item.outputUnavailable !== undefined
+              ? { outputUnavailable: item.outputUnavailable }
+              : {}),
             isError: item.isError,
             ...(item.outputPreview !== undefined
               ? { outputPreview: text(item.outputPreview) }
@@ -383,15 +436,14 @@ function boundedAgentDetail<Status extends WebWorkflowAgentActivity["status"]>(
       const parts = item.parts.slice(-32).flatMap((part): TranscriptPart[] => {
         if (part.type === "toolCall") {
           const toolId = toolIdentity(part.toolId);
-          if (toolId === undefined) return [];
+          const metadata = toolMetadata(part);
+          if (toolId === undefined || metadata === undefined) return [];
           return [
             {
               type: "toolCall",
               toolId,
               name: text(part.name, 640),
-              ...(part.argsPreview !== undefined
-                ? { argsPreview: text(part.argsPreview) }
-                : {}),
+              ...metadata,
             },
           ];
         }

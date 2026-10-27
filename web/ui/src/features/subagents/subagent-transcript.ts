@@ -1,5 +1,8 @@
 import type { WebCapabilityDetail } from "../../../../../extensions/shared/web-observer-registry.ts";
-import type { LiveToolState } from "../../../../../extensions/subagents/src/domain.ts";
+import type {
+  LiveToolState,
+  ToolCallMetadata,
+} from "../../../../../extensions/subagents/src/domain.ts";
 import type { LiveToolEvidence } from "../../../../protocol/evidence.ts";
 import type {
   WebLiveMessage,
@@ -16,14 +19,28 @@ export function subagentTranscriptSnapshot(
 ) {
   const sessionId = JSON.stringify([parentSessionId, detail.kind, detail.id]);
   const entries: NonNullable<WebSnapshot["selectedSession"]>["entries"] = [];
-  const calls = new Set<string>();
+  const calls = new Set(
+    detail.transcript.flatMap((item) =>
+      item.kind === "assistant"
+        ? item.parts.flatMap((part) =>
+            part.type === "toolCall" ? [part.toolId] : [],
+          )
+        : [],
+    ),
+  );
   const results = new Map<string, WebLiveMessage>();
   const occurrences = new Map<string, number>();
-  const toolCall = (tool: LiveToolState) => ({
+  const toolCall = (
+    tool: ToolCallMetadata & Pick<LiveToolState, "toolId" | "name">,
+  ) => ({
     type: "toolCall" as const,
     id: tool.toolId,
     name: tool.name,
-    arguments: tool.argsPreview ?? "{}",
+    arguments: tool.argsPreview ?? "",
+    ...(tool.evidenceArguments
+      ? { evidenceArguments: tool.evidenceArguments }
+      : {}),
+    ...(tool.argsTruncated ? { evidenceTruncated: true } : {}),
   });
   const append = (id: string, message: WebLiveMessage) => {
     entries.push({ type: "message", id, timestamp: "", message });
@@ -38,12 +55,29 @@ export function subagentTranscriptSnapshot(
     if (item.kind === "user") {
       append(id, { role: "user", content: item.text });
     } else if (item.kind === "toolResult") {
-      const result = {
+      // Native nested calls have execution events but no assistant toolCall
+      // message. Pair their retained start evidence before rendering the result.
+      if (
+        !calls.has(item.toolId) &&
+        (item.argsPreview !== undefined ||
+          item.evidenceArguments !== undefined ||
+          item.argsTruncated)
+      ) {
+        calls.add(item.toolId);
+        append(`${id}:call`, {
+          role: "assistant",
+          content: "",
+          parts: [toolCall(item)],
+          stopReason: "toolUse",
+        });
+      }
+      const result: WebLiveMessage = {
         role: "toolResult",
         toolCallId: item.toolId,
         toolName: item.name,
-        isError: item.isError,
+        ...(item.status !== "unfinished" ? { isError: item.isError } : {}),
         content: item.outputPreview ?? "",
+        ...(item.outputUnavailable ? { outputUnavailable: true } : {}),
       };
       results.set(item.toolId, result);
       append(id, result);
@@ -76,6 +110,9 @@ export function subagentTranscriptSnapshot(
   const liveTools = detail.liveTools.map(
     (tool): LiveToolEvidence => ({
       call: toolCall(tool),
+      ...(tool.parentToolCallId
+        ? { parentToolCallId: tool.parentToolCallId }
+        : {}),
       result: results.get(tool.toolId) ?? {
         role: "toolResult",
         toolCallId: tool.toolId,
@@ -84,9 +121,11 @@ export function subagentTranscriptSnapshot(
         ...(tool.done ? { isError: tool.isError === true } : {}),
       },
       state: results.has(tool.toolId)
-        ? results.get(tool.toolId)!.isError
+        ? results.get(tool.toolId)!.isError === true
           ? "failed"
-          : "returned"
+          : results.get(tool.toolId)!.isError === false
+            ? "returned"
+            : "unknown"
         : tool.done
           ? tool.isError
             ? "failed"

@@ -5,6 +5,7 @@ import {
   isEvidenceTool,
   projectToolEvidence,
   testSummary,
+  toolArguments,
 } from "../../web/protocol/evidence.ts";
 import { projectMessage } from "../../web/protocol/types.ts";
 import { reduceLiveTools } from "../../web/protocol/live-tools.ts";
@@ -82,6 +83,24 @@ test("file evidence preserves requested range after oversized arguments and neve
     }).diff,
     undefined,
   );
+});
+
+test("retained display targets supplement valid generic arguments and survive clipped JSON", () => {
+  const tool = {
+    type: "toolCall" as const,
+    name: "grep",
+    arguments: JSON.stringify({ pattern: "TODO", path: ".", glob: "*.ts" }),
+    evidenceArguments: { pattern: "TODO", path: "src" },
+  };
+  assert.deepEqual(toolArguments(tool), {
+    pattern: "TODO",
+    path: "src",
+    glob: "*.ts",
+  });
+  assert.deepEqual(toolArguments({ ...tool, arguments: '{"glob":"clipped' }), {
+    pattern: "TODO",
+    path: "src",
+  });
 });
 
 test("terminal receipts, TAP observations, and tool returns remain separate", () => {

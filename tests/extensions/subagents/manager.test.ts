@@ -31,6 +31,7 @@ import {
 import { runTool } from "../../../extensions/subagents/src/runtime.ts";
 import { ChildExecutionAdmission } from "../../../extensions/shared/child-execution-admission.ts";
 import { subagentCompletion } from "../../../extensions/subagents/src/completion.ts";
+import { projectToolArguments } from "../../../extensions/shared/tool-arguments.ts";
 import { AgentToolRenderLedger } from "../../../extensions/shared/agent-tool-renderer.ts";
 
 const STATUS_WAIT_TIMEOUT_MS = 5_000;
@@ -168,6 +169,81 @@ test("direct transcript eviction releases completed native tool payloads", async
         undefined,
       );
       assert.equal(Reflect.get(ledger, "executions").size, 512);
+    },
+    undefined,
+    [backend],
+  );
+});
+
+test("completed nested tools retain bounded start arguments and native parent identity", async () => {
+  const args = projectToolArguments({
+    padding: "x".repeat(12_000),
+    path: "src/known.ts",
+    offset: 4,
+  });
+  const events: SubagentEvent[] = [
+    { _tag: "RunStarted" },
+    {
+      _tag: "ToolStart",
+      toolId: "opaque-native-child",
+      name: "read",
+      parentToolCallId: "native-wrapper",
+      ...args,
+    },
+    {
+      _tag: "ToolEnd",
+      toolId: "opaque-native-child",
+      name: "read",
+      isError: false,
+      outputPreview: "# file content",
+    },
+    {
+      _tag: "ToolEnd",
+      toolId: "unobserved-start",
+      name: "bash",
+      parentToolCallId: "other-wrapper",
+      isError: true,
+      outputPreview: "200 7867",
+    },
+    { _tag: "RunSettled", outcome: { _tag: "Completed", finalText: "done" } },
+  ];
+  const backend: SubagentBackend = {
+    name: "pi",
+    spawn: () =>
+      Effect.succeed({
+        meta: Effect.succeed({ backend: "pi" }),
+        events: Stream.fromIterable(events),
+        send: () => Effect.void,
+        interrupt: Effect.void,
+      }),
+  };
+  await withManager(
+    async (manager, runtime) => {
+      const spawned = await runTool(
+        runtime,
+        manager.spawn("pi", task("nested calls")),
+      );
+      await runTool(runtime, manager.waitFor([spawned.id]));
+      const snapshot = manager.view.get(spawned.id)!;
+      assert.deepEqual(snapshot.liveTools, []);
+      const result = snapshot.transcript[0];
+      assert.equal(result?.kind, "toolResult");
+      if (result?.kind !== "toolResult") throw new Error("Missing result");
+      assert.equal(result.toolId, "opaque-native-child");
+      assert.equal(result.parentToolCallId, "native-wrapper");
+      assert.deepEqual(result.evidenceArguments, {
+        path: "src/known.ts",
+        offset: 4,
+      });
+      assert.equal(result.argsTruncated, true);
+      assert.ok(Buffer.byteLength(result.argsPreview!) <= 4096);
+      assert.equal(result.outputPreview, "# file content");
+      const orphan = snapshot.transcript[1];
+      assert.ok(orphan?.kind === "toolResult");
+      assert.equal(orphan.parentToolCallId, "other-wrapper");
+      assert.equal(orphan.argsPreview, undefined);
+      assert.equal(orphan.evidenceArguments, undefined);
+      assert.equal(orphan.argsTruncated, undefined);
     },
     undefined,
     [backend],

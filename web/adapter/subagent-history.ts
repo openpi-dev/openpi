@@ -1,3 +1,5 @@
+import { projectToolArguments, type ToolArgumentPreview } from "../../extensions/shared/tool-arguments.ts";
+import { projectMessage } from "../protocol/types.ts";
 import { readFile, lstat } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { getAgentDir, type SessionManager } from "@earendil-works/pi-coding-agent";
@@ -232,6 +234,7 @@ export function savedSubagentDetail(
   const startIndex = record.startEntryId ? branch.findIndex((entry) => entry.id === record.startEntryId) : -1;
   if (record.startEntryId && startIndex < 0) return undefined;
   const transcript: TranscriptItem[] = [];
+  const callArguments = new Map<string, ToolArgumentPreview>();
   let finalText = "";
   let errorText: string | undefined;
   const spend = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -243,7 +246,11 @@ export function savedSubagentDetail(
       transcript.push({ kind: "assistant", parts: message.content.flatMap((part): Extract<TranscriptItem, { kind: "assistant" }>["parts"][number][] => {
         if (part.type === "text") return [{ type: "text", text: part.text }];
         if (part.type === "thinking") return [{ type: "thinking", text: part.redacted ? "" : part.thinking, redacted: part.redacted }];
-        if (part.type === "toolCall") return [{ type: "toolCall", toolId: part.id, name: part.name, argsPreview: JSON.stringify(part.arguments).slice(0, 4096) }];
+        if (part.type === "toolCall") {
+          const args = projectToolArguments(part.arguments);
+          callArguments.set(part.id, args);
+          return [{ type: "toolCall", toolId: part.id, name: part.name, ...args }];
+        }
         return [];
       }) });
       if (index > startIndex) {
@@ -254,7 +261,30 @@ export function savedSubagentDetail(
       spend.output += message.usage.output;
       spend.cacheRead += message.usage.cacheRead;
       spend.cacheWrite += message.usage.cacheWrite;
-    } else if (message.role === "toolResult") transcript.push({ kind: "toolResult", toolId: message.toolCallId, name: message.toolName, isError: message.isError, outputPreview: contentText(message.content) });
+    } else if (message.role === "toolResult") {
+      // Use the existing native ledger validator and its 256-call / 64 KiB
+      // projection budget. Nested result bodies are not persisted by Pi.
+      const originals = Array.isArray(message.nestedCalls?.calls) ? message.nestedCalls.calls.slice(0, 256) : [];
+      const nestedCalls = message.nestedCalls ? projectMessage({ role: "toolResult", nestedCalls: message.nestedCalls }).nestedCalls : undefined;
+      for (const nested of nestedCalls?.calls ?? []) {
+        if (nested.call.id === undefined) continue;
+        const original = originals.find((call) => call?.id === nested.call.id && call.name === nested.call.name && call.status === nested.status);
+        const args = projectToolArguments(original?.arguments);
+        transcript.push({
+          kind: "toolResult",
+          toolId: nested.call.id,
+          name: nested.call.name,
+          parentToolCallId: message.toolCallId,
+          ...args,
+          argsTruncated: args.argsTruncated === true || nested.argumentsOmitted === true,
+          status: nested.status,
+          isError: nested.status === "error",
+          outputUnavailable: true,
+        });
+      }
+      transcript.push({ kind: "toolResult", toolId: message.toolCallId, name: message.toolName, ...callArguments.get(message.toolCallId), isError: message.isError, outputPreview: contentText(message.content) });
+      callArguments.delete(message.toolCallId);
+    }
   }
   const source: SubagentSnapshot = {
     ...record,

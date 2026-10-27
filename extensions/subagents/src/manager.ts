@@ -503,6 +503,15 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           entry.liveToolMap.set(event.toolId, {
             toolId: event.toolId,
             name: event.name,
+            ...(event.evidenceArguments !== undefined
+              ? { evidenceArguments: event.evidenceArguments }
+              : {}),
+            ...(event.argsTruncated !== undefined
+              ? { argsTruncated: event.argsTruncated }
+              : {}),
+            ...(event.parentToolCallId !== undefined
+              ? { parentToolCallId: event.parentToolCallId }
+              : {}),
             argsPreview: event.argsPreview
               ? boundedTranscriptText(event.argsPreview)
               : undefined,
@@ -522,19 +531,25 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           }
           break;
         }
-        case "ToolEnd":
+        case "ToolEnd": {
+          const start = entry.liveToolMap.get(event.toolId);
           entry.liveToolMap.delete(event.toolId);
           s.liveTools = [...entry.liveToolMap.values()];
           appendTranscript(s, {
+            ...start,
             kind: "toolResult",
             toolId: event.toolId,
             name: event.name,
+            ...(event.parentToolCallId !== undefined
+              ? { parentToolCallId: event.parentToolCallId }
+              : {}),
             isError: event.isError,
             outputPreview: event.outputPreview
               ? boundedTranscriptText(event.outputPreview)
               : undefined,
           });
           break;
+        }
         case "QueueChanged":
           s.queued = event.queued;
           break;

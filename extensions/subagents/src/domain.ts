@@ -7,6 +7,7 @@
  */
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ToolArgumentPreview } from "../../shared/tool-arguments.ts";
 import { Data } from "effect";
 
 export const BACKEND_NAMES = ["pi"] as const;
@@ -108,6 +109,11 @@ export interface SubagentMeta {
 
 // --- Transcript ------------------------------------------------------------
 
+export interface ToolCallMetadata extends ToolArgumentPreview {
+  /** Pi-native identity, never inferred from tool id spelling or order. */
+  readonly parentToolCallId?: string;
+}
+
 export type TranscriptPart =
   | { readonly type: "text"; readonly text: string }
   | {
@@ -115,12 +121,11 @@ export type TranscriptPart =
       readonly text: string;
       readonly redacted?: boolean;
     }
-  | {
+  | (ToolCallMetadata & {
       readonly type: "toolCall";
       readonly toolId: string;
       readonly name: string;
-      readonly argsPreview?: string;
-    };
+    });
 
 export type TranscriptItem =
   | { readonly kind: "user"; readonly text: string }
@@ -128,18 +133,21 @@ export type TranscriptItem =
       readonly kind: "assistant";
       readonly parts: ReadonlyArray<TranscriptPart>;
     }
-  | {
+  | (ToolCallMetadata & {
       readonly kind: "toolResult";
       readonly toolId: string;
       readonly name: string;
       readonly isError: boolean;
       readonly outputPreview?: string;
-    };
+      /** Native saved nested-call outcome; unfinished is not success. */
+      readonly status?: "ok" | "error" | "unfinished";
+      /** Pi's saved nested ledger does not contain child result bodies. */
+      readonly outputUnavailable?: boolean;
+    });
 
-export interface LiveToolState {
+export interface LiveToolState extends ToolCallMetadata {
   readonly toolId: string;
   readonly name: string;
-  readonly argsPreview?: string;
   readonly outputPreview?: string;
   readonly done?: boolean;
   readonly isError?: boolean;
@@ -194,12 +202,11 @@ export type SubagentEvent =
       readonly _tag: "AssistantMessage";
       readonly parts: ReadonlyArray<TranscriptPart>;
     }
-  | {
+  | (ToolCallMetadata & {
       readonly _tag: "ToolStart";
       readonly toolId: string;
       readonly name: string;
-      readonly argsPreview?: string;
-    }
+    })
   | {
       readonly _tag: "ToolUpdate";
       readonly toolId: string;
@@ -207,6 +214,7 @@ export type SubagentEvent =
     }
   | {
       readonly _tag: "ToolEnd";
+      readonly parentToolCallId?: string;
       readonly toolId: string;
       readonly name: string;
       readonly isError: boolean;

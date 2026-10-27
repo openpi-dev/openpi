@@ -1100,6 +1100,7 @@ const resources = {
         "Agent configuration requires an idle turn and leaving Plan mode. Display settings can be changed now.",
       setupOutcome_pending: "Configuration request is awaiting a save receipt.",
       toolCallArguments: "Tool arguments",
+      toolArgumentsUnavailable: "Arguments unavailable",
       toolCallOutput: "Tool result",
       setupOutcome_saved: "OpenPI configuration was saved and applied.",
       setupOutcome_unchanged:
@@ -3187,6 +3188,7 @@ const resources = {
         "Agent 配置需等待当前回合结束并退出 Plan 模式；显示设置可直接调整。",
       setupOutcome_pending: "配置请求正在处理，尚未收到保存回执。",
       toolCallArguments: "工具参数",
+      toolArgumentsUnavailable: "未保留调用参数",
       toolCallOutput: "工具结果",
       setupOutcome_saved: "OpenPI 配置已保存并应用。",
       setupOutcome_unchanged: "配置已保存，实际设置没有变化。",

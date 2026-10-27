@@ -176,7 +176,10 @@ export function ToolEvidence({
             )}
           </p>
         )}
-        {shell && (
+        {result?.outputUnavailable && (
+          <p className="evidence-note">{t("toolNestedOutputMissing")}</p>
+        )}
+        {shell && !result?.outputUnavailable && (
           <figure className="evidence-shell" aria-label={t("toolCallOutput")}>
             <figcaption>
               <span className="evidence-shell-label">
@@ -255,7 +258,7 @@ export function ToolEvidence({
             ))}
           </figure>
         )}
-        {shell ? null : view.diff ? (
+        {shell || result?.outputUnavailable ? null : view.diff ? (
           <figure className="evidence-diff" aria-label="Change diff">
             <figcaption>
               {artifacts && fileReference ? (
