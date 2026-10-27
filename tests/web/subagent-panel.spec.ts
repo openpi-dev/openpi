@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
+import { projectSubagentDetail } from "../../extensions/shared/web-observer-registry.ts";
 import type {
   WebSubagentDetail,
   WebWorkflowAgentDetail,
@@ -20,6 +21,7 @@ import { recordedSubagents } from "../../web/ui/src/features/subagents/recorded-
 import { SubagentPanel } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
 import { SessionOverview } from "../../web/ui/src/features/subagents/SessionOverview.tsx";
 import { subagentOverview } from "../../web/ui/src/features/subagents/subagent-overview.ts";
+import { subagentTranscriptSnapshot } from "../../web/ui/src/features/subagents/subagent-transcript.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
@@ -615,6 +617,294 @@ it("renders real transcript, paired tool errors and redacted thinking without ex
   expect(within(log).getByText("Searching")).toBeTruthy();
   expect(screen.getByRole("alert").textContent).toBe("Stopped by parent");
   expect(screen.getByText(i18n.t("subagentState_interrupted"))).toBeTruthy();
+});
+
+function childTranscript(value: WebSubagentDetail) {
+  return createElement(
+    Providers,
+    null,
+    createElement(Transcript, {
+      snapshot: subagentTranscriptSnapshot(
+        "parent",
+        value,
+        { theme: "system" },
+        i18n.t("subagentThinkingRedacted"),
+      ),
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+}
+
+it.each<{
+  name: string;
+  args: Record<string, string>;
+  target: string;
+  output: string;
+}>([
+  {
+    name: "read",
+    args: { path: "AGENTS.md" },
+    target: "AGENTS.md",
+    output: "# Agent 工作规则",
+  },
+  {
+    name: "bash",
+    args: { command: "curl -L https://api.github.com/repos/openpi-dev/openpi" },
+    target: "curl -L https://api.github.com/repos/openpi-dev/openpi",
+    output: "200 7867",
+  },
+])(
+  "keeps a nested $name target through completion and reopening without duplicate rows",
+  ({ name, args, target, output }) => {
+    const tool = {
+      toolId: "code/1",
+      parentToolCallId: "code",
+      name,
+      argsPreview: JSON.stringify(args),
+      evidenceArguments: args,
+    };
+    const value = detail({
+      transcript: [
+        {
+          kind: "assistant",
+          parts: [
+            {
+              type: "toolCall",
+              toolId: "code",
+              name: "codemode",
+              argsPreview: '{"code":"await tools.read(...)"}',
+            },
+          ],
+        },
+      ],
+      liveTools: [tool],
+    });
+    const rendered = render(childTranscript(value));
+    const heading = () =>
+      rendered.container.querySelectorAll(`[data-tool="${name}"] > summary`);
+    expect(heading()).toHaveLength(1);
+    expect(heading()[0]?.textContent).toContain(target);
+    const completed = detail({
+      status: "done",
+      transcript: [
+        ...value.transcript,
+        { ...tool, kind: "toolResult", isError: false, outputPreview: output },
+        {
+          kind: "toolResult",
+          toolId: "code",
+          name: "codemode",
+          isError: false,
+          outputPreview: "script completed",
+        },
+      ],
+    });
+    rendered.rerender(childTranscript(completed));
+    expect(heading()).toHaveLength(1);
+    expect(heading()[0]?.textContent).toContain(target);
+    expect(heading()[0]?.textContent).not.toContain(output);
+    expect(
+      rendered.container.querySelector(`[data-tool="${name}"]`)?.textContent,
+    ).toContain(output);
+    rendered.unmount();
+    const reopened = render(childTranscript(completed));
+    const summaries = reopened.container.querySelectorAll(
+      `[data-tool="${name}"] > summary`,
+    );
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.textContent).toContain(target);
+    expect(summaries[0]?.textContent).not.toContain(output);
+  },
+);
+
+it("keeps retained targets when raw child arguments are clipped and reports unavailable saved output", () => {
+  const rendered = render(
+    childTranscript(
+      detail({
+        status: "done",
+        transcript: [
+          {
+            kind: "toolResult",
+            toolId: "saved-read",
+            parentToolCallId: "saved-code",
+            name: "read",
+            argsPreview: '{"path":"AGENTS.md", "extra":"clipped',
+            evidenceArguments: { path: "AGENTS.md" },
+            argsTruncated: true,
+            isError: false,
+            status: "ok",
+            outputUnavailable: true,
+          },
+        ],
+      }),
+    ),
+  );
+  const card = rendered.container.querySelector('[data-tool="read"]')!;
+  expect(card.querySelector("summary")?.textContent).toContain("AGENTS.md");
+  expect(card.textContent).toContain(i18n.t("toolNestedOutputMissing"));
+  expect(card.textContent).toContain(i18n.t("toolPartialEvidence"));
+  expect(card.textContent).not.toContain(i18n.t("noOutput"));
+});
+
+it("does not use legacy orphan output as a requested filename or command", () => {
+  const rendered = render(
+    childTranscript(
+      detail({
+        status: "done",
+        transcript: [
+          {
+            kind: "toolResult",
+            toolId: "legacy-read",
+            name: "read",
+            isError: false,
+            outputPreview: "# Agent 工作规则",
+          },
+        ],
+      }),
+    ),
+  );
+  const card = rendered.container.querySelector('[data-tool="read"]')!;
+  expect(card.querySelector("summary")?.textContent).toContain(
+    i18n.t("toolArgumentsUnavailable"),
+  );
+  expect(card.querySelector("summary")?.textContent).not.toContain(
+    "# Agent 工作规则",
+  );
+  expect(card.textContent).toContain("# Agent 工作规则");
+});
+
+it("recovers a budget-depleted assistant call only from a unique matching result", () => {
+  const source = {
+    ...detail({ title: "", cwd: "", prompt: "" }),
+    backend: "pi" as const,
+    origin: "model" as const,
+    status: "done" as const,
+    meta: { backend: "pi" as const },
+    usage: {},
+    queued: [],
+    turns: 1,
+    transcriptVersion: 2,
+    transcript: [
+      {
+        kind: "assistant" as const,
+        parts: [
+          ...Array.from({ length: 15 }, () => ({
+            type: "text" as const,
+            text: "x".repeat(4096),
+          })),
+          { type: "text" as const, text: "x".repeat(4035) },
+          {
+            type: "toolCall" as const,
+            toolId: "read1",
+            name: "read",
+            argsPreview: '{"path":"src/known.ts"}',
+            evidenceArguments: { path: "src/known.ts" },
+          },
+        ],
+      },
+      {
+        kind: "toolResult" as const,
+        toolId: "read1",
+        name: "read",
+        argsPreview: '{"path":"src/known.ts"}',
+        evidenceArguments: { path: "src/known.ts" },
+        isError: false,
+      },
+    ],
+  };
+  const projected = projectSubagentDetail(source);
+  const assistant = projected.transcript[0];
+  expect(assistant?.kind).toBe("assistant");
+  if (assistant?.kind !== "assistant") throw new Error("Missing assistant");
+  const depleted = assistant.parts.at(-1);
+  expect(depleted).toMatchObject({
+    type: "toolCall",
+    name: "",
+    argsPreview: "",
+  });
+  const rendered = render(childTranscript(projected));
+  const heading = rendered.container.querySelectorAll(
+    '[data-tool="read"] > summary',
+  );
+  expect(heading).toHaveLength(1);
+  expect(heading[0]?.textContent).toContain("known.ts");
+  rendered.unmount();
+  const ambiguous = subagentTranscriptSnapshot(
+    "parent",
+    {
+      ...projected,
+      transcript: [...projected.transcript, projected.transcript[1]!],
+    },
+    { theme: "system" },
+    "",
+  );
+  const call = ambiguous.selectedSession.entries[0]?.message?.parts?.at(-1);
+  expect(call?.type === "toolCall" && call.name).not.toBe("read");
+});
+
+it.each(["grep", "rg"])(
+  "distinguishes missing saved %s output from recorded empty output",
+  (name) => {
+    const tool = {
+      kind: "toolResult" as const,
+      toolId: "saved-search",
+      name,
+      argsPreview: '{"pattern":"needle","path":"src"}',
+      isError: false,
+    };
+    const rendered = render(
+      childTranscript(
+        detail({
+          status: "done",
+          transcript: [{ ...tool, outputUnavailable: true }],
+        }),
+      ),
+    );
+    const card = () =>
+      rendered.container.querySelector(`[data-tool="${name}"]`)!;
+    expect(card().textContent).toContain(i18n.t("toolNestedOutputMissing"));
+    expect(card().textContent).not.toContain(i18n.t("noOutput"));
+    rendered.rerender(
+      childTranscript(
+        detail({
+          status: "done",
+          transcript: [{ ...tool, outputPreview: "" }],
+        }),
+      ),
+    );
+    expect(card().textContent).toContain(i18n.t("noOutput"));
+    expect(card().textContent).not.toContain(i18n.t("toolNestedOutputMissing"));
+  },
+);
+
+it("labels missing saved read arguments instead of rendering an empty target", () => {
+  const rendered = render(
+    childTranscript(
+      detail({
+        status: "done",
+        transcript: [
+          {
+            kind: "toolResult",
+            toolId: "missing-args",
+            name: "read",
+            isError: false,
+            argsTruncated: true,
+            outputUnavailable: true,
+          },
+        ],
+      }),
+    ),
+  );
+  expect(
+    rendered.container.querySelector('[data-tool="read"] > summary')
+      ?.textContent,
+  ).toContain(i18n.t("toolArgumentsUnavailable"));
 });
 
 const truncation = {

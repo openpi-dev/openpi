@@ -1100,6 +1100,7 @@ const resources = {
         "Agent configuration requires an idle turn and leaving Plan mode. Display settings can be changed now.",
       setupOutcome_pending: "Configuration request is awaiting a save receipt.",
       toolCallArguments: "Tool arguments",
+      toolArgumentsUnavailable: "Arguments unavailable",
       toolCallOutput: "Tool result",
       setupOutcome_saved: "OpenPI configuration was saved and applied.",
       setupOutcome_unchanged:
@@ -2001,6 +2002,11 @@ const resources = {
       modelRetrying: "Retrying model request...",
       modelRunning: "Working…",
       modelRequestFailed: "Model request failed",
+      modelConcurrencyLimit:
+        "The model service's concurrent request limit was reached. Wait for running requests to finish, then retry.",
+      modelConcurrencyRetrying:
+        "Concurrent request limit reached; waiting to retry...",
+      modelErrorDetails: "Error details",
       modelRequestStopped: "Model request stopped",
       modelFailureUnknown: "The provider did not return an error reason.",
       retryPrompt: "Retry prompt",
@@ -3187,6 +3193,7 @@ const resources = {
         "Agent 配置需等待当前回合结束并退出 Plan 模式；显示设置可直接调整。",
       setupOutcome_pending: "配置请求正在处理，尚未收到保存回执。",
       toolCallArguments: "工具参数",
+      toolArgumentsUnavailable: "未保留调用参数",
       toolCallOutput: "工具结果",
       setupOutcome_saved: "OpenPI 配置已保存并应用。",
       setupOutcome_unchanged: "配置已保存，实际设置没有变化。",
@@ -3998,6 +4005,10 @@ const resources = {
       modelRetrying: "模型请求重试中...",
       modelRunning: "正在运行…",
       modelRequestFailed: "模型请求失败",
+      modelConcurrencyLimit:
+        "模型服务的并发请求已达上限，请等待正在进行的请求结束后重试。",
+      modelConcurrencyRetrying: "并发请求已达上限，正在等待重试...",
+      modelErrorDetails: "错误详情",
       modelRequestStopped: "模型请求已停止",
       modelFailureUnknown: "服务商没有返回具体失败原因。",
       retryPrompt: "重试消息",

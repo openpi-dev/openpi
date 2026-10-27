@@ -64,8 +64,9 @@ export function bashReceipt(content: unknown, isError: unknown) {
 }
 
 export function toolArguments(call: Extract<WebMessagePart, { type: "toolCall" }>) {
-  if (call.evidenceArguments) return call.evidenceArguments;
-  try { return evidenceRecord(JSON.parse(call.arguments)); } catch { return {}; }
+  let args: Record<string, unknown> = {};
+  try { args = evidenceRecord(JSON.parse(call.arguments)); } catch { /* Raw previews may be clipped. */ }
+  return { ...args, ...call.evidenceArguments };
 }
 
 export function isEvidenceTool(name: string) {

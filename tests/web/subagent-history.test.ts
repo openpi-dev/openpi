@@ -188,6 +188,107 @@ test("root BTW locators retain ownership and failed side conversations retain fa
   assert.equal(saved.outcome, "failed");
 });
 
+test("saved child nested calls retain native arguments and outcomes with explicit missing outputs", () => {
+  const child = SessionManager.inMemory("/fixture");
+  child.appendMessage({
+    role: "assistant",
+    api: "openai-completions",
+    provider: "fixture",
+    model: "fixture",
+    usage,
+    content: [
+      {
+        type: "toolCall",
+        id: "wrapper",
+        name: "codemode",
+        arguments: { code: "native fixture" },
+      },
+    ],
+    stopReason: "toolUse",
+    timestamp: 1,
+  });
+  child.appendMessage({
+    role: "toolResult",
+    toolCallId: "wrapper",
+    toolName: "codemode",
+    isError: false,
+    timestamp: 2,
+    content: [{ type: "text", text: "200 7867" }],
+    nestedCalls: {
+      complete: false,
+      calls: [
+        {
+          id: "opaque-read",
+          name: "read",
+          arguments: {
+            padding: "x".repeat(5000),
+            path: "src/known.ts",
+            offset: 3,
+          },
+          status: "ok",
+        },
+        {
+          id: "opaque-bash",
+          name: "bash",
+          arguments: { command: "false" },
+          status: "error",
+          error: "exit 1",
+        },
+        {
+          id: "native-placeholder/?",
+          name: "read",
+          status: "unfinished",
+          argumentsBytes: 9000,
+        },
+      ],
+    },
+  });
+  const record = {
+    id: "sa-1",
+    title: "nested",
+    origin: "model" as const,
+    status: "done" as const,
+    createdAt: 1,
+    cwd: "/fixture",
+    prompt: "inspect",
+    sessionId: child.getSessionId(),
+  };
+  const detail = savedSubagentDetail(record, child)!;
+  const results = detail.transcript.filter(
+    (item) => item.kind === "toolResult",
+  );
+  assert.deepEqual(
+    results.map((item) => [
+      item.toolId,
+      item.parentToolCallId,
+      item.status,
+      item.isError,
+    ]),
+    [
+      ["opaque-read", "wrapper", "ok", false],
+      ["opaque-bash", "wrapper", "error", true],
+      ["native-placeholder/?", "wrapper", "unfinished", false],
+      ["wrapper", undefined, undefined, false],
+    ],
+  );
+  assert.deepEqual(results[0]?.evidenceArguments, {
+    path: "src/known.ts",
+    offset: 3,
+  });
+  assert.ok(Buffer.byteLength(results[0]!.argsPreview!) <= 4096);
+  assert.equal(results[0]?.argsTruncated, true);
+  assert.deepEqual(results[1]?.evidenceArguments, { command: "false" });
+  assert.equal(results[1]?.argsTruncated, false);
+  assert.equal(results[2]?.argsPreview, undefined);
+  assert.equal(results[2]?.argsTruncated, true);
+  for (const item of results.slice(0, 3)) {
+    assert.equal(item.outputUnavailable, true);
+    assert.equal(item.outputPreview, undefined);
+  }
+  assert.equal(results[3]?.outputPreview, "200 7867");
+  assert.equal(results[3]?.evidenceArguments, undefined);
+});
+
 test("an interrupted second run keeps earlier answers in history without claiming them as its result", () => {
   const parent = SessionManager.inMemory("/fixture");
   const origin = parent.appendMessage({

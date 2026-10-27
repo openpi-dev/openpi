@@ -420,6 +420,8 @@ export interface WebLiveMessage {
   timestamp?: number;
   commandId?: string;
   terminalReceipt?: ReturnType<typeof bashReceipt>;
+  /** The child history records the call outcome but does not retain its output. */
+  outputUnavailable?: true;
   role?: string;
   toolName?: string;
   content: string;

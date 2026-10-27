@@ -91,6 +91,20 @@ OPENPI_WEB_DEBUG=1 bun run dev:web:backend -- /absolute/path/to/workspace
 
 日志只记录字符数、阶段、耗时和不含密钥的连接配置，不记录 prompt、API key 或模型正文。`OPENPI_WEB_LOG=1` 是同义开关。
 
+## 工具标题与结果证据
+
+[Issue #907](https://github.com/openpi-dev/openpi/issues/907) 记录了子代理工具结束后标题变成 `已运行 200 7867` 或 `已读取 # Agent 工作规则` 的问题。这里的数字和标题来自工具输出；它们不能说明执行了哪个命令或读取了哪个文件。
+
+排查这类问题时，分别核对子代理 `ToolStart` 参数、`ToolEnd` 后保留的调用信息、Web observer 投影，以及浏览器中配对的 call/result。Pi 原生嵌套工具可以只有执行事件而没有独立的 assistant toolCall 消息，因此结束记录需要保留开始时的有界参数。父调用关系取自原生 `parentToolCallId`，不从调用 ID 格式或脚本文本猜测。
+
+长参数的原始 JSON 预览可能被截断；标题可以使用截断前单独保留的路径或命令字段，详情继续标记预览不完整。历史嵌套调用可能只保留参数和状态、没有结果正文，这时应明确显示输出未保留。旧记录缺少调用参数时，无法从输出恢复真实目标，标题显示参数不可用。
+
+验证时覆盖执行中、执行结束和重新打开历史三个阶段，并确认每个调用只显示一行，输出仍位于可展开的结果详情中。
+
+后台通知与流式消息标识还见 [Issue #910](https://github.com/openpi-dev/openpi/issues/910)：工具参数仍在生成时，非 assistant 消息的开始和结束不能覆盖或清空 assistant 回复的标识，否则一次调用的后续片段会变成多条“未确认”记录。按消息对象保留非 assistant 生命周期标识，assistant 更新继续使用本次回复的标识；不能通过相同标题合并不同调用。
+
+`gateway_concurrency_limit` 是另一类独立故障。Pi 1.2.0 对不带 HTTP 429 或 rate-limit 文案的这个网关错误码不会自动重试；`provider-retry` 在原生 `message_end` 替换边界保留原始错误码和正文，并补充瞬时限流语义，后续次数、退避和取消仍由 Pi 的原生配置决定。Web 只在原生重试证据存在时显示等待重试；同一用户任务继续执行后，先前失败收起为历史，不把另一个用户任务的失败改成恢复成功。
+
 ## 热更新边界
 
 | 改动 | 是否需要手动重启 | 说明 |
