@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
+import { projectSubagentDetail } from "../../extensions/shared/web-observer-registry.ts";
 import type {
   WebSubagentDetail,
   WebWorkflowAgentDetail,
@@ -776,6 +777,134 @@ it("does not use legacy orphan output as a requested filename or command", () =>
     "# Agent 工作规则",
   );
   expect(card.textContent).toContain("# Agent 工作规则");
+});
+
+it("recovers a budget-depleted assistant call only from a unique matching result", () => {
+  const source = {
+    ...detail({ title: "", cwd: "", prompt: "" }),
+    backend: "pi" as const,
+    origin: "model" as const,
+    status: "done" as const,
+    meta: { backend: "pi" as const },
+    usage: {},
+    queued: [],
+    turns: 1,
+    transcriptVersion: 2,
+    transcript: [
+      {
+        kind: "assistant" as const,
+        parts: [
+          ...Array.from({ length: 15 }, () => ({
+            type: "text" as const,
+            text: "x".repeat(4096),
+          })),
+          { type: "text" as const, text: "x".repeat(4035) },
+          {
+            type: "toolCall" as const,
+            toolId: "read1",
+            name: "read",
+            argsPreview: '{"path":"src/known.ts"}',
+            evidenceArguments: { path: "src/known.ts" },
+          },
+        ],
+      },
+      {
+        kind: "toolResult" as const,
+        toolId: "read1",
+        name: "read",
+        argsPreview: '{"path":"src/known.ts"}',
+        evidenceArguments: { path: "src/known.ts" },
+        isError: false,
+      },
+    ],
+  };
+  const projected = projectSubagentDetail(source);
+  const assistant = projected.transcript[0];
+  expect(assistant?.kind).toBe("assistant");
+  if (assistant?.kind !== "assistant") throw new Error("Missing assistant");
+  const depleted = assistant.parts.at(-1);
+  expect(depleted).toMatchObject({
+    type: "toolCall",
+    name: "",
+    argsPreview: "",
+  });
+  const rendered = render(childTranscript(projected));
+  const heading = rendered.container.querySelectorAll(
+    '[data-tool="read"] > summary',
+  );
+  expect(heading).toHaveLength(1);
+  expect(heading[0]?.textContent).toContain("known.ts");
+  rendered.unmount();
+  const ambiguous = subagentTranscriptSnapshot(
+    "parent",
+    {
+      ...projected,
+      transcript: [...projected.transcript, projected.transcript[1]!],
+    },
+    { theme: "system" },
+    "",
+  );
+  const call = ambiguous.selectedSession.entries[0]?.message?.parts?.at(-1);
+  expect(call?.type === "toolCall" && call.name).not.toBe("read");
+});
+
+it.each(["grep", "rg"])(
+  "distinguishes missing saved %s output from recorded empty output",
+  (name) => {
+    const tool = {
+      kind: "toolResult" as const,
+      toolId: "saved-search",
+      name,
+      argsPreview: '{"pattern":"needle","path":"src"}',
+      isError: false,
+    };
+    const rendered = render(
+      childTranscript(
+        detail({
+          status: "done",
+          transcript: [{ ...tool, outputUnavailable: true }],
+        }),
+      ),
+    );
+    const card = () =>
+      rendered.container.querySelector(`[data-tool="${name}"]`)!;
+    expect(card().textContent).toContain(i18n.t("toolNestedOutputMissing"));
+    expect(card().textContent).not.toContain(i18n.t("noOutput"));
+    rendered.rerender(
+      childTranscript(
+        detail({
+          status: "done",
+          transcript: [{ ...tool, outputPreview: "" }],
+        }),
+      ),
+    );
+    expect(card().textContent).toContain(i18n.t("noOutput"));
+    expect(card().textContent).not.toContain(i18n.t("toolNestedOutputMissing"));
+  },
+);
+
+it("labels missing saved read arguments instead of rendering an empty target", () => {
+  const rendered = render(
+    childTranscript(
+      detail({
+        status: "done",
+        transcript: [
+          {
+            kind: "toolResult",
+            toolId: "missing-args",
+            name: "read",
+            isError: false,
+            argsTruncated: true,
+            outputUnavailable: true,
+          },
+        ],
+      }),
+    ),
+  );
+  expect(
+    rendered.container.querySelector('[data-tool="read"] > summary')
+      ?.textContent,
+  ).toContain(i18n.t("toolArgumentsUnavailable"));
 });
 
 const truncation = {

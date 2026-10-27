@@ -145,6 +145,10 @@ export function ToolEvidence({
             <span className="evidence-filename">{filename}</span>
           ) : target ? (
             <span className="evidence-command">{target}</span>
+          ) : call.evidenceTruncated || !call.arguments.trim() ? (
+            <span className="evidence-command">
+              {t("toolArgumentsUnavailable")}
+            </span>
           ) : null}
         </span>
         {stats}

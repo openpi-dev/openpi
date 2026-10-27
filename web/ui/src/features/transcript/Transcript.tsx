@@ -516,6 +516,7 @@ function EvidenceDetails({
   status,
   summary,
   output,
+  outputUnavailable = false,
   evidenceState,
   note,
   rawDetails,
@@ -529,6 +530,7 @@ function EvidenceDetails({
   status: Status;
   summary?: string;
   output?: string;
+  outputUnavailable?: boolean;
   evidenceState?: EvidenceState;
   note?: string;
   rawDetails?: unknown;
@@ -578,8 +580,10 @@ function EvidenceDetails({
         <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
-      {note && <p className="evidence-note">{note}</p>}
-      {output === undefined ? (
+      {(note || outputUnavailable) && (
+        <p className="evidence-note">{note || t("toolNestedOutputMissing")}</p>
+      )}
+      {output === undefined || outputUnavailable ? (
         <pre className="details-body tool-evidence">
           {evidenceText(body).text}
         </pre>
@@ -3295,6 +3299,7 @@ export function Transcript(props: TranscriptProps) {
                                 ? result?.content
                                 : undefined
                           }
+                          outputUnavailable={result?.outputUnavailable}
                           status={status}
                           evidenceState={
                             props.activityObserved === false &&
@@ -3501,6 +3506,7 @@ export function Transcript(props: TranscriptProps) {
               defaultOpen={defaultOpen}
             />
           ) : isEmptyToolOutput(message.content) &&
+            !message.outputUnavailable &&
             !message.forkSnapshotToolResult ? (
             <div className="tool-line-empty" key={`${entry.key}-empty`}>
               <span className="tool-icon">{icon}</span>
@@ -3519,6 +3525,7 @@ export function Transcript(props: TranscriptProps) {
                   ? t("toolArgumentsUnavailable")
                   : compactSummary(message.content)
               }
+              outputUnavailable={message.outputUnavailable}
               status={status}
               snapshotMissingResult={message.forkSnapshotToolResult}
               defaultOpen={defaultOpen}

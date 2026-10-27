@@ -29,19 +29,46 @@ export function subagentTranscriptSnapshot(
     ),
   );
   const results = new Map<string, WebLiveMessage>();
+  type RecordedTool = ToolCallMetadata & Pick<LiveToolState, "toolId" | "name">;
+  const retainedTools = new Map<string, RecordedTool | undefined>();
+  for (const item of detail.transcript) {
+    if (item.kind !== "toolResult") continue;
+    // Ambiguous result identities cannot repair a call.
+    retainedTools.set(
+      item.toolId,
+      retainedTools.has(item.toolId) ? undefined : item,
+    );
+  }
   const occurrences = new Map<string, number>();
-  const toolCall = (
-    tool: ToolCallMetadata & Pick<LiveToolState, "toolId" | "name">,
-  ) => ({
-    type: "toolCall" as const,
-    id: tool.toolId,
-    name: tool.name,
-    arguments: tool.argsPreview ?? "",
-    ...(tool.evidenceArguments
-      ? { evidenceArguments: tool.evidenceArguments }
-      : {}),
-    ...(tool.argsTruncated ? { evidenceTruncated: true } : {}),
-  });
+  const toolCall = (tool: RecordedTool) => {
+    const candidate = retainedTools.get(tool.toolId);
+    const retained =
+      candidate && (!tool.name || candidate.name === tool.name)
+        ? candidate
+        : undefined;
+    const evidenceArguments = { ...retained?.evidenceArguments };
+    for (const [key, value] of Object.entries(tool.evidenceArguments ?? {})) {
+      if (value !== "" || !tool.argsTruncated || !evidenceArguments[key])
+        evidenceArguments[key] = value;
+    }
+    return {
+      type: "toolCall" as const,
+      id: tool.toolId,
+      name: tool.name || retained?.name || "tool",
+      arguments:
+        (tool.argsTruncated && retained?.argsPreview
+          ? retained.argsPreview
+          : tool.argsPreview) ??
+        retained?.argsPreview ??
+        "",
+      ...(tool.evidenceArguments || retained?.evidenceArguments
+        ? { evidenceArguments }
+        : {}),
+      ...(tool.argsTruncated || retained?.argsTruncated
+        ? { evidenceTruncated: true }
+        : {}),
+    };
+  };
   const append = (id: string, message: WebLiveMessage) => {
     entries.push({ type: "message", id, timestamp: "", message });
   };
