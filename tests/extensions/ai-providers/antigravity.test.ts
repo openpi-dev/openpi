@@ -555,6 +555,74 @@ test("sanitizeSchemaForCca preserves property names that match schema keywords",
   );
 });
 
+test("sanitizeSchemaForCca rewrites const literals to enum inside anyOf branches", () => {
+  // TypeBox serializes Type.Union([Type.Literal(...)]) this way; CCA 400s the
+  // whole request on "const" while accepting enum in the same payload.
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      properties: {
+        evidence: {
+          description: 'Evidence to read: "transcript", "final", "structured".',
+          anyOf: [
+            { type: "string", const: "transcript" },
+            { type: "string", const: "final" },
+            { type: "string", const: "structured" },
+          ],
+        },
+      },
+    }),
+    {
+      type: "object",
+      properties: {
+        evidence: {
+          description: 'Evidence to read: "transcript", "final", "structured".',
+          anyOf: [
+            { type: "string", enum: ["transcript"] },
+            { type: "string", enum: ["final"] },
+            { type: "string", enum: ["structured"] },
+          ],
+        },
+      },
+    },
+  );
+});
+
+test("sanitizeSchemaForCca merges a bare const into enum without duplicates", () => {
+  assert.deepEqual(
+    sanitizeSchemaForCca({ type: "string", const: "chromium" }),
+    {
+      type: "string",
+      enum: ["chromium"],
+    },
+  );
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "string",
+      const: "chrome",
+      enum: ["chrome", "edge"],
+    }),
+    { type: "string", enum: ["chrome", "edge"] },
+  );
+});
+
+test("sanitizeSchemaForCca preserves a property named const", () => {
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      properties: {
+        const: { type: "string", description: "Value to pin" },
+      },
+    }),
+    {
+      type: "object",
+      properties: {
+        const: { type: "string", description: "Value to pin" },
+      },
+    },
+  );
+});
+
 test("buildRequestBody strips CCA-rejected keywords and spills constraints into description", () => {
   const contextWithTools = {
     ...SIMPLE_CONTEXT,
