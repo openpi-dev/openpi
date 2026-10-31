@@ -76,6 +76,13 @@ import { formatSourceReference } from "../../../../protocol/session-sources.ts";
 import { ComposerActionMenu } from "./ComposerActionMenu.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import {
+  historyKeyApplies,
+  idlePromptHistory,
+  isBrowsing,
+  promptHistory,
+  stepPromptHistory,
+} from "./prompt-history.ts";
+import {
   filterWebCommands,
   SlashCommandMenu,
   slashCommandListId,
@@ -623,6 +630,102 @@ export function Composer(props: ComposerProps) {
     !props.workspaceDraft && selected && selectedPath === selected.path,
   );
   const canCompose = viewedSession || draftSession;
+  const historyItems = useMemo(
+    () => promptHistory(selected?.entries ?? []),
+    [selected?.entries],
+  );
+  const history = useRef({ owner: "", state: idlePromptHistory() });
+  const historyLoad = useRef<AbortController | null>(null);
+  useEffect(() => () => historyLoad.current?.abort(), []);
+  /** Arrow-key prompt recall; true when the key was consumed. */
+  const recallPrompt = (
+    key: "ArrowUp" | "ArrowDown",
+    input: HTMLTextAreaElement,
+  ) => {
+    if (!canCompose || !props.selectedWorkspace || !selected) return false;
+    if (history.current.owner !== renderedOwnerKey) {
+      historyLoad.current?.abort();
+      historyLoad.current = null;
+      history.current = { owner: renderedOwnerKey, state: idlePromptHistory() };
+    }
+    // Any edit ends browsing; the next Up starts again from the newest prompt.
+    const browsing = isBrowsing(history.current.state, prompt);
+    const state = browsing ? history.current.state : idlePromptHistory();
+    if (historyLoad.current) return true;
+    if (
+      !historyKeyApplies(
+        key,
+        prompt,
+        { start: input.selectionStart, end: input.selectionEnd },
+        browsing,
+      )
+    )
+      return false;
+    const next = stepPromptHistory(state, key, historyItems.length);
+    if (next === undefined) return browsing;
+    const draft = state.draft ?? { prompt, caret: input.selectionStart };
+    const owner = renderedOwnerKey;
+    const place = (text: string, caret: number) => {
+      if (!updateDraft({ prompt: text, caret }, owner)) return false;
+      // A recalled "/command" must not reopen the command menu over history.
+      setMenuDismissed(true);
+      queueMicrotask(() => {
+        if (draftOwner.current.key !== owner) return;
+        textarea.current?.setSelectionRange(caret, caret);
+      });
+      return true;
+    };
+    if (next === -1) {
+      if (place(draft.prompt, draft.caret))
+        history.current.state = idlePromptHistory();
+      return true;
+    }
+    const item = historyItems[next]!;
+    const apply = (text: string) => {
+      if (place(text, key === "ArrowUp" ? 0 : text.length))
+        history.current.state = { index: next, draft, applied: text };
+    };
+    if (!item.truncated) {
+      apply(item.text);
+      return true;
+    }
+    // The transcript only projects the start of a long prompt. Recall the
+    // complete native text, or nothing, never the shortened preview.
+    const controller = new AbortController();
+    historyLoad.current = controller;
+    const before = prompt;
+    void (async () => {
+      const chunks: string[] = [];
+      let cursor: number | null = 0;
+      while (cursor !== null) {
+        const page = await client.sessionItem(
+          selected.id,
+          selected.path,
+          item.entryId,
+          cursor,
+          controller.signal,
+        );
+        if (
+          page.entryId !== item.entryId ||
+          (page.nextCursor !== null && page.nextCursor <= cursor)
+        )
+          throw new Error("Prompt identity changed");
+        chunks.push(page.text);
+        cursor = page.nextCursor;
+      }
+      if (
+        !controller.signal.aborted &&
+        draftOwner.current.key === owner &&
+        currentDraft.current.prompt === before
+      )
+        apply(chunks.join(""));
+    })()
+      .catch(() => {})
+      .finally(() => {
+        if (historyLoad.current === controller) historyLoad.current = null;
+      });
+    return true;
+  };
   const compacting =
     active &&
     props.snapshot?.selectedExecution?.sessionId === selected?.id &&
@@ -2163,6 +2266,17 @@ export function Composer(props: ComposerProps) {
                     return;
                   }
                 }
+              }
+              if (
+                (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+                !event.shiftKey &&
+                !event.ctrlKey &&
+                !event.altKey &&
+                !event.metaKey &&
+                recallPrompt(event.key, event.currentTarget)
+              ) {
+                event.preventDefault();
+                return;
               }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
