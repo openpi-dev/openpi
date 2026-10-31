@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RunController } from "../../../extensions/workflows/controller.ts";
 import { shutdownActiveWorkflowRuns } from "../../../extensions/workflows/index.ts";
-import { ChildExecutionAdmission } from "../../../extensions/shared/child-execution-admission.ts";
+import {
+  ChildExecutionAdmission,
+  getSessionChildExecutionAdmission,
+  sessionChildExecutionAdmission,
+} from "../../../extensions/shared/child-execution-admission.ts";
 
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -52,7 +56,8 @@ test("FAIL: workflow waits for the shared Session slot before creating its child
 });
 
 test("retains the shared Session slot when child cleanup is uncertain", async () => {
-  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  const owner = {};
+  const admission = sessionChildExecutionAdmission(owner, { maxActive: 1 });
   const controller = new RunController(undefined, 1, 8, admission);
 
   await controller.schedule(async () => ({
@@ -65,6 +70,55 @@ test("retains the shared Session slot when child cleanup is uncertain", async ()
   assert.equal(admission.snapshot().queued, 1);
   admission.shutdown();
   await assert.rejects(queued, /parent Session is shutting down/);
+
+  // Reload uses the same SessionManager. Uncertain terminal cleanup must not
+  // disappear when the new extensions ask for their shared admission owner.
+  for (const origin of ["direct", "btw", "workflow"] as const) {
+    const reloaded = sessionChildExecutionAdmission(owner, { maxActive: 1 });
+    await assert.rejects(
+      reloaded.acquire(origin),
+      /parent Session is shutting down/,
+    );
+  }
+  assert.equal(getSessionChildExecutionAdmission(owner)?.snapshot().held, 1);
+});
+
+test("reload preserves a timed-out workflow lease until its late terminal release", async () => {
+  const owner = {};
+  const admission = sessionChildExecutionAdmission(owner, { maxActive: 1 });
+  const controller = new RunController(undefined, 1, 8, admission);
+  let finish!: () => void;
+  const started = new Promise<void>((resolveStarted) => {
+    finish = resolveStarted;
+  });
+  let complete!: () => void;
+  const pending = controller.schedule(() => {
+    finish();
+    return new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+  });
+  await started;
+  assert.equal(await controller.settle({ abort: true, timeoutMs: 1 }), false);
+  admission.shutdown();
+
+  const reloaded = sessionChildExecutionAdmission(owner, { maxActive: 1 });
+  await assert.rejects(
+    reloaded.acquire("direct"),
+    /parent Session is shutting down/,
+  );
+  assert.equal(getSessionChildExecutionAdmission(owner)?.snapshot().held, 1);
+
+  complete();
+  await pending;
+  assert.equal(getSessionChildExecutionAdmission(owner)?.snapshot().held, 0);
+  const recovered = sessionChildExecutionAdmission(owner, { maxActive: 1 });
+  const lease = await recovered.acquire("direct");
+  assert.equal(recovered.snapshot().held, 1);
+  // The old controller has settled; it cannot release this new attempt.
+  await controller.settle();
+  assert.equal(recovered.snapshot().held, 1);
+  lease.release();
 });
 
 test("RunController propagates invocation cancellation without aborting the run", async () => {

@@ -5,7 +5,7 @@
  * settled Direct children may remain available for a later `send`, but they do
  * not retain a permit. The parent `SessionManager` is the owner identity, so a
  * second top-level Pi Session gets an independent pool even though extensions
- * share this module instance in one process.
+ * share one Session map in this process.
  */
 
 export const MAX_CHILD_EXECUTION_QUEUE = 256;
@@ -87,6 +87,10 @@ export class ChildExecutionAdmission {
   constructor(options: ChildExecutionAdmissionOptions = {}) {
     this.limit = options.maxActive;
     this.maxQueued = options.maxQueued ?? MAX_CHILD_EXECUTION_QUEUE;
+  }
+
+  get isShutdown() {
+    return this.closed;
   }
 
   snapshot(): ChildExecutionAdmissionSnapshot {
@@ -254,7 +258,11 @@ export function sessionChildExecutionAdmission(
   options: ChildExecutionAdmissionOptions,
 ) {
   let admission = sessionAdmissions.get(sessionOwner);
-  if (!admission) {
+  // Pi's reload emits session_shutdown and then session_start for the same
+  // SessionManager. Replace a shut-down pool only after every old attempt has
+  // released its lease. Uncertain cleanup must remain visible and fail closed
+  // across reloads; late terminal callbacks still release into this owner.
+  if (!admission || (admission.isShutdown && admission.snapshot().held === 0)) {
     admission = new ChildExecutionAdmission(options);
     sessionAdmissions.set(sessionOwner, admission);
   }
