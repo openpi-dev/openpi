@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -290,4 +291,105 @@ test("transcriptsOmitted surfaces through the completion display projection", ()
     "an alert must report the omitted transcripts",
   );
   assert.match(entry.expanded, /omitted from transcripts\.json/);
+});
+
+test("FAIL: rebuilding transcripts.json does not re-encode agents whose transcript is unchanged", () => {
+  let reads = 0;
+  const counted = (entries: TranscriptEntry[]) =>
+    entries.map(
+      (entry) =>
+        new Proxy(entry, {
+          get(target, property, receiver) {
+            if (property === "text") reads++;
+            return Reflect.get(target, property, receiver);
+          },
+        }),
+    );
+  const agents = Array.from({ length: 40 }, (_, index) =>
+    agent(index, counted(transcript(8))),
+  );
+  const first = boundedTranscriptsArtifact(agents);
+  assert.ok(reads > 0);
+
+  // Live progress replaces one child's array; the others keep theirs.
+  reads = 0;
+  agents[0]!.transcript = [
+    ...transcript(8),
+    { role: "assistant", text: "next step" },
+  ];
+  const second = boundedTranscriptsArtifact(agents);
+  assert.equal(reads, 0, "finished agents were not re-read");
+  assert.notEqual(second.content, first.content);
+
+  // The cached result is byte-identical to encoding fresh copies.
+  const fresh = boundedTranscriptsArtifact(
+    agents.map((item) => ({
+      index: item.index,
+      transcript: item.transcript.map((entry) => ({ ...entry })),
+    })),
+  );
+  assert.equal(second.content, fresh.content);
+  assert.deepEqual(second.omitted, fresh.omitted);
+});
+
+test("transcript encoding retains bounded memory while workflow agents remain live", () => {
+  // Isolate GC and heap accounting from the test runner. Keep source arrays live
+  // so a WeakMap alone cannot hide retained encodings. The old cache retained
+  // ~73 MiB for this fixture; allow ample headroom above a few MiB of output.
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "--expose-gc",
+      "--input-type=module",
+      "--eval",
+      `
+        import { boundedTranscriptsArtifact } from ${JSON.stringify(
+          new URL("../../../extensions/workflows/artifacts.ts", import.meta.url)
+            .href,
+        )};
+        const agents = Array.from({ length: 256 }, (_, index) => ({
+          index,
+          transcript: Array.from({ length: 202 }, (_, i) => ({
+            role: i % 2 ? "toolResult" : "tool",
+            text: "Read src/module-" + i + ".ts",
+            name: "Read",
+            toolCallId: "toolu_" + i.toString(36).padStart(8, "0"),
+            timestamp: 1700000000000 + i,
+            startedAt: 1700000000000 + i,
+            finishedAt: 1700000000120 + i,
+            durationMs: 120,
+          })),
+        }));
+        global.gc();
+        const before = process.memoryUsage().heapUsed;
+        const first = boundedTranscriptsArtifact(agents);
+        // Separate workflows/prefixes must share a bound, rather than each
+        // keeping a full cache forever. Exercise warm reads and eviction too.
+        for (let start = 0; start < agents.length; start += 32) {
+          const batch = agents.slice(start, start + 32);
+          const cold = boundedTranscriptsArtifact(batch);
+          const warm = boundedTranscriptsArtifact(batch);
+          if (cold.content !== warm.content) throw new Error("cache changed bytes");
+        }
+        const again = boundedTranscriptsArtifact(agents);
+        if (again.content !== first.content) throw new Error("eviction changed bytes");
+        global.gc();
+        console.log(JSON.stringify({
+          retained: process.memoryUsage().heapUsed - before,
+          omitted: again.omitted.agents,
+          liveAgents: agents.length,
+        }));
+      `,
+    ],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  assert.equal(result.status, 0, result.stderr || String(result.error));
+  const memory = JSON.parse(result.stdout);
+  assert.equal(memory.liveAgents, 256);
+  assert.ok(memory.omitted > 0, "fixture must exceed the artifact byte budget");
+  assert.ok(
+    memory.retained < 24 * 1024 * 1024,
+    `encoding retained ${(memory.retained / 1024 / 1024).toFixed(1)} MiB`,
+  );
 });
