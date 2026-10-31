@@ -407,6 +407,8 @@ export interface WebMessageTruncation {
   readonly visibleText?: true;
   readonly partsOmitted?: number;
   readonly details?: true;
+  /** Shortened only to fit one live SSE event; the persisted entry is canonical. */
+  readonly transport?: true;
 }
 
 export interface WebLiveMessage {
@@ -1204,6 +1206,128 @@ const textEncoder = new TextEncoder();
 
 export function jsonByteLength(value: unknown) {
   return textEncoder.encode(JSON.stringify(value)).byteLength;
+}
+
+const LIVE_TRUNCATION_MARKER = "\n[truncated]";
+
+/** Bytes one code point adds inside a JSON string, matching JSON.stringify. */
+function jsonCodePointBytes(codePoint: number) {
+  if (codePoint === 0x22 || codePoint === 0x5c) return 2;
+  if (codePoint < 0x20)
+    return [0x08, 0x09, 0x0a, 0x0c, 0x0d].includes(codePoint) ? 2 : 6;
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  // Lone surrogates serialize as \uXXXX escapes.
+  if (codePoint >= 0xd800 && codePoint <= 0xdfff) return 6;
+  return codePoint < 0x10000 ? 3 : 4;
+}
+
+function jsonStringBytes(value: string) {
+  let bytes = 0;
+  for (const char of value) bytes += jsonCodePointBytes(char.codePointAt(0)!);
+  return bytes;
+}
+
+/** Longest whole-code-point prefix that fits `maxBytes` inside a JSON string. */
+function jsonPrefix(value: string, maxBytes: number) {
+  let bytes = 0;
+  let end = 0;
+  for (const char of value) {
+    bytes += jsonCodePointBytes(char.codePointAt(0)!);
+    if (bytes > maxBytes) break;
+    end += char.length;
+  }
+  return value.slice(0, end);
+}
+
+/**
+ * Fit one live message into `maxBytes` of serialized JSON. WEB_MAX_TEXT bounds
+ * characters, but CJK text costs three UTF-8 bytes per character and
+ * `content` repeats the text parts, so a normal long reply could exceed the
+ * SSE event limit and turn every update into `state_invalidated`. Shrink only
+ * the reply text (`content`, text and thinking parts), sharing the budget
+ * evenly; the persisted entry keeps the full text and its own recovery path.
+ * Returns the message unchanged when even empty text would not fit.
+ */
+export function fitLiveMessage(
+  message: WebLiveMessage,
+  maxBytes: number,
+): WebLiveMessage {
+  if (jsonByteLength(message) <= maxBytes) return message;
+  const parts = message.parts ?? [];
+  const texts = [
+    message.content,
+    ...parts.flatMap((part) =>
+      part.type === "text" || part.type === "thinking" ? [part.text] : [],
+    ),
+  ];
+  const fixed = jsonByteLength({
+    ...message,
+    content: "",
+    ...(message.parts
+      ? {
+          parts: parts.map((part) =>
+            part.type === "text" || part.type === "thinking"
+              ? { ...part, text: "", ...(part.type === "thinking" ? { textTruncated: true } : {}) }
+              : part,
+          ),
+        }
+      : {}),
+    truncation: {
+      ...message.truncation,
+      truncated: true,
+      text: true,
+      visibleText: true,
+      transport: true,
+    },
+  });
+  const markerBytes = jsonStringBytes(LIVE_TRUNCATION_MARKER);
+  let available = maxBytes - fixed - markerBytes * texts.length;
+  // Metadata or tool calls alone are too large; keep the publish-time
+  // fail-closed invalidation for that case.
+  if (available <= 0) return message;
+
+  // Water-fill: short texts stay whole, long ones share what remains.
+  const costs = texts.map(jsonStringBytes);
+  const order = costs.map((_, index) => index).sort((a, b) => costs[a]! - costs[b]!);
+  let cap = Number.POSITIVE_INFINITY;
+  for (const [rank, index] of order.entries()) {
+    const remaining = order.length - rank;
+    if (costs[index]! * remaining > available) {
+      cap = Math.floor(available / remaining);
+      break;
+    }
+    available -= costs[index]!;
+  }
+  let visibleTextTruncated = false;
+  const fit = (text: string, cost: number) =>
+    cost <= cap ? undefined : `${jsonPrefix(text, cap)}${LIVE_TRUNCATION_MARKER}`;
+
+  const content = fit(message.content, costs[0]!);
+  if (content !== undefined) visibleTextTruncated = true;
+  let textIndex = 1;
+  const fittedParts = message.parts?.map((part): WebMessagePart => {
+    if (part.type !== "text" && part.type !== "thinking") return part;
+    const fitted = fit(part.text, costs[textIndex++]!);
+    if (fitted === undefined) return part;
+    if (part.type === "thinking")
+      return { ...part, text: fitted, textTruncated: true };
+    visibleTextTruncated = true;
+    return { ...part, text: fitted };
+  });
+  const visibleRole = message.role === "user" || message.role === "assistant";
+  return {
+    ...message,
+    content: content ?? message.content,
+    ...(fittedParts ? { parts: fittedParts } : {}),
+    truncation: {
+      ...message.truncation,
+      truncated: true,
+      text: true,
+      transport: true,
+      ...(visibleRole && visibleTextTruncated ? { visibleText: true } : {}),
+    },
+  };
 }
 
 export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (path: string) => string | undefined, maxBytes = WEB_MAX_SELECTED_TRANSCRIPT_BYTES) {

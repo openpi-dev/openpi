@@ -42,6 +42,7 @@ import {
   WebReadOnlySessionError,
 } from "../adapter/pi-adapter.ts";
 import {
+  fitLiveMessage,
   jsonByteLength,
   boundThinkingProjection,
   WEB_MAX_ARCHIVED_SESSION_PAGE,
@@ -60,6 +61,7 @@ import {
   type WebAppearancePreference,
   type WebSettingsPreferencesPatch,
   type WebInteractiveTerminalEvent,
+  type WebLiveMessage,
   type WebPromptImage,
   type WebSidebarPinTarget,
   type WebSnapshot,
@@ -102,6 +104,11 @@ const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 const SERVER_CLOSE_DRAIN_MS = 500;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 const MAX_PROMPT_ADMISSIONS = 128;
+const LIVE_MESSAGE_EVENTS = new Set([
+  "message_start",
+  "message_update",
+  "message_end",
+]);
 const THINKING_LEVELS = new Set([
   "off",
   "minimal",
@@ -486,7 +493,32 @@ export class WebHost {
       ...(detail ? { detail } : {}),
     };
     let serialized = JSON.stringify(event);
-    if (Buffer.byteLength(serialized) > WEB_MAX_EVENT_BYTES) {
+    let bytes = Buffer.byteLength(serialized);
+    const message = detail?.message;
+    if (
+      bytes > WEB_MAX_EVENT_BYTES &&
+      LIVE_MESSAGE_EVENTS.has(type) &&
+      message &&
+      typeof message === "object"
+    ) {
+      // Each live update repeats the whole message. Trim its reply text to
+      // what this exact envelope leaves room for, rather than invalidating
+      // every update of a long reply; the persisted entry keeps the full text.
+      const envelopeBytes = bytes - jsonByteLength(message);
+      event = {
+        ...event,
+        detail: {
+          ...detail,
+          message: fitLiveMessage(
+            message as WebLiveMessage,
+            WEB_MAX_EVENT_BYTES - envelopeBytes,
+          ),
+        },
+      };
+      serialized = JSON.stringify(event);
+      bytes = Buffer.byteLength(serialized);
+    }
+    if (bytes > WEB_MAX_EVENT_BYTES) {
       event = {
         protocolVersion: WEB_PROTOCOL_VERSION,
         sequence: event.sequence,
