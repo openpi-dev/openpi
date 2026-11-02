@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Draft investigations
 
+- [`SUBAGENT_DESIGN_COMPARISON_2026-10-23.md`](SUBAGENT_DESIGN_COMPARISON_2026-10-23.md) — 固定当前 OpenCode V2、Kimi Code、Codex、DeepSeek Harness 与 Claude Code 官方文档，比较子会话、单次执行、交付与宿主接纳；分析 OpenPI 已有机制、设计取舍和静态消融，建议待选型，未复现现场时机问题（[#196](https://github.com/openpi-dev/openpi/issues/196)、[#512](https://github.com/openpi-dev/openpi/issues/512)）。
+
 
 - [`WEB_TOOL_GROUP_DETAILS_2026-10-13.md`](WEB_TOOL_GROUP_DETAILS_2026-10-13.md) — 工具组摘要、图标、对齐和动态的 Codex 安装包 / PR #711 状态对照；保留 OpenPI 分组的可选精修，原生 Codex 动态仍未验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #711](https://github.com/openpi-dev/openpi/pull/711)）。
 
