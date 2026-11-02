@@ -11,7 +11,7 @@ import type {
   PromptOptions,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
 import { sessionChildExecutionAdmission } from "../../extensions/shared/child-execution-admission.ts";
 import { jsonByteLength } from "../../web/protocol/types.ts";
@@ -42,8 +42,7 @@ type RuntimeHarness = {
   runtime: { session: object; dispose?: () => Promise<void> };
   activePromptTrace?: Trace;
   pendingPromptTraces: Trace[];
-  liveMessageSequence: number;
-  liveMessageKey?: string;
+  liveMessageKeys?: WeakMap<object, { key?: string; sequence: number }>;
   listeners: Set<(event: WebRuntimeEvent) => void>;
   nextTurnEpoch: number;
   terminalTurnKeys: Set<string>;
@@ -330,7 +329,6 @@ type LifecycleHarness = {
   pendingPromptTraces: Trace[];
   activePromptTrace?: Trace;
   turnAbortOperations: Map<string, Promise<unknown>>;
-  liveMessageSequence: number;
   disposed: boolean;
   dispatcherLease: { release: () => Promise<void> };
   webHostLease: { release: () => Promise<void> };
@@ -405,7 +403,6 @@ function lifecycleHarness(runtime: LifecycleRuntime) {
   harness.candidateRuntimes = new Set();
   harness.pendingPromptTraces = [];
   harness.turnAbortOperations = new Map();
-  harness.liveMessageSequence = 0;
   harness.disposed = false;
   harness.dispatcherLease = { release: async () => undefined };
   harness.webHostLease = { release: async () => undefined };
@@ -2709,7 +2706,6 @@ test("message_end and queued prompts do not settle a running turn", (t) => {
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
   harness.pendingPromptTraces = [];
-  harness.liveMessageSequence = 0;
   harness.listeners = new Set();
   harness.nextTurnEpoch = 0;
   harness.terminalTurnKeys = new Set();
@@ -2875,6 +2871,78 @@ test("message_end and queued prompts do not settle a running turn", (t) => {
   );
 });
 
+test("live message keys stay per Session when another Session streams in between", () => {
+  const sessionA = {
+    sessionManager: { getSessionId: () => "session-a", getBranch: () => [] },
+  };
+  const sessionB = {
+    sessionManager: { getSessionId: () => "session-b", getBranch: () => [] },
+  };
+  const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
+  harness.runtime = { session: sessionA };
+  harness.pendingPromptTraces = [];
+  harness.listeners = new Set();
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(this: RuntimeHarness, session: object, event: object): void;
+    }
+  ).projectEvent;
+  const assistant = (text?: string) => ({
+    type: text === undefined ? "message_start" : "message_update",
+    message: {
+      role: "assistant",
+      content: text === undefined ? [] : [{ type: "text", text }],
+    },
+  });
+
+  // Session A streams its answer while the reader watches it.
+  projectEvent.call(harness, sessionA, assistant());
+  projectEvent.call(harness, sessionA, assistant("partial from A"));
+
+  // The reader creates another Session and prompts it; B streams through the
+  // same runtime while A is retained mid-message.
+  harness.runtime = { session: sessionB };
+  projectEvent.call(harness, sessionB, assistant());
+  projectEvent.call(harness, sessionB, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "stop",
+      timestamp: 2,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    },
+  });
+
+  // The reader switches back to A, whose original message is still streaming.
+  harness.runtime = { session: sessionA };
+  projectEvent.call(harness, sessionA, assistant("more from A"));
+
+  const updates = events
+    .filter((event) => event.type === "message_update")
+    .map((event) => {
+      const detail = event.detail as {
+        sessionId?: string;
+        messageKey?: string;
+      };
+      return { sessionId: detail.sessionId, messageKey: detail.messageKey };
+    });
+  assert.deepEqual(updates, [
+    { sessionId: "session-a", messageKey: "live-1" },
+    { sessionId: "session-a", messageKey: "live-1" },
+  ]);
+});
+
 for (const aborted of [false, true]) {
   test(`toolUse without a terminal result preserves native aborted=${aborted}`, (t) => {
     t.mock.method(Date, "now", () => 10000);
@@ -2889,7 +2957,6 @@ for (const aborted of [false, true]) {
     const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
     harness.runtime = { session };
     harness.pendingPromptTraces = [];
-    harness.liveMessageSequence = 0;
     harness.listeners = new Set();
     harness.nextTurnEpoch = 0;
     harness.terminalTurnKeys = new Set();
@@ -2979,7 +3046,6 @@ test("native retry completion preserves success, exhaustion and backoff cancella
     const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
     harness.runtime = { session };
     harness.pendingPromptTraces = [];
-    harness.liveMessageSequence = 0;
     harness.listeners = new Set();
     harness.nextTurnEpoch = 0;
     harness.terminalTurnKeys = new Set();
@@ -3709,4 +3775,205 @@ test("retained settlement rechecks a deferred native wake before disposing its o
   await Promise.resolve();
   assert.equal(disposals, 0);
   assert.ok(runtime.retainedRuntimes.has(owner));
+});
+
+function subscribedMessageFixture() {
+  const makeSession = (id: string) => {
+    const base = lifecycleSession(id, true);
+    const nativeListeners = {
+      _eventListeners: [] as ((event: { type: string }) => void)[],
+    };
+    const callbacks: ((event: { type: string }) => void)[] = [];
+    base.subscribe = (listener) => {
+      callbacks.push(listener);
+      return Reflect.apply(AgentSession.prototype.subscribe, nativeListeners, [
+        listener,
+      ]) as () => void;
+    };
+    return Object.assign(base, {
+      callbacks,
+      emit(event: {
+        type: string;
+        message: { role: string; content: string };
+      }) {
+        const emit = (
+          AgentSession.prototype as unknown as {
+            _emit(this: object, event: object): void;
+          }
+        )._emit;
+        emit.call(nativeListeners, event);
+      },
+    });
+  };
+  const a = makeSession("session-a"),
+    b = makeSession("session-b");
+  const runtimeA = lifecycleRuntime(a),
+    runtimeB = lifecycleRuntime(b);
+  const harness = lifecycleHarness(runtimeA) as LifecycleHarness & {
+    attachActiveSession(
+      runtime: LifecycleRuntime,
+      session: LifecycleSession,
+    ): void;
+    retainRuntime(runtime: LifecycleRuntime): void;
+    promoteRetainedRuntime(runtime: LifecycleRuntime): Promise<void>;
+  };
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  // Production bind installs a phase observer before the projection observer.
+  a.subscribe(() => undefined);
+  b.subscribe(() => undefined);
+  harness.attachActiveSession(runtimeA, a);
+  harness.retainRuntime(runtimeB);
+  // A native consumer after projection keeps listener-array mutation observable.
+  a.subscribe(() => undefined);
+  b.subscribe(() => undefined);
+  const emit = (
+    session: typeof a,
+    type: string,
+    role = "assistant",
+    content = "",
+  ) => session.emit({ type, message: { role, content } });
+  return { a, b, runtimeA, runtimeB, harness, events, emit };
+}
+
+test("production subscriptions observe a first retained start before promotion", async (t) => {
+  const f = subscribedMessageFixture();
+  t.after(() => f.harness.dispose());
+  f.emit(f.b, "message_start");
+  f.emit(f.b, "message_update", "assistant", "hidden");
+  assert.equal(
+    f.events.some((event) => event.type.startsWith("message_")),
+    false,
+  );
+  await f.harness.promoteRetainedRuntime(f.runtimeB);
+  f.emit(f.b, "message_update", "assistant", "first");
+  f.emit(f.b, "message_update", "assistant", "second");
+  f.emit(f.b, "message_end", "assistant", "done");
+  const messages = f.events.filter((event) =>
+    event.type.startsWith("message_"),
+  );
+  assert.deepEqual(
+    messages.map((event) => [
+      event.detail?.sessionId,
+      event.detail?.messageKey,
+    ]),
+    [
+      ["session-b", "live-1"],
+      ["session-b", "live-1"],
+      ["session-b", "live-1"],
+    ],
+  );
+  f.emit(f.b, "message_update", "assistant", "no new native start");
+  assert.equal(f.events.at(-1)?.detail?.messageKey, undefined);
+});
+
+test("production subscriptions replace retained end/start keys for every native message role", async (t) => {
+  const f = subscribedMessageFixture();
+  t.after(() => f.harness.dispose());
+  f.emit(f.a, "message_start");
+  await f.harness.promoteRetainedRuntime(f.runtimeB);
+  f.emit(f.a, "message_end");
+  for (const role of ["toolResult", "user"]) {
+    f.emit(f.a, "message_start", role);
+    f.emit(f.a, "message_end", role);
+  }
+  f.emit(f.a, "message_start");
+  await f.harness.promoteRetainedRuntime(f.runtimeA);
+  f.emit(f.a, "message_update", "assistant", "new response");
+  f.emit(f.a, "message_update", "assistant", "same response");
+  assert.deepEqual(
+    f.events
+      .filter((event) => event.type === "message_update")
+      .map((event) => event.detail?.messageKey),
+    ["live-4", "live-4"],
+  );
+});
+
+test("production promotion during dispatch advances the owning key exactly once", async (t) => {
+  const f = subscribedMessageFixture();
+  t.after(() => f.harness.dispose());
+  let promote = true;
+  f.harness.listeners.add((event) => {
+    if (promote && event.type === "message_start") {
+      promote = false;
+      void f.harness.promoteRetainedRuntime(f.runtimeB);
+    }
+  });
+  f.emit(f.a, "message_start");
+  f.emit(f.b, "message_start");
+  f.emit(f.b, "message_end");
+  await f.harness.promoteRetainedRuntime(f.runtimeA);
+  f.emit(f.a, "message_update", "assistant", "resumed A");
+  f.emit(f.a, "message_end");
+  assert.equal(
+    f.events.find((event) => event.type === "message_update")?.detail
+      ?.messageKey,
+    "live-1",
+  );
+  assert.equal(f.events.at(-1)?.detail?.messageKey, "live-1");
+});
+
+test("unsubscribed and disposed production callbacks cannot mutate a promoted key", async (t) => {
+  const f = subscribedMessageFixture();
+  t.after(() => f.harness.dispose());
+  f.emit(f.a, "message_start");
+  await f.harness.promoteRetainedRuntime(f.runtimeB);
+  const oldRetained = f.a.callbacks.at(-1)!;
+  await f.harness.promoteRetainedRuntime(f.runtimeA);
+  oldRetained({
+    type: "message_start",
+    message: { role: "assistant", content: "late" },
+  } as { type: string });
+  f.emit(f.a, "message_update", "assistant", "still first");
+  assert.equal(f.events.at(-1)?.detail?.messageKey, "live-1");
+  await f.harness.dispose();
+  const before = f.events.length;
+  for (const callback of f.a.callbacks)
+    callback({
+      type: "message_start",
+      message: { role: "assistant", content: "disposed" },
+    } as { type: string });
+  assert.equal(f.events.length, before);
+});
+
+test("production same-dispatch A/B/A projection emits one start and keeps end's owning key", async (t) => {
+  const f = subscribedMessageFixture();
+  t.after(() => f.harness.dispose());
+  let switchOnce = true;
+  f.harness.listeners.add((event) => {
+    if (switchOnce && event.type === "message_start") {
+      switchOnce = false;
+      void f.harness.promoteRetainedRuntime(f.runtimeB);
+      void f.harness.promoteRetainedRuntime(f.runtimeA);
+    }
+  });
+  f.emit(f.a, "message_start");
+  assert.equal(
+    f.events.filter((event) => event.type === "message_start").length,
+    1,
+  );
+  f.emit(f.a, "message_update", "assistant", "same key");
+  f.emit(f.a, "message_end");
+  assert.deepEqual(
+    f.events
+      .filter((event) => event.type.startsWith("message_"))
+      .map((event) => event.detail?.messageKey),
+    ["live-1", "live-1", "live-1"],
+  );
+});
+
+test("a reentrant native start during end projection is not cleared by the prior end", async (t) => {
+  const f = subscribedMessageFixture();
+  t.after(() => f.harness.dispose());
+  f.emit(f.a, "message_start");
+  f.harness.listeners.add((event) => {
+    if (event.type === "message_end") f.emit(f.a, "message_start");
+  });
+  f.emit(f.a, "message_end");
+  f.emit(f.a, "message_update", "assistant", "new message");
+  assert.equal(
+    f.events.find((event) => event.type === "message_end")?.detail?.messageKey,
+    "live-1",
+  );
+  assert.equal(f.events.at(-1)?.detail?.messageKey, "live-2");
 });
