@@ -1,6 +1,7 @@
-import { rmSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -16,6 +17,7 @@ import {
   removeEditorLayer,
 } from "../shared/editor-layers.ts";
 
+const MAX_UNDO_ATTACHMENTS = 128;
 const IMAGE_PLACEHOLDER = /\[Image #(\d+)\]/g;
 const PI_CLIPBOARD_IMAGE =
   /^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(gif|jpe?g|png|webp)$/i;
@@ -44,6 +46,52 @@ interface Attachment {
 function normalizedPath(path: string) {
   const normalized = resolve(path);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function physicalIdentity(path: string) {
+  try {
+    const stat = statSync(path, { bigint: true });
+    // Device/inode identify the existing file even when realpath preserves an
+    // alias's spelling. Birth time distinguishes subsequent inode generations.
+    if (!stat.isFile() || stat.ino === 0n) return undefined;
+    return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function directFileSnapshot(path: string) {
+  try {
+    // Directory aliases are legitimate, but a foreign leaf symlink does not
+    // grant ownership of its target. Keep submission paths unchanged.
+    const initial = lstatSync(path, { bigint: true });
+    if (!initial.isFile()) return undefined;
+    const canonical = realpathSync(path);
+    const stat = lstatSync(canonical, { bigint: true });
+    if (
+      !stat.isFile() ||
+      stat.ino === 0n ||
+      initial.dev !== stat.dev ||
+      initial.ino !== stat.ino ||
+      initial.birthtimeNs !== stat.birthtimeNs ||
+      initial.ctimeNs !== stat.ctimeNs ||
+      initial.mtimeNs !== stat.mtimeNs ||
+      initial.size !== stat.size
+    )
+      return undefined;
+    return {
+      path: canonical,
+      identity: `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`,
+      dev: stat.dev,
+      ino: stat.ino,
+      birthtimeNs: stat.birthtimeNs,
+      ctimeNs: stat.ctimeNs,
+      mtimeNs: stat.mtimeNs,
+      size: stat.size,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -181,13 +229,17 @@ function expandWith(text: string, attachments: Iterable<Attachment>) {
  * message Pi sends is byte-identical to unmodified Pi.
  *
  * Submitted clipboard files remain Pi-owned so the read tool can open them
- * later. Direct files that lose their final placeholder before submission are
- * reclaimed as abandoned draft state.
+ * later. Direct files remain referenced by live mappings or the bounded native
+ * Undo window, and are reclaimed only after their final reference is released.
  */
 export class ImageAttachmentStore {
   private nextAttachmentId = 1;
   private readonly draft = new Map<number, Attachment>();
-  private readonly directDraftPaths = new Set<string>();
+  private readonly removed = new Map<number, Attachment>();
+  private readonly directDraftPaths = new Map<
+    string,
+    NonNullable<ReturnType<typeof directFileSnapshot>>
+  >();
 
   get hasDraft() {
     return this.draft.size > 0;
@@ -195,17 +247,28 @@ export class ImageAttachmentStore {
 
   attachClipboardPath(path: string, editorText: string) {
     if (!isPiClipboardImage(path)) return undefined;
+    const pathIdentity = physicalIdentity(path);
+    const references = [...this.draft.values(), ...this.removed.values()].map(
+      (attachment) => physicalIdentity(attachment.path),
+    );
+    const alreadyReferenced =
+      !pathIdentity ||
+      references.some((value) => !value || value === pathIdentity);
 
     let id = this.nextAttachmentId;
     while (this.draft.has(id) || editorText.includes(`[Image #${id}]`)) id += 1;
     const placeholder = `[Image #${id}]`;
     this.nextAttachmentId = id + 1;
     this.draft.set(id, { id, placeholder, path } satisfies Attachment);
-    this.directDraftPaths.add(path);
+    // Re-inserting a known adopted path must not claim a Pi-owned file.
+    const owned = !alreadyReferenced ? directFileSnapshot(path) : undefined;
+    if (owned && !this.directDraftPaths.has(owned.identity)) {
+      this.directDraftPaths.set(owned.identity, owned);
+    }
     return placeholder;
   }
 
-  reconcileDraft(text: string) {
+  reconcileDraft(text: string, undo = false, clearingForSubmit = false) {
     const occurrenceCounts = new Map<number, number>();
     for (const occurrence of placeholderOccurrences(text)) {
       occurrenceCounts.set(
@@ -213,17 +276,30 @@ export class ImageAttachmentStore {
         (occurrenceCounts.get(occurrence.id) ?? 0) + 1,
       );
     }
-    for (const id of [...this.draft.keys()]) {
-      // Placeholder text is user-editable, so only an unambiguous single
-      // occurrence keeps its mapping. Duplicated or removed tokens degrade to
-      // ordinary text; direct files that no longer have any draft reference
-      // are abandoned and can be reclaimed.
-      if (occurrenceCounts.get(id) === 1) continue;
-      this.draft.delete(id);
+    for (const [id, attachment] of this.removed) {
+      const count = occurrenceCounts.get(id) ?? 0;
+      if (count === 0) continue;
+      // Only native Undo can recover ownership. Typing a matching literal or
+      // duplicating a token revokes it, even if that edit is later undone.
+      this.removed.delete(id);
+      if (undo && count === 1) this.draft.set(id, attachment);
     }
-    this.reclaimUnreferencedDirectDraftPaths();
-    this.nextAttachmentId =
-      this.draft.size === 0 ? 1 : Math.max(...this.draft.keys()) + 1;
+    for (const [id, attachment] of this.draft) {
+      const count = occurrenceCounts.get(id) ?? 0;
+      if (count === 1) continue;
+      this.draft.delete(id);
+      // Undoing an insertion discards it; there is no native redo to recover.
+      if (count === 0 && !undo) this.removed.set(id, attachment);
+    }
+    // Keep only a bounded recovery window, not another editor undo stack.
+    while (this.removed.size > MAX_UNDO_ATTACHMENTS) {
+      const oldest = this.removed.keys().next().value;
+      if (oldest !== undefined) this.removed.delete(oldest);
+    }
+    // Native Enter reports the cleared buffer before onSubmit can hand off
+    // the snapshot. The input wrapper retires this provisional state if no
+    // submission follows, including when removal evicted an Undo reference.
+    if (!clearingForSubmit) this.reclaimUnreferencedDirectDraftPaths();
   }
 
   /**
@@ -248,22 +324,55 @@ export class ImageAttachmentStore {
   }
 
   clearDraft() {
+    // An active draft may be queued or handed to Pi through setText(""). Keep
+    // main's conservative handoff boundary, but retire older Undo-only files.
+    for (const attachment of this.draft.values()) {
+      const identity = physicalIdentity(attachment.path);
+      if (!identity) {
+        this.directDraftPaths.clear();
+        break;
+      }
+      this.directDraftPaths.delete(identity);
+    }
     this.draft.clear();
-    // A cleared draft can have been submitted, queued, or handed to another
-    // Pi delivery path. Release ownership without deleting those files.
-    this.directDraftPaths.clear();
+    this.removed.clear();
+    this.reclaimUnreferencedDirectDraftPaths();
     this.nextAttachmentId = 1;
   }
 
+  releaseDeliveredPaths(text: string) {
+    for (const match of text.matchAll(CLIPBOARD_PATH_IN_TEXT)) {
+      if (isPiClipboardPath(match[0])) {
+        const identity = physicalIdentity(match[0]);
+        if (!identity) {
+          this.directDraftPaths.clear();
+          return;
+        }
+        this.directDraftPaths.delete(identity);
+      }
+    }
+  }
+
   private reclaimUnreferencedDirectDraftPaths() {
-    const referencedPaths = new Set(
-      [...this.draft.values()].map((attachment) => attachment.path),
-    );
-    for (const path of this.directDraftPaths) {
-      if (referencedPaths.has(path)) continue;
-      this.directDraftPaths.delete(path);
+    const referencedPaths = new Set<string>();
+    for (const attachment of [
+      ...this.draft.values(),
+      ...this.removed.values(),
+    ]) {
+      const identity = physicalIdentity(attachment.path);
+      // An unresolved reference might alias an owned path. It cannot authorize
+      // reclamation, and an unresolved handoff relinquishes ownership above.
+      if (!identity) return;
+      referencedPaths.add(identity);
+    }
+    for (const [identity, owned] of this.directDraftPaths) {
+      if (referencedPaths.has(identity)) continue;
+      this.directDraftPaths.delete(identity);
+      // A move, replacement or external modification makes ownership uncertain.
+      // Never unlink a new file or a substituted leaf symlink at an old name.
+      if (!isDeepStrictEqual(directFileSnapshot(owned.path), owned)) continue;
       try {
-        rmSync(path, { force: true });
+        rmSync(owned.path, { force: true });
       } catch {
         // Editor input remains usable if a temporary file disappeared or the
         // operating system declines the cleanup.
@@ -287,7 +396,11 @@ export class ImageAttachmentStore {
     );
     if (matches.length === 0) return undefined;
 
+    // A recalled/queued path can also occur in the previous Undo window.
+    // Release the incoming Pi-owned paths before retiring that window.
+    this.releaseDeliveredPaths(text);
     this.clearDraft();
+    const reserved = new Set(placeholderOccurrences(text).map(({ id }) => id));
     // Build replacements in reverse document order so earlier indices stay
     // valid while we splice. Each occurrence — even of the same path — gets
     // its own placeholder identity so that expandWith's single-occurrence
@@ -296,6 +409,7 @@ export class ImageAttachmentStore {
       [];
     for (const match of matches) {
       const path = match[0];
+      while (reserved.has(this.nextAttachmentId)) this.nextAttachmentId += 1;
       const id = this.nextAttachmentId++;
       const placeholder = `[Image #${id}]`;
       this.draft.set(id, { id, placeholder, path } satisfies Attachment);
@@ -362,6 +476,7 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
   private downstreamSubmit?: (text: string) => void;
   private submittedDraft?: readonly Attachment[];
   private settingText = false;
+  private restoringUndo = false;
 
   constructor(
     base: EditorComponent,
@@ -391,12 +506,15 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
     this.downstreamChange = value;
     super.onChange = (text) => {
       if (!this.settingText) {
-        // submitValue() clears the buffer and reports it here before invoking
-        // onSubmit, so an empty buffer ends the draft and restarts numbering.
-        // Keep a snapshot so the submit that caused it can still expand.
+        // Native deletion and submit both report an empty buffer. Retain
+        // recoverable mappings until onSubmit confirms the draft ended.
         if (text.length === 0) {
           this.submittedDraft = this.attachments.snapshotDraft();
-          this.attachments.clearDraft();
+          this.attachments.reconcileDraft(
+            text,
+            this.restoringUndo,
+            this.submittedDraft !== undefined,
+          );
         } else {
           this.submittedDraft = undefined;
           // History recall uses setTextInternal (bypasses setText) and only
@@ -413,7 +531,7 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
               this.settingText = false;
             }
           } else {
-            this.attachments.reconcileDraft(text);
+            this.attachments.reconcileDraft(text, this.restoringUndo);
           }
         }
       }
@@ -435,11 +553,14 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
           // an already expanded string is a no-op.
           const snapshot = this.submittedDraft;
           this.submittedDraft = undefined;
-          value(
-            snapshot
-              ? expandWith(text, snapshot)
-              : this.attachments.expandPlaceholders(text),
-          );
+          const expanded = snapshot
+            ? expandWith(text, snapshot)
+            : this.attachments.expandPlaceholders(text);
+          // Native Enter clears the buffer before this callback, so the paths
+          // being delivered may now be referenced only by removed mappings.
+          this.attachments.releaseDeliveredPaths(expanded);
+          this.attachments.clearDraft();
+          value(expanded);
         }
       : undefined;
   }
@@ -459,6 +580,7 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
     // Pi restores queued messages and history entries as expanded paths. Adopt
     // them so the buffer shows compact tokens and the next submit can expand
     // again; ordinary text falls through to plain reconciliation.
+    this.submittedDraft = undefined;
     const adopted =
       text.length > 0 ? this.attachments.adoptExpandedText(text) : undefined;
     const next = adopted ?? text;
@@ -522,7 +644,19 @@ export class ImageAttachmentEditor extends BelowEditorNavigationEditor {
     ) {
       return;
     }
-    super.handleInput(data);
+    this.restoringUndo = this.editorKeybindings.matches(
+      data,
+      "tui.editor.undo",
+    );
+    try {
+      super.handleInput(data);
+    } finally {
+      if (this.submittedDraft) {
+        this.submittedDraft = undefined;
+        this.attachments.reconcileDraft(this.getText(), this.restoringUndo);
+      }
+      this.restoringUndo = false;
+    }
   }
 }
 
