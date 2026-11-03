@@ -12,7 +12,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { encodeStructuredResult } from "../../../extensions/shared/structured-output.ts";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, keyHint, keyText } from "@earendil-works/pi-coding-agent";
 import { PLAN_MODE_CHANNEL } from "../../../extensions/shared/plan-mode-state.ts";
 import subagents, {
   createSubagentResultDispatcher,
@@ -734,7 +734,7 @@ test("the visible subagent result entry renders the completed report", () => {
         },
       },
     },
-    { expanded: true },
+    { expanded: true, ...{ keyText, keyHint } },
     theme,
   );
 
@@ -790,7 +790,7 @@ test("the compact result renderer shows artifact save failures", () => {
         },
       },
     },
-    { expanded: false },
+    { expanded: false, ...{ keyText, keyHint } },
     theme,
   );
 

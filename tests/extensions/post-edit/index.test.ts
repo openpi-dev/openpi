@@ -96,6 +96,7 @@ const success: ExecResult = {
   stderr: "",
   code: 0,
   killed: false,
+  ...{ truncated: false },
 };
 
 const expectedShellArgs = (command: string) =>
@@ -162,6 +163,7 @@ test("post-edit sanitizes failure notifications", async () => {
     stderr: "\u001b[31mfailed\u001b[0m \u009b2J\u001b]52;c;payload\u0007safe",
     code: 1,
     killed: false,
+    ...{ truncated: false },
   });
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -182,6 +184,7 @@ test("post-edit independently bounds the command and output in failure notificat
     stderr: "y".repeat(1_000),
     code: 127,
     killed: false,
+    ...{ truncated: false },
   });
   await new Promise((resolve) => setImmediate(resolve));
 

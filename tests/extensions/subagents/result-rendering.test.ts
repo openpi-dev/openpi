@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   initTheme,
+  keyHint,
+  keyText,
   type MessageRenderer,
   type EntryRenderer,
   type ExtensionAPI,
@@ -98,7 +100,11 @@ test("automatic subagent results split model payload from bounded UI projection"
       },
     };
 
-    const compact = entryRenderer(entry, { expanded: false }, theme);
+    const compact = entryRenderer(
+      entry,
+      { expanded: false, ...{ keyText, keyHint } },
+      theme,
+    );
     assert.ok(compact);
     const compactText = compact.render(120).join("\n");
     assert.match(compactText, /1 subagent settled/);
@@ -107,7 +113,11 @@ test("automatic subagent results split model payload from bounded UI projection"
     assert.doesNotMatch(compactText, /Plan Mode investigation report/);
     assert.doesNotMatch(compactText, /This result is already shown/);
 
-    const expanded = entryRenderer(entry, { expanded: true }, theme);
+    const expanded = entryRenderer(
+      entry,
+      { expanded: true, ...{ keyText, keyHint } },
+      theme,
+    );
     assert.ok(expanded);
     const expandedText = expanded.render(120).join("\n");
     assert.match(expandedText, /Plan Mode investigation report/);
@@ -125,7 +135,7 @@ test("automatic subagent results split model payload from bounded UI projection"
           },
         },
       },
-      { expanded: true },
+      { expanded: true, ...{ keyText, keyHint } },
       theme,
     );
     assert.ok(quotedInstruction);
@@ -143,7 +153,7 @@ test("automatic subagent results split model payload from bounded UI projection"
         details: { ...entry.data.details, displayContent },
         timestamp: Date.now(),
       },
-      { expanded: true, outputPad: 0 },
+      { expanded: true, outputPad: 0, ...{ keyText, keyHint } },
       theme,
     );
     assert.ok(message);
@@ -157,7 +167,7 @@ test("automatic subagent results split model payload from bounded UI projection"
         id: "entry-legacy",
         data: { ...entry.data, content: modelContent },
       },
-      { expanded: true },
+      { expanded: true, ...{ keyText, keyHint } },
       theme,
     );
     assert.ok(legacy);
@@ -166,7 +176,11 @@ test("automatic subagent results split model payload from bounded UI projection"
     assert.doesNotMatch(legacyText, /This result is already shown/);
 
     setResultDisplay("full");
-    const fullByDefault = entryRenderer(entry, { expanded: false }, theme);
+    const fullByDefault = entryRenderer(
+      entry,
+      { expanded: false, ...{ keyText, keyHint } },
+      theme,
+    );
     assert.ok(fullByDefault);
     assert.match(
       fullByDefault.render(120).join("\n"),
@@ -190,7 +204,7 @@ test("automatic subagent results split model payload from bounded UI projection"
           },
         },
       },
-      { expanded: false },
+      { expanded: false, ...{ keyText, keyHint } },
       theme,
     );
     assert.ok(failure);
@@ -211,7 +225,7 @@ test("automatic subagent results split model payload from bounded UI projection"
           },
         },
       },
-      { expanded: true },
+      { expanded: true, ...{ keyText, keyHint } },
       theme,
     );
     assert.ok(expandedFailure);
@@ -246,7 +260,7 @@ test("automatic subagent results split model payload from bounded UI projection"
           },
         },
       },
-      { expanded: false },
+      { expanded: false, ...{ keyText, keyHint } },
       theme,
     );
     assert.ok(batch);
@@ -280,7 +294,7 @@ test("automatic subagent results split model payload from bounded UI projection"
           },
         },
       },
-      { expanded: true },
+      { expanded: true, ...{ keyText, keyHint } },
       theme,
     );
     assert.ok(expandedBatch);
@@ -305,7 +319,7 @@ test("automatic subagent results split model payload from bounded UI projection"
           },
         },
       },
-      { expanded: false },
+      { expanded: false, ...{ keyText, keyHint } },
       theme,
     );
     assert.ok(narrow);

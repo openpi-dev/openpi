@@ -30,6 +30,10 @@ if (nodeTests.length === 0 || vitestTests.length === 0) {
   );
 }
 
+// Process and jsdom fixtures both need headroom. Bound file-level overlap
+// instead of letting cold loaders and DOM work compete for every core.
+const concurrency = Math.max(1, Math.min(4, availableParallelism() - 1));
+
 function runNodeTests(files, options = []) {
   if (files.length === 0) return 0;
   const result = spawnSync(
@@ -64,10 +68,6 @@ if (suite !== "ui") {
       );
     }
   }
-  // A file can itself launch several real Pi/Git/sandbox processes. Bound
-  // file-level overlap so cold loaders do not fight every other fixture on
-  // machines with many cores; smaller CI hosts keep Node's default budget.
-  const concurrency = Math.max(1, Math.min(4, availableParallelism() - 1));
   const parallelNodeResult = runNodeTests(nodeTestGroups.parallel, [
     `--test-concurrency=${concurrency}`,
   ]);
@@ -94,7 +94,7 @@ if (suite.startsWith("node")) process.exit(0);
 const vitestCli = resolve("node_modules/vitest/vitest.mjs");
 const vitestResult = spawnSync(
   process.execPath,
-  [vitestCli, "run", ...vitestTests],
+  [vitestCli, "run", `--maxWorkers=${concurrency}`, ...vitestTests],
   {
     stdio: "inherit",
   },
