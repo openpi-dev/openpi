@@ -2,7 +2,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
 } from "@astryxdesign/core/DropdownMenu";
-import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
+import { REASONING_LEVELS } from "../../../../../extensions/shared/reasoning-levels.ts";
 import { Check, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -166,7 +166,7 @@ export function ProviderConfigurationCard({
   );
   const thinkingSelections = draft.models.map((model, index) => {
     const map = model.thinkingLevelMap ?? thinkingDefaults[index];
-    return MODEL_THINKING_LEVELS.filter(
+    return REASONING_LEVELS.filter(
       (level) =>
         map?.[level] !== null &&
         ((level !== "xhigh" && level !== "max") || map?.[level] !== undefined),
@@ -551,7 +551,7 @@ export function ProviderConfigurationCard({
                       menuWidth="min(240px, calc(100vw - 32px))"
                       alignment="end"
                     >
-                      {MODEL_THINKING_LEVELS.map((level) => {
+                      {REASONING_LEVELS.map((level) => {
                         const selectedThinkingLevels =
                           thinkingSelections[index]!;
                         const checked = selectedThinkingLevels.includes(level);
@@ -572,7 +572,7 @@ export function ProviderConfigurationCard({
                             onChange={(enabled: boolean) => {
                               updateModel(index, {
                                 thinkingLevelMap: Object.fromEntries(
-                                  MODEL_THINKING_LEVELS.map((native) => {
+                                  REASONING_LEVELS.map((native) => {
                                     const included =
                                       native === level
                                         ? enabled

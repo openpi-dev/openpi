@@ -1,4 +1,3 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -548,19 +547,21 @@ export default function openPiSetup(pi: ExtensionAPI) {
         }),
       ),
       response_verbosity: Type.Optional(
-        StringEnum(RESPONSE_VERBOSITIES, {
+        Type.Enum(RESPONSE_VERBOSITIES, {
+          type: "string",
           description:
             "Optional output verbosity for OpenAI Responses/Codex Responses: default preserves Pi's request; low, medium, or high overrides only text.verbosity. Unsupported APIs are unchanged. Omit to preserve the saved preference.",
         }),
       ),
       response_reasoning_summary: Type.Optional(
-        StringEnum(RESPONSE_REASONING_SUMMARIES, {
+        Type.Enum(RESPONSE_REASONING_SUMMARIES, {
+          type: "string",
           description:
             "Optional reasoning summary for an existing native reasoning request on OpenAI Responses/Codex Responses. default preserves Pi's request; auto, concise, and detailed override summary; none removes summary without changing effort. Unsupported requests are unchanged. Omit to preserve the saved preference.",
         }),
       ),
       web_hidden_thinking_levels: Type.Optional(
-        Type.Array(StringEnum(REASONING_LEVELS), {
+        Type.Array(Type.Enum(REASONING_LEVELS, { type: "string" }), {
           uniqueItems: true,
           maxItems: REASONING_LEVELS.length,
           description:
@@ -568,7 +569,8 @@ export default function openPiSetup(pi: ExtensionAPI) {
         }),
       ),
       web_access_action: Type.Optional(
-        StringEnum(WEB_ACCESS_ACTIONS, {
+        Type.Enum(WEB_ACCESS_ACTIONS, {
+          type: "string",
           description:
             "Reviewed optional pi-web-access package operation. install-exa selects keyless Exa with a minimal new profile; install-existing preserves existing plugin preferences; disable disables its native Pi resources. Native confirmation is required. Use this field alone. Never reload the Session automatically.",
         }),
@@ -586,7 +588,8 @@ export default function openPiSetup(pi: ExtensionAPI) {
         Type.String({ description: "Configured Pi model id." }),
       ),
       suggestion_reasoning: Type.Optional(
-        StringEnum(REASONING_LEVELS, {
+        Type.Enum(REASONING_LEVELS, {
+          type: "string",
           description: "Reasoning level for the suggestion model.",
         }),
       ),
@@ -628,7 +631,8 @@ export default function openPiSetup(pi: ExtensionAPI) {
         }),
       ),
       ui_web_theme: Type.Optional(
-        StringEnum(WEB_THEMES, {
+        Type.Enum(WEB_THEMES, {
+          type: "string",
           description:
             "Canonical OpenPI Web theme: system follows the browser/OS color scheme; light, dark, mist, rose, and pine force that appearance. Stored in package setup rather than browser storage. Omit to preserve the current value.",
         }),
@@ -636,11 +640,11 @@ export default function openPiSetup(pi: ExtensionAPI) {
       ui_web_appearance: Type.Optional(
         Type.Object(
           {
-            palette: StringEnum(WEB_APPEARANCE_PALETTES),
+            palette: Type.Enum(WEB_APPEARANCE_PALETTES, { type: "string" }),
             accent: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
             background: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
             foreground: Type.String({ pattern: "^(?:|#[0-9A-Fa-f]{6})$" }),
-            font: StringEnum(WEB_APPEARANCE_FONTS),
+            font: Type.Enum(WEB_APPEARANCE_FONTS, { type: "string" }),
           },
           {
             additionalProperties: false,
@@ -730,25 +734,29 @@ export default function openPiSetup(pi: ExtensionAPI) {
         }),
       ),
       ui_web_follow_up_behavior: Type.Optional(
-        StringEnum(["followUp", "steer"] as const, {
+        Type.Enum(["followUp", "steer"] as const, {
+          type: "string",
           description:
             "Default delivery for messages sent while OpenPI Web is running: followUp queues the next turn (default), steer guides the active turn after its current tool step. This only sets the composer default; it never sends a message. Omit to preserve the current value.",
         }),
       ),
       ui_web_pinned_sort: Type.Optional(
-        StringEnum(["manual", "updated"] as const, {
+        Type.Enum(["manual", "updated"] as const, {
+          type: "string",
           description:
             "OpenPI Web pinned conversation order: manual (default) or recently updated. Omit to preserve the current value.",
         }),
       ),
       ui_web_sidebar_grouping: Type.Optional(
-        StringEnum(["project", "list"] as const, {
+        Type.Enum(["project", "list"] as const, {
+          type: "string",
           description:
             "OpenPI Web sidebar grouping: project (default) or one recent conversation list. Omit to preserve the current value.",
         }),
       ),
       ui_web_chats_sort: Type.Optional(
-        StringEnum(["manual", "updated"] as const, {
+        Type.Enum(["manual", "updated"] as const, {
+          type: "string",
           description:
             "OpenPI Web conversation order within projects and the recent list: recently updated (default) or manual. Omit to preserve the current value.",
         }),
@@ -766,19 +774,23 @@ export default function openPiSetup(pi: ExtensionAPI) {
         }),
       ),
       ui_footer_preset: Type.Optional(
-        StringEnum(FOOTER_PRESETS, {
+        Type.Enum(FOOTER_PRESETS, {
+          type: "string",
           description: `Convenient footer preset applied first: powerline (one-line ANSI256 blocks), powerline-mono (one-line gray powerline), compact (one-line plain text). ${FOOTER_PRESET_GUIDANCE} Style/lines overrides still win after the preset. Omit to preserve the current layout unless other footer fields are set.`,
         }),
       ),
       ui_footer_style: Type.Optional(
-        StringEnum(FOOTER_STYLES, {
+        Type.Enum(FOOTER_STYLES, {
+          type: "string",
           description:
             "Footer visual style: plain (Pi theme separators), powerline (ANSI256 colored blocks with  seams), powerline-mono (high-contrast gray powerline). A Nerd Font renders Codicon metric glyphs and powerline seams as designed; text stays readable without it. Omit to preserve the current style (or the preset's style when a preset is applied).",
         }),
       ),
       ui_footer_lines: Type.Optional(
         Type.Array(
-          Type.Array(StringEnum(FOOTER_LAYOUT_ITEMS), { minItems: 1 }),
+          Type.Array(Type.Enum(FOOTER_LAYOUT_ITEMS, { type: "string" }), {
+            minItems: 1,
+          }),
           {
             minItems: 1,
             description:
@@ -787,7 +799,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
         ),
       ),
       ui_footer_items: Type.Optional(
-        Type.Array(StringEnum(FOOTER_ITEMS), {
+        Type.Array(Type.Enum(FOOTER_ITEMS, { type: "string" }), {
           minItems: 1,
           uniqueItems: true,
           description:
@@ -795,19 +807,22 @@ export default function openPiSetup(pi: ExtensionAPI) {
         }),
       ),
       subagent_result_display: Type.Optional(
-        StringEnum(DETAIL_DISPLAYS, {
+        Type.Enum(DETAIL_DISPLAYS, {
+          type: "string",
           description:
             "How completed Subagent results render by default in Pi and Web: full shows complete output; compact shows bounded status rows, with disclosure controls revealing the report. Omit to preserve the current value.",
         }),
       ),
       bash_tool_display: Type.Optional(
-        StringEnum(DETAIL_DISPLAYS, {
+        Type.Enum(DETAIL_DISPLAYS, {
+          type: "string",
           description:
             "How Bash commands and output render by default in Pi and Web: compact shows a semantic activity row with execution state; disclosure controls reveal command, output and evidence. Full expands the evidence and enclosing Web execution group by default. Omit to preserve the current value.",
         }),
       ),
       file_mutation_display: Type.Optional(
-        StringEnum(DETAIL_DISPLAYS, {
+        Type.Enum(DETAIL_DISPLAYS, {
+          type: "string",
           description:
             "How Write/Edit content and diffs render by default in Pi and Web: compact shows path, status and change counts; disclosure controls reveal native preview, output, error and diff. Full expands the evidence and enclosing Web execution group by default. Omit to preserve the current value.",
         }),

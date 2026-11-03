@@ -1,6 +1,5 @@
 /** All model-facing strings for the subagents tools. */
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { effectiveChildToolAllowlist } from "../../shared/child-session.ts";
 import { SUBAGENT_ROLE_NAMES } from "../../shared/subagent-roles.ts";
@@ -120,9 +119,12 @@ export function createAgentTypeParameterSchema(
 ) {
   const ordered = orderedAgentTypes(agentTypes);
   return Type.Optional(
-    StringEnum(
+    Type.Enum(
       ordered.map((agentType) => agentType.name) as [string, ...string[]],
-      { description: buildAgentTypeParameterDescription(ordered) },
+      {
+        type: "string",
+        description: buildAgentTypeParameterDescription(ordered),
+      },
     ),
   );
 }
@@ -167,7 +169,8 @@ export function createSubagentSpawnToolSurface(
         description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.name,
       }),
       harness: Type.Optional(
-        StringEnum(BACKEND_NAMES, {
+        Type.Enum(BACKEND_NAMES, {
+          type: "string",
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.harness,
         }),
       ),
@@ -177,7 +180,8 @@ export function createSubagentSpawnToolSurface(
         }),
       ),
       isolation: Type.Optional(
-        StringEnum(["worktree"] as const, {
+        Type.Enum(["worktree"] as const, {
+          type: "string",
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.isolation,
         }),
       ),
@@ -187,7 +191,8 @@ export function createSubagentSpawnToolSurface(
         }),
       ),
       reasoning_effort: Type.Optional(
-        StringEnum(REASONING_EFFORTS, {
+        Type.Enum(REASONING_EFFORTS, {
+          type: "string",
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
         }),
       ),
