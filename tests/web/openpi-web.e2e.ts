@@ -2569,6 +2569,8 @@ test("recovers an unknown prompt admission only after an explicit user decision"
     content: string;
     retry: boolean;
   }> = [];
+  // Keep the Host's event stream open: reconnect snapshots can supersede
+  // the explicit admission check after the first request fails.
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const snapshot = await response.json();
@@ -2609,13 +2611,6 @@ test("recovers an unknown prompt admission only after an explicit user decision"
     snapshot.runtime = { status: "idle", capabilities: {} };
     await route.fulfill({ response, json: snapshot });
   });
-  await page.route("**/events?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "text/event-stream",
-      body: ": idle\n\n",
-    }),
-  );
   await page.route("**/api/prompt", async (route) => {
     const body = route.request().postDataJSON() as {
       commandId: string;

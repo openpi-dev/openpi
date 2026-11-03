@@ -16,6 +16,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   Api,
   AssistantMessage,
@@ -32,7 +33,6 @@ import { emptyUsage } from "../usage.ts";
 import { decodeApiKey } from "./credentials.ts";
 import {
   convertMessages,
-  convertTools,
   isThinkingPart,
   mapStopReasonString,
   retainThoughtSignature,
@@ -76,12 +76,13 @@ interface AntigravitySessionState {
 const sessionStates = new Map<string, AntigravitySessionState>();
 const MAX_SESSION_STATES = 64;
 
-// Cloud Code Assist 400s on these JSON Schema keywords (reference: omp
-// packages/ai/src/utils/schema/fields.ts — union of UNSUPPORTED_SCHEMA_FIELDS
-// and LIFTABLE_TO_DESCRIPTION_FIELDS). Constraints that remain useful to the
-// model are serialized into the sibling description before being removed.
+// Conservative legacy projection, based on omp's Google schema fields.ts
+// denylist. This is not a complete list of what the CCA endpoint rejects.
+// Useful constraints are serialized into description before being removed.
 const CCA_UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
   $schema: true,
+  $id: true,
+  $anchor: true,
   $ref: true,
   $defs: true,
   $dynamicRef: true,
@@ -96,6 +97,11 @@ const CCA_UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
   propertyNames: true,
   minItems: true,
   maxItems: true,
+  uniqueItems: true,
+  contains: true,
+  minContains: true,
+  maxContains: true,
+  additionalItems: true,
   minLength: true,
   maxLength: true,
   minProperties: true,
@@ -105,9 +111,11 @@ const CCA_UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
   exclusiveMinimum: true,
   exclusiveMaximum: true,
   multipleOf: true,
-  uniqueItems: true,
   pattern: true,
   format: true,
+  contentEncoding: true,
+  contentMediaType: true,
+  contentSchema: true,
   default: true,
   deprecated: true,
   readOnly: true,
@@ -138,6 +146,28 @@ const CCA_LIFTABLE_TO_DESCRIPTION: Record<string, true> = {
   examples: true,
 };
 
+// Keep the existing CCA parameters surface. Unknown keywords are omitted;
+// this lossy projection does not replace Pi's validation of the original schema.
+const CCA_WIRE_ALLOWED_KEYS: Record<string, true> = {
+  type: true,
+  title: true,
+  description: true,
+  enum: true,
+  items: true,
+  properties: true,
+  required: true,
+  anyOf: true,
+  oneOf: true,
+  allOf: true,
+};
+
+function inferSchemaTypeFromValue(value: unknown) {
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "boolean";
+  return undefined;
+}
+
 function sanitizeSchemaForCcaValue(
   value: unknown,
   insidePropertiesMap: boolean,
@@ -146,14 +176,67 @@ function sanitizeSchemaForCcaValue(
     return value.map((entry) => sanitizeSchemaForCcaValue(entry, false));
   }
   if (value === null || typeof value !== "object") return value;
+  if (insidePropertiesMap) {
+    // fromEntries preserves arbitrary parameter names, including __proto__.
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        sanitizeSchemaForCcaValue(entry, false),
+      ]),
+    );
+  }
+  const source = value as Record<string, unknown>;
+  let collapsedEnum: unknown[] | undefined;
+  let collapsedType: string | undefined;
+  const variants = source.anyOf;
+  // Only plain, homogeneous literal alternatives are equivalent to a flat
+  // enum. Keep conjunctions, exclusive choices, annotations and additional
+  // branch constraints intact rather than silently widening their meaning.
+  if (
+    !Object.hasOwn(source, "const") &&
+    !Object.hasOwn(source, "enum") &&
+    Array.isArray(variants) &&
+    variants.length > 0 &&
+    variants.every((variant) => {
+      if (
+        variant === null ||
+        typeof variant !== "object" ||
+        Array.isArray(variant)
+      )
+        return false;
+      const entry = variant as Record<string, unknown>;
+      const inferred = inferSchemaTypeFromValue(entry.const);
+      return (
+        Object.hasOwn(entry, "const") &&
+        inferred !== undefined &&
+        (entry.type === undefined || entry.type === inferred) &&
+        Object.keys(entry).every((key) => key === "type" || key === "const")
+      );
+    })
+  ) {
+    const values = variants.map(
+      (variant) => (variant as Record<string, unknown>).const,
+    );
+    const types = new Set(values.map(inferSchemaTypeFromValue));
+    const inferred = inferSchemaTypeFromValue(values[0]);
+    if (
+      types.size === 1 &&
+      (source.type === undefined || source.type === inferred)
+    ) {
+      collapsedEnum = [...new Set(values)];
+      collapsedType = inferred;
+    }
+  }
+
   const out: Record<string, unknown> = {};
   const spill: Array<[string, unknown]> = [];
-  for (const [key, entry] of Object.entries(value)) {
-    // Keys below `properties` are user-defined parameter names, not JSON
-    // Schema keywords. A tool parameter named `pattern`, for example, must be
-    // preserved while its schema value is sanitized normally.
-    if (insidePropertiesMap) {
-      out[key] = sanitizeSchemaForCcaValue(entry, false);
+  let constEntry: unknown;
+  let hasConst = false;
+  for (const [key, entry] of Object.entries(source)) {
+    if (key === "anyOf" && collapsedEnum) continue;
+    if (key === "const") {
+      hasConst = true;
+      constEntry = entry;
       continue;
     }
     if (Object.hasOwn(CCA_UNSUPPORTED_SCHEMA_FIELDS, key)) {
@@ -165,17 +248,67 @@ function sanitizeSchemaForCcaValue(
       }
       continue;
     }
-    out[key] = sanitizeSchemaForCcaValue(entry, key === "properties");
+    if (!Object.hasOwn(CCA_WIRE_ALLOWED_KEYS, key)) continue;
+    // Walk schema positions only. Enum objects and other literal payloads
+    // must never be interpreted as schemas (omp classifySchemaChild).
+    const isSchema =
+      key === "properties" ||
+      key === "items" ||
+      key === "anyOf" ||
+      key === "oneOf" ||
+      key === "allOf";
+    out[key] = isSchema
+      ? sanitizeSchemaForCcaValue(entry, key === "properties")
+      : entry;
+  }
+  if (hasConst) {
+    if (
+      Array.isArray(out.enum) &&
+      !out.enum.some((entry) => isDeepStrictEqual(entry, constEntry))
+    ) {
+      throw new Error("Antigravity tool schema has conflicting const and enum");
+    }
+    out.enum = [constEntry];
+    const inferred = inferSchemaTypeFromValue(constEntry);
+    if (out.type === undefined && inferred !== undefined) out.type = inferred;
+  }
+  if (collapsedEnum) {
+    out.enum = collapsedEnum;
+    if (out.type === undefined) out.type = collapsedType;
   }
   if (spill.length > 0) {
     const formatted = `{${spill.map(([key, entry]) => `${key}: ${JSON.stringify(entry)}`).join(", ")}}`;
     const existing = typeof out.description === "string" ? out.description : "";
     out.description = existing ? `${existing}\n\n${formatted}` : formatted;
   }
+  if (Array.isArray(out.type)) {
+    const types = [
+      ...new Set(
+        out.type.filter(
+          (entry) => typeof entry === "string" && entry !== "null",
+        ),
+      ),
+    ];
+    delete out.type;
+    // Distribute sibling constraints over each alternative; overwriting an
+    // existing anyOf or selecting only the first type loses valid values.
+    const branches = types.map((type) => {
+      const branch: Record<string, unknown> = { ...out, type };
+      // JSON Schema ignores these fields on other types; CCA rejects them.
+      if (type !== "array") delete branch.items;
+      if (type !== "object") {
+        delete branch.properties;
+        delete branch.required;
+      }
+      return branch;
+    });
+    if (branches.length === 1) return branches[0];
+    if (branches.length > 1) return { anyOf: branches };
+  }
   return out;
 }
 
-/** Recursively drop schema keywords Cloud Code Assist rejects. */
+/** Project tool schemas onto CCA parameters without rewriting literal data. */
 export function sanitizeSchemaForCca(value: unknown): unknown {
   return sanitizeSchemaForCcaValue(value, false);
 }
@@ -271,17 +404,17 @@ function buildTools(
 ): Record<string, unknown>[] | undefined {
   if (toolChoice === "none") return undefined;
   if (!tools || tools.length === 0) return undefined;
-  const converted = convertTools([...tools], true) as
-    | { functionDeclarations: Record<string, unknown>[] }[]
-    | undefined;
-  if (!converted) return undefined;
-  return converted.map((group) => ({
-    ...group,
-    functionDeclarations: group.functionDeclarations.map((declaration) => ({
-      ...declaration,
-      parameters: sanitizeSchemaForCca(declaration.parameters),
-    })),
-  }));
+  // Sanitize the original schema once. The generic Google converter walks
+  // instance objects too, losing literal fields before CCA can preserve them.
+  return [
+    {
+      functionDeclarations: tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: sanitizeSchemaForCca(tool.parameters),
+      })),
+    },
+  ];
 }
 
 export function buildRequestBody(
