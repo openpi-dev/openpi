@@ -14,6 +14,8 @@ export const PI_FAMILY = [
   "tui",
 ].map((name) => `@earendil-works/pi-${name}`);
 
+const PI_SCHEMA_PACKAGE = "@earendil-works/pi-schema";
+
 export function supportFloor(manifest) {
   const peers = Object.entries(manifest.peerDependencies).filter(([name]) =>
     name.startsWith("@earendil-works/pi-"),
@@ -43,7 +45,8 @@ export function verifyInstalledHost(root, version, listing) {
   const installed = [
     ...listing.matchAll(/(@earendil-works\/pi-[\w-]+)@([^\s]+)/g),
   ];
-  for (const name of PI_FAMILY) {
+  const family = [...PI_FAMILY];
+  const verifyPackage = (name) => {
     assert.ok(
       installed.some((match) => match[1] === name),
       `Missing ${name}`,
@@ -54,15 +57,36 @@ export function verifyInstalledHost(root, version, listing) {
     const loaded = JSON.parse(readFileSync(path, "utf8"));
     assert.equal(loaded.name, name, `Installed identity: ${name}`);
     assert.equal(loaded.version, version, `Installed Pi host: ${name}`);
+    return loaded;
+  };
+  const packages = PI_FAMILY.map(verifyPackage);
+  // Newer hosts declare schema as a separate package. Require its exact cohort
+  // only when the verified host declares it; older hosts do not ship it.
+  const schemaVersions = packages.flatMap((manifest) =>
+    manifest.dependencies?.[PI_SCHEMA_PACKAGE] === undefined
+      ? []
+      : [manifest.dependencies[PI_SCHEMA_PACKAGE]],
+  );
+  if (schemaVersions.length > 0) {
+    for (const required of schemaVersions) {
+      assert.equal(
+        required,
+        version,
+        "Pi schema dependency must match its host",
+      );
+    }
+    family.push(PI_SCHEMA_PACKAGE);
+    verifyPackage(PI_SCHEMA_PACKAGE);
   }
   for (const [, name, actual] of installed) {
-    assert.ok(PI_FAMILY.includes(name), `Unexpected Pi family: ${name}`);
+    assert.ok(family.includes(name), `Unexpected Pi family: ${name}`);
     assert.equal(actual, version, `Mixed Pi host: ${name}`);
   }
   const entry = realpathSync(
     resolve(root, "node_modules/@earendil-works/pi-coding-agent/dist/index.js"),
   );
-  console.log(JSON.stringify({ version, family: PI_FAMILY, entry }));
+  console.log(JSON.stringify({ version, family, entry }));
+  return family.length;
 }
 
 export function selectPiHost({
@@ -95,7 +119,7 @@ export function selectPiHost({
     .map((match) => match[1])
     .sort();
   assert.deepEqual(
-    lockedFamily,
+    lockedFamily.filter((name) => name !== PI_SCHEMA_PACKAGE),
     [...PI_FAMILY].sort(),
     "Locked Pi family changed",
   );
@@ -111,9 +135,9 @@ export function selectPiHost({
       cwd: root,
       encoding: "utf8",
     });
-    verifyInstalledHost(root, version, listing);
+    const familySize = verifyInstalledHost(root, version, listing);
     console.log(
-      `Pi ${endpoint} host verified: ${version} (${PI_FAMILY.length} packages)`,
+      `Pi ${endpoint} host verified: ${version} (${familySize} packages)`,
     );
     return version;
   } finally {

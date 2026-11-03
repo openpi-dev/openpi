@@ -130,6 +130,41 @@ test("missing family and mismatched physical installed identity fail closed", ()
     rmSync(root, { recursive: true, force: true });
   }
 });
+for (const schema of ["matching", "missing", "mixed", "undeclared"] as const) {
+  test(`native schema package is verified as part of its host cohort: ${schema}`, () => {
+    const { root } = fixture();
+    try {
+      let listing = install(root, "1.5.0");
+      const schemaName = "@earendil-works/pi-schema";
+      if (schema !== "undeclared") {
+        writeFileSync(
+          join(root, "node_modules/@earendil-works/pi-ai/package.json"),
+          JSON.stringify({
+            name: "@earendil-works/pi-ai",
+            version: "1.5.0",
+            dependencies: { [schemaName]: "1.5.0" },
+          }),
+        );
+      }
+      if (schema !== "missing") {
+        const schemaPath = join(root, "node_modules", schemaName);
+        mkdirSync(schemaPath, { recursive: true });
+        const version = schema === "mixed" ? "1.4.0" : "1.5.0";
+        writeFileSync(
+          join(schemaPath, "package.json"),
+          JSON.stringify({ name: schemaName, version }),
+        );
+        listing += `\n${schemaName}@${version}`;
+      }
+      const verify = () => verifyInstalledHost(root, "1.5.0", listing);
+      if (schema === "matching") assert.equal(verify(), 8);
+      else
+        assert.throws(verify, /Missing|Installed Pi host|Unexpected Pi family/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 for (const extraVersion of [
   "1.3.0-beta.1",
   "1.3.0+build.7",

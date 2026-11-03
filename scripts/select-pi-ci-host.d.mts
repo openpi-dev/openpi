@@ -1,7 +1,7 @@
 export const PI_FAMILY: string[];
 export function supportFloor(manifest: { peerDependencies: Record<string, string> }): string;
 export function assertStableAtLeast(version: string, floor: string): void;
-export function verifyInstalledHost(root: string, version: string, listing: string): void;
+export function verifyInstalledHost(root: string, version: string, listing: string): number;
 export function selectPiHost(options?: {
   root?: string;
   endpoint?: string;
