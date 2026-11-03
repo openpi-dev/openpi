@@ -137,7 +137,7 @@ test("Pi execution timing excludes queue time, survives clock rollback and persi
   );
 });
 
-test("a timing entry retained in Pi memory after persistence fails cannot publish unread activity", async (t) => {
+test("failed native timing persistence cannot publish unread activity", async (t) => {
   const root = await mkdtemp(
     join(tmpdir(), "openpi-timing-persistence-failure-"),
   );
@@ -152,10 +152,14 @@ test("a timing entry retained in Pi memory after persistence fails cannot publis
   await rename(sessionFile, savedFile);
   await mkdir(sessionFile);
 
-  // Real Pi appends its entry to memory before appendFileSync fails on this directory.
+  // Legacy hosts retain the unwritten entry; newer hosts roll it back.
+  // Neither representation may publish an unread result.
   emit({ type: "agent_settled" });
   const record = manager.getEntries().find((entry) => entry.type === "custom");
-  assert.equal(record && readTurnTiming(record.data)?.unreadEligible, false);
+  if (record) {
+    assert.equal(record.customType, WEB_TURN_TIMING_ENTRY);
+    assert.equal(readTurnTiming(record.data)?.unreadEligible, false);
+  }
   for (const includeLegacyResults of [false, true]) {
     const evidence = readSessionTurnEvidence(
       manager.getBranch(),
@@ -163,7 +167,7 @@ test("a timing entry retained in Pi memory after persistence fails cannot publis
       includeLegacyResults,
     );
     assert.deepEqual(evidence.results, []);
-    assert.equal(evidence.lastTurn?.outcome, "failed");
+    assert.equal(evidence.lastTurn?.outcome, record ? "failed" : undefined);
   }
   assert.equal(
     SessionManager.open(savedFile)
