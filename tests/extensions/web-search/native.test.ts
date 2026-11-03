@@ -14,6 +14,8 @@ import {
 } from "../../../extensions/web-search/support.ts";
 import { projectMessage } from "../../../web/protocol/types.ts";
 
+// Hand-built replay payloads use Pi 1.2's wire contract; lifecycle tests pass
+// the actual SDK version and verify both sides of the native conversion change.
 const model: Model<Api> = {
   id: "gpt-6-astra",
   name: "Fixture",
@@ -183,7 +185,13 @@ test("Responses persists and replays native output, keeps citations clickable, a
     ],
     tools: [{ type: "function", name: "read" }],
   };
-  const replayed = replayNativeSearch(payload, [saved], model, "responses");
+  const replayed = replayNativeSearch(
+    payload,
+    [saved],
+    model,
+    "responses",
+    "1.2.0",
+  );
   assert.deepEqual(replayed.input, [
     payload.input[0],
     search,
@@ -196,7 +204,7 @@ test("Responses persists and replays native output, keeps citations clickable, a
     false,
   );
   assert.deepEqual(
-    replayNativeSearch(payload, [], model, "responses"),
+    replayNativeSearch(payload, [], model, "responses", "1.2.0"),
     payload,
   );
   assert.deepEqual(
@@ -205,6 +213,7 @@ test("Responses persists and replays native output, keeps citations clickable, a
       [saved],
       { ...model, baseUrl: "https://different.test/v1" },
       "responses",
+      "1.2.0",
     ),
     payload,
   );
@@ -354,6 +363,7 @@ test("native replay preserves ordinary tool pairing and citation-only followups"
       [message],
       model,
       "responses",
+      "1.2.0",
     ).input,
     [search, text, call, result],
   );
@@ -461,6 +471,7 @@ test("Anthropic replays opaque server blocks with citations, and distinguishes f
       [message],
       claude,
       "anthropic",
+      "1.2.0",
     ).messages,
     [
       {
@@ -482,7 +493,10 @@ test("native replay is bounded without counting ordinary images or making unsafe
       },
     ],
   };
-  assert.deepEqual(replayNativeSearch(image, [], model, "responses"), image);
+  assert.deepEqual(
+    replayNativeSearch(image, [], model, "responses", "1.2.0"),
+    image,
+  );
   const capture = createNativeSearchCapture("responses", model);
   capture.observe({
     type: "response.completed",
@@ -534,6 +548,7 @@ test("Anthropic replay binds repeated answers to every surviving assistant ordin
     [ordinary, searched],
     claude,
     "anthropic",
+    "1.2.0",
   );
   assert.ok(Array.isArray(replayed.messages));
   assert.deepEqual(replayed.messages[0], payload.messages[0]);
@@ -632,6 +647,7 @@ test("Anthropic ordinal replay survives saved v1 history, empty/error predecesso
     history,
     claude,
     "anthropic",
+    "1.2.0",
   );
   assert.ok(Array.isArray(result.messages));
   assert.equal(result.messages[0], row);
@@ -648,6 +664,7 @@ test("Anthropic ordinal replay survives saved v1 history, empty/error predecesso
     [second],
     claude,
     "anthropic",
+    "1.2.0",
   );
   assert.ok(Array.isArray(compacted.messages));
   assert.deepEqual(
@@ -668,11 +685,19 @@ test("Anthropic ordinal replay survives saved v1 history, empty/error predecesso
         [second],
         claude,
         "anthropic",
+        "1.2.0",
       ),
     /altered/u,
   );
   assert.throws(
-    () => replayNativeSearch({ messages: [] }, [second], claude, "anthropic"),
+    () =>
+      replayNativeSearch(
+        { messages: [] },
+        [second],
+        claude,
+        "anthropic",
+        "1.2.0",
+      ),
     /altered/u,
   );
 });
@@ -877,12 +902,25 @@ test("matching restored malformed or oversized evidence is rejected before repla
     },
   };
   assert.throws(
-    () => replayNativeSearch({ input: [] }, [malformed], model, "responses"),
+    () =>
+      replayNativeSearch(
+        { input: [] },
+        [malformed],
+        model,
+        "responses",
+        "1.2.0",
+      ),
     /invalid/u,
   );
   assert.throws(
     () =>
-      replayNativeSearch({ input: [text] }, [oversized], model, "responses"),
+      replayNativeSearch(
+        { input: [text] },
+        [oversized],
+        model,
+        "responses",
+        "1.2.0",
+      ),
     /budget/u,
   );
   const capture = createNativeSearchCapture("responses", model);
@@ -912,7 +950,7 @@ test("aborted and errored evidence alone never activates replay validation", () 
       },
     };
     assert.equal(
-      replayNativeSearch(payload, [source], claude, "anthropic"),
+      replayNativeSearch(payload, [source], claude, "anthropic", "1.2.0"),
       payload,
     );
   }
@@ -1023,6 +1061,7 @@ test("Anthropic assignment distinguishes duplicate retained message references b
     [searched, searched],
     claude,
     "anthropic",
+    "1.2.0",
   );
   assert.ok(Array.isArray(result.messages));
   for (const item of result.messages)

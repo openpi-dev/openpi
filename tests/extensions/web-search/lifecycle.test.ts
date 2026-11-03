@@ -3,12 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test, { after } from "node:test";
+import { fileURLToPath } from "node:url";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { readNativeSearchEvidence } from "../../../extensions/web-search/native.ts";
+import {
+  readNativeSearchEvidence,
+  record,
+} from "../../../extensions/web-search/native.ts";
 import { webSearchConnection } from "../../../extensions/web-search/support.ts";
 
 const root = mkdtempSync(join(tmpdir(), "openpi-native-search-"));
@@ -19,6 +22,7 @@ const {
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  VERSION,
 } = await import("@earendil-works/pi-coding-agent");
 const { default: webSearch } = await import(
   "../../../extensions/web-search/index.ts"
@@ -396,6 +400,7 @@ test("Pi Anthropic conversion assigns repeated saved answers by retained order",
             retained,
             model,
             "anthropic",
+            VERSION,
           );
         },
       },
@@ -426,7 +431,7 @@ test("Pi Anthropic conversion assigns repeated saved answers by retained order",
   const variants: {
     content: AssistantMessage["content"];
     patch?: Partial<AssistantMessage>;
-    expected: unknown[];
+    expected?: unknown[];
   }[] = [
     {
       content: [
@@ -466,7 +471,6 @@ test("Pi Anthropic conversion assigns repeated saved answers by retained order",
         },
       ],
       patch: { model: "other" },
-      expected: [{ type: "text", text: "cross" }],
     },
     {
       content: [
@@ -504,6 +508,10 @@ test("Pi Anthropic conversion assigns repeated saved answers by retained order",
       expected: [{ type: "text", text: "Unicode😀" }],
     },
   ];
+  const alteredTurnError = {
+    message:
+      "Cannot safely replay native search across an altered assistant turn.",
+  };
   const boundedFirst = JSON.parse(JSON.stringify(first)) as AssistantMessage;
   readNativeSearchEvidence(boundedFirst)!.output.splice(1, 0, {
     type: "web_search_tool_result",
@@ -516,17 +524,105 @@ test("Pi Anthropic conversion assigns repeated saved answers by retained order",
       boundedFirst,
       second,
     ];
+    let convertedRows: { role: string; content: unknown[] }[] = [];
     const reply = await streamSimple(
       model,
       normalizeContext({ messages: retained }),
       {
         apiKey: "fixture",
         onPayload(payload) {
+          assert.ok(record(payload) && Array.isArray(payload.messages));
+          const messages = payload.messages;
+          const rows = messages.filter(
+            (row): row is { role: string; content: unknown[] } =>
+              record(row) &&
+              row.role === "assistant" &&
+              Array.isArray(row.content),
+          );
+          convertedRows = structuredClone(rows);
+          const last = rows.at(-1);
+          assert.ok(last);
+          for (const alteredMessages of [
+            messages.filter((row) => row !== last),
+            [...messages, last],
+          ])
+            assert.throws(
+              () =>
+                replayNativeSearch(
+                  { ...payload, messages: alteredMessages },
+                  retained,
+                  model,
+                  "anthropic",
+                  VERSION,
+                ),
+              alteredTurnError,
+            );
+          if (variant.expected === undefined)
+            assert.throws(
+              () =>
+                replayNativeSearch(
+                  {
+                    ...payload,
+                    messages:
+                      rows.length === 2
+                        ? [
+                            {
+                              role: "assistant",
+                              content: [{ type: "text", text: "cross" }],
+                            },
+                            ...messages,
+                          ]
+                        : messages.filter((row) => row !== rows[0]),
+                  },
+                  retained,
+                  model,
+                  "anthropic",
+                  VERSION,
+                ),
+              alteredTurnError,
+            );
+          if (rows.length > 2) {
+            const ordinary = rows[0]!;
+            const block = ordinary.content[0];
+            assert.ok(record(block));
+            const altered = {
+              ...block,
+              ...(block.type === "tool_use"
+                ? { input: { altered: true } }
+                : block.type === "thinking"
+                  ? { thinking: "altered" }
+                  : block.type === "redacted_thinking"
+                    ? { data: "altered" }
+                    : { text: "altered" }),
+            };
+            assert.throws(
+              () =>
+                replayNativeSearch(
+                  {
+                    ...payload,
+                    messages: messages.map((row) =>
+                      row === ordinary
+                        ? {
+                            ...ordinary,
+                            content: [altered, ...ordinary.content.slice(1)],
+                          }
+                        : row,
+                    ),
+                  },
+                  retained,
+                  model,
+                  "anthropic",
+                  VERSION,
+                ),
+              alteredTurnError,
+            );
+          }
           return replayNativeSearch(
-            payload as Record<string, unknown>,
+            payload,
             retained,
             model,
             "anthropic",
+            VERSION,
           );
         },
       },
@@ -535,13 +631,20 @@ test("Pi Anthropic conversion assigns repeated saved answers by retained order",
     const rows = (
       requests.at(-1)!.messages as { role: string; content: unknown[] }[]
     ).filter((row) => row.role === "assistant");
-    assert.deepEqual(rows[0]?.content, variant.expected);
+    // Cross-model thinking may become text or disappear in Pi. Preserve the
+    // SDK's actual ordinary prefix, then bind both saved answers by occurrence.
+    if (variant.expected !== undefined)
+      assert.deepEqual(
+        convertedRows.slice(0, -2).map((row) => row.content),
+        [variant.expected],
+      );
+    assert.deepEqual(rows.slice(0, -2), convertedRows.slice(0, -2));
     assert.deepEqual(
-      rows[1]?.content,
+      rows.at(-2)?.content,
       readNativeSearchEvidence(boundedFirst)?.output,
     );
     assert.deepEqual(
-      rows[2]?.content,
+      rows.at(-1)?.content,
       readNativeSearchEvidence(second)?.output,
     );
   }

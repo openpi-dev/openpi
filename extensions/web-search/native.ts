@@ -1,8 +1,3 @@
-import {
-  admittedJsonBytes,
-  jsonStringBytes,
-  sameJsonValue,
-} from "./bounded-json.ts";
 import type {
   Api,
   AssistantMessage,
@@ -10,9 +5,14 @@ import type {
   Model,
 } from "@earendil-works/pi-ai";
 import {
+  admittedJsonBytes,
+  jsonStringBytes,
+  sameJsonValue,
+} from "./bounded-json.ts";
+import {
   sameWebSearchConnection,
-  webSearchConnection,
   type WebSearchModelSupport,
+  webSearchConnection,
 } from "./support.ts";
 
 export const WEB_SEARCH_MESSAGE_KEY = "openpiWebSearch";
@@ -624,6 +624,7 @@ export function replayNativeSearch(
   messages: readonly Message[],
   model: Model<Api>,
   adapter: NativeSearchEvidence["adapter"],
+  hostVersion: string,
 ) {
   const connection = webSearchConnection(model);
   for (const message of messages) {
@@ -682,6 +683,11 @@ export function replayNativeSearch(
     const rows = payload.messages.flatMap((item, index) =>
       record(item) && item.role === "assistant" ? [{ item, index }] : [],
     );
+    // Pi 1.3.0 (#10995) drops cross-model thinking instead of converting it to
+    // text. Use the loaded host's one policy so added/removed rows still fail.
+    const [hostMajor, hostMinor] = hostVersion.split(".").map(Number);
+    const dropsCrossModelThinking =
+      hostMajor > 1 || (hostMajor === 1 && hostMinor >= 3);
     // Only assistant visibility is projected here. Pi still owns conversion of
     // the transcript, tools, system updates, transport and request options.
     const sanitize = (text: string) =>
@@ -723,7 +729,7 @@ export function replayNativeSearch(
               ? [{ type: "redacted_thinking", data: block.thinkingSignature }]
               : [];
           if (!sameModel)
-            return block.thinking.trim()
+            return !dropsCrossModelThinking && block.thinking.trim()
               ? [{ type: "text", text: sanitize(block.thinking) }]
               : [];
           const signed = !!block.thinkingSignature?.trim();

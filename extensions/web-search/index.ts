@@ -1,5 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   createNativeSearchCapture,
@@ -63,6 +63,7 @@ export default function webSearch(pi: ExtensionAPI) {
         messages,
         model,
         adapter,
+        VERSION,
       );
       if (!config.enabled || !support.available) return payload;
       if (
