@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { after, before, describe, test } from "node:test";
+import { prepareWorktreeHandoff } from "../../../extensions/workflows/worktree-handoff.ts";
 
 const bunNodeTestMockUnsupported = typeof process.versions.bun === "string";
 import {
@@ -28,6 +29,97 @@ function git(cwd: string, ...args: string[]) {
       GIT_COMMITTER_EMAIL: "t@example.com",
     },
   });
+}
+
+for (const assertion of ["checkout baseline", "no-op handoff"]) {
+  const raceTest = bunNodeTestMockUnsupported ? test.skip : test;
+  raceTest(
+    `parent advancement cannot change the child's ${assertion}`,
+    async (t) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worktree-race-"));
+      const repo = path.join(root, "repo");
+      fs.mkdirSync(repo);
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      git(repo, "init", "--quiet", "--initial-branch=main", ".");
+      fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+      git(repo, "add", "-A");
+      git(repo, "commit", "--quiet", "-m", "base");
+      const baseSha = git(repo, "rev-parse", "HEAD").trim();
+      let parentSha = "";
+      let advances = 0;
+      const original = childProcess.execFile;
+      t.mock.method(
+        childProcess,
+        "execFile",
+        (...args: Parameters<typeof original>) => {
+          const [file, argv, options] = args;
+          if (
+            file === "git" &&
+            Array.isArray(argv) &&
+            argv.includes("worktree") &&
+            argv.includes("add") &&
+            typeof options === "object" &&
+            options?.cwd === repo
+          ) {
+            // Synchronize immediately before the actual add process, after the
+            // production helper has captured HEAD. Every Git result remains real.
+            advances++;
+            fs.writeFileSync(
+              path.join(repo, "parent-only.txt"),
+              "parent work\n",
+            );
+            git(repo, "add", "parent-only.txt");
+            git(repo, "commit", "--quiet", "-m", "parent advances");
+            parentSha = git(repo, "rev-parse", "HEAD").trim();
+          }
+          return Reflect.apply(original, childProcess, args);
+        },
+      );
+      syncBuiltinESMExports();
+      t.after(() => {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      });
+      const result = await createWorktree({
+        cwd: repo,
+        label: "race",
+        id: "1",
+        linkNodeModules: false,
+      });
+      assert.ok(result.ok);
+      assert.equal(advances, 1);
+      assert.notEqual(parentSha, baseSha);
+      assert.equal(git(repo, "rev-parse", "HEAD").trim(), parentSha);
+      assert.equal(result.worktree.baseSha, baseSha);
+      assert.equal(
+        git(result.worktree.path, "status", "--porcelain").trim(),
+        "",
+      );
+      if (assertion === "checkout baseline") {
+        assert.equal(
+          git(result.worktree.path, "rev-parse", "HEAD").trim(),
+          baseSha,
+        );
+        assert.equal(
+          git(repo, "rev-parse", result.worktree.branch).trim(),
+          baseSha,
+        );
+      } else {
+        const prepared = prepareWorktreeHandoff({
+          runDir: path.join(root, "run"),
+          runId: "race",
+          agentIndex: 0,
+          agentLabel: "no-op",
+          repoCwd: repo,
+          worktree: result.worktree,
+        });
+        assert.ok(prepared.ok);
+        assert.equal(prepared.manifest.patch.content, "");
+        assert.equal(prepared.manifest.nameStatus, "");
+        assert.equal(prepared.manifest.numstat, "");
+      }
+    },
+  );
 }
 
 describe("worktreeSlug", () => {
