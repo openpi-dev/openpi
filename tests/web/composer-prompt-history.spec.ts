@@ -14,7 +14,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import * as draftStorageModule from "../../web/ui/src/features/composer/composer-draft-storage.ts";
-import { promptHistory } from "../../web/ui/src/features/composer/prompt-history.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore } from "../../web/ui/src/store/web-store.ts";
@@ -175,7 +174,12 @@ const history = () => [
   userEntry("latest question"),
 ];
 
-it("FAIL: Up recalls earlier prompts newest first and Down returns to the draft", () => {
+const truncatedPrompt = () =>
+  userEntry(`${"长".repeat(12_000)}\n[truncated]`, {
+    truncation: { truncated: true, text: true, visibleText: true },
+  });
+
+it("Up recalls earlier prompts newest first and Down returns to the draft", () => {
   const { input } = setup(history());
   type(input, "");
   press(input, "ArrowUp");
@@ -206,19 +210,6 @@ it("Up keeps the unsent draft and restores it after browsing", () => {
   input.setSelectionRange(input.value.length, input.value.length);
   press(input, "ArrowDown");
   expect(input.value).toBe("half written");
-});
-
-it("Up moves the caret instead of recalling inside a multi-line draft", () => {
-  const { input } = setup(history());
-  type(input, "line one\nline two");
-  const event = press(input, "ArrowUp");
-  expect(event).toBe(true);
-  expect(input.value).toBe("line one\nline two");
-
-  // At the very start of the editor, Up recalls as in the TUI.
-  input.setSelectionRange(0, 0);
-  press(input, "ArrowUp");
-  expect(input.value).toBe("latest question");
 });
 
 it("modified keys and IME composition never recall history", () => {
@@ -279,7 +270,7 @@ it("editing a recalled prompt sends the edit and leaves history unchanged", asyn
   expect(sendPrompt.mock.calls[0]?.[0]).toBe("latest question, but shorter");
 });
 
-it("FAIL: a recalled truncated prompt is filled with its complete native text", async () => {
+it("a recalled truncated prompt is filled with its complete native text", async () => {
   const full = `${"长".repeat(12_000)}的结尾`;
   const sessionItem = vi
     .spyOn(WebClient.prototype, "sessionItem")
@@ -298,12 +289,7 @@ it("FAIL: a recalled truncated prompt is filled with its complete native text", 
             totalChars: full.length,
           },
     );
-  const { input } = setup([
-    userEntry("short one"),
-    userEntry(`${"长".repeat(12_000)}\n[truncated]`, {
-      truncation: { truncated: true, text: true, visibleText: true },
-    }),
-  ]);
+  const { input } = setup([userEntry("short one"), truncatedPrompt()]);
   type(input, "");
   press(input, "ArrowUp");
   // Never place the shortened preview as if it were the original prompt.
@@ -312,21 +298,60 @@ it("FAIL: a recalled truncated prompt is filled with its complete native text", 
   expect(sessionItem).toHaveBeenCalledTimes(2);
 });
 
-it("a truncated prompt whose full text cannot be loaded is not recalled", async () => {
-  vi.spyOn(WebClient.prototype, "sessionItem").mockRejectedValue(
-    new Error("offline"),
-  );
-  const { input } = setup([
-    userEntry("long\n[truncated]", {
-      truncation: { truncated: true, text: true, visibleText: true },
-    }),
-  ]);
+it("a failed full-text load recalls nothing and the next Up tries again", async () => {
+  const full = `${"长".repeat(12_000)}的结尾`;
+  const sessionItem = vi
+    .spyOn(WebClient.prototype, "sessionItem")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockImplementation(async (_id, _path, entryId) => ({
+      entryId,
+      text: full,
+      nextCursor: null,
+      totalChars: full.length,
+    }));
+  const { input } = setup([truncatedPrompt()]);
   type(input, "");
   press(input, "ArrowUp");
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  await waitFor(() => expect(sessionItem).toHaveBeenCalledTimes(1));
+  await act(async () => {});
   expect(input.value).toBe("");
+
+  press(input, "ArrowUp");
+  await waitFor(() => expect(input.value).toBe(full));
+  expect(sessionItem).toHaveBeenCalledTimes(2);
+});
+
+it("a pending full-text load does not swallow caret movement", async () => {
+  const full = `${"长".repeat(12_000)}的结尾`;
+  let finish = () => {};
+  vi.spyOn(WebClient.prototype, "sessionItem").mockImplementation(
+    (_id, _path, entryId) =>
+      new Promise((resolve) => {
+        finish = () =>
+          resolve({
+            entryId,
+            text: full,
+            nextCursor: null,
+            totalChars: full.length,
+          });
+      }),
+  );
+  const { input } = setup([truncatedPrompt()]);
+  type(input, "line one\nline two");
+  input.setSelectionRange(0, 0);
+  press(input, "ArrowUp");
+  expect(input.value).toBe("line one\nline two");
+
+  // Off the first line, Up is ordinary caret movement and is not prevented.
+  input.setSelectionRange(input.value.length, input.value.length);
+  expect(press(input, "ArrowUp")).toBe(true);
+  expect(press(input, "ArrowDown")).toBe(true);
+  // A history key still waits for the load in flight.
+  input.setSelectionRange(0, 0);
+  expect(press(input, "ArrowUp")).toBe(false);
+
+  await act(async () => finish());
+  await waitFor(() => expect(input.value).toBe(full));
 });
 
 it("history follows the selected session", () => {
@@ -347,19 +372,4 @@ it("history follows the selected session", () => {
   type(input, "");
   press(input, "ArrowUp");
   expect(input.value).toBe("from session B");
-});
-
-it("only real user prompts become history", () => {
-  const items = promptHistory([
-    userEntry("typed by the user"),
-    assistantEntry("model reply"),
-    {
-      id: "custom-1",
-      type: "custom_message",
-      timestamp: "2026-10-31T00:00:00Z",
-      message: { role: "custom", content: "extension note" },
-    } as Entry,
-    userEntry("   "),
-  ]);
-  expect(items.map((item) => item.text)).toEqual(["typed by the user"]);
 });

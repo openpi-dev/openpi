@@ -652,7 +652,6 @@ export function Composer(props: ComposerProps) {
     // Any edit ends browsing; the next Up starts again from the newest prompt.
     const browsing = isBrowsing(history.current.state, prompt);
     const state = browsing ? history.current.state : idlePromptHistory();
-    if (historyLoad.current) return true;
     if (
       !historyKeyApplies(
         key,
@@ -662,6 +661,8 @@ export function Composer(props: ComposerProps) {
       )
     )
       return false;
+    // Only history keys wait for a long prompt; caret movement never does.
+    if (historyLoad.current) return true;
     const next = stepPromptHistory(state, key, historyItems.length);
     if (next === undefined) return browsing;
     const draft = state.draft ?? { prompt, caret: input.selectionStart };
