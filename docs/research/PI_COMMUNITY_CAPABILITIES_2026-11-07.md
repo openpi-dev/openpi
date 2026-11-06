@@ -5,7 +5,9 @@ last-verified: 2026-11-07
 applies-to: OpenPI 1120cafcd3f5c1ad466df1c7b823976a3e911f72; installed Pi SDK 1.2.0; pinned community sources below
 related-issues:
   - https://github.com/openpi-dev/openpi/issues/913
-related-prs: []
+related-prs:
+  - https://github.com/openpi-dev/openpi/pull/914
+  - https://github.com/openpi-dev/openpi/pull/915
 supersedes: none
 ---
 
