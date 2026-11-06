@@ -82,17 +82,18 @@ import {
   slashCommandOptionId,
 } from "./SlashCommandMenu.tsx";
 
+import type { DiffLineReference } from "../review/DiffCodePreview.tsx";
+import {
+  REVIEW_REFERENCE_TEXT_LIMIT,
+  type PlanTextReference,
+} from "../review/review-reference.ts";
+
 interface ComposerProps {
   addSourcesRequest?: {
     sessionId: string;
     path: string;
     revision: number;
-    feedback?: {
-      filePath: string;
-      side: "new" | "old";
-      line: number;
-      code: string;
-    };
+    feedback?: DiffLineReference | PlanTextReference;
   };
   planSelectionPending?: boolean;
   workspaceDraft?: boolean;
@@ -702,8 +703,28 @@ export function Composer(props: ComposerProps) {
     )
       return;
     if (request.feedback) {
-      const { filePath, side, line, code } = request.feedback;
-      const quote = `${formatSourceReference(filePath)} — ${t(side === "new" ? "sourceFeedbackNew" : "sourceFeedbackOld", { path: filePath, line })}\n> ${code.split("\n").join("\n> ")}`;
+      const feedback = request.feedback;
+      let label: string;
+      let excerpt: string;
+      if ("kind" in feedback) {
+        if (
+          feedback.sessionId !== request.sessionId ||
+          feedback.sessionPath !== request.path
+        )
+          return;
+        label = `${t("sourceFeedbackPlan")} ${JSON.stringify({ sessionId: feedback.sessionId, sessionPath: feedback.sessionPath, entryId: feedback.entryId, toolCallId: feedback.toolCallId })}`;
+        excerpt = feedback.text;
+      } else {
+        const { filePath, side, line, code, source } = feedback;
+        label = `${formatSourceReference(filePath)} — ${t(side === "new" ? "sourceFeedbackNew" : "sourceFeedbackOld", { path: filePath, line })}`;
+        if (source)
+          label += `\n${t("sourceFeedbackProjection")} ${JSON.stringify(source)}`;
+        excerpt = code;
+      }
+      const bounded = excerpt
+        .slice(0, REVIEW_REFERENCE_TEXT_LIMIT)
+        .replace(/[\uD800-\uDBFF]$/u, "");
+      const quote = `${label}\n> ${bounded.split("\n").join("\n> ")}${excerpt.length > bounded.length ? `\n${t("sourceFeedbackTruncated")}` : ""}`;
       const current = currentDraft.current.prompt;
       const value = `${current}${current ? "\n\n" : ""}${quote}`;
       if (!updateDraft({ prompt: value, caret: value.length })) return;

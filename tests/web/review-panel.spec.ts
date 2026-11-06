@@ -1197,3 +1197,55 @@ it("keeps hidden diff reads and focus dormant, then cancels a read when hidden a
   rerender(node(true, "new-file.ts"));
   expect(readFile).toHaveBeenCalledTimes(2);
 });
+
+it("references the pinned displayed review revision after a newer summary arrives", async () => {
+  const quote = vi.fn();
+  const node = (revision: string) =>
+    withI18n(
+      createElement(ReviewPanel, {
+        review: {
+          result: { ok: true, snapshot: { ...snapshot, revision } },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+        },
+        initialFilePath: snapshot.files[0]!.path,
+        onClose: () => {},
+        onReferenceLine: quote,
+      }),
+    );
+  const view = render(node("displayed-v1"));
+  await act(async () => {});
+  view.rerender(node("latest-v2"));
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("reviewSelectNewLine", { line: 1 }),
+    }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("reviewQuoteLine") }),
+  );
+  expect(quote).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      source: {
+        repositoryRoot: snapshot.repositoryRoot,
+        comparison: snapshot.comparison,
+        revision: "displayed-v1",
+      },
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Show latest diff" }));
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: i18n.t("reviewSelectNewLine", { line: 1 }),
+    }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("reviewQuoteLine") }),
+  );
+  expect(quote).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      source: expect.objectContaining({ revision: "latest-v2" }),
+    }),
+  );
+});

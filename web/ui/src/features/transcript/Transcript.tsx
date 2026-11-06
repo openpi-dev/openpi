@@ -101,7 +101,10 @@ import "./provider-outcomes.css";
 import "./conversation-navigation.css";
 import "./message-branch.css";
 
+import type { PlanTextReference } from "../review/review-reference.ts";
+
 interface TranscriptProps {
+  onReferencePlan?: (reference: PlanTextReference) => void;
   label?: string;
   notice?: ReactNode;
   activityObserved?: boolean;
@@ -3181,6 +3184,7 @@ export function Transcript(props: TranscriptProps) {
                     sessionId={selectedId}
                     sessionPath={selectedPath}
                     entryId={persistedResultEntry?.entryId}
+                    onReference={active ? props.onReferencePlan : undefined}
                   />
                 ) : isEvidenceTool(part.name) && !child?.outputMissing ? (
                   <ToolEvidence
@@ -3438,6 +3442,7 @@ export function Transcript(props: TranscriptProps) {
                       sessionId={selectedId}
                       sessionPath={selectedPath}
                       entryId={entry.entryId}
+                      onReference={active ? props.onReferencePlan : undefined}
                     />
                   </div>
                 </article>
@@ -3627,6 +3632,7 @@ export function Transcript(props: TranscriptProps) {
     props.forkAvailable,
     props.forkPending,
     props.onInspectSubagent,
+    props.onReferencePlan,
     props.snapshot.runtime.capabilities.subagents,
     props.snapshot.runtime.capabilities.workflows?.items,
     props.snapshot.preferences.expandThinking,

@@ -15,6 +15,8 @@ import {
   type WebLiveMessage,
   type WebSnapshot,
 } from "../../web/protocol/types.ts";
+import type { PlanTextReference } from "../../web/ui/src/features/review/review-reference.ts";
+import { PlanCard } from "../../web/ui/src/features/transcript/PlanCard.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 
@@ -65,6 +67,7 @@ function transcript(
   messages: WebLiveMessage[],
   live: WebLiveMessage[] = [],
   active = true,
+  onReferencePlan?: (reference: PlanTextReference) => void,
 ) {
   const snapshot: WebSnapshot = {
     protocolVersion: 1,
@@ -108,6 +111,7 @@ function transcript(
       thinkingDurations: {},
       scrollToBottom: 0,
       onResend: async () => true,
+      onReferencePlan,
     }),
   );
 }
@@ -369,4 +373,61 @@ it("collapses without approving and copies the actual plan with explicit copy fe
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it("references selected plan text with its result identity and clears selection for a replacement result", () => {
+  const onReference = vi.fn();
+  const plan = result("# Plan\n\nSelected paragraph.");
+  const node = (message: WebLiveMessage, sessionPath = "/tmp/session") =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(PlanCard, {
+        result: message,
+        sessionId: "session",
+        sessionPath,
+        entryId: "result-entry",
+        onReference,
+      }),
+    );
+  const view = render(node(plan));
+  const button = screen.getByRole("button", {
+    name: i18n.t("planCardReference"),
+  }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  const paragraph = screen.getByText("Selected paragraph.");
+  const range = document.createRange();
+  range.selectNodeContents(paragraph);
+  window.getSelection()?.removeAllRanges();
+  window.getSelection()?.addRange(range);
+  fireEvent.mouseUp(paragraph);
+  expect(onReference).not.toHaveBeenCalled();
+  expect(button.disabled).toBe(false);
+  fireEvent.click(button);
+  expect(onReference).toHaveBeenCalledExactlyOnceWith({
+    kind: "plan",
+    sessionId: "session",
+    sessionPath: "/tmp/session",
+    entryId: "result-entry",
+    toolCallId: "plan-1",
+    text: "Selected paragraph.",
+  });
+  view.rerender(node(result("# Plan\n\nRevised paragraph.")));
+  expect(button.disabled).toBe(true);
+  expect(screen.getByText(i18n.t("planCardNotApproval"))).toBeTruthy();
+  view.rerender(node(plan, "/tmp/copied-session"));
+  expect(button.disabled).toBe(true);
+});
+
+it("offers plan references through the transcript only for the controlled Session", () => {
+  const callback = vi.fn();
+  const view = render(transcript([call, result()], [], false, callback));
+  expect(
+    screen.queryByRole("button", { name: i18n.t("planCardReference") }),
+  ).toBeNull();
+  view.rerender(transcript([call, result()], [], true, callback));
+  expect(
+    screen.getByRole("button", { name: i18n.t("planCardReference") }),
+  ).toBeTruthy();
+  expect(callback).not.toHaveBeenCalled();
 });

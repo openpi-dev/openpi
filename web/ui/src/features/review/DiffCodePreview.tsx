@@ -3,10 +3,13 @@ import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebGitReviewFile } from "../../../../protocol/types.ts";
 
+import type { ReviewSourceIdentity } from "./review-reference.ts";
+
 const DIFF_LINE_CAP = 500;
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/u;
 
 export interface DiffLineReference {
+  source?: ReviewSourceIdentity;
   filePath: string;
   side: "new" | "old";
   line: number;
@@ -112,9 +115,11 @@ export function parseDiffRows(diff: string) {
 
 export function DiffCodePreview({
   file,
+  source,
   onReferenceLine,
 }: {
   file: WebGitReviewFile;
+  source?: ReviewSourceIdentity;
   onReferenceLine?: (reference: DiffLineReference) => void;
 }) {
   const { t } = useTranslation();
@@ -144,6 +149,7 @@ export function DiffCodePreview({
     )
       return;
     return {
+      ...(source ? { source } : {}),
       filePath: side === "old" ? (file.previousPath ?? file.path) : file.path,
       side,
       line,
