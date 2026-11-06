@@ -93,6 +93,10 @@ Installation is quiet: no theme change, no provider or model binding, next-actio
 
 ## Capabilities
 
+### Semantic navigation
+
+The bundled `semantic-navigation` Skill can query an existing local language server for definitions, references and single-file diagnostics through Pi's ordinary Bash tool. Diagnostic comparisons retain ambiguous occurrences instead of treating matching messages as proof that nothing changed. No server is installed or started on launch; use requires an explicit server command and Bash permission. See [usage and limits](USAGE.md#semantic-navigation).
+
 ### Subagents
 
 ```text

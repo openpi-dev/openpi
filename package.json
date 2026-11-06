@@ -53,6 +53,11 @@
     "themes": [
       "./themes"
     ],
+    "skills": [
+      "./skills/subagents",
+      "./skills/workflows",
+      "./skills/semantic-navigation"
+    ],
     "image": "https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-package.png"
   },
   "dependencies": {

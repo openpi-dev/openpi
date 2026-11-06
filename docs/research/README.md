@@ -151,6 +151,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 - [`TEXT_PROJECTION_UTF8_2026-10-03.md`](TEXT_PROJECTION_UTF8_2026-10-03.md) — preservation of literal replacement characters in bounded Workflow context and handoffs ([#648](https://github.com/openpi-dev/openpi/issues/648)).
 
+- [`SEMANTIC_NAVIGATION_2026-11-07.md`](SEMANTIC_NAVIGATION_2026-11-07.md) — native Skill delivery, actual TypeScript navigation, occurrence-preserving diagnostic comparisons, package discovery and Bash cancellation; explicit single-file and abnormal-exit limits ([#913](https://github.com/openpi-dev/openpi/issues/913)).
+
 ## Legacy records
 
 The following records predate [`Decision 0001`](../decisions/0001-documentation-and-evidence-governance.md). They remain useful historical sources but have not been migrated to the new metadata contract as part of this change:

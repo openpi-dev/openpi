@@ -91,6 +91,10 @@ OpenPI 自有偏好通过自然语言配置：
 
 ## 能力
 
+### 语义导航
+
+内置 `semantic-navigation` Skill 通过 Pi 的普通 Bash 工具，按需向已有本地语言服务器查询定义、引用和单文件诊断。前后诊断对比保留无法可靠配对的记录，不把相同报错文字抵消成“没有变化”。启动 OpenPI 不会安装或启动服务器；调用需要明确的服务器命令和 Bash 权限。详见[使用方式与边界](USAGE.md#semantic-navigation)。
+
 ### Subagent
 
 ```text
