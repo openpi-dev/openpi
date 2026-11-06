@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   type AgentToolResult,
   initTheme,
+  keyHint,
+  keyText,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -38,6 +40,7 @@ function context(expanded = false, isError = false, showImages = false) {
     lastComponent: undefined,
     durationMs: undefined,
     outputPad: 0,
+    ...{ keyText, keyHint },
     state: {},
     cwd: "/workspace",
     executionStarted: true,

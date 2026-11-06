@@ -5,6 +5,8 @@ import {
   type AgentToolResult,
   type ExtensionAPI,
   initTheme,
+  keyHint,
+  keyText,
   type MessageRenderer,
   type Theme,
   type ToolDefinition,
@@ -150,6 +152,7 @@ test("workflow call rendering labels an explicit inline wait", () => {
     lastComponent: undefined,
     ...{ durationMs: undefined },
     ...{ outputPad: 0 },
+    ...{ keyText, keyHint },
     state: {},
     cwd: process.cwd(),
     executionStarted: true,
@@ -178,6 +181,7 @@ test("workflow call rendering gives legacy callers an actionable migration", () 
     lastComponent: undefined,
     ...{ durationMs: undefined },
     ...{ outputPad: 0 },
+    ...{ keyText, keyHint },
     state: {},
     cwd: process.cwd(),
     executionStarted: true,
@@ -209,6 +213,7 @@ test("workflow tool errors with malformed details fall back to plain text", (t) 
     lastComponent: undefined,
     ...{ durationMs: undefined },
     ...{ outputPad: 0 },
+    ...{ keyText, keyHint },
     state: {},
     cwd: process.cwd(),
     executionStarted: true,
@@ -257,6 +262,7 @@ test("running workflow cards request and render each shared spinner frame", (t) 
       lastComponent: undefined,
       ...{ durationMs: undefined },
       ...{ outputPad: 0 },
+      ...{ keyText, keyHint },
       state: {},
       cwd: process.cwd(),
       executionStarted: true,
@@ -300,7 +306,7 @@ test("running workflow result messages let the glyph carry the state", () => {
       details: runningWorkflow(),
       timestamp: Date.now(),
     },
-    { expanded: false, outputPad: 0 },
+    { expanded: false, outputPad: 0, ...{ keyText, keyHint } },
     theme,
   );
   assert.ok(component);
@@ -330,7 +336,7 @@ test("single completion keeps success diagnostics behind expansion", () => {
       details: display,
       timestamp: Date.now(),
     },
-    { expanded: false, outputPad: 0 },
+    { expanded: false, outputPad: 0, ...{ keyText, keyHint } },
     theme,
   );
   assert.ok(component);
@@ -360,7 +366,7 @@ test("single completion keeps success diagnostics behind expansion", () => {
       ]),
       timestamp: Date.now(),
     },
-    { expanded: true, outputPad: 0 },
+    { expanded: true, outputPad: 0, ...{ keyText, keyHint } },
     theme,
   );
   assert.ok(expanded);
@@ -393,7 +399,7 @@ test("malformed completion display fails closed to sanitized message content", (
       },
       timestamp: Date.now(),
     },
-    { expanded: false, outputPad: 0 },
+    { expanded: false, outputPad: 0, ...{ keyText, keyHint } },
     theme,
   );
   assert.ok(component);
@@ -540,7 +546,7 @@ test("batch completion foregrounds abnormal evidence within width", () => {
       ]),
       timestamp: Date.now(),
     },
-    { expanded: false, outputPad: 0 },
+    { expanded: false, outputPad: 0, ...{ keyText, keyHint } },
     theme,
   );
   assert.ok(component);
@@ -704,7 +710,7 @@ test("completion severities follow structured worktree facts and execution error
     };
     const rendered = message(
       input,
-      { expanded: false, outputPad: 0 },
+      { expanded: false, outputPad: 0, ...{ keyText, keyHint } },
       semanticTheme,
     )!;
     const plain = rendered.render(160).join("\n");
@@ -729,7 +735,7 @@ test("completion severities follow structured worktree facts and execution error
       );
     const expanded = message(
       input,
-      { expanded: true, outputPad: 0 },
+      { expanded: true, outputPad: 0, ...{ keyText, keyHint } },
       semanticTheme,
     )!
       .render(160)

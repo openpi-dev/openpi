@@ -127,6 +127,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
         tui.renderNow();
         const before = frame();
         assert.ok(before.some((line) => line.includes(image)));
+        const extensionDialogs: unknown[] = [];
         const host = {
           ui: tui,
           editor,
@@ -137,7 +138,12 @@ for (const mode of ["regular", "fullscreen"] as const) {
             getKeys: () => [],
           },
           disposeActiveSelector() {},
+          extensionDialogs,
+          programStatus: { setBlocked() {} },
         };
+        // Newer hosts mount custom pages through their native dialog stack.
+        // Use its real lifecycle methods rather than stubbing mount/restore.
+        Object.setPrototypeOf(host, InteractiveMode.prototype);
         // Execute the installed SDK's actual custom-editor mount/restore path.
         const nativeCustom = Reflect.get(
           InteractiveMode.prototype,

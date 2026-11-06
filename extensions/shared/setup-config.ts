@@ -29,18 +29,9 @@ import {
   type SubagentRoleModel,
   type SubagentRoleModels,
 } from "./subagent-roles.ts";
+import { REASONING_LEVELS, type ReasoningLevel } from "./reasoning-levels.ts";
 
-export const REASONING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-
-export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
+export { REASONING_LEVELS, type ReasoningLevel };
 
 export const RESPONSE_VERBOSITIES = [
   "default",

@@ -57,7 +57,12 @@ function fixture() {
     `
     import assert from "node:assert/strict";
     assert.equal(process.argv[2], "run");
-    assert.ok(process.argv[3].endsWith("sample.spec.ts"));
+    const args = process.argv.slice(3);
+    const workers = Number(args.find((arg) => arg.startsWith("--maxWorkers="))?.split("=")[1]);
+    assert.ok(Number.isInteger(workers) && workers >= 1 && workers <= 4);
+    const files = args.filter((arg) => !arg.startsWith("--"));
+    assert.equal(files.length, 1);
+    assert.ok(files[0].endsWith("sample.spec.ts"));
     console.log("ui suite marker");
     process.exit(process.env.FAIL_SUITE === "ui" ? 7 : 0);
   `,

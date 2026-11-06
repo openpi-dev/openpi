@@ -31,6 +31,8 @@ import {
   createAgentSession,
   createSyntheticSourceInfo,
   DefaultResourceLoader,
+  keyHint,
+  keyText,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -666,6 +668,7 @@ test("a settled launch card does not repaint while its detached run stays active
         lastComponent: undefined,
         ...{ durationMs: undefined },
         ...{ outputPad: 0 },
+        ...{ keyText, keyHint },
         state: {},
         cwd: repoDir,
         executionStarted: true,

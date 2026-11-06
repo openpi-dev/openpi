@@ -3,7 +3,7 @@ import { lstat, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
-import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
+import { REASONING_LEVELS } from "../../extensions/shared/reasoning-levels.ts";
 import { type WebModelConfiguration, type WebProviderConfigurationChange, type WebProviderConfigurationSummary, WebRuntimeRequestError } from "./types.ts";
 
 const apis = new Set(["openai-responses", "openai-completions", "anthropic-messages"]);
@@ -23,8 +23,8 @@ export function validModelConfiguration(value: unknown): value is WebModelConfig
   const thinking = value.thinkingLevelMap;
   if (thinking !== undefined && thinking !== null) {
     if (!record(thinking) || Object.entries(thinking).some(([level, mapped]) =>
-      !MODEL_THINKING_LEVELS.some((native) => native === level) || (mapped !== null && !text(mapped, 128)))) return false;
-    if (value.reasoning === true && !MODEL_THINKING_LEVELS.some((level) =>
+      !REASONING_LEVELS.some((native) => native === level) || (mapped !== null && !text(mapped, 128)))) return false;
+    if (value.reasoning === true && !REASONING_LEVELS.some((level) =>
       thinking[level] !== null && (level !== "xhigh" && level !== "max" || thinking[level] !== undefined))) return false;
   }
   if (value.input !== undefined && (!Array.isArray(value.input) || !value.input.length || value.input.length > 2 || new Set(value.input).size !== value.input.length || !value.input.every((item) => item === "text" || item === "image"))) return false;

@@ -302,12 +302,14 @@ test("frozen surface: /plan is a user boundary that adds exactly the plan tools"
 
     const planRequest = requests.at(-1)!;
     assert.notEqual(planRequest.tools, baselineTools);
-    assert.notEqual(planRequest.systemPrompt, baselinePrompt);
     const planWireNames = new Set(
       (JSON.parse(planRequest.tools) as Array<{ name: string }>).map(
         (tool) => tool.name,
       ),
     );
+    // Older hosts send changed tool declarations separately from prompt text.
+    // The model-visible set must still match the exact native active surface.
+    assert.deepEqual([...planWireNames].sort(), [...duringPlan].sort());
     for (const name of planTools) {
       assert.ok(planWireNames.has(name), `plan request must include ${name}`);
     }
