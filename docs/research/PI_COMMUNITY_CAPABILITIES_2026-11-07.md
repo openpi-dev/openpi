@@ -162,3 +162,10 @@ but remains unshipped. Server discovery/availability, termination behavior and
 reliable diagnostic identity require further work. The concrete false negative
 is retained rather than converting the probe into an accuracy claim.
 
+Initial CI rejected the committed Web bundles before running runtime tests.
+Replacing shared `node_modules` symlinks with independent Bun 1.3.14
+`--frozen-lockfile` installs and rebuilding removed 33 unrelated generated
+chunk changes. The lockfile was unchanged. This demonstrates an installation-
+layout-sensitive build result in this experiment; the original local checks
+alone did not establish CI artifact consistency. The corrected environment is
+validated separately before delivery.
