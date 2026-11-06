@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -522,13 +523,19 @@ async function snapshot(
         environment,
       );
     }
-    validateIndex(
-      await git(
-        source.sourceRoot,
-        ["ls-files", "--stage", "-z"],
-        context,
-        environment,
-      ),
+    const entries = await git(
+      source.sourceRoot,
+      ["ls-files", "--stage", "-z"],
+      context,
+      environment,
+    );
+    validateIndex(entries);
+    const executableFiles = paths(
+      entries
+        .split("\0")
+        .filter((entry) => entry.startsWith("100755 "))
+        .map((entry) => entry.slice(entry.indexOf("\t") + 1))
+        .join("\0"),
     );
     const tree = (
       await git(source.sourceRoot, ["write-tree"], context, environment)
@@ -549,7 +556,7 @@ async function snapshot(
       environment,
     );
     const ignored = await includedIgnored(source.sourceRoot, context);
-    return { tree, patch, ignored, ignoredTracked: existing };
+    return { tree, patch, ignored, ignoredTracked: existing, executableFiles };
   } finally {
     await rm(index, { force: true });
     await rm(`${index}.lock`, { force: true });
@@ -736,6 +743,20 @@ export async function createSessionWorktree(
         ["apply", "--binary", "--whitespace=nowarn", patchFile],
         mutationContext,
       );
+    }
+    if (process.platform !== "win32") {
+      for (const file of frozen.executableFiles) {
+        check(mutationContext);
+        const target = join(worktreePath, file);
+        const info = await lstat(target);
+        if (!info.isFile())
+          throw new SessionWorktreeError(
+            "changed",
+            "A tracked executable snapshot file changed during the fork.",
+          );
+        const mode = info.mode & 0o777;
+        if ((mode & 0o111) !== 0o111) await chmod(target, mode | 0o111);
+      }
     }
     for (const file of frozen.ignored) {
       await copyIncludedFile(
