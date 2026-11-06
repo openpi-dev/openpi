@@ -169,3 +169,12 @@ chunk changes. The lockfile was unchanged. This demonstrates an installation-
 layout-sensitive build result in this experiment; the original local checks
 alone did not establish CI artifact consistency. The corrected environment is
 validated separately before delivery.
+
+Corrected-bundle CI then exposed a separate packaged-startup failure. An exact
+local pack/install with Pi peers absent reproduced `Cannot find module
+'@earendil-works/pi-ai'`: the existing selected-host loader mapped AI subpaths
+but not its root export. Adding the root to that same alias map preserves the
+selected host and adds no runtime dependency. The resolver regression failed
+before the fix and passed afterward; the repacked installation reached ready,
+served its local assets and exited with status zero. Development-checkout
+success had not established this distribution boundary.
