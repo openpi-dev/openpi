@@ -1,3 +1,4 @@
+import { createContextObservation } from "./context-observation.ts";
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync, unlinkSync } from "node:fs";
 import { readConfiguredPackages } from "./configured-packages.ts";
@@ -97,6 +98,8 @@ import { applySetupConfiguration } from "../../extensions/shared/setup-apply.ts"
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { resolveWebSearchSupport } from "../../extensions/web-search/support.ts";
 import { createSessionWorktree, inspectSessionWorktree, cleanupSessionWorktree, bindSessionWorktree, listSessionWorktrees, readSessionWorktreeReceipt, sessionWorktreeReleaseTarget, SessionWorktreeError } from "./session-worktree.ts";
+
+const contextObservations = new WeakMap<object, ReturnType<typeof createContextObservation>>();
 
 const setupEvents = new WeakMap<object, ReturnType<typeof createEventBus>>();
 
@@ -1131,7 +1134,9 @@ export class PiWebRuntime implements WebRuntimeController {
 
   getSessionUsage() {
     const stats = this.runtime.session.getSessionStats();
+    const observedContext = contextObservations.get(this.runtime.services)?.read(this.runtime.session);
     return {
+      ...(observedContext ? { observedContext } : {}),
       input: stats.tokens.input,
       output: stats.tokens.output,
       cacheRead: stats.tokens.cacheRead,
@@ -2542,6 +2547,7 @@ export class PiWebRuntime implements WebRuntimeController {
         );
         ownsDispatcherLease = true;
       }
+      const contextObservation = createContextObservation();
       const commandDiscovery = createCommandDiscoveryBridge();
       const turnChanges = createTurnChangeRecorder(options.sessionManager, options.cwd);
       const eventBus = createEventBus();
@@ -2555,10 +2561,12 @@ export class PiWebRuntime implements WebRuntimeController {
           extensionFactories: [
             ...createPiBuiltinExtensionFactories(),
             commandDiscovery.extension,
+            contextObservation.extension,
             turnChanges.extension,
           ],
         },
       });
+      contextObservations.set(services, contextObservation);
       setupEvents.set(services, eventBus);
       registerCommandDiscoveryBridge(services, commandDiscovery);
       const extensionErrors = services.resourceLoader

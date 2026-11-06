@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import {
   contentText,
+  getCurrentSystemPrompt,
   type FauxResponseStep,
   fauxAssistantMessage,
   fauxProvider,
@@ -21,6 +22,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { createContextObservation } from "../../web/runtime/context-observation.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import type { WebRuntimeEvent } from "../../web/runtime/types.ts";
 
@@ -1112,4 +1114,108 @@ test("Web steering preserves native handled and queued input dispositions", {
   } finally {
     release.resolve();
   }
+});
+
+test("context observation reads real native calls without mutating them or claiming later handler changes", {
+  skip: skipBeforePi12,
+}, async (t) => {
+  const observation = createContextObservation();
+  let before: string | undefined;
+  let expectedSystemBytes = 0;
+  const { runtime, session } = await nativeRuntime(
+    t,
+    async (pi) => {
+      pi.on("context_with_system", (event) => {
+        event.messages.push({
+          role: "system",
+          content: "observed extra",
+          timestamp: 0,
+        });
+        before = JSON.stringify(event.messages);
+        expectedSystemBytes = Buffer.byteLength(
+          getCurrentSystemPrompt(event.messages),
+        );
+      });
+      await observation.extension.factory(pi);
+      pi.on("context_with_system", (event) => {
+        assert.equal(
+          JSON.stringify(event.messages),
+          before,
+          "observer must not change Pi's transcript",
+        );
+        event.messages.push({
+          role: "system",
+          content: "later unobserved",
+          timestamp: 0,
+        });
+      });
+    },
+    [
+      fauxAssistantMessage("first"),
+      fauxAssistantMessage("second"),
+      fauxAssistantMessage("third"),
+    ],
+  );
+  assert.equal(observation.read(session), undefined);
+  await runtime.sendPrompt("你好", {
+    commandId: "observed-first",
+    images: [
+      {
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      },
+    ],
+  });
+  await session.waitForIdle();
+  const first = observation.read(session)!;
+  assert.equal(first.sequence, 1);
+  assert.equal(first.conversationBytes, Buffer.byteLength("你好"));
+  assert.equal(first.messageCount, 1);
+  assert.equal(first.omittedBlocks, 1);
+  assert.equal(
+    first.systemBytes,
+    expectedSystemBytes,
+    "later system updates are not attributed to the observation",
+  );
+  assert.ok(first.systemBytes > Buffer.byteLength("observed extra"));
+  assert.ok(first.toolCount > 0);
+  assert.equal(
+    JSON.stringify(first).includes("observed extra"),
+    false,
+    "no raw context retained",
+  );
+  assert.equal(observation.read({ ...session, model: undefined }), undefined);
+  assert.equal(
+    observation.read({
+      sessionManager: SessionManager.inMemory(),
+      model: session.model,
+    }),
+    undefined,
+  );
+  await runtime.sendPrompt("next", { commandId: "observed-second" });
+  await session.waitForIdle();
+  const second = observation.read(session)!;
+  assert.equal(second.sequence, 2);
+  assert.ok(second.conversationBytes > first.conversationBytes);
+  assert.equal(
+    first.sequence,
+    1,
+    "readers receive a detached numeric snapshot",
+  );
+  const userEntry = session.sessionManager
+    .getBranch()
+    .find(
+      (entry) => entry.type === "message" && entry.message.role === "user",
+    )!;
+  await session.navigateTree(userEntry.id);
+  assert.equal(
+    observation.read(session),
+    undefined,
+    "tree navigation invalidates the old branch observation",
+  );
+  await runtime.sendPrompt("third", { commandId: "observed-third" });
+  await session.waitForIdle();
+  assert.equal(observation.read(session)?.sequence, 3);
+  await runtime.dispose();
+  assert.equal(observation.read(session), undefined);
 });
