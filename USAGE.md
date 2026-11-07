@@ -264,6 +264,16 @@ Skill 使用 Pi 原生机制：模型根据名称、描述和路径按需用 `re
 
 Skill 正文通过原生用户消息或工具结果进入正常 Session 历史，压缩也交给 Pi。OpenPI 不另存正文快照，不叠加隐藏正文，也不在压缩后自动补回。压缩后不保证全文仍在模型上下文中；需要时可重新读取或显式调用。普通 `read` 的输出限制和模型总上下文限制仍然适用。设计边界见 [Decision 0002](docs/decisions/0002-native-skill-lifecycle.md)。
 
+## Semantic navigation
+
+`semantic-navigation` 随包通过 Pi 原生 Skill 清单加载。模型可按需读取，也可用 `/skill:semantic-navigation` 明确调用；正文和脚本参数见 [Skill](skills/semantic-navigation/SKILL.md)。它复用普通 `bash`，不新增模型工具、模型调用或后台服务，也不会自动安装语言服务器。
+
+调用时明确指定项目目录、已有服务器的可执行文件与参数、文件及位置。支持定义、引用和单文件 pull diagnostics；不支持该能力的服务器会明确返回 unsupported。输入位置使用从 1 开始的 UTF-16 行列，返回位置保留 LSP 从 0 开始的范围。每次调用独立启动、请求和关闭服务，响应结果与进程退出结果分别展示。
+
+前后诊断快照绑定打开文本的 SHA-256、文件 URI 和服务器身份。对比保留每个诊断及其位置；文本变化后，同类报错的对应关系标为 ambiguous，而非直接抵消。新增或消失的诊断只表示两次观察的差异，不证明编辑造成或修复了问题。依赖、配置和其他文件未被冻结；单文件空结果不代表整个项目检查通过，未知或不完整快照也不作此结论。
+
+语言服务器以普通 Bash 权限运行；只读协议请求不构成服务器沙箱。需要当前会话具有 Bash 能力，Plan Mode 的命令限制仍然适用。原生包清单明确列出 `subagents`、`workflows` 和 `semantic-navigation` 三个 Skill，使字符串来源和带筛选项的对象来源都能发现它们；子会话继续排除两个编排 Skill。
+
 ## 模型工具速查
 
 OpenPI 提供一套固定的常驻模型工具，在 Session 开始时确定一次：Subagent（`subagent_spawn` 等 5 个）与 Workflow（`workflow`/`workflow_stop`/`workflow_status`），共 8 个。会话内工具列表不因模型动作或运行时状态改变；缺少对应状态的调用在执行层返回明确结果或 fail-closed。只有用户显式边界会改变工具：`/plan` 加入只读 Git、`plan_ready` 与 `ask_user`/`human_handoff`；`/openpi-setup` episode 加入 `configure_my_pi_setup` 与 `ask_user`/`human_handoff`；浏览器授权后启用 `openpi_browser`。Subagent 与 Workflow 的 Skill 文件仍随包发布，模型按需用 `read` 读取，不常驻普通系统 Prompt。
