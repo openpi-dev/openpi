@@ -1,4 +1,4 @@
-import { Check, Clipboard, FileText } from "lucide-react";
+import { Check, Clipboard, FileText, MessageSquarePlus } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { evidenceRecord, evidenceText } from "../../../../protocol/evidence.ts";
@@ -6,6 +6,8 @@ import type { WebLiveMessage } from "../../../../protocol/types.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { copyText } from "../../lib/clipboard.ts";
 import { FullMessageText } from "./FullMessageText.tsx";
+
+import type { PlanTextReference } from "../review/review-reference.ts";
 
 /** A tool's arguments are only a proposal; readiness comes from its result. */
 export function planPresentation(result?: WebLiveMessage) {
@@ -30,14 +32,23 @@ export function PlanCard({
   sessionId,
   sessionPath,
   entryId,
+  onReference,
 }: {
   result: WebLiveMessage;
   sessionId?: string;
   sessionPath?: string;
   entryId?: string;
+  onReference?: (reference: PlanTextReference) => void;
 }) {
   const { t } = useTranslation();
   const bodyId = useId();
+  const textBody = useRef<HTMLDivElement>(null);
+  const [selection, setSelection] = useState<{
+    source: string;
+    result: WebLiveMessage;
+    markdown: string;
+    text: string;
+  } | null>(null);
   const [expanded, setExpanded] = useState(true);
   const [copied, setCopied] = useState<{
     source: string;
@@ -68,6 +79,30 @@ export function PlanCard({
       ? copied.status
       : null;
   if (!plan) return null;
+  const selectedText =
+    selection?.source === source &&
+    selection.result === result &&
+    selection.markdown === plan.markdown
+      ? selection.text
+      : undefined;
+  const canReference =
+    onReference && sessionId && sessionPath && (entryId || result.toolCallId);
+  const captureSelection = () => {
+    const selected = window.getSelection();
+    const text = selected?.toString();
+    setSelection(
+      text &&
+        textBody.current?.contains(selected?.anchorNode ?? null) &&
+        textBody.current.contains(selected?.focusNode ?? null)
+        ? {
+            source,
+            result,
+            markdown: plan.markdown,
+            text,
+          }
+        : null,
+    );
+  };
 
   return (
     <section className="plan-card" aria-label={t("planCardLabel")}>
@@ -85,6 +120,29 @@ export function PlanCard({
             {t(expanded ? "planCardCollapse" : "planCardExpand")}
           </span>
         </button>
+        {canReference && (
+          <button
+            type="button"
+            className="plan-card-reference"
+            disabled={!selectedText || !expanded}
+            title={t("planCardReferenceHint")}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              if (!selectedText) return;
+              onReference({
+                kind: "plan",
+                sessionId,
+                sessionPath,
+                entryId,
+                toolCallId: result.toolCallId,
+                text: selectedText,
+              });
+            }}
+          >
+            <MessageSquarePlus aria-hidden="true" />
+            {t("planCardReference")}
+          </button>
+        )}
         <button
           type="button"
           className="plan-card-copy"
@@ -117,26 +175,34 @@ export function PlanCard({
         {plan.truncated && (
           <p className="plan-card-note">{t("planCardTruncated")}</p>
         )}
-        {preview?.truncated && sessionId && sessionPath && entryId ? (
-          <FullMessageText
-            key={source}
-            preview={preview.markdown}
-            sessionId={sessionId}
-            sessionPath={sessionPath}
-            entryId={entryId}
-            markdown
-            purpose="plan"
-            fullText={fullPlan}
-            onProgress={(markdown) =>
-              setHydrated({ source, markdown, complete: false })
-            }
-            onComplete={(markdown) =>
-              setHydrated({ source, markdown, complete: true })
-            }
-          />
-        ) : (
-          <Markdown>{plan.markdown}</Markdown>
-        )}
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: observes native text selection; the separate button owns interaction. */}
+        <div
+          ref={textBody}
+          className="plan-card-text"
+          onMouseUp={captureSelection}
+          onKeyUp={captureSelection}
+        >
+          {preview?.truncated && sessionId && sessionPath && entryId ? (
+            <FullMessageText
+              key={source}
+              preview={preview.markdown}
+              sessionId={sessionId}
+              sessionPath={sessionPath}
+              entryId={entryId}
+              markdown
+              purpose="plan"
+              fullText={fullPlan}
+              onProgress={(markdown) =>
+                setHydrated({ source, markdown, complete: false })
+              }
+              onComplete={(markdown) =>
+                setHydrated({ source, markdown, complete: true })
+              }
+            />
+          ) : (
+            <Markdown>{plan.markdown}</Markdown>
+          )}
+        </div>
         <details className="plan-card-evidence">
           <summary>{t("planCardEvidence")}</summary>
           <pre className="tool-evidence">

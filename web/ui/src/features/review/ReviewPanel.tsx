@@ -734,6 +734,15 @@ export function ReviewPanel({
                   )}
                   <DiffCodePreview
                     file={selectedFile}
+                    source={
+                      snapshot
+                        ? {
+                            repositoryRoot: snapshot.repositoryRoot,
+                            comparison: snapshot.comparison,
+                            revision: snapshot.revision,
+                          }
+                        : undefined
+                    }
                     onReferenceLine={onReferenceLine}
                   />
                 </>

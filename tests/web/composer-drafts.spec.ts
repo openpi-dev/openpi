@@ -1201,3 +1201,75 @@ it("does not write over unread storage after an initial read failure, and hydrat
   view.select("B");
   expect(view.input.value).toBe("B from before");
 });
+
+it("keeps cited review identity and excerpt in the draft across later renders and bounds long excerpts", async () => {
+  const view = setup();
+  const source = {
+    repositoryRoot: "/workspace",
+    comparison: "unstaged" as const,
+    revision: "displayed-v1",
+  };
+  view.update({
+    addSourcesRequest: {
+      sessionId: "A",
+      path: "/workspace/a.jsonl",
+      revision: 1,
+      feedback: {
+        filePath: "src/old.ts",
+        side: "old",
+        line: 8,
+        code: "old text",
+        source,
+      },
+    },
+  });
+  const cited = view.input.value;
+  expect(cited).toContain(JSON.stringify(source));
+  expect(cited).toContain("> old text");
+  view.update({ snapshot: { ...snapshot(), cursor: 2 } });
+  expect(view.input.value).toBe(cited);
+  view.update({
+    addSourcesRequest: {
+      sessionId: "A",
+      path: "/workspace/a.jsonl",
+      revision: 2,
+      feedback: {
+        kind: "plan",
+        sessionId: "A",
+        sessionPath: "/workspace/a.jsonl",
+        entryId: "result-entry",
+        toolCallId: "plan-call",
+        text: "x".repeat(9000),
+      },
+    },
+  });
+  expect(view.input.value).toContain('"entryId":"result-entry"');
+  expect(view.input.value).toContain('"toolCallId":"plan-call"');
+  expect(view.input.value).toContain("x".repeat(8000));
+  expect(view.input.value).not.toContain("x".repeat(8001));
+  expect(view.input.value).toContain(i18n.t("sourceFeedbackTruncated"));
+  expect(view.sendPrompt).not.toHaveBeenCalled();
+  const submitted = view.input.value;
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("send") }));
+  await waitFor(() => expect(view.sendPrompt).toHaveBeenCalledWith(submitted));
+});
+
+it("rejects plan text whose own Session identity differs from its draft request", () => {
+  const view = setup();
+  view.update({
+    addSourcesRequest: {
+      sessionId: "A",
+      path: "/workspace/a.jsonl",
+      revision: 1,
+      feedback: {
+        kind: "plan",
+        sessionId: "B",
+        sessionPath: "/workspace/b.jsonl",
+        entryId: "result-entry",
+        text: "wrong session",
+      },
+    },
+  });
+  expect(view.input.value).toBe("");
+  expect(view.sendPrompt).not.toHaveBeenCalled();
+});

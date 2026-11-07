@@ -1679,6 +1679,11 @@ const resources = {
       steeringMessagesTitle: "Pending instructions for this turn",
       steerStaleTurn:
         "That turn has ended or changed. Your draft is kept. Check the updated status and send again.",
+      planCardReference: "Reference selection",
+      planCardReferenceHint: "Select plan text, then add it to your draft",
+      sourceFeedbackPlan: "Plan reference:",
+      sourceFeedbackProjection: "Review version:",
+      sourceFeedbackTruncated: "[Reference excerpt truncated]",
       sourceFeedbackNew: "{{path}} · new line {{line}}",
       sourceFeedbackOld: "{{path}} · old line {{line}}",
       forkMessage: "Fork from here",
@@ -3712,6 +3717,11 @@ const resources = {
       steeringMessagesTitle: "当前轮次待处理的纠偏指示",
       steerStaleTurn:
         "目标轮次已结束或变化。草稿已保留，请确认更新后的状态并重新发送。",
+      planCardReference: "引用所选文字",
+      planCardReferenceHint: "选择计划文字，再添加到输入草稿",
+      sourceFeedbackPlan: "计划引用：",
+      sourceFeedbackProjection: "审阅版本：",
+      sourceFeedbackTruncated: "[引用摘录已截断]",
       sourceFeedbackNew: "{{path}} · 新版本第 {{line}} 行",
       sourceFeedbackOld: "{{path}} · 旧版本第 {{line}} 行",
       forkMessage: "从此处分叉",

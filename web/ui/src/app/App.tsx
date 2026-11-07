@@ -38,6 +38,7 @@ import {
   QuestionPanel,
   type QuestionWorkingCache,
 } from "../features/questions/QuestionPanel.tsx";
+import type { PlanTextReference } from "../features/review/review-reference.ts";
 import type { DiffLineReference } from "../features/review/DiffCodePreview.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
 import { ArchiveNotifications } from "../features/sessions/ArchiveNotifications.tsx";
@@ -139,7 +140,7 @@ export function App() {
     sessionId: string;
     path: string;
     revision: number;
-    feedback?: DiffLineReference;
+    feedback?: DiffLineReference | PlanTextReference;
   }>();
   const [resizingPane, setResizingPane] = useState(false);
   const [centerCollapsed, setCenterCollapsed] = useState(false);
@@ -1228,6 +1229,25 @@ export function App() {
                 onNavigateToMessage={actions.navigateToMessage}
                 onRefreshHistory={actions.refreshSnapshot}
                 onPromptProjection={actions.rememberPromptProjection}
+                onReferencePlan={(feedback) => {
+                  const current = webStore.getState();
+                  const session = current.snapshot?.selectedSession;
+                  if (
+                    current.workspaceDraft ||
+                    current.sessionSwitching ||
+                    current.selectedPath !== feedback.sessionPath ||
+                    session?.id !== feedback.sessionId ||
+                    session.path !== feedback.sessionPath ||
+                    !isControlledSession(current.snapshot, session)
+                  )
+                    return;
+                  setAddSourcesRequest((previous) => ({
+                    sessionId: feedback.sessionId,
+                    path: feedback.sessionPath,
+                    revision: (previous?.revision ?? 0) + 1,
+                    feedback,
+                  }));
+                }}
               />
             ) : null}
             {!providerSettingsVisible &&
