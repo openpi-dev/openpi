@@ -65,8 +65,15 @@ async function writePiPackage(
     JSON.stringify({
       name: "@earendil-works/pi-ai",
       type: "module",
-      exports: { "./providers/*": { import: "./dist/providers/*.js" } },
+      exports: {
+        ".": { import: "./dist/index.js" },
+        "./providers/*": { import: "./dist/providers/*.js" },
+      },
     }),
+  );
+  await writeFile(
+    join(aiRoot, "dist", "index.js"),
+    `export const marker = ${JSON.stringify(options.marker)};\n`,
   );
   const providers = join(aiRoot, "dist", "providers", "all.js");
   await writeFile(
@@ -78,7 +85,14 @@ async function writePiPackage(
     schema,
     `export const marker = ${JSON.stringify(options.marker)};\n`,
   );
-  return { root, entry, providers, schema, cli: join(root, "dist", "cli.js") };
+  return {
+    root,
+    entry,
+    ai: join(aiRoot, "dist", "index.js"),
+    providers,
+    schema,
+    cli: join(root, "dist", "cli.js"),
+  };
 }
 
 async function isolatedLayout() {
@@ -183,6 +197,7 @@ test("standalone uses a validated explicit handoff before its own peer", async (
     });
     const jiti = createJiti(layout.fromUrl, { alias: aliases });
     for (const dependency of [
+      "@earendil-works/pi-ai",
       "@earendil-works/pi-ai/providers/all",
       "@earendil-works/pi-ai/providers/model-schema",
     ]) {
@@ -301,6 +316,7 @@ test("standalone source uses the install peer and official 0.84.1 exports", asyn
     });
     assert.deepEqual(aliases, {
       [PI_CODING_AGENT_PACKAGE]: realpathSync(layout.peer.entry),
+      "@earendil-works/pi-ai": realpathSync(layout.peer.ai),
       "@earendil-works/pi-ai/providers/all": realpathSync(
         layout.peer.providers,
       ),
@@ -323,6 +339,7 @@ test("standalone keeps Pi and available dependencies when the host omits provide
     });
     assert.deepEqual(aliases, {
       [PI_CODING_AGENT_PACKAGE]: realpathSync(layout.peer.entry),
+      "@earendil-works/pi-ai": realpathSync(layout.peer.ai),
       "@earendil-works/pi-ai/providers/model-schema": realpathSync(
         layout.peer.schema,
       ),

@@ -143,3 +143,40 @@ it("closes from the visible control and returns focus to the usage strip", async
   });
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+it("labels hook bytes independently of native token usage and states missing observations", async () => {
+  const view = render(usageView(usage));
+  fireEvent.click(usageTrigger());
+  let dialog = within(
+    await screen.findByRole("dialog", { name: i18n.t("sessionUsage") }),
+  );
+  expect(dialog.getByText(i18n.t("usageObservationMissing"))).toBeTruthy();
+  view.rerender(
+    usageView({
+      ...usage,
+      observedContext: {
+        source: "context_with_system",
+        sequence: 2,
+        observedAt: 1,
+        sessionId: "fixture-session-id",
+        systemBytes: 123,
+        toolBytes: 456,
+        toolCount: 3,
+        conversationBytes: 789,
+        messageCount: 4,
+        omittedBlocks: 1,
+      },
+    }),
+  );
+  dialog = within(
+    await screen.findByRole("dialog", { name: i18n.t("sessionUsage") }),
+  );
+  expect(dialog.getByText("123 B")).toBeTruthy();
+  expect(dialog.getByText("456 B")).toBeTruthy();
+  expect(dialog.getByText("789 B")).toBeTruthy();
+  expect(dialog.getByText(i18n.t("usageObservationBoundary"))).toBeTruthy();
+  expect(
+    dialog.getByText(i18n.t("usageObservationOmitted", { count: 1 })),
+  ).toBeTruthy();
+  expect(dialog.getByText("7,141")).toBeTruthy();
+});

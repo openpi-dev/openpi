@@ -733,6 +733,19 @@ const resources = {
         "Input {{input}} · Output {{output}} · Context {{percent}} / {{capacity}} · View token usage",
       usageContextHelp:
         "Estimated tokens in the current branch / model context limit.",
+      usageObservedContext: "Observed model context",
+      usageObservationSource: "Latest observed call #{{sequence}}",
+      usageObservedSystem: "Current system prompt",
+      usageObservedTools: "Tools ({{count}})",
+      usageObservedConversation: "Conversation ({{count}} messages)",
+      usageObservationMeasure:
+        "UTF-8 text bytes, including tool definitions and call arguments. Metadata is excluded.",
+      usageObservationOmitted:
+        "Images and other non-text blocks excluded: {{count}}.",
+      usageObservationBoundary:
+        "The final provider request may differ. Byte sizes are not token counts or billing usage.",
+      usageObservationMissing:
+        "No model call observed for this session and model yet. Resets after context changes.",
       usageSessionTotals: "Session totals",
       usageInputLabel: "Input",
       usageOutputLabel: "Output",
@@ -2853,6 +2866,18 @@ const resources = {
       usageOpenDetails:
         "输入 {{input}} · 输出 {{output}} · 上下文 {{percent}} / {{capacity}} · 查看会话用量",
       usageContextHelp: "当前分支的估算占用 / 模型上下文容量上限。",
+      usageObservedContext: "已观测的模型上下文",
+      usageObservationSource: "最近观测调用 #{{sequence}}",
+      usageObservedSystem: "当前系统提示词",
+      usageObservedTools: "工具（{{count}} 个）",
+      usageObservedConversation: "对话（{{count}} 条消息）",
+      usageObservationMeasure:
+        "UTF-8 文本字节数，包含工具定义和调用参数，不含元数据。",
+      usageObservationOmitted: "已排除图片及其他非文本块：{{count}} 个。",
+      usageObservationBoundary:
+        "最终发给提供商的请求可能有所不同。字节数不是 token 数，也不代表计费使用量。",
+      usageObservationMissing:
+        "尚未观测到此会话和模型的调用。上下文变更后重置。",
       usageSessionTotals: "累计用量",
       usageInputLabel: "输入",
       usageOutputLabel: "输出",

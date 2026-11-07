@@ -374,7 +374,25 @@ export interface WebSessionPromptPreview {
   response: string;
 }
 
+/** Sizes observed at Pi's context hook, before later handlers and provider conversion. */
+export interface WebContextObservation {
+  source: "context_with_system";
+  sequence: number;
+  observedAt: number;
+  sessionId: string;
+  sessionPath?: string;
+  provider?: string;
+  modelId?: string;
+  systemBytes: number;
+  toolBytes: number;
+  toolCount: number;
+  conversationBytes: number;
+  messageCount: number;
+  omittedBlocks: number;
+}
+
 export interface WebSessionUsage {
+  observedContext?: WebContextObservation;
   input: number;
   output: number;
   cacheRead: number;

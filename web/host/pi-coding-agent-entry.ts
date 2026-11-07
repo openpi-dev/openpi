@@ -166,6 +166,7 @@ export function resolveStandaloneJitiAliases(options?: {
   const host = createJiti(entry);
   aliases[PI_CODING_AGENT_PACKAGE] = entry;
   for (const dependency of [
+    "@earendil-works/pi-ai",
     "@earendil-works/pi-ai/providers/all",
     "@earendil-works/pi-ai/providers/model-schema",
     "@earendil-works/pi-tui",
