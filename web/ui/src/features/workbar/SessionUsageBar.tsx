@@ -105,6 +105,57 @@ export function SessionUsageBar({
               )}
             </section>
             <section className="usage-section">
+              <h3>{t("usageObservedContext")}</h3>
+              {usage.observedContext ? (
+                <>
+                  <p className="usage-help">
+                    {t("usageObservationSource", {
+                      sequence: usage.observedContext.sequence,
+                    })}
+                  </p>
+                  <dl className="usage-metrics">
+                    <div>
+                      <dt>{t("usageObservedSystem")}</dt>
+                      <dd>{format(usage.observedContext.systemBytes)} B</dd>
+                    </div>
+                    <div>
+                      <dt>
+                        {t("usageObservedTools", {
+                          count: usage.observedContext.toolCount,
+                        })}
+                      </dt>
+                      <dd>{format(usage.observedContext.toolBytes)} B</dd>
+                    </div>
+                    <div>
+                      <dt>
+                        {t("usageObservedConversation", {
+                          count: usage.observedContext.messageCount,
+                        })}
+                      </dt>
+                      <dd>
+                        {format(usage.observedContext.conversationBytes)} B
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="usage-help">{t("usageObservationMeasure")}</p>
+                  <p className="usage-help">
+                    {t("usageObservationOmitted", {
+                      count: usage.observedContext.omittedBlocks,
+                    })}
+                  </p>
+                  <p className="usage-help">{t("usageObservationBoundary")}</p>
+                  {usage.observedContext.modelId && (
+                    <p className="usage-help">
+                      {usage.observedContext.provider} /{" "}
+                      {usage.observedContext.modelId}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="usage-help">{t("usageObservationMissing")}</p>
+              )}
+            </section>
+            <section className="usage-section">
               <h3>{t("usageSessionTotals")}</h3>
               <dl className="usage-metrics">
                 <div>
