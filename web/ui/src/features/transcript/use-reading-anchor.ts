@@ -15,6 +15,7 @@ export function useReadingAnchor(
     scope: string;
     element: HTMLElement;
     offset: number;
+    scrollTop: number;
   } | null>(null);
   const capture = useCallback(() => {
     const root = viewport.current;
@@ -59,6 +60,7 @@ export function useReadingAnchor(
           scope,
           element,
           offset: element.getBoundingClientRect().top - bounds.top,
+          scrollTop: root.scrollTop,
         }
       : null;
   }, [viewport, pinned, scope]);
@@ -73,6 +75,11 @@ export function useReadingAnchor(
       saved.current = null;
       return;
     }
+    // The reader (or the browser) moved this scrollport after the anchor was
+    // captured, and its scroll event has not been dispatched yet. The anchor
+    // describes a position the reader already left; restoring it would undo
+    // their scroll. The layout effect captures the new position instead.
+    if (Math.abs(root.scrollTop - anchor.scrollTop) > 0.5) return;
     const delta =
       anchor.element.getBoundingClientRect().top -
       root.getBoundingClientRect().top -

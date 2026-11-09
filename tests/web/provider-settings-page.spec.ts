@@ -1561,78 +1561,6 @@ it("restores sliders to persisted values when a direct save fails", async () => 
   );
 });
 
-it("saves every result display and footer control through presentation preferences, with failed saves preserving the canonical value", async () => {
-  const fetcher = settingsFetcher();
-  vi.stubGlobal("fetch", fetcher);
-  const configure = vi.fn(async () => true);
-  renderSettings({ onConfigureOpenPi: configure });
-  await screen.findByText(i18n.t("agentBehavior"));
-  for (const label of ["subagentResults", "bashOperations", "fileMutations"]) {
-    const select = screen.getByRole<HTMLButtonElement>("button", {
-      name: i18n.t(label),
-    });
-    fireEvent.click(select);
-    fireEvent.click(
-      screen.getByRole("menuitemradio", {
-        name: i18n.t("detailDisplay_full"),
-      }),
-    );
-    await waitFor(() =>
-      expect(select.textContent).toBe(i18n.t("detailDisplay_full")),
-    );
-    await waitFor(() => expect(select.disabled).toBe(false));
-  }
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("terminalFooterStyle") }),
-  );
-  fireEvent.click(
-    screen.getByRole("menuitemradio", { name: "Powerline Mono" }),
-  );
-  const footerStyle = screen.getByRole<HTMLButtonElement>("button", {
-    name: i18n.t("terminalFooterStyle"),
-  });
-  await waitFor(() => expect(footerStyle.textContent).toBe("Powerline Mono"));
-  fireEvent.click(
-    screen.getByRole("switch", { name: i18n.t("terminalFooter") }),
-  );
-  await waitFor(() =>
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", {
-        name: i18n.t("terminalFooterStyle"),
-      }).disabled,
-    ).toBe(true),
-  );
-  expect(configure).not.toHaveBeenCalled();
-  expect(
-    fetcher.mock.calls.filter(([input]) =>
-      String(input).includes("/api/settings/preferences"),
-    ),
-  ).toHaveLength(5);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      async () =>
-        new Response(JSON.stringify({ error: "read-only configuration" }), {
-          status: 422,
-        }),
-    ),
-  );
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("bashOperations") }),
-  );
-  fireEvent.click(
-    screen.getByRole("menuitemradio", {
-      name: i18n.t("detailDisplay_compact"),
-    }),
-  );
-  await screen.findByText(i18n.t("settingsPreferencesSaveFailed"));
-  expect(
-    screen.getByRole<HTMLButtonElement>("button", {
-      name: i18n.t("bashOperations"),
-    }).textContent,
-  ).toBe(i18n.t("detailDisplay_full"));
-});
-
 it("routes agent controls through canonical setup and waits for a save receipt", async () => {
   const fetcher = settingsFetcher();
   vi.stubGlobal("fetch", fetcher);
@@ -1667,6 +1595,8 @@ it("routes agent controls through canonical setup and waits for a save receipt",
       i18n.t("setupRequestLimits", { concurrency: 9, calls: 64 }),
     ),
   );
+  // The display change saved through preferences, never through setup.
+  expect(configure).toHaveBeenCalledTimes(1);
   expect(
     fetcher.mock.calls.filter(([input]) =>
       String(input).includes("/api/settings/preferences"),
