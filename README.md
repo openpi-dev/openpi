@@ -1,11 +1,18 @@
 <p align="center">
-  <img src="assets/openpi-product-hero-v2.webp" alt="OpenPI — Build. Delegate. Keep moving. A local Web workbench, isolated subagents, and workflows for Pi." width="100%" />
+  <a href="https://github.com/openpi-dev/openpi">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.webp">
+      <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/hero-light.webp">
+      <img src="docs/assets/readme/hero-dark.webp" alt="OpenPI — the Pi-native multi-agent workbench. The OpenPI Web workbench showing a parent session that delegated two isolated subagents, next to one subagent's read-only transcript." width="100%">
+    </picture>
+  </a>
 </p>
 
+<h3 align="center">Stay on your problem. Let independent work run in parallel.</h3>
+
 <p align="center">
-  <strong>Stay on your problem. Let independent work run in parallel.</strong><br />
-  OpenPI adds a local Web workbench, isolated-context subagents, and Workflows to <a href="https://pi.dev">Pi</a>.<br />
-  It keeps your models, tools, and Skills — everyday coding stays light, advanced capabilities unfold when needed.
+  OpenPI adds isolated subagents, replay-safe Workflows and a local Web workbench to <a href="https://pi.dev">Pi</a> —<br />
+  inside Pi's own sessions, providers, tools, Skills and Trust. Everyday coding stays light; power unfolds when you ask for it.
 </p>
 
 <p align="center">
@@ -16,14 +23,12 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
 
-```bash
-pi install npm:@tt-a1i/openpi
-```
-
 <p align="center">
-  <a href="https://openpi-dev.github.io/openpi/"><strong>Website</strong></a> ·
   <a href="#quick-start"><strong>Quick start</strong></a> ·
-  <a href="USAGE.md"><strong>Detailed reference</strong></a> ·
+  <a href="#see-it-work"><strong>Tour</strong></a> ·
+  <a href="https://openpi-dev.github.io/openpi/"><strong>Website</strong></a> ·
+  <a href="USAGE.md"><strong>Reference</strong></a> ·
+  <a href="https://github.com/openpi-dev/openpi/releases"><strong>Releases</strong></a> ·
   <a href="README.zh-CN.md"><strong>中文</strong></a>
 </p>
 
@@ -31,17 +36,13 @@ pi install npm:@tt-a1i/openpi
   <sub>OpenPI is an independent community project, unaffiliated with Physical Intelligence's openpi robotics project and with the Pi team.</sub>
 </p>
 
----
+<br />
 
-## What OpenPI is
-
-Pi is deliberately small: an agent loop, tools, sessions, and an extension API. OpenPI is a capability layer that stays inside Pi's lifecycle, sessions, providers, and trust boundaries — not a second agent operating system.
-
-- **Local Web workbench** — manage workspaces and sessions in the browser, and inspect saved prompts, tool arguments, and results. Independent of terminal sessions.
-- **Subagents** — delegate self-contained work to in-process Pi sessions with isolated context; results are delivered automatically.
-- **Workflows** — multi-phase, multi-agent orchestration with structured results, safe replay, and auditable artifacts.
-- **Terminal experience** — a status footer, compact tool results, Plan mode, and session-scoped helpers.
-- **Pi-native** — your provider, models, tools, Skills, sessions, and Trust stay in charge; OpenPI only adds capabilities at Pi's extension seams.
+<p align="center">
+  <img src="docs/assets/readme/demo-subagents.webp" alt="Recording of the OpenPI Web workbench: a prompt asks for two parallel audits, two subagents run and complete in the session overview, the parent merges their file:line findings into a prioritized table, and one subagent's transcript opens read-only." width="100%">
+  <br />
+  <sub>Real OpenPI Web workbench and real tool calls against a small demo repository. Model replies come from a scripted local provider so the recording is reproducible.</sub>
+</p>
 
 ## Quick start
 
@@ -49,12 +50,7 @@ Pi is deliberately small: an agent loop, tools, sessions, and an extension API. 
 pi install npm:@tt-a1i/openpi
 ```
 
-Restart Pi, or run `/reload` in the current session. Then describe real work:
-
-```text
-Start the dev server in the background with `nohup npm run dev &`, then keep
-editing the page; check on it with ordinary process commands when needed.
-```
+Restart Pi, or run `/reload` in the current session. Then describe real work — the model decides how to split it:
 
 ```text
 Spawn subagents to check the login flow and its tests in parallel, each with
@@ -66,15 +62,109 @@ Use a workflow to review these modules: collect issues in parallel, verify the
 findings, then synthesize what to fix first.
 ```
 
-The model decides how to split the work; OpenPI provides execution, status, results, and stop controls. Only genuinely independent tasks benefit from parallelism — the gain depends on the task, model, and configuration.
-
-Prefer a browser? Type `/web` in Pi, open the local address printed in the terminal, pick a model and workspace, and start chatting. Web sessions are independent and never take over a terminal conversation. See [Web workbench](#web-workbench).
-
-Configure OpenPI's own preferences through natural language:
-
 ```text
-/openpi-setup
+Start the dev server in the background with `nohup npm run dev &`, then keep
+editing the page; check on it with ordinary process commands when needed.
 ```
+
+Prefer a browser? Type `/web` in Pi and open the local address printed in the terminal. Web sessions are independent and never take over a terminal conversation. Configure OpenPI itself in plain language with `/openpi-setup`.
+
+OpenPI provides execution, status, results and stop controls. Only genuinely independent tasks benefit from parallelism — the gain depends on the task, model and configuration.
+
+## Why OpenPI
+
+Pi is deliberately small: an agent loop, tools, sessions and an extension API. OpenPI is a capability layer that stays inside Pi's lifecycle, sessions, providers and trust boundaries — not a second agent operating system.
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h4>Isolated subagents</h4>
+      Delegate self-contained work to in-process Pi sessions with their own context. They run concurrently and report back automatically — optionally in their own Git worktree.
+    </td>
+    <td width="33%" valign="top">
+      <h4>Replay-safe workflows</h4>
+      Script multi-phase, multi-agent runs with <code>phase</code>, <code>agent</code>, <code>parallel</code> and <code>pipeline</code>. Structured results, a journal, safe replay and auditable artifacts.
+    </td>
+    <td width="33%" valign="top">
+      <h4>Local Web workbench</h4>
+      Workspaces, sessions, changes, files and a trajectory inspector for every model and tool call — in a browser, authenticated, on your machine.
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h4>Plan mode &amp; human input</h4>
+      <code>/plan</code> researches read-only, then turns an explicit Plan Ready into implementation. <code>ask_user</code> and <code>human_handoff</code> collect decisions only you can make.
+    </td>
+    <td width="33%" valign="top">
+      <h4>Semantic navigation</h4>
+      A bundled Skill asks an existing local language server for definitions, references and diagnostics — on demand, never started on launch.
+    </td>
+    <td width="33%" valign="top">
+      <h4>Pi-native and quiet</h4>
+      Your provider, models, tools, Skills and Trust stay in charge. A fixed resident tool set, no theme or model changes on install, no extra model calls by default.
+    </td>
+  </tr>
+</table>
+
+### New in v1.2.0
+
+- **Semantic navigation Skill** for definitions, references and single-file diagnostics through a local language server. ([#916](https://github.com/openpi-dev/openpi/pull/916))
+- **Context composition** in the Web usage popover: system text, tool declarations and conversation of the latest call. ([#914](https://github.com/openpi-dev/openpi/pull/914))
+- **Trajectory overview** with context/model/tool tracks, search and a per-call inspector, plus a refreshed workbench, themes and model picker. ([#868](https://github.com/openpi-dev/openpi/pull/868), [#894](https://github.com/openpi-dev/openpi/pull/894), [#904](https://github.com/openpi-dev/openpi/pull/904), [#865](https://github.com/openpi-dev/openpi/pull/865))
+- **Quoted review and plan snippets keep their source** (repository, comparison, revision or session). ([#915](https://github.com/openpi-dev/openpi/pull/915))
+- **↑/↓ prompt history** in the Web composer, and **custom thinking levels** for custom models. ([#912](https://github.com/openpi-dev/openpi/pull/912), [#864](https://github.com/openpi-dev/openpi/pull/864))
+- CI now covers the **minimum and latest supported Pi hosts**. ([#719](https://github.com/openpi-dev/openpi/pull/719)) — [Full release notes](https://github.com/openpi-dev/openpi/releases/tag/v1.2.0)
+
+## See it work
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/shot-subagents-dark.webp">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/shot-subagents-light.webp">
+    <img src="docs/assets/readme/shot-subagents-dark.webp" alt="OpenPI Web workbench: the parent conversation lists two subagents and a prioritized table of findings; the right pane shows the audit-login-flow subagent's completed transcript, read-only." width="100%">
+  </picture>
+  <br />
+  <sub><b>Delegate, keep working, inspect.</b> The parent stays free while two isolated subagents audit code; open any child's transcript read-only.</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/shot-changes-dark.webp">
+        <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/shot-changes-light.webp">
+        <img src="docs/assets/readme/shot-changes-dark.webp" alt="Changes pane with a unified diff of src/auth/session.ts next to the conversation that made the edit." width="100%">
+      </picture>
+      <p align="center"><sub><b>Review every change</b><br />Working-tree diffs beside the turn that made them.</sub></p>
+    </td>
+    <td width="33%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/shot-trajectory-dark.webp">
+        <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/shot-trajectory-light.webp">
+        <img src="docs/assets/readme/shot-trajectory-dark.webp" alt="Trajectory view with context, model and tool tracks and an inspector showing the arguments and result of a subagent_spawn call." width="100%">
+      </picture>
+      <p align="center"><sub><b>Trace every call</b><br />Context, model and tool tracks with a per-call inspector.</sub></p>
+    </td>
+    <td width="33%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/shot-context-dark.webp">
+        <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/shot-context-light.webp">
+        <img src="docs/assets/readme/shot-context-dark.webp" alt="Session overview popover with context usage, observed system prompt, tool and conversation sizes, and session token totals." width="100%">
+      </picture>
+      <p align="center"><sub><b>Know your context</b><br />What the latest call actually sent, and session totals.</sub></p>
+    </td>
+  </tr>
+</table>
+
+## How it fits together
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/architecture-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/architecture-light.svg">
+    <img src="docs/assets/readme/architecture-light.svg" alt="Diagram: the Pi terminal and the OpenPI Web workbench each drive a parent Pi session that keeps your provider, models, tools, Skills and Trust, with a fixed resident set of five subagent and three workflow tools. The parent delegates to Pi Bash for long-running processes, to subagents, or to workflows; results flow back to the parent automatically." width="100%">
+  </picture>
+</p>
 
 ## Light by default
 
@@ -227,6 +317,9 @@ Safety here is a runtime constraint, not a prompt.
 
 ### Defaults
 
+<details>
+<summary><strong>All defaults</strong> — every setting starts here; staying at defaults creates no file.</summary>
+
 | Setting | Default |
 | --- | --- |
 | Code Mode (`code_mode_enabled`) | Off; opt in via `/openpi-setup` |
@@ -253,6 +346,8 @@ Safety here is a runtime constraint, not a prompt.
 | Subagent / Bash / Write/Edit result display | `compact` / `compact` / `compact` |
 | Post-edit command | Off; a single command of at most 500 characters |
 | Built-in role models | All inherit the parent model |
+
+</details>
 
 <!-- config-contract: codeMode.enabled webSearch.enabled webSearch.modelSupport response.verbosity response.reasoningSummary suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls childExecutions childExecutions.maxActive browser.control browser.embedded browser.defaultBrowser browser.externalBrowsers ui.webTheme ui.webAppearance ui.webChatWidth ui.webSidebarWidth ui.webAuxiliaryWidth ui.webChatFontSize ui.webExpandThinking ui.webFollowUpBehavior ui.webHiddenThinkingLevels ui.webPinnedSort ui.webSidebarGrouping ui.webChatsSort ui.webProjectsInRecents ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 

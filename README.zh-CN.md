@@ -1,11 +1,18 @@
 <p align="center">
-  <img src="assets/openpi-product-hero-v2.webp" alt="OpenPI — Build. Delegate. Keep moving. 终端与本地 Web、独立子代理、Workflow 的概念插画。" width="100%" />
+  <a href="https://github.com/openpi-dev/openpi">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.webp">
+      <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/hero-light.webp">
+      <img src="docs/assets/readme/hero-dark.webp" alt="OpenPI — Pi 原生的多 Agent 工作台。OpenPI Web 工作台截图：父会话委派了两个独立子代理，右侧是其中一个子代理的只读记录。" width="100%">
+    </picture>
+  </a>
 </p>
 
+<h3 align="center">专注手上的问题，让独立任务并行。</h3>
+
 <p align="center">
-  <strong>专注手上的问题，让独立任务并行。</strong><br />
-  OpenPI 为 <a href="https://pi.dev">Pi</a> 增加终端与本地 Web 工作台、独立上下文的子代理和 Workflow。<br />
-  沿用你的模型、工具与 Skills；普通编码保持轻量，需要时再展开高级能力。
+  OpenPI 为 <a href="https://pi.dev">Pi</a> 增加独立上下文的子代理、可安全重放的 Workflow 和本地 Web 工作台——<br />
+  全部运行在 Pi 自己的 Session、Provider、工具、Skills 与 Trust 之内。普通编码保持轻量，需要时再展开高级能力。
 </p>
 
 <p align="center">
@@ -16,14 +23,12 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
 
-```bash
-pi install npm:@tt-a1i/openpi
-```
-
 <p align="center">
+  <a href="#快速开始"><strong>快速开始</strong></a> ·
+  <a href="#看看实际效果"><strong>功能导览</strong></a> ·
   <a href="https://openpi-dev.github.io/openpi/"><strong>项目网站</strong></a> ·
-  <a href="#快速开始"><strong>立即开始</strong></a> ·
   <a href="USAGE.md"><strong>详细参考</strong></a> ·
+  <a href="https://github.com/openpi-dev/openpi/releases"><strong>版本发布</strong></a> ·
   <a href="README.md"><strong>English</strong></a>
 </p>
 
@@ -31,17 +36,13 @@ pi install npm:@tt-a1i/openpi
   <sub>OpenPI 是独立社区项目，与 Physical Intelligence 的 openpi 机器人项目及 Pi 官方均无关联。</sub>
 </p>
 
----
+<br />
 
-## OpenPI 是什么
-
-Pi 的价值在于小：Agent loop、工具、Session 与扩展 API 已经足够。OpenPI 是围绕这些原语的能力层，始终留在 Pi 的生命周期、Session、Provider 与 Trust 边界内——不是另一套 Agent 操作系统。
-
-- **本地 Web 工作台**：在浏览器中管理工作区与会话，检查已保存的 Prompt、工具参数与结果；与终端会话相互独立。
-- **Subagent**：把自包含的任务委派给独立上下文的进程内 Pi Session，结果自动回传。
-- **Workflow**：多阶段、多 Agent 编排，提供结构化结果、Safe Replay 与可审计产物。
-- **终端体验**：状态 Footer、紧凑工具结果、Plan Mode 与 Session 级辅助能力。
-- **Pi-native**：Provider、模型、工具、Skills、Session 与 Trust 仍由你掌控；OpenPI 只在 Pi 的扩展缝上增加能力。
+<p align="center">
+  <img src="docs/assets/readme/demo-subagents.webp" alt="OpenPI Web 工作台录屏：一句话要求并行做两项审查，Session 概览里两个子代理先后完成，父会话把它们带 file:line 的发现合并成优先级表，再以只读方式打开其中一个子代理的记录。" width="100%">
+  <br />
+  <sub>真实的 OpenPI Web 工作台与真实工具调用，作用于一个小型演示仓库；为了录屏可复现，模型回复来自本地脚本化的 Provider。</sub>
+</p>
 
 ## 快速开始
 
@@ -49,12 +50,7 @@ Pi 的价值在于小：Agent loop、工具、Session 与扩展 API 已经足够
 pi install npm:@tt-a1i/openpi
 ```
 
-重启 Pi，或在当前 Session 运行 `/reload`。然后直接描述真实任务：
-
-```text
-用 `nohup npm run dev &` 在后台启动开发服务器，我继续修改页面；
-需要时用普通进程命令查看它的状态。
-```
+重启 Pi，或在当前 Session 运行 `/reload`。然后直接描述真实任务，由模型决定怎么分工：
 
 ```text
 用子代理分别检查登录流程和相关测试，各自给出问题与证据，最后汇总。
@@ -64,15 +60,111 @@ pi install npm:@tt-a1i/openpi
 用 Workflow 分批审查这些模块，先并行收集问题，再汇总需要优先处理的项。
 ```
 
-模型负责判断怎么分工；OpenPI 提供执行、状态、结果和停止入口。独立任务才值得并行，具体收益取决于任务、模型和配置。
-
-更喜欢浏览器？在 Pi 中输入 `/web`，打开终端显示的本机地址，选择模型和工作区后开始对话。Web 使用独立会话，不会接管终端里正在进行的对话。详见 [Web 工作台](#web-工作台)。
-
-OpenPI 自有偏好通过自然语言配置：
-
 ```text
-/openpi-setup
+用 `nohup npm run dev &` 在后台启动开发服务器，我继续修改页面；
+需要时用普通进程命令查看它的状态。
 ```
+
+更喜欢浏览器？在 Pi 中输入 `/web`，打开终端显示的本机地址即可。Web 使用独立会话，不会接管终端里正在进行的对话。OpenPI 自身的偏好用 `/openpi-setup` 以自然语言配置。
+
+OpenPI 提供执行、状态、结果和停止入口。独立任务才值得并行，具体收益取决于任务、模型和配置。
+
+## 为什么是 OpenPI
+
+Pi 的价值在于小：Agent loop、工具、Session 与扩展 API 已经足够。OpenPI 是围绕这些原语的能力层，始终留在 Pi 的生命周期、Session、Provider 与 Trust 边界内——不是另一套 Agent 操作系统。
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h4>独立上下文的 Subagent</h4>
+      把自包含的任务委派给拥有独立 Context 的进程内 Pi Session，并行运行、完成后自动回传，也可以各自使用独立的 Git worktree。
+    </td>
+    <td width="33%" valign="top">
+      <h4>可安全重放的 Workflow</h4>
+      用 <code>phase</code>、<code>agent</code>、<code>parallel</code>、<code>pipeline</code> 编排多阶段、多 Agent 任务，提供结构化结果、Journal、Safe Replay 与可审计产物。
+    </td>
+    <td width="33%" valign="top">
+      <h4>本地 Web 工作台</h4>
+      在浏览器里管理工作区、会话、改动和文件，并逐条检查每次模型与工具调用；带鉴权，只在你的机器上运行。
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h4>Plan Mode 与人工输入</h4>
+      <code>/plan</code> 先做只读调研，只有明确的 Plan Ready 才进入实现。<code>ask_user</code> 和 <code>human_handoff</code> 收集只有你能做的决定。
+    </td>
+    <td width="33%" valign="top">
+      <h4>语义导航</h4>
+      内置 Skill 按需向已有的本地语言服务器查询定义、引用和诊断；启动时不会安装或启动任何服务器。
+    </td>
+    <td width="33%" valign="top">
+      <h4>Pi 原生，安装即安静</h4>
+      Provider、模型、工具、Skills 与 Trust 仍由你掌控。常驻工具集固定，安装不改主题、不绑定模型，默认不额外调用模型。
+    </td>
+  </tr>
+</table>
+
+### v1.2.0 新增
+
+- **语义导航 Skill**：通过本地语言服务器查询定义、引用和单文件诊断。（[#916](https://github.com/openpi-dev/openpi/pull/916)）
+- **上下文构成**：Web 用量弹窗显示最近一次调用的系统文本、工具声明和对话各占多少。（[#914](https://github.com/openpi-dev/openpi/pull/914)）
+- **执行轨迹总览**：Context / 模型 / 工具三条轨道、搜索和逐次调用检查器，另有焕新的工作台、主题和模型选择器。（[#868](https://github.com/openpi-dev/openpi/pull/868)、[#894](https://github.com/openpi-dev/openpi/pull/894)、[#904](https://github.com/openpi-dev/openpi/pull/904)、[#865](https://github.com/openpi-dev/openpi/pull/865)）
+- **引用的 Review 和 Plan 片段保留出处**（仓库、对比、修订或 Session）。（[#915](https://github.com/openpi-dev/openpi/pull/915)）
+- Web 输入框支持 **↑/↓ 调出历史消息**，自定义模型可声明 **思考档位**。（[#912](https://github.com/openpi-dev/openpi/pull/912)、[#864](https://github.com/openpi-dev/openpi/pull/864)）
+- CI 现在同时覆盖 **最低与最新支持的 Pi 版本**。（[#719](https://github.com/openpi-dev/openpi/pull/719)）——[完整发布说明](https://github.com/openpi-dev/openpi/releases/tag/v1.2.0)
+
+## 看看实际效果
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/shot-subagents-dark.webp">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/shot-subagents-light.webp">
+    <img src="docs/assets/readme/shot-subagents-dark.webp" alt="OpenPI Web 工作台：父会话列出两个子代理和一张按优先级排列的发现表，右侧窗格以只读方式显示 audit login flow 子代理已完成的记录。" width="100%">
+  </picture>
+  <br />
+  <sub><b>委派、继续工作、随时查看。</b>两个独立子代理审查代码时父会话不被占用；任意子代理的记录都可以只读打开。</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/shot-changes-dark.webp">
+        <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/shot-changes-light.webp">
+        <img src="docs/assets/readme/shot-changes-dark.webp" alt="Changes 窗格显示 src/auth/session.ts 的统一 diff，旁边是做出这次修改的对话。" width="100%">
+      </picture>
+      <p align="center"><sub><b>审阅每一处改动</b><br />工作区 diff 就在产生它的对话旁边。</sub></p>
+    </td>
+    <td width="33%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/shot-trajectory-dark.webp">
+        <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/shot-trajectory-light.webp">
+        <img src="docs/assets/readme/shot-trajectory-dark.webp" alt="Trajectory 视图：Context、模型、工具三条轨道，检查器显示一次 subagent_spawn 调用的参数与结果。" width="100%">
+      </picture>
+      <p align="center"><sub><b>追踪每一次调用</b><br />三条轨道加逐次调用检查器。</sub></p>
+    </td>
+    <td width="33%" valign="top">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/shot-context-dark.webp">
+        <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/shot-context-light.webp">
+        <img src="docs/assets/readme/shot-context-dark.webp" alt="Session 概览弹窗：Context 用量、观测到的系统提示、工具与对话大小，以及会话 Token 总计。" width="100%">
+      </picture>
+      <p align="center"><sub><b>看清 Context</b><br />最近一次调用实际发送了什么，以及会话总计。</sub></p>
+    </td>
+  </tr>
+</table>
+
+## 整体结构
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/architecture-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/architecture-light.svg">
+    <img src="docs/assets/readme/architecture-light.svg" alt="结构图：Pi 终端和 OpenPI Web 工作台各自驱动一个父 Pi Session，Provider、模型、工具、Skills 与 Trust 保持不变，常驻 5 个 Subagent 工具和 3 个 Workflow 工具。父会话把长期进程交给 Pi Bash，把任务委派给 Subagent 或 Workflow，结果自动回传父会话。" width="100%">
+  </picture>
+</p>
+
+<sub>结构图文字为英文，与界面一致。</sub>
 
 ## 默认轻，按需强
 
@@ -227,6 +319,9 @@ openpi web /path/to/repo      # 指定初始工作区
 
 ### 默认值
 
+<details>
+<summary><strong>全部默认值</strong>——所有设置都从这里开始；保持默认不会创建任何文件。</summary>
+
 | 配置 | 默认值 |
 | --- | --- |
 | Code Mode（`code_mode_enabled`） | 关闭；通过 `/openpi-setup` 开启 |
@@ -253,6 +348,8 @@ openpi web /path/to/repo      # 指定初始工作区
 | Subagent / Bash / Write/Edit | `compact` / `compact` / `compact` |
 | Post-edit 命令 | 关闭；单条命令最多 500 字符 |
 | 内置角色模型 | 全部继承父模型 |
+
+</details>
 
 Web「设置 → 常规」保存跟进默认方式 `ui.webFollowUpBehavior`。输入框切换和 ⌘/Ctrl+Enter 只影响单次消息；轮次结束后，下次主动发送恢复普通消息，草稿不会自动发出。也可通过 `/openpi-setup` 修改同一偏好。
 
