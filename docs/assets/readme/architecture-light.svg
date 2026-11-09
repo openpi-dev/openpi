@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="660" viewBox="0 0 1200 660" role="img" aria-labelledby="t d">
+<title id="t">How OpenPI fits into Pi</title>
+<desc id="d">You work in the Pi terminal or the OpenPI Web workbench. Both drive a parent Pi session that keeps your provider, models, tools, Skills and Trust. OpenPI adds a fixed resident tool set at Pi extension seams. The parent delegates to Pi Bash for long-running processes, to subagents (in-process Pi SDK sessions with isolated context and optional worktrees), or to workflows (a sandboxed script with phase, agent, parallel and pipeline primitives, a journal, safe replay and artifacts). Results flow back to the parent automatically.</desc>
+<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5 0 9Z" fill="#c4ccd5"/></marker><marker id="ab" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5 0 9Z" fill="#0f9f8f"/></marker></defs>
+<rect width="1200" height="660" rx="20" fill="#ffffff"/><rect x=".5" y=".5" width="1199" height="659" rx="19.5" fill="none" stroke="#d0d7de"/>
+<text x="48" y="58" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="24" font-weight="650" fill="#1f2328" text-anchor="start">How OpenPI fits into Pi</text>
+<text x="48" y="86" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#59636e" text-anchor="start">A capability layer at Pi's extension seams — not a second agent runtime.</text>
+<rect x="48" y="116" width="532" height="92" rx="14" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="72" y="150" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#1f2328" text-anchor="start">Pi terminal</text>
+<text x="72" y="178" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="400" fill="#59636e" text-anchor="start">status footer · compact results · /plan · /workflows · /sessions</text>
+<rect x="620" y="116" width="532" height="92" rx="14" fill="#f6f8fa" stroke="#0969da" stroke-width="1.5"/>
+<text x="644" y="150" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#1f2328" text-anchor="start">OpenPI Web workbench</text>
+<text x="644" y="178" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="400" fill="#59636e" text-anchor="start">local Host · /web or openpi web · trajectory · changes · files</text>
+<path d="M314 208 L314 250" stroke="#c4ccd5" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+<path d="M886 208 L886 250" stroke="#c4ccd5" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+<rect x="48" y="252" width="1104" height="150" rx="14" fill="#fbfcfd" stroke="#7c3aed" stroke-width="1.5"/>
+<text x="72" y="288" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#1f2328" text-anchor="start">Parent Pi session</text>
+<text x="72" y="314" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#59636e" text-anchor="start">Terminal and Web each run their own sessions. Your provider, models, tools, Skills and Trust stay in charge.</text>
+<rect x="72" y="336" width="115.39999999999999" height="24" rx="12" fill="#eef1f4" stroke="#0f9f8f" stroke-opacity=".55"/>
+<text x="129.7" y="352.5" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500" fill="#0f9f8f" text-anchor="middle">subagent_spawn</text>
+<rect x="195.39999999999998" y="336" width="107.8" height="24" rx="12" fill="#eef1f4" stroke="#0f9f8f" stroke-opacity=".55"/>
+<text x="249.29999999999998" y="352.5" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500" fill="#0f9f8f" text-anchor="middle">subagent_wait</text>
+<rect x="311.2" y="336" width="107.8" height="24" rx="12" fill="#eef1f4" stroke="#0f9f8f" stroke-opacity=".55"/>
+<text x="365.09999999999997" y="352.5" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500" fill="#0f9f8f" text-anchor="middle">subagent_send</text>
+<rect x="427.0" y="336" width="115.39999999999999" height="24" rx="12" fill="#eef1f4" stroke="#0f9f8f" stroke-opacity=".55"/>
+<text x="484.7" y="352.5" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500" fill="#0f9f8f" text-anchor="middle">subagent_check</text>
+<rect x="550.4" y="336" width="123.0" height="24" rx="12" fill="#eef1f4" stroke="#0f9f8f" stroke-opacity=".55"/>
+<text x="611.9" y="352.5" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500" fill="#0f9f8f" text-anchor="middle">subagent_cancel</text>
+<rect x="72" y="368" width="69.8" height="24" rx="12" fill="#eef1f4" stroke="#0969da" stroke-opacity=".55"/>
+<text x="106.9" y="384.5" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500" fill="#0969da" text-anchor="middle">workflow</text>
+<rect x="149.8" y="368" width="123.0" height="24" rx="12" fill="#eef1f4" stroke="#0969da" stroke-opacity=".55"/>
+<text x="211.3" y="384.5" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500" fill="#0969da" text-anchor="middle">workflow_status</text>
+<rect x="280.8" y="368" width="107.8" height="24" rx="12" fill="#eef1f4" stroke="#0969da" stroke-opacity=".55"/>
+<text x="334.7" y="384.5" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" font-weight="500" fill="#0969da" text-anchor="middle">workflow_stop</text>
+<text x="1128" y="288" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="500" fill="#59636e" text-anchor="end">fixed resident tool set</text>
+<text x="1128" y="308" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#59636e" text-anchor="end">decided once per session</text>
+<path d="M220 402 L220 450" stroke="#c4ccd5" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+<path d="M600 402 L600 450" stroke="#c4ccd5" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+<path d="M980 402 L980 450" stroke="#c4ccd5" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+<rect x="48" y="452" width="344" height="150" rx="14" fill="#f6f8fa" stroke="#9a6700" stroke-width="1.5"/>
+<circle cx="76" cy="486" r="6" fill="#9a6700"/>
+<text x="92" y="492" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#1f2328" text-anchor="start">Pi Bash</text>
+<text x="72" y="528" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2328" text-anchor="start">Long-running processes</text>
+<text x="72" y="552" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#59636e" text-anchor="start">dev servers, watchers, test runs</text>
+<text x="72" y="576" font-family="'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13.5" font-weight="400" fill="#59636e" text-anchor="start">nohup npm run dev &amp;</text>
+<rect x="428" y="452" width="344" height="150" rx="14" fill="#f6f8fa" stroke="#0f9f8f" stroke-width="1.5"/>
+<circle cx="456" cy="486" r="6" fill="#0f9f8f"/>
+<text x="472" y="492" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#1f2328" text-anchor="start">Subagents</text>
+<text x="452" y="528" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2328" text-anchor="start">In-process Pi SDK sessions</text>
+<text x="452" y="552" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#59636e" text-anchor="start">isolated context, run concurrently</text>
+<text x="452" y="576" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="400" fill="#59636e" text-anchor="start">optional git worktree per child</text>
+<rect x="808" y="452" width="344" height="150" rx="14" fill="#f6f8fa" stroke="#0969da" stroke-width="1.5"/>
+<circle cx="836" cy="486" r="6" fill="#0969da"/>
+<text x="852" y="492" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#1f2328" text-anchor="start">Workflows</text>
+<text x="832" y="528" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2328" text-anchor="start">Sandboxed script: phase · agent</text>
+<text x="832" y="552" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#59636e" text-anchor="start">parallel · pipeline · usage</text>
+<text x="832" y="576" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="400" fill="#59636e" text-anchor="start">journal · safe replay · artifacts</text>
+<path d="M600 602 L600 632 L1170 632 L1170 330 L1154 330" stroke="#0f9f8f" stroke-width="1.6" fill="none" stroke-dasharray="5 5" marker-end="url(#ab)"/>
+<path d="M980 602 L980 632" stroke="#0f9f8f" stroke-width="1.6" fill="none" stroke-dasharray="5 5"/>
+<text x="612" y="624" font-family="Geist, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="500" fill="#0f9f8f" text-anchor="start">results delivered back to the parent automatically</text>
+</svg>
