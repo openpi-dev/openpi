@@ -71,3 +71,32 @@ it("drops an old anchor when its message disappears or the Session changes", () 
   act(() => result.current.restore());
   expect(root.scrollTop).toBe(0);
 });
+
+it("keeps a reader scroll that lands before its scroll event when rows re-render", () => {
+  const root = document.createElement("div");
+  const row = document.createElement("article");
+  row.dataset.historyEntry = "row";
+  root.append(row);
+  document.body.append(root);
+  let offset = 400;
+  root.getBoundingClientRect = () => new DOMRect(0, 0, 800, 600);
+  row.getBoundingClientRect = () =>
+    new DOMRect(0, offset - root.scrollTop, 800, 100);
+  row.getClientRects = () =>
+    [row.getBoundingClientRect()] as unknown as DOMRectList;
+  root.scrollTop = 300;
+  const pinned = { current: false };
+  const lastScrollTop = { current: 300 };
+  const { rerender } = renderHook(() =>
+    useReadingAnchor({ current: root }, pinned, "session", lastScrollTop),
+  );
+  // Rows above the anchor grow without reader input: keep the same row put.
+  offset = 450;
+  rerender();
+  expect(root.scrollTop).toBe(350);
+  // The reader jumps to the top; a commit runs before the scroll event.
+  root.scrollTop = 0;
+  offset = 470;
+  rerender();
+  expect(root.scrollTop).toBe(0);
+});
