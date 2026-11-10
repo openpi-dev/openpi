@@ -266,7 +266,7 @@ test("duplicating a placeholder makes both copies ordinary text", () => {
   assert.equal(existsSync(path), false);
 });
 
-test("deleting the last image makes its number available to the next paste", () => {
+test("deleted image numbers stay reserved for native undo", () => {
   const first = temporaryImage("png", "first");
   const second = temporaryImage("png", "second");
   const third = temporaryImage("png", "third");
@@ -283,7 +283,7 @@ test("deleting the last image makes its number available to the next paste", () 
 
   base.cursor = editor.getText().length;
   editor.insertTextAtCursor(third);
-  assert.equal(editor.getText(), "[Image #1] [Image #2]");
+  assert.equal(editor.getText(), "[Image #1] [Image #3]");
 
   base.submit();
   assert.equal(submitted[0], `${first} ${third}`);
