@@ -1,0 +1,54 @@
+{
+  "purpose": "Explicit historical admission reviewed for the pending PR integration. These records remain legacy; admission does not validate their content. New siblings are governed.",
+  "admissions": [
+    {
+      "sourceRevision": "a6112a0d58e83e6439cbc38c66de31425af2aed5",
+      "sourcePr": "https://github.com/openpi-dev/openpi/pull/272",
+      "reviewProvenance": "Scoped PR #369 review admits the original report preserved by PR #272; content migration and validation remain separate.",
+      "records": [
+        "docs/research/OPENPI_BARE_PI_DEEPSEEK_24_CELL_DIAGNOSTIC.md"
+      ],
+      "sourceBlobs": {
+        "docs/research/OPENPI_BARE_PI_DEEPSEEK_24_CELL_DIAGNOSTIC.md": "459fcaa76fd8ccd412a070f8c01f79d6bb0d9db3"
+      },
+      "admissionReviewPr": "https://github.com/openpi-dev/openpi/pull/369"
+    },
+    {
+      "sourceRevision": "7891bd8fff43b9e6c751ddcac4e419070b4d18e7",
+      "sourcePr": "https://github.com/openpi-dev/openpi/pull/825",
+      "reviewProvenance": "Scoped PR #369 review admits PR #825 historical Research records preserved unchanged by its PR #711 topic split. WEB_TRAJECTORY is already in the fixed-main legacy baseline.",
+      "records": [
+        "docs/research/CODEMODE_DEFAULT_2026-10-13.md",
+        "docs/research/CODEX_CHAT_TYPOGRAPHY_2026-10-14.md",
+        "docs/research/CODEX_DEFAULT_FONT_2026-10-13.md",
+        "docs/research/HARNESS_LATENCY_OWNERSHIP_2026-10-14.md",
+        "docs/research/PI_1_2_COMPATIBILITY_2026-10-13.md",
+        "docs/research/PI_BROWSER_TOOLS_2026-10-09.md",
+        "docs/research/WEB_CODEX_ACTIVITY_2026-10-08.md",
+        "docs/research/WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md",
+        "docs/research/WEB_CONFIGURATION_2026-10-13.md",
+        "docs/research/WEB_DOCUMENT_FEEDBACK_2026-10-13.md",
+        "docs/research/WEB_SEARCH_INTEGRATION_2026-10-10.md",
+        "docs/research/WEB_SUBAGENTS_2026-10-13.md",
+        "docs/research/WEB_TOOL_GROUP_DETAILS_2026-10-13.md"
+      ],
+      "sourceBlobs": {
+        "docs/research/CODEMODE_DEFAULT_2026-10-13.md": "ed90ec8e6f49a96a8e0da682629f6ad65fe24377",
+        "docs/research/CODEX_CHAT_TYPOGRAPHY_2026-10-14.md": "ee6de8cf9f399f003c6e04157a8d84f444256355",
+        "docs/research/CODEX_DEFAULT_FONT_2026-10-13.md": "cf6e90ad4fe931b38ad3f7d3971c41f9c3276107",
+        "docs/research/HARNESS_LATENCY_OWNERSHIP_2026-10-14.md": "3e1354cf69451407ac7c5e33ee5b7bfef50afeee",
+        "docs/research/PI_1_2_COMPATIBILITY_2026-10-13.md": "84d5b887c4d86bab119dea0a7655bb114c20a13c",
+        "docs/research/PI_BROWSER_TOOLS_2026-10-09.md": "10e0515686098edae81471a6f218e90a98650342",
+        "docs/research/WEB_CODEX_ACTIVITY_2026-10-08.md": "d9c4126e812d89f6149402efa2e24b125e5f1fe0",
+        "docs/research/WEB_CODEX_SIDEBAR_REWORK_2026-10-12.md": "887e47cdcb4e5ecdefed18391d44a6efda79d1ce",
+        "docs/research/WEB_CONFIGURATION_2026-10-13.md": "c0bdd0ed388f24fdbdf9a50e6b9366aca7a557fa",
+        "docs/research/WEB_DOCUMENT_FEEDBACK_2026-10-13.md": "139a21a83ec9075bc003e0f46a059cbf5ed7517d",
+        "docs/research/WEB_SEARCH_INTEGRATION_2026-10-10.md": "cd742527dedfdfa49bfbae7b9b668372bdf60dd8",
+        "docs/research/WEB_SUBAGENTS_2026-10-13.md": "ac5aa8abe8ba4b8d7e8d77646c8d4ec39c596819",
+        "docs/research/WEB_TOOL_GROUP_DETAILS_2026-10-13.md": "4adf1e4b34327ae0c0e66ba28681a06e0482c9bc"
+      },
+      "admissionReviewPr": "https://github.com/openpi-dev/openpi/pull/369"
+    }
+  ],
+  "identityNote": "Source blob IDs record provenance only. They are not a hash-equality gate and ordinary corrections do not automatically migrate a legacy record."
+}

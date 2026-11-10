@@ -43,6 +43,7 @@
         "jsdom": "30.0.1",
         "lucide-react": "1.39.0",
         "mammoth": "1.13.0",
+        "mdast-util-from-markdown": "2.0.3",
         "mermaid": "12.0.0",
         "pdfjs-dist": "6.3.289",
         "react": "19.2.8",
