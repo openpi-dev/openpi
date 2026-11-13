@@ -70,6 +70,11 @@ bun run check
 bun run test
 ```
 
+The Node and UI runners default to at most four concurrent test files. On a
+machine with at least eight available CPUs, `OPENPI_TEST_WORKERS=8 bun run test`
+uses eight workers. For a memory-constrained run, set it to one or two.
+Windows process-isolated tests always run one file at a time.
+
 Green automation only proves the code, type, and test contracts. When a change touches the runtime or the UI, also complete the matching smoke in a real, `/reload`ed Pi:
 
 - Tool or lifecycle changes: actually trigger the success, failure, and termination paths in normal tool mode;

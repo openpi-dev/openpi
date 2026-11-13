@@ -24,4 +24,4 @@ Start from [`TEMPLATE.md`](TEMPLATE.md).
 
 - [`0005-frozen-tool-surface.md`](0005-frozen-tool-surface.md) — one fixed resident tool set per Session; model-visible tools change only at explicit user boundaries ([#879](https://github.com/openpi-dev/openpi/issues/879)).
 
-- [`0006-supported-pi-versions.md`](0006-supported-pi-versions.md) — proposed minimum/locked/latest host verification and the boundary of the open-ended peer range ([#328](https://github.com/openpi-dev/openpi/issues/328)).
+- [`0006-supported-pi-versions.md`](0006-supported-pi-versions.md) — minimum/locked/latest host verification and the boundary of the open-ended peer range ([#328](https://github.com/openpi-dev/openpi/issues/328)).

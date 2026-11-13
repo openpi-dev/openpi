@@ -2,7 +2,8 @@ import {
   WEB_PROMPT_FILE_MAX_BYTES,
   type WebPromptFileUpload,
 } from "../../../../protocol/prompt-files.ts";
-import { type PromptFileText, promptFileKind } from "./file-text.ts";
+import type { PromptFileText } from "./file-text.ts";
+import { promptFileKind } from "./prompt-file-kind.ts";
 
 export interface StagedPromptFile extends WebPromptFileUpload {
   id: string;
@@ -48,7 +49,7 @@ function extractDocument(
 ) {
   return new Promise<PromptFileText & { data: string }>((resolve, reject) => {
     const worker = new Worker(
-      new URL("./file-text-worker.ts", import.meta.url),
+      new URL("../files/document-worker.ts", import.meta.url),
       {
         type: "module",
       },
@@ -91,7 +92,7 @@ function extractDocument(
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
     else {
-      worker.postMessage({ data, kind }, [data]);
+      worker.postMessage({ operation: "extract", data, kind }, [data]);
     }
   });
 }
