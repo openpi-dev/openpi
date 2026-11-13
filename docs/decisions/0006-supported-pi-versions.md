@@ -1,7 +1,7 @@
 ---
-decision-status: proposed
+decision-status: accepted
 created: 2026-10-09
-last-reviewed: 2026-10-09
+last-reviewed: 2026-11-14
 applies-to: OpenPI Pi compatibility checks from adoption of this change forward
 owner: OpenPI maintainers
 related-issues: "#328"
@@ -31,7 +31,7 @@ allowed by the peers. Historical compatibility evidence is retained in the
 
 ## Decision
 
-Proposed for maintainer adoption with [#719](https://github.com/openpi-dev/openpi/pull/719):
+OpenPI maintains the host compatibility checks introduced in [#719](https://github.com/openpi-dev/openpi/pull/719).
 
 - Keep Pi packages host-owned peers. Preserve the current open-ended peer range;
   do not bundle a second Pi runtime or add an OpenPI runtime version-rejection gate.
@@ -104,3 +104,19 @@ this policy or equate development versions with the supported floor.
 2026-11-03 integration note: rebased onto main `0addb739`. Renumbered this
 proposal to 0006 because main adopted an unrelated Decision 0005. Its status
 remains **proposed**; the existing frozen tool surface decision is unchanged.
+
+2026-11-14 adoption proposal for [#328](https://github.com/openpi-dev/openpi/issues/328).
+This amendment takes effect when maintainers merge it. The minimum, locked and
+latest checks are already required on main. At
+`ffc9c62475d8a1f87fcab7d511e8bf6badbccd82`, the published minimum is Pi
+0.99.1 and the frozen development host is 1.2.0. The
+[November 9 CI run](https://github.com/openpi-dev/openpi/actions/runs/42641377991)
+passed the checks, Node suite and four installation smokes on both the minimum
+and the then-latest Pi 1.5.0.
+
+On November 14, a separate macOS smoke on Node 26.12.0 verified all eight
+packages of the npm stable Pi 1.5.2 host. An isolated `pi list` reported the
+packed OpenPI as its sole source. Offline RPC loaded the extensions, and the
+packed Web CLI served its HTML, JavaScript, CSS and favicon using a separate
+Pi installation. Full-suite evidence for 1.5.2 belongs to the next endpoint CI
+run that selects that version.
