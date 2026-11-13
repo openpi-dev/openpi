@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
@@ -59,7 +59,9 @@ function fixture() {
     assert.equal(process.argv[2], "run");
     const args = process.argv.slice(3);
     const workers = Number(args.find((arg) => arg.startsWith("--maxWorkers="))?.split("=")[1]);
-    assert.ok(Number.isInteger(workers) && workers >= 1 && workers <= 4);
+    assert.ok(Number.isInteger(workers) && workers >= 1);
+    if (process.env.EXPECT_WORKERS) assert.equal(workers, Number(process.env.EXPECT_WORKERS));
+    else assert.ok(workers <= 4);
     const files = args.filter((arg) => !arg.startsWith("--"));
     assert.equal(files.length, 1);
     assert.ok(files[0].endsWith("sample.spec.ts"));
@@ -69,8 +71,17 @@ function fixture() {
   );
   return {
     root,
-    run(args: string[] = [], failSuite = "") {
-      const env: NodeJS.ProcessEnv = { ...process.env, FAIL_SUITE: failSuite };
+    run(
+      args: string[] = [],
+      failSuite = "",
+      overrides: NodeJS.ProcessEnv = {},
+    ) {
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        FAIL_SUITE: failSuite,
+      };
+      delete env.OPENPI_TEST_WORKERS;
+      Object.assign(env, overrides);
       // Start a fresh test runner rather than inheriting this test worker context.
       delete env.NODE_TEST_CONTEXT;
       return spawnSync(process.execPath, ["scripts/run-tests.mjs", ...args], {
@@ -206,6 +217,38 @@ test("invalid selection and empty discovery fail before running a partial suite"
     assert.notEqual(empty.status, 0);
     assert.match(empty.stderr, /both suites must be non-empty/);
     assert.equal(empty.stdout.includes("suite marker"), false);
+  } finally {
+    runner.dispose();
+  }
+});
+
+test("local worker override is validated before running tests", () => {
+  const runner = fixture();
+  try {
+    const workers = String(Math.min(5, availableParallelism()));
+    const valid = runner.run(["ui"], "", {
+      OPENPI_TEST_WORKERS: workers,
+      EXPECT_WORKERS: workers,
+    });
+    assert.equal(valid.status, 0, valid.stderr || valid.stdout);
+    const node = runner.run(["node"], "", { OPENPI_TEST_WORKERS: "1" });
+    assert.equal(node.status, 0, node.stderr || node.stdout);
+    for (const value of [
+      "0",
+      "-1",
+      "1.5",
+      "2junk",
+      "",
+      "9007199254740992",
+      String(availableParallelism() + 1),
+    ]) {
+      const invalid = runner.run([], "", {
+        OPENPI_TEST_WORKERS: value,
+      });
+      assert.notEqual(invalid.status, 0);
+      assert.match(invalid.stderr, /OPENPI_TEST_WORKERS must be an integer/);
+      assert.equal(invalid.stdout.includes("marker"), false);
+    }
   } finally {
     runner.dispose();
   }
