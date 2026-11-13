@@ -6,13 +6,19 @@ type WorkerReply = { result?: OfficePreview; error?: string };
 let receive: ((reply: WorkerReply) => void) | undefined;
 const worker = {
   onmessage: null as
-    | ((event: MessageEvent<{ data: ArrayBuffer; extension: string }>) => void)
+    | ((
+        event: MessageEvent<{
+          operation: "preview";
+          data: ArrayBuffer;
+          extension: string;
+        }>,
+      ) => void)
     | null,
   postMessage: (reply: WorkerReply) => receive?.(reply),
 };
 beforeAll(async () => {
   vi.stubGlobal("self", worker);
-  await import("../../web/ui/src/features/files/office-worker.ts");
+  await import("../../web/ui/src/features/files/document-worker.ts");
 });
 afterAll(() => vi.unstubAllGlobals());
 
@@ -25,7 +31,9 @@ async function preview(workbook: ExcelJS.Workbook) {
   });
   expect(worker.onmessage).toBeTypeOf("function");
   worker.onmessage?.(
-    new MessageEvent("message", { data: { data, extension: "xlsx" } }),
+    new MessageEvent("message", {
+      data: { operation: "preview", data, extension: "xlsx" },
+    }),
   );
   const reply = await response;
   expect(reply.error).toBeUndefined();
@@ -67,4 +75,22 @@ it("marks a budget cut within the last worksheet row, but not an exactly complet
   expect(clipped.sheets[1].rows.map((row) => row.length)).toEqual([30, 20]);
   expect(clipped.sheets[1].rows[1][19]).toBe("2,20");
   expect(clipped.sheets[1].truncated).toBe(true);
+});
+
+it("reports invalid preview documents through the preview error response", async () => {
+  const response = new Promise<WorkerReply>((resolve) => {
+    receive = resolve;
+  });
+  worker.onmessage?.(
+    new MessageEvent("message", {
+      data: {
+        operation: "preview",
+        data: new TextEncoder().encode("not an Office archive").buffer,
+        extension: "xlsx",
+      },
+    }),
+  );
+  const reply = await response;
+  expect(reply.result).toBeUndefined();
+  expect(reply.error).toBeTypeOf("string");
 });

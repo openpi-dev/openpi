@@ -18,7 +18,7 @@ const escapeHtml = (value: unknown) =>
       ]!,
   );
 
-async function preview(
+export async function previewOfficeDocument(
   data: ArrayBuffer,
   extension: string,
 ): Promise<OfficePreview> {
@@ -166,18 +166,3 @@ async function preview(
   if (!slides.length) throw new Error("No readable slides.");
   return { kind: "slides", slides, truncated: ids.length > 100 };
 }
-
-self.onmessage = (
-  event: MessageEvent<{ data: ArrayBuffer; extension: string }>,
-) => {
-  void preview(event.data.data, event.data.extension).then(
-    (result) => self.postMessage({ result }),
-    (error: unknown) =>
-      self.postMessage({
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unable to preview this document.",
-      }),
-  );
-};

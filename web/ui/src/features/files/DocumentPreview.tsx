@@ -89,9 +89,12 @@ function OfficeDocument({
   useEffect(() => {
     setResult(null);
     setError("");
-    const worker = new Worker(new URL("./office-worker.ts", import.meta.url), {
-      type: "module",
-    });
+    const worker = new Worker(
+      new URL("./document-worker.ts", import.meta.url),
+      {
+        type: "module",
+      },
+    );
     const timer = window.setTimeout(() => {
       worker.terminate();
       setError(t("filesDocumentLimit"));
@@ -111,7 +114,7 @@ function OfficeDocument({
     };
     // Keep the caller's bytes intact for a later revision/remount.
     const copy = data.slice(0);
-    worker.postMessage({ data: copy, extension }, [copy]);
+    worker.postMessage({ operation: "preview", data: copy, extension }, [copy]);
     return () => {
       clearTimeout(timer);
       worker.terminate();

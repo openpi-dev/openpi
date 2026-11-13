@@ -134,7 +134,15 @@ bun run check
 bun run test
 ```
 
-修改 `web/ui/` 或 Web 构建配置后，需要同时提交重新生成的 `web/dist/`。CI 会重新构建并检查该目录；如果源码和提交的产物不一致，门禁会失败。不要手工编辑 `web/dist/`。
+修改 `web/ui/` 或 Web 构建配置后，需要同时提交重新生成的 `web/dist/`。CI 会重新构建并检查该目录；如果源码和提交的产物不一致，门禁会失败。如果合并或 rebase 时 `web/dist/` 有冲突，先解决源码和锁文件的冲突，再从仓库根目录运行：
+
+```bash
+bun install --frozen-lockfile
+bun run build:web
+git add -A -- web/dist
+```
+
+Vite 会清空旧的输出目录。最后一步会同时暂存新产物和已失效的 chunk 删除记录。
 
 CI 在 Node `22.19.0` 上运行一次 Chromium E2E，覆盖项目声明的最低 Node 版本；普通 `check` 和 `test` 继续同时覆盖 Node `22.19.0` 与 Node `24`。
 
