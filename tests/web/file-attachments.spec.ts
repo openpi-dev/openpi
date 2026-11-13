@@ -30,6 +30,7 @@ describe("composer file staging boundary", () => {
     await vi.waitFor(() => expect(StagingWorker.instances).toHaveLength(1));
     const worker = StagingWorker.instances[0]!;
     expect(worker.postMessage.mock.calls[0]?.[0]).toMatchObject({
+      operation: "extract",
       kind: "text",
     });
     worker.onmessage?.({
