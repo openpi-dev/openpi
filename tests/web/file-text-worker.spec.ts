@@ -13,9 +13,9 @@ async function extract(bytes: Uint8Array, kind: string) {
     postMessage: vi.fn(),
   };
   vi.stubGlobal("self", worker);
-  await import("../../web/ui/src/features/composer/file-text-worker.ts");
+  await import("../../web/ui/src/features/files/document-worker.ts");
   worker.onmessage?.({
-    data: { data: Uint8Array.from(bytes).buffer, kind },
+    data: { operation: "extract", data: Uint8Array.from(bytes).buffer, kind },
   } as MessageEvent);
   await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledOnce());
   return worker.postMessage.mock.calls[0]![0].result;

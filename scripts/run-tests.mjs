@@ -32,7 +32,21 @@ if (nodeTests.length === 0 || vitestTests.length === 0) {
 
 // Process and jsdom fixtures both need headroom. Bound file-level overlap
 // instead of letting cold loaders and DOM work compete for every core.
-const concurrency = Math.max(1, Math.min(4, availableParallelism() - 1));
+const availableWorkers = availableParallelism();
+const requestedWorkers = process.env.OPENPI_TEST_WORKERS;
+const concurrency =
+  requestedWorkers === undefined
+    ? Math.max(1, Math.min(4, availableWorkers - 1))
+    : Number(requestedWorkers);
+if (
+  !Number.isInteger(concurrency) ||
+  concurrency < 1 ||
+  concurrency > availableWorkers
+) {
+  throw new Error(
+    `OPENPI_TEST_WORKERS must be an integer between 1 and ${availableWorkers}.`,
+  );
+}
 
 function runNodeTests(files, options = []) {
   if (files.length === 0) return 0;

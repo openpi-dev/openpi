@@ -16,14 +16,16 @@
 
 ## Install
 
-```bash
-npm install effect@beta @effect/platform-node@beta
-```
+Use the repository root `package.json` and lockfile for the current Effect versions.
+Install the pinned development dependencies from the repository root with
+`bun install --frozen-lockfile`. The examples below retain their historical beta.98
+verification; they are not an instruction to install that version.
 
 Big structural facts:
 
-- **One version number for everything.** All ecosystem packages release together at
-  `4.0.0-beta.N`. `@effect/platform-node` must match `effect` exactly.
+- **Use the repository's tested version cohort.** The root manifest pins Effect packages
+  together to avoid prerelease dependency drift during packed npm installs; see
+  [issue #533](https://github.com/openpi-dev/openpi/issues/533).
 - **`@effect/platform` is gone — merged into core `effect`.** `FileSystem`, `Path`,
   `PlatformError`, `Terminal`, `Stdio` are now top-level `effect` modules.
   `@effect/platform-node` remains as the Node *implementation* package.
