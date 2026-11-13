@@ -16,8 +16,8 @@ import {
   type WebSnapshot,
 } from "../../../protocol/types.ts";
 import type {
-  WebSessionForkRequest,
   WebSessionExecution,
+  WebSessionForkRequest,
   WebWorktreeReleaseResult,
   WebWorktreeReleaseTarget,
 } from "../../../runtime/types.ts";
@@ -547,7 +547,7 @@ export function createWebStore(
   } | null = null;
   let refreshTimer: number | null = null;
   let refreshInFlight = false;
-  let refreshPending = false;
+  let pendingSnapshotRefresh: number | "force" | undefined;
   let streamController: AbortController | null = null;
   let streamAttempt: { signal: AbortSignal; connected: boolean } | null = null;
   let modelSearchController: AbortController | null = null;
@@ -784,25 +784,43 @@ export function createWebStore(
       }
     };
 
-    const scheduleSnapshotRefresh = (delay = 160) => {
-      if (refreshInFlight) {
-        refreshPending = true;
+    const schedulePendingSnapshotRefresh = (delay = 160) => {
+      if (
+        refreshInFlight ||
+        refreshTimer !== null ||
+        pendingSnapshotRefresh === undefined
+      )
         return;
-      }
-      if (refreshTimer !== null) return;
       refreshTimer = window.setTimeout(async () => {
         refreshTimer = null;
+        const request = pendingSnapshotRefresh;
+        pendingSnapshotRefresh = undefined;
+        // The host captures snapshot.cursor before reading the projection.
+        // Only an accepted canonical snapshot can satisfy an event request.
+        if (
+          request === undefined ||
+          (typeof request === "number" &&
+            (get().snapshot?.cursor ?? -1) >= request)
+        )
+          return;
         refreshInFlight = true;
         try {
           await get().actions.refreshSnapshot();
         } finally {
           refreshInFlight = false;
-          if (refreshPending) {
-            refreshPending = false;
-            scheduleSnapshotRefresh();
-          }
+          schedulePendingSnapshotRefresh();
         }
       }, delay);
+    };
+
+    const scheduleSnapshotRefresh = (delay = 160, eventSequence?: number) => {
+      if (eventSequence === undefined) pendingSnapshotRefresh = "force";
+      else if (pendingSnapshotRefresh !== "force")
+        pendingSnapshotRefresh = Math.max(
+          pendingSnapshotRefresh ?? 0,
+          eventSequence,
+        );
+      schedulePendingSnapshotRefresh(delay);
     };
 
     const thinking = createThinkingCoordinator({
@@ -906,7 +924,7 @@ export function createWebStore(
       if (event.type === "runtime_changed") clearCommandDiscovery();
 
       if (current.sessionSwitching && !sessionTransition) {
-        scheduleSnapshotRefresh();
+        scheduleSnapshotRefresh(160, event.sequence);
         return;
       }
       if (
@@ -914,7 +932,7 @@ export function createWebStore(
         eventSessionId !== current.snapshot?.currentSessionId &&
         !sessionTransition
       ) {
-        scheduleSnapshotRefresh();
+        scheduleSnapshotRefresh(160, event.sequence);
         return;
       }
       if (
@@ -924,7 +942,7 @@ export function createWebStore(
           (current.snapshot?.currentSessionPath ??
             current.snapshot?.selectedSession?.path)
       ) {
-        scheduleSnapshotRefresh();
+        scheduleSnapshotRefresh(160, event.sequence);
         return;
       }
       if (
@@ -932,7 +950,8 @@ export function createWebStore(
         (detail.message || event.type.startsWith("tool_execution_")) &&
         !isControlledSession(current.snapshot)
       ) {
-        if (refreshEventTypes.has(event.type)) scheduleSnapshotRefresh();
+        if (refreshEventTypes.has(event.type))
+          scheduleSnapshotRefresh(160, event.sequence);
         return;
       }
 
@@ -954,7 +973,7 @@ export function createWebStore(
           typeof eventCommandId === "string" &&
           completedActivationIds.has(eventCommandId)
         ) {
-          scheduleSnapshotRefresh();
+          scheduleSnapshotRefresh(160, event.sequence);
           return;
         }
         const eventPath = detail.sessionPath;
@@ -1258,7 +1277,8 @@ export function createWebStore(
           });
         }
       }
-      if (refreshEventTypes.has(event.type)) scheduleSnapshotRefresh();
+      if (refreshEventTypes.has(event.type))
+        scheduleSnapshotRefresh(160, event.sequence);
     };
 
     const runEventLoop = async (signal: AbortSignal) => {
@@ -1395,6 +1415,7 @@ export function createWebStore(
         streamController = null;
         if (refreshTimer !== null) window.clearTimeout(refreshTimer);
         refreshTimer = null;
+        pendingSnapshotRefresh = undefined;
         thinking.resetPending();
         clearCommandDiscovery();
       },

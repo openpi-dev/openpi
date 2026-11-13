@@ -3014,6 +3014,121 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  it.each([
+    { snapshotCursor: 6, expectedReads: 2 },
+    { snapshotCursor: 5, expectedReads: 3 },
+  ])(
+    "keeps only uncovered event refreshes after an in-flight snapshot at cursor $snapshotCursor",
+    async ({ snapshotCursor, expectedReads }) => {
+      vi.useFakeTimers();
+      const client = new FakeClient();
+      const reading = deferred<WebSnapshot>();
+      const canonical = { ...snapshot("Canonical"), cursor: snapshotCursor };
+      client.snapshots.push(
+        Promise.resolve(snapshot()),
+        reading.promise,
+        Promise.resolve({ ...canonical, cursor: 6 }),
+      );
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      store.getState().actions.start();
+      try {
+        stream.emit(runtimeEvent(5, "agent_start", { sessionId: "session-1" }));
+        await vi.advanceTimersByTimeAsync(160);
+        expect(client.snapshotPaths).toHaveLength(2);
+        stream.emit(
+          runtimeEvent(6, "message_end", {
+            messageKey: "answer",
+            message: { role: "assistant", content: "Finished answer" },
+          }),
+        );
+        // Live projection remains immediate while canonical history is read.
+        expect(store.getState().liveMessages[0]?.message.content).toBe(
+          "Finished answer",
+        );
+        reading.resolve(canonical);
+        await vi.advanceTimersByTimeAsync(320);
+        expect(client.snapshotPaths).toHaveLength(expectedReads);
+        expect(store.getState().snapshot?.cursor).toBe(6);
+        expect(store.getState().snapshot?.sessions[0]?.name).toBe("Canonical");
+      } finally {
+        store.getState().actions.stop();
+      }
+    },
+  );
+
+  it("does not let a superseded snapshot suppress refreshes for newer events", async () => {
+    vi.useFakeTimers();
+    const client = new FakeClient();
+    const older = deferred<WebSnapshot>();
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      older.promise,
+      Promise.resolve({ ...snapshot(), cursor: 5 }),
+      Promise.resolve({ ...snapshot("Newer event confirmed"), cursor: 6 }),
+    );
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    try {
+      stream.emit(runtimeEvent(5, "agent_start", { sessionId: "session-1" }));
+      await vi.advanceTimersByTimeAsync(160);
+      stream.emit(
+        runtimeEvent(6, "session_renamed", { sessionId: "session-1" }),
+      );
+      await store.getState().actions.refreshSnapshot();
+      // This cursor would cover the event, but the newer request superseded it.
+      older.resolve({ ...snapshot("Superseded"), cursor: 6 });
+      await vi.advanceTimersByTimeAsync(320);
+      expect(client.snapshotPaths).toHaveLength(4);
+      expect(store.getState().snapshot?.sessions[0]?.name).toBe(
+        "Newer event confirmed",
+      );
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("retains heartbeat reconciliation even when a snapshot covers pending events", async () => {
+    vi.useFakeTimers();
+    const client = new FakeClient();
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve({ ...snapshot(), cursor: 5 }),
+      Promise.resolve({ ...snapshot("Externally updated"), cursor: 5 }),
+    );
+    let heartbeat: (() => void) | undefined;
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: (options) => {
+        heartbeat = options.onHeartbeat;
+        return stream.consumeEvents(options);
+      },
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    try {
+      stream.emit(
+        runtimeEvent(5, "session_renamed", { sessionId: "session-1" }),
+      );
+      await store.getState().actions.refreshSnapshot();
+      heartbeat?.();
+      await vi.advanceTimersByTimeAsync(160);
+      expect(client.snapshotPaths).toHaveLength(3);
+      expect(store.getState().snapshot?.sessions[0]?.name).toBe(
+        "Externally updated",
+      );
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
   it("refreshes Session metadata events emitted by another browser tab", async () => {
     vi.useFakeTimers();
     const client = new FakeClient();
