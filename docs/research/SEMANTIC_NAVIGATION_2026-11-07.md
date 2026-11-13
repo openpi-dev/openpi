@@ -5,9 +5,11 @@ last-verified: 2026-11-07
 applies-to: OpenPI baseline 1120cafcd3f5c1ad466df1c7b823976a3e911f72 and the semantic-navigation candidate described below; Pi SDK 1.2.0; TypeScript 7.0.2 with effect-tsgo 0.24.3
 related-issues:
   - https://github.com/openpi-dev/openpi/issues/913
-related-prs: []
+related-prs: "https://github.com/openpi-dev/openpi/pull/916"
 supersedes: none
 ---
+
+<!-- Related PR link added 2026-11-14; the verification date is unchanged. -->
 
 # On-demand semantic navigation and diagnostic observations
 
@@ -62,3 +64,19 @@ An actual `npm pack --ignore-scripts` tarball included the Skill and adjacent sc
 Raw receipts, exact requests/results, controlled source copies, cancellation and package artifacts remain outside Git under `/Users/tsk/.codex/experiments/openpi-community-2026-11-07/semantic-delivery-v1/`. Its manifest records file hashes. The checked CLI hash is `fb4effecd87115d985d08cf35f5755860f9af68a9b0d4f97914e558b9483f1ba`. Original exploratory counterexamples remain under the sibling `semantic/` evidence directory.
 
 Repository checks, full test totals, independent review and final CI are recorded in the implementation PR once complete. These functional observations are not a formal Benchmark: there is no representative task suite, model-quality experiment or usage comparison.
+
+## Verified facts
+
+The candidate resolved two navigation examples and retained ambiguous diagnostic occurrences in controlled single-document cases.
+
+## Inferences
+
+Matching diagnostic signatures in changed text can be ambiguous; a response alone does not establish clean server termination.
+
+## Recommendations
+
+Retain ambiguity and incomplete results explicitly, and keep execution within the existing Pi and Bash boundaries described above.
+
+## Unknowns
+
+The experiment does not establish project-wide diagnostic coverage, general language-server compatibility, latency or token efficiency.

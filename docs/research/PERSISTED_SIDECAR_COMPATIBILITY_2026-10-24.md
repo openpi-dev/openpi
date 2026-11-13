@@ -8,9 +8,11 @@ related-issues:
   - https://github.com/openpi-dev/openpi/issues/118
   - https://github.com/openpi-dev/openpi/issues/193
   - https://github.com/openpi-dev/openpi/issues/196
-related-prs: []
+related-prs: "https://github.com/openpi-dev/openpi/pull/902"
 supersedes: none
 ---
+
+<!-- Related PR link added 2026-11-14; the verification date is unchanged. -->
 
 # OpenPI-owned persisted sidecar compatibility inventory
 
@@ -60,3 +62,19 @@ Maintainers must decide whether these owner-local rules need a durable,
 repository-level compatibility contract. If not, this inventory and its tests
 remain evidence only; no general registry, migration engine, second Session
 store, orchestration runtime, or user-data migration follows from it.
+
+## Verified facts
+
+The inventoried owners reject or withhold unsupported sidecars according to their own semantics; synthetic tests cover setup configuration, workflow journals and Plan Mode state.
+
+## Inferences
+
+The owner-specific outcomes support the narrow shared invariant stated in the conclusion; they do not establish a global migration policy.
+
+## Recommendations
+
+Keep the owner-local rules and tests as evidence unless a durable compatibility contract is separately adopted.
+
+## Unknowns
+
+Whether the owner-local rules need a repository-level compatibility contract remains a maintainer decision.

@@ -1,3 +1,15 @@
+---
+status: validated
+created: 2026-10-22
+last-verified: 2026-10-22
+applies-to: "ea4dfb993793ccdb093229588b6ccd3467afd90a, PR #892 and the separately identified follow-ups below"
+related-issues: "#890, #891"
+related-prs: "#892"
+supersedes: none
+---
+
+<!-- Metadata added 2026-11-14; the original verification boundary is unchanged. -->
+
 # Web lifecycle and saved child history
 
 - Status: validated for the named source and local fixture boundaries below
@@ -134,3 +146,19 @@ The complete isolated `bun run test` passed **2,382 Node tests / 8 skipped / 0 f
 ## Limits and interpretation
 
 This evidence demonstrates source behavior, native fixtures and an isolated browser. It does not claim a real computer reboot test, deployment to the user's installed runtime, automatic execution recovery, or a comparative performance improvement. The installed OpenPI source remains separate from this checkout. Lists and transcript previews retain explicit bounds; deleted files, missing private bindings and historical in-memory data remain unavailable rather than reconstructed by title or working-directory guesses.
+
+## Verified facts
+
+The Web Host owns execution independently of browser subscriptions; persisted Session files do not resume a stopped execution loop.
+
+## Inferences
+
+The historical incident evidence establishes the reproduced source failure path, not the exact action that initiated the incident.
+
+## Recommendations
+
+Keep execution ownership separate from browser subscriptions and preserve the bounded Session identity and recovery rules described above.
+
+## Unknowns
+
+Real reboot, deployment to the installed runtime and recovery of unavailable historical in-memory data were not established.

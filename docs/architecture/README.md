@@ -10,4 +10,5 @@ Each new or materially revised architecture record should identify its evidence 
 - [`WEB_MODEL_DISCOVERY.md`](WEB_MODEL_DISCOVERY.md) - bounded Web model snapshots and full-catalog discovery through Pi's model runtime
 - [`RUNTIME_SNAPSHOT.md`](RUNTIME_SNAPSHOT.md) - historical record of a removed parent-only runtime snapshot tool ([#879](https://github.com/openpi-dev/openpi/issues/879))
 
+- [`WORKFLOW_ARTIFACT_COMMIT.md`](WORKFLOW_ARTIFACT_COMMIT.md) - workflow terminal publication and recovery across per-file atomic writes (#110)
 - [`WORKFLOW_EXECUTION_TIMING.md`](WORKFLOW_EXECUTION_TIMING.md) - privacy-safe bounded timing observation, explicit coverage and replay provenance (#662)

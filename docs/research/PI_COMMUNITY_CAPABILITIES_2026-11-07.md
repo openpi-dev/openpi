@@ -178,3 +178,19 @@ selected host and adds no runtime dependency. The resolver regression failed
 before the fix and passed afterward; the repacked installation reached ready,
 served its local assets and exited with status zero. Development-checkout
 success had not established this distribution boundary.
+
+## Verified facts
+
+Pinned community sources and local experiments exposed useful context and review seams; a diagnostic comparison produced a false negative.
+
+## Inferences
+
+The diagnostic false negative limits what a location-free comparison can establish; the source audit does not validate the packages for production use.
+
+## Recommendations
+
+Evaluate the described native Pi seams within their stated boundaries; further language-server work needs explicit availability and termination handling.
+
+## Unknowns
+
+Diagnostic identity, server availability and clean termination remain unresolved at the experiment boundary. Model quality and performance were not measured.

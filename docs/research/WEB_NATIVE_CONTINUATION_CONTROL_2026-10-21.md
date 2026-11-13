@@ -1,3 +1,15 @@
+---
+status: validated
+created: 2026-10-21
+last-verified: 2026-10-21
+applies-to: "PR #865 extending db3d40ed93439f30c148b03c9a3f2c03827cc098, at the local boundaries below"
+related-issues: "#867"
+related-prs: "#865"
+supersedes: none
+---
+
+<!-- Metadata added 2026-11-14; the original verification boundary is unchanged. -->
+
 # Web control after a native continuation
 
 - Status: validated at the local source, Pi fixture, Host and rendered-UI boundaries below; not a new architectural Decision.
@@ -30,3 +42,19 @@ The transcript withholds only the active turn's change summary until execution s
 - A read-only synthetic preview using frozen before/after Web bundles reproduced the early card, verified its absence during execution and compaction, and verified the final expandable file list. Screens were reviewed at 1440, 768 and 390 pixels. The app inspector allows the existing 4% composer shadow; sparse-chat whitespace is reserved conversation space, not a new fixed-height card.
 - Local evidence: `~/.codex/evidence/openpi-browser-continuation-20261021/`, including check/test logs, the cancellation ablation, frozen bundles, screenshots and `comparison.html`. Private Session content and credentials are excluded from this record and the repository.
 - The running user service was not updated or restarted. Native lifecycle tests use Pi with a deterministic provider; no claim is made about a new live website login, native browser action or model-provider smoke.
+
+## Verified facts
+
+A native continuation has a fresh command identity without a fresh HTTP admission; local regressions cover its origin and cancellation boundaries.
+
+## Inferences
+
+A native continuation needs its exact originating admission; selecting a recent visible controller would not establish that authority.
+
+## Recommendations
+
+Preserve the exact invocation and cancellation-revocation boundary described above.
+
+## Unknowns
+
+A new live website login, native browser action and model-provider smoke were not established; the running user service was not updated.
