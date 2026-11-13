@@ -1,3 +1,15 @@
+---
+status: validated
+created: 2026-10-23
+last-verified: 2026-10-23
+applies-to: "baseline ea4dfb993793ccdb093229588b6ccd3467afd90a and the local changes and follow-ups described below"
+related-issues: "#841, #839"
+related-prs: "#895"
+supersedes: none
+---
+
+<!-- Metadata added 2026-11-14; the original verification boundary is unchanged. -->
+
 # Performance audit continuation
 
 - Status: validated at the local source boundary; native TUI visual acceptance confirmed by the user on 2026-10-23
@@ -92,3 +104,19 @@ The measured improvements address concrete repeated work and retention defects. 
 Local audit closure: all nine confirmed defects are repaired, the implementation still matches the tested archive, and the user-reported TUI check closes the last local acceptance gap. At that audit boundary, remote publication, CI, merge and release had not been performed. See PR #895 for subsequent delivery status.
 
 PR validation follow-up: Windows CI at `1061f966` returned timeout code `-1` instead of exit code `7` in the existing Git process output test. That test gave Node startup and execution a one-second budget. Its non-deadline helper now allows ten seconds; the separate explicit 20 ms timeout test and production deadlines are unchanged. Focused local output, missing-command and timeout checks passed; the final PR checks carry Windows verification.
+
+## Verified facts
+
+Nine repairs addressed repeated work or retention; local synthetic probes measured operation counts and file writes, not whole-application performance.
+
+## Inferences
+
+The operation counts explain removed work at the tested boundaries; they do not establish whole-application speedup.
+
+## Recommendations
+
+Further transcript caching needs a sound mutation and identity boundary. Preserve the existing trust filtering when investigating child package discovery.
+
+## Unknowns
+
+Cross-platform behavior, production-wide latency and upstream loader reuse remain outside the local evidence.
