@@ -555,9 +555,11 @@ test("sanitizeSchemaForCca preserves property names that match schema keywords",
   );
 });
 
-test("sanitizeSchemaForCca rewrites const literals to enum inside anyOf branches", () => {
+test("sanitizeSchemaForCca collapses only unconstrained same-type literal anyOf", () => {
   // TypeBox serializes Type.Union([Type.Literal(...)]) this way; CCA 400s the
-  // whole request on "const" while accepting enum in the same payload.
+  // whole request on "const" while accepting enum in the same payload. The
+  // plain alternatives collapse so the model sees one enum instead of
+  // anyOf-of-singleton-enums, without changing the allowed value set.
   assert.deepEqual(
     sanitizeSchemaForCca({
       type: "object",
@@ -577,10 +579,103 @@ test("sanitizeSchemaForCca rewrites const literals to enum inside anyOf branches
       properties: {
         evidence: {
           description: 'Evidence to read: "transcript", "final", "structured".',
+          type: "string",
+          enum: ["transcript", "final", "structured"],
+        },
+      },
+    },
+  );
+  // Literals without an explicit type still collapse, inferring "string".
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      anyOf: [{ const: "a" }, { const: "b" }],
+    }),
+    { type: "string", enum: ["a", "b"] },
+  );
+  // Conjunction and exclusive choice must not become a union of values.
+  for (const combiner of ["allOf", "oneOf"]) {
+    assert.deepEqual(
+      sanitizeSchemaForCca({
+        [combiner]: [
+          { type: "string", const: "a" },
+          { type: "string", const: "b" },
+        ],
+      }),
+      {
+        [combiner]: [
+          { type: "string", enum: ["a"] },
+          { type: "string", enum: ["b"] },
+        ],
+      },
+    );
+  }
+  assert.deepEqual(
+    sanitizeSchemaForCca({ oneOf: [{ const: "a" }, { const: "a" }] }),
+    {
+      oneOf: [
+        { type: "string", enum: ["a"] },
+        { type: "string", enum: ["a"] },
+      ],
+    },
+  );
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      anyOf: [{ type: "string", const: "a" }, { const: 1 }],
+    }),
+    {
+      anyOf: [
+        { type: "string", enum: ["a"] },
+        { type: "number", enum: [1] },
+      ],
+    },
+  );
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      anyOf: [{ const: "a", description: "First choice" }, { const: "b" }],
+      enum: ["a"],
+    }),
+    {
+      anyOf: [
+        { type: "string", enum: ["a"], description: "First choice" },
+        { type: "string", enum: ["b"] },
+      ],
+      enum: ["a"],
+    },
+  );
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      anyOf: [{ const: "a", enum: ["a"] }, { const: "b" }],
+    }),
+    {
+      anyOf: [
+        { type: "string", enum: ["a"] },
+        { type: "string", enum: ["b"] },
+      ],
+    },
+  );
+});
+
+test("sanitizeSchemaForCca keeps mixed-type combinators as anyOf", () => {
+  // Not every variant carries `const` — the union must stay a union.
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      properties: {
+        exclude: {
           anyOf: [
-            { type: "string", enum: ["transcript"] },
-            { type: "string", enum: ["final"] },
-            { type: "string", enum: ["structured"] },
+            { type: "string" },
+            { type: "array", items: { type: "string" } },
+          ],
+        },
+      },
+    }),
+    {
+      type: "object",
+      properties: {
+        exclude: {
+          anyOf: [
+            { type: "string" },
+            { type: "array", items: { type: "string" } },
           ],
         },
       },
@@ -596,6 +691,11 @@ test("sanitizeSchemaForCca intersects const with a sibling enum", () => {
       enum: ["chromium"],
     },
   );
+  // A bare const infers its type when the node has none.
+  assert.deepEqual(sanitizeSchemaForCca({ const: "chromium" }), {
+    type: "string",
+    enum: ["chromium"],
+  });
   assert.deepEqual(
     sanitizeSchemaForCca({
       type: "string",
@@ -635,6 +735,111 @@ test("sanitizeSchemaForCca preserves a property named const", () => {
   );
 });
 
+test("sanitizeSchemaForCca strips omp-synced keywords (contains, additionalItems, $id)", () => {
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "array",
+      items: { type: "string" },
+      contains: { type: "string" },
+      minContains: 1,
+      additionalItems: { type: "string" },
+      contentEncoding: "base64",
+      $id: "https://example.com/schema",
+    }),
+    { type: "array", items: { type: "string" } },
+  );
+});
+
+test("sanitizeSchemaForCca drops unknown keywords as a fail-soft final gate", () => {
+  // Keep existing metadata and schema structure while omitting keywords
+  // outside this projection. This gate is not a complete CCA validator.
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      title: "Files to write",
+      if: { type: "object" },
+      // biome-ignore lint/suspicious/noThenProperty: JSON Schema keyword under test
+      then: { type: "object" },
+      properties: {
+        path: { type: "string", title: "Path", nullable: true },
+      },
+      required: ["path"],
+    }),
+    {
+      type: "object",
+      title: "Files to write",
+      properties: {
+        path: { type: "string", title: "Path" },
+      },
+      required: ["path"],
+    },
+  );
+});
+
+test("sanitizeSchemaForCca keeps every non-null type in type arrays", () => {
+  assert.deepEqual(sanitizeSchemaForCca({ type: ["string", "null"] }), {
+    type: "string",
+  });
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: ["string", "number"],
+      description: "Either type",
+      anyOf: [{ enum: ["a"] }, { enum: [1] }],
+    }),
+    {
+      anyOf: [
+        {
+          type: "string",
+          description: "Either type",
+          anyOf: [{ enum: ["a"] }, { enum: [1] }],
+        },
+        {
+          type: "number",
+          description: "Either type",
+          anyOf: [{ enum: ["a"] }, { enum: [1] }],
+        },
+      ],
+    },
+  );
+  assert.deepEqual(sanitizeSchemaForCca({ type: ["null"] }), {});
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: ["string", "array", "object"],
+      items: { type: "string" },
+      properties: { value: { type: "string" } },
+      required: ["value"],
+    }),
+    {
+      anyOf: [
+        { type: "string" },
+        { type: "array", items: { type: "string" } },
+        {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+      ],
+    },
+  );
+});
+
+test("sanitizeSchemaForCca preserves a property named anyOf", () => {
+  assert.deepEqual(
+    sanitizeSchemaForCca({
+      type: "object",
+      properties: {
+        anyOf: { type: "string", description: "Coin flip" },
+      },
+    }),
+    {
+      type: "object",
+      properties: {
+        anyOf: { type: "string", description: "Coin flip" },
+      },
+    },
+  );
+});
+
 test("buildRequestBody strips CCA-rejected keywords and spills constraints into description", () => {
   const contextWithTools = {
     ...SIMPLE_CONTEXT,
@@ -654,6 +859,15 @@ test("buildRequestBody strips CCA-rejected keywords and spills constraints into 
             mode: { type: "string", readOnly: false },
             pattern: { type: "string", description: "Search pattern" },
             $id: { type: "string", description: "User-defined property" },
+            // TypeBox Type.Union([Type.Literal(...)]) shape: must reach the
+            // wire as a flat enum, never as anyOf branches carrying const.
+            evidence: {
+              description: 'Evidence to read: "transcript", "final".',
+              anyOf: [
+                { type: "string", const: "transcript" },
+                { type: "string", const: "final" },
+              ],
+            },
           },
         },
       },
@@ -689,9 +903,52 @@ test("buildRequestBody strips CCA-rejected keywords and spills constraints into 
     type: "string",
     description: "User-defined property",
   });
+  assert.deepEqual(parameters.properties.evidence, {
+    type: "string",
+    description: 'Evidence to read: "transcript", "final".',
+    enum: ["transcript", "final"],
+  });
 });
 
 // --- request envelope ------------------------------------------------------
+
+test("buildRequestBody preserves raw literal data and special property names on both routes", () => {
+  const literal = { type: "data", const: "keep", pattern: "data", $id: "data" };
+  const context = {
+    ...SIMPLE_CONTEXT,
+    tools: [
+      {
+        name: "choose",
+        description: "d",
+        parameters: {
+          type: "object",
+          properties: {
+            ["__proto__"]: { type: "string" },
+            choice: { enum: [literal] },
+          },
+          required: ["__proto__", "choice"],
+        },
+      },
+    ],
+  };
+  const original = structuredClone(context);
+  for (const model of [CLAUDE_MODEL, GEMINI_MODEL]) {
+    const body = buildRequestBody(model, context as never, undefined, "p") as {
+      request: {
+        tools: {
+          functionDeclarations: {
+            parameters: unknown;
+            parametersJsonSchema?: unknown;
+          }[];
+        }[];
+      };
+    };
+    const declaration = body.request.tools[0]!.functionDeclarations[0]!;
+    assert.deepEqual(declaration.parameters, original.tools[0]!.parameters);
+    assert.equal(Object.hasOwn(declaration, "parametersJsonSchema"), false);
+  }
+  assert.deepEqual(context, original);
+});
 
 test("buildRequestBody produces the Antigravity envelope", () => {
   const body = buildRequestBody(
