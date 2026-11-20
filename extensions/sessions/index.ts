@@ -798,7 +798,7 @@ async function showSessionPicker(
         ];
       };
 
-      const renderSinglePane = (width: number): string[] => {
+      const renderSinglePane = (width: number) => {
         const container = new Container();
 
         container.addChild(

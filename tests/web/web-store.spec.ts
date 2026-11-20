@@ -1476,6 +1476,64 @@ describe("OpenPI Web store", () => {
     }
   });
 
+  it("keeps a live row scoped to its owning Session, including copies with one embedded ID", async () => {
+    const client = new FakeClient();
+    const initial = snapshot();
+    client.snapshots.push(Promise.resolve(initial));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      const sessionId = initial.currentSessionId;
+      const sessionPath = initial.selectedSession?.path;
+      const messageKey = "live-1";
+      let sequence = 10;
+      stream.emit(
+        runtimeEvent(sequence++, "message_start", {
+          sessionId,
+          sessionPath,
+          messageKey,
+          message: { role: "assistant", content: "Selected answer" },
+        }),
+      );
+      const before = store.getState().liveMessages;
+      expect(before).toHaveLength(1);
+      for (const owner of [
+        { sessionId: "session-2", sessionPath },
+        { sessionId, sessionPath: "/copies/session.jsonl" },
+      ]) {
+        for (const type of ["message_start", "message_update", "message_end"])
+          stream.emit(
+            runtimeEvent(sequence++, type, {
+              ...owner,
+              messageKey,
+              message: { role: "assistant", content: "Foreign answer" },
+            }),
+          );
+        expect(store.getState().liveMessages).toEqual(before);
+      }
+      stream.emit(
+        runtimeEvent(sequence, "message_update", {
+          sessionId,
+          sessionPath,
+          messageKey,
+          message: { role: "assistant", content: "Selected continuation" },
+        }),
+      );
+      expect(store.getState().liveMessages).toHaveLength(1);
+      expect(store.getState().liveMessages[0]?.message.content).toBe(
+        "Selected continuation",
+      );
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
   it("keeps its requested view and scoped pending message when another client changes the controller", async () => {
     const client = new FakeClient();
     const viewed = snapshot();

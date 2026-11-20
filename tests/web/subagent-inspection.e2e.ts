@@ -269,18 +269,39 @@ for (const [width, touch] of [
                   parts: [
                     {
                       type: "toolCall",
-                      toolId: "read-1",
-                      name: "read",
-                      argsPreview: '{"path":"package.json"}',
+                      toolId: "code-1",
+                      name: "codemode",
+                      argsPreview:
+                        '{"code":"Read a file and fetch repository metadata"}',
                     },
                   ],
                 },
                 {
                   kind: "toolResult",
                   toolId: "read-1",
+                  parentToolCallId: "code-1",
                   name: "read",
+                  argsPreview: '{"path":"package.json"}',
+                  evidenceArguments: { path: "package.json" },
                   isError: false,
-                  outputPreview: '{"name":"example-app"}',
+                  outputPreview: '# Agent 工作规则\n{"name":"example-app"}',
+                },
+                {
+                  kind: "toolResult",
+                  toolId: "bash-1",
+                  parentToolCallId: "code-1",
+                  name: "bash",
+                  argsPreview:
+                    '{"command":"curl -L https://api.github.com/repos/openpi-dev/openpi"}',
+                  isError: false,
+                  outputPreview: "200 7867",
+                },
+                {
+                  kind: "toolResult",
+                  toolId: "code-1",
+                  name: "codemode",
+                  isError: false,
+                  outputPreview: "Script completed",
                 },
               ],
               liveAssistant: running
@@ -382,9 +403,33 @@ for (const [width, touch] of [
       await expect(
         dialog.getByText("Read-only verification complete."),
       ).toBeVisible();
+      await dialog.locator(".process-sequence > summary").click();
       const readEvidence = dialog.locator(
         '.tool-evidence-card[data-tool="read"]',
       );
+      await expect(readEvidence).toHaveCount(1);
+      await expect(readEvidence.locator(":scope > summary")).toContainText(
+        "package.json",
+      );
+      await expect(readEvidence.locator(":scope > summary")).not.toContainText(
+        "# Agent 工作规则",
+      );
+      const commandEvidence = dialog.locator(
+        '.tool-evidence-card[data-tool="bash"]',
+      );
+      await expect(commandEvidence).toHaveCount(1);
+      await expect(commandEvidence.locator(":scope > summary")).toContainText(
+        "curl -L https://api.github.com/repos/openpi-dev/openpi",
+      );
+      await expect(
+        commandEvidence.locator(":scope > summary"),
+      ).not.toContainText("200 7867");
+      await expect(
+        commandEvidence.locator(":scope > summary"),
+      ).toBeInViewport();
+      await dialog.screenshot({
+        path: testInfo.outputPath(`subagent-nested-tool-targets-${width}.png`),
+      });
       await readEvidence.locator(":scope > summary").click();
       const fileContent = readEvidence.getByRole("figure", {
         name: "File content",

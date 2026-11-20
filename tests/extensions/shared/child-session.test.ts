@@ -19,6 +19,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  InMemoryCredentialStore,
 } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -436,8 +437,10 @@ test("Pi nested tool calls preserve child exclusions, allowlists, and permission
           fauxAssistantMessage("Finished the child tool check."),
         ]);
         const modelRuntime = await ModelRuntime.create({
-          authPath: path.join(agentDir, "auth.json"),
-          modelsPath: path.join(agentDir, "models.json"),
+          // Provider refreshes can outlive Session disposal. This authority
+          // fixture needs no credential or model files racing directory cleanup.
+          credentials: new InMemoryCredentialStore(),
+          modelsPath: null,
           refreshOnCreate: false,
         });
         modelRuntime.registerNativeProvider(provider.provider);

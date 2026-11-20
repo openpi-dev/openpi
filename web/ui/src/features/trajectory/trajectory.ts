@@ -16,6 +16,8 @@ export interface TrajectoryNode {
   timestamp?: string;
   callId?: string;
   input?: string;
+  evidenceArguments?: Record<string, unknown>;
+  argumentsOmitted?: boolean;
   message?: WebLiveMessage;
   result?: WebLiveMessage;
   outcome?: "returned" | "error" | "unknown";
@@ -134,6 +136,7 @@ export function buildTrajectory(entries: readonly Entry[]) {
         timestamp: entry.timestamp,
         callId: part.id,
         input: part.arguments,
+        evidenceArguments: part.evidenceArguments,
         message,
         result,
         outcome:
@@ -239,6 +242,8 @@ export function trajectoryRecords(
           parentKey: node.key,
           callId: child.call.id,
           input: child.call.arguments,
+          evidenceArguments: child.call.evidenceArguments,
+          argumentsOmitted: child.argumentsOmitted,
           result: child.result,
           missingOutput: child.outputMissing,
           error: child.error,

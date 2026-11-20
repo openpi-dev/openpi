@@ -254,12 +254,14 @@ function renderAssistantItem(
   toolRenderer?: AgentToolRenderer,
   expanded = false,
 ) {
-  const out = renderAssistantParts(
-    item.parts,
-    width,
-    false,
-    toolRenderer?.messagePresentation,
-  );
+  const out = [
+    ...renderAssistantParts(
+      item.parts,
+      width,
+      false,
+      toolRenderer?.messagePresentation,
+    ),
+  ];
   for (const part of item.parts) {
     if (part.type === "toolCall") {
       const state = tools.get(part.toolId) ?? { phase: "pending" };
@@ -488,7 +490,10 @@ function findResult(
  * from their component's invalidate() when Pi changes theme.
  */
 export class AgentTranscriptRenderer {
-  private itemCache = new WeakMap<AgentTranscriptItem, Map<string, string[]>>();
+  private itemCache = new WeakMap<
+    AgentTranscriptItem,
+    Map<string, readonly string[]>
+  >();
   private toolRenderers = new Set<AgentToolRenderer>();
 
   render(
@@ -536,7 +541,8 @@ export class AgentTranscriptRenderer {
           expanded,
         );
       if (!cached && cacheable) {
-        const widths = this.itemCache.get(item) ?? new Map<string, string[]>();
+        const widths =
+          this.itemCache.get(item) ?? new Map<string, readonly string[]>();
         if (widths.size >= MAX_CACHED_WIDTHS_PER_ITEM) {
           const oldestWidth = widths.keys().next().value;
           if (oldestWidth !== undefined) widths.delete(oldestWidth);

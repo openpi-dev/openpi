@@ -24,13 +24,13 @@ import {
   Scope,
   Stream,
 } from "effect";
-import type { SubagentBackend, SubagentSession } from "./backend.ts";
 import type { AgentToolRenderer } from "../../shared/agent-tool-renderer.ts";
 import type {
   ChildExecutionAdmission,
-  ChildExecutionLease,
   ChildExecutionAdmissionSnapshot,
+  ChildExecutionLease,
 } from "../../shared/child-execution-admission.ts";
+import type { SubagentBackend, SubagentSession } from "./backend.ts";
 import { BackendRegistry } from "./backend.ts";
 import type {
   BackendName,
@@ -38,8 +38,8 @@ import type {
   RunOutcome,
   SpawnTask,
   SubagentEvent,
-  SubagentOrigin,
   SubagentMeta,
+  SubagentOrigin,
   SubagentSnapshot,
   SubagentSpend,
   SubagentStatus,
@@ -503,6 +503,15 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           entry.liveToolMap.set(event.toolId, {
             toolId: event.toolId,
             name: event.name,
+            ...(event.evidenceArguments !== undefined
+              ? { evidenceArguments: event.evidenceArguments }
+              : {}),
+            ...(event.argsTruncated !== undefined
+              ? { argsTruncated: event.argsTruncated }
+              : {}),
+            ...(event.parentToolCallId !== undefined
+              ? { parentToolCallId: event.parentToolCallId }
+              : {}),
             argsPreview: event.argsPreview
               ? boundedTranscriptText(event.argsPreview)
               : undefined,
@@ -522,19 +531,25 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           }
           break;
         }
-        case "ToolEnd":
+        case "ToolEnd": {
+          const start = entry.liveToolMap.get(event.toolId);
           entry.liveToolMap.delete(event.toolId);
           s.liveTools = [...entry.liveToolMap.values()];
           appendTranscript(s, {
+            ...start,
             kind: "toolResult",
             toolId: event.toolId,
             name: event.name,
+            ...(event.parentToolCallId !== undefined
+              ? { parentToolCallId: event.parentToolCallId }
+              : {}),
             isError: event.isError,
             outputPreview: event.outputPreview
               ? boundedTranscriptText(event.outputPreview)
               : undefined,
           });
           break;
+        }
         case "QueueChanged":
           s.queued = event.queued;
           break;
