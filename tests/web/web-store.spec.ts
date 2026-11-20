@@ -1476,6 +1476,83 @@ describe("OpenPI Web store", () => {
     }
   });
 
+  it("drops message events that name another Session instead of rendering them", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
+    );
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      stream.emit(
+        runtimeEvent(10, "message_update", {
+          sessionId: "session-2",
+          messageKey: "foreign-live-1",
+          message: { role: "assistant", content: "Another Session's answer" },
+        }),
+      );
+      expect(store.getState().liveMessages).toEqual([]);
+      expect(store.getState().snapshot?.currentSessionId).toBe("session-1");
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("does not let another Session with the same live key update or end the selected row", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
+    );
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      stream.emit(
+        runtimeEvent(10, "message_start", {
+          sessionId: "session-1",
+          messageKey: "live-1",
+          message: { role: "assistant", content: "Selected answer" },
+        }),
+      );
+      const before = store.getState().liveMessages;
+      for (const type of ["message_start", "message_update", "message_end"])
+        stream.emit(
+          runtimeEvent(11, type, {
+            sessionId: "session-2",
+            messageKey: "live-1",
+            message: { role: "assistant", content: "Foreign answer" },
+          }),
+        );
+      expect(store.getState().liveMessages).toEqual(before);
+      stream.emit(
+        runtimeEvent(12, "message_update", {
+          sessionId: "session-1",
+          messageKey: "live-1",
+          message: { role: "assistant", content: "Selected continuation" },
+        }),
+      );
+      expect(store.getState().liveMessages).toHaveLength(1);
+      expect(store.getState().liveMessages[0]?.message.content).toBe(
+        "Selected continuation",
+      );
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
   it("keeps its requested view and scoped pending message when another client changes the controller", async () => {
     const client = new FakeClient();
     const viewed = snapshot();
