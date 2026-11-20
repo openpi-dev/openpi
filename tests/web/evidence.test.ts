@@ -3,15 +3,16 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { ArtifactReader } from "../../web/host/artifacts.ts";
 import {
   evidenceText,
   isEvidenceTool,
   projectToolEvidence,
   testSummary,
+  toolArguments,
 } from "../../web/protocol/evidence.ts";
-import { projectMessage } from "../../web/protocol/types.ts";
 import { reduceLiveTools } from "../../web/protocol/live-tools.ts";
-import { ArtifactReader } from "../../web/host/artifacts.ts";
+import { projectMessage } from "../../web/protocol/types.ts";
 
 function call(name: string, args: Record<string, unknown> = {}) {
   const part = projectMessage({
@@ -20,6 +21,24 @@ function call(name: string, args: Record<string, unknown> = {}) {
   assert.ok(part?.type === "toolCall");
   return part;
 }
+
+test("retained display targets supplement valid generic arguments and survive clipped JSON", () => {
+  const tool = {
+    type: "toolCall" as const,
+    name: "grep",
+    arguments: JSON.stringify({ pattern: "TODO", path: ".", glob: "*.ts" }),
+    evidenceArguments: { pattern: "TODO", path: "src" },
+  };
+  assert.deepEqual(toolArguments(tool), {
+    pattern: "TODO",
+    path: "src",
+    glob: "*.ts",
+  });
+  assert.deepEqual(toolArguments({ ...tool, arguments: '{"glob":"clipped' }), {
+    pattern: "TODO",
+    path: "src",
+  });
+});
 
 test("Web evidence strips terminal-owned hidden strings rather than exposing their payloads", () => {
   for (const start of [

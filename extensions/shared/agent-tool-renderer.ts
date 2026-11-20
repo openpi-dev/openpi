@@ -26,7 +26,7 @@ export interface AgentToolRenderer {
   renderTool(
     request: AgentToolRenderRequest,
     width: number,
-  ): string[] | undefined;
+  ): readonly string[] | undefined;
   readonly messagePresentation?: AgentMessagePresentation;
   invalidate?(): void;
   /** Release completed payloads explicitly evicted by the transcript owner. */

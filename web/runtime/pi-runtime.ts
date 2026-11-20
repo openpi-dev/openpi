@@ -320,8 +320,13 @@ export class PiWebRuntime implements WebRuntimeController {
   >();
   /** Native aborts remain owned by Pi until its agent_settled event arrives. */
   private readonly turnAbortOperations = new Map<string, Promise<unknown>>();
-  private liveMessageKey?: string;
-  private liveMessageSequence = 0;
+  /** A parked Session can keep streaming while another Session is active. */
+  private liveMessages?: WeakMap<AgentSession, {
+    assistantKey?: string;
+    sequence: number;
+    keys: WeakMap<object, string>;
+    events: WeakMap<AgentSessionEvent, { key?: string; projected: boolean }>;
+  }>;
   private readonly webSessionDirectory: string;
   private readonly dispatcherLease: HttpDispatcherLease;
   private readonly webHostLease: WebHostLease;
@@ -2692,6 +2697,50 @@ export class PiWebRuntime implements WebRuntimeController {
     previous?.();
   }
 
+  /** Active and retained subscriptions may overlap during native listener dispatch. */
+  private withLiveMessageKey(
+    session: AgentSession,
+    event: AgentSessionEvent,
+    project?: (key: string | undefined) => void,
+  ) {
+    if (this.disposed || (event.type !== "message_start" && event.type !== "message_update" && event.type !== "message_end")) return;
+    const sessions = this.liveMessages ??= new WeakMap();
+    let live = sessions.get(session);
+    if (!live) {
+      live = { sequence: 0, keys: new WeakMap(), events: new WeakMap() };
+      sessions.set(session, live);
+    }
+    const message = event.message;
+    const assistant = message.role === "assistant";
+    let observed = live.events.get(event);
+    if (!observed) {
+      let key: string | undefined;
+      if (event.type === "message_start") {
+        key = `live-${++live.sequence}`;
+        live.keys.set(message, key);
+        // Assistant updates may come with fresh objects. A custom notification
+        // uses its own key and cannot end the assistant's current response.
+        if (assistant) live.assistantKey = key;
+      } else {
+        key = live.keys.get(message) ?? (assistant ? live.assistantKey : undefined);
+      }
+      observed = { key, projected: false };
+      live.events.set(event, observed);
+    }
+    try {
+      if (project && !observed.projected) {
+        observed.projected = true;
+        project(observed.key);
+      }
+    } finally {
+      if (event.type === "message_end") {
+        // A reentrant start owns its new key, even if it uses the same object.
+        if (live.keys.get(message) === observed.key) live.keys.delete(message);
+        if (assistant && live.assistantKey === observed.key) live.assistantKey = undefined;
+      }
+    }
+  }
+
   private projectEvent(session: AgentSession, event: AgentSessionEvent) {
     if (session !== this.runtime.session) return;
     this.observeRetry(session, event);
@@ -2798,19 +2847,17 @@ export class PiWebRuntime implements WebRuntimeController {
         });
         break;
       case "message_start":
-        this.liveMessageKey = `live-${++this.liveMessageSequence}`;
-        this.emit(event.type, {
-          message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
-          messageKey: this.liveMessageKey,
-        });
-        break;
       case "message_update":
       case "message_end":
-        this.emit(event.type, {
-          message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
-          ...(this.liveMessageKey ? { messageKey: this.liveMessageKey } : {}),
+        this.withLiveMessageKey(session, event, (key) => {
+          const sessionPath = session.sessionManager.getSessionFile();
+          this.emit(event.type, {
+            sessionId: session.sessionManager.getSessionId(),
+            ...(sessionPath ? { sessionPath } : {}),
+            message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
+            ...(key ? { messageKey: key } : {}),
+          });
         });
-        if (event.type === "message_end") this.liveMessageKey = undefined;
         break;
       case "tool_execution_start":
       case "tool_execution_update":
@@ -3052,6 +3099,8 @@ export class PiWebRuntime implements WebRuntimeController {
       });
     };
     const unsubscribe = session.subscribe((event) => {
+      if (!this.retainedRuntimes.has(runtime) || this.runtime === runtime || runtime.session !== session) return;
+      this.withLiveMessageKey(session, event);
       this.observeRetry(session, event);
       this.observeCompaction(session, event);
       const owners = this.suspendedPromptTraces ??= new WeakMap();

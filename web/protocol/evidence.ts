@@ -81,8 +81,11 @@ export function bashReceipt(content: unknown, isError: unknown) {
 }
 
 export function toolArguments(call: Extract<WebMessagePart, { type: "toolCall" }>) {
-  if (call.evidenceArguments) return projectEvidenceArguments(call.evidenceArguments, true);
-  try { return projectEvidenceArguments(JSON.parse(call.arguments)); } catch { return {}; }
+  const nativeEvidence = isEvidenceTool(call.name);
+  if (nativeEvidence && call.evidenceArguments) return projectEvidenceArguments(call.evidenceArguments, true);
+  let raw: Record<string, unknown> = {};
+  try { raw = evidenceRecord(JSON.parse(call.arguments)); } catch { /* The raw preview may be clipped. */ }
+  return nativeEvidence ? projectEvidenceArguments(raw) : { ...raw, ...call.evidenceArguments };
 }
 
 export function isEvidenceTool(name: string) {

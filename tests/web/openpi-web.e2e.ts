@@ -587,6 +587,18 @@ test("provider failures remain visible after refresh without discarding partial 
     await route.fulfill({ json: { id: "provider-retry", accepted: true } });
   });
   await openWorkbench(page);
+  const notice = page.getByRole("alert");
+  await expect(
+    notice.locator(":scope > .execution-error-content > p"),
+  ).toHaveText("模型服务的并发请求已达上限，请等待正在进行的请求结束后重试。");
+  await expect(notice.locator("details")).not.toHaveAttribute("open", "");
+  await expect(notice.locator("details pre")).toBeHidden();
+  await notice.getByText("错误详情", { exact: true }).click();
+  await expect(notice.locator("details pre")).toBeVisible();
+  await expect(notice.locator("details pre")).toHaveText(
+    "gateway_concurrency_limit (429)",
+  );
+  await notice.getByText("错误详情", { exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
     "gateway_concurrency_limit (429)",
   );

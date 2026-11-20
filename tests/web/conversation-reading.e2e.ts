@@ -310,13 +310,18 @@ test("conversation text stays readable and file links retain their exact target"
       expect(turn.width).toBeCloseTo(pane.width - 32, 0);
     }
     if (fontSize === 20) {
-      const process = (await page
-        .locator(".turn-response-body")
-        .boundingBox())!;
-      const final = (await page.locator(".final-response").boundingBox())!;
-      expect(
-        Math.abs(final.y - process.y - process.height - 16),
-      ).toBeLessThanOrEqual(1);
+      // The opened process body animates its height. Measure both elements in
+      // the same layout instead of comparing rectangles from different frames.
+      const gap = await page.evaluate(() => {
+        const process = document.querySelector(".turn-response-body");
+        const response = document.querySelector(".final-response");
+        if (!process || !response) throw new Error("Missing turn response");
+        return (
+          response.getBoundingClientRect().top -
+          process.getBoundingClientRect().bottom
+        );
+      });
+      expect(Math.abs(gap - 16)).toBeLessThanOrEqual(1);
       await page.locator(".turn-duration-toggle").click();
       await expect(page.locator(".turn-response-body")).toBeHidden();
       await expect(response).toBeVisible();

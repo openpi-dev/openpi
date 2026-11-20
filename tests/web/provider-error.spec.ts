@@ -101,9 +101,14 @@ it("renders a persisted provider error with no body after refresh", () => {
   expect(screen.getByRole("alert").textContent).toContain(
     "gateway_concurrency_limit (429)",
   );
-  expect(
-    screen.getByRole("alert", { name: "Model request failed" }).textContent,
-  ).toBe("gateway_concurrency_limit (429)");
+  const alert = screen.getByRole("alert", { name: "Model request failed" });
+  expect(alert.querySelector("p")?.textContent).toBe(
+    i18n.t("modelConcurrencyLimit"),
+  );
+  expect(alert.querySelector("details")?.open).toBe(false);
+  expect(alert.querySelector("details")?.textContent).toContain(
+    "gateway_concurrency_limit (429)",
+  );
   expect(screen.queryByRole("button", { name: "Retry prompt" })).toBeNull();
 });
 
@@ -339,6 +344,102 @@ function transcriptNode(
     }),
   );
 }
+
+it("shows concurrency backoff only while native retry evidence exists", () => {
+  const reason =
+    "gateway_concurrency_limit: Concurrency limit exceeded for user, please retry later";
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Continue the work" }),
+    error(reason),
+  ]);
+  state.selectedExecution = {
+    sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
+    status: "running",
+    liveTools: [],
+    liveToolsOmitted: 0,
+    retry: { attempt: 2, maxAttempts: 3, errorMessage: reason },
+  };
+  const rendered = render(transcriptNode(state));
+  expect(
+    rendered.container.querySelector(".provider-attempts summary")?.textContent,
+  ).toContain(i18n.t("modelConcurrencyRetrying"));
+  expect(
+    rendered.container.querySelector(".provider-attempts summary")?.textContent,
+  ).toContain("2/3");
+  expect(screen.queryByRole("alert")).toBeNull();
+  state.selectedExecution = {
+    ...state.selectedExecution,
+    status: "idle",
+    retry: undefined,
+  };
+  rendered.rerender(transcriptNode({ ...state }));
+  expect(screen.getByRole("alert").querySelector("p")?.textContent).toBe(
+    i18n.t("modelConcurrencyLimit"),
+  );
+  expect(
+    rendered.container.querySelector(".provider-attempts.retrying"),
+  ).toBeNull();
+});
+
+it("keeps a prior concurrency failure as history while a child-result continuation runs and succeeds", () => {
+  const reason =
+    "gateway_concurrency_limit: Concurrency limit exceeded for user, please retry later";
+  const state = turnSnapshot([
+    projectMessage({ role: "user", content: "Review the work" }),
+    error(reason),
+  ]);
+  state.selectedSession!.entries.push({
+    id: "failed-run",
+    type: "custom",
+    timestamp: "2026-10-27T00:00:01Z",
+    turnTiming: {
+      version: 1,
+      sessionId: "session",
+      commandId: "original",
+      epoch: 1,
+      promptEntryId: "entry-0",
+      startedAt: 1000,
+      finishedAt: 2000,
+      elapsedMs: 1000,
+      outcome: "failed",
+    },
+  });
+  const activeTurn = {
+    sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
+    commandId: "child-result-continuation",
+    epoch: 2,
+    startedAt: 3000,
+    elapsedMs: 1000,
+  };
+  const rendered = render(
+    transcriptNode(state, { liveRunning: true, liveActiveTurn: activeTurn }),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(
+    rendered.container.querySelector(".provider-attempts.earlier")?.textContent,
+  ).toContain(reason);
+  expect(
+    rendered.container.querySelector(".provider-attempts.recovered"),
+  ).toBeNull();
+  state.selectedSession!.entries.push({
+    id: "continued-answer",
+    type: "message",
+    timestamp: "2026-10-27T00:00:04Z",
+    message: projectMessage({
+      role: "assistant",
+      content: "Review completed",
+      stopReason: "stop",
+    }),
+  });
+  rendered.rerender(transcriptNode({ ...state }, { liveActiveTurn: null }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByText("Review completed")).toBeTruthy();
+  expect(
+    rendered.container.querySelector(".provider-attempts.earlier")?.textContent,
+  ).toContain(reason);
+});
 
 it("keeps recovered failed attempts folded after refreshing a successful run", () => {
   const state = turnSnapshot([
