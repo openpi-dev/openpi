@@ -6,6 +6,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { loadSessionPreviewData } from "../../../extensions/sessions/preview-loader.ts";
+import {
+  buildSessionPreview,
+  type PreviewMessageLike,
+} from "../../../extensions/sessions/sessions.ts";
 
 const timestamp = (offset: number) =>
   new Date(Date.UTC(2026, 0, 1, 0, 0, offset)).toISOString();
@@ -278,6 +282,54 @@ test("preview retains the newest oversized message with an explicit byte omissio
   assert.ok(
     Buffer.byteLength(serialized, "utf8") <
       Buffer.byteLength(oversized, "utf8"),
+  );
+});
+
+test("preview renders when the byte budget ends inside an earlier text block", async (t) => {
+  const latest = "x".repeat(1_048_455);
+  const fixture = await writeSession([
+    header(),
+    message("m1", null, "user", "question"),
+    message("m2", "m1", "assistant", "earlier answer"),
+    message("m3", "m2", "user", latest),
+  ]);
+  t.after(() => rm(fixture.directory, { recursive: true, force: true }));
+
+  const native = SessionManager.open(fixture.path).buildSessionContext();
+  assert.equal(native.messages.length, 3);
+  const nativeLatest = native.messages.at(-1);
+  assert.equal(nativeLatest?.role, "user");
+  assert.ok(nativeLatest && "content" in nativeLatest);
+  assert.deepEqual(nativeLatest.content, [{ type: "text", text: latest }]);
+  const result = await loadSessionPreviewData(fixture.path);
+  const preview = buildSessionPreview(
+    {
+      id: "preview-test",
+      cwd: "/tmp/preview-test",
+      path: fixture.path,
+      modified: new Date(timestamp(3)),
+      firstMessage: "question",
+    },
+    result.messages as PreviewMessageLike[],
+    {
+      totalMessages: result.totalMessages,
+      truncatedBytes: result.truncatedBytes,
+    },
+  );
+
+  assert.ok(result.retainedBytes <= 1024 * 1024);
+  assert.ok(
+    result.totalMessages > result.messages.length || result.truncatedBytes > 0,
+  );
+  assert.ok(
+    preview.blocks.some(
+      (block) => block.kind === "user" && block.text === latest,
+    ),
+  );
+  assert.ok(
+    preview.blocks.some(
+      (block) => block.kind === "notice" && /omitted/.test(block.text),
+    ),
   );
 });
 
