@@ -174,7 +174,7 @@ test("complete JSON encoding rejects non-finite budget configuration", () => {
   }
 });
 
-test("oversized object keys fail before their values are read", () => {
+test("oversized object keys bound diagnostic iteration before reading values", () => {
   let valueRead = false;
   const key = "k".repeat(1024 * 1024);
   const value = Object.defineProperty({}, key, {
@@ -185,18 +185,113 @@ test("oversized object keys fail before their values are read", () => {
     },
   });
 
-  const encoded = encodeCompleteJson(value, {
-    maxBytes: 2 * 1024 * 1024,
-    maxDepth: 8,
-    maxNodes: 10,
-    maxStringBytes: 128,
-  });
+  const descriptor = Object.getOwnPropertyDescriptor(
+    String.prototype,
+    Symbol.iterator,
+  );
+  assert.ok(descriptor);
+  const originalIterator = String.prototype[Symbol.iterator];
+  let nextCalls = 0;
+  let encoded: ReturnType<typeof encodeCompleteJson>;
+  try {
+    Object.defineProperty(String.prototype, Symbol.iterator, {
+      ...descriptor,
+      value: function (this: string) {
+        const iterator = originalIterator.call(this);
+        if (String(this) !== key) return iterator;
+        const originalNext = iterator.next.bind(iterator);
+        // Keep the native iterator and its remaining protocol unchanged.
+        Object.defineProperty(iterator, "next", {
+          value() {
+            nextCalls++;
+            return originalNext();
+          },
+        });
+        return iterator;
+      },
+    });
+    encoded = encodeCompleteJson(value, {
+      maxBytes: 2 * 1024 * 1024,
+      maxDepth: 8,
+      maxNodes: 10,
+      maxStringBytes: 128,
+    });
+  } finally {
+    Object.defineProperty(String.prototype, Symbol.iterator, descriptor);
+  }
 
   assert.equal(encoded.ok, false);
   if (encoded.ok) return;
   assert.equal(encoded.limit, "string");
+  assert.equal(encoded.path, `$root.${"k".repeat(128)}...[key truncated]`);
   assert.equal(valueRead, false);
+  assert.equal(nextCalls, 129);
   assert.ok(Buffer.byteLength(encoded.path, "utf8") <= 256);
+});
+
+test("reported JSON paths preserve ASCII, BMP and astral prefix boundaries", () => {
+  for (const character of ["b", "é", "😀"]) {
+    for (const count of [127, 128, 129]) {
+      const key = `${"a".repeat(126)}${character.repeat(count - 126)}`;
+      let valueRead = false;
+      const value = Object.defineProperty({}, key, {
+        enumerable: true,
+        get() {
+          valueRead = true;
+          return "unreachable";
+        },
+      });
+      const encoded = encodeCompleteJson(value, {
+        maxBytes: 1_024,
+        maxDepth: 8,
+        maxNodes: 10,
+        maxStringBytes: 0,
+      });
+      assert.equal(encoded.ok, false);
+      if (encoded.ok) return;
+      assert.equal(encoded.limit, "string");
+      assert.equal(
+        encoded.path,
+        count <= 128
+          ? `$root.${key}`
+          : `$root.${"a".repeat(126)}${character.repeat(2)}...[key truncated]`,
+      );
+      assert.equal(valueRead, false);
+    }
+  }
+});
+
+test("reported JSON paths retain the UTF-8 outer bound for astral prefixes", () => {
+  const encoded = encodeCompleteJson(
+    { ["😀".repeat(129)]: "unreachable" },
+    { maxBytes: 1_024, maxDepth: 8, maxNodes: 10, maxStringBytes: 0 },
+  );
+  assert.equal(encoded.ok, false);
+  if (encoded.ok) return;
+  assert.equal(encoded.limit, "string");
+  // The encoder's final 256-byte cap also bounds the existing path marker.
+  assert.equal(encoded.path, `$root.${"😀".repeat(58)}...[path truncated`);
+  assert.ok(Buffer.byteLength(encoded.path, "utf8") <= 256);
+});
+
+test("reported JSON paths keep a truncated key on code points", () => {
+  // The 128 cap must not split a surrogate pair: the reported path is user- and
+  // model-visible, and a lone surrogate is not representable there.
+  const key = `${"a".repeat(127)}\u{1F600}${"b".repeat(10)}`;
+  assert.equal(key.length, 139);
+
+  const encoded = encodeCompleteJson(
+    { [key]: "value", other: "value" },
+    { maxBytes: 1_024, maxDepth: 8, maxNodes: 2, maxStringBytes: 128 },
+  );
+
+  assert.equal(encoded.ok, false);
+  if (encoded.ok) return;
+  assert.equal(encoded.limit, "string");
+  assert.equal(
+    encoded.path,
+    `$root.${"a".repeat(127)}\u{1F600}...[key truncated]`,
+  );
 });
 
 test("safeStringify handles cycles, bigint, depth, and size", () => {
