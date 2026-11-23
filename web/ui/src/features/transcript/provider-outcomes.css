@@ -113,6 +113,12 @@ div.provider-attempts,
   min-width: 0;
 }
 
+.execution-error-content:has(.provider-error-details) { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:6px 12px; }
+.provider-error-details { grid-column:1 / -1; grid-row:2; min-width:0; color:var(--muted); font-size:calc(var(--conversation-font-size) - 1px); }
+.provider-error-details summary { cursor:pointer; }
+.provider-error-details pre { margin:6px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+.execution-error-content:has(.provider-error-details) .provider-outcome-actions { grid-column:2; grid-row:1; }
+
 .execution-error .provider-outcome-actions {
   flex: none;
   margin-top: 0;
@@ -142,6 +148,8 @@ div.provider-attempts,
   .execution-error { align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 12px; }
   .execution-error > svg { margin-top: 3px; }
   .execution-error-content { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .execution-error-content:has(.provider-error-details) { grid-template-columns:minmax(0, 1fr); }
+  .execution-error-content:has(.provider-error-details) .provider-outcome-actions { grid-column:1; grid-row:3; }
 }
 
 .provider-attempts li + li {

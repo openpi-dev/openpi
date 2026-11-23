@@ -936,7 +936,9 @@ export function createWebStore(
         return;
       }
       if (
-        ["auto_retry_start", "auto_retry_end"].includes(event.type) &&
+        (detail.message ||
+          event.type === "auto_retry_start" ||
+          event.type === "auto_retry_end") &&
         typeof detail.sessionPath === "string" &&
         detail.sessionPath !==
           (current.snapshot?.currentSessionPath ??

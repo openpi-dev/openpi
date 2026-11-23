@@ -121,6 +121,69 @@ test("subagent detail clones display data, redacts private thinking, and preserv
   assert.equal(advanced.transcript.at(-1)?.id, detail.nextEntryId);
 });
 
+test("retained nested argument evidence survives projection without corrupting parent identity", () => {
+  const detail = projectSubagentDetail(
+    subagentSnapshot({
+      transcript: [
+        {
+          kind: "toolResult",
+          toolId: "native-child",
+          name: "read",
+          parentToolCallId: "native-parent",
+          argsPreview: '{"padding":"' + "界".repeat(5000),
+          evidenceArguments: { path: "src/known.ts", offset: 7 },
+          argsTruncated: true,
+          status: "unfinished",
+          isError: false,
+          outputUnavailable: true,
+        },
+      ],
+      liveTools: [
+        {
+          toolId: "native-live",
+          name: "bash",
+          parentToolCallId: "native-parent",
+          argsPreview: '{"command":"pwd"}',
+          evidenceArguments: { command: "pwd" },
+          argsTruncated: false,
+        },
+      ],
+    }),
+  );
+  const result = detail.transcript[0];
+  assert.ok(result?.kind === "toolResult");
+  assert.equal(result.parentToolCallId, "native-parent");
+  assert.deepEqual(result.evidenceArguments, {
+    path: "src/known.ts",
+    offset: 7,
+  });
+  assert.equal(result.argsTruncated, true);
+  assert.equal(result.status, "unfinished");
+  assert.equal(result.outputUnavailable, true);
+  assert.equal(result.outputPreview, undefined);
+  assert.ok(Buffer.byteLength(result.argsPreview!) <= 4096);
+  assert.ok(result.argsPreview?.startsWith('{"padding":"'));
+  assert.ok(!result.argsPreview?.includes("\ufffd"));
+  assert.equal(detail.liveTools[0]?.parentToolCallId, "native-parent");
+  assert.deepEqual(detail.liveTools[0]?.evidenceArguments, { command: "pwd" });
+  assert.equal(detail.liveTools[0]?.argsTruncated, false);
+  const invalid = projectSubagentDetail(
+    subagentSnapshot({
+      transcript: [
+        {
+          kind: "toolResult",
+          toolId: "child",
+          name: "read",
+          parentToolCallId: "p".repeat(641),
+          isError: false,
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(invalid.transcript, []);
+  assert.equal(invalid.truncated, true);
+});
+
 test("subagent detail projects cumulative spend verbatim", () => {
   const spend = {
     input: 1_000,
@@ -345,6 +408,12 @@ test("shares providers across separate physical module copies", async () => {
     await Promise.all([
       copyFile(source, firstPath),
       copyFile(source, secondPath),
+      copyFile(
+        fileURLToPath(
+          new URL("../../extensions/shared/tool-arguments.ts", import.meta.url),
+        ),
+        join(root, "tool-arguments.ts"),
+      ),
     ]);
     const first = (await import(
       pathToFileURL(firstPath).href
