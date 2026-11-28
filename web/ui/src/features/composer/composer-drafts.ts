@@ -2,8 +2,10 @@ import type { StagedPromptImage } from "./image-attachments.ts";
 import type { StagedPromptFile } from "./file-attachments.ts";
 import {
   COMPOSER_DRAFT_LIMITS,
+  heldPromptIdentity,
   parseStoredComposerDraft,
 } from "./composer-draft-storage.ts";
+import type { WebPromptIdentity } from "../../../../protocol/types.ts";
 
 export interface ComposerDraft {
   prompt: string;
@@ -27,8 +29,17 @@ export interface ComposerDraftStorageState {
 
 export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
   const drafts = new Map<string, ComposerDraft>();
+  const submissions = new Set<ComposerDraft>();
+  let held: {
+    key: string;
+    draft: ComposerDraft;
+    identity: WebPromptIdentity;
+  }[] = [];
   const changed = new Set<string>();
   const pending = new Map<string, ComposerDraft | null>();
+  const deletedSessions = new Set<string>();
+  const sessionIdentity = (sessionId: string, sessionPath: string) =>
+    JSON.stringify([sessionId, sessionPath]);
   const listeners = new Set<() => void>();
   let state: ComposerDraftStorageState = {
     status: storage ? "loading" : "saved",
@@ -49,6 +60,12 @@ export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
     draft.prompt.length > 0 ||
     draft.images.length > 0 ||
     Boolean(draft.files?.length);
+  const refreshHeld = () => {
+    held = [...drafts].flatMap(([key, draft]) => {
+      const identity = heldPromptIdentity(key);
+      return identity ? [{ key, draft, identity }] : [];
+    });
+  };
   const attachmentBytes = (draft: ComposerDraft) =>
     draft.images.reduce((sum, image) => sum + image.size, 0) +
     (draft.files ?? []).reduce(
@@ -60,19 +77,26 @@ export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
     state = { ...state, ...patch };
     for (const listener of listeners) listener();
   };
-  const fits = (key: string, next: ComposerDraft) => {
+  const fits = (key: string, next: ComposerDraft, replacing?: string) => {
     let count = 0;
     let textBytes = 0;
     let imageBytes = 0;
-    for (const [owner, draft] of drafts) {
-      if (owner === key) continue;
+    const included = new Set<number>();
+    const countDraft = (draft: ComposerDraft) => {
+      included.add(draft.revision);
       count += 1;
       textBytes += draft.prompt.length * 2;
       imageBytes += attachmentBytes(draft);
+    };
+    for (const [owner, draft] of drafts) {
+      if (owner === key || owner === replacing) continue;
+      countDraft(draft);
     }
-    if (hasContent(next)) count += 1;
-    textBytes += next.prompt.length * 2;
-    imageBytes += attachmentBytes(next);
+    if (hasContent(next)) countDraft(next);
+    // Editing a submitted draft may require room for both the edit and a
+    // later compaction backup of the captured revision.
+    for (const submission of submissions)
+      if (!included.has(submission.revision)) countDraft(submission);
     return (
       count <= COMPOSER_DRAFT_LIMITS.count &&
       textBytes <= COMPOSER_DRAFT_LIMITS.textBytes &&
@@ -124,6 +148,16 @@ export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
                 continue;
               }
               if (changed.has(record.key)) continue;
+              const identity = heldPromptIdentity(record.key);
+              if (
+                identity &&
+                deletedSessions.has(
+                  sessionIdentity(identity.sessionId, identity.sessionPath),
+                )
+              ) {
+                persist(record.key, null);
+                continue;
+              }
               const parsed = parseStoredComposerDraft(record.key, record.draft);
               if (
                 !parsed ||
@@ -138,6 +172,7 @@ export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
             }
             changed.clear();
             loading = false;
+            refreshHeld();
             notify({ status: pending.size > 0 ? "pending" : "saved", invalid });
             void flush();
           })
@@ -166,6 +201,50 @@ export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
     read(key: string) {
       return drafts.get(key) ?? empty();
     },
+    heldPrompts: () => held,
+    deleteHeldPrompts(sessionId: string, sessionPath: string) {
+      // A deletion can arrive before IndexedDB hydration or a held receipt.
+      deletedSessions.add(sessionIdentity(sessionId, sessionPath));
+      const backups = held.filter(
+        ({ identity }) =>
+          identity.sessionId === sessionId &&
+          identity.sessionPath === sessionPath,
+      );
+      if (backups.length === 0) return;
+      for (const { key } of backups) drafts.delete(key);
+      refreshHeld();
+      for (const { key } of backups) persist(key, null);
+    },
+    reserve(draft: ComposerDraft) {
+      if (hasContent(draft)) submissions.add(draft);
+      return () => submissions.delete(draft);
+    },
+    hold(owner: string, captured: ComposerDraft, identity: WebPromptIdentity) {
+      if (
+        deletedSessions.has(
+          sessionIdentity(identity.sessionId, identity.sessionPath),
+        )
+      )
+        return null;
+      const key = JSON.stringify([
+        "held",
+        identity.sessionId,
+        identity.sessionPath,
+        identity.commandId,
+      ]);
+      const unchanged = drafts.get(owner)?.revision === captured.revision;
+      if (
+        !hasContent(captured) ||
+        !fits(key, captured, unchanged ? owner : undefined)
+      )
+        return false;
+      drafts.set(key, captured);
+      if (unchanged) drafts.delete(owner);
+      refreshHeld();
+      if (unchanged) persist(owner, null);
+      persist(key, captured);
+      return true;
+    },
     edit(
       key: string,
       current: ComposerDraft,
@@ -180,8 +259,8 @@ export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
         next.images !== current.images ||
         next.files !== current.files
       ) {
-        if (!fits(key, next)) return null;
         next.revision = ++revision;
+        if (!fits(key, next)) return null;
       }
       if (hasContent(next)) drafts.set(key, next);
       else drafts.delete(key);
@@ -197,6 +276,7 @@ export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
     clear(key: string, capturedRevision: number) {
       if (drafts.get(key)?.revision !== capturedRevision) return null;
       drafts.delete(key);
+      if (held.some((item) => item.key === key)) refreshHeld();
       revision += 1;
       persist(key, null);
       return empty();
@@ -207,6 +287,7 @@ export function createComposerDraftMemory(storage?: ComposerDraftStorage) {
       if (draft) {
         drafts.delete(from);
         drafts.set(to, draft);
+        if (held.some((item) => item.key === from)) refreshHeld();
         persist(from, null);
         persist(to, draft);
       }

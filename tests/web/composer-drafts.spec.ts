@@ -19,7 +19,10 @@ import {
   it,
   vi,
 } from "vitest";
-import type { WebSnapshot } from "../../web/protocol/types.ts";
+import type {
+  WebPromptAdmissionState,
+  WebSnapshot,
+} from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import {
   type ComposerDraft,
@@ -30,6 +33,8 @@ import * as draftStorageModule from "../../web/ui/src/features/composer/composer
 import type { StagedPromptImage } from "../../web/ui/src/features/composer/image-attachments.ts";
 import type { StagedPromptFile } from "../../web/ui/src/features/composer/file-attachments.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
 import { createWebStore } from "../../web/ui/src/store/web-store.ts";
 
 type Props = ComponentProps<typeof Composer>;
@@ -1159,6 +1164,227 @@ it("protects a failed accepted-send deletion, so reloading cannot silently resur
   expect(reopened.input.value).toBe("");
   expect(reopened.sendPrompt).not.toHaveBeenCalled();
 });
+
+const heldIdentity = {
+  sessionId: "A",
+  sessionPath: "/workspace/a.jsonl",
+  commandId: "compaction-send",
+};
+const heldKey = JSON.stringify([
+  "held",
+  heldIdentity.sessionId,
+  heldIdentity.sessionPath,
+  heldIdentity.commandId,
+]);
+
+it.each(["receipt", "event"] as const)(
+  "reclaims deleted-session queue backups and frees draft capacity via %s",
+  async (confirmation) => {
+    const { sessionId, sessionPath } = heldIdentity;
+    const otherBackups = [
+      JSON.stringify(["held", sessionId, "/workspace/copied.jsonl", "copy"]),
+      JSON.stringify(["held", "other-id", sessionPath, "other"]),
+    ];
+    const deletedBackups = Array.from(
+      {
+        length:
+          draftStorageModule.COMPOSER_DRAFT_LIMITS.count - otherBackups.length,
+      },
+      (_, index) =>
+        JSON.stringify(["held", sessionId, sessionPath, `draft-${index}`]),
+    );
+    for (const key of [...deletedBackups, ...otherBackups])
+      savedDrafts.set(key, {
+        prompt: "cleared queue draft",
+        images: [],
+        caret: 0,
+      });
+
+    const read = storage.read;
+    const allowHydration = deferred<void>();
+    if (confirmation === "event") {
+      vi.spyOn(storage, "read").mockImplementation(async () => {
+        await allowHydration.promise;
+        return read();
+      });
+    }
+    const client = new WebClient();
+    const other = snapshot("B", "/workspace/b.jsonl");
+    vi.spyOn(client, "snapshot").mockResolvedValue(other);
+    const deleteSession = vi
+      .spyOn(client, "deleteSession")
+      .mockImplementation(async (request) => ({
+        ...request,
+        state: "cancelled",
+      }));
+    const connected = deferred<EventStreamOptions>();
+    const store = createWebStore(client, {
+      consumeEvents: (options) => {
+        options.onConnected();
+        connected.resolve(options);
+        return new Promise<void>((resolve) => {
+          options.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+      },
+    });
+    const { actions } = store.getState();
+    const view = setup({
+      snapshot: other,
+      selectedPath: other.selectedSession!.path,
+      activityObserved: false,
+      actions,
+    });
+
+    try {
+      if (confirmation === "receipt") {
+        await act(async () => {
+          expect(
+            await actions.deleteSession(sessionPath, sessionId, "cancel"),
+          ).toBe(false);
+        });
+        expect(savedDrafts.size).toBe(
+          draftStorageModule.COMPOSER_DRAFT_LIMITS.count,
+        );
+        deleteSession.mockImplementation(async (request) => ({
+          ...request,
+          state: "deleted",
+        }));
+        await act(async () => {
+          expect(
+            await actions.deleteSession(sessionPath, sessionId, "confirm"),
+          ).toBe(true);
+        });
+      } else {
+        await actions.refreshSnapshot();
+        actions.start();
+        const stream = await connected.promise;
+        await act(async () => {
+          stream.onEvent({
+            protocolVersion: 1,
+            sequence: other.cursor,
+            type: "session_deleted",
+            timestamp: other.generatedAt,
+            detail: { sessionId, sessionPath },
+          });
+          allowHydration.resolve();
+        });
+      }
+
+      await waitFor(() =>
+        expect([...savedDrafts.keys()]).toEqual(otherBackups),
+      );
+      fireEvent.change(view.input, {
+        target: { value: "unrelated new draft" },
+      });
+      await waitFor(() =>
+        expect(savedDrafts.get(owner("B"))).toMatchObject({
+          prompt: "unrelated new draft",
+        }),
+      );
+    } finally {
+      actions.stop();
+    }
+  },
+);
+
+it.each(["unknown", "blocked"] as const)(
+  "restores a held draft and its image on request after reload (%s)",
+  async (reopenedState) => {
+    let state: WebPromptAdmissionState = "held";
+    vi.spyOn(WebClient.prototype, "promptAdmissionStatus").mockImplementation(
+      async () => ({ state }),
+    );
+    const discard = vi
+      .spyOn(WebClient.prototype, "discardBlockedPrompt")
+      .mockImplementation(async () => {
+        state = "discarded";
+        return { sessionId: heldIdentity.sessionId };
+      });
+    const sendPrompt = vi.fn(async () => heldIdentity);
+    const view = setup({
+      actions: { ...createWebStore().getState().actions, sendPrompt },
+    });
+    fireEvent.change(view.input, { target: { value: "keep the diagram" } });
+    await paste(image("diagram.png"));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("send") }));
+    await waitFor(() => expect(savedDrafts.has(heldKey)).toBe(true));
+    expect(view.input.value).toBe("");
+    expect(
+      screen.queryByRole("button", { name: i18n.t("restoreQueuedDraft") }),
+    ).toBeNull();
+    view.unmount();
+    state = reopenedState;
+    const reopened = setup();
+    fireEvent.click(
+      await screen.findByRole("button", { name: i18n.t("restoreQueuedDraft") }),
+    );
+    await waitFor(() => expect(reopened.input.value).toBe("keep the diagram"));
+    expect(screen.getByText("diagram.png")).toBeTruthy();
+    expect(reopened.sendPrompt).not.toHaveBeenCalled();
+    if (reopenedState === "blocked")
+      expect(discard).toHaveBeenCalledExactlyOnceWith(heldIdentity);
+    else expect(discard).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["event", "reconnect"] as const)(
+  "deletes only the queue backup after Pi admission via %s",
+  async (proof) => {
+    let state: WebPromptAdmissionState = "held";
+    const submission = deferred<typeof heldIdentity>();
+    const read = vi
+      .spyOn(WebClient.prototype, "promptAdmissionStatus")
+      .mockImplementation(async () => ({ state }));
+    const view = setup({
+      activityObserved: true,
+      actions: {
+        ...createWebStore().getState().actions,
+        sendPrompt: () => submission.promise,
+      },
+    });
+    fireEvent.change(view.input, { target: { value: "deliver once" } });
+    await paste(image("delivered.png"));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("send") }));
+    if (proof === "event") {
+      fireEvent.change(view.input, { target: { value: "new unsent draft" } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /^Remove attachment/u }),
+      );
+    }
+    await act(async () => submission.resolve(heldIdentity));
+    await waitFor(() =>
+      expect(savedDrafts.get(heldKey)).toMatchObject({
+        prompt: "deliver once",
+        images: [{ name: "delivered.png" }],
+      }),
+    );
+    await waitFor(() =>
+      expect(read).toHaveBeenCalledWith(heldIdentity, expect.any(AbortSignal)),
+    );
+    if (proof === "event") {
+      view.update({
+        promptQueueEvidence: [{ ...heldIdentity, state: "accepted" }],
+      });
+    } else {
+      expect(savedDrafts.has(owner("A"))).toBe(false);
+      fireEvent.change(view.input, { target: { value: "new unsent draft" } });
+      view.update({ activityObserved: false });
+      state = "accepted";
+      view.update({ activityObserved: true });
+    }
+    await waitFor(() => expect(savedDrafts.has(heldKey)).toBe(false));
+    expect(view.input.value).toBe("new unsent draft");
+    view.unmount();
+    const reopened = setup();
+    await waitFor(() => expect(reopened.input.value).toBe("new unsent draft"));
+    expect(screen.queryByText("delivered.png")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("restoreQueuedDraft") }),
+    ).toBeNull();
+  },
+);
 
 it("retains a newer persisted revision when an older send receipt arrives", async () => {
   const receipt = deferred<boolean>();

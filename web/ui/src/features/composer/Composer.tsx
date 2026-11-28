@@ -38,7 +38,7 @@ import {
   WEB_PROMPT_MAX_TEXT_LENGTH,
   type WebCommandSummary,
   type WebPromptDelivery,
-  type WebPromptImage,
+  type WebPromptIdentity,
   type WebSnapshot,
 } from "../../../../protocol/types.ts";
 import {
@@ -49,15 +49,12 @@ import {
 import { isControlledSession } from "../../lib/session-control.ts";
 import type {
   PlanImplementationApproval,
+  PromptAdmissionResolution,
   WebStoreActions,
   WebStoreState,
 } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
-import {
-  type ComposerDraft,
-  createComposerDraftMemory,
-} from "./composer-drafts.ts";
-import { createBrowserComposerDraftStorage } from "./composer-draft-storage.ts";
+import type { ComposerDraft } from "./composer-drafts.ts";
 import { DraftImagePreview } from "./DraftImagePreview.tsx";
 import { DraftFilePreview } from "./DraftFilePreview.tsx";
 import { stagePromptFile, type StagedPromptFile } from "./file-attachments.ts";
@@ -131,6 +128,7 @@ interface ComposerProps {
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
+  promptQueueEvidence?: WebStoreState["promptQueueEvidence"];
   pendingSteeringReceipt?: number | null;
   commandDiscovery?: WebStoreState["commandDiscovery"];
   accessory?: ReactNode;
@@ -145,7 +143,10 @@ function workspaceDraftOwner(workspacePath: string | null) {
 }
 
 function sessionDraftOwner(
-  session: NonNullable<WebSnapshot["selectedSession"]>,
+  session: Pick<
+    NonNullable<WebSnapshot["selectedSession"]>,
+    "id" | "path" | "cwd"
+  >,
 ) {
   return {
     key: JSON.stringify(["session", session.id, session.path]),
@@ -160,6 +161,30 @@ type DraftOwner =
   | ReturnType<typeof workspaceDraftOwner>
   | ReturnType<typeof sessionDraftOwner>;
 
+interface DraftSubmission {
+  owner: DraftOwner;
+  draft: ComposerDraft;
+  pending: boolean;
+  content: string;
+}
+
+function matchesDraftSubmission(
+  submission: DraftSubmission | undefined,
+  evidence: PromptAdmissionResolution,
+): submission is DraftSubmission {
+  const images = evidence.images ?? [];
+  return (
+    submission?.content.trim() === evidence.content &&
+    submission.draft.images.length === images.length &&
+    submission.draft.images.every(
+      (image, index) =>
+        image.data === images[index]?.data &&
+        image.mimeType === images[index]?.mimeType &&
+        image.name === images[index]?.name,
+    )
+  );
+}
+
 export function Composer(props: ComposerProps) {
   const { t } = useTranslation();
   const selected = props.snapshot?.selectedSession;
@@ -172,12 +197,14 @@ export function Composer(props: ComposerProps) {
     !props.workspaceDraft && !props.sessionSwitching && selected && sessionPath
       ? sessionDraftOwner(selected)
       : null;
-  const [draftMemory] = useState(() =>
-    createComposerDraftMemory(createBrowserComposerDraftStorage()),
-  );
+  const [draftMemory] = useState(props.actions.getComposerDraftMemory);
   const draftStorage = useSyncExternalStore(
     draftMemory.subscribe,
     draftMemory.storageState,
+  );
+  const heldPrompts = useSyncExternalStore(
+    draftMemory.subscribe,
+    draftMemory.heldPrompts,
   );
   const draftOwner = useRef<DraftOwner>(
     canonicalOwner ?? workspaceDraftOwner(props.selectedWorkspace),
@@ -195,18 +222,7 @@ export function Composer(props: ComposerProps) {
   const promptLength = prompt.trim().length;
   const promptTooLong = promptLength > WEB_PROMPT_MAX_TEXT_LENGTH;
   const renderedOwnerKey = nextOwner.key;
-  const submissions = useRef(
-    new Map<
-      string,
-      {
-        owner: DraftOwner;
-        revision: number;
-        pending: boolean;
-        content: string;
-        images: readonly WebPromptImage[];
-      }
-    >(),
-  );
+  const submissions = useRef(new Map<string, DraftSubmission>());
   const recoveryRevision = useRef<{
     commandId: string;
     key: string;
@@ -233,6 +249,10 @@ export function Composer(props: ComposerProps) {
   );
   const [modelOpenRequest, setModelOpenRequest] = useState(0);
   const client = useMemo(() => new WebClient(), []);
+  const [recoverablePrompts, setRecoverablePrompts] = useState<
+    ReturnType<typeof draftMemory.heldPrompts>
+  >([]);
+  const [restoringHeldPrompt, setRestoringHeldPrompt] = useState(false);
   const contextTrigger = useRef<HTMLButtonElement>(null);
   const menuOwner = useRef(renderedOwnerKey);
   useEffect(() => {
@@ -324,6 +344,47 @@ export function Composer(props: ComposerProps) {
       mounted = false;
     };
   }, [draftMemory]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.all(
+      heldPrompts.map(async (backup) => {
+        if (
+          props.promptQueueEvidence?.some(
+            (identity) =>
+              identity.state === "accepted" &&
+              identity.commandId === backup.identity.commandId &&
+              identity.sessionId === backup.identity.sessionId &&
+              identity.sessionPath === backup.identity.sessionPath,
+          )
+        ) {
+          draftMemory.clear(backup.key, backup.draft.revision);
+          return [];
+        }
+        if (props.activityObserved === false) return [];
+        try {
+          const { state } = await client.promptAdmissionStatus(
+            backup.identity,
+            controller.signal,
+          );
+          if (controller.signal.aborted) return [];
+          if (state === "accepted")
+            draftMemory.clear(backup.key, backup.draft.revision);
+          return state === "held" || state === "accepted" ? [] : [backup];
+        } catch {
+          return [];
+        }
+      }),
+    ).then((available) => {
+      if (!controller.signal.aborted) setRecoverablePrompts(available.flat());
+    });
+    return () => controller.abort();
+  }, [
+    client,
+    draftMemory,
+    heldPrompts,
+    props.activityObserved,
+    props.promptQueueEvidence,
+  ]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
       if (
@@ -1022,21 +1083,11 @@ export function Composer(props: ComposerProps) {
       recovery.sessionPath,
     ]);
     const submission = submissions.current.get(key);
-    const images = recovery.images ?? [];
-    if (
-      submission?.content.trim() === recovery.content &&
-      submission.images.length === images.length &&
-      submission.images.every(
-        (image, index) =>
-          image.data === images[index]?.data &&
-          image.mimeType === images[index]?.mimeType &&
-          image.name === images[index]?.name,
-      )
-    ) {
+    if (matchesDraftSubmission(submission, recovery)) {
       recoveryRevision.current = {
         commandId: recovery.commandId,
         key,
-        revision: submission.revision,
+        revision: submission.draft.revision,
       };
       return;
     }
@@ -1093,21 +1144,11 @@ export function Composer(props: ComposerProps) {
       resolution.sessionPath,
     ]);
     const submission = submissions.current.get(key);
-    const images = resolution.images ?? [];
-    const matchingSubmission =
-      submission?.content.trim() === resolution.content &&
-      submission.images.length === images.length &&
-      submission.images.every(
-        (image, index) =>
-          image.data === images[index]?.data &&
-          image.mimeType === images[index]?.mimeType &&
-          image.name === images[index]?.name,
-      );
     const revision =
       captured?.key === key && captured.commandId === resolution.commandId
         ? captured.revision
-        : matchingSubmission
-          ? submission.revision
+        : matchesDraftSubmission(submission, resolution)
+          ? submission.draft.revision
           : undefined;
     if (revision !== undefined) {
       const cleared = draftMemory.clear(key, revision);
@@ -1120,6 +1161,94 @@ export function Composer(props: ComposerProps) {
       recoveryRevision.current = null;
     props.actions.acknowledgePromptAdmissionResolution(resolution.commandId);
   }, [draftMemory, props.actions, props.promptAdmissionResolution]);
+
+  const retainHeldDraft = (
+    identity: WebPromptIdentity,
+    ownerKey: string,
+    captured: ComposerDraft,
+  ) => {
+    const held = draftMemory.hold(ownerKey, captured, identity);
+    if (held === null) return;
+    if (!held) {
+      setAttachmentError(t("draftLimit"));
+      return;
+    }
+    if (
+      draftOwner.current.key === ownerKey &&
+      currentDraft.current.revision === captured.revision
+    ) {
+      const next = draftMemory.read(ownerKey);
+      currentDraft.current = next;
+      setDraft(next);
+      setAttachmentError(null);
+    }
+  };
+
+  const restoreHeldDraft = async (
+    backup: (typeof recoverablePrompts)[number],
+  ) => {
+    const key = sessionDraftOwner({
+      id: backup.identity.sessionId,
+      path: backup.identity.sessionPath,
+      cwd: "",
+    }).key;
+    const canRestore = () =>
+      draftOwner.current.key === key &&
+      !currentDraft.current.prompt &&
+      !currentDraft.current.images.length &&
+      !currentDraft.current.files?.length;
+    if (!canRestore() || restoringHeldPrompt) return;
+    setRestoringHeldPrompt(true);
+    try {
+      const { state } = await client.promptAdmissionStatus(backup.identity);
+      if (state === "accepted") {
+        draftMemory.clear(backup.key, backup.draft.revision);
+        return;
+      }
+      if (state === "held" || !canRestore()) return;
+      if (state === "blocked")
+        await client.discardBlockedPrompt(backup.identity);
+      if (
+        !canRestore() ||
+        draftMemory.read(backup.key).revision !== backup.draft.revision ||
+        !draftMemory.move(backup.key, key)
+      )
+        return;
+      const restored = draftMemory.read(key);
+      currentDraft.current = restored;
+      restoreCaret.current = true;
+      setDraft(restored);
+      setRecoverablePrompts((prompts) =>
+        prompts.filter((item) => item.key !== backup.key),
+      );
+    } catch (error) {
+      if (draftOwner.current.key === key)
+        setAttachmentError(
+          error instanceof Error ? error.message : t("restoreQueuedDraft"),
+        );
+    } finally {
+      setRestoringHeldPrompt(false);
+    }
+  };
+
+  const retryOriginalAdmission = async () => {
+    const recovery = props.promptAdmissionRecovery;
+    if (!recovery) return;
+    const owner = draftOwner.current.key;
+    const submission = submissions.current.get(owner);
+    const current = currentDraft.current;
+    const restored = recoveryRevision.current;
+    const captured = matchesDraftSubmission(submission, recovery)
+      ? submission.draft
+      : restored?.commandId === recovery.commandId &&
+          restored.key === owner &&
+          restored.revision === current.revision
+        ? current
+        : undefined;
+    const receipt = await props.actions.retryPromptAdmission();
+    if (typeof receipt === "object" && captured)
+      retainHeldDraft(receipt, owner, captured);
+  };
 
   const sendDraft = async (
     sendPrompt: WebStoreActions["sendPrompt"],
@@ -1139,15 +1268,15 @@ export function Composer(props: ComposerProps) {
     }
     if (renderedOwnerKey !== draftOwner.current.key) return;
     const captured = currentDraft.current;
+    const releaseDraft = draftMemory.reserve(captured);
     const submission = {
-      revision: captured.revision,
+      draft: captured,
       owner: draftOwner.current,
       pending: true,
       content: captured.prompt,
-      images: captured.images,
     };
     submissions.current.set(submission.owner.key, submission);
-    let accepted = false;
+    let submitted = false;
     let sendingFiles = false;
     try {
       let content = captured.prompt;
@@ -1206,7 +1335,7 @@ export function Composer(props: ComposerProps) {
         }
         submission.content = content;
       }
-      accepted = expectedTarget
+      const receipt = expectedTarget
         ? await sendPrompt(
             content,
             captured.images,
@@ -1227,13 +1356,18 @@ export function Composer(props: ComposerProps) {
             : explicitImages || captured.images.length > 0
               ? await sendPrompt(content, captured.images)
               : await sendPrompt(content);
-      if (accepted) {
+      submitted = receipt !== false;
+      if (submitted) {
         setDeliveryOverride(null);
         if (approval === planImplementationApproval.current)
           planImplementationApproval.current = null;
+        if (typeof receipt === "object") {
+          retainHeldDraft(receipt, submission.owner.key, captured);
+          return;
+        }
         const cleared = draftMemory.clear(
           submission.owner.key,
-          submission.revision,
+          submission.draft.revision,
         );
         if (cleared && draftOwner.current.key === submission.owner.key) {
           currentDraft.current = cleared;
@@ -1249,6 +1383,7 @@ export function Composer(props: ComposerProps) {
             : t("fileAttachmentReadFailed"),
         );
     } finally {
+      releaseDraft();
       if (
         sendingFiles &&
         draftOwner.current.key === submission.owner.key &&
@@ -1258,7 +1393,7 @@ export function Composer(props: ComposerProps) {
       submission.pending = false;
       const retained = draftMemory.read(submission.owner.key);
       if (
-        (accepted ||
+        (submitted ||
           (!retained.prompt &&
             retained.images.length === 0 &&
             !retained.files?.length)) &&
@@ -1830,7 +1965,7 @@ export function Composer(props: ComposerProps) {
                   props.thinkingPendingLevel !== null ||
                   props.promptAdmissionRecovery.phase !== "ready"
                 }
-                onClick={() => void props.actions.retryPromptAdmission()}
+                onClick={() => void retryOriginalAdmission()}
               >
                 {t("retryOriginalAdmission")}
               </button>
@@ -1857,6 +1992,37 @@ export function Composer(props: ComposerProps) {
           </div>
         </section>
       )}
+      {canonicalOwner?.kind === "session" &&
+        recoverablePrompts
+          .filter(
+            ({ identity }) =>
+              identity.sessionId === canonicalOwner.sessionId &&
+              identity.sessionPath === canonicalOwner.sessionPath,
+          )
+          .map((backup) => (
+            <section className="prompt-recovery" key={backup.key}>
+              <p>{t("queuedDraftRecoverable")}</p>
+              <div className="prompt-recovery-actions">
+                <button
+                  type="button"
+                  disabled={
+                    restoringHeldPrompt ||
+                    props.activityObserved === false ||
+                    Boolean(prompt || images.length || files.length)
+                  }
+                  onClick={() => void restoreHeldDraft(backup)}
+                >
+                  {t("restoreQueuedDraft")}
+                </button>
+                <span>
+                  {backup.draft.prompt.trim().slice(0, 120) ||
+                    [...backup.draft.images, ...(backup.draft.files ?? [])]
+                      .map(({ name }) => name)
+                      .join(", ")}
+                </span>
+              </div>
+            </section>
+          ))}
       <div className="composer-status-strip">
         {active && (
           <ActivityBar

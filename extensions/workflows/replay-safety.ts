@@ -12,26 +12,8 @@ import {
 import { effectiveChildToolAllowlist } from "../shared/child-session.ts";
 import { isPiBuiltinExtensionPath } from "../shared/pi-builtin-extensions.ts";
 
-const REPLAY_FILESYSTEM_TOOL_NAMES = new Set([
-  "read",
-  "grep",
-  "find",
-  "ls",
-  "git_show",
-  "git_diff",
-  "git_log",
-]);
-const REPLAY_BUILTIN_FILESYSTEM_TOOL_NAMES = new Set([
-  "read",
-  "grep",
-  "find",
-  "ls",
-]);
-const REPLAY_PACKAGE_FILESYSTEM_TOOL_NAMES = new Set([
-  "git_show",
-  "git_diff",
-  "git_log",
-]);
+// Git observers see the index and refs outside the repository fingerprint.
+const REPLAY_FILESYSTEM_TOOL_NAMES = new Set(["read", "grep", "find", "ls"]);
 const GIT_OUTPUT_LIMIT = 32 * 1024 * 1024;
 const REPLAY_IDENTITY_TIMEOUT_MS = 5_000;
 const REPLAY_RESOURCE_FILE_LIMIT = 8 * 1024 * 1024;
@@ -175,27 +157,6 @@ function hasPathParameter(definition: ToolDefinition) {
   );
 }
 
-function hasKnownReplayFilesystemImplementation(tool: {
-  name: string;
-  sourceInfo?: { path: string; source: string; origin: string };
-}) {
-  if (REPLAY_BUILTIN_FILESYSTEM_TOOL_NAMES.has(tool.name)) {
-    return (
-      tool.sourceInfo?.source === "builtin" &&
-      tool.sourceInfo.path === `<builtin:${tool.name}>`
-    );
-  }
-  if (!REPLAY_PACKAGE_FILESYSTEM_TOOL_NAMES.has(tool.name)) return false;
-  // The read-only git tools come from git-read.
-  return (
-    tool.sourceInfo?.origin === "package" &&
-    tool.sourceInfo.path
-      .split(path.sep)
-      .join("/")
-      .endsWith("/extensions/git-read/index.ts")
-  );
-}
-
 export interface ReplayFilesystemBoundaryOptions {
   repositoryRoot: string;
   cwd: string;
@@ -280,7 +241,9 @@ export function createReplayFilesystemBoundary(
     const knownImplementation =
       definition.name === tool.name &&
       hasPathParameter(definition) &&
-      hasKnownReplayFilesystemImplementation(tool);
+      tool.sourceInfo?.source === "builtin" &&
+      (tool.sourceInfo.path === `builtin:${tool.name}` ||
+        tool.sourceInfo.path === `<builtin:${tool.name}>`);
     const execute = definition.execute;
     definition.execute = async (toolCallId, params, signal, onUpdate, ctx) => {
       try {
@@ -340,20 +303,23 @@ export function createReplayWorkspaceGuard() {
   return {
     begin(replaySafe: boolean): ReplayWorkspaceLease {
       const startEpoch = epoch;
-      const canReplay = replaySafe && activeUnsafe === 0;
+      const initialCanReplay = activeUnsafe === 0;
       let ended = false;
       if (!replaySafe) {
         activeUnsafe += 1;
         epoch += 1;
       }
+      const canReplay = () =>
+        !ended &&
+        replaySafe &&
+        initialCanReplay &&
+        activeUnsafe === 0 &&
+        epoch === startEpoch;
       return {
-        canReplay,
-        canJournal: () =>
-          !ended &&
-          replaySafe &&
-          canReplay &&
-          activeUnsafe === 0 &&
-          epoch === startEpoch,
+        get canReplay() {
+          return canReplay();
+        },
+        canJournal: canReplay,
         end: () => {
           if (ended) return;
           ended = true;

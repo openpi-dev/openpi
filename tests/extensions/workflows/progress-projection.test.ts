@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { AgentProgressProjection } from "../../../extensions/workflows/progress-projection.ts";
+import { normalizePersistedWorkflowDetails } from "../../../extensions/workflows/dashboard.ts";
+import { workflowTranscriptDocument } from "../../../extensions/workflows/transcript.ts";
 
 type AgentMessage = AgentSession["messages"][number];
 
@@ -129,6 +131,82 @@ test("tool timings remain keyed by call identity after incremental ingestion", (
       },
     ],
   );
+});
+
+test("Workflow captures native nested outcomes and reopens them under the original parent", () => {
+  const messages: AgentMessage[] = [
+    { role: "user", content: "inspect", timestamp: 1 },
+    {
+      ...assistant("", 10),
+      content: [
+        {
+          type: "toolCall",
+          id: "outer",
+          name: "codemode",
+          arguments: { code: "fixture" },
+        },
+      ],
+      stopReason: "toolUse",
+    },
+    {
+      role: "toolResult",
+      toolCallId: "outer",
+      toolName: "codemode",
+      content: [{ type: "text", text: "wrapper result" }],
+      isError: false,
+      timestamp: 2000,
+      nestedCalls: {
+        complete: false,
+        calls: [
+          {
+            id: "opaque-read",
+            name: "read",
+            arguments: { path: "notes.md" },
+            status: "ok",
+          },
+          {
+            id: "opaque-bash",
+            name: "bash",
+            arguments: { command: "false" },
+            status: "error",
+          },
+          { id: "opaque-unfinished", name: "read", status: "unfinished" },
+        ],
+      },
+    },
+  ];
+  const transcript = new AgentProgressProjection(messages).snapshot()
+    .transcript;
+  const saved = JSON.parse(
+    JSON.stringify({
+      sessionId: "parent",
+      status: "completed",
+      agents: [{ index: 1, state: "done", transcript }],
+    }),
+  );
+  const reopened = normalizePersistedWorkflowDetails("wf_123", saved)!
+    .agents[0]!.transcript;
+  const results = workflowTranscriptDocument(reopened).items.filter(
+    (item) => item.kind === "toolResult",
+  );
+  assert.deepEqual(
+    results.map((item) => [
+      item.toolId,
+      item.parentToolCallId,
+      item.status,
+      item.isError,
+      item.outputUnavailable,
+    ]),
+    [
+      ["opaque-read", "outer", "ok", false, true],
+      ["opaque-bash", "outer", "error", true, true],
+      ["opaque-unfinished", "outer", "unfinished", false, true],
+      ["outer", undefined, undefined, false, undefined],
+    ],
+  );
+  assert.deepEqual(results[0]?.evidenceArguments, { path: "notes.md" });
+  assert.equal(results[0]?.outputPreview, undefined);
+  assert.equal(results.at(-1)?.outputPreview, "wrapper result");
 });
 
 test("transcript byte limits preserve UTF-8 boundaries and explicit markers", () => {

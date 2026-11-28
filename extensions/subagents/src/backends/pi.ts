@@ -262,7 +262,10 @@ const makePiSession = (
             // `task.tools` is projected from the parent's live surface, so a
             // name the child cannot expose narrows the child instead of
             // failing the spawn.
-            { tolerateInheritedMisses: task.inheritedTools === true },
+            {
+              tolerateInheritedMisses: task.inheritedTools === true,
+              toolSources: task.toolSources,
+            },
           );
           checkCancelled();
           return session;

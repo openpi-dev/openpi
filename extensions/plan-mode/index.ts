@@ -26,9 +26,12 @@
  * may predate the plan and still hold the full tool set.
  */
 
+import { isDeepStrictEqual } from "node:util";
 import {
+  buildSessionProjection,
   getMarkdownTheme,
   keyHint,
+  type ContextEvent,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
@@ -53,13 +56,34 @@ import {
 } from "./control.ts";
 
 import {
-  decodePlanModeState,
   MAX_READY_PLAN_CHARS,
   MAX_READY_PLAN_UTF8_BYTES,
   PLAN_MODE_STATE_ENTRY,
+  readPlanModeStateEntry,
   restorePlanModeState,
   type PersistedPlanModeState,
 } from "./persisted-state.ts";
+
+type ContextMessage = ContextEvent["messages"][number];
+
+function contextMessageIdentity(message: ContextMessage) {
+  const id =
+    message.role === "toolResult"
+      ? message.toolCallId
+      : message.role === "custom"
+        ? message.customType
+        : message.role === "branchSummary"
+          ? message.fromId
+          : undefined;
+  return JSON.stringify([message.role, message.timestamp, id]);
+}
+
+function countContextIdentities(identities: Iterable<string>) {
+  const counts = new Map<string, number>();
+  for (const identity of identities)
+    counts.set(identity, (counts.get(identity) ?? 0) + 1);
+  return counts;
+}
 export {
   MAX_READY_PLAN_CHARS,
   MAX_READY_PLAN_UTF8_BYTES,
@@ -697,57 +721,80 @@ export default function planMode(pi: ExtensionAPI) {
   // k+1 and the provider's prompt cache never hits. Reminder text derives only
   // from the entry itself, so history already sent never changes.
   pi.on("context", (event, ctx) => {
-    const reminders: Array<{ ms: number; content: string }> = [];
-    let previous: string | undefined;
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (
-        !isRecord(entry) ||
-        entry.type !== "custom" ||
-        entry.customType !== PLAN_MODE_STATE_ENTRY
-      )
-        continue;
-      const state = decodePlanModeState(entry.data);
-      const content =
-        !state || (state.planning && state.readyPlan === undefined)
-          ? BLOCK_REASON
-          : state.planning
-            ? READY_PLAN_CONTEXT
-            : INACTIVE_PLAN_CONTEXT;
-      if (content === previous) continue;
-      previous = content;
-      reminders.push({
-        ms: Date.parse(
-          typeof entry.timestamp === "string" ? entry.timestamp : "",
-        ),
-        content,
-      });
+    const branch = ctx.sessionManager.getBranch();
+    let stateEnd = branch.length;
+    while (stateEnd > 0 && !readPlanModeStateEntry(branch[stateEnd - 1])) {
+      stateEnd--;
     }
-    if (reminders.length === 0) return;
+    if (stateEnd === 0) return;
     const base = event.messages.filter(
       (message) =>
         message.role !== "custom" ||
         message.customType !== "openpi-plan-context",
     );
-    // Transitions with no message between them share an anchor; only the
-    // latest state there is meaningful.
-    const anchored = new Map<number, (typeof reminders)[number]>();
-    for (const reminder of reminders) {
-      let index = base.findIndex((message) => message.timestamp > reminder.ms);
-      if (index === -1) index = base.length;
+    const { entries: projected, messages: projectedMessages } =
+      buildSessionProjection(branch);
+    const visible = new Map(
+      projected.map(({ sourceEntry, messages }) => [sourceEntry.id, messages]),
+    );
+    const anchored = new Map<number, (typeof base)[number]>();
+    const baseIdentities = base.map(contextMessageIdentity);
+    const baseCounts = countContextIdentities(baseIdentities);
+    const projectedCounts = countContextIdentities(
+      projectedMessages.map(contextMessageIdentity),
+    );
+    let cursor = 0;
+    let previous: string | undefined;
+    const advance = (entryId: string) => {
+      for (const message of visible.get(entryId) ?? []) {
+        // Pi clones the request before invoking context hooks. Earlier hooks
+        // can change the body. Match repeated identities by order only when
+        // their counts agree, since a deletion can make that order ambiguous.
+        if (message.role === "system") continue;
+        const identity = contextMessageIdentity(message);
+        const canMatchEdited =
+          baseCounts.get(identity) === projectedCounts.get(identity);
+        for (let index = cursor; index < base.length; index++) {
+          if (
+            baseIdentities[index] !== identity ||
+            (!canMatchEdited && !isDeepStrictEqual(base[index], message))
+          )
+            continue;
+          cursor = index + 1;
+          break;
+        }
+      }
+    };
+    // Pi projects a compaction summary before the retained range. States
+    // from the summarized range share the anchor directly after the summary.
+    const first = projected[0]?.sourceEntry;
+    if (first?.type === "compaction") advance(first.id);
+    for (const entry of branch.slice(0, stateEnd)) {
+      if (entry.type !== "compaction") advance(entry.id);
+      const state = readPlanModeStateEntry(entry);
+      if (!state) continue;
+      const content = state.planning
+        ? state.readyPlan === undefined
+          ? BLOCK_REASON
+          : READY_PLAN_CONTEXT
+        : INACTIVE_PLAN_CONTEXT;
+      if (content === previous) continue;
+      previous = content;
+      let index = cursor;
       // A mid-turn plan_ready commit lands between the assistant tool call
       // and its results; never split a call from its toolResult run.
       while (base[index]?.role === "toolResult") index++;
-      anchored.set(index, reminder);
+      anchored.set(index, {
+        role: "custom",
+        customType: "openpi-plan-context",
+        content,
+        display: false,
+        timestamp: Date.parse(entry.timestamp) || 0,
+      });
     }
     const messages = [...base];
     for (const [index, reminder] of [...anchored].reverse())
-      messages.splice(index, 0, {
-        role: "custom" as const,
-        customType: "openpi-plan-context",
-        content: reminder.content,
-        display: false,
-        timestamp: Number.isFinite(reminder.ms) ? reminder.ms : 0,
-      });
+      messages.splice(index, 0, reminder);
     return { messages };
   });
 

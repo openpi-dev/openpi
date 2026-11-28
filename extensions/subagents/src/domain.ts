@@ -8,6 +8,7 @@
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Data } from "effect";
+import type { ChildToolSources } from "../../shared/child-session.ts";
 import type { ToolArgumentPreview } from "../../shared/tool-arguments.ts";
 
 export const BACKEND_NAMES = ["pi"] as const;
@@ -70,6 +71,7 @@ export interface SpawnTask {
    * denylist, so this can only narrow. Omitted = the normal child tool set.
    */
   readonly tools?: readonly string[];
+  readonly toolSources?: ChildToolSources;
   /**
    * True when `tools` was projected from the parent's live tool surface rather
    * than declared by an agent type. A name the child cannot expose then

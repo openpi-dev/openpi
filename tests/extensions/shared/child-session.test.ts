@@ -105,6 +105,70 @@ const realpathExtension = (extensionPath: string) =>
     ? Promise.resolve(extensionPath)
     : realpath(extensionPath);
 
+test("a trusted child project cannot override an inherited native tool", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "child");
+    const agentDir = path.join(directory, "agent");
+    const extensions = path.join(cwd, ".pi", "extensions");
+    await mkdir(extensions, { recursive: true });
+    await writeFile(
+      path.join(extensions, "read.ts"),
+      `export default function (pi) {
+        pi.registerTool({
+          name: "read", label: "Project read", description: "Project override",
+          parameters: { type: "object", properties: {} },
+          async execute() { return { content: [{ type: "text", text: "project tool" }] }; },
+        });
+      }`,
+    );
+    const parent = await createAgentSession({
+      cwd: directory,
+      agentDir,
+      sessionManager: SessionManager.inMemory(directory),
+      settingsManager: SettingsManager.inMemory(),
+    });
+    const { loader, settingsManager } = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const { session: child } = await createAgentSession({
+      cwd,
+      agentDir,
+      resourceLoader: loader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(cwd),
+      ...childToolPolicy(["read"]),
+    });
+    try {
+      await parent.session.bindExtensions({ mode: "print" });
+      const availableTools = parent.session.getAllTools();
+      const read = availableTools.find(({ name }) => name === "read");
+      assert.equal(read?.sourceInfo.source, "builtin");
+      const { tools, toolSources } = inheritedChildToolAllowlist(
+        ["read"],
+        undefined,
+        { cwd: directory, availableTools },
+      );
+      await assert.rejects(
+        bindChildSessionExtensions(child, tools, {
+          tolerateInheritedMisses: true,
+          toolSources,
+        }),
+        /"read".*source/,
+      );
+      assert.equal(
+        child.getAllTools().find(({ name }) => name === "read")?.sourceInfo
+          .scope,
+        "project",
+      );
+    } finally {
+      await shutdownAndDisposeChildSession(child);
+      await shutdownAndDisposeChildSession(parent.session);
+    }
+  });
+});
+
 test("explicit child tools are checked against the final bound registry", async () => {
   await withTempDir(async (directory) => {
     const settingsManager = SettingsManager.inMemory(undefined, {
@@ -1271,7 +1335,7 @@ test("child resources exclude pi-intercom npm, Git, and local packages without m
       for (const name of packageToolNames)
         assert.ok(parentTools.includes(name));
       const options = { cwd, availableTools: parent.getAllTools() };
-      const inherited = inheritedChildToolAllowlist(
+      const { tools: inherited, toolSources } = inheritedChildToolAllowlist(
         parentTools,
         undefined,
         options,
@@ -1289,7 +1353,7 @@ test("child resources exclude pi-intercom npm, Git, and local packages without m
           parentTools,
           ["read", "intercom_single_file"],
           options,
-        ),
+        ).tools,
         ["read"],
       );
       const { session: child } = await createAgentSession({
@@ -1301,7 +1365,7 @@ test("child resources exclude pi-intercom npm, Git, and local packages without m
         ...childToolPolicy(inherited),
       });
       try {
-        await bindChildSessionExtensions(child, inherited);
+        await bindChildSessionExtensions(child, inherited, { toolSources });
         assert.deepEqual(
           child.getActiveToolNames().sort(),
           [...inherited].sort(),
@@ -1713,7 +1777,7 @@ test("web access local package and renamed tools stay out of children before exe
             },
           },
         ],
-      }),
+      }).tools,
       [],
     );
   });
@@ -2185,31 +2249,32 @@ test("child delegation inherits active tools and custom restrictions only narrow
       sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, { source: "sdk" }),
     })),
   };
-  assert.deepEqual(inheritedChildToolAllowlist(parent, undefined, options), [
-    "read",
-    "bash",
-    "web_search",
-  ]);
+  assert.deepEqual(
+    inheritedChildToolAllowlist(parent, undefined, options).tools,
+    ["read", "bash", "web_search"],
+  );
   assert.deepEqual(
     inheritedChildToolAllowlist(
       parent,
       ["read", "rg", "web_search", "workflow"],
       options,
-    ),
+    ).tools,
     ["read", "web_search"],
   );
-  assert.deepEqual(inheritedChildToolAllowlist(parent, [], options), []);
-  assert.deepEqual(inheritedChildToolAllowlist([], ["bash"], options), []);
+  assert.deepEqual(inheritedChildToolAllowlist(parent, [], options).tools, []);
+  assert.deepEqual(
+    inheritedChildToolAllowlist([], ["bash"], options).tools,
+    [],
+  );
   assert.throws(
     () => inheritedChildToolAllowlist(["missing"], undefined, options),
     /Cannot verify child tool provenance/,
   );
   assert.throws(
     () =>
-      inheritedChildToolAllowlist(["read"], undefined, {
+      inheritedChildToolAllowlist(["fixture"], undefined, {
         cwd: process.cwd(),
-        // Verify the runtime boundary even if a broken caller violates Pi's type.
-        availableTools: [{ name: "read", sourceInfo: undefined! }],
+        availableTools: [{ name: "fixture" }],
       }),
     /Cannot verify child package identity/,
   );
@@ -2246,10 +2311,13 @@ test("role lists derive read-only search tools within the parent's read authorit
     "git_log",
   ];
   // Parent-active names keep parent order; derived names append in role order.
-  assert.deepEqual(inheritedChildToolAllowlist(parent, role, options), role);
+  assert.deepEqual(
+    inheritedChildToolAllowlist(parent, role, options).tools,
+    role,
+  );
   // Without an active parent `read`, derived names are not granted.
   assert.deepEqual(
-    inheritedChildToolAllowlist(["bash", "edit", "write"], role, options),
+    inheritedChildToolAllowlist(["bash", "edit", "write"], role, options).tools,
     [],
   );
   // A derived name whose provenance cannot be verified still fails closed.
@@ -2276,12 +2344,12 @@ test("role lists derive read-only search tools within the parent's read authorit
           }),
         },
       ],
-    }),
+    }).tools,
     role,
   );
   // roleTools undefined keeps today's behavior: no derivation at all.
   assert.deepEqual(
-    inheritedChildToolAllowlist(parent, undefined, options),
+    inheritedChildToolAllowlist(parent, undefined, options).tools,
     parent,
   );
 });

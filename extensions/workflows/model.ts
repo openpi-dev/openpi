@@ -99,6 +99,11 @@ export interface TranscriptEntry {
   name?: string;
   /** Stable tool-call identifier used to pair calls, results, and timings. */
   toolCallId?: string;
+  /** Native nested call evidence. Pi does not save the nested result body. */
+  parentToolCallId?: string;
+  status?: "ok" | "error" | "unfinished";
+  argsTruncated?: boolean;
+  evidenceArguments?: Readonly<Record<string, string | number>>;
   isError?: boolean;
   /** Original message timestamp, when provided by the model/session. */
   timestamp?: number;

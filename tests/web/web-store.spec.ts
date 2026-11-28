@@ -195,6 +195,68 @@ it("rejects a stale steering choice locally and does not silently send it as the
   expect(store.getState().notice).toContain("Your draft is kept");
 });
 
+it("keeps a compaction receipt separate from Pi admission and applies the exact drained event", async () => {
+  const client = new FakeClient();
+  const initial = snapshot();
+  client.snapshots.push(Promise.resolve(initial));
+  const prompt = vi
+    .spyOn(client, "prompt")
+    .mockImplementation(async (_session, _content, id) => ({
+      id,
+      accepted: false,
+      state: "held",
+      pendingFollowUps: 1,
+    }));
+  const stream = eventStreamHarness();
+  const store = createWebStore(client, { consumeEvents: stream.consumeEvents });
+  await store.getState().actions.refreshSnapshot();
+  store.getState().actions.start();
+  try {
+    await vi.waitFor(() => expect(stream.consumeEvents).toHaveBeenCalledOnce());
+    const receipt = await store
+      .getState()
+      .actions.sendPrompt("after compacting");
+    expect(prompt).toHaveBeenCalledOnce();
+    const identity = {
+      sessionId: initial.currentSessionId,
+      sessionPath: initial.selectedSession!.path,
+      commandId: prompt.mock.calls[0]![2],
+    };
+    expect(receipt).toEqual(identity);
+    expect(store.getState().pendingFollowUpsReceipt).toBe(1);
+    expect(store.getState().livePhase).toBe("idle");
+    expect(store.getState().liveMessages.at(-1)?.optimistic?.admitted).toBe(
+      false,
+    );
+    stream.emit(
+      runtimeEvent(initial.cursor + 1, "prompt_accepted", {
+        ...identity,
+        sessionPath: "/tmp/ws/copied.jsonl",
+        fromCompactionQueue: true,
+      }),
+    );
+    expect(store.getState().liveMessages.at(-1)?.optimistic?.admitted).toBe(
+      false,
+    );
+    stream.emit(
+      runtimeEvent(initial.cursor + 2, "prompt_accepted", {
+        ...identity,
+        fromCompactionQueue: true,
+        pendingFollowUps: 0,
+      }),
+    );
+    expect(store.getState().liveMessages.at(-1)?.optimistic?.admitted).toBe(
+      true,
+    );
+    expect(store.getState().promptQueueEvidence.at(-1)).toEqual({
+      ...identity,
+      state: "accepted",
+    });
+  } finally {
+    store.getState().actions.stop();
+  }
+});
+
 it("treats a runtime steering conflict as a known rejection with no optimistic admission or fallback", async () => {
   const client = new FakeClient();
   const current = snapshot();

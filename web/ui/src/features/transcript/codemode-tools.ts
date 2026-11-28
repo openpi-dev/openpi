@@ -28,8 +28,7 @@ export function codemodeChildren(
   liveTools: readonly LiveToolEvidence[],
   liveState?: EvidenceState,
 ) {
-  if (call.name !== "codemode" || !call.id || result?.forkSnapshotToolResult)
-    return undefined;
+  if (!call.id || result?.forkSnapshotToolResult) return undefined;
   const settled = result !== undefined && liveState !== "running";
   const ids = new Set([call.id]);
   const live: LiveToolEvidence[] = [];
@@ -39,8 +38,12 @@ export function codemodeChildren(
     if (item.call.id) ids.add(item.call.id);
     live.push(item);
   }
+  if (call.name !== "codemode" && live.length === 0) return undefined;
   const details = evidenceRecord(result?.details);
-  const ledger = Array.isArray(details.calls) ? details.calls : [];
+  const ledger =
+    call.name === "codemode" && Array.isArray(details.calls)
+      ? details.calls
+      : [];
   const cancelled = new Set(
     ledger.flatMap((item) => {
       const entry = evidenceRecord(item);
@@ -77,7 +80,8 @@ export function codemodeChildren(
       call: entry.call,
       result: observed?.result,
       state,
-      outputMissing: !observed?.result,
+      outputMissing:
+        !observed?.result || observed.result.outputUnavailable === true,
       argumentsOmitted: entry.argumentsOmitted,
       error: entry.error,
     });
@@ -95,7 +99,7 @@ export function codemodeChildren(
           : item.result?.isError !== false && cancelled.has(item.call.id ?? "")
             ? "cancelled"
             : projectToolEvidence(item.call, item.result, item.state).state,
-      outputMissing: false,
+      outputMissing: item.result?.outputUnavailable === true,
     });
   }
   const unmatchedLedger = ledger.some((item) => {
@@ -121,6 +125,7 @@ export function codemodeChildren(
       (settled && !records && ledger.length > children.length),
     // Keep script-level errors, and a running script after its children finish, visible.
     showWrapper:
+      call.name !== "codemode" ||
       children.length === 0 ||
       unmatchedLedger ||
       result?.isError === true ||

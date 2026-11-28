@@ -50,26 +50,30 @@ export function decodePlanModeState(
   }
 }
 
+export function readPlanModeStateEntry(entry: unknown) {
+  if (
+    !isRecord(entry) ||
+    entry.type !== "custom" ||
+    entry.customType !== PLAN_MODE_STATE_ENTRY
+  ) {
+    return;
+  }
+  return (
+    decodePlanModeState(entry.data) ?? {
+      planning: true,
+      error:
+        "The latest persisted Plan Mode state is malformed; writes remain blocked. Use `/plan off` to clear it explicitly.",
+    }
+  );
+}
+
 /** Restore only the newest branch-local state; malformed state fails closed. */
 export function restorePlanModeState(
   entries: readonly unknown[],
 ): RestoredPlanModeState {
   for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index];
-    if (
-      !isRecord(entry) ||
-      entry.type !== "custom" ||
-      entry.customType !== PLAN_MODE_STATE_ENTRY
-    ) {
-      continue;
-    }
-    return (
-      decodePlanModeState(entry.data) ?? {
-        planning: true,
-        error:
-          "The latest persisted Plan Mode state is malformed; writes remain blocked. Use `/plan off` to clear it explicitly.",
-      }
-    );
+    const state = readPlanModeStateEntry(entries[index]);
+    if (state) return state;
   }
   return { planning: false };
 }

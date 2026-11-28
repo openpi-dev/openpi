@@ -29,6 +29,7 @@ export function subagentTranscriptSnapshot(
     ),
   );
   const results = new Map<string, WebLiveMessage>();
+  const nestedTools = new Map<string, LiveToolEvidence>();
   type RecordedTool = ToolCallMetadata & Pick<LiveToolState, "toolId" | "name">;
   const retainedTools = new Map<string, RecordedTool | undefined>();
   for (const item of detail.transcript) {
@@ -82,11 +83,33 @@ export function subagentTranscriptSnapshot(
     if (item.kind === "user") {
       append(id, { role: "user", content: item.text });
     } else if (item.kind === "toolResult") {
-      // Native nested calls have execution events but no assistant toolCall
-      // message. Pair their retained start evidence before rendering the result.
+      const result: WebLiveMessage = {
+        role: "toolResult",
+        toolCallId: item.toolId,
+        toolName: item.name,
+        ...(item.status !== "unfinished" ? { isError: item.isError } : {}),
+        content: item.outputPreview ?? "",
+        ...(item.outputUnavailable ? { outputUnavailable: true } : {}),
+      };
+      if (item.parentToolCallId) {
+        nestedTools.set(item.toolId, {
+          call: toolCall(item),
+          parentToolCallId: item.parentToolCallId,
+          result,
+          state:
+            item.status === "unfinished"
+              ? "unknown"
+              : item.isError
+                ? "failed"
+                : "returned",
+        });
+        if (calls.has(item.parentToolCallId)) continue;
+      }
+      // The parent start may have fallen outside the retained window.
       if (
         !calls.has(item.toolId) &&
-        (item.argsPreview !== undefined ||
+        (item.parentToolCallId ||
+          item.argsPreview !== undefined ||
           item.evidenceArguments !== undefined ||
           item.argsTruncated)
       ) {
@@ -98,14 +121,6 @@ export function subagentTranscriptSnapshot(
           stopReason: "toolUse",
         });
       }
-      const result: WebLiveMessage = {
-        role: "toolResult",
-        toolCallId: item.toolId,
-        toolName: item.name,
-        ...(item.status !== "unfinished" ? { isError: item.isError } : {}),
-        content: item.outputPreview ?? "",
-        ...(item.outputUnavailable ? { outputUnavailable: true } : {}),
-      };
       results.set(item.toolId, result);
       append(id, result);
     } else {
@@ -135,32 +150,37 @@ export function subagentTranscriptSnapshot(
   }
   const running = detail.status === "running";
   const liveTools = detail.liveTools.map(
-    (tool): LiveToolEvidence => ({
-      call: toolCall(tool),
-      ...(tool.parentToolCallId
-        ? { parentToolCallId: tool.parentToolCallId }
-        : {}),
-      result: results.get(tool.toolId) ?? {
-        role: "toolResult",
-        toolCallId: tool.toolId,
-        toolName: tool.name,
-        content: tool.outputPreview ?? "",
-        ...(tool.done ? { isError: tool.isError === true } : {}),
-      },
-      state: results.has(tool.toolId)
-        ? results.get(tool.toolId)!.isError === true
-          ? "failed"
-          : results.get(tool.toolId)!.isError === false
-            ? "returned"
-            : "unknown"
-        : tool.done
-          ? tool.isError
+    (tool): LiveToolEvidence =>
+      nestedTools.get(tool.toolId) ?? {
+        call: toolCall(tool),
+        ...(tool.parentToolCallId
+          ? { parentToolCallId: tool.parentToolCallId }
+          : {}),
+        result: results.get(tool.toolId) ?? {
+          role: "toolResult",
+          toolCallId: tool.toolId,
+          toolName: tool.name,
+          content: tool.outputPreview ?? "",
+          ...(tool.done ? { isError: tool.isError === true } : {}),
+        },
+        state: results.has(tool.toolId)
+          ? results.get(tool.toolId)!.isError === true
             ? "failed"
-            : "returned"
-          : running
-            ? "running"
-            : "unknown",
-    }),
+            : results.get(tool.toolId)!.isError === false
+              ? "returned"
+              : "unknown"
+          : tool.done
+            ? tool.isError
+              ? "failed"
+              : "returned"
+            : running
+              ? "running"
+              : "unknown",
+      },
+  );
+  const liveIds = new Set(liveTools.map((tool) => tool.call.id));
+  liveTools.push(
+    ...[...nestedTools.values()].filter((tool) => !liveIds.has(tool.call.id)),
   );
   const liveParts: WebMessagePart[] = [];
   if (detail.liveAssistant?.thinking)
@@ -170,7 +190,11 @@ export function subagentTranscriptSnapshot(
   liveParts.push(
     ...liveTools
       .filter(
-        (tool) => !calls.has(tool.call.id!) && !results.has(tool.call.id!),
+        (tool) =>
+          !calls.has(tool.call.id!) &&
+          !results.has(tool.call.id!) &&
+          !nestedTools.has(tool.call.id!) &&
+          (!tool.parentToolCallId || !calls.has(tool.parentToolCallId)),
       )
       .map((tool) => tool.call),
   );

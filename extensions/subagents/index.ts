@@ -1137,7 +1137,7 @@ export default function (
       const requestedChildTools = planning
         ? planModeChildTools(declaredChildTools)
         : declaredChildTools;
-      const childTools = inheritedChildToolAllowlist(
+      const { tools: childTools, toolSources } = inheritedChildToolAllowlist(
         pi.getActiveTools(),
         requestedChildTools,
         {
@@ -1166,12 +1166,9 @@ export default function (
         model,
         reasoningEffort: params.reasoning_effort ?? agentType?.reasoningEffort,
         ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
-        ...(childTools
-          ? {
-              tools: childTools,
-              inheritedTools: agentType?.tools === undefined,
-            }
-          : {}),
+        tools: childTools,
+        toolSources,
+        inheritedTools: agentType?.tools === undefined,
         ...(agentType ? { agentTypeName: agentType.name } : {}),
         ...(params.output_schema !== undefined
           ? { outputSchema: params.output_schema }

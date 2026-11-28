@@ -5823,6 +5823,7 @@ test("returns and publishes the observed follow-up queue receipt", async () => {
       {
         commandId: undefined,
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         pendingFollowUps: 2,
       },
     );
@@ -5830,6 +5831,72 @@ test("returns and publishes the observed follow-up queue receipt", async () => {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }
+});
+
+test("distinguishes volatile prompt receipts from Pi acceptance and reconciles by exact identity", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-held-receipt-"));
+  const runtime = testRuntime(cwd, async () => ({
+    state: "held",
+    pendingFollowUps: 1,
+  }));
+  let observe: Parameters<typeof runtime.subscribe>[0] | undefined;
+  runtime.subscribe = (listener) => {
+    observe = listener;
+    return () => {
+      observe = undefined;
+    };
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  t.after(async () => {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const endpoint = `${launched.origin}/api/prompt`;
+  const identity = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: mutationSessionPath(runtime.sessionManager),
+    commandId: "held",
+  };
+  const post = (retry = false) =>
+    fetch(endpoint, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...identity, content: "queue me", retry }),
+    });
+  const status = async (target = identity) =>
+    (
+      await fetch(`${endpoint}?${new URLSearchParams(target)}`, { headers })
+    ).json();
+  const initial = await post();
+  assert.equal(initial.status, 202);
+  const { cursor, ...receipt } = await initial.json();
+  assert.deepEqual(receipt, {
+    id: "held",
+    accepted: false,
+    state: "held",
+    pendingFollowUps: 1,
+  });
+  assert.deepEqual(await status(), { state: "held" });
+  assert.deepEqual(
+    await status({ ...identity, sessionPath: "/copied.jsonl" }),
+    { state: "unknown" },
+  );
+  assert.equal(typeof observe, "function");
+  observe!({ type: "prompt_blocked", detail: identity });
+  assert.deepEqual(await status(), { state: "blocked" });
+  observe!({ type: "prompt_accepted", detail: identity });
+  assert.deepEqual(await status(), { state: "accepted" });
+  const replay = await (await post(true)).json();
+  assert.equal(replay.accepted, true);
+  assert.equal(replay.state, "accepted");
+  const events = await readEventRecords(
+    await fetch(`${launched.origin}/events?cursor=${cursor - 1}`, { headers }),
+    3,
+  );
+  assert.deepEqual(
+    events.map(({ event }) => event.type),
+    ["prompt_held", "prompt_blocked", "prompt_accepted"],
+  );
 });
 
 test("replays only events after an exact SSE cursor with event ids", async () => {

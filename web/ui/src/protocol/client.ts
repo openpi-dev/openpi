@@ -36,6 +36,8 @@ import {
   type WebModelSummary,
   type WebPromptDelivery,
   type WebPromptImage,
+  type WebPromptAdmissionState,
+  type WebPromptIdentity,
   type WebSessionHistoryPage,
   type WebSessionProjection,
   type WebSessionPromptHistoryPage,
@@ -106,6 +108,7 @@ function readToken() {
 export interface CommandReceipt {
   id: string;
   accepted: boolean;
+  state?: Exclude<WebPromptAdmissionState, "unknown">;
   pendingFollowUps?: number;
   pendingSteering?: number;
   delivery?: "prompt" | "followUp" | "steer";
@@ -903,6 +906,21 @@ export class WebClient {
     });
   }
 
+  discardBlockedPrompt(identity: WebPromptIdentity) {
+    return this.request<{ sessionId: string }>("/api/prompt-queue", {
+      method: "POST",
+      body: JSON.stringify({ ...identity, action: "discard" }),
+    });
+  }
+
+  promptAdmissionStatus(identity: WebPromptIdentity, signal?: AbortSignal) {
+    const query = new URLSearchParams({ ...identity });
+    return this.request<{ state: WebPromptAdmissionState }>(
+      `/api/prompt?${query}`,
+      { signal },
+    );
+  }
+
   preparePlanImplementation(
     sessionId: string,
     sessionPath: string,
@@ -1294,7 +1312,11 @@ export class WebClient {
     if (
       typeof receipt.id !== "string" ||
       !receipt.id ||
-      receipt.accepted !== true
+      (receipt.state === "held" ||
+      receipt.state === "blocked" ||
+      receipt.state === "discarded"
+        ? receipt.accepted !== false
+        : receipt.accepted !== true)
     ) {
       throw new Error(
         "Invalid prompt receipt; retry the same message to recover its admission.",

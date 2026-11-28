@@ -625,6 +625,9 @@ function EvidenceDetails({
             {t("toolSnapshotMissingResult")}
           </span>
         )}
+        {outputUnavailable && state === "unknown" && (
+          <span className="evidence-status">{t("toolState_unknown")}</span>
+        )}
         <ChevronRight className="tool-disclosure" aria-hidden="true" />
         <StatusMark status={status} />
       </summary>
@@ -3253,7 +3256,8 @@ export function Transcript(props: TranscriptProps) {
                     entryId={persistedResultEntry?.entryId}
                     onReference={active ? props.onReferencePlan : undefined}
                   />
-                ) : isEvidenceTool(part.name) && !child?.outputMissing ? (
+                ) : isEvidenceTool(part.name) &&
+                  (!child?.outputMissing || result?.outputUnavailable) ? (
                   <ToolEvidence
                     key={`${entry.key}-${part.id || partIndex}-evidence`}
                     call={part}
@@ -3396,6 +3400,13 @@ export function Transcript(props: TranscriptProps) {
                           </p>
                         )}
                       {card && !isEvidenceTool(part.name) && rawEvidence}
+                      {!child &&
+                        live?.parentToolCallId &&
+                        !pairedToolIds.has(live.parentToolCallId) && (
+                          <p className="evidence-note">
+                            {t("toolNestedParentUnavailable")}
+                          </p>
+                        )}
                     </div>
                   </article>
                 ),

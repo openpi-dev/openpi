@@ -13,7 +13,6 @@ import {
   type SessionShutdownEvent,
   SettingsManager,
   type SourceInfo,
-  type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 import { createPiBuiltinExtensionFactories } from "./pi-builtin-extensions.ts";
 import {
@@ -686,6 +685,45 @@ export function effectiveChildToolAllowlist(tools?: readonly string[]) {
   );
 }
 
+type ChildToolInfo = { name: string; sourceInfo?: SourceInfo };
+export type ChildToolSources = ReadonlyMap<string, SourceInfo | undefined>;
+
+const PI_NATIVE_TOOL_NAMES = new Set([
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+  "powershell",
+]);
+
+function isNativeToolSource(name: string, source?: SourceInfo) {
+  return (
+    PI_NATIVE_TOOL_NAMES.has(name) &&
+    (source === undefined ||
+      (source.source === "builtin" &&
+        (source.path === `builtin:${name}` ||
+          source.path === `<builtin:${name}>`)))
+  );
+}
+
+function sameToolSource(name: string, parent?: SourceInfo, child?: SourceInfo) {
+  if (isNativeToolSource(name, parent) && isNativeToolSource(name, child)) {
+    return true;
+  }
+  return (
+    parent !== undefined &&
+    child !== undefined &&
+    parent.path === child.path &&
+    parent.source === child.source &&
+    parent.scope === child.scope &&
+    parent.origin === child.origin &&
+    parent.baseDir === child.baseDir
+  );
+}
+
 /** Project the parent's active surface into a child; a role can only narrow it.
  * Active tools are a visibility choice, not a filesystem/network sandbox.
  * Inactive tools are not implicitly activated by delegation — except the
@@ -698,7 +736,7 @@ export function inheritedChildToolAllowlist(
   parentTools: readonly string[],
   roleTools: readonly string[] | undefined,
   options: {
-    availableTools: readonly Pick<ToolInfo, "name" | "sourceInfo">[];
+    availableTools: readonly ChildToolInfo[];
     cwd: string;
   },
 ) {
@@ -710,6 +748,7 @@ export function inheritedChildToolAllowlist(
     cwd: options.cwd,
     agentDir: getAgentDir(),
   });
+  const toolSources = new Map<string, SourceInfo | undefined>();
   const permitted = (name: string) => {
     const tool = available.get(name);
     if (!tool) {
@@ -717,7 +756,15 @@ export function inheritedChildToolAllowlist(
         `Cannot verify child tool provenance for ${JSON.stringify(name)}`,
       );
     }
-    return !isBlocked(tool.sourceInfo);
+    const source = tool.sourceInfo;
+    if (source === undefined && !isNativeToolSource(name)) {
+      throw new Error(
+        `Cannot verify child package identity for ${JSON.stringify(name)}: missing source metadata`,
+      );
+    }
+    if (source !== undefined && isBlocked(source)) return false;
+    toolSources.set(name, source && { ...source });
+    return true;
   };
   const parentActive = new Set(
     effectiveChildToolAllowlist([...new Set(parentTools)]),
@@ -725,14 +772,16 @@ export function inheritedChildToolAllowlist(
   const inherited = [...parentActive].filter(
     (name) => (!allowed || allowed.has(name)) && permitted(name),
   );
-  if (!allowed || !parentActive.has("read")) return inherited;
+  if (!allowed || !parentActive.has("read")) {
+    return { tools: inherited, toolSources };
+  }
   const readDerived = new Set<string>(CHILD_READ_DERIVED_TOOL_NAMES);
   const derived = effectiveChildToolAllowlist(
     [...allowed].filter(
       (name) => !parentActive.has(name) && readDerived.has(name),
     ),
   )!.filter(permitted);
-  return [...inherited, ...derived];
+  return { tools: [...inherited, ...derived], toolSources };
 }
 
 export function childToolPolicy(tools?: readonly string[]) {
@@ -821,7 +870,7 @@ export function resolveStandaloneChildProjectTrust(options: {
 interface ChildSessionStartup {
   bindExtensions(bindings: { mode: "print" }): Promise<void>;
   getActiveToolNames?(): string[];
-  getAllTools?(): { name: string }[];
+  getAllTools?(): ChildToolInfo[];
   setActiveToolsByName?(toolNames: string[]): void;
 }
 
@@ -849,6 +898,8 @@ export interface ChildToolPreflightOptions {
    * declared name still fails before the first prompt.
    */
   tolerateInheritedMisses?: boolean;
+  /** Verified parent provenance for inherited and derived tools. */
+  toolSources?: ChildToolSources;
 }
 
 export async function bindChildSessionExtensions(
@@ -858,15 +909,33 @@ export async function bindChildSessionExtensions(
 ) {
   await session.bindExtensions({ mode: "print" });
   const requested = effectiveChildToolAllowlist(requestedTools);
+  const registered = session.getAllTools?.();
+  const toolSources = options?.toolSources;
+  if (toolSources?.size && !registered) {
+    throw new Error(
+      "Child tool preflight failed: no bound tool provenance is available.",
+    );
+  }
+  for (const { name, sourceInfo } of registered ?? []) {
+    if (
+      toolSources?.has(name) &&
+      !sameToolSource(name, toolSources.get(name), sourceInfo)
+    ) {
+      // Pi can expose registered tools through other tools even when inactive.
+      throw new Error(
+        `Child tool preflight failed: tool ${boundedToolNames([name])} has a different source than the parent authorized.`,
+      );
+    }
+  }
   let active: Set<string> | undefined;
   let available: Set<string> | undefined;
   if (
     session.getActiveToolNames &&
-    session.getAllTools &&
+    registered &&
     session.setActiveToolsByName
   ) {
     const requestedSet = requested ? new Set(requested) : undefined;
-    available = new Set(session.getAllTools().map(({ name }) => name));
+    available = new Set(registered.map(({ name }) => name));
     const activeNames = session.getActiveToolNames();
     active = new Set(activeNames);
     // 父级继承来的工具在子会话里往往只是"已注册但未激活"：内置扩展注册的

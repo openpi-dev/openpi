@@ -60,9 +60,9 @@ test("retains the shared Session slot when child cleanup is uncertain", async ()
   const admission = sessionChildExecutionAdmission(owner, { maxActive: 1 });
   const controller = new RunController(undefined, 1, 8, admission);
 
-  await controller.schedule(async () => ({
-    retainAdmissionLease: true as const,
-  }));
+  await controller.schedule(async (_signal, retainAdmissionLease) => {
+    retainAdmissionLease();
+  });
   assert.equal(admission.snapshot().held, 1);
 
   const queued = controller.schedule(async () => "must remain queued");
