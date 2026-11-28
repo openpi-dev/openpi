@@ -10,6 +10,8 @@ import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "
 import type { MyPiSetupConfig, ReasoningLevel } from "../../extensions/shared/setup-config.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
 import { readNativeSearchEvidence, type NativeSearchActivity } from "../../extensions/web-search/native.ts";
+import { projectToolArguments } from "../../extensions/shared/tool-arguments.ts";
+import type { TranscriptItem } from "../../extensions/subagents/src/domain.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
@@ -45,6 +47,23 @@ export const WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 export type WebPromptDelivery =
   | { streamingBehavior: "followUp"; expectedTurnCommandId?: never; retryEntryId?: string }
   | { streamingBehavior: "steer"; expectedTurnCommandId: string; retryEntryId?: never };
+
+export interface WebPromptIdentity {
+  commandId: string;
+  sessionId: string;
+  sessionPath: string;
+}
+
+/** "held" and "blocked" refer to the Host's volatile compaction queue. */
+export type WebPromptAdmissionState = "held" | "blocked" | "accepted" | "discarded" | "unknown";
+
+export interface WebPromptQueueEvidence extends WebPromptIdentity {
+  state: Exclude<WebPromptAdmissionState, "unknown">;
+}
+
+export type WebPromptQueueAction =
+  | { action: "retry" | "clear"; commandId?: never }
+  | { action: "discard"; commandId: string };
 export const WEB_MAX_GIT_REVIEW_FILES = 200;
 export const WEB_MAX_GIT_REVIEW_DIFF_BYTES = 3 * 1024 * 1024;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
@@ -981,7 +1000,11 @@ function projectNativeSearch(message: unknown, partCount: number) {
   }));
 }
 
-function projectNestedCalls(input: unknown, resolvePath?: (path: string) => string | undefined) {
+function projectNestedCalls(
+  input: unknown,
+  resolvePath?: (path: string) => string | undefined,
+  onRetained?: (entry: WebNestedToolCall, argumentsValue: unknown) => void,
+) {
   if (!input || typeof input !== "object") return undefined;
   const raw = input as Record<string, unknown>;
   if (!Array.isArray(raw.calls) || typeof raw.complete !== "boolean") return undefined;
@@ -994,14 +1017,14 @@ function projectNestedCalls(input: unknown, resolvePath?: (path: string) => stri
     const value = item as Record<string, unknown>;
     if (typeof value.id !== "string" || !value.id || value.id.length > 500 || ids.has(value.id) ||
       typeof value.name !== "string" || !value.name || value.name.length > 500 ||
-      !["ok", "error", "unfinished"].includes(String(value.status))) { complete = false; continue; }
+      (value.status !== "ok" && value.status !== "error" && value.status !== "unfinished")) { complete = false; continue; }
     ids.add(value.id);
     const call = projectContent({ content: [{ type: "toolCall", id: value.id, name: value.name, arguments: value.arguments ?? {} }] }, resolvePath).parts[0];
     if (call?.type !== "toolCall") { complete = false; continue; }
     const argumentsOmitted = value.arguments === undefined || call.evidenceTruncated === true;
     complete &&= !argumentsOmitted && value.status !== "unfinished";
     const projected: WebNestedToolCall = {
-      call, status: value.status as WebNestedToolCall["status"],
+      call, status: value.status,
       ...(argumentsOmitted ? { argumentsOmitted: true } : {}),
       ...(typeof value.error === "string" ? { error: value.error.slice(0, 500) } : {}),
       ...(typeof value.durationMs === "number" && Number.isFinite(value.durationMs) && value.durationMs >= 0 ? { durationMs: value.durationMs } : {}),
@@ -1009,8 +1032,28 @@ function projectNestedCalls(input: unknown, resolvePath?: (path: string) => stri
     bytes += jsonByteLength(projected);
     if (bytes > 64 * 1024) { complete = false; break; }
     calls.push(projected);
+    onRetained?.(projected, value.arguments);
   }
   return { calls, complete };
+}
+
+/** Reuse Pi's validated, bounded ledger when adapting child transcripts. */
+export function projectNestedToolResults(parentToolCallId: string, ledger: unknown) {
+  const results: Extract<TranscriptItem, { kind: "toolResult" }>[] = [];
+  projectNestedCalls(ledger, undefined, ({ call, status }, argumentsValue) => {
+    if (!call.id) return;
+    results.push({
+      kind: "toolResult",
+      toolId: call.id,
+      name: call.name,
+      parentToolCallId,
+      ...projectToolArguments(argumentsValue),
+      status,
+      isError: status === "error",
+      outputUnavailable: true,
+    });
+  });
+  return results;
 }
 
 export function projectMessage(message: unknown, resolvePath?: (path: string) => string | undefined): WebLiveMessage {

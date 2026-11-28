@@ -73,7 +73,16 @@ function buildWorkflowTranscriptDocument(
       toolId,
       name,
       isError: entry.isError === true,
-      outputPreview: entry.text,
+      ...(entry.parentToolCallId
+        ? {
+            parentToolCallId: entry.parentToolCallId,
+            status: entry.status,
+            argsPreview: entry.text,
+            argsTruncated: entry.argsTruncated,
+            evidenceArguments: entry.evidenceArguments,
+            outputUnavailable: true,
+          }
+        : { outputPreview: entry.text }),
     });
   }
 

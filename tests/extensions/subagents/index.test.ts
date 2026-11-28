@@ -1425,13 +1425,20 @@ test("Direct spawn tolerates inherited misses but rejects a missing explicit rol
       sendMessage() {},
       setActiveTools() {},
       getActiveTools: () => ["read", "parent_fixture"],
-      getAllTools: () =>
-        ["read", "parent_fixture"].map((name) => ({
-          name,
-          sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, {
+      getAllTools: () => [
+        {
+          name: "read",
+          sourceInfo: createSyntheticSourceInfo("builtin:read", {
+            source: "builtin",
+          }),
+        },
+        {
+          name: "parent_fixture",
+          sourceInfo: createSyntheticSourceInfo("<sdk:parent_fixture>", {
             source: "sdk",
           }),
-        })),
+        },
+      ],
       getThinkingLevel: () => "off",
     } as unknown as ExtensionAPI;
     const ctx = {
@@ -1547,13 +1554,14 @@ test("subagent_check reports the child's cumulative spend", async () => {
       sendMessage() {},
       setActiveTools() {},
       getActiveTools: () => ["read"],
-      getAllTools: () =>
-        ["read"].map((name) => ({
-          name,
-          sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, {
-            source: "sdk",
+      getAllTools: () => [
+        {
+          name: "read",
+          sourceInfo: createSyntheticSourceInfo("builtin:read", {
+            source: "builtin",
           }),
-        })),
+        },
+      ],
       getThinkingLevel: () => "off",
     } as unknown as ExtensionAPI;
     const ctx = {

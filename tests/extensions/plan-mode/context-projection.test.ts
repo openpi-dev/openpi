@@ -170,7 +170,14 @@ function harness() {
   const ctx = {
     hasUI: false,
     isIdle: () => true,
-    sessionManager: { getBranch: () => branch },
+    sessionManager: {
+      getBranch: () =>
+        branch.map((entry, index) => ({
+          ...entry,
+          id: `entry-${index}`,
+          parentId: index > 0 ? `entry-${index - 1}` : null,
+        })),
+    },
     ui: { notify() {}, setStatus() {} },
   } as unknown as ExtensionContext;
   planMode({
@@ -204,39 +211,51 @@ const planEntry = (timestampMs: number, data: Record<string, unknown>) => ({
   type: "custom",
   customType: PLAN_MODE_STATE_ENTRY,
   data,
-  id: `entry-${timestampMs}`,
   timestamp: new Date(timestampMs).toISOString(),
+});
+
+const messageEntry = (message: { timestamp: number }) => ({
+  type: "message",
+  message,
+  timestamp: new Date(message.timestamp).toISOString(),
 });
 
 test("reminders project in branch order at their anchors and never split a tool call from its results", () => {
   const h = harness();
-  // planning armed mid-history, a duplicate planning re-arm (dedup), then a
-  // mid-turn plan_ready commit landing between the assistant call and its
-  // toolResult.
-  h.branch.push(
-    planEntry(500, { version: 1, status: "planning" }),
-    planEntry(700, { version: 1, status: "planning" }),
-    planEntry(3000, {
-      version: 1,
-      status: "ready",
-      plan: "# Plan",
-    }),
-  );
   const messages = [
     { role: "user", content: "inspect", timestamp: 100 },
     {
       role: "assistant",
-      content: [{ type: "toolCall", id: "call-1", name: "plan_ready" }],
+      content: [
+        { type: "toolCall", id: "call-1", name: "read" },
+        { type: "toolCall", id: "call-2", name: "grep" },
+      ],
       timestamp: 2000,
     },
     {
       role: "toolResult",
       toolCallId: "call-1",
-      toolName: "plan_ready",
-      content: [{ type: "text", text: "Plan ready." }],
+      toolName: "read",
+      content: [{ type: "text", text: "First result" }],
       timestamp: 4000,
     },
+    {
+      role: "toolResult",
+      toolCallId: "call-2",
+      toolName: "grep",
+      content: [{ type: "text", text: "Second result" }],
+      timestamp: 4100,
+    },
   ];
+  h.branch.push(
+    messageEntry(messages[0]!),
+    planEntry(500, { version: 1, status: "planning" }),
+    planEntry(700, { version: 1, status: "planning" }),
+    messageEntry(messages[1]!),
+    planEntry(3000, { version: 1, status: "ready", plan: "# Plan" }),
+    messageEntry(messages[2]!),
+    messageEntry(messages[3]!),
+  );
 
   const projection = h.emit("context", { messages }) as {
     messages: Array<Record<string, unknown>>;
@@ -256,8 +275,8 @@ test("reminders project in branch order at their anchors and never split a tool 
   assert.equal(reminders[0]!.index, 1);
   assert.equal(projected[2]!.role, "assistant");
   // The ready reminder must not sit between the tool call and its result.
-  assert.equal(projected[3]!.role, "toolResult");
-  assert.equal(reminders[1]!.index, 4);
+  assert.deepEqual(projected.slice(3, 5), messages.slice(2));
+  assert.equal(reminders[1]!.index, 5);
   // Injected timestamps are deterministic (the entry's own time).
   assert.equal(reminders[0]!.message.timestamp, 500);
   assert.equal(reminders[1]!.message.timestamp, 3000);
@@ -267,18 +286,20 @@ test("reminders project in branch order at their anchors and never split a tool 
 
 test("a malformed state entry fails closed to the blocked reminder at its anchor", () => {
   const h = harness();
+  const messages = [
+    { role: "user", content: "before", timestamp: 100 },
+    { role: "user", content: "after", timestamp: 1000 },
+  ];
   h.branch.push(
+    messageEntry(messages[0]!),
     planEntry(500, {
       version: 1,
       status: "ready",
       plan: "# Plan",
       extra: true,
     }),
+    messageEntry(messages[1]!),
   );
-  const messages = [
-    { role: "user", content: "before", timestamp: 100 },
-    { role: "user", content: "after", timestamp: 1000 },
-  ];
   const projection = h.emit("context", { messages }) as {
     messages: Array<Record<string, unknown>>;
   };
@@ -288,14 +309,16 @@ test("a malformed state entry fails closed to the blocked reminder at its anchor
 
 test("transitions with no message between them project only the latest state", () => {
   const h = harness();
-  h.branch.push(
-    planEntry(500, { version: 1, status: "planning" }),
-    planEntry(600, { version: 1, status: "inactive" }),
-  );
   const messages = [
     { role: "user", content: "before", timestamp: 100 },
     { role: "user", content: "after", timestamp: 1000 },
   ];
+  h.branch.push(
+    messageEntry(messages[0]!),
+    planEntry(500, { version: 1, status: "planning" }),
+    planEntry(600, { version: 1, status: "inactive" }),
+    messageEntry(messages[1]!),
+  );
   const projection = h.emit("context", { messages }) as {
     messages: Array<Record<string, unknown>>;
   };
@@ -305,4 +328,101 @@ test("transitions with no message between them project only the latest state", (
   assert.equal(reminders.length, 1);
   assert.match(String(reminders[0]!.content), /Plan mode is inactive/);
   assert.equal(projection.messages[1], reminders[0]);
+});
+
+for (const hookEdit of ["redact", "remove"] as const) {
+  test(`Plan anchors follow a context hook that will ${hookEdit} the only message between transitions`, () => {
+    const h = harness();
+    const before = { role: "user", content: "before", timestamp: 500 };
+    const during = { role: "user", content: "private text", timestamp: 500 };
+    h.branch.push(
+      messageEntry(before),
+      planEntry(500, { version: 1, status: "planning" }),
+      messageEntry(during),
+      planEntry(500, { version: 1, status: "inactive" }),
+    );
+    const { messages } = h.emit("context", {
+      messages:
+        hookEdit === "redact"
+          ? [before, { ...during, content: "[redacted]" }]
+          : [before],
+    }) as { messages: { content: string }[] };
+    const contents = messages.map(({ content }) => content);
+    assert.match(contents.pop()!, /Plan mode is inactive/);
+    assert.deepEqual(
+      contents,
+      hookEdit === "redact"
+        ? ["before", BLOCK_REASON, "[redacted]"]
+        : ["before"],
+    );
+  });
+}
+
+for (const exitTime of [500, 100]) {
+  test(`plan projection follows branch order when the clock ${exitTime === 500 ? "ties" : "runs backward"}`, () => {
+    const h = harness();
+    const before = { role: "user", content: "before", timestamp: 500 };
+    const during = { role: "user", content: "during", timestamp: 500 };
+    const after = { role: "user", content: "after", timestamp: exitTime };
+    h.branch.push(
+      messageEntry(before),
+      planEntry(500, { version: 1, status: "planning" }),
+      messageEntry(during),
+      planEntry(exitTime, { version: 1, status: "inactive" }),
+      messageEntry(after),
+    );
+    const { messages } = h.emit("context", {
+      messages: structuredClone([before, during, after]),
+    }) as { messages: { content: string }[] };
+    assert.equal(messages.length, 5);
+    assert.equal(messages[0]!.content, "before");
+    assert.equal(messages[1]!.content, BLOCK_REASON);
+    assert.equal(messages[2]!.content, "during");
+    assert.match(messages[3]!.content, /Plan mode is inactive/);
+    assert.equal(messages[4]!.content, "after");
+  });
+}
+
+test("compaction carries only the last summarized plan state before retained messages", () => {
+  const h = harness();
+  const session = SessionManager.inMemory();
+  session.appendCustomEntry(PLAN_MODE_STATE_ENTRY, {
+    version: 1,
+    status: "planning",
+  });
+  session.appendMessage({
+    role: "user",
+    content: "summarized",
+    timestamp: 500,
+  });
+  session.appendCustomEntry(PLAN_MODE_STATE_ENTRY, {
+    version: 1,
+    status: "inactive",
+  });
+  const firstKept = session.appendMessage({
+    role: "user",
+    content: "kept",
+    timestamp: 100,
+  });
+  session.appendCompaction("Earlier history", firstKept, 100);
+  session.appendCustomEntry(PLAN_MODE_STATE_ENTRY, {
+    version: 1,
+    status: "planning",
+  });
+  session.appendMessage({ role: "user", content: "current", timestamp: 100 });
+  h.ctx.sessionManager.getBranch = () => session.getBranch();
+  const base = session
+    .buildSessionContext()
+    .messages.filter(({ role }) => role !== "system");
+  const { messages } = h.emit("context", {
+    messages: structuredClone(base),
+  }) as {
+    messages: { role: string; content: unknown }[];
+  };
+  assert.equal(messages.length, 5);
+  assert.equal(messages[0]?.role, "compactionSummary");
+  assert.match(String(messages[1]?.content), /Plan mode is inactive/);
+  assert.equal(messages[2]?.content, "kept");
+  assert.equal(messages[3]?.content, BLOCK_REASON);
+  assert.equal(messages[4]?.content, "current");
 });

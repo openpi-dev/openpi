@@ -848,13 +848,15 @@ export function App() {
           state.snapshot.selectedExecution.compaction
         )));
   const resend = useCallback(
-    (content: string, retryEntryId?: string) =>
-      retryEntryId
-        ? actions.sendPrompt("", [], undefined, {
-            streamingBehavior: "followUp",
-            retryEntryId,
-          })
-        : actions.sendPrompt(content),
+    async (content: string, retryEntryId?: string) =>
+      Boolean(
+        await (retryEntryId
+          ? actions.sendPrompt("", [], undefined, {
+              streamingBehavior: "followUp",
+              retryEntryId,
+            })
+          : actions.sendPrompt(content)),
+      ),
     [actions],
   );
 
@@ -1327,6 +1329,7 @@ export function App() {
                 turnCancellationPending={state.turnCancellationPending}
                 turnTerminalStatus={state.turnTerminalStatus}
                 pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
+                promptQueueEvidence={state.promptQueueEvidence}
                 pendingSteeringReceipt={state.pendingSteeringReceipt}
                 commandDiscovery={state.commandDiscovery}
                 snapshot={state.snapshot}

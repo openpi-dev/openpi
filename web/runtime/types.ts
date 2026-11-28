@@ -12,6 +12,7 @@ import type {
   WebSettingsResourceCatalog,
   WebSessionUsage,
   WebPromptImage,
+  WebPromptQueueAction,
   WebHistoryAnchor,
 } from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
@@ -160,6 +161,7 @@ export interface WebPromptOptions {
 }
 
 export interface WebPromptAdmissionReceipt {
+  state?: "held" | "blocked";
   pendingFollowUps: number;
   pendingSteering?: number;
   delivery?: "prompt" | "followUp" | "steer";
@@ -401,7 +403,7 @@ export interface WebRuntimeController {
     sessionPath: string;
     expectedRevision: string | null;
   }): Promise<PlanControlResult & { prompt: string }>;
-  updatePromptQueue?(request: { sessionId: string; sessionPath: string; action: "retry" | "clear" }): void;
+  updatePromptQueue?(request: { sessionId: string; sessionPath: string } & WebPromptQueueAction): void;
   compactSession?(request: { sessionId: string; sessionPath: string }): Promise<void>;
   setThinkingLevel?(
     level: string,

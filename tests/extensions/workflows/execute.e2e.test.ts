@@ -19,6 +19,12 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
 import type {
   AgentSession,
   AgentSessionEventListener,
@@ -33,10 +39,15 @@ import {
   DefaultResourceLoader,
   keyHint,
   keyText,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { shutdownAndDisposeChildSession } from "../../../extensions/shared/child-session.ts";
+import {
+  createChildResources,
+  shutdownAndDisposeChildSession,
+} from "../../../extensions/shared/child-session.ts";
+import { getSessionChildExecutionAdmission } from "../../../extensions/shared/child-execution-admission.ts";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import {
   webCapabilityDetail,
@@ -82,6 +93,13 @@ writeFileSync(
   join(agentDir, "agents", "explicit-parent-fixture.md"),
   "---\nname: explicit-parent-fixture\ndescription: Requires a parent fixture\ntools: [read, parent_fixture]\n---\nUse parent_fixture to verify the result.\n",
 );
+for (const tool of ["git_log", "git_diff"]) {
+  const role = tool.replace("_", "-") + "-reviewer";
+  writeFileSync(
+    join(agentDir, "agents", `${role}.md`),
+    `---\nname: ${role}\ndescription: Git inspection fixture\ntools: [${tool}]\n---\nInspect Git state.\n`,
+  );
+}
 
 const {
   default: workflows,
@@ -120,6 +138,12 @@ const sentMessages: SentMessage[] = [];
 let modelIdle = true;
 let sendFailures = 0;
 
+function fixtureToolSource(name: string) {
+  return ["read", "bash"].includes(name)
+    ? createSyntheticSourceInfo(`builtin:${name}`, { source: "builtin" })
+    : createSyntheticSourceInfo(`<sdk:${name}>`, { source: "sdk" });
+}
+
 const pi = {
   registerTool(tool: CapturedTool) {
     tools.set(tool.name, tool);
@@ -141,7 +165,7 @@ const pi = {
   getAllTools: () =>
     activeTools.map((name) => ({
       name,
-      sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, { source: "sdk" }),
+      sourceInfo: fixtureToolSource(name),
     })),
   setActiveTools(names: string[]) {
     activeTools = [...names];
@@ -332,7 +356,8 @@ function fakeAgentSession(
     async abort() {},
     dispose() {},
     getContextUsage: () => undefined,
-    getAllTools: () => toolNames.map((name) => ({ name })),
+    getAllTools: () =>
+      toolNames.map((name) => ({ name, sourceInfo: fixtureToolSource(name) })),
     getToolDefinition: () => undefined,
     getActiveToolNames: () => [...toolNames],
     setActiveToolsByName() {},
@@ -1955,6 +1980,142 @@ test("forced settlement persists worktree cleanup that finishes later", async ()
   }
 });
 
+for (const cancelDuring of ["session creation", "abort timeout"]) {
+  test(`worktree survives cancellation with unconfirmed child quiescence during ${cancelDuring}`, {
+    timeout: 15_000,
+  }, async () => {
+    const selectedRepo = join(agentDir, `isolated-${cancelDuring}`);
+    execFileSync("git", ["clone", "--quiet", repoDir, selectedRepo]);
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const shutdownStarted = Promise.withResolvers<void>();
+    const finishShutdown = Promise.withResolvers<void>();
+    const disposed = Promise.withResolvers<void>();
+    const admission = getSessionChildExecutionAdmission(ctx.sessionManager);
+    assert.ok(admission);
+    const limit = admission.snapshot().limit;
+    if (cancelDuring === "session creation")
+      admission.configure({ maxActive: 1 });
+    const child = fakeAgentSession("late output", release.promise, () =>
+      started.resolve(),
+    );
+    child.abort = () => {
+      shutdownStarted.resolve();
+      return cancelDuring === "session creation"
+        ? finishShutdown.promise
+        : release.promise;
+    };
+    child.dispose = disposed.resolve;
+    let run:
+      | Parameters<typeof shutdownActiveWorkflowRuns>[0][number]
+      | undefined;
+    let nextRun: typeof run;
+    let factoryEntered = false;
+    let reclaimCalls = 0;
+    __setWorkflowTestAgentSessionFactory(async () => {
+      if (factoryEntered) return { session: fakeAgentSession("next output") };
+      factoryEntered = true;
+      if (cancelDuring === "session creation") {
+        started.resolve();
+        await release.promise;
+      }
+      return { session: child };
+    });
+    __setWorkflowTestLifecycleHooks({
+      shutdownTimeoutMs: cancelDuring === "session creation" ? 2_000 : 10,
+      onRunStarted(value) {
+        if (run) nextRun = value;
+        else run = value;
+      },
+      async reclaimWorktree(cwd, worktree) {
+        reclaimCalls++;
+        return reclaimWorktree(cwd, worktree);
+      },
+    });
+    try {
+      const launch = (await workflow.execute(
+        "cancel-with-live-child",
+        {
+          script: `return await agent("probe", { isolation: "worktree", working_dir: ${JSON.stringify(selectedRepo)} });`,
+          background: true,
+        },
+        undefined,
+        undefined,
+        ctx,
+      )) as { details: { runId: string } };
+      assert.ok(run?.completion);
+      await Promise.race([
+        started.promise,
+        run.completion.then(() =>
+          assert.fail("workflow settled before child startup"),
+        ),
+      ]);
+      await workflowStop.execute("cancel-with-live-child-stop", {
+        runId: launch.details.runId,
+      });
+      await run.completion;
+
+      const persisted = readWorkflowJson(launch.details.runId);
+      assert.equal(persisted.status, "aborted");
+      const [agent] = persisted.agents as WorkflowDetails["agents"];
+      assert.equal(reclaimCalls, 0);
+      assert.equal(agent?.worktreeCleanup?.removed, false);
+      assert.match(
+        agent?.worktreeCleanup?.reason ?? "",
+        /quiescence.*(creation|abort timed out)/i,
+      );
+      assert.ok(agent?.worktreePath && existsSync(agent.worktreePath));
+      assert.equal(admission.snapshot().held, 1);
+
+      if (cancelDuring === "session creation") {
+        const next = (await workflow.execute(
+          "after-late-child",
+          { script: 'return (await agent("next")).output;', background: true },
+          undefined,
+          undefined,
+          ctx,
+        )) as { details: { runId: string } };
+        await waitFor(
+          () => admission.snapshot().queued === 1,
+          "next workflow waiting for the slot",
+          2_000,
+        );
+        release.resolve();
+        await shutdownStarted.promise;
+        assert.equal(admission.snapshot().held, 1);
+        assert.equal(admission.snapshot().queued, 1);
+        assert.ok(existsSync(agent.worktreePath));
+        finishShutdown.resolve();
+        await disposed.promise;
+        assert.ok(nextRun?.completion);
+        await waitFor(
+          () => readWorkflowJson(next.details.runId).status === "completed",
+          "next workflow after disposal",
+          2_000,
+        );
+        assert.equal(
+          JSON.parse(
+            readFileSync(
+              join(runDirFor(next.details.runId), "result.json"),
+              "utf8",
+            ),
+          ),
+          "next output",
+        );
+      }
+    } finally {
+      release.resolve();
+      finishShutdown.resolve();
+      await run?.completion;
+      if (factoryEntered) await disposed.promise;
+      admission.configure({ maxActive: limit });
+      await nextRun?.completion;
+      __setWorkflowTestLifecycleHooks(undefined);
+      __setWorkflowTestAgentSessionFactory(undefined);
+    }
+  });
+}
+
 test.after(() => {
   for (const handler of handlers.get("session_shutdown") ?? []) {
     void handler({}, ctx);
@@ -1999,6 +2160,7 @@ test("built-in Workflow children inherit active shell/network tools in the selec
     session.getAllTools = () =>
       ["read", "bash", "fixture_network"].map((name) => ({
         name,
+        sourceInfo: fixtureToolSource(name),
       })) as ReturnType<AgentSession["getAllTools"]>;
     return { session };
   });
@@ -2103,6 +2265,140 @@ test("Workflow entry tolerates inherited misses but rejects a missing explicit r
     __setWorkflowTestAgentSessionFactory(undefined);
   }
 });
+
+for (const name of ["git_log", "git_diff"]) {
+  test(`Workflow read-only role executes ${name} against live Git state`, async () => {
+    const cwd = join(agentDir, `live-${name}`);
+    execFileSync("git", ["clone", "--quiet", repoDir, cwd]);
+    const settingsPath = join(agentDir, "settings.json");
+    const role = name.replace("_", "-") + "-reviewer";
+    const previousSettings = existsSync(settingsPath)
+      ? readFileSync(settingsPath)
+      : undefined;
+    const previousGetAllTools = pi.getAllTools;
+    let executions = 0;
+    try {
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          packages: [
+            {
+              source: fileURLToPath(new URL("../../../", import.meta.url)),
+              extensions: ["extensions/git-read/index.ts"],
+              skills: [],
+              prompts: [],
+              themes: [],
+            },
+          ],
+        }),
+      );
+      const { loader } = await createChildResources({
+        cwd,
+        agentDir,
+        projectTrusted: false,
+      });
+      const registered = loader
+        .getExtensions()
+        .extensions.flatMap((entry) => [...entry.tools.values()]);
+      const tool = registered.find(
+        ({ definition }) => definition.name === name,
+      );
+      assert.ok(tool);
+      pi.getAllTools = () => [
+        ...previousGetAllTools(),
+        {
+          ...tool.definition,
+          exposure: "direct",
+          sourceInfo: tool.sourceInfo,
+        },
+      ];
+
+      const provider = fauxProvider({
+        api: `openpi-workflow-${name}`,
+        provider: `workflow-${name}`,
+        models: [{ id: "fixture", name: "Fixture", reasoning: false }],
+      });
+      const modelRuntime = await ModelRuntime.create({
+        authPath: join(agentDir, "auth.json"),
+        modelsPath: join(agentDir, "models.json"),
+      });
+      modelRuntime.registerNativeProvider(provider.provider);
+      await modelRuntime.setRuntimeApiKey(provider.provider.id, "fixture-key");
+      __setWorkflowTestAgentSessionFactory(async (options) => {
+        executions++;
+        provider.setResponses([
+          () =>
+            fauxAssistantMessage(
+              [
+                fauxToolCall(
+                  name,
+                  name === "git_log"
+                    ? { file: "fixture.txt" }
+                    : { staged: true, path: "fixture.txt" },
+                ),
+              ],
+              { stopReason: "toolUse" },
+            ),
+          (context) => {
+            const result = context.messages.at(-1);
+            assert.ok(result?.role === "toolResult");
+            return fauxAssistantMessage(
+              result.content
+                .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                .join("\n"),
+            );
+          },
+        ]);
+        return createAgentSession({
+          ...options,
+          modelRuntime,
+          model: provider.getModel(),
+        });
+      });
+      const script = `return await agent("inspect Git", { agent_type: "${role}", working_dir: ${JSON.stringify(cwd)} });`;
+      const execute = async (resume?: string) => {
+        const result = (await workflow.execute(
+          name,
+          {
+            script,
+            wait: true,
+            ...(resume ? { resume_from_run_id: resume } : {}),
+          },
+          undefined,
+          undefined,
+          ctx,
+        )) as { details: { runId: string } };
+        return result.details.runId;
+      };
+      if (name === "git_diff")
+        writeFileSync(join(cwd, "fixture.txt"), "staged change\n");
+      const first = await execute();
+      const [initial] = readWorkflowJson(first)
+        .agents as WorkflowDetails["agents"];
+      assert.equal(initial?.state, "done", initial?.error ?? "");
+      if (name === "git_log") {
+        assert.match(initial?.preview ?? "", /\bfixture\b/);
+        assert.doesNotMatch(
+          initial?.preview ?? "",
+          /Replay filesystem boundary/,
+        );
+      } else {
+        assert.doesNotMatch(initial?.preview ?? "", /staged change/);
+        execFileSync("git", ["add", "fixture.txt"], { cwd });
+        const resumed = await execute(first);
+        const [agent] = readWorkflowJson(resumed)
+          .agents as WorkflowDetails["agents"];
+        assert.equal(executions, 2);
+        assert.match(agent?.preview ?? "", /\+staged change/);
+      }
+    } finally {
+      pi.getAllTools = previousGetAllTools;
+      if (previousSettings) writeFileSync(settingsPath, previousSettings);
+      else rmSync(settingsPath, { force: true });
+      __setWorkflowTestAgentSessionFactory(undefined);
+    }
+  });
+}
 
 for (const dirty of [false, true])
   test(`cancellation during worktree creation ${dirty ? "preserves dirty work" : "reclaims the checkout"}`, {

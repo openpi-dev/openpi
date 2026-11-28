@@ -16,17 +16,6 @@ function abortError(signal: AbortSignal) {
     : new Error("Workflow was aborted");
 }
 
-function retainsAdmissionLease(
-  value: unknown,
-): value is { retainAdmissionLease: true } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "retainAdmissionLease" in value &&
-    value.retainAdmissionLease === true
-  );
-}
-
 class Semaphore {
   private active = 0;
   private readonly limit: number;
@@ -152,7 +141,10 @@ export class RunController {
   }
 
   schedule<T>(
-    task: (signal: AbortSignal) => Promise<T>,
+    task: (
+      signal: AbortSignal,
+      retainAdmissionLease: (lateSessionQuiescence?: Promise<boolean>) => void,
+    ) => Promise<T>,
     invocationSignal?: AbortSignal,
   ): Promise<T> {
     if (this.sealed) return Promise.reject(new Error("Workflow is settling"));
@@ -191,8 +183,18 @@ export class RunController {
           taskAbort.signal,
         );
         if (taskAbort.signal.aborted) throw abortError(taskAbort.signal);
-        const result = await task(taskAbort.signal);
-        if (retainsAdmissionLease(result)) releaseAdmissionLease = false;
+        const result = await task(taskAbort.signal, (lateSessionQuiescence) => {
+          releaseAdmissionLease = false;
+          const lease = admissionLease;
+          if (lease && lateSessionQuiescence) {
+            void lateSessionQuiescence.then(
+              (quiescent) => {
+                if (quiescent) lease.release();
+              },
+              () => {},
+            );
+          }
+        });
         if (invocationSignal?.aborted) throw abortError(invocationSignal);
         return result;
       } finally {

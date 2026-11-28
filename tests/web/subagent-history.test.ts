@@ -395,6 +395,20 @@ for (const pending of [false, true, "background"] as const)
             role: "assistant",
             timestamp: 1,
           },
+          {
+            role: "tool",
+            toolCallId: "workflow-codemode",
+            name: "codemode",
+            text: '{"code":"fixture"}',
+          },
+          {
+            role: "toolResult",
+            toolCallId: "opaque-workflow-read",
+            parentToolCallId: "workflow-codemode",
+            name: "read",
+            status: "unfinished",
+            text: '{"path":"workflow.md"}',
+          },
         ],
       }),
     );
@@ -445,6 +459,25 @@ for (const pending of [false, true, "background"] as const)
     assert.match(
       JSON.stringify(detail?.transcript),
       /The persisted Workflow review/,
+    );
+    const nested = detail?.transcript.find(
+      (item) =>
+        item.kind === "toolResult" && item.toolId === "opaque-workflow-read",
+    );
+    assert.ok(nested?.kind === "toolResult");
+    assert.deepEqual(
+      {
+        parent: nested.parentToolCallId,
+        status: nested.status,
+        outputUnavailable: nested.outputUnavailable,
+        output: nested.outputPreview,
+      },
+      {
+        parent: "workflow-codemode",
+        status: "unfinished",
+        outputUnavailable: true,
+        output: undefined,
+      },
     );
     await rm(join(runDirectory, "transcripts.json"));
     const metadataOnly = await adapter.capabilityDetail(

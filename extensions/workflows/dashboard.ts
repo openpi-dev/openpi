@@ -36,6 +36,7 @@ import {
 } from "../shared/screen-chrome.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import { projectToolArguments } from "../shared/tool-arguments.ts";
 import { isAcceptanceLedger } from "./acceptance.ts";
 import { recoverPendingWorkflowCommit } from "./artifacts.ts";
 import { decodeExecutionTimingSummary } from "./execution-timing.ts";
@@ -360,6 +361,23 @@ function normalizeTranscript(value: unknown): TranscriptEntry[] {
           ? sanitizeLine(entry.toolCallId, 1_024) || undefined
           : undefined,
       isError: entry.isError === true,
+      ...(entry.role === "toolResult" &&
+      typeof entry.parentToolCallId === "string" &&
+      entry.parentToolCallId
+        ? {
+            parentToolCallId:
+              sanitizeLine(entry.parentToolCallId, 1_024) || undefined,
+            status:
+              entry.status === "ok" ||
+              entry.status === "error" ||
+              entry.status === "unfinished"
+                ? entry.status
+                : "unfinished",
+            argsTruncated: entry.argsTruncated === true,
+            evidenceArguments: projectToolArguments(entry.evidenceArguments)
+              .evidenceArguments,
+          }
+        : {}),
       timestamp:
         typeof entry.timestamp === "number" ? entry.timestamp : undefined,
     });

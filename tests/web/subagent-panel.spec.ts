@@ -705,6 +705,17 @@ it.each<{
         },
       ],
     });
+    expect(
+      subagentTranscriptSnapshot("parent", completed, { theme: "system" }, "")
+        .selectedExecution.liveTools,
+    ).toMatchObject([
+      {
+        parentToolCallId: "code",
+        call: { id: "code/1", name },
+        state: "returned",
+        result: { content: output },
+      },
+    ]);
     rendered.rerender(childTranscript(completed));
     expect(heading()).toHaveLength(1);
     expect(heading()[0]?.textContent).toContain(target);
@@ -720,6 +731,9 @@ it.each<{
     expect(summaries).toHaveLength(1);
     expect(summaries[0]?.textContent).toContain(target);
     expect(summaries[0]?.textContent).not.toContain(output);
+    expect(
+      reopened.container.querySelector("details.evidence-raw")?.textContent,
+    ).toContain("script completed");
   },
 );
 
@@ -749,7 +763,52 @@ it("keeps retained targets when raw child arguments are clipped and reports unav
   expect(card.querySelector("summary")?.textContent).toContain("AGENTS.md");
   expect(card.textContent).toContain(i18n.t("toolNestedOutputMissing"));
   expect(card.textContent).toContain(i18n.t("toolPartialEvidence"));
+  expect(rendered.container.textContent).toContain(
+    i18n.t("toolNestedParentUnavailable"),
+  );
   expect(card.textContent).not.toContain(i18n.t("noOutput"));
+});
+
+it("shows unfinished saved nested calls under their wrapper with unavailable output", () => {
+  const rendered = render(
+    childTranscript(
+      detail({
+        status: "done",
+        transcript: [
+          {
+            kind: "assistant",
+            parts: [{ type: "toolCall", toolId: "outer", name: "codemode" }],
+          },
+          {
+            kind: "toolResult",
+            toolId: "child",
+            name: "read",
+            parentToolCallId: "outer",
+            evidenceArguments: { path: "unfinished.md" },
+            status: "unfinished",
+            isError: false,
+            outputUnavailable: true,
+          },
+          {
+            kind: "toolResult",
+            toolId: "outer",
+            name: "codemode",
+            isError: false,
+            outputPreview: "script result",
+          },
+        ],
+      }),
+    ),
+  );
+  const nested = rendered.container.querySelector('[data-tool="read"]')!;
+  expect(nested.querySelector("summary")?.textContent).toContain(
+    "unfinished.md",
+  );
+  expect(nested.textContent).toContain(i18n.t("toolNestedOutputMissing"));
+  expect(nested.textContent).toContain(i18n.t("toolState_unknown"));
+  expect(nested.querySelector("details.evidence-raw")?.textContent).toContain(
+    "script result",
+  );
 });
 
 it("does not use legacy orphan output as a requested filename or command", () => {

@@ -10,6 +10,8 @@ import {
   type WebModelSummary,
   type WebPromptDelivery,
   type WebPromptImage,
+  type WebPromptIdentity,
+  type WebPromptQueueEvidence,
   type WebSessionProjection,
   type WebSettingsPreferencesPatch,
   type WebSidebarPinTarget,
@@ -22,6 +24,8 @@ import type {
   WebWorktreeReleaseTarget,
 } from "../../../runtime/types.ts";
 import { i18n } from "../i18n.ts";
+import { createBrowserComposerDraftStorage } from "../features/composer/composer-draft-storage.ts";
+import { createComposerDraftMemory } from "../features/composer/composer-drafts.ts";
 import { sessionTitle } from "../lib/format.ts";
 import { isControlledSession } from "../lib/session-control.ts";
 import { WebApiError, WebClient } from "../protocol/client.ts";
@@ -318,6 +322,7 @@ export interface WebStoreState {
   thinkingStarts: Record<string, number>;
   thinkingDurations: Record<string, number>;
   promptAdmissionPending: boolean;
+  promptQueueEvidence: readonly WebPromptQueueEvidence[];
   promptAdmissionRecovery: PromptAdmissionRecovery | null;
   promptAdmissionResolution: PromptAdmissionResolution | null;
   restoredPromptDraft: PromptAdmissionResolution | null;
@@ -330,6 +335,7 @@ export interface WebStoreState {
 }
 
 export interface WebStoreActions {
+  getComposerDraftMemory: () => ReturnType<typeof createComposerDraftMemory>;
   setHistoryAnchor: (anchor: WebHistoryAnchor | null) => void;
   navigateToMessage: (
     anchor: WebHistoryAnchor,
@@ -426,16 +432,16 @@ export interface WebStoreActions {
     approval?: PlanImplementationApproval,
     delivery?: WebPromptDelivery,
     expectedTarget?: SessionTarget,
-  ) => Promise<boolean>;
+  ) => Promise<boolean | WebPromptIdentity>;
   checkPromptAdmissionRecovery: () => Promise<void>;
-  retryPromptAdmission: () => Promise<boolean>;
+  retryPromptAdmission: () => Promise<boolean | WebPromptIdentity>;
   sendPromptAsNew: (
     content: string,
     images?: readonly WebPromptImage[],
     approval?: PlanImplementationApproval,
     delivery?: WebPromptDelivery,
     expectedTarget?: SessionTarget,
-  ) => Promise<boolean>;
+  ) => Promise<boolean | WebPromptIdentity>;
   abandonPromptAdmission: () => void;
   acknowledgePromptAdmissionResolution: (commandId: string) => void;
   discoverCommands: () => Promise<void>;
@@ -489,6 +495,13 @@ export function createWebStore(
   dependencies: WebStoreDependencies = {},
 ) {
   const consumeEvents = dependencies.consumeEvents ?? consumeEventStream;
+  let composerDraftMemory:
+    | ReturnType<typeof createComposerDraftMemory>
+    | undefined;
+  const getComposerDraftMemory = () =>
+    (composerDraftMemory ??= createComposerDraftMemory(
+      createBrowserComposerDraftStorage(),
+    ));
   const linkParams = new URLSearchParams(window.location.search);
   const linkPath = linkParams.get("sessionPath");
   const linkId = linkParams.get("sessionId");
@@ -841,8 +854,51 @@ export function createWebStore(
         "session_switched",
         "session_created",
       ].includes(event.type);
+      // A snapshot can advance the cursor while a deletion event is in
+      // flight. The snapshot does not carry draft cleanup evidence.
+      if (
+        event.type === "session_deleted" &&
+        typeof eventSessionId === "string" &&
+        typeof detail.sessionPath === "string"
+      ) {
+        getComposerDraftMemory().deleteHeldPrompts(
+          eventSessionId,
+          detail.sessionPath,
+        );
+      }
       if (current.cursor !== null && event.sequence <= current.cursor) return;
-      set({ cursor: event.sequence });
+      const queueState =
+        event.type === "prompt_held"
+          ? "held"
+          : event.type === "prompt_blocked"
+            ? "blocked"
+            : event.type === "prompt_accepted"
+              ? "accepted"
+              : event.type === "prompt_discarded"
+                ? "discarded"
+                : undefined;
+      set({
+        cursor: event.sequence,
+        ...(queueState &&
+        detail.fromCompactionQueue === true &&
+        typeof detail.commandId === "string" &&
+        typeof eventSessionId === "string" &&
+        typeof detail.sessionPath === "string"
+          ? {
+              promptQueueEvidence: [
+                ...current.promptQueueEvidence
+                  .filter((item) => item.commandId !== detail.commandId)
+                  .slice(-127),
+                {
+                  state: queueState,
+                  commandId: detail.commandId,
+                  sessionId: eventSessionId,
+                  sessionPath: detail.sessionPath,
+                },
+              ],
+            }
+          : {}),
+      });
 
       const recovery = current.promptAdmissionRecovery;
       const recoveryCommandId = recovery?.commandId;
@@ -1066,7 +1122,13 @@ export function createWebStore(
             ),
           });
         }
-      } else if (event.type === "prompt_accepted") {
+      } else if (
+        event.type === "prompt_held" ||
+        event.type === "prompt_blocked"
+      ) {
+        if (matchesSelected && Number.isInteger(detail.pendingFollowUps))
+          set({ pendingFollowUpsReceipt: Number(detail.pendingFollowUps) });
+      } else if (event.type === "prompt_accepted" && matchesSelected) {
         const settled = terminalPromptIds.has(String(detail.commandId ?? ""));
         set({
           ...promptAcceptedLivePatch(settled, current.livePhase),
@@ -1344,6 +1406,7 @@ export function createWebStore(
     };
 
     const actions: WebStoreActions = {
+      getComposerDraftMemory,
       rememberPromptProjection(sessionId, sessionPath, pairs) {
         const current = get();
         const selected = current.snapshot?.selectedSession;
@@ -2477,6 +2540,7 @@ export function createWebStore(
             }
             return false;
           }
+          getComposerDraftMemory().deleteHeldPrompts(id, path);
           if (epoch === sessionEpoch && get().selectedPath === path) {
             ++sessionEpoch;
             thinking.resetPending();
@@ -3071,6 +3135,7 @@ export function createWebStore(
           : (get().snapshot?.selectedSession?.history?.leafEntryId ??
             get().snapshot?.selectedSession?.entries.at(-1)?.id ??
             null);
+        const identity = { sessionId, sessionPath, commandId };
         promptAdmission = {
           sessionId,
           sessionPath,
@@ -3160,7 +3225,11 @@ export function createWebStore(
             sessionId !== get().snapshot?.selectedSession?.id ||
             promptAdmissionToken !== admission
           )
-            return false;
+            return receipt.id === commandId && receipt.accepted === false
+              ? identity
+              : false;
+          if (!receipt.accepted && receipt.id !== commandId)
+            throw new Error("Prompt receipt identity mismatch");
           const settled = terminalPromptIds.has(receipt.id);
           if (promptAdmission?.commandId === commandId) promptAdmission = null;
           set({
@@ -3173,7 +3242,7 @@ export function createWebStore(
                     commandId,
                   )
                 : get().liveMessages,
-            ...(isControlledSession(get().snapshot)
+            ...(receipt.accepted && isControlledSession(get().snapshot)
               ? promptAcceptedLivePatch(settled, get().livePhase)
               : {}),
             pendingFollowUpsReceipt: isControlledSession(get().snapshot)
@@ -3186,7 +3255,7 @@ export function createWebStore(
             get().promptAdmissionRecovery?.commandId === replacement.commandId
               ? {
                   promptAdmissionRecovery: null,
-                  ...(retrying
+                  ...(retrying && receipt.accepted
                     ? {
                         promptAdmissionResolution: {
                           sessionId: replacement.sessionId,
@@ -3201,7 +3270,7 @@ export function createWebStore(
               : {}),
           });
           scheduleSnapshotRefresh(120);
-          return true;
+          return receipt.accepted ? true : identity;
         } catch (error) {
           if (
             epoch !== sessionEpoch ||
@@ -3230,8 +3299,15 @@ export function createWebStore(
                 "INVALID_PROMPT",
                 "INVALID_PROMPT_IMAGES",
               ].includes(error.code ?? ""));
+          const queueEvidence = get().promptQueueEvidence.find(
+            (entry) =>
+              entry.commandId === commandId &&
+              entry.sessionId === sessionId &&
+              entry.sessionPath === sessionPath,
+          );
           const confirmedAdmission =
-            terminalPromptIds.has(commandId) ||
+            queueEvidence?.state === "accepted" ||
+            (!queueEvidence && terminalPromptIds.has(commandId)) ||
             get().liveMessages.some(
               (entry) =>
                 entry.optimistic?.sessionId === sessionId &&
@@ -3264,6 +3340,17 @@ export function createWebStore(
               });
             }
             return true;
+          }
+          if (!knownRejection && queueEvidence) {
+            if (promptAdmission?.commandId === commandId)
+              promptAdmission = null;
+            if (
+              replacement &&
+              get().promptAdmissionRecovery?.commandId === replacement.commandId
+            )
+              set({ promptAdmissionRecovery: null });
+            scheduleSnapshotRefresh(120);
+            return identity;
           }
           if (!knownRejection && promptAdmission?.commandId === commandId) {
             const recovery = promptAdmission;
@@ -3453,7 +3540,7 @@ export function createWebStore(
           promptAdmissionRecovery: { ...recovery, phase: "submitting" },
           notice: null,
         });
-        let admitted = false;
+        let admitted: boolean | WebPromptIdentity = false;
         try {
           const approval = recovery.planRevision
             ? {
@@ -3670,6 +3757,7 @@ export function createWebStore(
       thinkingStarts: {},
       thinkingDurations: {},
       promptAdmissionPending: false,
+      promptQueueEvidence: [],
       promptAdmissionRecovery: null,
       promptAdmissionResolution: null,
       restoredPromptDraft: null,

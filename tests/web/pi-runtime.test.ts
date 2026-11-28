@@ -623,13 +623,21 @@ test("compaction-held messages preserve order and images through native admissio
   const session = promptSession("queue");
   const runtime = promptHarness(session);
   const api = runtime as unknown as PiWebRuntime;
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
   session.isCompacting = true;
   const image = {
     data: "aGVsbG8=",
     mimeType: "image/png" as const,
     name: "queued-diagram.png",
   };
-  await runtime.sendPrompt("first", { commandId: "q1", images: [image] });
+  assert.deepEqual(
+    await runtime.sendPrompt("first", { commandId: "q1", images: [image] }),
+    {
+      state: "held",
+      pendingFollowUps: 1,
+    },
+  );
   await runtime.sendPrompt("second", { commandId: "q2" });
   assert.equal(session.calls.length, 0);
   assert.deepEqual(
@@ -640,6 +648,10 @@ test("compaction-held messages preserve order and images through native admissio
   await new Promise(setImmediate);
   assert.equal(session.calls.length, 1);
   assert.equal(session.calls[0]!.content, "first");
+  assert.equal(
+    events.some((event) => event.type === "prompt_accepted"),
+    false,
+  );
   assert.deepEqual(
     (session.calls[0]!.options as { images: unknown[] }).images,
     [{ type: "image", ...image }],
@@ -660,8 +672,82 @@ test("compaction-held messages preserve order and images through native admissio
     api.getSessionExecution("queue", "current:queue").queuedMessages,
     ["second"],
   );
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "prompt_accepted")
+      .map((event) => [
+        event.detail?.commandId,
+        event.detail?.sessionId,
+        event.detail?.sessionPath,
+      ]),
+    [
+      ["q1", "queue", "current:queue"],
+      ["q2", "queue", "current:queue"],
+    ],
+  );
   for (const call of session.calls) call.run.resolve();
   await Promise.all(runtime.promptOperations);
+});
+
+test("shutting down a runtime with a held prompt never dispatches it or claims Pi acceptance", async () => {
+  const session = promptSession("restart");
+  const runtime = promptHarness(session);
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  session.isCompacting = true;
+  assert.equal(
+    (await runtime.sendPrompt("keep my draft", { commandId: "held" })).state,
+    "held",
+  );
+  await runtime.dispose();
+  finishCompaction(runtime, session);
+  await new Promise(setImmediate);
+  assert.deepEqual(session.calls, []);
+  assert.equal(
+    events.some((event) => event.type === "prompt_accepted"),
+    false,
+  );
+  const restarted = promptHarness(
+    promptSession("restart"),
+  ) as unknown as PiWebRuntime;
+  assert.equal(
+    restarted.getSessionExecution("restart", "current:restart")
+      .pendingFollowUps,
+    0,
+  );
+});
+
+test("streaming message updates project their content once during a traced prompt", () => {
+  const session = promptSession("stream");
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "streaming",
+    sessionId: "stream",
+    startedAt: 1,
+    started: true,
+    queued: false,
+  };
+  let contentReads = 0;
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  (
+    runtime as unknown as { projectEvent(session: object, event: object): void }
+  ).projectEvent(session, {
+    type: "message_update",
+    message: {
+      role: "assistant",
+      get content() {
+        contentReads++;
+        return [{ type: "text", text: "streamed answer" }];
+      },
+    },
+  });
+  assert.equal(contentReads, 1);
+  assert.equal(events[0]?.type, "message_update");
+  assert.equal(
+    (events[0]?.detail?.message as { content?: string }).content,
+    "streamed answer",
+  );
 });
 
 test("compaction and admission failure retain queued text until explicit retry or clear", async () => {
@@ -694,6 +780,37 @@ test("compaction and admission failure retain queued text until explicit retry o
   assert.equal(
     events.some((event) => event.type === "prompt_failed"),
     false,
+  );
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "prompt_blocked")
+      .map((event) => event.detail),
+    Array.from({ length: 2 }, () => ({
+      ...identity,
+      commandId: "retry-1",
+      fromCompactionQueue: true,
+    })),
+  );
+  const heldWhileBlocked = await runtime.sendPrompt("second draft", {
+    commandId: "retry-2",
+  });
+  assert.equal(heldWhileBlocked.state, "blocked");
+  api.updatePromptQueue({
+    ...identity,
+    action: "discard",
+    commandId: "retry-2",
+  });
+  assert.deepEqual(
+    api.getSessionExecution(identity.sessionId, identity.sessionPath)
+      .queuedMessages,
+    ["retained draft"],
+  );
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "prompt_discarded" &&
+        event.detail?.commandId === "retry-2",
+    ),
   );
   api.updatePromptQueue({ ...identity, action: "retry" });
   await new Promise(setImmediate);
@@ -841,7 +958,7 @@ test("compaction is busy, accepts a held prompt, and projects native outcomes wi
     await runtime.sendPrompt("extra", {
       expectedSessionId: "compacting-session",
     }),
-    { pendingFollowUps: 1 },
+    { pendingFollowUps: 1, state: "held" },
   );
   api.updatePromptQueue({
     sessionId: "compacting-session",
@@ -2119,6 +2236,58 @@ test("later prompt failures retain their command and Session correlation", async
       error: "provider failed",
     },
   });
+});
+
+test("turn cancellation publishes blocked delivery for compaction-held drafts", async () => {
+  const session = promptSession("cancelling-compaction");
+  const runtime = promptHarness(session);
+  const api = runtime as unknown as PiWebRuntime;
+  const sessionId = "cancelling-compaction";
+  const sessionPath = "current:cancelling-compaction";
+  const turn = { sessionId, commandId: "active-turn", epoch: 1 };
+  runtime.activePromptTrace = {
+    ...turn,
+    startedAt: 1,
+    started: true,
+    queued: false,
+    outcome: "cancelled",
+  };
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  session.isCompacting = true;
+  assert.equal(
+    (await runtime.sendPrompt("unsent draft", { commandId: "held-draft" }))
+      .state,
+    "held",
+  );
+  session.abort = async () => {
+    finishCompaction(runtime, session, { aborted: true });
+    (
+      runtime as unknown as {
+        projectEvent(session: object, event: { type: string }): void;
+      }
+    ).projectEvent(session, { type: "agent_settled" });
+  };
+
+  assert.equal((await runtime.cancelTurn(turn)).state, "accepted");
+  assert.equal(
+    api.getSessionExecution(sessionId, sessionPath).promptQueueBlocked,
+    true,
+  );
+  assert.deepEqual(
+    events
+      .filter(({ type }) => type === "prompt_blocked")
+      .map(({ detail }) => detail),
+    [
+      {
+        sessionId,
+        sessionPath,
+        commandId: "held-draft",
+        fromCompactionQueue: true,
+      },
+    ],
+  );
+  assert.equal(session.calls.length, 0);
 });
 
 test("turn cancellation reports uncertainty without assistant terminal evidence", async () => {

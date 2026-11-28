@@ -21,7 +21,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createPiBuiltinExtensionFactories } from "../../../extensions/shared/pi-builtin-extensions.ts";
 import { Type } from "typebox";
-import { agentCallKey } from "../../../extensions/workflows/journal.ts";
+import {
+  agentCallKey,
+  createReplayCache,
+} from "../../../extensions/workflows/journal.ts";
 import {
   beginProcessReplayWorkspaceLease,
   createReplayFilesystemBoundary,
@@ -126,18 +129,15 @@ function replayKey(cwd: string, resourcePath: string, projectTrusted = true) {
 test("only provably read-only agent calls are replay-safe", () => {
   assert.equal(
     isReplaySafeAgentCall({
-      tools: ["read", "grep", "find", "ls", "git_show"],
+      tools: ["read", "grep", "find", "ls"],
     }),
     true,
   );
   assert.equal(isReplaySafeAgentCall({ tools: ["read"] }), true);
-  // The read-only git tools are side-effect-free and replay-safe.
-  assert.equal(
-    isReplaySafeAgentCall({
-      tools: ["read", "git_show", "git_diff", "git_log"],
-    }),
-    true,
-  );
+  // Git tools observe the index or refs outside the replay fingerprint.
+  for (const tool of ["git_show", "git_diff", "git_log"]) {
+    assert.equal(isReplaySafeAgentCall({ tools: ["read", tool] }), false);
+  }
 
   // No type/no allowlist inherits the normal unrestricted child capability set.
   assert.equal(isReplaySafeAgentCall({}), false);
@@ -161,19 +161,12 @@ test("only provably read-only agent calls are replay-safe", () => {
 });
 
 function replayToolSource(name: string) {
-  return name.startsWith("git_")
-    ? {
-        path: "/fixture/extensions/git-read/index.ts",
-        source: "fixture-package",
-        scope: "user" as const,
-        origin: "package" as const,
-      }
-    : {
-        path: `<builtin:${name}>`,
-        source: "builtin",
-        scope: "temporary" as const,
-        origin: "top-level" as const,
-      };
+  return {
+    path: `builtin:${name}`,
+    source: "builtin",
+    scope: "temporary" as const,
+    origin: "top-level" as const,
+  };
 }
 
 function filesystemTool(name: string, observe: (path: string) => string) {
@@ -199,7 +192,7 @@ test("replay filesystem boundary permits repo-local observers and rejects escapi
     writeFileSync(outsideFile, "external one\n");
     const observations: string[] = [];
     const definitions = new Map(
-      ["read", "grep", "find", "ls", "git_show"].map((name) => {
+      ["read", "grep", "find", "ls"].map((name) => {
         const definition = filesystemTool(name, (pathname) => {
           observations.push(pathname);
           return readFileSync(path.resolve(cwd, pathname), "utf8");
@@ -409,6 +402,29 @@ test("workspace guard rejects replay and journaling across unsafe overlap", () =
   laterReader.end();
   laterReader.end();
 });
+
+for (const writerFinishes of [false, true]) {
+  test(`cache lookup after loading resources rejects an unsafe call that ${writerFinishes ? "already finished" : "is still running"}`, async () => {
+    const guard = createReplayWorkspaceGuard();
+    const cache = createReplayCache({
+      version: 1,
+      entries: [{ key: "inspect", output: "previous observation" }],
+    });
+    const resources = Promise.withResolvers<void>();
+    const reader = guard.begin(true);
+    assert.equal(reader.canReplay, true);
+    const lookup = resources.promise.then(() =>
+      reader.canReplay ? cache.take("inspect") : undefined,
+    );
+    const writer = guard.begin(false);
+    if (writerFinishes) writer.end();
+    resources.resolve();
+    assert.equal(await lookup, undefined);
+    assert.equal(cache.replayed, 0);
+    writer.end();
+    reader.end();
+  });
+}
 
 test("process-wide guard coordinates overlapping calls from different workflow runs", () => {
   const firstRunReader = beginProcessReplayWorkspaceLease(true);

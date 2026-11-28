@@ -718,6 +718,7 @@ test("a pre-aborted startup does not create or bind a child session", async () =
   assert.equal(outcome.ok, false);
   assert.equal(outcome.aborted, true);
   assert.equal(factoryCalls, 0);
+  assert.equal(outcome.quiescenceError, undefined);
   assert.equal(harness.bindings(), 0);
   assert.equal(harness.prompts(), 0);
   assert.equal(harness.disposals(), 0);
@@ -747,6 +748,7 @@ test("cancel during session creation returns before a late session is disposed",
 
   assert.equal(outcome.ok, false);
   assert.equal(outcome.aborted, true);
+  assert.match(outcome.quiescenceError ?? "", /session creation.*pending/);
   assert.equal(harness.bindings(), 0);
   assert.equal(harness.prompts(), 0);
   await settleWithin(harness.firstDisposal);
@@ -812,6 +814,7 @@ test("cancel during extension binding owns the session and observes a late failu
   assert.equal(outcome.ok, false);
   assert.equal(outcome.aborted, true);
   assert.equal(harness.bindings(), 1);
+  assert.match(outcome.quiescenceError ?? "", /extension binding.*pending/);
   assert.equal(harness.prompts(), 0);
   assert.equal(harness.aborts(), 1);
   assert.equal(harness.disposals(), 1);
@@ -903,6 +906,7 @@ test("cancel during a hanging tool ignores late events and progress writers", as
   });
   assert.equal(progress, settledProgress);
   assert.equal(outcome.aborted, true);
+  assert.match(outcome.quiescenceError ?? "", /prompt did not settle/i);
   assert.equal(
     outcome.transcript.some((entry) => entry.finishedAt !== undefined),
     false,

@@ -2,6 +2,7 @@ import {
   WEB_PROMPT_IMAGE_MAX_BYTES,
   WEB_PROMPT_IMAGE_MAX_COUNT,
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
+  type WebPromptIdentity,
 } from "../../../../protocol/types.ts";
 import type { ComposerDraft, ComposerDraftStorage } from "./composer-drafts.ts";
 import type { StagedPromptFile } from "./file-attachments.ts";
@@ -26,8 +27,31 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export function heldPromptIdentity(key: string): WebPromptIdentity | undefined {
+  if (key.length > 8192) return undefined;
+  try {
+    const owner: unknown = JSON.parse(key);
+    if (Array.isArray(owner) && owner.length === 4 && owner[0] === "held") {
+      const [, sessionId, sessionPath, commandId] = owner;
+      if (
+        typeof sessionId === "string" &&
+        sessionId.length > 0 &&
+        sessionId.length <= 256 &&
+        typeof sessionPath === "string" &&
+        sessionPath.length > 0 &&
+        sessionPath.length <= 4096 &&
+        typeof commandId === "string" &&
+        commandId.length > 0 &&
+        commandId.length <= 128
+      )
+        return { sessionId, sessionPath, commandId };
+    }
+  } catch {}
+}
+
 function validOwner(key: string) {
   if (key.length > 8192) return false;
+  if (heldPromptIdentity(key)) return true;
   try {
     const owner: unknown = JSON.parse(key);
     return (

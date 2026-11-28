@@ -1822,6 +1822,11 @@ const resources = {
       draftStorageInvalid:
         "Some saved draft content could not be restored. Check your message and attachments.",
       draftStorageRetry: "Retry saving draft",
+      queuedDraftRecoverable:
+        "Pi has not confirmed this queued message. You can restore it and check the conversation before sending again.",
+      restoreQueuedDraft: "Restore queued draft",
+      toolNestedParentUnavailable:
+        "The parent tool call is outside the available transcript.",
       workbarBackToChat: "Back to chat",
       workbarCollapseTools: "Collapse tools",
       workbarEndTerminal: "Close {{name}} and end its process",
@@ -3868,6 +3873,10 @@ const resources = {
         "草稿未能保存到此设备，请保持页面打开或复制消息。",
       draftStorageInvalid: "部分保存的草稿内容无法恢复，请检查消息和附件。",
       draftStorageRetry: "重试保存草稿",
+      queuedDraftRecoverable:
+        "Pi 尚未确认接纳这条排队消息。你可以恢复草稿，查看对话后再决定是否重发。",
+      restoreQueuedDraft: "恢复排队草稿",
+      toolNestedParentUnavailable: "当前记录中看不到这次调用所属的父工具调用。",
       workbarBackToChat: "返回聊天",
       workbarCollapseTools: "收起工具栏",
       workbarEndTerminal: "关闭 {{name}} 并结束进程",

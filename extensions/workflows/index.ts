@@ -214,7 +214,6 @@ import {
   type WorkflowSettledRunRetentionOptions,
 } from "./retention.ts";
 import {
-  type AgentOutcome,
   createWorkflowResources,
   runAgent,
   type ThinkingLevel,
@@ -553,16 +552,6 @@ interface ScriptAgentResult {
   /** Present only for the deprecated model self-attestation compatibility path. */
   acceptanceWarning?: string;
   error?: string;
-  /** Internal runtime receipt; never persisted or shown to the model. */
-  retainAdmissionLease?: true;
-}
-
-function admissionLeaseReceipt(
-  outcome: Pick<AgentOutcome, "retainAdmissionLease">,
-) {
-  return outcome.retainAdmissionLease === true
-    ? ({ retainAdmissionLease: true } as const)
-    : {};
 }
 
 interface AgentCallOptions {
@@ -706,6 +695,7 @@ export interface ActiveWorkflowRunLifecycle {
 interface WorkflowLifecycleTestHooks {
   readonly persistWorkflow?: typeof persistWorkflowJson;
   readonly reclaimWorktree?: typeof reclaimWorktree;
+  readonly shutdownTimeoutMs?: number;
   readonly onRunStarted?: (run: ActiveWorkflowRunLifecycle) => void;
 }
 
@@ -1777,7 +1767,7 @@ export default function workflows(
           );
         }
 
-        const childTools = inheritedChildToolAllowlist(
+        const { tools: childTools, toolSources } = inheritedChildToolAllowlist(
           pi.getActiveTools(),
           agentType?.tools,
           {
@@ -1953,6 +1943,7 @@ export default function workflows(
               model: model ? `${model.provider}/${model.id}` : undefined,
               effort: thinkingLevel,
               acceptance: acceptanceContract,
+              toolSources: [...toolSources],
               replayIdentity: identity,
             },
           });
@@ -1987,8 +1978,8 @@ export default function workflows(
             record.timingArtifactState = "failed";
           }
         };
-        // Checked before controller.schedule on purpose: schedule() charges the
-        // run's agent-call budget on entry, and a replayed call runs no agent.
+        // Check the lease after resource loading and immediately before take().
+        // A replay hit bypasses schedule() and does not charge the agent budget.
         const cached =
           callKey && replayLease.canReplay ? replay?.take(callKey) : undefined;
         if (cached) {
@@ -2097,7 +2088,7 @@ export default function workflows(
         }
 
         return controller
-          .schedule(async (runSignal) => {
+          .schedule(async (runSignal, retainAdmissionLease) => {
             const claimedAt = Date.now();
             record.invocation = transitionInvocation(record.invocation!, {
               status: "claimed",
@@ -2143,6 +2134,7 @@ export default function workflows(
             const agentCwd = worktree?.path ?? requestedCwd;
             record.effectiveCwd = replayIdentity?.cwd ?? agentCwd;
             record.isolation = worktree ? "worktree" : "shared";
+            let quiescenceError: string | undefined;
 
             // Inside the try, not before it: building resources can throw
             // (bad settings, an unreadable skills dir), and a throw out here
@@ -2185,8 +2177,9 @@ export default function workflows(
               if (runSettled) {
                 throw new Error("Workflow was settled before agent creation");
               }
-              const runChild = (sessionManager?: SessionManager) =>
-                runAgent({
+              const runChild = async (sessionManager?: SessionManager) => {
+                quiescenceError = "child execution did not report settlement";
+                const outcome = await runAgent({
                   prompt,
                   schema: effectiveSchema,
                   model,
@@ -2200,7 +2193,10 @@ export default function workflows(
                   ...(sessionManager ? { sessionManager } : {}),
                   modelRegistry: ctx.modelRegistry,
                   tools: childTools,
+                  toolSources,
                   inheritedTools: agentType?.tools === undefined,
+                  shutdownTimeoutMs:
+                    workflowLifecycleTestHooks?.shutdownTimeoutMs,
                   ...(testAgentSessionFactory
                     ? { sessionFactory: testAgentSessionFactory }
                     : {}),
@@ -2233,6 +2229,11 @@ export default function workflows(
                     emit(true, false);
                   },
                 });
+                quiescenceError = outcome.quiescenceError;
+                if (outcome.retainAdmissionLease)
+                  retainAdmissionLease(outcome.lateSessionQuiescence);
+                return outcome;
+              };
               const outcome = operatorKey
                 ? await operators.activate(
                     {
@@ -2250,7 +2251,6 @@ export default function workflows(
                   ok: false,
                   output: "",
                   error: "Agent completed after workflow settlement",
-                  ...admissionLeaseReceipt(outcome),
                 };
               }
               record.executionOutcome = outcome.retainAdmissionLease
@@ -2377,7 +2377,6 @@ export default function workflows(
                   ? { acceptanceWarning: judged.acceptanceWarning }
                   : {}),
                 ...(record.error !== undefined ? { error: record.error } : {}),
-                ...admissionLeaseReceipt(outcome),
               };
             } finally {
               // Reclaim as this agent settles, not at run end: a pipeline can
@@ -2385,20 +2384,24 @@ export default function workflows(
               // finished agent into a failed one, so failures only downgrade
               // what we report about the worktree.
               if (worktree) {
-                const prepared = prepareWorktreeHandoff({
-                  runDir,
-                  runId: details.runId,
-                  agentIndex: record.index,
-                  agentLabel: record.label,
-                  repoCwd: requestedCwd,
-                  worktree,
-                });
+                const prepared = quiescenceError
+                  ? undefined
+                  : prepareWorktreeHandoff({
+                      runDir,
+                      runId: details.runId,
+                      agentIndex: record.index,
+                      agentLabel: record.label,
+                      repoCwd: requestedCwd,
+                      worktree,
+                    });
                 let cleanup: WorktreeCleanup;
-                if (!prepared.ok) {
+                if (!prepared?.ok) {
                   cleanup = {
                     removed: false,
                     branchDeleted: false,
-                    reason: `handoff capture failed; preserved checkout: ${prepared.reason}`,
+                    reason: prepared
+                      ? `handoff capture failed; preserved checkout: ${prepared.reason}`
+                      : `Child quiescence unconfirmed; preserved checkout: ${quiescenceError}`,
                     branch: worktree.branch,
                     ...(worktree.baseSha ? { baseSha: worktree.baseSha } : {}),
                     detached: false,

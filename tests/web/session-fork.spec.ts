@@ -518,7 +518,8 @@ it("edits an older saved question, confirms its native child, and sends the prep
         thinkingStarts: {},
         thinkingDurations: {},
         scrollToBottom: 0,
-        onResend: (content) => store.getState().actions.sendPrompt(content),
+        onResend: async (content) =>
+          Boolean(await store.getState().actions.sendPrompt(content)),
         onEdit: edit,
         onRegenerate: store.getState().actions.regenerateMessage,
         forkAvailable: true,
@@ -769,7 +770,8 @@ it("forks the exact message into a new empty composer, preserves the original dr
           thinkingStarts: {},
           thinkingDurations: {},
           scrollToBottom: state.scrollToBottom,
-          onResend: (content) => state.actions.sendPrompt(content),
+          onResend: async (content) =>
+            Boolean(await state.actions.sendPrompt(content)),
           onFork: state.actions.forkMessage,
           forkAvailable: true,
           forkPending: state.sessionForkPending,

@@ -13,6 +13,7 @@ import type {
   AgentToolRenderer,
 } from "./agent-tool-renderer.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
+import type { ToolArgumentPreview } from "./tool-arguments.ts";
 import {
   parseToolArgsPreview,
   renderPaddedToolActivityLine,
@@ -39,13 +40,16 @@ export type AgentTranscriptItem =
       readonly kind: "assistant";
       readonly parts: ReadonlyArray<AgentTranscriptPart>;
     }
-  | {
+  | (ToolArgumentPreview & {
       readonly kind: "toolResult";
       readonly toolId: string;
       readonly name: string;
       readonly isError: boolean;
       readonly outputPreview?: string;
-    };
+      readonly parentToolCallId?: string;
+      readonly status?: "ok" | "error" | "unfinished";
+      readonly outputUnavailable?: boolean;
+    });
 
 export interface AgentTranscriptDocument {
   readonly items: ReadonlyArray<AgentTranscriptItem>;
@@ -302,10 +306,10 @@ function renderToolResultItem(
   if (paired) return [];
   return renderToolBlock(
     theme,
-    item.isError ? "error" : "ok",
+    item.status === "unfinished" ? "pending" : item.isError ? "error" : "ok",
     item.toolId,
     item.name,
-    undefined,
+    item.argsPreview,
     item.outputPreview,
     width,
     now,

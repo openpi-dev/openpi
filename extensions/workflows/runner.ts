@@ -26,6 +26,7 @@ import { createAgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import {
   bindChildSessionExtensions,
   childToolPolicy,
+  type ChildToolSources,
   createChildResources,
   shutdownAndDisposeChildSession,
 } from "../shared/child-session.ts";
@@ -85,6 +86,10 @@ export interface AgentOutcome {
   timing?: ReturnType<ExecutionTimingLedger["snapshot"]>;
   /** Set when child shutdown did not provide trustworthy terminal evidence. */
   retainAdmissionLease?: true;
+  /** Resolves true when a pending factory no longer owns a live child. */
+  lateSessionQuiescence?: Promise<boolean>;
+  /** Explains why the child may still access its working directory. */
+  quiescenceError?: string;
 }
 
 export interface AgentProgress {
@@ -112,6 +117,7 @@ export interface RunAgentOptions {
   modelRegistry: ExtensionContext["modelRegistry"];
   /** Agent Type allowlist; childToolPolicy can only narrow capabilities. */
   tools?: readonly string[];
+  toolSources?: ChildToolSources;
   /**
    * True when `tools` was projected from the parent's live surface. A name the
    * child cannot expose then narrows the child instead of failing the run.
@@ -273,6 +279,9 @@ export async function runAgent(
   let settled = false;
   let customTools: ToolDefinition[] | undefined;
   let session: AgentSession | undefined;
+  let creationPending = false;
+  let lateSessionQuiescence: Promise<boolean> | undefined;
+  let bindingPending = false;
   let unsubscribeToolGuards: (() => void) | undefined;
   let aborted = false;
   let abortOperation: Promise<unknown> | undefined;
@@ -338,25 +347,35 @@ export async function runAgent(
       ...(customTools ? { customTools } : {}),
       ...childToolPolicy(childTools),
     });
+    creationPending = true;
     // Promise.race cannot cancel the factory. If cancellation wins, retain
     // ownership of a late session and dispose it without re-entering startup.
-    void sessionCreation
+    lateSessionQuiescence = sessionCreation
       .then(
-        ({ session: lateSession }) => {
-          if (!aborted) return;
-          return shutdownAndDisposeChildSession(lateSession, {
+        async ({ session: lateSession }) => {
+          if (!aborted) return false;
+          const cleanup = await shutdownAndDisposeChildSession(lateSession, {
             abort: true,
             timeoutMs: options.shutdownTimeoutMs,
           });
+          return cleanup.ok;
         },
-        () => undefined,
+        () => {
+          creationPending = false;
+          return true;
+        },
       )
-      .catch(() => {});
+      .catch(() => false);
     ({ session } = await Promise.race([sessionCreation, abortRace]));
+    creationPending = false;
     if (aborted) throw abortError();
+    bindingPending = true;
     await Promise.race([
       bindChildSessionExtensions(session, childTools, {
         tolerateInheritedMisses: options.inheritedTools === true,
+        toolSources: options.toolSources,
+      }).finally(() => {
+        bindingPending = false;
       }),
       abortRace,
     ]);
@@ -380,8 +399,20 @@ export async function runAgent(
         })
       : undefined;
     const cleanupError = cleanup?.errors.join("; ");
-    const retainAdmissionLease =
-      cleanup !== undefined && (!cleanup.ok || cleanup.timedOut);
+    const quiescenceError =
+      cleanupError ||
+      (creationPending
+        ? "child session creation is still pending"
+        : bindingPending
+          ? "child extension binding is still pending"
+          : undefined);
+    const uncertainty = quiescenceError
+      ? {
+          retainAdmissionLease: true as const,
+          quiescenceError,
+          ...(creationPending ? { lateSessionQuiescence } : {}),
+        }
+      : {};
     if (aborted) {
       return {
         ok: false,
@@ -394,8 +425,8 @@ export async function runAgent(
         model: options.model?.id,
         contextWindow: options.model?.contextWindow,
         transcript: [],
-        timing: timingOutcome(retainAdmissionLease ? "uncertain" : "cancelled"),
-        ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
+        timing: timingOutcome(quiescenceError ? "uncertain" : "cancelled"),
+        ...uncertainty,
       };
     }
     return {
@@ -407,8 +438,8 @@ export async function runAgent(
       model: options.model?.id,
       contextWindow: options.model?.contextWindow,
       transcript: [],
-      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "failure"),
-      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
+      timing: timingOutcome(quiescenceError ? "uncertain" : "failure"),
+      ...uncertainty,
     };
   }
 
@@ -597,7 +628,7 @@ export async function runAgent(
   let output = "";
   let transcript: TranscriptEntry[] = [];
   let cleanupErrors: string[] = [];
-  let retainAdmissionLease = false;
+  let promptPending = false;
   try {
     // Operator reuse may restore messages before this activation subscribes.
     // Hydrate both bounded projections once; ordinary progress never rescans it.
@@ -608,8 +639,9 @@ export async function runAgent(
       timing.promptStarted();
       // Pi owns transport liveness and retries. Quiet model output is not
       // evidence of a stalled request (thinking and retry backoff can be silent).
-      await Promise.race([
-        childSession.prompt(buildWorkflowAgentPrompt(options.prompt), {
+      const prompt = childSession.prompt(
+        buildWorkflowAgentPrompt(options.prompt),
+        {
           preflightResult: (accepted) => {
             if (accepted && aborted) {
               // Pi invokes this immediately before entering the provider loop.
@@ -618,6 +650,12 @@ export async function runAgent(
               throw abortError();
             }
           },
+        },
+      );
+      promptPending = true;
+      await Promise.race([
+        prompt.finally(() => {
+          promptPending = false;
         }),
         abortRace,
         projectionFailureRace,
@@ -658,13 +696,16 @@ export async function runAgent(
       timeoutMs: options.shutdownTimeoutMs,
     });
     cleanupErrors = cleanup.errors;
-    retainAdmissionLease = !cleanup.ok || cleanup.timedOut;
   }
 
+  if (promptPending) cleanupErrors.push("Child prompt did not settle");
   const cleanupError =
     cleanupErrors.length > 0
       ? `Cleanup failed: ${cleanupErrors.join("; ")}`
       : undefined;
+  const uncertainty = cleanupError
+    ? { retainAdmissionLease: true as const, quiescenceError: cleanupError }
+    : {};
 
   if (aborted || assistantSettlement?.stopReason === "aborted") {
     return {
@@ -679,8 +720,8 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
-      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "cancelled"),
-      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
+      timing: timingOutcome(cleanupError ? "uncertain" : "cancelled"),
+      ...uncertainty,
     };
   }
 
@@ -698,8 +739,8 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
-      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "failure"),
-      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
+      timing: timingOutcome(cleanupError ? "uncertain" : "failure"),
+      ...uncertainty,
     };
   }
 
@@ -714,8 +755,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
-      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "failure"),
-      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
+      timing: timingOutcome("failure"),
     };
   }
 
@@ -730,8 +770,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
-      timing: timingOutcome(retainAdmissionLease ? "uncertain" : "failure"),
-      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
+      timing: timingOutcome("failure"),
     };
   }
 

@@ -58,12 +58,12 @@ import {
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
-import { projectMessage, projectAssistantError, jsonByteLength, boundedText, WEB_MAX_TEXT, WEB_PROMPT_MAX_TEXT_LENGTH, WEB_PROMPT_IMAGE_MAX_BASE64_CHARS, WEB_PROMPT_IMAGE_MAX_BYTES, WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES, WEB_PROMPT_IMAGE_MAX_COUNT, type WebPromptImage } from "../protocol/types.ts";
+import { projectMessage, projectAssistantError, jsonByteLength, boundedText, WEB_MAX_TEXT, WEB_PROMPT_MAX_TEXT_LENGTH, WEB_PROMPT_IMAGE_MAX_BASE64_CHARS, WEB_PROMPT_IMAGE_MAX_BYTES, WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES, WEB_PROMPT_IMAGE_MAX_COUNT, type WebPromptImage, type WebPromptQueueAction } from "../protocol/types.ts";
 import { sourceReferenceTokens } from "../protocol/session-sources.ts";
 import { WEB_MESSAGE_RERUN } from "../protocol/message-rerun.ts";
 import { WEB_SESSION_FORK, readSessionFork, type WebSessionForkMetadata, type WebSessionForkSnapshot, type WebSessionForkToolBoundary } from "../protocol/session-fork.ts";
 import { LIVE_TOOL_LIMIT, type LiveToolEvidence } from "../protocol/evidence.ts";
-import { elapsed, traceWeb } from "../trace.ts";
+import { elapsed, traceWeb, webTraceEnabled } from "../trace.ts";
 import { WEB_TURN_TIMING_ENTRY, readSessionTurnEvidence, readTurnTiming, type WebTurnTiming } from "../protocol/turn-timing.ts";
 import {
   applyHttpProxySettings,
@@ -257,6 +257,12 @@ function inspectSavedWebSession(path: string, id: string, directory: string, pur
   }
 }
 
+interface CompactionPromptQueue {
+  items: Array<{ content: string; options: WebPromptOptions }>;
+  draining: boolean;
+  blocked: boolean;
+}
+
 export class PiWebRuntime implements WebRuntimeController {
   private runtime: AgentSessionRuntime;
   private unsubscribeSession?: () => void;
@@ -304,11 +310,7 @@ export class PiWebRuntime implements WebRuntimeController {
     startedAt?: number;
     clock?: number;
   }>;
-  private compactionQueues?: Map<AgentSessionRuntime, {
-    items: Array<{ content: string; options: WebPromptOptions }>;
-    draining: boolean;
-    blocked: boolean;
-  }>;
+  private compactionQueues?: Map<AgentSessionRuntime, CompactionPromptQueue>;
   private manualCompactionOwner?: AgentSessionRuntime;
   private nextTurnEpoch = 0;
   private readonly terminalTurnKeys = new Set<string>();
@@ -548,7 +550,7 @@ export class PiWebRuntime implements WebRuntimeController {
     if (event.type === "compaction_end") {
       for (const [owner, queue] of this.compactionQueues ?? []) {
         if (owner.session !== session) continue;
-        if (event.aborted || event.errorMessage) queue.blocked = true;
+        if (event.aborted || event.errorMessage) this.blockCompactionQueue(queue);
         else queueMicrotask(() => void this.drainCompactionQueue(owner));
       }
     }
@@ -570,7 +572,27 @@ export class PiWebRuntime implements WebRuntimeController {
     queue.items.push(item);
     this.emit("session_progress", { sessionId: owner.session.sessionManager.getSessionId() });
     if (!owner.session.isCompacting) queueMicrotask(() => void this.drainCompactionQueue(owner));
-    return { pendingFollowUps: owner.session.getFollowUpMessages().length + queue.items.length };
+    return {
+      state: queue.blocked ? "blocked" as const : "held" as const,
+      pendingFollowUps: owner.session.getFollowUpMessages().length + queue.items.length,
+    };
+  }
+
+  private emitCompactionDelivery(type: "prompt_held" | "prompt_blocked" | "prompt_accepted" | "prompt_discarded", options: WebPromptOptions, detail?: Record<string, unknown>) {
+    if (!options.commandId) return;
+    this.emit(type, {
+      commandId: options.commandId,
+      sessionId: options.expectedSessionId,
+      sessionPath: options.expectedSessionPath,
+      fromCompactionQueue: true,
+      ...detail,
+    });
+  }
+
+  private blockCompactionQueue(queue: CompactionPromptQueue) {
+    if (queue.blocked) return;
+    queue.blocked = true;
+    for (const item of queue.items) this.emitCompactionDelivery("prompt_blocked", item.options);
   }
 
   private async drainCompactionQueue(owner: AgentSessionRuntime) {
@@ -580,15 +602,17 @@ export class PiWebRuntime implements WebRuntimeController {
     try {
       while (queue.items.length && !this.disposed && !queue.blocked && !owner.session.isCompacting) {
         const item = queue.items[0]!;
+        let receipt: WebPromptAdmissionReceipt;
         try {
-          await this.dispatchPrompt(owner, item.content, item.options, true);
+          receipt = await this.dispatchPrompt(owner, item.content, item.options, true);
         } catch {
           // Acceptance into this queue is not model admission. Retain the
           // original text/images for explicit retry after a delivery failure.
-          queue.blocked = true;
+          this.blockCompactionQueue(queue);
           break;
         }
-        if (queue.items[0] === item) queue.items.shift();
+        queue.items.shift();
+        this.emitCompactionDelivery("prompt_accepted", item.options, { ...receipt, pendingFollowUps: receipt.pendingFollowUps + queue.items.length });
       }
     } finally {
       queue.draining = false;
@@ -600,7 +624,7 @@ export class PiWebRuntime implements WebRuntimeController {
     }
   }
 
-  updatePromptQueue(request: { sessionId: string; sessionPath: string; action: "retry" | "clear" }) {
+  updatePromptQueue(request: { sessionId: string; sessionPath: string } & WebPromptQueueAction) {
     this.assertActive();
     if (!matchesSessionIdentity(this.runtime.session.sessionManager, { expectedSessionId: request.sessionId, expectedSessionPath: request.sessionPath }))
       throw new WebRuntimeRequestError("Only the active Web session accepts queue changes", "SESSION_CONFLICT", 409);
@@ -608,11 +632,24 @@ export class PiWebRuntime implements WebRuntimeController {
     const queue = this.compactionQueues?.get(owner);
     if (queue?.draining) throw new WebRuntimeRequestError("A queued message is being admitted. Retry shortly.", "SESSION_CONFLICT", 409);
     if (request.action === "retry") {
-      if (queue) queue.blocked = false;
+      if (queue?.blocked) {
+        queue.blocked = false;
+        for (const item of queue.items) this.emitCompactionDelivery("prompt_held", item.options);
+      }
       queueMicrotask(() => void this.drainCompactionQueue(owner));
+    } else if (request.action === "discard") {
+      const index = queue?.items.findIndex((item) => item.options.commandId === request.commandId) ?? -1;
+      if (!queue?.blocked || index < 0)
+        throw new WebRuntimeRequestError("This draft is no longer in the blocked queue", "SESSION_CONFLICT", 409);
+      const [item] = queue.items.splice(index, 1);
+      this.emitCompactionDelivery("prompt_discarded", item!.options);
+      if (!queue.items.length) {
+        this.compactionQueues?.delete(owner);
+        this.releaseRuntimeReference(owner);
+      }
     } else {
       for (const item of queue?.items ?? [])
-        this.emit("prompt_discarded", { commandId: item.options.commandId, sessionId: request.sessionId });
+        this.emitCompactionDelivery("prompt_discarded", item.options);
       if (queue) {
         this.compactionQueues?.delete(owner);
         this.releaseRuntimeReference(owner);
@@ -708,7 +745,7 @@ export class PiWebRuntime implements WebRuntimeController {
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       const held = this.compactionQueues?.get(this.runtime);
-      if (held) held.blocked = true;
+      if (held) this.blockCompactionQueue(held);
       const abortOperation = this.runtime.session.abort();
       if (!this.terminalTurnKeys.has(key)) this.turnAbortOperations.set(key, abortOperation);
       void abortOperation.catch(() => {
@@ -2762,16 +2799,13 @@ export class PiWebRuntime implements WebRuntimeController {
       }
     }
     const promptTrace = this.activePromptTrace;
-    if (promptTrace) {
+    if (promptTrace && webTraceEnabled && event.type !== "message_update") {
       const eventDetail: Record<string, unknown> = {
         commandId: promptTrace.commandId,
         sessionId: promptTrace.sessionId,
         type: event.type,
         elapsedMs: elapsed(promptTrace.startedAt),
       };
-      if (event.type === "message_update") {
-        eventDetail.contentChars = projectMessage(event.message).content.length;
-      }
       if (event.type === "message_start" || event.type === "message_end") {
         eventDetail.role = event.message.role;
         const message = event.message as { stopReason?: unknown; errorMessage?: unknown };
@@ -2851,10 +2885,19 @@ export class PiWebRuntime implements WebRuntimeController {
       case "message_end":
         this.withLiveMessageKey(session, event, (key) => {
           const sessionPath = session.sessionManager.getSessionFile();
+          const message = projectMessage(event.message, (path) => resolve(this.cwd, path));
+          if (webTraceEnabled && promptTrace && event.type === "message_update")
+            traceWeb("agent_event", {
+              commandId: promptTrace.commandId,
+              sessionId: promptTrace.sessionId,
+              type: event.type,
+              elapsedMs: elapsed(promptTrace.startedAt),
+              contentChars: message.content.length,
+            });
           this.emit(event.type, {
             sessionId: session.sessionManager.getSessionId(),
             ...(sessionPath ? { sessionPath } : {}),
-            message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
+            message,
             ...(key ? { messageKey: key } : {}),
           });
         });

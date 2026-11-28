@@ -141,7 +141,7 @@ test("investigator roles describe the same inherited capability that spawn repor
         }),
       })),
     });
-    assert.deepEqual(inherited, expectedTools);
+    assert.deepEqual(inherited.tools, expectedTools);
     assert.deepEqual(effectiveChildToolAllowlist(parentTools), expectedTools);
     const result = buildSubagentSpawnResult({
       id: "sa-1",
@@ -150,7 +150,7 @@ test("investigator roles describe the same inherited capability that spawn repor
       modelLabel: "fixture",
       cwd: "/repo",
       agentTypeName: name,
-      tools: inherited,
+      tools: inherited.tools,
     });
     assert.match(result, /It can only use: read, bash, edit, write, grep\./);
     assert.doesNotMatch(result, /subagent_spawn/);

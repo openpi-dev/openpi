@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type AgentUsage, emptyUsage, type TranscriptEntry } from "./model.ts";
 import { safeStringify, truncateUtf8 } from "./serialization.ts";
+import { projectNestedToolResults } from "../../web/protocol/types.ts";
 
 const TRANSCRIPT_ENTRY_MAX_BYTES = 16 * 1024;
 const TRANSCRIPT_TOTAL_MAX_BYTES = 256 * 1024;
@@ -24,14 +25,9 @@ export interface ProgressToolTiming {
 
 type ContextTokens = number | null | undefined;
 
-interface ProjectedTranscriptEntry {
-  role: TranscriptEntry["role"];
-  text: string;
+interface ProjectedTranscriptEntry extends Omit<TranscriptEntry, "toolCallId"> {
   sourceTextTruncated: boolean;
-  name?: string;
   sourceToolCallId?: string;
-  isError?: boolean;
-  timestamp?: number;
 }
 
 export interface AgentProgressProjectionSnapshot {
@@ -125,6 +121,20 @@ function messageEntries(message: AgentMessage): ProjectedTranscriptEntry[] {
     )
     .join("\n");
   return [
+    ...projectNestedToolResults(message.toolCallId, message.nestedCalls).map(
+      (nested): ProjectedTranscriptEntry => ({
+        role: "toolResult",
+        ...boundedSourceText(nested.argsPreview ?? ""),
+        name: nested.name,
+        sourceToolCallId: nested.toolId,
+        parentToolCallId: nested.parentToolCallId,
+        status: nested.status,
+        isError: nested.isError,
+        argsTruncated: nested.argsTruncated,
+        evidenceArguments: nested.evidenceArguments,
+        timestamp: message.timestamp,
+      }),
+    ),
     {
       role: "toolResult",
       ...boundedSourceText(source),
@@ -261,11 +271,19 @@ export class AgentProgressProjection {
     for (const entry of selected) {
       const remaining = TRANSCRIPT_TOTAL_MAX_BYTES - totalBytes;
       if (remaining <= 0) break;
+      const evidenceBytes = entry.evidenceArguments
+        ? Buffer.byteLength(JSON.stringify(entry.evidenceArguments))
+        : 0;
+      const retainEvidence = evidenceBytes <= remaining;
       const text = truncateUtf8(
         entry.text,
-        Math.min(TRANSCRIPT_ENTRY_MAX_BYTES, remaining),
+        Math.min(
+          TRANSCRIPT_ENTRY_MAX_BYTES,
+          remaining - (retainEvidence ? evidenceBytes : 0),
+        ),
       );
-      totalBytes += Buffer.byteLength(text, "utf8");
+      totalBytes +=
+        Buffer.byteLength(text, "utf8") + (retainEvidence ? evidenceBytes : 0);
       const truncated = entry.sourceTextTruncated || text !== entry.text;
       transcript.push({
         role: entry.role,
@@ -275,6 +293,17 @@ export class AgentProgressProjection {
           ? {}
           : toolMetadata(entry.sourceToolCallId, toolTimings)),
         ...(entry.isError === undefined ? {} : { isError: entry.isError }),
+        ...(entry.parentToolCallId === undefined
+          ? {}
+          : {
+              parentToolCallId: truncateUtf8(entry.parentToolCallId, 1024),
+              status: entry.status,
+              argsTruncated:
+                entry.argsTruncated || truncated || !retainEvidence,
+              evidenceArguments: retainEvidence
+                ? entry.evidenceArguments
+                : undefined,
+            }),
         ...(entry.timestamp === undefined
           ? {}
           : { timestamp: entry.timestamp }),

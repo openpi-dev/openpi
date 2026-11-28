@@ -1,8 +1,8 @@
-const traceEnabled =
+export const webTraceEnabled =
   process.env.OPENPI_WEB_DEBUG === "1" || process.env.OPENPI_WEB_LOG === "1";
 
 export function traceWeb(event: string, detail: Record<string, unknown> = {}) {
-  if (!traceEnabled) return;
+  if (!webTraceEnabled) return;
   process.stderr.write(
     `${JSON.stringify({
       scope: "openpi-web",

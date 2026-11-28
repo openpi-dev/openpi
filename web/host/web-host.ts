@@ -60,6 +60,7 @@ import {
   type WebInteractiveTerminalEvent,
   type WebLiveMessage,
   type WebPromptImage,
+  type WebPromptAdmissionState,
   type WebSidebarPinTarget,
   type WebSnapshot,
 } from "../protocol/types.ts";
@@ -159,6 +160,7 @@ type PromptAdmissionResponse = {
 type PromptAdmission = {
   readonly sessionId: string;
   readonly sessionPath: string;
+  readonly nativeSessionPath: string;
   readonly content: string;
   readonly imageSignature: string;
   readonly planRevision?: string;
@@ -168,6 +170,7 @@ type PromptAdmission = {
   readonly retryEntryId?: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
+  state?: WebPromptAdmissionState;
 };
 
 function validSessionPath(value: unknown): value is string {
@@ -319,9 +322,19 @@ export class WebHost {
     this.unsubscribeCapabilities = subscribeWebCapabilities((scope) => {
       if (scope === this.runtime.sessionManager) this.publish("runtime_changed");
     });
-    this.unsubscribeRuntime = this.runtime.subscribe(({ type, detail }) =>
-      this.publish(type, detail),
-    );
+    this.unsubscribeRuntime = this.runtime.subscribe(({ type, detail }) => {
+      const state = type === "prompt_accepted" ? "accepted"
+        : type === "prompt_blocked" ? "blocked"
+        : type === "prompt_held" ? "held"
+        : type === "prompt_discarded" ? "discarded" : undefined;
+      if (state && typeof detail?.commandId === "string") {
+        const admission = this.promptAdmissions.get(detail.commandId);
+        if (admission && detail.sessionId === admission.sessionId &&
+            detail.sessionPath === admission.nativeSessionPath)
+          admission.state = state;
+      }
+      this.publish(type, detail);
+    });
     this.server = createServer((request, response) => {
       const leaseSensitive = this.isLeaseSensitiveMutation(request);
       if (this.stopping && leaseSensitive) {
@@ -1507,6 +1520,17 @@ export class WebHost {
         return this.json(response, 200, await persistPromptFiles(this.runtime, body));
       } finally { this.promptFileUploads--; }
     }
+    if (url.pathname === "/api/prompt" && request.method === "GET") {
+      const commandId = url.searchParams.get("commandId");
+      const sessionId = url.searchParams.get("sessionId");
+      const sessionPath = url.searchParams.get("sessionPath");
+      if (!boundedIdentity(commandId) || !boundedIdentity(sessionId) || !validSessionPath(sessionPath))
+        return this.json(response, 400, { error: "Exact prompt and Session identities are required" });
+      const admission = this.promptAdmissions.get(commandId);
+      const state = admission?.sessionId === sessionId && admission.sessionPath === sessionPath
+        ? admission.state : undefined;
+      return this.json(response, 200, { state: state ?? "unknown" });
+    }
     if (url.pathname === "/api/prompt" && request.method === "POST") {
       const requestStarted = performance.now();
       const body = await this.readJson(request, MAX_PROMPT_REQUEST_BYTES);
@@ -1598,7 +1622,9 @@ export class WebHost {
           status: result.status,
           elapsedMs: elapsed(requestStarted),
         });
-        return this.json(response, result.status, result.body);
+        return this.json(response, result.status, result.status === 202
+          ? { ...result.body, accepted: existing.state === "accepted", state: existing.state }
+          : result.body);
       }
       if (body.retry === true) {
         return this.json(response, 409, {
@@ -1706,18 +1732,23 @@ export class WebHost {
       });
     }
     if (["/api/compact", "/api/prompt-queue"].includes(url.pathname) && request.method === "POST") {
-      const body = await this.readJson(request, 1024);
+      const body = await this.readJson(request, 8192);
       const isQueue = url.pathname === "/api/prompt-queue";
       if (typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 256 || !validSessionPath(body.sessionPath) ||
-        Object.keys(body).some((key) => !["sessionId", "sessionPath", ...(isQueue ? ["action"] : [])].includes(key)) ||
-        (isQueue && body.action !== "retry" && body.action !== "clear"))
+        Object.keys(body).some((key) => !["sessionId", "sessionPath", ...(isQueue ? ["action", "commandId"] : [])].includes(key)) ||
+        (isQueue && (body.action === "discard" ? !boundedIdentity(body.commandId) :
+          (body.action !== "retry" && body.action !== "clear") || body.commandId !== undefined)))
         return this.json(response, 400, { error: "An exact Session identity and supported action are required" });
       try {
         if (!this.adapter.isCurrentSession({ id: body.sessionId, path: body.sessionPath }))
           throw new WebRuntimeRequestError("Only the active Web session accepts this action", "SESSION_CONFLICT", 409);
         if (isQueue) {
           if (!this.runtime.updatePromptQueue) return this.json(response, 501, { error: "Queue control is unavailable" });
-          this.runtime.updatePromptQueue({ sessionId: body.sessionId, sessionPath: body.sessionPath, action: body.action as "retry" | "clear" });
+          const target = { sessionId: body.sessionId, sessionPath: body.sessionPath };
+          if (body.action === "discard" && boundedIdentity(body.commandId))
+            this.runtime.updatePromptQueue({ ...target, action: body.action, commandId: body.commandId });
+          else if (body.action === "retry" || body.action === "clear")
+            this.runtime.updatePromptQueue({ ...target, action: body.action });
         } else {
           if (!this.runtime.compactSession) return this.json(response, 501, { error: "Compaction is unavailable" });
           await this.runtime.compactSession({ sessionId: body.sessionId, sessionPath: body.sessionPath });
@@ -2708,6 +2739,7 @@ export class WebHost {
     while (this.promptAdmissions.size >= MAX_PROMPT_ADMISSIONS) {
       const settled = [...this.promptAdmissions.entries()].find(
         ([commandId, admission]) => admission.result !== undefined &&
+          admission.state !== "held" && admission.state !== "blocked" &&
           commandId !== activeTurn?.commandId && commandId !== activeTurn?.originCommandId,
       );
       if (!settled) return false;
@@ -2734,6 +2766,7 @@ export class WebHost {
     const admission: PromptAdmission = {
       sessionId,
       sessionPath,
+      nativeSessionPath: this.runtime.sessionManager.getSessionFile() ?? `current:${sessionId}`,
       content,
       imageSignature,
       ...(planRevision !== undefined ? { planRevision } : {}),
@@ -2770,12 +2803,14 @@ export class WebHost {
       )
       .then(
         (receipt) => {
+          const published = admission.state !== undefined;
+          const state = admission.state ??= receipt.state ?? "accepted";
           const result: PromptAdmissionResponse = {
             status: 202,
             body: {
               id: commandId,
-              accepted: true,
-              state: "accepted",
+              accepted: state === "accepted",
+              state,
               pendingFollowUps: receipt.pendingFollowUps,
               ...(receipt.pendingSteering !== undefined ? { pendingSteering: receipt.pendingSteering } : {}),
               ...(receipt.delivery !== undefined ? { delivery: receipt.delivery } : {}),
@@ -2783,9 +2818,11 @@ export class WebHost {
             },
           };
           try {
-            this.publish("prompt_accepted", {
+            if (!published) this.publish(state === "accepted" ? "prompt_accepted" : state === "blocked" ? "prompt_blocked" : "prompt_held", {
               commandId,
               sessionId,
+              sessionPath,
+              ...(receipt.state ? { fromCompactionQueue: true } : {}),
               pendingFollowUps: receipt.pendingFollowUps,
               ...(receipt.pendingSteering !== undefined ? { pendingSteering: receipt.pendingSteering } : {}),
               ...(receipt.delivery !== undefined ? { delivery: receipt.delivery } : {}),

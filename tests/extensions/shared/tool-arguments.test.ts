@@ -2,6 +2,27 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { projectToolArguments } from "../../../extensions/shared/tool-arguments.ts";
 
+test("oversized arguments stop traversal before later values and preserve BOM-prefixed paths", () => {
+  const path = "\uFEFFreport.md";
+  const small = projectToolArguments({ path });
+  assert.deepEqual(small.evidenceArguments, { path });
+  assert.equal(small.argsTruncated, false);
+
+  let trailingReads = 0;
+  const preview = projectToolArguments({
+    payload: "界".repeat(2_000_000),
+    get trailing() {
+      trailingReads++;
+      return "outside the preview";
+    },
+    path,
+  });
+  assert.equal(trailingReads, 0);
+  assert.equal(preview.argsTruncated, true);
+  assert.deepEqual(preview.evidenceArguments, { path });
+  assert.ok(Buffer.byteLength(preview.argsPreview!) <= 4096);
+});
+
 test("argument previews retain original evidence after large fields within UTF-8 budgets", () => {
   const projected = projectToolArguments({
     padding: "界".repeat(20_000),
